@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -104,16 +107,18 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	}
 
 	if len(cfg.MCPServers) > 0 {
-		_, mcpTools, err := mcpclient.Connect(ctx, cfg.MCPServers)
-		if err != nil {
-			return nil, fmt.Errorf("connect mcp servers: %w", err)
+		// A server that fails to connect or list tools is skipped (logged as
+		// a warning), not fatal: one bad MCP server shouldn't take down the
+		// whole daemon. The Manager itself is intentionally not tracked for
+		// a clean shutdown here — this MVP has no signal handling yet, and
+		// the child MCP server processes exit when this process does.
+		_, mcpTools, warnings := mcpclient.Connect(ctx, cfg.MCPServers)
+		for _, w := range warnings {
+			log.Printf("mcp: %v", w)
 		}
 		for _, t := range mcpTools {
 			registry.Register(t)
 		}
-		// The Manager (session handles) is intentionally not tracked for a
-		// clean shutdown here: this MVP has no signal handling yet, and the
-		// child MCP server processes exit when this process does.
 	}
 
 	loop := agent.New(store, registry, providers, cfg)
@@ -173,7 +178,7 @@ func runTUIClient(serverURL, agentName string) error {
 	c := client.New(serverURL)
 
 	ctx := context.Background()
-	sess, err := c.CreateSession(ctx, agentName)
+	sess, err := pickOrCreateSession(ctx, c, agentName)
 	if err != nil {
 		return fmt.Errorf("create session on %s: %w", serverURL, err)
 	}
@@ -187,6 +192,38 @@ func runTUIClient(serverURL, agentName string) error {
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	_, err = p.Run()
 	return err
+}
+
+// pickOrCreateSession lists existing (visible, resumable) sessions on the
+// daemon and, if any exist, prompts on stdin before the TUI takes over the
+// screen. This runs before tea.NewProgram's alt-screen, so plain
+// stdin/stdout is fine here. A listing failure or an empty list falls
+// back to creating a new session without prompting.
+func pickOrCreateSession(ctx context.Context, c *client.Client, agentName string) (session.Session, error) {
+	sessions, err := c.ListSessions(ctx)
+	if err != nil || len(sessions) == 0 {
+		return c.CreateSession(ctx, agentName)
+	}
+
+	fmt.Println("이어서 사용할 세션을 선택하세요:")
+	for i, s := range sessions {
+		fmt.Printf("  [%d] %s  (%s, %s)\n", i+1, s.ID, s.Agent, s.CreatedAt.Local().Format("2006-01-02 15:04"))
+	}
+	fmt.Print("  [n] 새 세션 시작\n선택 (번호 또는 n, 기본값 n): ")
+
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	line = strings.TrimSpace(line)
+
+	if line == "" || strings.EqualFold(line, "n") {
+		return c.CreateSession(ctx, agentName)
+	}
+	idx, err := strconv.Atoi(line)
+	if err != nil || idx < 1 || idx > len(sessions) {
+		fmt.Println("잘못된 입력입니다 — 새 세션을 시작합니다.")
+		return c.CreateSession(ctx, agentName)
+	}
+	return sessions[idx-1], nil
 }
 
 func loadConfig(explicitPath string) (*config.Config, error) {
