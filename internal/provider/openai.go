@@ -29,10 +29,10 @@ func NewOpenAICompat(baseURL, apiKey string) *OpenAICompat {
 // --- wire types (OpenAI chat/completions) ---
 
 type oaMessage struct {
-	Role       string      `json:"role"`
-	Content    string      `json:"content,omitempty"`
+	Role       string       `json:"role"`
+	Content    string       `json:"content,omitempty"`
 	ToolCalls  []oaToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
+	ToolCallID string       `json:"tool_call_id,omitempty"`
 }
 
 type oaToolCall struct {

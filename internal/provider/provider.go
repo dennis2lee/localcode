@@ -19,8 +19,8 @@ const (
 )
 
 type Message struct {
-	Role    Role      `json:"role"`
-	Content []Block    `json:"content"`
+	Role    Role    `json:"role"`
+	Content []Block `json:"content"`
 }
 
 // Block is a tagged union over content block kinds. Exactly one of the
@@ -76,10 +76,10 @@ type StreamEvent struct {
 
 	TextDelta string // EventTextDelta
 
-	ToolUseID    string          // EventToolUseStart, EventToolUseInputDelta, EventToolUseEnd
-	ToolName     string          // EventToolUseStart
-	InputDelta   string          // EventToolUseInputDelta (partial JSON fragment)
-	ToolInput    json.RawMessage // EventToolUseEnd (full accumulated input)
+	ToolUseID  string          // EventToolUseStart, EventToolUseInputDelta, EventToolUseEnd
+	ToolName   string          // EventToolUseStart
+	InputDelta string          // EventToolUseInputDelta (partial JSON fragment)
+	ToolInput  json.RawMessage // EventToolUseEnd (full accumulated input)
 
 	StopReason string // EventMessageStop: "end_turn" | "tool_use" | "max_tokens"
 

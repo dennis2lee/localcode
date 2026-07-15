@@ -123,8 +123,8 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	}
 
 	input := &bedrockruntime.ConverseStreamInput{
-		ModelId:  aws.String(req.Model),
-		Messages: messages,
+		ModelId:    aws.String(req.Model),
+		Messages:   messages,
 		ToolConfig: toolConfig,
 		InferenceConfig: &types.InferenceConfiguration{
 			MaxTokens:   aws.Int32(int32(req.MaxTokens)),
