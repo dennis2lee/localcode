@@ -1,0 +1,8 @@
+/localcode
+/dist/
+*.tar.gz
+*.zip
+*.exe
+
+# session logs (local runtime state, not source)
+.localcode/
