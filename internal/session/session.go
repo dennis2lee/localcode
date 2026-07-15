@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -102,6 +103,24 @@ func (s *Store) Get(id string) (*Session, error) {
 	}
 	metaCopy := st.meta
 	return &metaCopy, nil
+}
+
+// ListVisible returns all top-level (visible:true) sessions — i.e. the
+// ones a user picks from when resuming, not background tasks — newest
+// first.
+func (s *Store) ListVisible() []Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Session
+	for _, st := range s.sessions {
+		if st.meta.Visible {
+			out = append(out, st.meta)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out
 }
 
 // Children returns sessions spawned by parentID (background tasks).

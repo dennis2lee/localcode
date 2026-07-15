@@ -52,6 +52,7 @@ func (d *Daemon) Handler() http.Handler { return d.mux }
 
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
+	d.mux.HandleFunc("GET /api/sessions", d.handleListSessions)
 	d.mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)
 	d.mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleSendMessage)
 	d.mux.HandleFunc("GET /api/sessions/{id}/events", d.handleEvents)
@@ -94,6 +95,13 @@ func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, sess)
+}
+
+// handleListSessions returns every top-level (visible) session, newest
+// first, so a client can offer "resume an existing session" instead of
+// always starting a new one.
+func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, d.Loop.Store.ListVisible())
 }
 
 func (d *Daemon) handleGetSession(w http.ResponseWriter, r *http.Request) {

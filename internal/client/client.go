@@ -75,6 +75,15 @@ func (c *Client) CreateSession(ctx context.Context, agentName string) (session.S
 	return sess, err
 }
 
+// ListSessions returns every top-level (visible) session, newest first,
+// so a caller can offer the user a choice to resume one instead of
+// always creating a new session.
+func (c *Client) ListSessions(ctx context.Context) ([]session.Session, error) {
+	var out []session.Session
+	err := c.doJSON(ctx, http.MethodGet, "/api/sessions", nil, &out)
+	return out, err
+}
+
 func (c *Client) SendMessage(ctx context.Context, sessionID, text string) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/messages", map[string]string{"text": text}, nil)
 }

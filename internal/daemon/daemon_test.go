@@ -189,6 +189,49 @@ func TestDaemonEndToEnd(t *testing.T) {
 	}
 }
 
+// TestDaemonListSessions confirms visible (top-level) sessions show up
+// for resuming, newest first, while background task sessions (visible:
+// false) are excluded.
+func TestDaemonListSessions(t *testing.T) {
+	textOnly := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+	}))
+	defer textOnly.Close()
+
+	d := newTestDaemon(t, textOnly.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	first, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond) // ensure distinct CreatedAt for ordering
+	second, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	if _, err := c.SpawnTask(ctx, second.ID, "general-purpose", "background work"); err != nil {
+		t.Fatalf("SpawnTask: %v", err)
+	}
+
+	list, err := c.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 visible sessions (task session excluded), got %d: %+v", len(list), list)
+	}
+	if list[0].ID != second.ID || list[1].ID != first.ID {
+		t.Errorf("expected newest-first order [%s, %s], got [%s, %s]", second.ID, first.ID, list[0].ID, list[1].ID)
+	}
+}
+
 // TestDaemonBackgroundTask exercises the Task Manager over HTTP: spawn a
 // background task from a parent session and poll until it completes.
 func TestDaemonBackgroundTask(t *testing.T) {
