@@ -1,7 +1,7 @@
-// Package tui implements a minimal Bubble Tea front-end that drives an
-// agent.Loop in-process (MVP: single binary, no HTTP split yet — see
-// internal/agent for the interface the daemon/HTTP split will later sit
-// behind).
+// Package tui implements a Bubble Tea front-end that talks to the core
+// daemon over HTTP + SSE via internal/client — it is a client like any
+// other (a Web UI is the other one), holding no conversation state beyond
+// what's needed to render the current screen.
 package tui
 
 import (
@@ -14,9 +14,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"localcode/internal/agent"
+	"localcode/internal/client"
 	"localcode/internal/events"
-	"localcode/internal/session"
 )
 
 var (
@@ -32,11 +31,8 @@ type pendingPermission struct {
 }
 
 type Model struct {
-	loop      *agent.Loop
-	store     *session.Store
-	broker    *agent.PermissionBroker
+	client    *client.Client
 	sessionID string
-	agentName string
 
 	viewport viewport.Model
 	input    textinput.Model
@@ -48,7 +44,7 @@ type Model struct {
 	errMsg     string
 }
 
-func New(loop *agent.Loop, store *session.Store, broker *agent.PermissionBroker, sessionID, agentName string, eventCh <-chan events.Event) Model {
+func New(c *client.Client, sessionID string, eventCh <-chan events.Event) Model {
 	ti := textinput.New()
 	ti.Placeholder = "메시지를 입력하세요 (Enter로 전송, Ctrl+C로 종료)"
 	ti.Focus()
@@ -56,11 +52,8 @@ func New(loop *agent.Loop, store *session.Store, broker *agent.PermissionBroker,
 	vp := viewport.New(80, 20)
 
 	return Model{
-		loop:      loop,
-		store:     store,
-		broker:    broker,
+		client:    c,
 		sessionID: sessionID,
-		agentName: agentName,
 		viewport:  vp,
 		input:     ti,
 		events:    eventCh,
@@ -73,6 +66,7 @@ func (m Model) Init() tea.Cmd {
 
 type eventMsg events.Event
 type turnDoneMsg struct{ err error }
+type permissionResolvedMsg struct{ err error }
 
 func listenForEvent(ch <-chan events.Event) tea.Cmd {
 	return func() tea.Msg {
@@ -86,8 +80,15 @@ func listenForEvent(ch <-chan events.Event) tea.Cmd {
 
 func (m Model) sendMessage(text string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.loop.SendMessage(context.Background(), m.sessionID, m.agentName, text)
+		err := m.client.SendMessage(context.Background(), m.sessionID, text)
 		return turnDoneMsg{err: err}
+	}
+}
+
+func (m Model) resolvePermission(id string, allow bool) tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.ResolvePermission(context.Background(), m.sessionID, id, allow)
+		return permissionResolvedMsg{err: err}
 	}
 }
 
@@ -107,9 +108,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "y", "n":
 			if m.pending != nil {
 				allow := msg.String() == "y"
-				m.broker.Resolve(m.pending.id, allow)
+				id := m.pending.id
 				m.pending = nil
-				return m, nil
+				return m, m.resolvePermission(id, allow)
 			}
 
 		case "enter":
@@ -133,7 +134,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listenForEvent(m.events)
 
 	case turnDoneMsg:
-		m.waiting = false
+		if msg.err != nil {
+			m.waiting = false
+			m.errMsg = msg.err.Error()
+		}
+		// On success we leave m.waiting as-is: the daemon accepted the
+		// message and is streaming the actual turn via events; waiting
+		// clears when a message.part.end / error event arrives.
+		return m, nil
+
+	case permissionResolvedMsg:
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 		}
@@ -153,6 +163,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		}
 	case events.TypeMessagePartEnd:
 		m.transcript.WriteString("\n\n")
+		m.waiting = false
 	case events.TypeToolStart:
 		name, _ := ev.Data["name"].(string)
 		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[tool] %s 실행 중...\n", name)))
@@ -168,8 +179,17 @@ func (m *Model) applyEvent(ev events.Event) {
 		tool, _ := ev.Data["tool"].(string)
 		desc, _ := ev.Data["description"].(string)
 		m.pending = &pendingPermission{id: id, tool: tool, description: desc}
+	case events.TypeTaskSpawned:
+		taskID, _ := ev.Data["task_id"].(string)
+		agentName, _ := ev.Data["agent"].(string)
+		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[task] %s (%s) 백그라운드 실행 시작\n", taskID, agentName)))
+	case events.TypeTaskStatus:
+		taskID, _ := ev.Data["task_id"].(string)
+		status, _ := ev.Data["status"].(string)
+		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[task] %s: %s\n", taskID, status)))
 	case events.TypeError:
 		if msg, ok := ev.Data["error"].(string); ok {
+			m.waiting = false
 			m.errMsg = msg
 		}
 	}
