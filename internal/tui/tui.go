@@ -122,9 +122,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.input.SetValue("")
-			m.transcript.WriteString(userStyle.Render("You: ") + text + "\n\n")
-			m.viewport.SetContent(m.transcript.String())
-			m.viewport.GotoBottom()
+			// The user line itself renders from the message.user event (see
+			// applyEvent), not optimistically here, so a resumed/replayed
+			// session shows the same transcript a live one did.
 			m.waiting = true
 			return m, m.sendMessage(text)
 		}
@@ -157,6 +157,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) applyEvent(ev events.Event) {
 	switch ev.Type {
+	case events.TypeUserMessage:
+		if text, ok := ev.Data["text"].(string); ok {
+			m.transcript.WriteString(userStyle.Render("You: ") + text + "\n\n")
+		}
 	case events.TypeMessagePartDelta:
 		if text, ok := ev.Data["text"].(string); ok {
 			m.transcript.WriteString(text)

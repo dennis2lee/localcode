@@ -65,6 +65,8 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		maxTokens = defaultMaxTokens
 	}
 
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
+
 	l.appendHistory(sessionID, provider.Message{
 		Role:    provider.RoleUser,
 		Content: []provider.Block{provider.TextBlock(text)},

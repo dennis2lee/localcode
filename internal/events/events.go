@@ -7,6 +7,7 @@ import "time"
 type Type string
 
 const (
+	TypeUserMessage        Type = "message.user"
 	TypeMessagePartDelta   Type = "message.part.delta"
 	TypeMessagePartEnd     Type = "message.part.end"
 	TypeToolStart          Type = "tool.start"

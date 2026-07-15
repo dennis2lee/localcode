@@ -33,7 +33,15 @@
     justify-content: space-between;
   }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .right { display: flex; align-items: center; gap: 10px; }
   header .session-id { color: var(--muted); font-size: 12px; font-family: monospace; }
+  header .switch-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    padding: 4px 10px;
+  }
   main {
     flex: 1;
     display: flex;
@@ -108,12 +116,50 @@
   #permission-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
   #permission-modal .deny { background: var(--err); }
   #status { color: var(--muted); font-size: 12px; padding: 0 16px 8px; }
+
+  #session-picker {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  #session-picker.open { display: flex; }
+  #session-picker .box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    width: 420px;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+  }
+  #session-picker h3 { margin: 0 0 12px; }
+  #session-list { overflow-y: auto; margin-bottom: 12px; }
+  .session-item {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .session-item .meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-item button { padding: 4px 10px; font-size: 12px; }
 </style>
 </head>
 <body>
 <header>
   <h1>LocalCode</h1>
-  <span class="session-id" id="session-id">connecting…</span>
+  <div class="right">
+    <span class="session-id" id="session-id">connecting…</span>
+    <button class="switch-btn" id="switch-session">세션 전환</button>
+  </div>
 </header>
 <main>
   <div id="transcript"></div>
@@ -139,6 +185,14 @@
   </div>
 </div>
 
+<div id="session-picker">
+  <div class="box">
+    <h3>세션 선택</h3>
+    <div id="session-list"></div>
+    <button id="new-session-btn">새 세션 시작</button>
+  </div>
+</div>
+
 <script>
 (function () {
   const transcriptEl = document.getElementById('transcript');
@@ -151,11 +205,16 @@
   const permissionTextEl = document.getElementById('permission-text');
   const permissionAllowBtn = document.getElementById('permission-allow');
   const permissionDenyBtn = document.getElementById('permission-deny');
+  const pickerEl = document.getElementById('session-picker');
+  const sessionListEl = document.getElementById('session-list');
+  const newSessionBtn = document.getElementById('new-session-btn');
+  const switchSessionBtn = document.getElementById('switch-session');
 
   let sessionID = null;
+  let eventSource = null;
   let pendingPermissionID = null;
   let waiting = false;
-  const tasks = new Map(); // task_id -> {agent, status}
+  let tasks = new Map(); // task_id -> {agent, status}
 
   function appendLine(html) {
     transcriptEl.insertAdjacentHTML('beforeend', html);
@@ -213,6 +272,11 @@
 
   function applyEvent(ev) {
     switch (ev.type) {
+      case 'message.user':
+        if (ev.data && typeof ev.data.text === 'string') {
+          appendLine(`<div class="msg-user">You: ${escapeHtml(ev.data.text)}</div>`);
+        }
+        break;
       case 'message.part.delta':
         if (ev.data && typeof ev.data.text === 'string') appendText(ev.data.text);
         break;
@@ -256,20 +320,84 @@
   }
 
   function connectEvents() {
-    const es = new EventSource(`/api/sessions/${sessionID}/events`);
-    es.onmessage = (e) => {
+    if (eventSource) eventSource.close();
+    eventSource = new EventSource(`/api/sessions/${sessionID}/events`);
+    eventSource.onmessage = (e) => {
       try { applyEvent(JSON.parse(e.data)); } catch (err) { console.error('bad event', err); }
     };
-    es.onerror = () => {
+    eventSource.onerror = () => {
       // EventSource auto-reconnects using Last-Event-ID; nothing to do.
     };
   }
+
+  function formatTime(iso) {
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString();
+    } catch { return iso; }
+  }
+
+  async function openSessionPicker() {
+    let sessions;
+    try {
+      sessions = await api('GET', '/api/sessions');
+    } catch (err) {
+      sessions = [];
+    }
+
+    sessionListEl.innerHTML = '';
+    if (!sessions || sessions.length === 0) {
+      sessionListEl.innerHTML = '<div style="color:var(--muted); font-size:12px;">기존 세션이 없습니다.</div>';
+    } else {
+      for (const s of sessions) {
+        const div = document.createElement('div');
+        div.className = 'session-item';
+        div.innerHTML = `<div class="meta">${escapeHtml(s.id)}<br>${escapeHtml(s.agent)} · ${escapeHtml(formatTime(s.created_at))}</div>`;
+        const btn = document.createElement('button');
+        btn.textContent = '이어하기';
+        btn.addEventListener('click', () => selectSession(s.id));
+        div.appendChild(btn);
+        sessionListEl.appendChild(div);
+      }
+    }
+    pickerEl.classList.add('open');
+  }
+
+  function closeSessionPicker() {
+    pickerEl.classList.remove('open');
+  }
+
+  function selectSession(id) {
+    sessionID = id;
+    sessionIdEl.textContent = sessionID;
+    transcriptEl.innerHTML = '';
+    tasks = new Map();
+    renderTasks();
+    setWaiting(false);
+    closeSessionPicker();
+    connectEvents();
+  }
+
+  async function createNewSession() {
+    try {
+      const sess = await api('POST', '/api/sessions', { agent: 'general-purpose' });
+      selectSession(sess.id);
+    } catch (err) {
+      sessionIdEl.textContent = 'error';
+      appendLine(`<div class="msg-error">세션 생성 실패: ${escapeHtml(String(err))}</div>`);
+    }
+  }
+
+  newSessionBtn.addEventListener('click', createNewSession);
+  switchSessionBtn.addEventListener('click', openSessionPicker);
 
   async function sendMessage() {
     const text = inputEl.value.trim();
     if (!text || waiting) return;
     inputEl.value = '';
-    appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
+    // The user line renders from the message.user event (see applyEvent),
+    // not optimistically here, so a resumed/replayed session shows the
+    // same transcript a live one did.
     setWaiting(true);
     try {
       await api('POST', `/api/sessions/${sessionID}/messages`, { text });
@@ -300,15 +428,18 @@
   }
 
   async function init() {
+    renderTasks();
+    let sessions;
     try {
-      const sess = await api('POST', '/api/sessions', { agent: 'general-purpose' });
-      sessionID = sess.id;
-      sessionIdEl.textContent = sessionID;
-      connectEvents();
-      renderTasks();
+      sessions = await api('GET', '/api/sessions');
     } catch (err) {
-      sessionIdEl.textContent = 'error';
-      appendLine(`<div class="msg-error">세션 생성 실패: ${escapeHtml(String(err))}</div>`);
+      sessions = [];
+    }
+
+    if (!sessions || sessions.length === 0) {
+      await createNewSession();
+    } else {
+      await openSessionPicker();
     }
   }
 
