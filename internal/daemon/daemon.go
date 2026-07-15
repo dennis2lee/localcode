@@ -1,0 +1,293 @@
+// Package daemon exposes the core agent loop over HTTP + Server-Sent
+// Events, so the TUI and a Web UI can be equal, independent clients of the
+// same running session instead of the TUI calling agent.Loop in-process.
+//
+// Session state lives entirely on the server: clients never hold
+// conversation history themselves, only a `since` sequence number they use
+// to resume the event stream.
+package daemon
+
+import (
+	"context"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"log"
+	"net/http"
+	"strconv"
+	"sync"
+	"time"
+
+	"localcode/internal/agent"
+	"localcode/internal/events"
+)
+
+type Daemon struct {
+	Loop   *agent.Loop
+	Broker *agent.PermissionBroker
+	Tasks  *agent.TaskManager
+
+	mux *http.ServeMux
+
+	busyMu sync.Mutex
+	busy   map[string]bool // sessionID -> a message is currently being processed
+}
+
+// New builds the daemon's HTTP handler. webFS, if non-nil, is served at "/"
+// (the embedded Web UI); pass nil to run headless (TUI-only).
+func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskManager, webFS fs.FS) *Daemon {
+	d := &Daemon{
+		Loop:   loop,
+		Broker: broker,
+		Tasks:  tasks,
+		mux:    http.NewServeMux(),
+		busy:   map[string]bool{},
+	}
+	d.routes(webFS)
+	return d
+}
+
+func (d *Daemon) Handler() http.Handler { return d.mux }
+
+func (d *Daemon) routes(webFS fs.FS) {
+	d.mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
+	d.mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)
+	d.mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleSendMessage)
+	d.mux.HandleFunc("GET /api/sessions/{id}/events", d.handleEvents)
+	d.mux.HandleFunc("POST /api/sessions/{id}/permissions/{permId}", d.handleResolvePermission)
+	d.mux.HandleFunc("POST /api/sessions/{id}/tasks", d.handleSpawnTask)
+	d.mux.HandleFunc("GET /api/sessions/{id}/tasks", d.handleListTasks)
+	d.mux.HandleFunc("POST /api/tasks/{taskId}/cancel", d.handleCancelTask)
+
+	if webFS != nil {
+		d.mux.Handle("/", http.FileServerFS(webFS))
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, err error) {
+	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Agent string `json:"agent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Agent == "" {
+		req.Agent = "general-purpose"
+	}
+
+	id := fmt.Sprintf("s-%d", time.Now().UnixNano())
+	sess, err := d.Loop.Store.CreateSession(id, "", req.Agent, true)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, sess)
+}
+
+func (d *Daemon) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess, err := d.Loop.Store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
+func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess, err := d.Loop.Store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	var req struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Text == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("text is required"))
+		return
+	}
+
+	d.busyMu.Lock()
+	if d.busy[id] {
+		d.busyMu.Unlock()
+		writeError(w, http.StatusConflict, fmt.Errorf("session %s is already processing a message", id))
+		return
+	}
+	d.busy[id] = true
+	d.busyMu.Unlock()
+
+	go func() {
+		defer func() {
+			d.busyMu.Lock()
+			delete(d.busy, id)
+			d.busyMu.Unlock()
+		}()
+		// Deliberately not r.Context(): the HTTP request returns immediately
+		// (202) and must not cancel the turn when the client disconnects.
+		if err := d.Loop.SendMessage(context.Background(), id, sess.Agent, req.Text); err != nil {
+			log.Printf("session %s: SendMessage: %v", id, err)
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+// handleEvents streams the session's event log as SSE: any backlog since
+// the given seq first, then live events. Subscribing before reading the
+// backlog (rather than after) means the only failure mode is a duplicate
+// event across the two sources, never a gap — duplicates are filtered by
+// seq before being written to the client.
+func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	since := uint64(0)
+	if s := r.URL.Query().Get("since"); s != "" {
+		v, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid since: %w", err))
+			return
+		}
+		since = v
+	} else if lastEventID := r.Header.Get("Last-Event-ID"); lastEventID != "" {
+		// Browsers' EventSource auto-reconnects on a dropped connection and
+		// resends whatever `id:` value the server last sent as this
+		// header, so a client that never set ?since= explicitly still
+		// resumes without re-fetching events it already has.
+		if v, err := strconv.ParseUint(lastEventID, 10, 64); err == nil {
+			since = v
+		}
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming unsupported"))
+		return
+	}
+
+	live, unsub, err := d.Loop.Store.Subscribe(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	defer unsub()
+
+	backlog, err := d.Loop.Store.Events(id, since)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush() // send headers immediately even if there's no backlog to write yet
+
+	lastSeq := since
+	writeSSE := func(ev events.Event) {
+		if ev.Seq <= lastSeq {
+			return // already sent via backlog or an earlier live event
+		}
+		lastSeq = ev.Seq
+		payload, err := json.Marshal(ev)
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(w, "id: %d\ndata: %s\n\n", ev.Seq, payload)
+		flusher.Flush()
+	}
+
+	for _, ev := range backlog {
+		writeSSE(ev)
+	}
+
+	for {
+		select {
+		case ev, ok := <-live:
+			if !ok {
+				return
+			}
+			writeSSE(ev)
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (d *Daemon) handleResolvePermission(w http.ResponseWriter, r *http.Request) {
+	permID := r.PathValue("permId")
+	var req struct {
+		Allow bool `json:"allow"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	d.Broker.Resolve(permID, req.Allow)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
+}
+
+func (d *Daemon) handleSpawnTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Agent  string `json:"agent"`
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Agent == "" || req.Prompt == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("agent and prompt are required"))
+		return
+	}
+
+	taskID, err := d.Tasks.Spawn(id, req.Agent, req.Prompt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"task_id": taskID})
+}
+
+func (d *Daemon) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	writeJSON(w, http.StatusOK, d.Tasks.List(id))
+}
+
+func (d *Daemon) handleCancelTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskId")
+	ok := d.Tasks.Cancel(taskID)
+	writeJSON(w, http.StatusOK, map[string]bool{"cancelled": ok})
+}
+
+//go:embed all:static
+var embeddedWebFS embed.FS
+
+// WebFS returns the embedded Web UI's filesystem rooted at the static
+// directory (so "/" maps to static/index.html).
+func WebFS() fs.FS {
+	sub, err := fs.Sub(embeddedWebFS, "static")
+	if err != nil {
+		panic(err) // programmer error: static/ must exist at build time
+	}
+	return sub
+}

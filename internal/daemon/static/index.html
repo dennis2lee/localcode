@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LocalCode</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --warn: #d29922;
+    --err: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .session-id { color: var(--muted); font-size: 12px; font-family: monospace; }
+  main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+  #transcript {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  #transcript .msg-user { color: var(--accent); font-weight: 600; }
+  #transcript .msg-tool { color: var(--muted); font-style: italic; }
+  #transcript .msg-error { color: var(--err); font-weight: 600; }
+  aside {
+    width: 260px;
+    border-left: 1px solid var(--border);
+    padding: 12px;
+    overflow-y: auto;
+    font-size: 12px;
+  }
+  aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+  .task { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; }
+  .task .agent { color: var(--muted); }
+  .task .status-running { color: var(--warn); }
+  .task .status-completed { color: #3fb950; }
+  .task .status-failed, .task .status-cancelled { color: var(--err); }
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex;
+    gap: 8px;
+  }
+  #input {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font: inherit;
+  }
+  button {
+    background: var(--accent);
+    color: #05131f;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #permission-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  #permission-modal.open { display: flex; }
+  #permission-modal .box {
+    background: var(--panel);
+    border: 1px solid var(--warn);
+    border-radius: 8px;
+    padding: 20px;
+    max-width: 480px;
+  }
+  #permission-modal h3 { margin-top: 0; color: var(--warn); }
+  #permission-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+  #permission-modal .deny { background: var(--err); }
+  #status { color: var(--muted); font-size: 12px; padding: 0 16px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LocalCode</h1>
+  <span class="session-id" id="session-id">connecting…</span>
+</header>
+<main>
+  <div id="transcript"></div>
+  <aside>
+    <h2>Background tasks</h2>
+    <div id="tasks"></div>
+  </aside>
+</main>
+<div id="status"></div>
+<footer>
+  <input id="input" placeholder="메시지를 입력하세요 (Enter로 전송)" autofocus>
+  <button id="send">전송</button>
+</footer>
+
+<div id="permission-modal">
+  <div class="box">
+    <h3>권한 요청</h3>
+    <p id="permission-text"></p>
+    <div class="actions">
+      <button class="deny" id="permission-deny">거부</button>
+      <button id="permission-allow">승인</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const transcriptEl = document.getElementById('transcript');
+  const tasksEl = document.getElementById('tasks');
+  const statusEl = document.getElementById('status');
+  const sessionIdEl = document.getElementById('session-id');
+  const inputEl = document.getElementById('input');
+  const sendBtn = document.getElementById('send');
+  const modalEl = document.getElementById('permission-modal');
+  const permissionTextEl = document.getElementById('permission-text');
+  const permissionAllowBtn = document.getElementById('permission-allow');
+  const permissionDenyBtn = document.getElementById('permission-deny');
+
+  let sessionID = null;
+  let pendingPermissionID = null;
+  let waiting = false;
+  const tasks = new Map(); // task_id -> {agent, status}
+
+  function appendLine(html) {
+    transcriptEl.insertAdjacentHTML('beforeend', html);
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  }
+
+  function appendText(text) {
+    // Append raw text to the last text node run so streaming deltas don't
+    // each get their own DOM element.
+    const last = transcriptEl.lastChild;
+    if (last && last.nodeType === Node.TEXT_NODE) {
+      last.textContent += text;
+    } else {
+      transcriptEl.appendChild(document.createTextNode(text));
+    }
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  }
+
+  function setWaiting(v) {
+    waiting = v;
+    sendBtn.disabled = v;
+    statusEl.textContent = v ? '응답 대기 중…' : '';
+  }
+
+  function renderTasks() {
+    tasksEl.innerHTML = '';
+    if (tasks.size === 0) {
+      tasksEl.innerHTML = '<div style="color:var(--muted)">없음</div>';
+      return;
+    }
+    for (const [id, t] of tasks) {
+      const div = document.createElement('div');
+      div.className = 'task';
+      div.innerHTML = `<div class="agent">${t.agent || ''}</div>` +
+        `<div>${id}</div>` +
+        `<div class="status-${t.status}">${t.status}</div>`;
+      tasksEl.appendChild(div);
+    }
+  }
+
+  async function api(method, path, body) {
+    const resp = await fetch(path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`${method} ${path}: ${resp.status} ${text}`);
+    }
+    if (resp.status === 204) return null;
+    const ct = resp.headers.get('content-type') || '';
+    return ct.includes('application/json') ? resp.json() : null;
+  }
+
+  function applyEvent(ev) {
+    switch (ev.type) {
+      case 'message.part.delta':
+        if (ev.data && typeof ev.data.text === 'string') appendText(ev.data.text);
+        break;
+      case 'message.part.end':
+        appendText('\n\n');
+        setWaiting(false);
+        break;
+      case 'tool.start':
+        appendLine(`<div class="msg-tool">[tool] ${escapeHtml(ev.data.name || '')} 실행 중...</div>`);
+        break;
+      case 'tool.end':
+        appendLine(`<div class="msg-tool">[tool] ${ev.data.is_error ? '실패' : '완료'}</div>`);
+        break;
+      case 'permission.request':
+        pendingPermissionID = ev.data.id;
+        permissionTextEl.textContent = `[${ev.data.tool}] ${ev.data.description}`;
+        modalEl.classList.add('open');
+        break;
+      case 'permission.resolved':
+        modalEl.classList.remove('open');
+        break;
+      case 'task.spawned':
+        tasks.set(ev.data.task_id, { agent: ev.data.agent, status: 'spawned' });
+        renderTasks();
+        appendLine(`<div class="msg-tool">[task] ${ev.data.task_id} (${ev.data.agent}) 백그라운드 실행 시작</div>`);
+        break;
+      case 'task.status':
+        if (tasks.has(ev.data.task_id)) tasks.get(ev.data.task_id).status = ev.data.status;
+        else tasks.set(ev.data.task_id, { agent: '', status: ev.data.status });
+        renderTasks();
+        break;
+      case 'error':
+        setWaiting(false);
+        appendLine(`<div class="msg-error">오류: ${escapeHtml(ev.data.error || '')}</div>`);
+        break;
+    }
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function connectEvents() {
+    const es = new EventSource(`/api/sessions/${sessionID}/events`);
+    es.onmessage = (e) => {
+      try { applyEvent(JSON.parse(e.data)); } catch (err) { console.error('bad event', err); }
+    };
+    es.onerror = () => {
+      // EventSource auto-reconnects using Last-Event-ID; nothing to do.
+    };
+  }
+
+  async function sendMessage() {
+    const text = inputEl.value.trim();
+    if (!text || waiting) return;
+    inputEl.value = '';
+    appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
+    setWaiting(true);
+    try {
+      await api('POST', `/api/sessions/${sessionID}/messages`, { text });
+    } catch (err) {
+      setWaiting(false);
+      appendLine(`<div class="msg-error">오류: ${escapeHtml(String(err))}</div>`);
+    }
+  }
+
+  sendBtn.addEventListener('click', sendMessage);
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendMessage();
+  });
+
+  permissionAllowBtn.addEventListener('click', () => resolvePermission(true));
+  permissionDenyBtn.addEventListener('click', () => resolvePermission(false));
+
+  async function resolvePermission(allow) {
+    if (!pendingPermissionID) return;
+    const id = pendingPermissionID;
+    pendingPermissionID = null;
+    modalEl.classList.remove('open');
+    try {
+      await api('POST', `/api/sessions/${sessionID}/permissions/${id}`, { allow });
+    } catch (err) {
+      appendLine(`<div class="msg-error">권한 응답 실패: ${escapeHtml(String(err))}</div>`);
+    }
+  }
+
+  async function init() {
+    try {
+      const sess = await api('POST', '/api/sessions', { agent: 'general-purpose' });
+      sessionID = sess.id;
+      sessionIdEl.textContent = sessionID;
+      connectEvents();
+      renderTasks();
+    } catch (err) {
+      sessionIdEl.textContent = 'error';
+      appendLine(`<div class="msg-error">세션 생성 실패: ${escapeHtml(String(err))}</div>`);
+    }
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
