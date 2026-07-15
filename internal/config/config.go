@@ -16,7 +16,17 @@ type Config struct {
 	Profiles           map[string]Profile        `json:"profiles"`
 	Agents             map[string]AgentConfig    `json:"agents"`
 	DefaultProfile     string                    `json:"default_profile"`
-	MaxConcurrentTasks int                        `json:"max_concurrent_tasks"`
+	MaxConcurrentTasks int                       `json:"max_concurrent_tasks"`
+	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+}
+
+// MCPServerConfig launches one MCP server over stdio, same shape as Claude
+// Code's .mcp.json `mcpServers` entries (command/args/env) so an existing
+// .mcp.json's entries can be copied in directly.
+type MCPServerConfig struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 // ProviderConfig describes how to reach a model backend.
