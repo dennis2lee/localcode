@@ -29,12 +29,12 @@ type subscriber struct {
 }
 
 type sessionState struct {
-	meta       Session
-	log        []events.Event
-	nextSeq    uint64
-	subs       map[int]*subscriber
-	nextSubID  int
-	file       *os.File // nil if not persisted
+	meta      Session
+	log       []events.Event
+	nextSeq   uint64
+	subs      map[int]*subscriber
+	nextSubID int
+	file      *os.File // nil if not persisted
 }
 
 // Store holds all sessions in memory, optionally persisting each session's

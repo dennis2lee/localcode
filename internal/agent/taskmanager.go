@@ -16,8 +16,8 @@ import (
 // into the parent session's event log (task.spawned / task.status) so any
 // client watching the parent sees background progress without polling.
 type TaskManager struct {
-	loop  *Loop
-	sem   chan struct{}
+	loop    *Loop
+	sem     chan struct{}
 	rootCtx context.Context
 
 	mu      sync.Mutex
