@@ -1,0 +1,70 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+  WiX source for the Windows MSI installer, built with msitools' `wixl`
+  (works cross-platform, including on macOS — no Windows or real WiX
+  Toolset needed). Version/arch/path are passed in as preprocessor
+  variables from build/package-msi.sh via `wixl -D Name=Value`.
+
+  UpgradeCode is a fixed GUID so future versions correctly upgrade
+  in-place instead of installing side by side — do not change it.
+-->
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+  <Product Name='LocalCode'
+           Id='*'
+           UpgradeCode='4C4C7D49-F28C-475D-923C-EB66927691A8'
+           Language='1033'
+           Codepage='1252'
+           Version='$(var.Version)'
+           Manufacturer='dennis2lee'>
+
+    <Package Id='*'
+             Keywords='Installer'
+             Description='LocalCode installer'
+             Comments='Bedrock + local-LLM TUI coding agent'
+             Manufacturer='dennis2lee'
+             InstallerVersion='450'
+             Languages='1033'
+             Compressed='yes'
+             SummaryCodepage='1252'
+             InstallScope='perMachine' />
+
+    <MajorUpgrade DowngradeErrorMessage='A newer version of LocalCode is already installed.' />
+
+    <Media Id='1' Cabinet='localcode.cab' EmbedCab='yes' />
+
+    <Directory Id='TARGETDIR' Name='SourceDir'>
+      <Directory Id='ProgramFiles64Folder'>
+        <Directory Id='INSTALLDIR' Name='LocalCode'>
+          <Component Id='MainExecutable' Guid='*'>
+            <File Id='LocalCodeEXE' Name='localcode.exe' Source='$(var.ExePath)' KeyPath='yes' />
+            <Environment Id='PathEnv' Name='PATH' Value='[INSTALLDIR]' Permanent='no' Part='last' Action='set' System='yes' />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <Directory Id='ProgramMenuFolder'>
+        <Directory Id='AppMenuFolder' Name='LocalCode'>
+          <Component Id='StartMenuShortcut' Guid='*'>
+            <Shortcut Id='LocalCodeStartMenuShortcut'
+                      Name='LocalCode'
+                      Description='Bedrock + local-LLM TUI coding agent'
+                      Target='[INSTALLDIR]localcode.exe'
+                      WorkingDirectory='INSTALLDIR' />
+            <RemoveFolder Id='RemoveAppMenuFolder' On='uninstall' />
+            <RegistryValue Root='HKCU'
+                            Key='Software\LocalCode'
+                            Name='installed'
+                            Type='integer'
+                            Value='1'
+                            KeyPath='yes' />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id='Complete' Level='1'>
+      <ComponentRef Id='MainExecutable' />
+      <ComponentRef Id='StartMenuShortcut' />
+    </Feature>
+  </Product>
+</Wix>

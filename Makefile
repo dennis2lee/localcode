@@ -4,7 +4,7 @@ VERSION     ?= 0.1.0
 DIST        := dist
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 
-.PHONY: build test clean dist dist-mac dist-windows
+.PHONY: build test clean dist dist-mac dist-windows dist-msi
 
 build:
 	go build -o $(BIN_NAME) ./cmd/localcode
@@ -23,5 +23,9 @@ dist-mac:
 dist-windows:
 	./build/package-windows.sh "$(VERSION)" "$(DIST)"
 
-dist: dist-mac dist-windows
+# --- Windows: amd64 .msi installer (needs `brew install msitools`) ---
+dist-msi:
+	./build/package-msi.sh "$(VERSION)" "$(DIST)"
+
+dist: dist-mac dist-windows dist-msi
 	@echo "Packages written to $(DIST)/"

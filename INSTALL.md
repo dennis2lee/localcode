@@ -7,6 +7,7 @@
 - Go 1.23 이상 (`brew install go`)
 - macOS에서 `.app` 번들을 만들려면 Xcode Command Line Tools의 `lipo` (기본 내장)
 - Windows용 zip을 만들려면 `zip` (macOS/Linux 기본 내장)
+- Windows용 `.msi`를 만들려면 `msitools` (`brew install msitools`) — Windows 없이 macOS/Linux에서 바로 `.msi`를 빌드합니다
 
 ### 빌드
 
@@ -25,9 +26,10 @@ go build -o localcode ./cmd/localcode
 ## 2. 배포 패키지 빌드 (macOS / Windows)
 
 ```bash
-make dist            # dist/mac, dist/windows 둘 다 생성
+make dist            # dist/mac, dist/windows 전부 생성 (msi 포함)
 make dist-mac         # macOS만
-make dist-windows      # Windows만
+make dist-windows      # Windows zip만
+make dist-msi          # Windows msi만
 ```
 
 결과물:
@@ -36,8 +38,9 @@ make dist-windows      # Windows만
 |---|---|---|
 | macOS | `dist/mac/localcode-<version>-darwin-universal.tar.gz` | 순수 바이너리 (Intel+Apple Silicon universal) |
 | macOS | `dist/mac/LocalCode-<version>-darwin-universal-app.tar.gz` | `.app` 번들 (더블클릭 실행, 터미널 자동 실행) |
-| Windows | `dist/windows/localcode-<version>-windows-amd64.zip` | 64비트 인텔/AMD |
-| Windows | `dist/windows/localcode-<version>-windows-arm64.zip` | ARM64 (Surface 등) |
+| Windows | `dist/windows/localcode-<version>-windows-amd64.msi` | 설치형 패키지 (64비트 인텔/AMD, 시작 메뉴 바로가기 + PATH 등록) |
+| Windows | `dist/windows/localcode-<version>-windows-amd64.zip` | portable zip (64비트 인텔/AMD) |
+| Windows | `dist/windows/localcode-<version>-windows-arm64.zip` | portable zip (ARM64, Surface 등 — msi는 아직 arm64 미지원) |
 
 ### macOS 설치
 
@@ -54,7 +57,11 @@ tar xzf dist/mac/LocalCode-<version>-darwin-universal-app.tar.gz -C /Application
 
 ### Windows 설치
 
-압축을 풀고 `localcode.exe`를 원하는 위치에 두고 실행하면 됩니다. 별도 설치 과정은 없습니다 (현재는 portable 배포만 지원, `.msi` 설치 패키지는 아직 없습니다).
+**msi (권장, amd64):** `localcode-<version>-windows-amd64.msi`를 더블클릭해서 설치 마법사를 따라가면 `C:\Program Files\LocalCode\`에 설치되고, 시작 메뉴 바로가기가 생기고, PATH에 자동 등록되어 어디서든 `localcode` 명령을 바로 쓸 수 있습니다. 재설치하면 이전 버전을 자동으로 업그레이드합니다 (MSI `UpgradeCode` 고정).
+
+msi가 아직 서명되지 않아 SmartScreen이 "Windows에서 PC를 보호했습니다" 경고를 띄울 수 있습니다 — "추가 정보" → "실행"으로 진행하거나, 배포 전에 code-signing 인증서로 서명하세요 (Windows에서 `signtool sign`, 또는 크로스플랫폼 `osslsigncode`).
+
+**zip (portable, amd64/arm64):** 압축을 풀고 `localcode.exe`를 원하는 위치에 두고 바로 실행하면 됩니다. 설치 과정이나 PATH 등록이 없습니다. arm64는 아직 msi가 지원되지 않아(빌드에 사용한 `wixl` 0.106이 `-a arm64`를 거부합니다) zip만 제공됩니다.
 
 ## 3. 설정 파일 준비
 

@@ -27,6 +27,7 @@ go test ./...
 
 - 코어 데몬/HTTP-SSE 분리 (현재는 TUI가 agent loop를 in-process로 직접 호출하는 단일 프로세스 MVP)
 - Web UI, MCP, Skills, 백그라운드 Task Manager(동시 에이전트 실행/추적)
-- macOS 코드 서명·공증, Windows .msi 설치 패키지
+- macOS 코드 서명·공증, Windows msi 코드 서명 (둘 다 설치는 되지만 아직 미서명 상태)
+- Windows arm64용 msi (현재 amd64만 msi 지원, arm64는 portable zip)
 
 자세한 제약 사항은 [USAGE.md](USAGE.md#알려진-제약-mvp)를 참고하세요.
