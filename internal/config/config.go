@@ -12,11 +12,11 @@ import (
 // Config is the root of ~/.localcode/config.json (global) merged with
 // .localcode/config.json (project-local override, same shape).
 type Config struct {
-	Providers          map[string]ProviderConfig `json:"providers"`
-	Profiles           map[string]Profile        `json:"profiles"`
-	Agents             map[string]AgentConfig    `json:"agents"`
-	DefaultProfile     string                    `json:"default_profile"`
-	MaxConcurrentTasks int                       `json:"max_concurrent_tasks"`
+	Providers          map[string]ProviderConfig  `json:"providers"`
+	Profiles           map[string]Profile         `json:"profiles"`
+	Agents             map[string]AgentConfig     `json:"agents"`
+	DefaultProfile     string                     `json:"default_profile"`
+	MaxConcurrentTasks int                        `json:"max_concurrent_tasks"`
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 }
 
