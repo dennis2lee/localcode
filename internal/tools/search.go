@@ -71,8 +71,10 @@ func doubleStarGlob(pattern string) ([]string, error) {
 
 type Grep struct{}
 
-func (Grep) Name() string        { return "grep" }
-func (Grep) Description() string { return "Search file contents for a regex pattern under a path (recursive)." }
+func (Grep) Name() string { return "grep" }
+func (Grep) Description() string {
+	return "Search file contents for a regex pattern under a path (recursive)."
+}
 func (Grep) InputSchema() json.RawMessage {
 	return schema(`{"pattern":{"type":"string"},"path":{"type":"string","description":"file or directory to search; defaults to \".\""}}`, "pattern")
 }
