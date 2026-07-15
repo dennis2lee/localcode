@@ -1,10 +1,22 @@
 # localcode
 
-Bedrock + OpenAI-compatible(로컬 LLM) 양쪽에 붙는 TUI 코딩 에이전트. Claude Code처럼 파일 읽기/쓰기, 셸 실행 같은 툴을 모델이 직접 호출할 수 있고, 클라우드 모델(Bedrock)과 로컬 모델(LM Studio 등)을 config 하나로 전환합니다.
+Bedrock + OpenAI-compatible(로컬 LLM) 양쪽에 붙는 코딩 에이전트. Claude Code처럼 파일 읽기/쓰기, 셸 실행, MCP, Skills를 모델이 직접 호출할 수 있고, 클라우드 모델(Bedrock)과 로컬 모델(LM Studio 등)을 config 하나로 전환합니다. 코어는 헤드리스 데몬이고, TUI와 브라우저(Web UI)는 둘 다 그 위의 대등한 클라이언트입니다.
 
 - [설치 방법](INSTALL.md) — 소스 빌드, macOS/Windows 배포 패키지 만들기
-- [사용 방법](USAGE.md) — config.json 작성법, 화면 조작, 로컬 LLM 연결
+- [사용 방법](USAGE.md) — config.json 작성법(Provider/MCP/Skills), 화면 조작, 백그라운드 태스크
 - [LICENSE](LICENSE) — MIT
+
+## 아키텍처
+
+```
+[core daemon]  ← 세션/에이전트 루프/툴/MCP/Skills/Provider/Task Manager
+   ├ HTTP API   (세션 생성, 메시지 전송, 권한 응답, 백그라운드 태스크 스폰)
+   └ SSE        (토큰 스트림, 툴 시작/종료, 권한 요청, 태스크 상태)
+        ↑              ↑
+     [TUI]         [Web UI]   ← 둘 다 동일한 API를 쓰는 1급 클라이언트
+```
+
+세션은 메시지 배열이 아니라 append-only 이벤트 로그라서, TUI를 껐다 켜거나 브라우저 탭을 새로 열어도 `since` seq 하나로 그 자리에서 이어붙습니다.
 
 ## 빠른 시작
 
@@ -17,6 +29,8 @@ cp config.example.json ~/.localcode/config.json
 ./localcode --agent general-purpose
 ```
 
+기본 실행은 로컬 데몬을 띄우고 TUI를 그 클라이언트로 붙입니다. 같은 주소(`http://127.0.0.1:4096`)를 브라우저로 열면 Web UI로도 동시에 접속할 수 있습니다. 원격 서버에서 데몬만 돌리고(`--headless`) 맥북에서 `--server`로 붙는 구성은 [USAGE.md](USAGE.md#원격-데몬--ssh-터널)를 참고하세요.
+
 ## 테스트
 
 ```bash
@@ -25,9 +39,9 @@ go test ./...
 
 ## 아직 없는 것
 
-- 코어 데몬/HTTP-SSE 분리 (현재는 TUI가 agent loop를 in-process로 직접 호출하는 단일 프로세스 MVP)
-- Web UI, MCP, Skills, 백그라운드 Task Manager(동시 에이전트 실행/추적)
+- Web UI ↔ TUI 두 클라이언트 사이의 세션 목록 UI (지금은 각자 세션을 새로 만듦 — 이벤트 로그/데몬은 다중 세션을 이미 지원하지만 세션 선택 화면은 없음)
 - macOS 코드 서명·공증, Windows msi 코드 서명 (둘 다 설치는 되지만 아직 미서명 상태)
 - Windows arm64용 msi (현재 amd64만 msi 지원, arm64는 portable zip)
+- MCP 서버 다운/재연결 처리 (연결 실패 시 데몬 시작 자체가 실패)
 
-자세한 제약 사항은 [USAGE.md](USAGE.md#알려진-제약-mvp)를 참고하세요.
+자세한 제약 사항은 [USAGE.md](USAGE.md#알려진-제약)를 참고하세요.

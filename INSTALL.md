@@ -83,3 +83,7 @@ cp config.example.json ~/.localcode/config.json
 - EC2/컨테이너 인스턴스 역할
 
 Bedrock 콘솔에서 해당 리전에 사용할 Claude 모델 접근 권한(model access)이 활성화되어 있어야 합니다.
+
+## 5. MCP 서버 (선택)
+
+config의 `mcp_servers`에 등록한 각 서버는 `command`로 지정한 실행 파일을 그대로 stdio로 띄웁니다. 예를 들어 `npx -y @modelcontextprotocol/server-github`를 쓰려면 Node.js/npm이 설치되어 있어야 합니다. 자세한 설정은 [USAGE.md](USAGE.md#설정-파일-configjson)를 참고하세요.
