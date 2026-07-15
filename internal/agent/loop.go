@@ -1,0 +1,199 @@
+// Package agent implements the core agent loop: send a user message, stream
+// the model's response into the session's event log, execute any requested
+// tool calls, and repeat until the model stops asking for tools.
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+
+	"localcode/internal/config"
+	"localcode/internal/events"
+	"localcode/internal/provider"
+	"localcode/internal/session"
+	"localcode/internal/tools"
+)
+
+const defaultSystemPrompt = "You are a helpful coding assistant with access to file and shell tools. Use them when needed; otherwise answer directly."
+
+const defaultMaxTokens = 4096
+
+// Loop wires a session store, tool registry, and the set of configured
+// model providers together. One Loop instance is shared across sessions;
+// per-session conversation history is kept in memory.
+type Loop struct {
+	Store        *session.Store
+	Tools        *tools.Registry
+	Providers    map[string]provider.Provider // provider config key -> client
+	Config       *config.Config
+	SystemPrompt string
+
+	mu       sync.Mutex
+	messages map[string][]provider.Message // sessionID -> history
+}
+
+func New(store *session.Store, reg *tools.Registry, providers map[string]provider.Provider, cfg *config.Config) *Loop {
+	return &Loop{
+		Store:        store,
+		Tools:        reg,
+		Providers:    providers,
+		Config:       cfg,
+		SystemPrompt: defaultSystemPrompt,
+		messages:     map[string][]provider.Message{},
+	}
+}
+
+// SendMessage appends a user turn to sessionID's history and drives the
+// agent loop (model call -> optional tool calls -> model call -> ...) until
+// the model produces a final answer. agentName selects which model profile
+// to use, per the config's agents map.
+func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text string) error {
+	profile, err := l.Config.ResolveProfile(agentName)
+	if err != nil {
+		return fmt.Errorf("resolve profile for agent %q: %w", agentName, err)
+	}
+	p, ok := l.Providers[profile.Provider]
+	if !ok {
+		return fmt.Errorf("no provider client configured for %q (check Providers map at startup)", profile.Provider)
+	}
+
+	maxTokens := profile.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = defaultMaxTokens
+	}
+
+	l.appendHistory(sessionID, provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Block{provider.TextBlock(text)},
+	})
+
+	for {
+		history := l.history(sessionID)
+
+		req := provider.ChatRequest{
+			Model:       profile.Model,
+			System:      l.SystemPrompt,
+			Messages:    history,
+			Tools:       l.Tools.Specs(),
+			MaxTokens:   maxTokens,
+			Temperature: profile.Temperature,
+		}
+
+		stream, err := p.Chat(ctx, req)
+		if err != nil {
+			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
+			return fmt.Errorf("chat request: %w", err)
+		}
+
+		assistantBlocks, toolUses, stopReason, err := l.consumeStream(sessionID, stream)
+		if err != nil {
+			return err
+		}
+
+		l.appendHistory(sessionID, provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})
+
+		if stopReason != "tool_use" || len(toolUses) == 0 {
+			return nil
+		}
+
+		resultBlocks := l.runTools(ctx, sessionID, toolUses)
+		l.appendHistory(sessionID, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
+	}
+}
+
+// consumeStream drains one model response, mirroring each piece into the
+// session's event log, and returns the assistant's content blocks plus any
+// tool_use blocks it requested.
+func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEvent) (blocks []provider.Block, toolUses []provider.Block, stopReason string, err error) {
+	var text strings.Builder
+	toolNames := map[string]string{}
+	toolInputs := map[string]*strings.Builder{}
+	var toolOrder []string
+
+	for ev := range stream {
+		switch ev.Type {
+		case provider.EventTextDelta:
+			text.WriteString(ev.TextDelta)
+			l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": ev.TextDelta})
+
+		case provider.EventToolUseStart:
+			toolNames[ev.ToolUseID] = ev.ToolName
+			toolInputs[ev.ToolUseID] = &strings.Builder{}
+			toolOrder = append(toolOrder, ev.ToolUseID)
+			l.Store.Append(sessionID, events.TypeToolStart, map[string]any{
+				"tool_use_id": ev.ToolUseID,
+				"name":        ev.ToolName,
+			})
+
+		case provider.EventToolUseInputDelta:
+			if b, ok := toolInputs[ev.ToolUseID]; ok {
+				b.WriteString(ev.InputDelta)
+			}
+
+		case provider.EventToolUseEnd:
+			input := ev.ToolInput
+			if len(input) == 0 {
+				if b, ok := toolInputs[ev.ToolUseID]; ok && b.Len() > 0 {
+					input = json.RawMessage(b.String())
+				} else {
+					input = json.RawMessage("{}")
+				}
+			}
+			toolUses = append(toolUses, provider.Block{
+				Type:      provider.BlockToolUse,
+				ToolUseID: ev.ToolUseID,
+				ToolName:  toolNames[ev.ToolUseID],
+				ToolInput: input,
+			})
+
+		case provider.EventMessageStop:
+			stopReason = ev.StopReason
+
+		case provider.EventError:
+			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": ev.Err.Error()})
+			return nil, nil, "", fmt.Errorf("provider stream error: %w", ev.Err)
+		}
+	}
+
+	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String()})
+
+	if text.Len() > 0 {
+		blocks = append(blocks, provider.TextBlock(text.String()))
+	}
+	blocks = append(blocks, toolUses...)
+	return blocks, toolUses, stopReason, nil
+}
+
+// runTools executes each requested tool call in order and returns the
+// resulting tool_result blocks to feed back to the model.
+func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block) []provider.Block {
+	ctx = WithSessionID(ctx, sessionID)
+	results := make([]provider.Block, 0, len(toolUses))
+	for _, tu := range toolUses {
+		res := l.Tools.Call(ctx, tu.ToolName, tu.ToolInput, "")
+		l.Store.Append(sessionID, events.TypeToolEnd, map[string]any{
+			"tool_use_id": tu.ToolUseID,
+			"content":     res.Content,
+			"is_error":    res.IsError,
+		})
+		results = append(results, provider.ToolResultBlock(tu.ToolUseID, res.Content, res.IsError))
+	}
+	return results
+}
+
+func (l *Loop) appendHistory(sessionID string, msg provider.Message) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.messages[sessionID] = append(l.messages[sessionID], msg)
+}
+
+func (l *Loop) history(sessionID string) []provider.Message {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]provider.Message, len(l.messages[sessionID]))
+	copy(out, l.messages[sessionID])
+	return out
+}
