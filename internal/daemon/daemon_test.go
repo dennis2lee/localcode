@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,9 +21,9 @@ import (
 )
 
 // mockModelServer scripts a two-turn OpenAI-compat conversation: first turn
-// asks to run write_file (so the test also exercises the permission
-// broker over HTTP), second turn answers with plain text.
-func mockModelServer(t *testing.T) *httptest.Server {
+// asks to run write_file against writePath (so the test also exercises the
+// permission broker over HTTP), second turn answers with plain text.
+func mockModelServer(t *testing.T, writePath string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -43,7 +44,8 @@ func mockModelServer(t *testing.T) *httptest.Server {
 
 		var chunks []string
 		if !hasToolResult {
-			args := `{\"path\":\"out.txt\",\"content\":\"hi\"}`
+			escapedPath := strings.ReplaceAll(writePath, `\`, `\\`)
+			args := `{\"path\":\"` + escapedPath + `\",\"content\":\"hi\"}`
 			chunks = []string{
 				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"write_file","arguments":""}}]}}]}`,
 				`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"` + args + `"}}]}}]}`,
@@ -105,7 +107,8 @@ func newTestDaemon(t *testing.T, modelURL string) *Daemon {
 // its SSE stream, send a message that triggers a permission-gated tool
 // call, approve it over HTTP, and confirm the final answer arrives.
 func TestDaemonEndToEnd(t *testing.T) {
-	model := mockModelServer(t)
+	writePath := filepath.Join(t.TempDir(), "out.txt")
+	model := mockModelServer(t, writePath)
 	defer model.Close()
 
 	d := newTestDaemon(t, model.URL)
