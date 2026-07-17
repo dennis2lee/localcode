@@ -66,8 +66,9 @@ localcode --server http://localhost:4096   # 터미널
 
 ### 필드 설명
 
-- **providers**: 모델 백엔드 연결 정보. `type`은 `bedrock` 또는 `openai-compat`.
-  - `bedrock.region`: AWS 리전 (예: `us-west-2`). 인증은 별도 설정 없이 AWS 기본 자격 증명 체인을 사용합니다. 모델 access 활성화, 실제 모델 ID(리전 프리픽스 포함) 등 자세한 설정은 [MODELS.md](MODELS.md#amazon-bedrock-claude)를 참고하세요.
+- **providers**: 모델 백엔드 연결 정보. `type`은 `bedrock`, `anthropic`, `openai-compat` 중 하나.
+  - `bedrock.region`: AWS 리전 (예: `us-west-2`). `bedrock.profile`: 사용할 AWS named profile (`localcode login bedrock`이 만들어 둔 프로필 등) — 생략하면 AWS 기본 자격 증명 체인을 그대로 사용합니다. 모델 access 활성화, 실제 모델 ID(리전 프리픽스 포함) 등 자세한 설정은 [MODELS.md](MODELS.md#amazon-bedrock-claude)를 참고하세요.
+  - `anthropic.api_key`: 생략하면 `localcode login anthropic`으로 저장한 키(`~/.localcode/credentials.json`)를 자동으로 씁니다. `anthropic.base_url`: 기본값은 `api.anthropic.com`이고, 사내 프록시를 거친다면 override 가능. 자세한 건 [MODELS.md](MODELS.md#anthropic-api-직접-사용) 참고.
   - `openai-compat.base_url`: `/chat/completions` 앞부분 URL. LM Studio, vLLM 등 OpenAI 호환 서버 주소.
   - `openai-compat.api_key`: 필요하면 지정 (로컬 서버는 보통 불필요).
 - **profiles**: 실제로 쓸 provider+model 조합에 이름을 붙인 것. `max_tokens`, `temperature` 선택적으로 지정.
@@ -76,6 +77,34 @@ localcode --server http://localhost:4096   # 터미널
 - **mcp_servers**: Claude Code의 `.mcp.json`과 같은 모양(`command`/`args`/`env`)이라, 기존 항목을 그대로 옮겨 쓸 수 있습니다. 각 서버는 stdio로 붙고, 그 서버의 툴은 `mcp__<서버이름>__<툴이름>`으로 노출됩니다. **MCP 툴은 항상 권한 확인을 거칩니다** — 서버가 자기 툴을 "읽기 전용"이라고 알려와도(annotations) 신뢰하지 않습니다. 서버 하나가 연결에 실패해도(잘못된 command, 프로세스 크래시 등) 그 서버만 건너뛰고 나머지는 정상 등록됩니다 — 데몬 로그에 경고만 남고 시작은 막히지 않습니다. 연결된 서버의 세션이 죽으면 다음 호출 시 자동으로 한 번 재연결을 시도합니다.
 
 설정이 틀리면(예: 존재하지 않는 provider를 가리키는 profile) 실행 시작 시점에 바로 에러를 내고 종료합니다.
+
+## `/login`으로 인증하기
+
+`localcode login <bedrock|anthropic>`는 클라우드 provider 인증을 대화식으로 끝내주는 CLI 서브커맨드입니다 (데몬/TUI를 띄우기 전에 터미널에서 직접 실행). config.json에 `api_key`를 직접 적어 넣거나 AWS CLI를 미리 설치해야 하는 수고를 없애줍니다.
+
+> claude.ai **Pro/Max 구독 자체를 재사용하는 로그인은 지원하지 않습니다.** Claude Code가 그렇게 동작하는 건 Anthropic이 Claude Code 전용으로 발급한 비공개 OAuth 클라이언트를 쓰기 때문인데, 그 자격 증명과 스코프는 공개되어 있지 않습니다. 제3자 도구가 이를 흉내 내려고 하면 Anthropic 이용약관 위반 소지가 있어 구현하지 않았습니다. 아래 두 방법은 각각 AWS/Anthropic이 공개한 정식 인증 절차만 사용합니다.
+
+### `localcode login bedrock`
+
+AWS IAM Identity Center(SSO)의 **디바이스 인가 플로우**를 직접 구현했습니다 — AWS CLI 설치 없이도 동작합니다.
+
+```bash
+localcode login bedrock
+```
+
+- SSO 시작 URL, SSO 리전을 물어봅니다 (플래그로 미리 줄 수도 있음: `--start-url`, `--sso-region`, `--region`, `--profile`, `--account`, `--role`).
+- 인증용 URL을 출력하고 (가능하면 자동으로 브라우저도 엽니다) 승인을 기다립니다. **이 URL은 디바이스 코드 방식이라 어떤 기기에서 열어도 상관없습니다** — 이 명령을 실행 중인 컴퓨터일 필요가 없습니다.
+- 로그인 후 접근 가능한 AWS 계정/역할이 여러 개면 번호로 선택하게 하고, 하나뿐이면 자동 선택합니다.
+- 결과를 **AWS CLI와 동일한 위치**에 저장합니다: `~/.aws/sso/cache/<start-url의 sha1>.json` (토큰 캐시), `~/.aws/config`의 `[profile <이름>]` (기본값 `localcode-bedrock`). 이미 같은 이름의 프로필이 있으면 건드리지 않습니다.
+- 이렇게 저장된 자격 증명은 AWS 기본 자격 증명 체인이 그대로 인식하므로, config.json에는 `"providers": {"bedrock": {"type":"bedrock","region":"...","profile":"localcode-bedrock"}}`만 추가하면 됩니다 — 명령이 끝나면 정확한 값을 출력해줍니다.
+
+### `localcode login anthropic`
+
+```bash
+localcode login anthropic
+```
+
+`console.anthropic.com`에서 발급한 API 키를 입력받아(터미널이면 화면에 표시되지 않음) `~/.localcode/credentials.json`(권한 0600)에 저장합니다. config.json에는 `"providers": {"anthropic": {"type":"anthropic"}}`만 추가하면 되고, `api_key`는 생략해도 저장된 키를 자동으로 씁니다. 자세한 사용처는 [MODELS.md의 Anthropic API 직접 사용](MODELS.md#anthropic-api-직접-사용) 참고.
 
 ## Skills
 

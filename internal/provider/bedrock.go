@@ -21,8 +21,16 @@ type Bedrock struct {
 	client *bedrockruntime.Client
 }
 
-func NewBedrock(ctx context.Context, region string) (*Bedrock, error) {
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+// NewBedrock builds a Bedrock client for region. profile, if non-empty,
+// selects a named AWS profile (e.g. one `localcode login bedrock` set up)
+// via the shared config/credentials files instead of the default
+// credential chain's usual resolution order.
+func NewBedrock(ctx context.Context, region, profile string) (*Bedrock, error) {
+	opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
+	if profile != "" {
+		opts = append(opts, awsconfig.WithSharedConfigProfile(profile))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}

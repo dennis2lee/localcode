@@ -44,10 +44,19 @@ type MCPServerConfig struct {
 // ProviderConfig describes how to reach a model backend.
 // Type selects which concrete client to construct (see provider.Provider).
 type ProviderConfig struct {
-	Type    ProviderType `json:"type"`               // "bedrock" | "openai-compat"
-	Region  string       `json:"region,omitempty"`   // bedrock
-	BaseURL string       `json:"base_url,omitempty"` // openai-compat
-	APIKey  string       `json:"api_key,omitempty"`  // openai-compat, optional
+	Type ProviderType `json:"type"` // "bedrock" | "openai-compat" | "anthropic"
+
+	Region  string `json:"region,omitempty"`  // bedrock
+	Profile string `json:"profile,omitempty"` // bedrock: AWS named profile to use (e.g. one set up by `localcode login bedrock`); empty uses the default credential chain
+
+	BaseURL string `json:"base_url,omitempty"` // openai-compat (required); anthropic (optional override, e.g. an enterprise proxy — defaults to api.anthropic.com)
+
+	// APIKey is used by openai-compat directly, and by anthropic as a
+	// fallback: if empty, the anthropic provider reads the key saved by
+	// `localcode login anthropic` from ~/.localcode/credentials.json
+	// instead — so a project-local config.json naming an "anthropic"
+	// provider doesn't need to embed the key itself.
+	APIKey string `json:"api_key,omitempty"`
 }
 
 type ProviderType string
@@ -55,6 +64,7 @@ type ProviderType string
 const (
 	ProviderBedrock      ProviderType = "bedrock"
 	ProviderOpenAICompat ProviderType = "openai-compat"
+	ProviderAnthropic    ProviderType = "anthropic"
 )
 
 // Profile pins a concrete provider+model combination.

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.0
+
+- `localcode login bedrock`: native AWS IAM Identity Center (SSO) device-authorization flow — no AWS CLI required. Writes the same artifacts the AWS CLI does (`~/.aws/sso/cache/<sha1(start-url)>.json`, a `[profile ...]` block in `~/.aws/config`), so the default AWS credential chain (which `provider.Bedrock` already relies on) picks it up automatically. `config.json`'s `providers.<name>.profile` selects the named profile.
+- `localcode login anthropic`: saves a personal Anthropic API key (from console.anthropic.com) to `~/.localcode/credentials.json` (mode 0600), and a new `anthropic` provider type talks directly to `api.anthropic.com` — usage-billed separately from a claude.ai Pro/Max subscription, not a substitute for one. Unlocks the newest Claude models (Opus 4.7/4.8, Sonnet 5, Fable 5) that Bedrock's Converse API doesn't yet expose.
+- Explicitly does **not** implement reusing a claude.ai Pro/Max subscription itself (what Claude Code's own login does) — that requires Anthropic's undocumented, Claude-Code-only OAuth client, and reimplementing it in a third-party tool would risk violating Anthropic's terms of service.
+
 ## v0.6.1
 
 - Fix: custom-command expansion no longer re-scans substituted content for further directives — a `!`shell`` command's output or an argument value containing an `@path` (e.g. `@/etc/passwd`) is now left literal instead of being read and inlined. Expansion is a single left-to-right pass; `$1`/`$ARGUMENTS` still substitute into the shell command itself.

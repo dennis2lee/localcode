@@ -24,6 +24,7 @@ import (
 	"localcode/internal/client"
 	"localcode/internal/commands"
 	"localcode/internal/config"
+	"localcode/internal/credentials"
 	"localcode/internal/daemon"
 	mcpclient "localcode/internal/mcp"
 	"localcode/internal/memory"
@@ -41,6 +42,13 @@ var version = "dev"
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Println(version)
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "login" {
+		if err := runLogin(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if err := run(); err != nil {
@@ -285,17 +293,39 @@ func loadConfig(explicitPath string) (*config.Config, error) {
 }
 
 func buildProviders(ctx context.Context, cfg *config.Config) (map[string]provider.Provider, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home dir: %w", err)
+	}
+
 	out := map[string]provider.Provider{}
 	for name, pc := range cfg.Providers {
 		switch pc.Type {
 		case config.ProviderBedrock:
-			b, err := provider.NewBedrock(ctx, pc.Region)
+			b, err := provider.NewBedrock(ctx, pc.Region, pc.Profile)
 			if err != nil {
 				return nil, fmt.Errorf("init bedrock provider %q: %w", name, err)
 			}
 			out[name] = b
 		case config.ProviderOpenAICompat:
 			out[name] = provider.NewOpenAICompat(pc.BaseURL, pc.APIKey)
+		case config.ProviderAnthropic:
+			apiKey := pc.APIKey
+			if apiKey == "" {
+				creds, err := credentials.Load(home)
+				if err != nil {
+					return nil, fmt.Errorf("load credentials for anthropic provider %q: %w", name, err)
+				}
+				apiKey = creds.AnthropicAPIKey
+			}
+			if apiKey == "" {
+				return nil, fmt.Errorf("provider %q (anthropic) has no api_key and none saved — run `localcode login anthropic` first", name)
+			}
+			ad := provider.NewAnthropicDirect(apiKey)
+			if pc.BaseURL != "" {
+				ad.BaseURL = pc.BaseURL
+			}
+			out[name] = ad
 		default:
 			return nil, fmt.Errorf("provider %q has unknown type %q", name, pc.Type)
 		}
