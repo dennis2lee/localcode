@@ -87,6 +87,8 @@ func newTestDaemon(t *testing.T, modelURL string) *Daemon {
 		},
 		Agents: map[string]config.AgentConfig{
 			"general-purpose": {Profile: "balanced"},
+			"plan":            {Profile: "balanced", Description: "Read-only planning.", Tools: []string{"glob"}},
+			"build":           {Profile: "balanced", Description: "Implements changes."},
 		},
 		DefaultProfile:     "balanced",
 		MaxConcurrentTasks: 2,
@@ -337,5 +339,117 @@ func TestDaemonVersion(t *testing.T) {
 	}
 	if v != "test-version" {
 		t.Errorf("version = %q, want %q", v, "test-version")
+	}
+}
+
+// TestDaemonListAgents confirms GET /api/agents reports every configured
+// agent, sorted, with its description — the picker Tab-cycling and the
+// Web UI's agent selector are built from this.
+func TestDaemonListAgents(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	agents, err := c.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+
+	if len(agents) != 3 {
+		t.Fatalf("expected 3 agents, got %d: %+v", len(agents), agents)
+	}
+	names := []string{agents[0].Name, agents[1].Name, agents[2].Name}
+	want := []string{"build", "general-purpose", "plan"} // alphabetical
+	for i := range want {
+		if names[i] != want[i] {
+			t.Errorf("agents[%d].Name = %q, want %q (sorted order)", i, names[i], want[i])
+		}
+	}
+	for _, a := range agents {
+		if a.Name == "plan" && a.Description != "Read-only planning." {
+			t.Errorf("plan agent description = %q, want %q", a.Description, "Read-only planning.")
+		}
+	}
+}
+
+// TestDaemonSwitchAgent confirms switching a session's agent mid-
+// conversation updates the session (visible via GET /api/sessions/{id})
+// and emits an agent.switched event, without touching anything else about
+// the session.
+func TestDaemonSwitchAgent(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "plan")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if sess.Agent != "plan" {
+		t.Fatalf("expected session to start as \"plan\", got %q", sess.Agent)
+	}
+
+	updated, err := c.SwitchAgent(ctx, sess.ID, "build")
+	if err != nil {
+		t.Fatalf("SwitchAgent: %v", err)
+	}
+	if updated.Agent != "build" {
+		t.Errorf("SwitchAgent returned Agent = %q, want %q", updated.Agent, "build")
+	}
+
+	got, err := d.Loop.Store.Get(sess.ID)
+	if err != nil {
+		t.Fatalf("re-fetch session: %v", err)
+	}
+	if got.Agent != "build" {
+		t.Errorf("session Agent after switch = %q, want %q", got.Agent, "build")
+	}
+
+	all, err := d.Loop.Store.Events(sess.ID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	sawSwitch := false
+	for _, ev := range all {
+		if ev.Type == events.TypeAgentSwitched {
+			sawSwitch = true
+			if ev.Data["agent"] != "build" {
+				t.Errorf("agent.switched event data = %+v, want agent=build", ev.Data)
+			}
+		}
+	}
+	if !sawSwitch {
+		t.Error("expected an agent.switched event")
+	}
+}
+
+func TestDaemonSwitchAgentUnknownAgent(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "plan")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	if _, err := c.SwitchAgent(ctx, sess.ID, "does-not-exist"); err == nil {
+		t.Error("expected an error switching to an unconfigured agent name")
 	}
 }

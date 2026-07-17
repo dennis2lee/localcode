@@ -84,6 +84,31 @@ func (c *Client) ListSessions(ctx context.Context) ([]session.Session, error) {
 	return out, err
 }
 
+// AgentInfo is one configured agent, as offered by the daemon's agent
+// picker (GET /api/agents) — enough to build a Tab-cycle or dropdown
+// without exposing that agent's system prompt or tool restrictions.
+type AgentInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// ListAgents returns every agent configured on the daemon, sorted by name.
+func (c *Client) ListAgents(ctx context.Context) ([]AgentInfo, error) {
+	var out []AgentInfo
+	err := c.doJSON(ctx, http.MethodGet, "/api/agents", nil, &out)
+	return out, err
+}
+
+// SwitchAgent changes which agent sessionID sends future messages as.
+// Conversation history is untouched — only the model/system prompt/tool
+// scope used for the next message changes. This is what backs Tab-cycling
+// between e.g. "plan" and "build" mid-conversation.
+func (c *Client) SwitchAgent(ctx context.Context, sessionID, agentName string) (session.Session, error) {
+	var sess session.Session
+	err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/agent", map[string]string{"agent": agentName}, &sess)
+	return sess, err
+}
+
 // Version returns the version string of the daemon this client is
 // attached to — not necessarily the local binary's own version, since a
 // TUI can be pointed at a remote daemon via --server.

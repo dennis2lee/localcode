@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -57,9 +58,11 @@ func (d *Daemon) Handler() http.Handler { return d.mux }
 
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
+	d.mux.HandleFunc("GET /api/agents", d.handleListAgents)
 	d.mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
 	d.mux.HandleFunc("GET /api/sessions", d.handleListSessions)
 	d.mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)
+	d.mux.HandleFunc("POST /api/sessions/{id}/agent", d.handleSwitchAgent)
 	d.mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleSendMessage)
 	d.mux.HandleFunc("GET /api/sessions/{id}/events", d.handleEvents)
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions/{permId}", d.handleResolvePermission)
@@ -84,6 +87,65 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func (d *Daemon) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"version": d.Version})
+}
+
+// AgentInfo is the client-facing view of a configured agent — enough to
+// build a picker (TUI Tab-cycle, Web UI dropdown) without exposing the
+// full config.AgentConfig (system prompt, tool list).
+type AgentInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// handleListAgents returns every agent defined in config.json's agents
+// map, sorted by name — the picklist for switching a session's active
+// agent (e.g. plan -> build).
+func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	names := make([]string, 0, len(d.Loop.Config.Agents))
+	for name := range d.Loop.Config.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]AgentInfo, 0, len(names))
+	for _, name := range names {
+		out = append(out, AgentInfo{Name: name, Description: d.Loop.Config.Agents[name].Description})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSwitchAgent changes which agent a session sends future messages
+// as — mid-conversation history is untouched, only the model/system
+// prompt/tool scope used for the *next* message changes. This is what
+// backs Tab-cycling in the TUI (plan -> build) or the Web UI's agent
+// selector, and the /agent slash command in both.
+func (d *Daemon) handleSwitchAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := d.Loop.Store.Get(id); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	var req struct {
+		Agent string `json:"agent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if _, ok := d.Loop.Config.Agents[req.Agent]; !ok {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("unknown agent %q", req.Agent))
+		return
+	}
+
+	sess, err := d.Loop.Store.SetAgent(id, req.Agent)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	d.Loop.Store.Append(id, events.TypeAgentSwitched, map[string]any{"agent": req.Agent})
+
+	writeJSON(w, http.StatusOK, sess)
 }
 
 func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
