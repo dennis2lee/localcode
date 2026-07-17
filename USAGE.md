@@ -67,7 +67,7 @@ localcode --server http://localhost:4096   # 터미널
 ### 필드 설명
 
 - **providers**: 모델 백엔드 연결 정보. `type`은 `bedrock` 또는 `openai-compat`.
-  - `bedrock.region`: AWS 리전 (예: `us-west-2`). 인증은 별도 설정 없이 AWS 기본 자격 증명 체인을 사용합니다.
+  - `bedrock.region`: AWS 리전 (예: `us-west-2`). 인증은 별도 설정 없이 AWS 기본 자격 증명 체인을 사용합니다. 모델 access 활성화, 실제 모델 ID(리전 프리픽스 포함) 등 자세한 설정은 [MODELS.md](MODELS.md#amazon-bedrock-claude)를 참고하세요.
   - `openai-compat.base_url`: `/chat/completions` 앞부분 URL. LM Studio, vLLM 등 OpenAI 호환 서버 주소.
   - `openai-compat.api_key`: 필요하면 지정 (로컬 서버는 보통 불필요).
 - **profiles**: 실제로 쓸 provider+model 조합에 이름을 붙인 것. `max_tokens`, `temperature` 선택적으로 지정.

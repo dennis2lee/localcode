@@ -1,0 +1,137 @@
+# 모델 설정 가이드
+
+localcode는 두 종류의 provider를 지원합니다 — **Amazon Bedrock**(클라우드, Claude)과 **OpenAI-compatible**(로컬 LLM, LM Studio/vLLM 등). 이 문서는 각각을 실제로 어떻게 설정하는지 다룹니다. 기본 항목 설명은 [USAGE.md](USAGE.md#설정-파일-configjson)를 먼저 참고하세요.
+
+## Amazon Bedrock (Claude)
+
+### 1. AWS 계정 준비
+
+1. AWS 계정이 없다면 만듭니다.
+2. AWS 콘솔 → **Bedrock → Model access**([console.aws.amazon.com/bedrock/home#/modelaccess](https://console.aws.amazon.com/bedrock/home#/modelaccess))에서 쓰려는 Claude 모델의 접근 권한을 요청/활성화합니다. 이 단계를 빼먹으면 API 호출이 `AccessDeniedException`으로 실패합니다.
+3. Anthropic 모델은 리전마다 사용 가능 여부가 다릅니다. 아래 모델 ID 표의 리전 컬럼을 참고하세요.
+
+### 2. 자격 증명 설정
+
+localcode는 별도 설정 없이 **AWS 기본 자격 증명 체인**을 그대로 사용합니다(`internal/provider/bedrock.go`가 `config.LoadDefaultConfig`를 호출). 아래 중 하나만 준비되어 있으면 됩니다.
+
+```bash
+# 방법 1: 액세스 키
+aws configure
+
+# 방법 2: SSO
+aws sso login --profile your-profile
+export AWS_PROFILE=your-profile
+
+# 방법 3: 환경 변수
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_SESSION_TOKEN=...   # 임시 자격 증명인 경우
+
+# 확인
+aws sts get-caller-identity
+```
+
+EC2/ECS/컨테이너에서 돌린다면 인스턴스/태스크 역할로도 자동 인식됩니다.
+
+### 3. 리전과 모델 ID
+
+`config.json`의 `providers.<name>.region`이 `AWS_REGION`처럼 SDK에 전달되는 리전입니다. **모델 ID 자체에도 별도 리전 프리픽스가 붙습니다** — 이게 헷갈리는 부분입니다.
+
+Sonnet 4.5 이후 모델부터 Bedrock은 base 모델 ID로 직접 호출하는 걸 막고, 반드시 **cross-region inference profile ID**(base ID 앞에 `us.`/`eu.`/`global.` 등을 붙인 것)를 쓰도록 강제합니다. base ID로 그냥 호출하면 이런 에러가 납니다:
+
+```
+Invocation of model ID anthropic.claude-sonnet-4-5-20250929-v1:0 with on-demand
+throughput isn't supported. Retry your request with the ID or ARN of an
+inference profile that contains this model.
+```
+
+즉 `config.json`의 `profiles.<name>.model`에는 **프리픽스가 붙은 전체 ID**를 넣어야 합니다.
+
+### 4. 실제 사용 가능한 모델 ID (2026-07 기준)
+
+이 표는 localcode가 실제로 호출하는 **Bedrock Converse/ConverseStream API** 기준입니다 (`bedrockruntime.ConverseStream` — [internal/provider/bedrock.go](internal/provider/bedrock.go)). 최신 모델 이름과 이 표의 이름이 다를 수 있는데, Bedrock에 올라오는 시점과 이름 체계가 Anthropic 자체 API와 별도로 관리되기 때문입니다.
+
+| 모델 | Base 모델 ID | 리전 프리픽스 | Converse API |
+|---|---|---|---|
+| Claude Opus 4.6 | `anthropic.claude-opus-4-6-v1` | `global.` `us.` `eu.` `jp.` `apac.` | ✅ |
+| Claude Sonnet 4.6 | `anthropic.claude-sonnet-4-6` | `global.` `us.` `eu.` `jp.` | ✅ |
+| Claude Sonnet 4.5 | `anthropic.claude-sonnet-4-5-20250929-v1:0` | `global.` `us.` `eu.` `jp.` | ✅ |
+| Claude Opus 4.5 | `anthropic.claude-opus-4-5-20251101-v1:0` | `global.` `us.` `eu.` | ✅ |
+| Claude Haiku 4.5 | `anthropic.claude-haiku-4-5-20251001-v1:0` | `global.` `us.` `eu.` | ✅ |
+
+예를 들어 US 리전 프로필로 Sonnet 4.5를 쓰려면 모델 ID는 `us.anthropic.claude-sonnet-4-5-20250929-v1:0`, 지연 없는 전역 라우팅을 원하면 `global.anthropic.claude-opus-4-6-v1`처럼 씁니다. `global.`은 가격 프리미엄이 없고 가용성이 가장 높으며, `us.`/`eu.`/`jp.`/`apac.` 같은 리전 고정 프리픽스는 데이터 상주(data residency) 요구사항이 있을 때만 쓰면 됩니다(약 10% 가격 프리미엄).
+
+> **⚠️ 중요한 제약**: Claude Opus 4.7, Opus 4.8, Sonnet 5, Fable 5는 **이 표에 없습니다** — Anthropic 공식 문서 기준으로 이 모델들은 ARN 버전 모델 ID가 없고, Bedrock의 새 Messages API 게이트웨이(`bedrock-mantle`, `/anthropic/v1/messages`)를 통해서만 제공됩니다. localcode의 Bedrock provider는 기존 Converse API만 구현되어 있어서, **현재는 이 최신 모델들을 Bedrock으로 쓸 수 없습니다.** Bedrock에서 최신 모델을 쓰고 싶다면 위 표의 모델(Opus 4.6/Sonnet 4.6 등)을 쓰거나, localcode의 향후 업데이트를 기다리세요. (Claude API를 직접 쓰는 경우엔 이 제약이 없습니다 — Bedrock을 거치지 않는 별도 provider가 필요합니다.)
+
+최신 사용 가능 여부/리전은 언제든 바뀔 수 있으므로, 확실한 최신 목록이 필요하면:
+
+```bash
+aws bedrock list-foundation-models --region=us-west-2 --by-provider anthropic \
+  --query "modelSummaries[*].modelId"
+```
+
+### 5. config.json 예시
+
+```json
+{
+  "providers": {
+    "bedrock": { "type": "bedrock", "region": "us-west-2" }
+  },
+  "profiles": {
+    "strong":   { "provider": "bedrock", "model": "us.anthropic.claude-opus-4-6-v1", "max_tokens": 8192 },
+    "balanced": { "provider": "bedrock", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "max_tokens": 8192 },
+    "cheap":    { "provider": "bedrock", "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "max_tokens": 4096 }
+  },
+  "agents": {
+    "general-purpose": { "profile": "balanced" },
+    "explore":          { "profile": "cheap" }
+  },
+  "default_profile": "balanced"
+}
+```
+
+### 6. 확인
+
+```bash
+localcode --agent general-purpose
+```
+
+바로 메시지를 보내보고, 인증/모델 ID 문제가 있으면 다음을 순서대로 의심하세요:
+
+1. `aws sts get-caller-identity`가 실패한다 → 자격 증명 문제
+2. `AccessDeniedException` → 콘솔에서 해당 모델 access 활성화 안 함
+3. `... with on-demand throughput isn't supported` → 모델 ID에 리전 프리픽스(`us.` 등)가 빠짐
+4. `ValidationException: model identifier is invalid` → 오타 또는 해당 리전에서 미지원 모델
+
+## 로컬 LLM (OpenAI-compatible)
+
+Bedrock 없이 완전히 로컬에서 돌리고 싶을 때, 또는 가볍고 빠른 작업(예: `explore` 에이전트)에 로컬 모델을 쓰고 싶을 때 사용합니다.
+
+### LM Studio
+
+1. [LM Studio](https://lmstudio.ai/) 설치 후 원하는 모델 다운로드 (예: Qwen3-30B-A3B).
+2. 좌측 **Developer** 탭 → 로컬 서버 시작. 기본 주소는 `http://localhost:1234/v1`.
+3. LM Studio에 표시되는 정확한 모델 이름을 `config.json`의 `profiles.<name>.model`에 그대로 씁니다 (이름이 다르면 요청이 실패합니다).
+
+```json
+{
+  "providers": {
+    "local": { "type": "openai-compat", "base_url": "http://localhost:1234/v1" }
+  },
+  "profiles": {
+    "local-fast": { "provider": "local", "model": "qwen3-30b-a3b", "max_tokens": 4096 }
+  },
+  "agents": {
+    "general-purpose": { "profile": "local-fast" }
+  },
+  "default_profile": "local-fast"
+}
+```
+
+### vLLM / 그 외 OpenAI 호환 서버
+
+`/chat/completions`를 제공하는 서버라면 무엇이든 `base_url`만 맞추면 동일하게 동작합니다. 인증이 필요하면 `providers.<name>.api_key`를 지정하세요 (`Authorization: Bearer <key>` 헤더로 전달됩니다). 사내망을 거친다면 리버스 프록시/방화벽에서 해당 포트가 열려 있는지 확인하세요.
+
+## Bedrock + 로컬 모델 같이 쓰기
+
+`providers`에 둘 다 등록하고, `agents` 맵에서 작업 종류별로 다른 `profile`을 가리키면 됩니다 — 예를 들어 복잡한 작업은 Bedrock Sonnet, 단순 파일 탐색은 로컬 모델로 라우팅. 자세한 건 [USAGE.md의 "다른 모델로 전환하기"](USAGE.md#다른-모델로-전환하기)를 참고하세요.

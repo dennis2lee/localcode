@@ -4,6 +4,7 @@ Bedrock + OpenAI-compatible(로컬 LLM) 양쪽에 붙는 코딩 에이전트. Cl
 
 - [설치 방법](INSTALL.md) — 소스 빌드, macOS/Windows 배포 패키지 만들기
 - [사용 방법](USAGE.md) — config.json 작성법(Provider/MCP/Skills), 화면 조작, 백그라운드 태스크
+- [모델 설정 가이드](MODELS.md) — Amazon Bedrock/Claude, 로컬 LLM(LM Studio 등) 실제 설정 방법과 검증된 모델 ID
 - [LICENSE](LICENSE) — MIT
 
 ## 아키텍처
