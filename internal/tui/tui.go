@@ -37,9 +37,15 @@ const helpText = `사용 가능한 명령:
   /version            데몬 버전 표시
   /skill              등록된 skill 목록 표시
   /skill <이름>        해당 skill을 로드해서 바로 이어서 질문
+  /agent              등록된 에이전트 목록 표시
+  /agent <이름>        해당 에이전트로 전환 (Tab으로도 순환 전환 가능)
   exit, :q            TUI 종료 (Ctrl+C와 동일)
 
-Enter로 전송, Ctrl+J로 줄바꿈.`
+Enter로 전송, Ctrl+J로 줄바꿈, Tab으로 에이전트 전환.`
+
+// headerLines is how many rows View() reserves above the viewport for the
+// current-agent status line, so resizeLayout can size the viewport to fit.
+const headerLines = 1
 
 type pendingPermission struct {
 	id, tool, description string
@@ -54,13 +60,15 @@ type Model struct {
 	termHeight int
 	events     <-chan events.Event
 
-	transcript strings.Builder
-	pending    *pendingPermission
-	waiting    bool
-	errMsg     string
+	transcript   strings.Builder
+	pending      *pendingPermission
+	waiting      bool
+	errMsg       string
+	currentAgent string
+	agents       []client.AgentInfo
 }
 
-func New(c *client.Client, sessionID string, eventCh <-chan events.Event) Model {
+func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Event) Model {
 	ta := textarea.New()
 	ta.Placeholder = "메시지를 입력하세요 (Enter로 전송, /help로 도움말, exit로 종료)"
 	ta.ShowLineNumbers = false
@@ -76,16 +84,17 @@ func New(c *client.Client, sessionID string, eventCh <-chan events.Event) Model 
 	vp := viewport.New(80, 20)
 
 	return Model{
-		client:    c,
-		sessionID: sessionID,
-		viewport:  vp,
-		input:     ta,
-		events:    eventCh,
+		client:       c,
+		sessionID:    sessionID,
+		viewport:     vp,
+		input:        ta,
+		events:       eventCh,
+		currentAgent: agentName,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return listenForEvent(m.events)
+	return tea.Batch(listenForEvent(m.events), m.fetchAgents())
 }
 
 type eventMsg events.Event
@@ -95,6 +104,11 @@ type versionMsg struct {
 	version string
 	err     error
 }
+type agentsMsg struct {
+	agents []client.AgentInfo
+	err    error
+}
+type switchAgentMsg struct{ err error }
 
 func listenForEvent(ch <-chan events.Event) tea.Cmd {
 	return func() tea.Msg {
@@ -127,6 +141,50 @@ func (m Model) fetchVersion() tea.Cmd {
 	}
 }
 
+func (m Model) fetchAgents() tea.Cmd {
+	return func() tea.Msg {
+		agents, err := m.client.ListAgents(context.Background())
+		return agentsMsg{agents: agents, err: err}
+	}
+}
+
+// switchAgent asks the daemon to change this session's active agent. It
+// reports only errors back to Update — the actual state change (and the
+// transcript line announcing it) comes from the agent.switched event this
+// same call causes the daemon to broadcast, which every subscribed client
+// (including this one) receives the same way.
+func (m Model) switchAgent(name string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := m.client.SwitchAgent(context.Background(), m.sessionID, name)
+		return switchAgentMsg{err: err}
+	}
+}
+
+// nextAgent returns the agent after currentAgent in m.agents, cycling
+// back to the start — the Tab-key behavior. Returns "", false if there's
+// nothing to cycle to (0 or 1 known agents).
+func (m Model) nextAgent() (string, bool) {
+	if len(m.agents) < 2 {
+		return "", false
+	}
+	for i, a := range m.agents {
+		if a.Name == m.currentAgent {
+			return m.agents[(i+1)%len(m.agents)].Name, true
+		}
+	}
+	// Current agent isn't in the known list (shouldn't normally happen) —
+	// just start from the first one.
+	return m.agents[0].Name, true
+}
+
+func (m Model) agentNames() []string {
+	names := make([]string, len(m.agents))
+	for i, a := range m.agents {
+		names[i] = a.Name
+	}
+	return names
+}
+
 // appendLocal writes text straight into the transcript without going
 // through the server — for /help and /version, which are answered purely
 // client-side (well, /version does hit the daemon, but the answer isn't
@@ -151,7 +209,7 @@ func (m *Model) resizeLayout() {
 	m.input.SetHeight(inputHeight)
 
 	const chromeLines = 2 // status/permission line + blank separator
-	vh := m.termHeight - chromeLines - inputHeight
+	vh := m.termHeight - chromeLines - inputHeight - headerLines
 	if vh < 3 {
 		vh = 3
 	}
@@ -180,6 +238,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.resolvePermission(id, allow)
 			}
 
+		case "tab":
+			if next, ok := m.nextAgent(); ok {
+				return m, m.switchAgent(next)
+			}
+			return m, nil
+
 		case "enter":
 			if m.pending != nil {
 				return m, nil // waiting for y/n, ignore stray enters
@@ -199,6 +263,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "/version":
 				return m, m.fetchVersion()
+			case "/agent":
+				if len(m.agents) == 0 {
+					m.appendLocal("등록된 에이전트가 없습니다.")
+				} else {
+					var b strings.Builder
+					b.WriteString("사용 가능한 에이전트 (/agent <이름> 으로 전환, 현재: " + m.currentAgent + "):\n")
+					for _, a := range m.agents {
+						fmt.Fprintf(&b, "- %s: %s\n", a.Name, a.Description)
+					}
+					m.appendLocal(strings.TrimRight(b.String(), "\n"))
+				}
+				return m, nil
+			}
+			if name, ok := strings.CutPrefix(text, "/agent "); ok {
+				name = strings.TrimSpace(name)
+				return m, m.switchAgent(name)
 			}
 
 			// The user line itself renders from the message.user event (see
@@ -234,6 +314,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.appendLocal("localcode " + msg.version)
 		}
+		return m, nil
+
+	case agentsMsg:
+		if msg.err == nil {
+			m.agents = msg.agents
+		}
+		return m, nil
+
+	case switchAgentMsg:
+		if msg.err != nil {
+			m.errMsg = msg.err.Error()
+		}
+		// On success, m.currentAgent updates from the agent.switched event
+		// this call causes the daemon to broadcast (see applyEvent) — not
+		// here, so every client reacts to the same event uniformly.
 		return m, nil
 	}
 
@@ -279,6 +374,11 @@ func (m *Model) applyEvent(ev events.Event) {
 		taskID, _ := ev.Data["task_id"].(string)
 		status, _ := ev.Data["status"].(string)
 		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[task] %s: %s\n", taskID, status)))
+	case events.TypeAgentSwitched:
+		if name, ok := ev.Data["agent"].(string); ok {
+			m.currentAgent = name
+			m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("→ %s 에이전트로 전환\n\n", name)))
+		}
 	case events.TypeError:
 		if msg, ok := ev.Data["error"].(string); ok {
 			m.waiting = false
@@ -291,6 +391,14 @@ func (m *Model) applyEvent(ev events.Event) {
 
 func (m Model) View() string {
 	var b strings.Builder
+
+	header := "agent: " + m.currentAgent
+	if len(m.agents) > 1 {
+		header += "  (Tab로 전환: " + strings.Join(m.agentNames(), " → ") + ")"
+	}
+	b.WriteString(statusStyle.Render(header))
+	b.WriteString("\n")
+
 	b.WriteString(m.viewport.View())
 	b.WriteString("\n")
 

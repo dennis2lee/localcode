@@ -204,7 +204,7 @@ func runTUIClient(serverURL, agentName string) error {
 		return fmt.Errorf("subscribe to events: %w", err)
 	}
 
-	model := tui.New(c, sess.ID, eventCh)
+	model := tui.New(c, sess.ID, sess.Agent, eventCh)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	_, err = p.Run()
 	return err

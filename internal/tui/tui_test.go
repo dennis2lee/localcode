@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +19,7 @@ import (
 // Init() or a real tea.Program, so the client is never called.
 func newTestModel() Model {
 	ch := make(chan events.Event)
-	return New(client.New("http://unused.invalid"), "s1", ch)
+	return New(client.New("http://unused.invalid"), "s1", "general-purpose", ch)
 }
 
 func TestResizeLayoutGrowsWithContent(t *testing.T) {
@@ -31,8 +32,8 @@ func TestResizeLayoutGrowsWithContent(t *testing.T) {
 		t.Fatalf("initial LineCount = %d, want %d", got, want)
 	}
 	initialViewportHeight := m.viewport.Height
-	if initialViewportHeight != 24-2-1 {
-		t.Errorf("initial viewport height = %d, want %d", initialViewportHeight, 24-2-1)
+	if want := 24 - 2 - 1 - headerLines; initialViewportHeight != want {
+		t.Errorf("initial viewport height = %d, want %d", initialViewportHeight, want)
 	}
 
 	m.input.SetValue("line one\nline two\nline three\nline four")
@@ -44,7 +45,7 @@ func TestResizeLayoutGrowsWithContent(t *testing.T) {
 	if m.viewport.Height >= initialViewportHeight {
 		t.Errorf("viewport height = %d, expected it to shrink below the 1-line baseline %d", m.viewport.Height, initialViewportHeight)
 	}
-	if want := 24 - 2 - 4; m.viewport.Height != want {
+	if want := 24 - 2 - 4 - headerLines; m.viewport.Height != want {
 		t.Errorf("viewport height = %d, want %d", m.viewport.Height, want)
 	}
 }
@@ -142,7 +143,7 @@ func TestVersionCommandFetchesFromDaemon(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
 	m, cmd := pressEnterWith(t, m, "/version")
 	if cmd == nil {
 		t.Fatal("/version should issue a command to fetch the daemon's version")
@@ -154,5 +155,92 @@ func TestVersionCommandFetchesFromDaemon(t *testing.T) {
 
 	if !strings.Contains(m.transcript.String(), "1.2.3") {
 		t.Errorf("transcript = %q, want it to contain the fetched version", m.transcript.String())
+	}
+}
+
+func TestNextAgentCyclesAndWraps(t *testing.T) {
+	m := newTestModel()
+	m.currentAgent = "plan"
+	m.agents = []client.AgentInfo{{Name: "build"}, {Name: "explore"}, {Name: "plan"}}
+
+	next, ok := m.nextAgent()
+	if !ok || next != "build" {
+		t.Errorf("nextAgent() from plan = (%q, %v), want (\"build\", true) — wraps to the start", next, ok)
+	}
+
+	m.currentAgent = "build"
+	next, ok = m.nextAgent()
+	if !ok || next != "explore" {
+		t.Errorf("nextAgent() from build = (%q, %v), want (\"explore\", true)", next, ok)
+	}
+}
+
+func TestNextAgentNoopWithFewerThanTwoAgents(t *testing.T) {
+	m := newTestModel()
+	if _, ok := m.nextAgent(); ok {
+		t.Error("nextAgent() with no known agents should return ok=false")
+	}
+	m.agents = []client.AgentInfo{{Name: "solo"}}
+	if _, ok := m.nextAgent(); ok {
+		t.Error("nextAgent() with exactly one known agent should return ok=false (nothing to cycle to)")
+	}
+}
+
+// TestTabKeySwitchesAgent drives Tab through Update against a real daemon
+// stand-in and confirms it POSTs to the switch-agent endpoint for the
+// *next* agent in the list.
+func TestTabKeySwitchesAgent(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/agent") {
+			buf, _ := io.ReadAll(r.Body)
+			gotBody = string(buf)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"id":"s1","agent":"build"}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	m := New(client.New(srv.URL), "s1", "plan", make(chan events.Event))
+	m.agents = []client.AgentInfo{{Name: "build"}, {Name: "plan"}}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if cmd == nil {
+		t.Fatal("Tab with 2+ known agents should issue a switch command")
+	}
+	cmd() // execute the HTTP call synchronously
+
+	if !strings.Contains(gotBody, "build") {
+		t.Errorf("POST body = %q, want it to request switching to \"build\"", gotBody)
+	}
+}
+
+func TestAgentSwitchedEventUpdatesCurrentAgent(t *testing.T) {
+	m := newTestModel()
+	m.currentAgent = "plan"
+
+	ev := events.Event{Type: events.TypeAgentSwitched, Data: map[string]any{"agent": "build"}}
+	m.applyEvent(ev)
+
+	if m.currentAgent != "build" {
+		t.Errorf("currentAgent = %q, want %q after an agent.switched event", m.currentAgent, "build")
+	}
+	if !strings.Contains(m.transcript.String(), "build") {
+		t.Errorf("transcript = %q, want it to mention the new agent", m.transcript.String())
+	}
+}
+
+func TestAgentCommandListsLocally(t *testing.T) {
+	m := newTestModel()
+	m.agents = []client.AgentInfo{{Name: "build", Description: "implements features"}}
+
+	m, cmd := pressEnterWith(t, m, "/agent")
+	if cmd != nil {
+		t.Errorf("/agent (list) should not issue a command, got %v", cmd)
+	}
+	if !strings.Contains(m.transcript.String(), "build") || !strings.Contains(m.transcript.String(), "implements features") {
+		t.Errorf("transcript = %q, want it to list the known agent", m.transcript.String())
 	}
 }
