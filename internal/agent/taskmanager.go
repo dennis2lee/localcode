@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"localcode/internal/events"
+	"localcode/internal/session"
 )
 
 // TaskManager spawns and tracks background agent sessions ("tasks") on
@@ -37,15 +38,19 @@ func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *Tas
 	}
 }
 
+func (tm *TaskManager) nextTaskID() string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.counter++
+	return fmt.Sprintf("task-%d-%d", time.Now().UnixNano(), tm.counter)
+}
+
 // Spawn creates a child session under parentSessionID and runs agentName's
 // profile against prompt in the background. It returns immediately with the
 // new session's id; progress is reported via task.status events appended to
 // the parent session.
 func (tm *TaskManager) Spawn(parentSessionID, agentName, prompt string) (string, error) {
-	tm.mu.Lock()
-	tm.counter++
-	taskID := fmt.Sprintf("task-%d-%d", time.Now().UnixNano(), tm.counter)
-	tm.mu.Unlock()
+	taskID := tm.nextTaskID()
 
 	if _, err := tm.loop.Store.CreateSession(taskID, parentSessionID, agentName, false); err != nil {
 		return "", fmt.Errorf("create task session: %w", err)
@@ -101,6 +106,82 @@ func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentNa
 		data["error"] = err.Error()
 	}
 	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, data)
+}
+
+// taskDepthKey tracks how many levels deep a chain of synchronous Task
+// delegations (agent A delegates to B, which delegates to C, ...) has
+// gone, so TaskTool can refuse to go past maxTaskDepth and guard against a
+// misconfigured agent delegating to itself forever.
+type taskDepthKey struct{}
+
+const maxTaskDepth = 3
+
+func withTaskDepth(ctx context.Context, depth int) context.Context {
+	return context.WithValue(ctx, taskDepthKey{}, depth)
+}
+
+func taskDepthFromContext(ctx context.Context) int {
+	d, _ := ctx.Value(taskDepthKey{}).(int)
+	return d
+}
+
+// SpawnSync runs agentName synchronously in a new child session under
+// parentSessionID and returns its final answer text once the turn
+// completes. Unlike Spawn (fire-and-forget, polled via task.status
+// events), this blocks the caller — it's what backs the Task tool, where
+// the delegating agent's own turn needs the sub-agent's answer before it
+// can continue.
+func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName, prompt string) (string, error) {
+	taskID := tm.nextTaskID()
+
+	if _, err := tm.loop.Store.CreateSession(taskID, parentSessionID, agentName, false); err != nil {
+		return "", fmt.Errorf("create task session: %w", err)
+	}
+	if _, err := tm.loop.Store.Append(parentSessionID, events.TypeTaskSpawned, map[string]any{
+		"task_id": taskID,
+		"agent":   agentName,
+		"prompt":  prompt,
+	}); err != nil {
+		return "", fmt.Errorf("append task.spawned: %w", err)
+	}
+
+	select {
+	case tm.sem <- struct{}{}:
+		defer func() { <-tm.sem }()
+	case <-ctx.Done():
+		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "cancelled"})
+		return "", ctx.Err()
+	}
+
+	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "running"})
+
+	err := tm.loop.SendMessage(ctx, taskID, agentName, prompt)
+	if err != nil {
+		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
+			"task_id": taskID, "status": "failed", "error": err.Error(),
+		})
+		return "", err
+	}
+
+	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "completed"})
+	return lastAssistantText(tm.loop.Store, taskID), nil
+}
+
+// lastAssistantText finds the most recent message.part.end event in a
+// session's log and returns its accumulated text — the sub-agent's final
+// answer for the turn that just completed.
+func lastAssistantText(store *session.Store, sessionID string) string {
+	all, err := store.Events(sessionID, 0)
+	if err != nil {
+		return ""
+	}
+	for i := len(all) - 1; i >= 0; i-- {
+		if all[i].Type == events.TypeMessagePartEnd {
+			text, _ := all[i].Data["text"].(string)
+			return text
+		}
+	}
+	return ""
 }
 
 // Cancel stops a running task, if it's still running. Returns false if the
