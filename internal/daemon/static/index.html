@@ -42,6 +42,14 @@
     font-size: 12px;
     padding: 4px 10px;
   }
+  header .agent-select {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
   main {
     flex: 1;
     display: flex;
@@ -162,6 +170,7 @@
 <header>
   <h1>LocalCode</h1>
   <div class="right">
+    <select class="agent-select" id="agent-select" title="에이전트 전환"></select>
     <span class="session-id" id="session-id">connecting…</span>
     <button class="switch-btn" id="switch-session">세션 전환</button>
   </div>
@@ -214,12 +223,15 @@
   const sessionListEl = document.getElementById('session-list');
   const newSessionBtn = document.getElementById('new-session-btn');
   const switchSessionBtn = document.getElementById('switch-session');
+  const agentSelectEl = document.getElementById('agent-select');
 
   let sessionID = null;
   let eventSource = null;
   let pendingPermissionID = null;
   let waiting = false;
   let tasks = new Map(); // task_id -> {agent, status}
+  let agents = []; // [{name, description}]
+  let currentAgent = null;
 
   function appendLine(html) {
     transcriptEl.insertAdjacentHTML('beforeend', html);
@@ -313,12 +325,53 @@
         else tasks.set(ev.data.task_id, { agent: '', status: ev.data.status });
         renderTasks();
         break;
+      case 'agent.switched':
+        setCurrentAgent(ev.data.agent);
+        appendLine(`<div class="msg-tool">→ ${escapeHtml(ev.data.agent)} 에이전트로 전환</div>`);
+        break;
       case 'error':
         setWaiting(false);
         appendLine(`<div class="msg-error">오류: ${escapeHtml(ev.data.error || '')}</div>`);
         break;
     }
   }
+
+  async function loadAgents() {
+    try {
+      agents = await api('GET', '/api/agents');
+    } catch (err) {
+      agents = [];
+    }
+    agentSelectEl.innerHTML = '';
+    for (const a of agents) {
+      const opt = document.createElement('option');
+      opt.value = a.name;
+      opt.textContent = a.description ? `${a.name} — ${a.description}` : a.name;
+      agentSelectEl.appendChild(opt);
+    }
+    if (currentAgent) agentSelectEl.value = currentAgent;
+  }
+
+  function setCurrentAgent(name) {
+    currentAgent = name;
+    if ([...agentSelectEl.options].some(o => o.value === name)) {
+      agentSelectEl.value = name;
+    }
+  }
+
+  agentSelectEl.addEventListener('change', async () => {
+    const name = agentSelectEl.value;
+    if (!sessionID || name === currentAgent) return;
+    try {
+      await api('POST', `/api/sessions/${sessionID}/agent`, { agent: name });
+      // currentAgent updates from the agent.switched event this call
+      // causes the daemon to broadcast — see applyEvent — not here, so
+      // every client (including this one) reacts the same way.
+    } catch (err) {
+      agentSelectEl.value = currentAgent; // revert the dropdown on failure
+      appendLine(`<div class="msg-error">에이전트 전환 실패: ${escapeHtml(String(err))}</div>`);
+    }
+  });
 
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -360,7 +413,7 @@
         div.innerHTML = `<div class="meta">${escapeHtml(s.id)}<br>${escapeHtml(s.agent)} · ${escapeHtml(formatTime(s.created_at))}</div>`;
         const btn = document.createElement('button');
         btn.textContent = '이어하기';
-        btn.addEventListener('click', () => selectSession(s.id));
+        btn.addEventListener('click', () => selectSession(s.id, s.agent));
         div.appendChild(btn);
         sessionListEl.appendChild(div);
       }
@@ -372,13 +425,14 @@
     pickerEl.classList.remove('open');
   }
 
-  function selectSession(id) {
+  function selectSession(id, agent) {
     sessionID = id;
     sessionIdEl.textContent = sessionID;
     transcriptEl.innerHTML = '';
     tasks = new Map();
     renderTasks();
     setWaiting(false);
+    setCurrentAgent(agent);
     closeSessionPicker();
     connectEvents();
   }
@@ -386,7 +440,7 @@
   async function createNewSession() {
     try {
       const sess = await api('POST', '/api/sessions', { agent: 'general-purpose' });
-      selectSession(sess.id);
+      selectSession(sess.id, sess.agent);
     } catch (err) {
       sessionIdEl.textContent = 'error';
       appendLine(`<div class="msg-error">세션 생성 실패: ${escapeHtml(String(err))}</div>`);
@@ -402,6 +456,8 @@
     '  /version            데몬 버전 표시',
     '  /skill              등록된 skill 목록 표시',
     '  /skill <이름>        해당 skill을 로드해서 바로 이어서 질문',
+    '  /agent              등록된 에이전트 목록 표시',
+    '  /agent <이름>        해당 에이전트로 전환 (헤더 드롭다운으로도 가능)',
     '  exit, :q            안내만 표시 (브라우저 탭은 직접 닫아주세요)',
   ].join('\n');
 
@@ -430,6 +486,29 @@
         appendLine(`<div class="msg-tool">localcode ${escapeHtml(v.version)}</div>`);
       } catch (err) {
         appendLine(`<div class="msg-error">버전 조회 실패: ${escapeHtml(String(err))}</div>`);
+      }
+      return true;
+    }
+
+    if (lower === '/agent') {
+      appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
+      if (agents.length === 0) {
+        appendLine(`<div class="msg-tool">등록된 에이전트가 없습니다.</div>`);
+      } else {
+        const lines = [`사용 가능한 에이전트 (/agent &lt;이름&gt; 으로 전환, 현재: ${escapeHtml(currentAgent || '')}):`]
+          .concat(agents.map(a => `- ${escapeHtml(a.name)}: ${escapeHtml(a.description || '')}`));
+        appendLine(`<div class="msg-tool">${lines.join('<br>')}</div>`);
+      }
+      return true;
+    }
+
+    const agentMatch = text.match(/^\/agent\s+(\S+)/);
+    if (agentMatch) {
+      appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
+      try {
+        await api('POST', `/api/sessions/${sessionID}/agent`, { agent: agentMatch[1] });
+      } catch (err) {
+        appendLine(`<div class="msg-error">에이전트 전환 실패: ${escapeHtml(String(err))}</div>`);
       }
       return true;
     }
@@ -488,6 +567,7 @@
 
   async function init() {
     renderTasks();
+    await loadAgents();
     let sessions;
     try {
       sessions = await api('GET', '/api/sessions');
