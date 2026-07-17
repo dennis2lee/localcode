@@ -32,6 +32,15 @@ var (
 // transcript viewport down to nothing.
 const inputMaxHeight = 10
 
+const helpText = `사용 가능한 명령:
+  /help              이 도움말 표시
+  /version            데몬 버전 표시
+  /skill              등록된 skill 목록 표시
+  /skill <이름>        해당 skill을 로드해서 바로 이어서 질문
+  exit, :q            TUI 종료 (Ctrl+C와 동일)
+
+Enter로 전송, Ctrl+J로 줄바꿈.`
+
 type pendingPermission struct {
 	id, tool, description string
 }
@@ -53,7 +62,7 @@ type Model struct {
 
 func New(c *client.Client, sessionID string, eventCh <-chan events.Event) Model {
 	ta := textarea.New()
-	ta.Placeholder = "메시지를 입력하세요 (Enter로 전송, Ctrl+J로 줄바꿈, Ctrl+C로 종료)"
+	ta.Placeholder = "메시지를 입력하세요 (Enter로 전송, /help로 도움말, exit로 종료)"
 	ta.ShowLineNumbers = false
 	ta.MaxHeight = inputMaxHeight
 	ta.SetHeight(1)
@@ -82,6 +91,10 @@ func (m Model) Init() tea.Cmd {
 type eventMsg events.Event
 type turnDoneMsg struct{ err error }
 type permissionResolvedMsg struct{ err error }
+type versionMsg struct {
+	version string
+	err     error
+}
 
 func listenForEvent(ch <-chan events.Event) tea.Cmd {
 	return func() tea.Msg {
@@ -105,6 +118,23 @@ func (m Model) resolvePermission(id string, allow bool) tea.Cmd {
 		err := m.client.ResolvePermission(context.Background(), m.sessionID, id, allow)
 		return permissionResolvedMsg{err: err}
 	}
+}
+
+func (m Model) fetchVersion() tea.Cmd {
+	return func() tea.Msg {
+		v, err := m.client.Version(context.Background())
+		return versionMsg{version: v, err: err}
+	}
+}
+
+// appendLocal writes text straight into the transcript without going
+// through the server — for /help and /version, which are answered purely
+// client-side (well, /version does hit the daemon, but the answer isn't
+// part of the session's event log either way).
+func (m *Model) appendLocal(text string) {
+	m.transcript.WriteString(toolStyle.Render(text) + "\n\n")
+	m.viewport.SetContent(m.transcript.String())
+	m.viewport.GotoBottom()
 }
 
 // resizeLayout recomputes the input box height from its current content and
@@ -160,6 +190,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.input.Reset()
 			m.resizeLayout()
+
+			switch strings.ToLower(text) {
+			case "exit", ":q":
+				return m, tea.Quit
+			case "/help":
+				m.appendLocal(helpText)
+				return m, nil
+			case "/version":
+				return m, m.fetchVersion()
+			}
+
 			// The user line itself renders from the message.user event (see
 			// applyEvent), not optimistically here, so a resumed/replayed
 			// session shows the same transcript a live one did.
@@ -184,6 +225,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case permissionResolvedMsg:
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
+		}
+		return m, nil
+
+	case versionMsg:
+		if msg.err != nil {
+			m.appendLocal("버전 조회 실패: " + msg.err.Error())
+		} else {
+			m.appendLocal("localcode " + msg.version)
 		}
 		return m, nil
 	}
