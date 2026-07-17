@@ -53,9 +53,29 @@ type Profile struct {
 	Temperature float64 `json:"temperature,omitempty"`
 }
 
-// AgentConfig maps an agent/task type name to a profile.
+// AgentConfig defines one named agent role: which model profile it runs
+// on, and optionally a scoped system prompt and a restricted tool set —
+// the same idea as oh-my-opencode's per-agent model/prompt matching (a
+// cheap/fast model for a grep-only "explore" agent, a strong model for
+// planning, etc.), and what lets Task-tool delegation between agents mean
+// something beyond just picking a model.
 type AgentConfig struct {
 	Profile string `json:"profile"` // key into Config.Profiles
+
+	// Description is shown to the model (via the Task tool) when deciding
+	// which agent to delegate a piece of work to.
+	Description string `json:"description,omitempty"`
+
+	// Prompt, if set, is appended to the base system prompt for turns run
+	// as this agent — e.g. "You are the review agent: look for bugs, do
+	// not edit files."
+	Prompt string `json:"prompt,omitempty"`
+
+	// Tools, if non-empty, restricts this agent to only these tool names
+	// (both which tools the model sees and, as defense in depth, which it
+	// can actually call). Empty/absent means no restriction — every
+	// registered tool is available, matching prior behavior.
+	Tools []string `json:"tools,omitempty"`
 }
 
 // DefaultGlobalPath returns ~/.localcode/config.json.
