@@ -52,7 +52,13 @@ func run() error {
 	listen := flag.String("listen", "127.0.0.1:4096", "address the daemon listens on (also where the Web UI is served)")
 	server := flag.String("server", "", "connect the TUI to an already-running daemon at this URL instead of starting one locally (e.g. http://localhost:4096, or an SSH-tunneled remote core)")
 	headless := flag.Bool("headless", false, "run only the daemon (HTTP API + Web UI), no TUI — for a remote box you'll attach to over SSH or the network")
+	showVersion := flag.Bool("version", false, "print version and exit (same as the \"localcode version\" subcommand)")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return nil
+	}
 
 	if *headless {
 		return runDaemon(*configPath, *listen)
@@ -123,6 +129,7 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 
 	loop := agent.New(store, registry, providers, cfg)
 	loop.SystemPrompt += skillPromptSection
+	loop.Skills = skillList
 	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
 
 	return daemon.New(loop, broker, tasks, daemon.WebFS()), nil
