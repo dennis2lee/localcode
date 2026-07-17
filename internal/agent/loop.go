@@ -102,6 +102,16 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		maxTokens = defaultMaxTokens
 	}
 
+	// Per-agent system prompt addition and tool scoping — this is what
+	// makes agentName more than just a model choice. An empty AgentConfig
+	// (agent not found, or found with no Prompt/Tools set) is a no-op:
+	// same behavior as before per-agent config existed.
+	agentCfg := l.Config.Agents[agentName]
+	systemPrompt := l.SystemPrompt
+	if agentCfg.Prompt != "" {
+		systemPrompt = systemPrompt + "\n\n" + agentCfg.Prompt
+	}
+
 	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
 
 	l.appendHistory(sessionID, provider.Message{
@@ -114,9 +124,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 
 		req := provider.ChatRequest{
 			Model:       profile.Model,
-			System:      l.SystemPrompt,
+			System:      systemPrompt,
 			Messages:    history,
-			Tools:       l.Tools.Specs(),
+			Tools:       l.Tools.SpecsFor(agentCfg.Tools),
 			MaxTokens:   maxTokens,
 			Temperature: profile.Temperature,
 		}
@@ -138,7 +148,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return nil
 		}
 
-		resultBlocks := l.runTools(ctx, sessionID, toolUses)
+		resultBlocks := l.runTools(ctx, sessionID, toolUses, agentCfg.Tools)
 		l.appendHistory(sessionID, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
 	}
 }
@@ -207,12 +217,23 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 }
 
 // runTools executes each requested tool call in order and returns the
-// resulting tool_result blocks to feed back to the model.
-func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block) []provider.Block {
+// resulting tool_result blocks to feed back to the model. allowedTools, if
+// non-empty, is enforced here too (not just in the specs the model saw) —
+// a belt-and-suspenders check in case a model calls a tool it wasn't
+// offered.
+func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block, allowedTools []string) []provider.Block {
 	ctx = WithSessionID(ctx, sessionID)
 	results := make([]provider.Block, 0, len(toolUses))
 	for _, tu := range toolUses {
-		res := l.Tools.Call(ctx, tu.ToolName, tu.ToolInput, "")
+		var res tools.Result
+		if !tools.IsAllowed(allowedTools, tu.ToolName) {
+			res = tools.Result{
+				Content: fmt.Sprintf("tool %q is not available to this agent", tu.ToolName),
+				IsError: true,
+			}
+		} else {
+			res = l.Tools.Call(ctx, tu.ToolName, tu.ToolInput, "")
+		}
 		l.Store.Append(sessionID, events.TypeToolEnd, map[string]any{
 			"tool_use_id": tu.ToolUseID,
 			"content":     res.Content,

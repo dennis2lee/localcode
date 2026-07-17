@@ -57,8 +57,20 @@ func (r *Registry) Register(t Tool) {
 // Specs returns provider-facing tool specs in registration order, for
 // inclusion in a ChatRequest.
 func (r *Registry) Specs() []provider.Tool {
+	return r.SpecsFor(nil)
+}
+
+// SpecsFor is like Specs but restricted to the named tools, preserving
+// registration order. A nil/empty allowed list means no restriction (same
+// as Specs). Unknown names are silently skipped — an agent config
+// referencing a typo'd tool name just gets fewer tools, not a crash.
+func (r *Registry) SpecsFor(allowed []string) []provider.Tool {
+	allowSet := toSet(allowed)
 	out := make([]provider.Tool, 0, len(r.order))
 	for _, name := range r.order {
+		if allowSet != nil && !allowSet[name] {
+			continue
+		}
 		t := r.tools[name]
 		out = append(out, provider.Tool{
 			Name:        t.Name(),
@@ -67,6 +79,26 @@ func (r *Registry) Specs() []provider.Tool {
 		})
 	}
 	return out
+}
+
+// IsAllowed reports whether name is permitted under an allowed list from
+// an agent's Tools restriction. A nil/empty list means unrestricted.
+func IsAllowed(allowed []string, name string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	return toSet(allowed)[name]
+}
+
+func toSet(names []string) map[string]bool {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
 }
 
 // Call runs a tool by name, applying the permission gate first if the tool

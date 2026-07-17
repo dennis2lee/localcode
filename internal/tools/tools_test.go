@@ -151,3 +151,57 @@ func TestRegistryReRegisterReplacesButKeepsOrder(t *testing.T) {
 		t.Error("the replacement (second) tool should have executed")
 	}
 }
+
+func TestSpecsForRestrictsAndPreservesOrder(t *testing.T) {
+	r := NewRegistry(nil)
+	r.Register(&fakeTool{name: "read_file"})
+	r.Register(&fakeTool{name: "write_file"})
+	r.Register(&fakeTool{name: "bash"})
+
+	got := r.SpecsFor([]string{"bash", "read_file"})
+	if len(got) != 2 {
+		t.Fatalf("expected 2 specs, got %d: %+v", len(got), got)
+	}
+	// Registration order (read_file, write_file, bash), not allowed-list order.
+	if got[0].Name != "read_file" || got[1].Name != "bash" {
+		t.Errorf("got %q, %q; want read_file, bash in registration order", got[0].Name, got[1].Name)
+	}
+}
+
+func TestSpecsForEmptyAllowedMeansUnrestricted(t *testing.T) {
+	r := NewRegistry(nil)
+	r.Register(&fakeTool{name: "a"})
+	r.Register(&fakeTool{name: "b"})
+
+	if got := len(r.SpecsFor(nil)); got != 2 {
+		t.Errorf("SpecsFor(nil) = %d specs, want 2 (unrestricted)", got)
+	}
+	if got := len(r.SpecsFor([]string{})); got != 2 {
+		t.Errorf("SpecsFor([]string{}) = %d specs, want 2 (unrestricted)", got)
+	}
+}
+
+func TestSpecsForUnknownNameSkipped(t *testing.T) {
+	r := NewRegistry(nil)
+	r.Register(&fakeTool{name: "a"})
+
+	got := r.SpecsFor([]string{"a", "typo_name"})
+	if len(got) != 1 || got[0].Name != "a" {
+		t.Errorf("expected only the known tool, got %+v", got)
+	}
+}
+
+func TestIsAllowed(t *testing.T) {
+	if !IsAllowed(nil, "anything") {
+		t.Error("nil allowed list should permit anything")
+	}
+	if !IsAllowed([]string{}, "anything") {
+		t.Error("empty allowed list should permit anything")
+	}
+	if !IsAllowed([]string{"read_file", "grep"}, "grep") {
+		t.Error("expected grep to be allowed")
+	}
+	if IsAllowed([]string{"read_file", "grep"}, "bash") {
+		t.Error("expected bash to be disallowed")
+	}
+}
