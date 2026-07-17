@@ -9,7 +9,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,6 +27,11 @@ var (
 	statusStyle = lipgloss.NewStyle().Faint(true)
 )
 
+// inputMaxHeight caps how tall the prompt box can grow (in rows) before it
+// starts scrolling internally, so a very long paste can't push the
+// transcript viewport down to nothing.
+const inputMaxHeight = 10
+
 type pendingPermission struct {
 	id, tool, description string
 }
@@ -34,9 +40,10 @@ type Model struct {
 	client    *client.Client
 	sessionID string
 
-	viewport viewport.Model
-	input    textinput.Model
-	events   <-chan events.Event
+	viewport   viewport.Model
+	input      textarea.Model
+	termHeight int
+	events     <-chan events.Event
 
 	transcript strings.Builder
 	pending    *pendingPermission
@@ -45,9 +52,17 @@ type Model struct {
 }
 
 func New(c *client.Client, sessionID string, eventCh <-chan events.Event) Model {
-	ti := textinput.New()
-	ti.Placeholder = "메시지를 입력하세요 (Enter로 전송, Ctrl+C로 종료)"
-	ti.Focus()
+	ta := textarea.New()
+	ta.Placeholder = "메시지를 입력하세요 (Enter로 전송, Ctrl+J로 줄바꿈, Ctrl+C로 종료)"
+	ta.ShowLineNumbers = false
+	ta.MaxHeight = inputMaxHeight
+	ta.SetHeight(1)
+	// Enter sends the message (handled explicitly below); only ctrl+j
+	// inserts a literal newline. Most terminals don't reliably deliver a
+	// distinct shift+enter sequence, so we bind to something that works
+	// everywhere instead.
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
+	ta.Focus()
 
 	vp := viewport.New(80, 20)
 
@@ -55,7 +70,7 @@ func New(c *client.Client, sessionID string, eventCh <-chan events.Event) Model 
 		client:    c,
 		sessionID: sessionID,
 		viewport:  vp,
-		input:     ti,
+		input:     ta,
 		events:    eventCh,
 	}
 }
@@ -92,12 +107,34 @@ func (m Model) resolvePermission(id string, allow bool) tea.Cmd {
 	}
 }
 
+// resizeLayout recomputes the input box height from its current content and
+// gives the viewport whatever vertical space is left, so the prompt grows
+// as the user types a longer message without pushing the input off screen.
+func (m *Model) resizeLayout() {
+	inputHeight := m.input.LineCount()
+	if inputHeight > inputMaxHeight {
+		inputHeight = inputMaxHeight
+	}
+	if inputHeight < 1 {
+		inputHeight = 1
+	}
+	m.input.SetHeight(inputHeight)
+
+	const chromeLines = 2 // status/permission line + blank separator
+	vh := m.termHeight - chromeLines - inputHeight
+	if vh < 3 {
+		vh = 3
+	}
+	m.viewport.Height = vh
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.termHeight = msg.Height
 		m.viewport.Width = msg.Width
-		m.viewport.Height = msg.Height - 4
-		m.input.Width = msg.Width - 2
+		m.input.SetWidth(msg.Width - 2)
+		m.resizeLayout()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -121,7 +158,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" || m.waiting {
 				return m, nil
 			}
-			m.input.SetValue("")
+			m.input.Reset()
+			m.resizeLayout()
 			// The user line itself renders from the message.user event (see
 			// applyEvent), not optimistically here, so a resumed/replayed
 			// session shows the same transcript a live one did.
@@ -152,6 +190,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.resizeLayout()
 	return m, cmd
 }
 

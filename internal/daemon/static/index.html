@@ -74,6 +74,7 @@
     border-top: 1px solid var(--border);
     padding: 10px 16px;
     display: flex;
+    align-items: flex-end;
     gap: 8px;
   }
   #input {
@@ -84,6 +85,10 @@
     border-radius: 6px;
     padding: 8px 10px;
     font: inherit;
+    resize: none;
+    overflow-y: auto;
+    max-height: 240px;
+    line-height: 1.4;
   }
   button {
     background: var(--accent);
@@ -170,7 +175,7 @@
 </main>
 <div id="status"></div>
 <footer>
-  <input id="input" placeholder="메시지를 입력하세요 (Enter로 전송)" autofocus>
+  <textarea id="input" rows="1" placeholder="메시지를 입력하세요 (Enter로 전송, Shift+Enter로 줄바꿈)" autofocus></textarea>
   <button id="send">전송</button>
 </footer>
 
@@ -395,6 +400,7 @@
     const text = inputEl.value.trim();
     if (!text || waiting) return;
     inputEl.value = '';
+    autoResizeInput();
     // The user line renders from the message.user event (see applyEvent),
     // not optimistically here, so a resumed/replayed session shows the
     // same transcript a live one did.
@@ -407,9 +413,18 @@
     }
   }
 
+  function autoResizeInput() {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = inputEl.scrollHeight + 'px';
+  }
+
   sendBtn.addEventListener('click', sendMessage);
+  inputEl.addEventListener('input', autoResizeInput);
   inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') sendMessage();
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
   });
 
   permissionAllowBtn.addEventListener('click', () => resolvePermission(true));
