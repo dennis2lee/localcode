@@ -175,7 +175,7 @@
 </main>
 <div id="status"></div>
 <footer>
-  <textarea id="input" rows="1" placeholder="메시지를 입력하세요 (Enter로 전송, Shift+Enter로 줄바꿈)" autofocus></textarea>
+  <textarea id="input" rows="1" placeholder="메시지를 입력하세요 (Enter로 전송, /help로 도움말)" autofocus></textarea>
   <button id="send">전송</button>
 </footer>
 
@@ -396,11 +396,55 @@
   newSessionBtn.addEventListener('click', createNewSession);
   switchSessionBtn.addEventListener('click', openSessionPicker);
 
+  const HELP_TEXT = [
+    '사용 가능한 명령:',
+    '  /help              이 도움말 표시',
+    '  /version            데몬 버전 표시',
+    '  /skill              등록된 skill 목록 표시',
+    '  /skill <이름>        해당 skill을 로드해서 바로 이어서 질문',
+    '  exit, :q            안내만 표시 (브라우저 탭은 직접 닫아주세요)',
+  ].join('\n');
+
+  // Commands handled entirely client-side — never touch the session's
+  // event log, so they don't show up again on session replay. Returns
+  // true if `text` was a local command (and thus already handled).
+  async function tryLocalCommand(text) {
+    const lower = text.toLowerCase();
+
+    if (lower === 'exit' || lower === ':q') {
+      appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
+      appendLine(`<div class="msg-tool">브라우저 탭을 닫으면 종료됩니다 (Web UI는 프로그램을 직접 종료할 수 없습니다).</div>`);
+      return true;
+    }
+
+    if (lower === '/help') {
+      appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
+      appendLine(`<div class="msg-tool">${escapeHtml(HELP_TEXT).replace(/\n/g, '<br>')}</div>`);
+      return true;
+    }
+
+    if (lower === '/version') {
+      appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
+      try {
+        const v = await api('GET', '/api/version');
+        appendLine(`<div class="msg-tool">localcode ${escapeHtml(v.version)}</div>`);
+      } catch (err) {
+        appendLine(`<div class="msg-error">버전 조회 실패: ${escapeHtml(String(err))}</div>`);
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   async function sendMessage() {
     const text = inputEl.value.trim();
     if (!text || waiting) return;
     inputEl.value = '';
     autoResizeInput();
+
+    if (await tryLocalCommand(text)) return;
+
     // The user line renders from the message.user event (see applyEvent),
     // not optimistically here, so a resumed/replayed session shows the
     // same transcript a live one did.
