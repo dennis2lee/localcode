@@ -232,6 +232,7 @@
   let tasks = new Map(); // task_id -> {agent, status}
   let agents = []; // [{name, description}]
   let currentAgent = null;
+  let customCommands = []; // [{name, description}]
 
   function appendLine(html) {
     transcriptEl.insertAdjacentHTML('beforeend', html);
@@ -352,6 +353,14 @@
     if (currentAgent) agentSelectEl.value = currentAgent;
   }
 
+  async function loadCommands() {
+    try {
+      customCommands = await api('GET', '/api/commands');
+    } catch (err) {
+      customCommands = [];
+    }
+  }
+
   function setCurrentAgent(name) {
     currentAgent = name;
     if ([...agentSelectEl.options].some(o => o.value === name)) {
@@ -458,6 +467,9 @@
     '  /skill <이름>        해당 skill을 로드해서 바로 이어서 질문',
     '  /agent              등록된 에이전트 목록 표시',
     '  /agent <이름>        해당 에이전트로 전환 (헤더 드롭다운으로도 가능)',
+    '  /init              저장소를 스캔해서 AGENTS.md 규칙 파일 생성/개선',
+    '  /commands          등록된 사용자 정의 명령 목록 표시',
+    '  /<사용자 정의 명령>   .localcode/commands/*.md 로 정의한 명령 실행',
     '  exit, :q            안내만 표시 (브라우저 탭은 직접 닫아주세요)',
   ].join('\n');
 
@@ -497,6 +509,18 @@
       } else {
         const lines = [`사용 가능한 에이전트 (/agent &lt;이름&gt; 으로 전환, 현재: ${escapeHtml(currentAgent || '')}):`]
           .concat(agents.map(a => `- ${escapeHtml(a.name)}: ${escapeHtml(a.description || '')}`));
+        appendLine(`<div class="msg-tool">${lines.join('<br>')}</div>`);
+      }
+      return true;
+    }
+
+    if (lower === '/commands') {
+      appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
+      if (customCommands.length === 0) {
+        appendLine(`<div class="msg-tool">등록된 사용자 정의 명령이 없습니다. (.localcode/commands/*.md 로 추가)</div>`);
+      } else {
+        const lines = ['사용 가능한 사용자 정의 명령:']
+          .concat(customCommands.map(c => `- /${escapeHtml(c.name)}: ${escapeHtml(c.description || '')}`));
         appendLine(`<div class="msg-tool">${lines.join('<br>')}</div>`);
       }
       return true;
@@ -568,6 +592,7 @@
   async function init() {
     renderTasks();
     await loadAgents();
+    await loadCommands();
     let sessions;
     try {
       sessions = await api('GET', '/api/sessions');

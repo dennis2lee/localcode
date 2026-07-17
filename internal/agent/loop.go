@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"localcode/internal/commands"
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/provider"
@@ -21,6 +22,12 @@ import (
 const defaultSystemPrompt = "You are a helpful coding assistant with access to file and shell tools. Use them when needed; otherwise answer directly."
 
 const defaultMaxTokens = 4096
+
+// initPrompt is what "/init" sends to the model — the same idea as
+// opencode's "/init": scan the repo and write an AGENTS.md rules file so
+// future turns (in this project or picked up by opencode/Claude Code too,
+// since both read AGENTS.md/CLAUDE.md) start with real project context.
+const initPrompt = `Scan this repository (file listing, README, package/build manifests, existing build/lint/test tooling) and create or update an AGENTS.md file at the project root with concise, project-specific guidance for a coding agent: build/lint/test commands, an architecture overview, and code conventions. If AGENTS.md already exists, improve it in place rather than replacing it wholesale. Use your file tools (Glob/Grep/Read to explore, Write or Edit to save AGENTS.md).`
 
 // Loop wires a session store, tool registry, and the set of configured
 // model providers together. One Loop instance is shared across sessions;
@@ -37,6 +44,15 @@ type Loop struct {
 	// user typing a command instead of waiting on the model to decide to
 	// use it.
 	Skills []skills.Skill
+
+	// Commands backs custom user-defined slash commands ("/<name>"),
+	// loaded from .localcode/commands/*.md (project) and
+	// ~/.localcode/commands/*.md (global) — see internal/commands.
+	Commands []commands.Command
+
+	// ProjectDir is the working directory custom commands resolve
+	// "!`shell`" and "@file" expansions against.
+	ProjectDir string
 
 	mu       sync.Mutex
 	messages map[string][]provider.Message // sessionID -> history
@@ -76,21 +92,68 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 			return nil
 		}
 		return l.sendWithModelText(ctx, sessionID, agentName, text,
-			fmt.Sprintf("Follow the %q skill's instructions below to help with my request.\n\n---\n%s\n---", sk.Name, sk.Body))
+			fmt.Sprintf("Follow the %q skill's instructions below to help with my request.\n\n---\n%s\n---", sk.Name, sk.Body), "", "")
 	}
 
-	return l.sendWithModelText(ctx, sessionID, agentName, text, text)
+	if strings.TrimSpace(text) == "/init" {
+		return l.sendWithModelText(ctx, sessionID, agentName, text, initPrompt, "", "")
+	}
+
+	if cmd, args, ok := l.matchCustomCommand(text); ok {
+		modelText, err := commands.Expand(cmd, args, l.ProjectDir)
+		if err != nil {
+			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
+			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
+			return nil
+		}
+		return l.sendWithModelText(ctx, sessionID, agentName, text, modelText, cmd.Agent, cmd.Model)
+	}
+
+	return l.sendWithModelText(ctx, sessionID, agentName, text, text, "", "")
+}
+
+// matchCustomCommand recognizes "/<name>" or "/<name> <args>" against a
+// loaded custom command. Built-in commands (/skill, /init) are checked by
+// the caller first, so they always take precedence over a same-named
+// custom command.
+func (l *Loop) matchCustomCommand(text string) (commands.Command, string, bool) {
+	trimmed := strings.TrimSpace(text)
+	rest, ok := strings.CutPrefix(trimmed, "/")
+	if !ok {
+		return commands.Command{}, "", false
+	}
+	name, args := rest, ""
+	if idx := strings.IndexAny(rest, " \t"); idx >= 0 {
+		name, args = rest[:idx], strings.TrimSpace(rest[idx+1:])
+	}
+	for _, c := range l.Commands {
+		if c.Name == name {
+			return c, args, true
+		}
+	}
+	return commands.Command{}, "", false
 }
 
 // sendWithModelText drives one full agent turn. displayText is what gets
 // recorded as the message.user event (what the user actually typed);
 // modelText is what the model receives as the user turn's content — they
-// differ for /skill <name>, where the model needs the full skill body but
-// the transcript should stay readable.
-func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, displayText, modelText string) error {
-	profile, err := l.Config.ResolveProfile(agentName)
+// differ for /skill <name> and custom commands, where the model needs the
+// expanded body but the transcript should stay readable. agentOverride and
+// modelOverride, if non-empty, apply for this turn only (a custom
+// command's "agent"/"model" frontmatter) without changing the session's
+// standing agent.
+func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, displayText, modelText, agentOverride, modelOverride string) error {
+	resolveAgent := agentName
+	if agentOverride != "" {
+		resolveAgent = agentOverride
+	}
+
+	profile, err := l.Config.ResolveProfile(resolveAgent)
 	if err != nil {
-		return fmt.Errorf("resolve profile for agent %q: %w", agentName, err)
+		return fmt.Errorf("resolve profile for agent %q: %w", resolveAgent, err)
+	}
+	if modelOverride != "" {
+		profile.Model = modelOverride
 	}
 	p, ok := l.Providers[profile.Provider]
 	if !ok {
@@ -106,7 +169,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// makes agentName more than just a model choice. An empty AgentConfig
 	// (agent not found, or found with no Prompt/Tools set) is a no-op:
 	// same behavior as before per-agent config existed.
-	agentCfg := l.Config.Agents[agentName]
+	agentCfg := l.Config.Agents[resolveAgent]
 	systemPrompt := l.SystemPrompt
 	if agentCfg.Prompt != "" {
 		systemPrompt = systemPrompt + "\n\n" + agentCfg.Prompt

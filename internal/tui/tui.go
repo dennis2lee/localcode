@@ -39,6 +39,9 @@ const helpText = `사용 가능한 명령:
   /skill <이름>        해당 skill을 로드해서 바로 이어서 질문
   /agent              등록된 에이전트 목록 표시
   /agent <이름>        해당 에이전트로 전환 (Tab으로도 순환 전환 가능)
+  /init              저장소를 스캔해서 AGENTS.md 규칙 파일 생성/개선
+  /commands          등록된 사용자 정의 명령 목록 표시
+  /<사용자 정의 명령>   .localcode/commands/*.md 로 정의한 명령 실행
   exit, :q            TUI 종료 (Ctrl+C와 동일)
 
 Enter로 전송, Ctrl+J로 줄바꿈, Tab으로 에이전트 전환.`
@@ -66,6 +69,7 @@ type Model struct {
 	errMsg       string
 	currentAgent string
 	agents       []client.AgentInfo
+	commandsList []client.CommandInfo
 }
 
 func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Event) Model {
@@ -94,7 +98,7 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(listenForEvent(m.events), m.fetchAgents())
+	return tea.Batch(listenForEvent(m.events), m.fetchAgents(), m.fetchCommands())
 }
 
 type eventMsg events.Event
@@ -109,6 +113,10 @@ type agentsMsg struct {
 	err    error
 }
 type switchAgentMsg struct{ err error }
+type commandsMsg struct {
+	commands []client.CommandInfo
+	err      error
+}
 
 func listenForEvent(ch <-chan events.Event) tea.Cmd {
 	return func() tea.Msg {
@@ -145,6 +153,13 @@ func (m Model) fetchAgents() tea.Cmd {
 	return func() tea.Msg {
 		agents, err := m.client.ListAgents(context.Background())
 		return agentsMsg{agents: agents, err: err}
+	}
+}
+
+func (m Model) fetchCommands() tea.Cmd {
+	return func() tea.Msg {
+		cmds, err := m.client.ListCommands(context.Background())
+		return commandsMsg{commands: cmds, err: err}
 	}
 }
 
@@ -275,6 +290,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.appendLocal(strings.TrimRight(b.String(), "\n"))
 				}
 				return m, nil
+			case "/commands":
+				if len(m.commandsList) == 0 {
+					m.appendLocal("등록된 사용자 정의 명령이 없습니다. (.localcode/commands/*.md 로 추가)")
+				} else {
+					var b strings.Builder
+					b.WriteString("사용 가능한 사용자 정의 명령:\n")
+					for _, c := range m.commandsList {
+						fmt.Fprintf(&b, "- /%s: %s\n", c.Name, c.Description)
+					}
+					m.appendLocal(strings.TrimRight(b.String(), "\n"))
+				}
+				return m, nil
 			}
 			if name, ok := strings.CutPrefix(text, "/agent "); ok {
 				name = strings.TrimSpace(name)
@@ -319,6 +346,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentsMsg:
 		if msg.err == nil {
 			m.agents = msg.agents
+		}
+		return m, nil
+
+	case commandsMsg:
+		if msg.err == nil {
+			m.commandsList = msg.commands
 		}
 		return m, nil
 

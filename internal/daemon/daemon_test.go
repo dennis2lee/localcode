@@ -13,6 +13,7 @@ import (
 
 	"localcode/internal/agent"
 	"localcode/internal/client"
+	"localcode/internal/commands"
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/provider"
@@ -373,6 +374,36 @@ func TestDaemonListAgents(t *testing.T) {
 		if a.Name == "plan" && a.Description != "Read-only planning." {
 			t.Errorf("plan agent description = %q, want %q", a.Description, "Read-only planning.")
 		}
+	}
+}
+
+// TestDaemonListCommands confirms GET /api/commands reports the custom
+// commands loaded on the daemon's Loop, sorted by name.
+func TestDaemonListCommands(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	d.Loop.Commands = []commands.Command{
+		{Name: "zzz-last", Description: "sorts last"},
+		{Name: "aaa-first", Description: "sorts first"},
+	}
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	got, err := c.ListCommands(context.Background())
+	if err != nil {
+		t.Fatalf("ListCommands: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 commands, got %d: %+v", len(got), got)
+	}
+	if got[0].Name != "aaa-first" || got[1].Name != "zzz-last" {
+		t.Errorf("commands = %+v, want sorted by name", got)
+	}
+	if got[0].Description != "sorts first" {
+		t.Errorf("Description = %q, want %q", got[0].Description, "sorts first")
 	}
 }
 

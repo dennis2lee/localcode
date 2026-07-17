@@ -59,6 +59,7 @@ func (d *Daemon) Handler() http.Handler { return d.mux }
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
 	d.mux.HandleFunc("GET /api/agents", d.handleListAgents)
+	d.mux.HandleFunc("GET /api/commands", d.handleListCommands)
 	d.mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
 	d.mux.HandleFunc("GET /api/sessions", d.handleListSessions)
 	d.mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)
@@ -111,6 +112,26 @@ func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	for _, name := range names {
 		out = append(out, AgentInfo{Name: name, Description: d.Loop.Config.Agents[name].Description})
 	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// CommandInfo is the client-facing view of a loaded custom slash command.
+type CommandInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// handleListCommands returns every custom command loaded from
+// .localcode/commands/*.md (project) and ~/.localcode/commands/*.md
+// (global) — for a /help listing or client-side autocomplete. Actually
+// running a command still goes through POST .../messages like any other
+// message; the server matches "/<name>" there.
+func (d *Daemon) handleListCommands(w http.ResponseWriter, r *http.Request) {
+	out := make([]CommandInfo, 0, len(d.Loop.Commands))
+	for _, c := range d.Loop.Commands {
+		out = append(out, CommandInfo{Name: c.Name, Description: c.Description})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, out)
 }
 

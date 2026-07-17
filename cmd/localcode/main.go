@@ -22,10 +22,12 @@ import (
 
 	"localcode/internal/agent"
 	"localcode/internal/client"
+	"localcode/internal/commands"
 	"localcode/internal/config"
 	"localcode/internal/daemon"
 	mcpclient "localcode/internal/mcp"
 	"localcode/internal/provider"
+	"localcode/internal/rules"
 	"localcode/internal/session"
 	"localcode/internal/skills"
 	"localcode/internal/tools"
@@ -112,6 +114,16 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 		skillPromptSection = "\n\n" + skills.SystemPromptSection(skillList)
 	}
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	cmdList, err := commands.LoadAll(filepath.Join(cwd, ".localcode", "commands"), filepath.Join(home, ".localcode", "commands"))
+	if err != nil {
+		return nil, err
+	}
+	rulesSection := rules.Load(cwd, home)
+
 	if len(cfg.MCPServers) > 0 {
 		// A server that fails to connect or list tools is skipped (logged as
 		// a warning), not fatal: one bad MCP server shouldn't take down the
@@ -129,7 +141,12 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 
 	loop := agent.New(store, registry, providers, cfg)
 	loop.SystemPrompt += skillPromptSection
+	if rulesSection != "" {
+		loop.SystemPrompt += "\n\n" + rulesSection
+	}
 	loop.Skills = skillList
+	loop.Commands = cmdList
+	loop.ProjectDir = cwd
 	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
 
 	// The Task tool only makes sense once there's more than one agent role

@@ -109,6 +109,22 @@ func (c *Client) SwitchAgent(ctx context.Context, sessionID, agentName string) (
 	return sess, err
 }
 
+// CommandInfo is one loaded custom slash command, as offered by the
+// daemon's GET /api/commands — for a /help listing or autocomplete.
+// Running the command still goes through SendMessage like any other text.
+type CommandInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// ListCommands returns every custom command loaded on the daemon, sorted
+// by name.
+func (c *Client) ListCommands(ctx context.Context) ([]CommandInfo, error) {
+	var out []CommandInfo
+	err := c.doJSON(ctx, http.MethodGet, "/api/commands", nil, &out)
+	return out, err
+}
+
 // Version returns the version string of the daemon this client is
 // attached to — not necessarily the local binary's own version, since a
 // TUI can be pointed at a remote daemon via --server.
