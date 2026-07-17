@@ -24,9 +24,10 @@ import (
 )
 
 type Daemon struct {
-	Loop   *agent.Loop
-	Broker *agent.PermissionBroker
-	Tasks  *agent.TaskManager
+	Loop    *agent.Loop
+	Broker  *agent.PermissionBroker
+	Tasks   *agent.TaskManager
+	Version string
 
 	mux *http.ServeMux
 
@@ -35,14 +36,18 @@ type Daemon struct {
 }
 
 // New builds the daemon's HTTP handler. webFS, if non-nil, is served at "/"
-// (the embedded Web UI); pass nil to run headless (TUI-only).
-func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskManager, webFS fs.FS) *Daemon {
+// (the embedded Web UI); pass nil to run headless (TUI-only). version is
+// reported back to clients via GET /api/version (e.g. for the /version
+// prompt command) — it identifies the *daemon's* build, which matters when
+// a TUI is attached to a remote core over --server.
+func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskManager, webFS fs.FS, version string) *Daemon {
 	d := &Daemon{
-		Loop:   loop,
-		Broker: broker,
-		Tasks:  tasks,
-		mux:    http.NewServeMux(),
-		busy:   map[string]bool{},
+		Loop:    loop,
+		Broker:  broker,
+		Tasks:   tasks,
+		Version: version,
+		mux:     http.NewServeMux(),
+		busy:    map[string]bool{},
 	}
 	d.routes(webFS)
 	return d
@@ -51,6 +56,7 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 func (d *Daemon) Handler() http.Handler { return d.mux }
 
 func (d *Daemon) routes(webFS fs.FS) {
+	d.mux.HandleFunc("GET /api/version", d.handleVersion)
 	d.mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
 	d.mux.HandleFunc("GET /api/sessions", d.handleListSessions)
 	d.mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)
@@ -74,6 +80,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func (d *Daemon) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": d.Version})
 }
 
 func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {

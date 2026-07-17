@@ -132,7 +132,7 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	loop.Skills = skillList
 	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
 
-	return daemon.New(loop, broker, tasks, daemon.WebFS()), nil
+	return daemon.New(loop, broker, tasks, daemon.WebFS(), version), nil
 }
 
 // loadSkills scans the project-local skills dir (if run from within a

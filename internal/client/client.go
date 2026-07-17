@@ -84,6 +84,17 @@ func (c *Client) ListSessions(ctx context.Context) ([]session.Session, error) {
 	return out, err
 }
 
+// Version returns the version string of the daemon this client is
+// attached to — not necessarily the local binary's own version, since a
+// TUI can be pointed at a remote daemon via --server.
+func (c *Client) Version(ctx context.Context) (string, error) {
+	var out struct {
+		Version string `json:"version"`
+	}
+	err := c.doJSON(ctx, http.MethodGet, "/api/version", nil, &out)
+	return out.Version, err
+}
+
 func (c *Client) SendMessage(ctx context.Context, sessionID, text string) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/messages", map[string]string{"text": text}, nil)
 }

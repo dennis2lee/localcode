@@ -99,7 +99,7 @@ func newTestDaemon(t *testing.T, modelURL string) *Daemon {
 	loop := agent.New(store, registry, providers, cfg)
 	tasks := agent.NewTaskManager(context.Background(), loop, cfg.MaxConcurrentTasks)
 
-	return New(loop, broker, tasks, nil)
+	return New(loop, broker, tasks, nil, "test-version")
 }
 
 // TestDaemonEndToEnd drives the daemon purely over HTTP via internal/client,
@@ -316,5 +316,26 @@ func TestDaemonBackgroundTask(t *testing.T) {
 			t.Fatal("timed out waiting for background task to complete")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestDaemonVersion confirms GET /api/version reports back whatever
+// version string the daemon was constructed with — this is what backs the
+// /version prompt command in the TUI and Web UI.
+func TestDaemonVersion(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	v, err := c.Version(context.Background())
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+	if v != "test-version" {
+		t.Errorf("version = %q, want %q", v, "test-version")
 	}
 }
