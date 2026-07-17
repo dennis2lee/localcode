@@ -40,6 +40,36 @@ func TestCreateSessionDuplicateID(t *testing.T) {
 	}
 }
 
+func TestSetAgentUpdatesSessionAndPersistsAcrossGet(t *testing.T) {
+	s, _ := NewStore("")
+	if _, err := s.CreateSession("s1", "", "plan", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	updated, err := s.SetAgent("s1", "build")
+	if err != nil {
+		t.Fatalf("SetAgent: %v", err)
+	}
+	if updated.Agent != "build" {
+		t.Errorf("SetAgent returned Agent = %q, want %q", updated.Agent, "build")
+	}
+
+	got, err := s.Get("s1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Agent != "build" {
+		t.Errorf("Get after SetAgent returned Agent = %q, want %q", got.Agent, "build")
+	}
+}
+
+func TestSetAgentUnknownSession(t *testing.T) {
+	s, _ := NewStore("")
+	if _, err := s.SetAgent("nope", "build"); err == nil {
+		t.Error("expected an error switching the agent of an unknown session")
+	}
+}
+
 func TestGetUnknownSession(t *testing.T) {
 	s, _ := NewStore("")
 	if _, err := s.Get("nope"); err == nil {

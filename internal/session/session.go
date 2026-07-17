@@ -105,6 +105,23 @@ func (s *Store) Get(id string) (*Session, error) {
 	return &metaCopy, nil
 }
 
+// SetAgent changes which agent a session sends future messages as —
+// e.g. switching a session from "plan" to "build" mid-conversation.
+// Message history is untouched; only the agent used for the *next*
+// SendMessage call changes, since callers re-read Session.Agent fresh on
+// every send rather than caching it.
+func (s *Store) SetAgent(sessionID, agent string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	st.meta.Agent = agent
+	metaCopy := st.meta
+	return &metaCopy, nil
+}
+
 // ListVisible returns all top-level (visible:true) sessions — i.e. the
 // ones a user picks from when resuming, not background tasks — newest
 // first.

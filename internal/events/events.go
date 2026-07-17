@@ -16,6 +16,7 @@ const (
 	TypePermissionResolved Type = "permission.resolved"
 	TypeTaskSpawned        Type = "task.spawned"
 	TypeTaskStatus         Type = "task.status"
+	TypeAgentSwitched      Type = "agent.switched"
 	TypeError              Type = "error"
 )
 
