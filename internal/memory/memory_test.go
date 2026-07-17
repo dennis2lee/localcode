@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSlugify(t *testing.T) {
@@ -95,6 +96,25 @@ func TestLoadIndexCapsAtMaxBytes(t *testing.T) {
 	got := LoadIndex(dir)
 	if len(got) > maxIndexBytes {
 		t.Errorf("LoadIndex() returned %d bytes, want capped at %d", len(got), maxIndexBytes)
+	}
+}
+
+// TestLoadIndexByteCapKeepsValidUTF8 guards against the byte cap slicing
+// through a multi-byte rune (CJK/emoji), which would emit invalid UTF-8.
+func TestLoadIndexByteCapKeepsValidUTF8(t *testing.T) {
+	dir := t.TempDir()
+	// "가" is 3 bytes in UTF-8; maxIndexBytes is not a multiple of 3, so the
+	// cap lands mid-rune.
+	big := strings.Repeat("가", maxIndexBytes) // ~3x over the byte cap
+	if err := os.WriteFile(IndexPath(dir), []byte(big), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadIndex(dir)
+	if !utf8.ValidString(got) {
+		t.Errorf("LoadIndex() produced invalid UTF-8 at the byte boundary")
+	}
+	if len(got) > maxIndexBytes {
+		t.Errorf("LoadIndex() = %d bytes, want <= %d", len(got), maxIndexBytes)
 	}
 }
 

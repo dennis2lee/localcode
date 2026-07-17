@@ -102,53 +102,82 @@ func parseCommandFile(path string) (Command, error) {
 	}, nil
 }
 
-var (
-	shellPattern = regexp.MustCompile("!`([^`]*)`")
-	filePattern  = regexp.MustCompile(`@(\S+)`)
-)
+// expandPattern matches, as whole tokens, each construct Expand knows:
+// $ARGUMENTS, a positional $1-$9, a !`shell command`, or an @file
+// reference. Matching all four in one alternation lets Expand run a single
+// left-to-right pass — so substituted content (a shell command's output,
+// or an argument value) is never itself re-scanned for further directives.
+// That matters for safety: without it, `!`echo @/etc/passwd`` would read
+// /etc/passwd, and an argument like "@/secret" spliced via $ARGUMENTS
+// would too.
+var expandPattern = regexp.MustCompile("\\$ARGUMENTS|\\$[1-9]|!`[^`]*`|@\\S+")
 
 // Expand renders cmd's body against the given raw argument string and
-// working directory: $ARGUMENTS is replaced with args verbatim, $1-$9
-// with whitespace-split positional fields (empty string if not supplied),
-// !`cmd` with the stdout of running cmd via the shell (cwd-relative), and
-// @path with the contents of the file at path (resolved against cwd).
+// working directory in a single pass: $ARGUMENTS is replaced with args
+// verbatim, $1-$9 with whitespace-split positional fields (empty string if
+// not supplied), !`cmd` with the stdout of running cmd via the shell
+// (cwd-relative, with $ARGUMENTS/$N substituted into the command first),
+// and @path with the contents of the file at path (resolved against cwd).
 func Expand(cmd Command, args, cwd string) (string, error) {
 	fields := strings.Fields(args)
+	var expandErr error
 
-	out := strings.ReplaceAll(cmd.Body, "$ARGUMENTS", args)
+	out := expandPattern.ReplaceAllStringFunc(cmd.Body, func(tok string) string {
+		if expandErr != nil {
+			return tok
+		}
+		switch {
+		case tok == "$ARGUMENTS":
+			return args
+		case len(tok) == 2 && tok[0] == '$': // $1-$9
+			if i := int(tok[1] - '0'); i >= 1 && i <= len(fields) {
+				return fields[i-1]
+			}
+			return ""
+		case strings.HasPrefix(tok, "!`"):
+			cmdStr := substituteArgs(tok[2:len(tok)-1], args, fields)
+			out, err := runShell(cmdStr, cwd)
+			if err != nil {
+				expandErr = err
+				return tok
+			}
+			return out
+		case strings.HasPrefix(tok, "@"):
+			ref := tok[1:]
+			path := ref
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(cwd, path)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				expandErr = fmt.Errorf("read @%s: %w", ref, err)
+				return tok
+			}
+			return fmt.Sprintf("\n--- %s ---\n%s\n---\n", ref, string(data))
+		}
+		return tok
+	})
+
+	if expandErr != nil {
+		return "", expandErr
+	}
+	return out, nil
+}
+
+// substituteArgs replaces $ARGUMENTS and $1-$9 in a shell command string,
+// so a command template can pass its arguments through to the shell (e.g.
+// !`grep $1 somefile`). Only used for the shell-command text itself, not
+// re-applied to that command's output.
+func substituteArgs(s, args string, fields []string) string {
+	s = strings.ReplaceAll(s, "$ARGUMENTS", args)
 	for i := 1; i <= 9; i++ {
 		val := ""
 		if i <= len(fields) {
 			val = fields[i-1]
 		}
-		out = strings.ReplaceAll(out, fmt.Sprintf("$%d", i), val)
+		s = strings.ReplaceAll(s, fmt.Sprintf("$%d", i), val)
 	}
-
-	out, err := expandShell(out, cwd)
-	if err != nil {
-		return "", err
-	}
-	return expandFiles(out, cwd)
-}
-
-func expandShell(text, cwd string) (string, error) {
-	var runErr error
-	result := shellPattern.ReplaceAllStringFunc(text, func(match string) string {
-		if runErr != nil {
-			return match
-		}
-		sub := shellPattern.FindStringSubmatch(match)
-		out, err := runShell(sub[1], cwd)
-		if err != nil {
-			runErr = err
-			return match
-		}
-		return out
-	})
-	if runErr != nil {
-		return "", runErr
-	}
-	return result, nil
+	return s
 }
 
 func runShell(cmdStr, cwd string) (string, error) {
@@ -161,28 +190,4 @@ func runShell(cmdStr, cwd string) (string, error) {
 		return "", fmt.Errorf("shell command %q: %w", cmdStr, err)
 	}
 	return strings.TrimRight(buf.String(), "\n"), nil
-}
-
-func expandFiles(text, cwd string) (string, error) {
-	var readErr error
-	result := filePattern.ReplaceAllStringFunc(text, func(match string) string {
-		if readErr != nil {
-			return match
-		}
-		relPath := filePattern.FindStringSubmatch(match)[1]
-		path := relPath
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(cwd, path)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			readErr = fmt.Errorf("read @%s: %w", relPath, err)
-			return match
-		}
-		return fmt.Sprintf("\n--- %s ---\n%s\n---\n", relPath, string(data))
-	})
-	if readErr != nil {
-		return "", readErr
-	}
-	return result, nil
 }

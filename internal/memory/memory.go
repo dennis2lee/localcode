@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const indexFileName = "MEMORY.md"
@@ -77,6 +78,16 @@ func LoadIndex(dir string) string {
 	}
 	if len(data) > maxIndexBytes {
 		data = data[:maxIndexBytes]
+		// The byte cap can land in the middle of a multi-byte rune (CJK,
+		// emoji, ...); trim the incomplete trailing bytes so we never emit
+		// invalid UTF-8 into the system prompt / SSE stream.
+		for len(data) > 0 {
+			if r, size := utf8.DecodeLastRune(data); r == utf8.RuneError && size <= 1 {
+				data = data[:len(data)-1]
+				continue
+			}
+			break
+		}
 	}
 	lines := strings.Split(string(data), "\n")
 	if len(lines) > maxIndexLines {

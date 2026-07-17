@@ -169,3 +169,59 @@ func TestExpandShellFailureErrors(t *testing.T) {
 		t.Error("expected an error for a failing shell command")
 	}
 }
+
+// TestExpandShellOutputNotReScannedForImports guards against a
+// directive-injection bug: a shell command whose stdout happens to contain
+// an "@path" reference must NOT cause that path to be read and inlined.
+func TestExpandShellOutputNotReScannedForImports(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The shell prints an @-reference to the secret file; it must survive
+	// as literal text, not be expanded into the file's contents.
+	cmd := Command{Body: "!`echo @" + secret + "`"}
+	got, err := Expand(cmd, "", dir)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	if strings.Contains(got, "TOP SECRET") {
+		t.Errorf("shell output was re-scanned and the file got inlined: %q", got)
+	}
+	if !strings.Contains(got, "@"+secret) {
+		t.Errorf("expected the @-reference to remain literal in the output, got %q", got)
+	}
+}
+
+// TestExpandArgumentNotReScannedForImports guards the same injection via an
+// argument: a "$ARGUMENTS" value that contains an "@path" must not trigger
+// a file read.
+func TestExpandArgumentNotReScannedForImports(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := Command{Body: "user said: $ARGUMENTS"}
+	got, err := Expand(cmd, "@"+secret, dir)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	if strings.Contains(got, "TOP SECRET") {
+		t.Errorf("argument was re-scanned and the file got inlined: %q", got)
+	}
+}
+
+// TestExpandShellReceivesSubstitutedArgs confirms $N still reaches the
+// shell command itself (a legitimate, preserved feature).
+func TestExpandShellReceivesSubstitutedArgs(t *testing.T) {
+	cmd := Command{Body: "!`echo got:$1`"}
+	got, err := Expand(cmd, "hello", t.TempDir())
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	if got != "got:hello" {
+		t.Errorf("Expand() = %q, want %q (arg substituted into the shell command)", got, "got:hello")
+	}
+}
