@@ -1,0 +1,190 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"localcode/internal/config"
+	"localcode/internal/events"
+	"localcode/internal/provider"
+	"localcode/internal/session"
+	"localcode/internal/skills"
+	"localcode/internal/tools"
+)
+
+func newSkillTestLoop(t *testing.T, modelURL string) (*Loop, *session.Store) {
+	t.Helper()
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	registry := tools.NewRegistry(nil)
+
+	cfg := &config.Config{
+		Providers: map[string]config.ProviderConfig{
+			"local": {Type: config.ProviderOpenAICompat, BaseURL: modelURL},
+		},
+		Profiles: map[string]config.Profile{
+			"balanced": {Provider: "local", Model: "test-model"},
+		},
+		Agents: map[string]config.AgentConfig{
+			"general-purpose": {Profile: "balanced"},
+		},
+		DefaultProfile: "balanced",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("invalid config: %v", err)
+	}
+
+	providers := map[string]provider.Provider{}
+	if modelURL != "" {
+		providers["local"] = provider.NewOpenAICompat(modelURL, "")
+	}
+
+	loop := New(store, registry, providers, cfg)
+	loop.Skills = []skills.Skill{
+		{Name: "pdf-tools", Description: "Work with PDF files", Body: "# PDF Tools\nMerge and split PDFs."},
+	}
+	return loop, store
+}
+
+// TestSkillCommandList confirms "/skill" answers locally (no model call —
+// modelURL is empty and would error if Chat were ever invoked) with the
+// name/description index.
+func TestSkillCommandList(t *testing.T) {
+	loop, store := newSkillTestLoop(t, "")
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/skill"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	all, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	var sawUserMsg bool
+	var listing string
+	for _, ev := range all {
+		switch ev.Type {
+		case events.TypeUserMessage:
+			sawUserMsg = true
+			if text, _ := ev.Data["text"].(string); text != "/skill" {
+				t.Errorf("message.user text = %q, want %q", text, "/skill")
+			}
+		case events.TypeMessagePartEnd:
+			listing, _ = ev.Data["text"].(string)
+		}
+	}
+	if !sawUserMsg {
+		t.Error("expected a message.user event for \"/skill\"")
+	}
+	if !strings.Contains(listing, "pdf-tools") || !strings.Contains(listing, "Work with PDF files") {
+		t.Errorf("listing = %q, want it to mention the registered skill", listing)
+	}
+}
+
+// TestSkillCommandUnknown confirms "/skill <bad name>" reports an error
+// locally without ever calling the model.
+func TestSkillCommandUnknown(t *testing.T) {
+	loop, store := newSkillTestLoop(t, "")
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/skill nonexistent"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	all, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	var sawError bool
+	for _, ev := range all {
+		if ev.Type == events.TypeError {
+			sawError = true
+			msg, _ := ev.Data["error"].(string)
+			if !strings.Contains(msg, "nonexistent") {
+				t.Errorf("error message = %q, want it to mention the bad skill name", msg)
+			}
+		}
+	}
+	if !sawError {
+		t.Error("expected an error event for an unknown skill name")
+	}
+}
+
+// TestSkillCommandLoad confirms "/skill <name>" keeps the short command as
+// the displayed message.user text but sends the full skill body to the
+// model, which then answers normally.
+func TestSkillCommandLoad(t *testing.T) {
+	var lastRequestBody string
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		lastRequestBody = string(raw)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok, using pdf-tools.\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer model.Close()
+
+	loop, store := newSkillTestLoop(t, model.URL)
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/skill pdf-tools"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	all, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	var displayedText string
+	var finalText strings.Builder
+	for _, ev := range all {
+		switch ev.Type {
+		case events.TypeUserMessage:
+			displayedText, _ = ev.Data["text"].(string)
+		case events.TypeMessagePartDelta:
+			if text, ok := ev.Data["text"].(string); ok {
+				finalText.WriteString(text)
+			}
+		}
+	}
+
+	if displayedText != "/skill pdf-tools" {
+		t.Errorf("displayed message.user text = %q, want %q", displayedText, "/skill pdf-tools")
+	}
+	if got := finalText.String(); got != "ok, using pdf-tools." {
+		t.Errorf("final text = %q, want %q", got, "ok, using pdf-tools.")
+	}
+	if !strings.Contains(lastRequestBody, "Merge and split PDFs.") {
+		t.Errorf("expected the skill body to be sent to the model; request was: %s", lastRequestBody)
+	}
+	if strings.Contains(lastRequestBody, "/skill pdf-tools") {
+		t.Error("the raw \"/skill pdf-tools\" command text should not leak into the model request")
+	}
+}

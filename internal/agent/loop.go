@@ -14,6 +14,7 @@ import (
 	"localcode/internal/events"
 	"localcode/internal/provider"
 	"localcode/internal/session"
+	"localcode/internal/skills"
 	"localcode/internal/tools"
 )
 
@@ -30,6 +31,12 @@ type Loop struct {
 	Providers    map[string]provider.Provider // provider config key -> client
 	Config       *config.Config
 	SystemPrompt string
+	// Skills backs the /skill slash command (list / load by name). It's
+	// separate from the Skill *tool* the model can call on its own —
+	// this is the same skill set, just also reachable directly by the
+	// user typing a command instead of waiting on the model to decide to
+	// use it.
+	Skills []skills.Skill
 
 	mu       sync.Mutex
 	messages map[string][]provider.Message // sessionID -> history
@@ -51,6 +58,36 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 // the model produces a final answer. agentName selects which model profile
 // to use, per the config's agents map.
 func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text string) error {
+	// /skill lists available skills locally (no model call); /skill <name>
+	// splices that skill's full body into what the model sees, so it
+	// starts following it immediately instead of the user hoping the
+	// model decides to call the Skill tool on its own. Either way the
+	// displayed transcript keeps the short "/skill ..." the user typed.
+	if arg, ok := parseSkillCommand(text); ok {
+		if arg == "" {
+			return l.listSkills(sessionID, text)
+		}
+		sk, found := l.findSkill(arg)
+		if !found {
+			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
+			l.Store.Append(sessionID, events.TypeError, map[string]any{
+				"error": fmt.Sprintf("unknown skill %q. Available: %s", arg, l.skillNames()),
+			})
+			return nil
+		}
+		return l.sendWithModelText(ctx, sessionID, agentName, text,
+			fmt.Sprintf("Follow the %q skill's instructions below to help with my request.\n\n---\n%s\n---", sk.Name, sk.Body))
+	}
+
+	return l.sendWithModelText(ctx, sessionID, agentName, text, text)
+}
+
+// sendWithModelText drives one full agent turn. displayText is what gets
+// recorded as the message.user event (what the user actually typed);
+// modelText is what the model receives as the user turn's content — they
+// differ for /skill <name>, where the model needs the full skill body but
+// the transcript should stay readable.
+func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, displayText, modelText string) error {
 	profile, err := l.Config.ResolveProfile(agentName)
 	if err != nil {
 		return fmt.Errorf("resolve profile for agent %q: %w", agentName, err)
@@ -65,11 +102,11 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		maxTokens = defaultMaxTokens
 	}
 
-	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
 
 	l.appendHistory(sessionID, provider.Message{
 		Role:    provider.RoleUser,
-		Content: []provider.Block{provider.TextBlock(text)},
+		Content: []provider.Block{provider.TextBlock(modelText)},
 	})
 
 	for {
@@ -184,6 +221,57 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		results = append(results, provider.ToolResultBlock(tu.ToolUseID, res.Content, res.IsError))
 	}
 	return results
+}
+
+// parseSkillCommand recognizes "/skill" and "/skill <name>". ok is false
+// for anything else (including a message that merely mentions "/skill" in
+// the middle of a sentence).
+func parseSkillCommand(text string) (arg string, ok bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "/skill" {
+		return "", true
+	}
+	if rest, found := strings.CutPrefix(trimmed, "/skill "); found {
+		return strings.TrimSpace(rest), true
+	}
+	return "", false
+}
+
+// listSkills answers "/skill" locally — no model call — with the same
+// name/description index that's in the system prompt.
+func (l *Loop) listSkills(sessionID, displayText string) error {
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+
+	text := "등록된 skill이 없습니다."
+	if len(l.Skills) > 0 {
+		var b strings.Builder
+		b.WriteString("사용 가능한 skill (/skill <이름> 으로 로드):\n")
+		for _, s := range l.Skills {
+			fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
+		}
+		text = b.String()
+	}
+
+	l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": text})
+	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text})
+	return nil
+}
+
+func (l *Loop) findSkill(name string) (skills.Skill, bool) {
+	for _, s := range l.Skills {
+		if strings.EqualFold(s.Name, name) {
+			return s, true
+		}
+	}
+	return skills.Skill{}, false
+}
+
+func (l *Loop) skillNames() string {
+	names := make([]string, len(l.Skills))
+	for i, s := range l.Skills {
+		names[i] = s.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 func (l *Loop) appendHistory(sessionID string, msg provider.Message) {
