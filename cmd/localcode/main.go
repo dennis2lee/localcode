@@ -132,6 +132,15 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	loop.Skills = skillList
 	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
 
+	// The Task tool only makes sense once there's more than one agent role
+	// to delegate to — with a single agent it'd just be a slower way to
+	// call yourself. Registered after the TaskManager exists (it needs
+	// one), but registry is a live pointer already shared with loop, so
+	// this still takes effect before any SendMessage call.
+	if len(cfg.Agents) > 1 {
+		registry.Register(agent.NewTaskTool(tasks, cfg.Agents))
+	}
+
 	return daemon.New(loop, broker, tasks, daemon.WebFS(), version), nil
 }
 

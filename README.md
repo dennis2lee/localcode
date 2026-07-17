@@ -1,6 +1,6 @@
 # localcode
 
-Bedrock + OpenAI-compatible(로컬 LLM) 양쪽에 붙는 코딩 에이전트. Claude Code처럼 파일 읽기/쓰기, 셸 실행, MCP, Skills를 모델이 직접 호출할 수 있고, 클라우드 모델(Bedrock)과 로컬 모델(LM Studio 등)을 config 하나로 전환합니다. 코어는 헤드리스 데몬이고, TUI와 브라우저(Web UI)는 둘 다 그 위의 대등한 클라이언트입니다.
+Bedrock + OpenAI-compatible(로컬 LLM) 양쪽에 붙는 코딩 에이전트. Claude Code처럼 파일 읽기/쓰기, 셸 실행, MCP, Skills를 모델이 직접 호출할 수 있고, 클라우드 모델(Bedrock)과 로컬 모델(LM Studio 등)을 config 하나로 전환합니다. 역할별로 다른 모델·프롬프트·툴 범위를 가진 여러 에이전트를 정의하고 `Task` 툴로 서로 위임하게 할 수도 있습니다(oh-my-opencode 스타일). 코어는 헤드리스 데몬이고, TUI와 브라우저(Web UI)는 둘 다 그 위의 대등한 클라이언트입니다.
 
 - [설치 방법](INSTALL.md) — 소스 빌드, macOS/Windows 배포 패키지 만들기
 - [사용 방법](USAGE.md) — config.json 작성법(Provider/MCP/Skills), 화면 조작, 백그라운드 태스크
@@ -10,7 +10,7 @@ Bedrock + OpenAI-compatible(로컬 LLM) 양쪽에 붙는 코딩 에이전트. Cl
 ## 아키텍처
 
 ```
-[core daemon]  ← 세션/에이전트 루프/툴/MCP/Skills/Provider/Task Manager
+[core daemon]  ← 세션/에이전트 루프/툴/MCP/Skills/Provider/다중 에이전트 Task Manager
    ├ HTTP API   (세션 생성, 메시지 전송, 권한 응답, 백그라운드 태스크 스폰)
    └ SSE        (토큰 스트림, 툴 시작/종료, 권한 요청, 태스크 상태)
         ↑              ↑

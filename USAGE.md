@@ -71,7 +71,7 @@ localcode --server http://localhost:4096   # 터미널
   - `openai-compat.base_url`: `/chat/completions` 앞부분 URL. LM Studio, vLLM 등 OpenAI 호환 서버 주소.
   - `openai-compat.api_key`: 필요하면 지정 (로컬 서버는 보통 불필요).
 - **profiles**: 실제로 쓸 provider+model 조합에 이름을 붙인 것. `max_tokens`, `temperature` 선택적으로 지정.
-- **agents**: 에이전트/작업 종류 이름 → 프로필 매핑. `--agent` 플래그로 선택한 이름이 여기서 풀립니다. 없는 이름이면 `default_profile`로 대체됩니다.
+- **agents**: 에이전트/작업 종류 이름 → 프로필 매핑. `--agent` 플래그로 선택한 이름이 여기서 풀립니다. 없는 이름이면 `default_profile`로 대체됩니다. `profile` 외에 `description`(다른 에이전트가 Task 툴로 위임할 때 보는 설명), `prompt`(이 에이전트 전용 시스템 프롬프트 추가분), `tools`(이 에이전트가 쓸 수 있는 툴을 이 목록으로 제한 — 비워두면 전체 툴 사용 가능)를 지정할 수 있습니다. 자세한 건 아래 "여러 에이전트 조합하기" 참고.
 - **max_concurrent_tasks**: 백그라운드 태스크(아래 참고) 동시 실행 개수 제한.
 - **mcp_servers**: Claude Code의 `.mcp.json`과 같은 모양(`command`/`args`/`env`)이라, 기존 항목을 그대로 옮겨 쓸 수 있습니다. 각 서버는 stdio로 붙고, 그 서버의 툴은 `mcp__<서버이름>__<툴이름>`으로 노출됩니다. **MCP 툴은 항상 권한 확인을 거칩니다** — 서버가 자기 툴을 "읽기 전용"이라고 알려와도(annotations) 신뢰하지 않습니다. 서버 하나가 연결에 실패해도(잘못된 command, 프로세스 크래시 등) 그 서버만 건너뛰고 나머지는 정상 등록됩니다 — 데몬 로그에 경고만 남고 시작은 막히지 않습니다. 연결된 서버의 세션이 죽으면 다음 호출 시 자동으로 한 번 재연결을 시도합니다.
 
@@ -141,10 +141,44 @@ description: PDF 파일 병합/분할/워터마크 작업
 | `bash` | 예 | 셸 명령 실행 (기본 타임아웃 2분) |
 | `Skill` | 아니오 | 이름으로 스킬 본문 전체를 로드 (설정된 스킬이 있을 때만 등록됨) |
 | `mcp__<server>__<tool>` | 예 (항상) | 설정된 각 MCP 서버가 제공하는 툴 |
+| `Task` | 아니오 | 이름 붙은 다른 에이전트에게 작업을 위임하고 결과를 기다림 (`agents`가 2개 이상 설정됐을 때만 등록됨) |
+
+## 여러 에이전트 조합하기
+
+config의 `agents` 맵에 `profile` 하나만 지정했을 때는 지금까지처럼 "이 이름으로 실행하면 이 모델을 쓴다"는 라우팅일 뿐입니다. 여기에 `description`/`prompt`/`tools`를 추가하면 진짜 **역할이 다른 에이전트**가 되고, 모델이 `Task` 툴로 서로를 호출해서 위임할 수 있습니다 — opencode의 서브에이전트/모델 매칭 방식(예: `oh-my-opencode`가 orchestrator·explore·review처럼 역할별로 다른 모델을 붙이는 것)에서 착안했습니다.
+
+```json
+"agents": {
+  "build": {
+    "profile": "strong",
+    "description": "Implements features and fixes bugs.",
+    "prompt": "You are the build agent. Delegate research to the explore agent via the Task tool instead of doing it yourself."
+  },
+  "explore": {
+    "profile": "cheap",
+    "description": "Fast, read-only codebase search.",
+    "prompt": "You are the explore agent. Locate relevant files and summarize quickly.",
+    "tools": ["read_file", "glob", "grep"]
+  }
+}
+```
+
+- **`profile`**: 이 에이전트가 어떤 provider+model을 쓸지 (필수, 기존과 동일).
+- **`description`**: 다른 에이전트가 `Task` 툴로 위임 대상을 고를 때 보는 한 줄 설명.
+- **`prompt`**: 이 에이전트로 실행될 때 기본 시스템 프롬프트 뒤에 덧붙는 지침. 역할을 좁히는 용도 (`"파일을 수정하지 마라"`, `"빠르고 간결하게"` 등).
+- **`tools`**: 이 에이전트가 쓸 수 있는 툴 이름 목록. 비워두면 제한 없음(전체 툴 + 등록되어 있으면 `Task`까지). 지정하면 모델에게 그 툴들만 보이고, 혹시 모델이 목록 밖 툴을 호출해도 실행 전에 거부됩니다(이중 방어).
+
+**`Task` 도구**: `agents`에 항목이 2개 이상이면 자동으로 등록됩니다. 모델이 `Task({"agent":"explore","prompt":"..."})`를 호출하면:
+
+1. `explore` 세션이 새로 만들어지고(부모 세션에 `task.spawned` 이벤트) `max_concurrent_tasks` 세마포어를 기다립니다.
+2. `explore`의 `profile`/`prompt`/`tools`로 **동기적으로** 한 턴을 실행합니다 — 아래 "백그라운드 태스크"와 달리 위임한 에이전트의 턴이 이 결과를 기다립니다.
+3. `explore`의 최종 답변 텍스트가 `Task` 호출의 결과로 돌아가고, 위임한 에이전트는 그걸 이어서 씁니다.
+
+무한 위임(에이전트가 자기 자신 또는 서로를 계속 호출)을 막기 위해 위임 깊이가 3단계를 넘으면 `Task` 호출이 자동으로 거부됩니다.
 
 ## 백그라운드 태스크
 
-세션 하나(부모)에서 다른 에이전트를 백그라운드로 띄우고 진행 상황을 추적할 수 있습니다. 지금은 API로만 가능합니다 (TUI/Web UI에 "백그라운드로 실행" 버튼은 아직 없고, 결과 상태를 보여주는 사이드바만 있습니다):
+세션 하나(부모)에서 다른 에이전트를 백그라운드로 띄우고 진행 상황을 추적할 수 있습니다. 위의 `Task` 툴과 이벤트 종류(`task.spawned`/`task.status`)는 같지만, 이건 **비동기**입니다 — 호출한 쪽이 결과를 기다리지 않고 바로 다음으로 넘어갑니다. 지금은 API로만 가능합니다 (TUI/Web UI에 "백그라운드로 실행" 버튼은 아직 없고, 결과 상태를 보여주는 사이드바만 있습니다):
 
 ```bash
 curl -X POST http://127.0.0.1:4096/api/sessions/<parent-id>/tasks \

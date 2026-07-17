@@ -27,8 +27,33 @@
     }
   },
   "agents": {
-    "general-purpose": { "profile": "balanced" },
-    "explore": { "profile": "cheap" }
+    "general-purpose": {
+      "profile": "balanced",
+      "description": "Default agent for direct user conversation: full tool access, no scoped prompt."
+    },
+    "build": {
+      "profile": "strong",
+      "description": "Implements features and fixes bugs. Full tool access.",
+      "prompt": "You are the build agent. Focus on writing correct, working code and using tools to verify your changes. Delegate research/search-heavy sub-tasks to the explore agent via the Task tool instead of doing them yourself."
+    },
+    "explore": {
+      "profile": "cheap",
+      "description": "Fast, read-only codebase search. Cheap/fast model on purpose — don't use it for anything requiring deep reasoning.",
+      "prompt": "You are the explore agent. Locate relevant files and summarize what you find, quickly and concisely. Do not modify anything.",
+      "tools": ["read_file", "glob", "grep"]
+    },
+    "plan": {
+      "profile": "strong",
+      "description": "Designs a step-by-step implementation plan without making any changes.",
+      "prompt": "You are the plan agent. Read the codebase and propose a concrete, ordered implementation plan. Do not write or edit files — describe what should change and why.",
+      "tools": ["read_file", "glob", "grep"]
+    },
+    "review": {
+      "profile": "balanced",
+      "description": "Reviews a diff or code section for correctness bugs, security issues, and unnecessary complexity.",
+      "prompt": "You are the review agent. Look for correctness bugs, security issues, and needless complexity — not style nitpicks. Do not modify files; report findings.",
+      "tools": ["read_file", "glob", "grep", "bash"]
+    }
   },
   "default_profile": "balanced",
   "max_concurrent_tasks": 5
