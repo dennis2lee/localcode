@@ -13,6 +13,7 @@ import (
 	"localcode/internal/commands"
 	"localcode/internal/config"
 	"localcode/internal/events"
+	"localcode/internal/memory"
 	"localcode/internal/provider"
 	"localcode/internal/session"
 	"localcode/internal/skills"
@@ -53,6 +54,12 @@ type Loop struct {
 	// ProjectDir is the working directory custom commands resolve
 	// "!`shell`" and "@file" expansions against.
 	ProjectDir string
+
+	// MemoryDir is this project's auto-memory directory (see
+	// internal/memory) — "" if auto memory is disabled. Backs the
+	// "/memory" local command; the actual read/write of memory files
+	// happens via the model's ordinary file tools, not here.
+	MemoryDir string
 
 	mu       sync.Mutex
 	messages map[string][]provider.Message // sessionID -> history
@@ -97,6 +104,10 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 
 	if strings.TrimSpace(text) == "/init" {
 		return l.sendWithModelText(ctx, sessionID, agentName, text, initPrompt, "", "")
+	}
+
+	if strings.TrimSpace(text) == "/memory" {
+		return l.showMemoryInfo(sessionID, text)
 	}
 
 	if cmd, args, ok := l.matchCustomCommand(text); ok {
@@ -332,6 +343,33 @@ func (l *Loop) listSkills(sessionID, displayText string) error {
 		b.WriteString("사용 가능한 skill (/skill <이름> 으로 로드):\n")
 		for _, s := range l.Skills {
 			fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
+		}
+		text = b.String()
+	}
+
+	l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": text})
+	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text})
+	return nil
+}
+
+// showMemoryInfo answers "/memory" locally — no model call — with the
+// auto-memory directory path and current MEMORY.md index content, the
+// same information Claude Code's "/memory" command surfaces.
+func (l *Loop) showMemoryInfo(sessionID, displayText string) error {
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+
+	var text string
+	if l.MemoryDir == "" {
+		text = "Auto memory가 비활성화되어 있습니다 (config.json의 \"auto_memory_enabled\": false)."
+	} else {
+		index := memory.LoadIndex(l.MemoryDir)
+		var b strings.Builder
+		fmt.Fprintf(&b, "Auto memory 디렉터리: %s\n", l.MemoryDir)
+		fmt.Fprintf(&b, "인덱스 파일: %s\n\n", memory.IndexPath(l.MemoryDir))
+		if index == "" {
+			b.WriteString("아직 저장된 메모리가 없습니다.")
+		} else {
+			b.WriteString(index)
 		}
 		text = b.String()
 	}

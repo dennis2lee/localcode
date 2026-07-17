@@ -202,3 +202,27 @@ func TestLoadMergedNeitherExists(t *testing.T) {
 		t.Error("expected an error when neither global nor project config exists")
 	}
 }
+
+func TestMemoryEnabledDefaultsTrue(t *testing.T) {
+	c := &Config{}
+	if !c.MemoryEnabled() {
+		t.Error("MemoryEnabled() should default to true when AutoMemoryEnabled is unset")
+	}
+}
+
+func TestMemoryEnabledExplicitFalse(t *testing.T) {
+	disabled := false
+	c := &Config{AutoMemoryEnabled: &disabled}
+	if c.MemoryEnabled() {
+		t.Error("MemoryEnabled() should be false when AutoMemoryEnabled is explicitly false")
+	}
+}
+
+func TestMergeCarriesAutoMemoryEnabledFromProject(t *testing.T) {
+	disabled := false
+	base := &Config{}
+	base.merge(&Config{AutoMemoryEnabled: &disabled})
+	if base.MemoryEnabled() {
+		t.Error("expected the project override's AutoMemoryEnabled=false to win after merge")
+	}
+}

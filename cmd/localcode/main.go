@@ -26,6 +26,7 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/daemon"
 	mcpclient "localcode/internal/mcp"
+	"localcode/internal/memory"
 	"localcode/internal/provider"
 	"localcode/internal/rules"
 	"localcode/internal/session"
@@ -124,6 +125,15 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	}
 	rulesSection := rules.Load(cwd, home)
 
+	var memDir, memorySection string
+	if cfg.MemoryEnabled() {
+		memDir = memory.Dir(cwd, home)
+		if err := os.MkdirAll(memDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create memory dir: %w", err)
+		}
+		memorySection = memory.SystemPromptSection(memDir, memory.LoadIndex(memDir))
+	}
+
 	if len(cfg.MCPServers) > 0 {
 		// A server that fails to connect or list tools is skipped (logged as
 		// a warning), not fatal: one bad MCP server shouldn't take down the
@@ -144,9 +154,13 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	if rulesSection != "" {
 		loop.SystemPrompt += "\n\n" + rulesSection
 	}
+	if memorySection != "" {
+		loop.SystemPrompt += "\n\n" + memorySection
+	}
 	loop.Skills = skillList
 	loop.Commands = cmdList
 	loop.ProjectDir = cwd
+	loop.MemoryDir = memDir
 	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
 
 	// The Task tool only makes sense once there's more than one agent role

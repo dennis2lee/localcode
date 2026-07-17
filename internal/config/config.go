@@ -18,6 +18,18 @@ type Config struct {
 	DefaultProfile     string                     `json:"default_profile"`
 	MaxConcurrentTasks int                        `json:"max_concurrent_tasks"`
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+
+	// AutoMemoryEnabled toggles Claude Code-style auto memory (the model
+	// accumulating its own notes across sessions under a per-project
+	// memory directory — see internal/memory). A nil pointer means
+	// unset, which defaults to enabled.
+	AutoMemoryEnabled *bool `json:"auto_memory_enabled,omitempty"`
+}
+
+// MemoryEnabled reports whether auto memory is on — the default when
+// AutoMemoryEnabled is unset.
+func (c *Config) MemoryEnabled() bool {
+	return c.AutoMemoryEnabled == nil || *c.AutoMemoryEnabled
 }
 
 // MCPServerConfig launches one MCP server over stdio, same shape as Claude
@@ -180,6 +192,9 @@ func (c *Config) merge(other *Config) {
 	}
 	if other.MaxConcurrentTasks != 0 {
 		c.MaxConcurrentTasks = other.MaxConcurrentTasks
+	}
+	if other.AutoMemoryEnabled != nil {
+		c.AutoMemoryEnabled = other.AutoMemoryEnabled
 	}
 }
 

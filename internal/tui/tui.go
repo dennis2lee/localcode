@@ -40,6 +40,7 @@ const helpText = `사용 가능한 명령:
   /agent              등록된 에이전트 목록 표시
   /agent <이름>        해당 에이전트로 전환 (Tab으로도 순환 전환 가능)
   /init              저장소를 스캔해서 AGENTS.md 규칙 파일 생성/개선
+  /memory            auto memory 디렉터리/인덱스(MEMORY.md) 확인
   /commands          등록된 사용자 정의 명령 목록 표시
   /<사용자 정의 명령>   .localcode/commands/*.md 로 정의한 명령 실행
   exit, :q            TUI 종료 (Ctrl+C와 동일)
