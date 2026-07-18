@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.12.2
+
+- Restructure README.md and USAGE.md for readability — no content removed, only reorganized:
+  - README.md's single wall-of-text feature paragraph is now a scannable "핵심 기능" bullet list grouped by theme (providers/auth, safety, multi-agent, project context, conversation management, Web UI, MCP management), plus a proper "문서" links section.
+  - USAGE.md's 22 flat, ungrouped `##` sections are now organized into 8 numbered parts (시작하기/설정/프로젝트 컨텍스트/명령어/세션 관리/Web UI/에이전트와 자동화/알려진 제약), with a table of contents at the top. Verified every one of USAGE.md's 45 internal links and every cross-file link from README.md/MODELS.md/INSTALL.md still resolves to a valid anchor — heading text (and therefore its anchor) was never changed, only its nesting level.
+- No functional/behavioral changes. Tab-key agent cycling, the `plan`/`build`/`explore`/`review` agent presets (opencode's Plan/Build mode equivalent), and the startup ASCII banner were all already implemented in earlier releases (v0.9.0–v0.12.0) — verified still working, nothing new to ship there.
+
 ## v0.12.1
 
 - Rename `/cost` to `/usage` — the command only ever showed raw token counts (deliberately no dollar figures), so "cost" was misleading terminology; the underlying behavior is unchanged.

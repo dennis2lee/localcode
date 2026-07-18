@@ -1,10 +1,24 @@
 # localcode
 
-Bedrock + Anthropic API 직접 + OpenAI-compatible(로컬 LLM) 세 가지에 다 붙는 코딩 에이전트. Claude Code처럼 파일 읽기/쓰기, 셸 실행, MCP, Skills를 모델이 직접 호출할 수 있고, 클라우드 모델(Bedrock, Anthropic API)과 로컬 모델(LM Studio 등)을 config 하나로 전환합니다. `localcode login bedrock`(AWS SSO 디바이스 플로우, AWS CLI 불필요)과 `localcode login anthropic`(API 키 저장)으로 인증을 CLI에서 바로 끝낼 수 있습니다. `permission` config로 opencode 스타일 세밀한 허용/거부/확인 규칙(예: `git *`는 자동 허용, `rm *`는 자동 차단)도 지정할 수 있습니다. 역할별로 다른 모델·프롬프트·툴 범위를 가진 여러 에이전트를 정의하고 `Task` 툴로 서로 위임하게 할 수도 있습니다(oh-my-opencode 스타일). `AGENTS.md`(opencode/Claude Code와 같은 관례) 프로젝트 규칙 자동 인식(`@경로` 임포트 포함), `/init`으로 초안 생성, `.localcode/commands/*.md` 사용자 정의 슬래시 명령, Claude Code 스타일 auto memory(모델이 세션 간 스스로 기록하는 메모)도 지원합니다. 코어는 헤드리스 데몬이고, TUI와 브라우저(Web UI)는 둘 다 그 위의 대등한 클라이언트입니다. Web UI는 파일 드래그 앤 드롭 첨부, 프롬프트 하단 실시간 상태 표시줄(에이전트/모델/context 사용률/TPS/통신 표시등), context 80% 초과 시 자동 압축(`/config`로 켜고 끔), 세션 이름 변경/삭제가 가능한 오른쪽 패널(세션 목록 + 연결된 MCP 서버 목록)을 갖추고 있습니다. Claude Code 스타일 `hooks`(pre/post_tool_use, user_prompt_submit, stop, session_start 시점에 셸 명령을 실행하고 필요하면 차단)도 `config.json`으로 설정할 수 있고, `/compact [지침]`으로 즉시 대화 압축을, `/usage`로 모델별 누적 토큰 사용량(달러 아님, 토큰 수만)을 바로 확인할 수 있습니다. MCP 서버는 `localcode mcp add/list/get/remove` CLI 서브커맨드로 (Claude Code의 `claude mcp`처럼) config.json을 직접 건드리지 않고 등록·조회·삭제할 수 있습니다. **데몬을 재시작해도** 세션 목록·대화 컨텍스트·`/usage` 누적치가 디스크에서 그대로 복원됩니다 — 이전에는 재시작하면 전부 사라졌습니다.
+Bedrock + Anthropic API 직접 + OpenAI-compatible(로컬 LLM) 세 가지에 다 붙는 코딩 에이전트. Claude Code처럼 파일 읽기/쓰기, 셸 실행, MCP, Skills를 모델이 직접 호출하고, 코어는 헤드리스 데몬으로 띄운 뒤 TUI와 브라우저(Web UI)가 둘 다 그 위의 대등한 클라이언트로 붙는 구조입니다.
+
+## 핵심 기능
+
+- **Provider 3종**: Bedrock, Anthropic API 직접, OpenAI-compatible(LM Studio/vLLM 등 로컬 LLM) — config 하나로 전환. `localcode login bedrock`(AWS SSO 디바이스 플로우, AWS CLI 불필요)/`localcode login anthropic`(API 키 저장)으로 CLI에서 바로 인증.
+- **안전장치**: `permission` config로 opencode 스타일 세밀한 허용/거부/확인 규칙(`git *`는 자동 허용, `rm *`는 자동 차단 등), Claude Code 스타일 `hooks`(pre/post_tool_use, user_prompt_submit, stop, session_start 시점에 셸 명령 실행/차단).
+- **멀티 에이전트**: 역할별로 다른 모델·프롬프트·툴 범위를 가진 에이전트를 정의하고 `Task` 툴로 서로 위임(oh-my-opencode 스타일). Tab 키(또는 `/agent`)로 세션 맥락을 유지한 채 에이전트 전환 — opencode의 Plan/Build 모드와 같은 흐름.
+- **프로젝트 컨텍스트**: `AGENTS.md` 자동 인식(`@경로` 임포트 포함, `CLAUDE.md` 폴백), `/init`으로 초안 생성, `.localcode/commands/*.md` 사용자 정의 슬래시 명령, Claude Code 스타일 auto memory(모델이 세션 간 스스로 기록하는 메모).
+- **대화 관리**: `/compact [지침]`으로 즉시 압축, context 80% 초과 시 자동 압축, `/usage`로 모델별 누적 토큰 사용량(토큰 수만, 달러 아님). **데몬을 재시작해도** 세션 목록·대화 컨텍스트·`/usage` 누적치가 디스크에서 그대로 복원됩니다.
+- **Web UI**: 파일 드래그 앤 드롭 첨부, 프롬프트 하단 실시간 상태 표시줄(에이전트/모델/context 사용률/TPS/통신 표시등), 세션 이름 변경/삭제가 가능한 오른쪽 패널(세션 목록 + 연결된 MCP 서버 목록).
+- **MCP 서버 관리**: `localcode mcp add/list/get/remove` CLI 서브커맨드로 (Claude Code의 `claude mcp`처럼) config.json을 직접 건드리지 않고 등록·조회·삭제.
+
+## 문서
 
 - [설치 방법](INSTALL.md) — 소스 빌드, macOS/Windows 배포 패키지 만들기
-- [사용 방법](USAGE.md) — config.json 작성법(Provider/MCP/Skills), 화면 조작, 백그라운드 태스크
+- [사용 방법](USAGE.md) — config.json 작성법, 명령어, 화면 조작, 세션/에이전트 관리 (전체 목차는 문서 상단 참고)
 - [모델 설정 가이드](MODELS.md) — Amazon Bedrock/Claude, 로컬 LLM(LM Studio 등) 실제 설정 방법과 검증된 모델 ID
+- [개선 목록](IMPROVEMENTS.md) — 알려진 완성도 갭, UI 개선 아이디어
+- [CHANGELOG](CHANGELOG.md) — 버전별 변경 이력
 - [LICENSE](LICENSE) — MIT
 
 ## 아키텍처
