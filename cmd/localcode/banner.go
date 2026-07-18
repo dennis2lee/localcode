@@ -2,16 +2,15 @@ package main
 
 import "fmt"
 
-// logo is a block-letter "LOCALCODE" wordmark, opencode-style, printed once
-// on stdout before the interactive TUI takes the screen (plain text, no
-// ANSI color — some Windows terminals still mishandle raw escape codes,
-// and a startup banner isn't worth the portability risk).
+// logo is a small star-scattered "localcode" wordmark, printed once on
+// stdout before the interactive TUI takes the screen (plain text/basic
+// Unicode only, no ANSI color — some Windows terminals still mishandle
+// raw escape codes, and a startup banner isn't worth the portability
+// risk).
 const logo = `
-█░░░░ ░███░ ░████ ░███░ █░░░░ ░████ ░███░ ████░ █████
-█░░░░ █░░░█ █░░░░ █░░░█ █░░░░ █░░░░ █░░░█ █░░░█ █░░░░
-█░░░░ █░░░█ █░░░░ █████ █░░░░ █░░░░ █░░░█ █░░░█ ████░
-█░░░░ █░░░█ █░░░░ █░░░█ █░░░░ █░░░░ █░░░█ █░░░█ █░░░░
-█████ ░███░ ░████ █░░░█ █████ ░████ ░███░ ████░ █████
+    ˚    ✦      ˚        ✦
+  ✦   l o c a l c o d e    ˚
+    ˚      ✦
 `
 
 // printBanner shows the logo plus version/tagline before an interactive
@@ -20,5 +19,5 @@ const logo = `
 // unattended, where a big banner in a log file is just noise.
 func printBanner() {
 	fmt.Print(logo)
-	fmt.Printf("  로컬/클라우드 LLM 코딩 에이전트 · v%s\n\n", version)
+	fmt.Printf("   Local & cloud LLM coding agent · v%s\n\n", version)
 }
