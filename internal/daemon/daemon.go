@@ -25,6 +25,7 @@ import (
 
 	"localcode/internal/agent"
 	"localcode/internal/events"
+	"localcode/internal/hooks"
 	"localcode/internal/mcp"
 )
 
@@ -251,6 +252,7 @@ func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	d.Loop.ClearSessionState(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -272,6 +274,16 @@ func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	if len(d.Loop.Config.Hooks) > 0 {
+		// Fire-and-forget: session_start is purely a notification point
+		// (e.g. log/announce a new session starting) — nothing to block.
+		hooks.Run(r.Context(), d.Loop.Config.Hooks, hooks.EventSessionStart, map[string]any{
+			"session_id": id,
+			"agent":      req.Agent,
+		})
+	}
+
 	writeJSON(w, http.StatusCreated, sess)
 }
 

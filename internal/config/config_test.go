@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"localcode/internal/hooks"
 )
 
 func writeConfig(t *testing.T, path string, cfg Config) {
@@ -266,5 +268,42 @@ func TestMergeCarriesAutoCompactAndShowTPS(t *testing.T) {
 	}
 	if base.TPSEnabled() {
 		t.Error("expected the project override's ShowTPS=false to win after merge")
+	}
+}
+
+func TestValidateRejectsUnknownHookEvent(t *testing.T) {
+	c := &Config{Hooks: hooks.Config{"not_a_real_event": {{Command: "true"}}}}
+	if err := c.Validate(); err == nil {
+		t.Error("expected an error for an unknown hook event name")
+	}
+}
+
+func TestValidateAcceptsKnownHookEvents(t *testing.T) {
+	c := &Config{Hooks: hooks.Config{
+		hooks.EventPreToolUse:       {{Command: "true"}},
+		hooks.EventPostToolUse:      {{Command: "true"}},
+		hooks.EventUserPromptSubmit: {{Command: "true"}},
+		hooks.EventStop:             {{Command: "true"}},
+		hooks.EventSessionStart:     {{Command: "true"}},
+	}}
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil for all-known hook events", err)
+	}
+}
+
+func TestMergeHooksOverridesPerEvent(t *testing.T) {
+	base := &Config{Hooks: hooks.Config{
+		hooks.EventPreToolUse: {{Command: "global-pre"}},
+		hooks.EventStop:       {{Command: "global-stop"}},
+	}}
+	base.merge(&Config{Hooks: hooks.Config{
+		hooks.EventPreToolUse: {{Command: "project-pre"}},
+	}})
+
+	if len(base.Hooks[hooks.EventPreToolUse]) != 1 || base.Hooks[hooks.EventPreToolUse][0].Command != "project-pre" {
+		t.Errorf("pre_tool_use hooks = %+v, want the project override to replace the global list", base.Hooks[hooks.EventPreToolUse])
+	}
+	if len(base.Hooks[hooks.EventStop]) != 1 || base.Hooks[hooks.EventStop][0].Command != "global-stop" {
+		t.Errorf("stop hooks = %+v, want the global list untouched since the project didn't override it", base.Hooks[hooks.EventStop])
 	}
 }

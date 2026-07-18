@@ -109,6 +109,7 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	registry.Resolver = func(toolName, subject string, staticRequiresPermission bool) tools.Decision {
 		return tools.Decision(cfg.ResolvePermission(toolName, subject, staticRequiresPermission))
 	}
+	registry.Hooks = cfg.Hooks
 	registry.Register(tools.ReadFile{})
 	registry.Register(tools.WriteFile{})
 	registry.Register(tools.Edit{})

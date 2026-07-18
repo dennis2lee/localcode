@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.10.0
+
+- Hooks (`hooks` in config.json): Claude Code-style lifecycle hooks — `pre_tool_use`, `post_tool_use`, `user_prompt_submit`, `stop`, `session_start` — each a list of `{"matcher": regex-on-tool-name, "command": shell-command}` run with the event payload as JSON on stdin. `pre_tool_use` and `user_prompt_submit` can block (exit code 2, reason on stderr, or `{"decision":"block","reason":"..."}` on stdout); `post_tool_use`/`stop`/`session_start` are fire-and-forget/informational since they run after the fact. Independent of and layered before the existing `permission` allow/ask/deny system — a `pre_tool_use` hook that allows a call still goes through `permission` afterward. Per-event config, not additive across project/global merge (matches how other config sections merge).
+- `/compact [instructions]`: on-demand conversation compaction, without waiting for the 80% auto-compact threshold. An optional trailing instruction string overrides the default summarization prompt for that one compaction. Shares its core logic with auto-compaction but surfaces failures to the user instead of silently skipping.
+- `/cost`: shows cumulative token usage broken down by model for the current session — input/output tokens and call count per model, plus a grand total. Deliberately token-counts only, no dollar figures. Distinct from the existing context-window status line, which reflects only the most recent call's usage (a snapshot for auto-compact triggering), whereas `/cost` sums every API call made in the session (since each call is billed for its full resent history).
+
 ## v0.9.0
 
 - Token usage tracking: all three providers (Bedrock, Anthropic direct, OpenAI-compat) now report input/output token usage per turn (`provider.EventUsage`), surfaced as a new `usage` session event with context-window fill percentage (via a new `internal/modelinfo` best-effort max-context lookup) and tokens-per-second.

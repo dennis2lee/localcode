@@ -17,6 +17,7 @@ import (
 	"localcode/internal/commands"
 	"localcode/internal/config"
 	"localcode/internal/events"
+	"localcode/internal/hooks"
 	"localcode/internal/provider"
 	"localcode/internal/session"
 	"localcode/internal/tools"
@@ -434,6 +435,33 @@ func TestDaemonGetSettings(t *testing.T) {
 	}
 	if got.AutoCompactEnabled {
 		t.Error("expected AutoCompactEnabled=false to be reflected after SetAutoCompactEnabled(false)")
+	}
+}
+
+// TestDaemonSessionStartHookFires confirms creating a session runs any
+// configured session_start hooks (fire-and-forget — verified here via a
+// side effect, since the API response doesn't carry hook results).
+func TestDaemonSessionStartHookFires(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "started")
+
+	d := newTestDaemon(t, model.URL)
+	d.Loop.Config.Hooks = hooks.Config{hooks.EventSessionStart: {{Command: "echo started > " + marker}}}
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	if _, err := c.CreateSession(context.Background(), "general-purpose"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// The hook runs synchronously inside handleCreateSession before the
+	// HTTP response is written, so no polling/sleep is needed here.
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("expected the session_start hook to have run")
 	}
 }
 

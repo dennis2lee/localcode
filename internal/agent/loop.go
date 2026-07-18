@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"localcode/internal/commands"
 	"localcode/internal/config"
 	"localcode/internal/events"
+	"localcode/internal/hooks"
 	"localcode/internal/memory"
 	"localcode/internal/modelinfo"
 	"localcode/internal/provider"
@@ -51,6 +53,18 @@ type sessionUsage struct {
 	TPS          float64
 }
 
+// modelTotals accumulates token usage across every provider.Chat call a
+// session has made against one model. Unlike sessionUsage (the latest
+// snapshot, used for context-window-fill %), this is a running sum: each
+// API call is billed for its own full request (history included), so
+// summing every call's tokens is the correct "how much has this session
+// used" figure — see /cost.
+type modelTotals struct {
+	InputTokens  int
+	OutputTokens int
+	Calls        int
+}
+
 // Loop wires a session store, tool registry, and the set of configured
 // model providers together. One Loop instance is shared across sessions;
 // per-session conversation history is kept in memory.
@@ -83,10 +97,11 @@ type Loop struct {
 	MemoryDir string
 
 	mu                 sync.Mutex
-	messages           map[string][]provider.Message // sessionID -> history
-	usage              map[string]sessionUsage       // sessionID -> latest known usage
-	autoCompactEnabled bool                           // process-global runtime setting, toggleable via "/config"
-	showTPS            bool                           // process-global runtime setting, toggleable via "/config"
+	messages           map[string][]provider.Message     // sessionID -> history
+	usage              map[string]sessionUsage           // sessionID -> latest known usage
+	cumulativeUsage    map[string]map[string]modelTotals // sessionID -> model -> running totals, see /cost
+	autoCompactEnabled bool                              // process-global runtime setting, toggleable via "/config"
+	showTPS            bool                              // process-global runtime setting, toggleable via "/config"
 }
 
 func New(store *session.Store, reg *tools.Registry, providers map[string]provider.Provider, cfg *config.Config) *Loop {
@@ -100,7 +115,19 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 		showTPS:            cfg.TPSEnabled(),
 		messages:           map[string][]provider.Message{},
 		usage:              map[string]sessionUsage{},
+		cumulativeUsage:    map[string]map[string]modelTotals{},
 	}
+}
+
+// ClearSessionState drops all in-memory state Loop keeps for sessionID
+// (conversation history, usage snapshot, cumulative per-model totals) —
+// called when a session is deleted, so its memory isn't retained forever.
+func (l *Loop) ClearSessionState(sessionID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.messages, sessionID)
+	delete(l.usage, sessionID)
+	delete(l.cumulativeUsage, sessionID)
 }
 
 // AutoCompactEnabled reports whether auto-compaction is currently on —
@@ -139,6 +166,20 @@ func (l *Loop) SetShowTPS(v bool) {
 // the model produces a final answer. agentName selects which model profile
 // to use, per the config's agents map.
 func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text string) error {
+	if len(l.Config.Hooks) > 0 {
+		blocked, reason, _ := hooks.Run(ctx, l.Config.Hooks, hooks.EventUserPromptSubmit, map[string]any{
+			"session_id": sessionID,
+			"prompt":     text,
+		})
+		if blocked {
+			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
+			l.Store.Append(sessionID, events.TypeError, map[string]any{
+				"error": fmt.Sprintf("blocked by user_prompt_submit hook: %s", reason),
+			})
+			return nil
+		}
+	}
+
 	// /skill lists available skills locally (no model call); /skill <name>
 	// splices that skill's full body into what the model sees, so it
 	// starts following it immediately instead of the user hoping the
@@ -170,6 +211,14 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 
 	if arg, ok := parseConfigCommand(text); ok {
 		return l.handleConfigCommand(sessionID, text, arg)
+	}
+
+	if arg, ok := parseCompactCommand(text); ok {
+		return l.handleCompactCommand(ctx, sessionID, agentName, text, arg)
+	}
+
+	if strings.TrimSpace(text) == "/cost" {
+		return l.handleCostCommand(sessionID, text)
 	}
 
 	if cmd, args, ok := l.matchCustomCommand(text); ok {
@@ -286,6 +335,14 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		l.appendHistory(sessionID, provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})
 
 		if stopReason != "tool_use" || len(toolUses) == 0 {
+			if len(l.Config.Hooks) > 0 {
+				// Fire-and-forget: a Stop hook is purely a notification
+				// point here (e.g. "ping me when a turn finishes") — its
+				// block decision, if any, has no effect, since there's no
+				// well-defined "keep going without a new user turn" flow
+				// to force.
+				hooks.Run(ctx, l.Config.Hooks, hooks.EventStop, map[string]any{"session_id": sessionID})
+			}
 			return nil
 		}
 
@@ -532,6 +589,102 @@ func onOff(v bool) string {
 	return "off"
 }
 
+// parseCompactCommand recognizes "/compact" and "/compact <instructions>".
+// ok is false for anything else.
+func parseCompactCommand(text string) (instructions string, ok bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "/compact" {
+		return "", true
+	}
+	if rest, found := strings.CutPrefix(trimmed, "/compact "); found {
+		return strings.TrimSpace(rest), true
+	}
+	return "", false
+}
+
+// handleCompactCommand runs compaction on demand, regardless of
+// AutoCompactEnabled or the usage threshold — unlike maybeAutoCompact,
+// this always compacts when invoked. instructions, if given, replaces the
+// default summarization prompt (e.g. "/compact focus on the auth
+// decisions, drop exploratory dead ends").
+func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, displayText, instructions string) error {
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+
+	profile, err := l.Config.ResolveProfile(agentName)
+	if err != nil {
+		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
+		return nil
+	}
+	p, ok := l.Providers[profile.Provider]
+	if !ok {
+		l.Store.Append(sessionID, events.TypeError, map[string]any{
+			"error": fmt.Sprintf("no provider client configured for %q", profile.Provider),
+		})
+		return nil
+	}
+	agentCfg := l.Config.Agents[agentName]
+	systemPrompt := l.SystemPrompt
+	if agentCfg.Prompt != "" {
+		systemPrompt = systemPrompt + "\n\n" + agentCfg.Prompt
+	}
+
+	var text string
+	if err := l.compactHistory(ctx, sessionID, p, profile, systemPrompt, instructions, true); err != nil {
+		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": fmt.Sprintf("compaction failed: %v", err)})
+		return nil
+	}
+	text = "대화가 압축되었습니다."
+
+	l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": text})
+	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text})
+	return nil
+}
+
+// handleCostCommand answers "/cost" locally — no model call — with a
+// per-model breakdown of cumulative token usage for this session (input,
+// output, total, number of API calls), plus a grand total. Tokens only,
+// deliberately no dollar figures: this project has no per-model pricing
+// table to keep in sync, and the raw counts are what the context-window
+// math elsewhere in this file already uses.
+func (l *Loop) handleCostCommand(sessionID, displayText string) error {
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+
+	l.mu.Lock()
+	totals := make(map[string]modelTotals, len(l.cumulativeUsage[sessionID]))
+	for model, t := range l.cumulativeUsage[sessionID] {
+		totals[model] = t
+	}
+	l.mu.Unlock()
+
+	var text string
+	if len(totals) == 0 {
+		text = "아직 사용량이 없습니다."
+	} else {
+		models := make([]string, 0, len(totals))
+		for m := range totals {
+			models = append(models, m)
+		}
+		sort.Strings(models)
+
+		var b strings.Builder
+		b.WriteString("모델별 토큰 사용량:\n")
+		var grandInput, grandOutput, grandCalls int
+		for _, m := range models {
+			t := totals[m]
+			fmt.Fprintf(&b, "- %s: 입력 %d · 출력 %d · 합계 %d (호출 %d회)\n", m, t.InputTokens, t.OutputTokens, t.InputTokens+t.OutputTokens, t.Calls)
+			grandInput += t.InputTokens
+			grandOutput += t.OutputTokens
+			grandCalls += t.Calls
+		}
+		fmt.Fprintf(&b, "\n전체 합계: 입력 %d · 출력 %d · 총 %d (호출 %d회)", grandInput, grandOutput, grandInput+grandOutput, grandCalls)
+		text = b.String()
+	}
+
+	l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": text})
+	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text})
+	return nil
+}
+
 func (l *Loop) findSkill(name string) (skills.Skill, bool) {
 	for _, s := range l.Skills {
 		if strings.EqualFold(s.Name, name) {
@@ -592,6 +745,14 @@ func (l *Loop) recordUsage(sessionID, model string, usage streamUsage) {
 
 	l.mu.Lock()
 	l.usage[sessionID] = u
+	if l.cumulativeUsage[sessionID] == nil {
+		l.cumulativeUsage[sessionID] = map[string]modelTotals{}
+	}
+	mt := l.cumulativeUsage[sessionID][model]
+	mt.InputTokens += usage.inputTokens
+	mt.OutputTokens += usage.outputTokens
+	mt.Calls++
+	l.cumulativeUsage[sessionID][model] = mt
 	l.mu.Unlock()
 
 	percent := 0.0
@@ -640,17 +801,30 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 	if percent < compactThresholdPercent {
 		return
 	}
+	_ = l.compactHistory(ctx, sessionID, p, profile, systemPrompt, "", false)
+}
 
+// compactHistory summarizes sessionID's history via the model and, on
+// success, replaces the in-memory history with just that summary.
+// instructions overrides the default summarization prompt (used by the
+// manual "/compact <instructions>" command); empty means use
+// compactionPrompt. manual marks the resulting "compacted" event so
+// clients/logs can distinguish a user-triggered compaction from an
+// automatic one.
+func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt, instructions string, manual bool) error {
 	history := l.history(sessionID)
 	if len(history) == 0 {
-		return
+		return fmt.Errorf("no conversation history to compact")
+	}
+	if instructions == "" {
+		instructions = compactionPrompt
 	}
 
 	summaryMessages := make([]provider.Message, len(history), len(history)+1)
 	copy(summaryMessages, history)
 	summaryMessages = append(summaryMessages, provider.Message{
 		Role:    provider.RoleUser,
-		Content: []provider.Block{provider.TextBlock(compactionPrompt)},
+		Content: []provider.Block{provider.TextBlock(instructions)},
 	})
 
 	stream, err := p.Chat(ctx, provider.ChatRequest{
@@ -660,19 +834,23 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 		MaxTokens: 1024,
 	})
 	if err != nil {
-		return
+		return fmt.Errorf("compaction request: %w", err)
 	}
 	summary, err := drainText(ctx, stream)
-	if err != nil || summary == "" {
-		return
+	if err != nil {
+		return fmt.Errorf("compaction request: %w", err)
+	}
+	if summary == "" {
+		return fmt.Errorf("model returned an empty summary")
 	}
 
 	l.setHistory(sessionID, []provider.Message{{
 		Role:    provider.RoleUser,
-		Content: []provider.Block{provider.TextBlock("[이전 대화가 context 절약을 위해 요약되었습니다]\n\n" + summary)},
+		Content: []provider.Block{provider.TextBlock("[이전 대화가 요약되었습니다]\n\n" + summary)},
 	}})
 	l.clearUsage(sessionID)
-	l.Store.Append(sessionID, events.TypeCompacted, map[string]any{"summary_length": len(summary)})
+	l.Store.Append(sessionID, events.TypeCompacted, map[string]any{"summary_length": len(summary), "manual": manual})
+	return nil
 }
 
 // drainText concatenates every text delta from stream and returns the

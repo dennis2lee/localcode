@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"localcode/internal/hooks"
 	"localcode/internal/provider"
 )
 
@@ -74,6 +75,12 @@ type Registry struct {
 	// Resolver, if set, is consulted before the static
 	// Tool.RequiresPermission check — see PermissionResolver.
 	Resolver PermissionResolver
+
+	// Hooks, if set, runs pre_tool_use (can block the call outright,
+	// before permission is even considered) and post_tool_use (fire-and-
+	// forget, e.g. auto-formatting a file after an edit — its block
+	// decision is a no-op since the tool has already run) around Call.
+	Hooks hooks.Config
 }
 
 func NewRegistry(permission PermissionFunc) *Registry {
@@ -144,6 +151,16 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		return Result{Content: fmt.Sprintf("unknown tool %q", name), IsError: true}
 	}
 
+	if len(r.Hooks) > 0 {
+		blocked, reason, _ := hooks.Run(ctx, r.Hooks, hooks.EventPreToolUse, map[string]any{
+			"tool_name":  name,
+			"tool_input": json.RawMessage(input),
+		})
+		if blocked {
+			return Result{Content: fmt.Sprintf("blocked by pre_tool_use hook: %s", reason), IsError: true}
+		}
+	}
+
 	decision := DecisionAsk
 	if !t.RequiresPermission(input) {
 		decision = DecisionAllow
@@ -176,7 +193,22 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		}
 	}
 
-	return t.Execute(ctx, input)
+	result := t.Execute(ctx, input)
+
+	if len(r.Hooks) > 0 {
+		// post_tool_use is fire-and-forget: the tool has already run, so
+		// there's nothing left to block — a "block" decision here is
+		// simply ignored. This is the hook point for side effects like
+		// auto-formatting a file right after an edit.
+		hooks.Run(ctx, r.Hooks, hooks.EventPostToolUse, map[string]any{
+			"tool_name":   name,
+			"tool_input":  json.RawMessage(input),
+			"tool_output": result.Content,
+			"is_error":    result.IsError,
+		})
+	}
+
+	return result
 }
 
 func schema(properties string, required ...string) json.RawMessage {

@@ -102,6 +102,40 @@ localcode --server http://localhost:4096   # 터미널
 - **아무 규칙도 매치하지 않으면** 그 툴의 원래 기본 동작(위 표 참고)으로 돌아갑니다 — 규칙을 안 써도 지금까지와 동일하게 동작합니다.
 - **`deny`는 원래 확인이 필요 없던 툴도 완전히 차단할 수 있습니다** — 예를 들어 `"read_file": [{"match": "*.env", "decision": "deny"}, {"match": "*", "decision": "allow"}]`로 `.env` 파일만 못 읽게 막을 수 있습니다.
 
+## Hooks (`hooks`)
+
+Claude Code의 hooks와 같은 개념 — 특정 시점에 셸 명령을 실행시켜서, 필요하면 그 시점의 동작을 막을 수 있습니다. 세밀한 권한 규칙(`permission`)과는 별개의 층입니다: `permission`은 "이 툴 호출을 허용/거부/확인할지"를 결정하고, hooks는 그 앞뒤(또는 전혀 다른 시점)에 임의의 셸 명령을 끼워 넣습니다. 둘 다 켜져 있으면 `pre_tool_use` hook이 먼저 실행되고, 거기서 막지 않으면 그다음에 `permission` 확인이 진행됩니다 — `pre_tool_use`가 "허용"한다고 해서 `permission`의 ask/deny를 건너뛰지는 않습니다.
+
+```json
+{
+  "hooks": {
+    "pre_tool_use": [
+      { "matcher": "bash", "command": "echo \"$STDIN\" | jq -e '.tool_input.command | test(\"rm -rf\") | not' >/dev/null || (echo blocked >&2; exit 2)" }
+    ],
+    "post_tool_use": [
+      { "command": "cat >> /tmp/tool-log.jsonl" }
+    ],
+    "user_prompt_submit": [
+      { "command": "..." }
+    ],
+    "stop": [
+      { "command": "..." }
+    ],
+    "session_start": [
+      { "command": "..." }
+    ]
+  }
+}
+```
+
+- **이벤트**: `pre_tool_use`, `post_tool_use`, `user_prompt_submit`, `stop`, `session_start` 다섯 가지. 등록되지 않은 이벤트는 아무 일도 하지 않습니다.
+- **matcher**: `pre_tool_use`/`post_tool_use`에서만 의미가 있고, 툴 이름(`bash`, `write_file` 등)에 대한 정규식입니다. 생략하면(빈 문자열) 모든 툴 호출에 실행됩니다.
+- **payload**: 각 hook 명령의 표준입력으로 JSON이 전달됩니다 — `pre_tool_use`/`post_tool_use`는 `tool_name`/`tool_input`(그리고 `post_tool_use`는 `tool_output`/`is_error`도), `user_prompt_submit`은 `session_id`/`prompt`, `stop`/`session_start`는 `session_id`(`session_start`는 `agent`도 포함).
+- **차단 방법**: 표준출력으로 `{"decision":"block","reason":"..."}`를 출력하거나, exit code **2**로 종료(이때는 표준에러 내용이 이유로 쓰입니다). 그 외의 실패(0도 2도 아닌 exit code)는 차단이 아니라 경고로만 취급되고 계속 진행됩니다.
+- **차단 가능한 이벤트**: `pre_tool_use`(툴 실행 자체를 막음 — 권한 확인 이전에 개입), `user_prompt_submit`(메시지가 `/skill`/`/config`/모델 등 어디로도 전달되지 못하게 막고, 대신 에러 이벤트를 남김). `post_tool_use`/`stop`/`session_start`는 이미 벌어진 일 뒤에 실행되는 정보성 hook이라 차단해도 되돌릴 방법이 없습니다 — 로깅/알림 용도로만 쓰세요.
+- 각 hook은 30초 타임아웃이 있고, 같은 이벤트에 여러 hook을 등록하면 등록 순서대로 실행하다 하나라도 차단하면 즉시 멈춥니다.
+- 프로젝트 config의 `hooks`는 이벤트별로 전역 config를 완전히 대체합니다(병합 아님) — 다른 설정 병합 방식과 동일합니다.
+
 ## `/login`으로 인증하기
 
 `localcode login <bedrock|anthropic>`는 클라우드 provider 인증을 대화식으로 끝내주는 CLI 서브커맨드입니다 (데몬/TUI를 띄우기 전에 터미널에서 직접 실행). config.json에 `api_key`를 직접 적어 넣거나 AWS CLI를 미리 설치해야 하는 수고를 없애줍니다.
@@ -240,6 +274,19 @@ model: my-strong-model-id
 - `/config show_tps on|off` — 프롬프트 하단 tokens/sec 표시 켜기/끄기
 
 변경 즉시 `config.changed` 이벤트가 그 세션에 남고, Web UI는 프롬프트 하단 상태 표시줄을 바로 갱신합니다. 새로 여는 클라이언트는 `GET /api/settings`로 현재 값을 바로 조회합니다.
+
+### `/compact` 명령
+
+80% 자동 압축([Context Window 관리](#context-window-관리-사용량-표시--자동-압축) 참고)을 기다리지 않고, 그 자리에서 바로 지금까지의 대화를 압축합니다.
+
+- `/compact` — 기본 요약 프롬프트로 즉시 압축.
+- `/compact <지침>` — 요약할 때 반영할 지침을 직접 지정합니다 (예: `/compact 파일 경로만 남겨줘`). 지침은 그 압축 한 번에만 적용되고 이후 대화에는 영향을 주지 않습니다.
+
+압축할 대화가 없으면(세션이 비어 있으면) 에러 이벤트를 남기고 아무 것도 하지 않습니다. 성공하면 자동 압축과 동일하게 `compacted` 이벤트가 남지만 `manual: true`로 구분되고, 화면에는 압축 완료 확인 메시지가 뜹니다.
+
+### `/cost` 명령
+
+현재 세션에서 지금까지 호출한 모델별 누적 토큰 사용량을 보여줍니다 (모델 호출 없음, 즉답). 달러 비용은 표시하지 않고 **토큰 수만** 보여줍니다 — 위 상태 표시줄의 context 사용률(가장 최근 호출 기준 스냅샷)과 달리, `/cost`는 세션 시작부터 지금까지의 모든 API 호출을 모델별로 합산한 값입니다 (같은 대화를 재전송할 때마다 매번 그 전체 분량이 과금되므로, "이 세션이 총 얼마나 썼는가"는 스냅샷이 아니라 합산이 맞는 계산입니다). 아직 아무 호출도 없었으면 사용량이 없다는 메시지만 표시됩니다.
 
 ### 그 외 로컬 명령 (`/help`, `/version`, `exit`, `:q`)
 

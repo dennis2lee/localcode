@@ -4,7 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"localcode/internal/hooks"
 )
 
 // fakeTool is a minimal Tool for exercising Registry.Call's permission
@@ -223,6 +228,92 @@ func TestRegistryCallResolverSubjectEmptyForNonPermissionSubjectTool(t *testing.
 	r.Call(context.Background(), "plain", nil, "")
 	if gotSubject != "" {
 		t.Errorf("subject = %q, want empty for a tool that doesn't implement PermissionSubject", gotSubject)
+	}
+}
+
+func TestRegistryCallPreToolUseHookBlocksBeforePermission(t *testing.T) {
+	permCalled := false
+	r := NewRegistry(func(context.Context, string, string) (bool, error) {
+		permCalled = true
+		return true, nil
+	})
+	r.Hooks = hooks.Config{hooks.EventPreToolUse: {{Command: "echo 'no way' >&2; exit 2"}}}
+
+	ft := &fakeTool{name: "dangerous", needsPerm: true}
+	r.Register(ft)
+
+	result := r.Call(context.Background(), "dangerous", nil, "")
+	if !result.IsError {
+		t.Error("expected an error when pre_tool_use blocks")
+	}
+	if ft.executed {
+		t.Error("tool should not execute when pre_tool_use blocks")
+	}
+	if permCalled {
+		t.Error("permission func should not be consulted once pre_tool_use has already blocked")
+	}
+}
+
+func TestRegistryCallPreToolUseHookAllowsThenNormalFlowContinues(t *testing.T) {
+	r := NewRegistry(nil)
+	r.Hooks = hooks.Config{hooks.EventPreToolUse: {{Command: "true"}}}
+
+	ft := &fakeTool{name: "safe", needsPerm: false}
+	r.Register(ft)
+
+	result := r.Call(context.Background(), "safe", nil, "")
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !ft.executed {
+		t.Error("expected the tool to execute after pre_tool_use allows")
+	}
+}
+
+func TestRegistryCallPostToolUseHookRunsAfterExecuteAndCannotUndo(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "post-ran")
+	r := NewRegistry(nil)
+	// A post_tool_use hook that "blocks" is a documented no-op — the tool
+	// has already run by the time it fires.
+	r.Hooks = hooks.Config{hooks.EventPostToolUse: {{Command: "echo ran > " + marker + "; exit 2"}}}
+
+	ft := &fakeTool{name: "safe", needsPerm: false}
+	r.Register(ft)
+
+	result := r.Call(context.Background(), "safe", nil, "")
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !ft.executed {
+		t.Error("expected the tool to have executed")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("expected the post_tool_use hook to have run")
+	}
+}
+
+func TestRegistryCallHookReceivesToolNameAndInput(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "captured")
+	r := NewRegistry(nil)
+	r.Hooks = hooks.Config{hooks.EventPreToolUse: {{Command: "cat > " + out}}}
+
+	ft := &fakeTool{name: "bash", needsPerm: false}
+	r.Register(ft)
+
+	r.Call(context.Background(), "bash", json.RawMessage(`{"command":"ls"}`), "")
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read captured payload: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, `"tool_name":"bash"`) {
+		t.Errorf("captured payload = %q, want it to contain the tool name", got)
+	}
+	if !strings.Contains(got, `"command":"ls"`) {
+		t.Errorf("captured payload = %q, want it to contain the tool input", got)
 	}
 }
 

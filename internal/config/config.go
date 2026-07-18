@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"localcode/internal/hooks"
 )
 
 // Config is the root of ~/.localcode/config.json (global) merged with
@@ -40,6 +42,11 @@ type Config struct {
 	// usage events for clients to display. A nil pointer means unset,
 	// defaulting to enabled. Also runtime-toggleable via "/config".
 	ShowTPS *bool `json:"show_tps,omitempty"`
+
+	// Hooks holds Claude Code-style lifecycle hooks (shell commands run at
+	// pre_tool_use/post_tool_use/user_prompt_submit/stop/session_start),
+	// keyed by event name. See internal/hooks.
+	Hooks hooks.Config `json:"hooks,omitempty"`
 }
 
 // MemoryEnabled reports whether auto memory is on — the default when
@@ -240,6 +247,12 @@ func (c *Config) merge(other *Config) {
 	if other.ShowTPS != nil {
 		c.ShowTPS = other.ShowTPS
 	}
+	for event, list := range other.Hooks {
+		if c.Hooks == nil {
+			c.Hooks = hooks.Config{}
+		}
+		c.Hooks[event] = list
+	}
 }
 
 // Validate checks that all cross-references (agent -> profile -> provider)
@@ -260,6 +273,12 @@ func (c *Config) Validate() error {
 	for name, agent := range c.Agents {
 		if _, ok := c.Profiles[agent.Profile]; !ok {
 			return fmt.Errorf("agent %q references unknown profile %q", name, agent.Profile)
+		}
+	}
+
+	for event := range c.Hooks {
+		if !hooks.KnownEvents[event] {
+			return fmt.Errorf("hooks: unknown event %q (want one of pre_tool_use, post_tool_use, user_prompt_submit, stop, session_start)", event)
 		}
 	}
 
