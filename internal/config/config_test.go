@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"localcode/internal/hooks"
@@ -305,5 +306,54 @@ func TestMergeHooksOverridesPerEvent(t *testing.T) {
 	}
 	if len(base.Hooks[hooks.EventStop]) != 1 || base.Hooks[hooks.EventStop][0].Command != "global-stop" {
 		t.Errorf("stop hooks = %+v, want the global list untouched since the project didn't override it", base.Hooks[hooks.EventStop])
+	}
+}
+
+func TestLoadFileReturnsEmptyConfigWhenMissing(t *testing.T) {
+	cfg, err := LoadFile(filepath.Join(t.TempDir(), "does-not-exist.json"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if cfg == nil || len(cfg.MCPServers) != 0 {
+		t.Errorf("cfg = %+v, want a non-nil empty Config", cfg)
+	}
+}
+
+func TestSaveFileThenLoadFileRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "config.json")
+	cfg := &Config{MCPServers: map[string]MCPServerConfig{
+		"github": {Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-github"}, Env: map[string]string{"GITHUB_TOKEN": "abc"}},
+	}}
+
+	if err := SaveFile(path, cfg); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if got.MCPServers["github"].Command != "npx" {
+		t.Errorf("round-tripped MCPServers = %+v, want the github entry preserved", got.MCPServers)
+	}
+	if got.MCPServers["github"].Env["GITHUB_TOKEN"] != "abc" {
+		t.Errorf("round-tripped env = %+v, want GITHUB_TOKEN=abc", got.MCPServers["github"].Env)
+	}
+}
+
+func TestSaveFileOmitsEmptyFieldsForMinimalConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := &Config{MCPServers: map[string]MCPServerConfig{"x": {Command: "echo"}}}
+	if err := SaveFile(path, cfg); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	for _, absent := range []string{`"providers"`, `"profiles"`, `"agents"`, `"default_profile"`, `"max_concurrent_tasks"`} {
+		if strings.Contains(string(data), absent) {
+			t.Errorf("saved config = %s, did not want %s to appear when unset", data, absent)
+		}
 	}
 }

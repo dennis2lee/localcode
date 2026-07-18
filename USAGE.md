@@ -78,6 +78,30 @@ localcode --server http://localhost:4096   # 터미널
 
 설정이 틀리면(예: 존재하지 않는 provider를 가리키는 profile) 실행 시작 시점에 바로 에러를 내고 종료합니다.
 
+## `localcode mcp`로 MCP 서버 관리하기
+
+Claude Code의 `claude mcp` 서브커맨드와 같은 역할 — `mcp_servers` JSON을 손으로 고치지 않고 터미널에서 바로 등록/조회/삭제할 수 있습니다. 데몬/TUI를 띄우지 않고 즉시 실행되는 CLI 서브커맨드이고(`localcode login`과 같은 방식), config.json 파일 자체만 수정하므로 **실행 중인 데몬에는 다음 시작(또는 재연결) 시점부터 반영**됩니다.
+
+```bash
+# stdio MCP 서버 등록 (기본은 global — ~/.localcode/config.json)
+localcode mcp add github -e GITHUB_TOKEN=ghp_xxx -- npx -y @modelcontextprotocol/server-github
+
+# 이 프로젝트에서만 쓸 서버는 -s project로 ./.localcode/config.json에 등록
+localcode mcp add local-fs -s project -- npx -y @modelcontextprotocol/server-filesystem .
+
+# 기존 .mcp.json 항목을 JSON 그대로 옮기고 싶다면
+localcode mcp add-json weather '{"command":"node","args":["weather-server.js"],"env":{"API_KEY":"xyz"}}'
+
+localcode mcp list          # global/project 어디서 왔는지 표시 (같은 이름이면 project가 우선)
+localcode mcp get github    # 서버 하나의 상세 설정(command/args/env) 확인
+localcode mcp remove github # 등록 해제 — 같은 이름이 global/project 양쪽에 있으면 -s로 지정해야 함
+```
+
+- `-e`/`--env KEY=VALUE`는 여러 번 줄 수 있습니다. `-s`/`--scope`는 `global`(기본값)과 `project` 중 하나입니다.
+- `--` 뒤에 오는 것이 실제로 실행할 명령과 인자입니다 — `localcode mcp` 자신의 플래그(`-e`, `-s`)와 서버에 넘길 인자(`-y` 등)가 섞이지 않도록 항상 `--`로 구분합니다.
+- `remove`에 `-s`를 생략했는데 같은 이름이 global/project 양쪽에 있으면 모호하다는 에러를 내고 아무것도 지우지 않습니다 — 어느 쪽인지 `-s global`/`-s project`로 명시해야 합니다.
+- 이 명령들이 하는 일은 결국 config.json의 `mcp_servers` 맵을 읽고 쓰는 것뿐이라, `permission`/`hooks`처럼 config.json을 직접 편집해도 동일하게 동작합니다 — CLI는 그 편의 기능일 뿐입니다.
+
 ## 세밀한 권한 규칙 (`permission`)
 
 기본 동작은 지금까지와 같습니다 — `write_file`/`edit`/`bash`/MCP 툴은 항상 확인을 거치고, `read_file`/`glob`/`grep`은 그냥 실행됩니다. `config.json`에 `permission`을 추가하면 opencode 스타일로 툴별·패턴별 allow/ask/deny를 세밀하게 지정할 수 있습니다 — 안전한 명령은 자동 허용하고, 위험한 건 아예 차단하고, 나머지만 물어보게 할 수 있습니다.

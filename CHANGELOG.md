@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.11.0
+
+- `localcode mcp` CLI subcommand (Claude Code's `claude mcp` equivalent): `add [-e KEY=VALUE]... [-s global|project] <name> -- <command> [args...]`, `add-json`, `list`, `get <name>`, and `remove [-s global|project] <name>` manage `mcp_servers` entries in `~/.localcode/config.json` (default) or `./.localcode/config.json` (`-s project`) without hand-editing JSON. `list`/`get` read both scopes and report which one a server actually lives in (project overrides global on name collision, matching runtime merge semantics); `remove` requires an explicit `-s` when a name exists in both scopes rather than guessing. Runs standalone like `localcode login`, no daemon required — edits take effect on the daemon's next start. Added `config.LoadFile`/`config.SaveFile` to read/write a single config file for editing, and `omitempty` on `providers`/`profiles`/`agents`/`default_profile`/`max_concurrent_tasks` so a freshly-created config (e.g. one that only has `mcp_servers` so far) doesn't get cluttered with `null`/`0` entries.
+
 ## v0.10.0
 
 - Hooks (`hooks` in config.json): Claude Code-style lifecycle hooks — `pre_tool_use`, `post_tool_use`, `user_prompt_submit`, `stop`, `session_start` — each a list of `{"matcher": regex-on-tool-name, "command": shell-command}` run with the event payload as JSON on stdin. `pre_tool_use` and `user_prompt_submit` can block (exit code 2, reason on stderr, or `{"decision":"block","reason":"..."}` on stdout); `post_tool_use`/`stop`/`session_start` are fire-and-forget/informational since they run after the fact. Independent of and layered before the existing `permission` allow/ask/deny system — a `pre_tool_use` hook that allows a call still goes through `permission` afterward. Per-event config, not additive across project/global merge (matches how other config sections merge).

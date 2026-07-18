@@ -14,11 +14,11 @@ import (
 // Config is the root of ~/.localcode/config.json (global) merged with
 // .localcode/config.json (project-local override, same shape).
 type Config struct {
-	Providers          map[string]ProviderConfig  `json:"providers"`
-	Profiles           map[string]Profile         `json:"profiles"`
-	Agents             map[string]AgentConfig     `json:"agents"`
-	DefaultProfile     string                     `json:"default_profile"`
-	MaxConcurrentTasks int                        `json:"max_concurrent_tasks"`
+	Providers          map[string]ProviderConfig  `json:"providers,omitempty"`
+	Profiles           map[string]Profile         `json:"profiles,omitempty"`
+	Agents             map[string]AgentConfig     `json:"agents,omitempty"`
+	DefaultProfile     string                     `json:"default_profile,omitempty"`
+	MaxConcurrentTasks int                        `json:"max_concurrent_tasks,omitempty"`
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 
 	// AutoMemoryEnabled toggles Claude Code-style auto memory (the model
@@ -192,6 +192,38 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// LoadFile reads a single config file for editing (e.g. by `localcode
+// mcp`). Unlike Load, a missing file is not an error — it returns an
+// empty, unvalidated Config ready to be filled in and saved.
+func LoadFile(path string) (*Config, error) {
+	cfg, err := loadOptional(path)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return &Config{}, nil
+	}
+	return cfg, nil
+}
+
+// SaveFile writes cfg as indented JSON to path, creating the parent
+// directory if needed. Used by `localcode mcp add/remove` to edit
+// ~/.localcode/config.json or ./.localcode/config.json in place.
+func SaveFile(path string, cfg *Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	return nil
 }
 
 func loadOptional(path string) (*Config, error) {
