@@ -7,6 +7,15 @@ import "time"
 type Type string
 
 const (
+	// TypeUserMessage records what the user typed: {"text",
+	// "model_text","local"}. "model_text", if present, is what the model
+	// actually received when it differs from the displayed "text" (e.g.
+	// "/skill foo" expands to that skill's full body). "local": true
+	// marks a message answered without any model call (/cost, /compact,
+	// /config, /memory, a blocked/unknown command, ...) — its paired
+	// reply is a display-only echo, not something the model ever said,
+	// and both are skipped when reconstructing model history from the
+	// log (see agent.rehydrateHistory).
 	TypeUserMessage        Type = "message.user"
 	TypeMessagePartDelta   Type = "message.part.delta"
 	TypeMessagePartEnd     Type = "message.part.end"
@@ -23,8 +32,12 @@ const (
 	// for a turn: {"input_tokens","output_tokens","max_context","percent",
 	// "tps","show_tps","model"}.
 	TypeUsage Type = "usage"
-	// TypeCompacted marks that auto-compaction replaced a session's
-	// in-memory history with a summary: {"summary_length"}.
+	// TypeCompacted marks that compaction replaced a session's in-memory
+	// history with a summary: {"summary_length","manual","summary",
+	// "model","input_tokens","output_tokens"} (the last three are omitted
+	// if the compaction call didn't report usage). "summary" carries the
+	// full text (not just its length) so a restart can restore the exact
+	// post-compaction history — see agent.rehydrateHistory.
 	TypeCompacted Type = "compacted"
 	// TypeConfigChanged reports a live settings change from "/config":
 	// {"auto_compact_enabled","show_tps"}.

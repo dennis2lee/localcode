@@ -172,7 +172,7 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 			"prompt":     text,
 		})
 		if blocked {
-			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
+			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 			l.Store.Append(sessionID, events.TypeError, map[string]any{
 				"error": fmt.Sprintf("blocked by user_prompt_submit hook: %s", reason),
 			})
@@ -191,7 +191,7 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		}
 		sk, found := l.findSkill(arg)
 		if !found {
-			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
+			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 			l.Store.Append(sessionID, events.TypeError, map[string]any{
 				"error": fmt.Sprintf("unknown skill %q. Available: %s", arg, l.skillNames()),
 			})
@@ -224,7 +224,7 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	if cmd, args, ok := l.matchCustomCommand(text); ok {
 		modelText, err := commands.Expand(cmd, args, l.ProjectDir)
 		if err != nil {
-			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
+			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
 			return nil
 		}
@@ -299,7 +299,16 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 
 	l.maybeAutoCompact(ctx, sessionID, p, profile, systemPrompt)
 
-	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+	// modelText differs from displayText for /skill <name>, custom
+	// commands, and /init — the transcript shows the short command the
+	// user typed, but the model needs the expanded body. Persist both so
+	// rehydrateHistory can reconstruct the exact message the model saw,
+	// not just what's shown on screen.
+	userMsgData := map[string]any{"text": displayText}
+	if modelText != displayText {
+		userMsgData["model_text"] = modelText
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, userMsgData)
 
 	l.appendHistory(sessionID, provider.Message{
 		Role:    provider.RoleUser,
@@ -454,6 +463,12 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 			"tool_use_id": tu.ToolUseID,
 			"content":     res.Content,
 			"is_error":    res.IsError,
+			// input carries this call's arguments (not just its result) —
+			// the event log is otherwise the only place a tool_use block's
+			// ToolInput would live, and rehydrateHistory needs it to
+			// reconstruct the exact message sent to the model after a
+			// restart. See rehydrateHistory in loop_rehydrate.go.
+			"input": string(tu.ToolInput),
 		})
 		results = append(results, provider.ToolResultBlock(tu.ToolUseID, res.Content, res.IsError))
 	}
@@ -477,7 +492,7 @@ func parseSkillCommand(text string) (arg string, ok bool) {
 // listSkills answers "/skill" locally — no model call — with the same
 // name/description index that's in the system prompt.
 func (l *Loop) listSkills(sessionID, displayText string) error {
-	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText, "local": true})
 
 	text := "등록된 skill이 없습니다."
 	if len(l.Skills) > 0 {
@@ -498,7 +513,7 @@ func (l *Loop) listSkills(sessionID, displayText string) error {
 // auto-memory directory path and current MEMORY.md index content, the
 // same information Claude Code's "/memory" command surfaces.
 func (l *Loop) showMemoryInfo(sessionID, displayText string) error {
-	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText, "local": true})
 
 	var text string
 	if l.MemoryDir == "" {
@@ -541,7 +556,7 @@ func parseConfigCommand(text string) (arg string, ok bool) {
 // Loop.autoCompactEnabled/showTPS) and broadcasts an events.TypeConfigChanged
 // event so this session's clients update their display immediately.
 func (l *Loop) handleConfigCommand(sessionID, displayText, arg string) error {
-	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText, "local": true})
 
 	fields := strings.Fields(arg)
 	var text string
@@ -608,7 +623,7 @@ func parseCompactCommand(text string) (instructions string, ok bool) {
 // default summarization prompt (e.g. "/compact focus on the auth
 // decisions, drop exploratory dead ends").
 func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, displayText, instructions string) error {
-	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText, "local": true})
 
 	profile, err := l.Config.ResolveProfile(agentName)
 	if err != nil {
@@ -647,7 +662,7 @@ func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, d
 // table to keep in sync, and the raw counts are what the context-window
 // math elsewhere in this file already uses.
 func (l *Loop) handleCostCommand(sessionID, displayText string) error {
-	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText, "local": true})
 
 	l.mu.Lock()
 	totals := make(map[string]modelTotals, len(l.cumulativeUsage[sessionID]))
@@ -854,7 +869,16 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		Content: []provider.Block{provider.TextBlock("[이전 대화가 요약되었습니다]\n\n" + summary)},
 	}})
 	l.clearUsage(sessionID)
-	l.Store.Append(sessionID, events.TypeCompacted, map[string]any{"summary_length": len(summary), "manual": manual})
+	// "summary" (not just its length) and the compaction call's own usage
+	// are what rehydrateHistory/rehydrateSession need to reconstruct this
+	// exact post-compaction state after a restart — see loop_rehydrate.go.
+	compactedData := map[string]any{"summary_length": len(summary), "manual": manual, "summary": summary}
+	if usage.hasUsage {
+		compactedData["model"] = profile.Model
+		compactedData["input_tokens"] = usage.inputTokens
+		compactedData["output_tokens"] = usage.outputTokens
+	}
+	l.Store.Append(sessionID, events.TypeCompacted, compactedData)
 	return nil
 }
 

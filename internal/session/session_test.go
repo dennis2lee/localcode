@@ -305,7 +305,7 @@ func TestSubscribeUnknownSession(t *testing.T) {
 	}
 }
 
-func TestPersistenceAndLoadFromDisk(t *testing.T) {
+func TestPersistenceAndLoadAllFromDisk(t *testing.T) {
 	dir := t.TempDir()
 
 	s, err := NewStore(dir)
@@ -318,9 +318,20 @@ func TestPersistenceAndLoadFromDisk(t *testing.T) {
 	s.Append("s1", events.TypeUserMessage, map[string]any{"text": "hello"})
 	s.Append("s1", events.TypeMessagePartDelta, map[string]any{"text": "hi there"})
 
-	restored, err := LoadFromDisk(dir, "s1", "", "general-purpose", true)
+	restored, warnings, err := LoadAllFromDisk(dir)
 	if err != nil {
-		t.Fatalf("LoadFromDisk: %v", err)
+		t.Fatalf("LoadAllFromDisk: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none", warnings)
+	}
+
+	meta, err := restored.Get("s1")
+	if err != nil {
+		t.Fatalf("Get s1 on restored store: %v", err)
+	}
+	if meta.Agent != "general-purpose" || !meta.Visible {
+		t.Errorf("restored meta = %+v, want Agent=general-purpose Visible=true", meta)
 	}
 
 	replayed, err := restored.Events("s1", 0)
@@ -346,17 +357,89 @@ func TestPersistenceAndLoadFromDisk(t *testing.T) {
 	}
 }
 
-func TestLoadFromDiskNoExistingFile(t *testing.T) {
+func TestLoadAllFromDiskEmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	s, err := LoadFromDisk(dir, "brand-new", "", "a", true)
+	s, warnings, err := LoadAllFromDisk(dir)
 	if err != nil {
-		t.Fatalf("LoadFromDisk with no prior log file: %v", err)
+		t.Fatalf("LoadAllFromDisk on an empty dir: %v", err)
 	}
-	list, err := s.Events("brand-new", 0)
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none", warnings)
+	}
+	if len(s.AllSessions()) != 0 {
+		t.Errorf("expected no sessions restored from an empty dir, got %+v", s.AllSessions())
+	}
+}
+
+func TestLoadAllFromDiskRestoresMultipleSessionsAndTitle(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
 	if err != nil {
-		t.Fatalf("Events: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
-	if len(list) != 0 {
-		t.Errorf("expected no events for a freshly-created session, got %+v", list)
+	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession s1: %v", err)
+	}
+	if _, err := s.CreateSession("s2", "s1", "review", false); err != nil {
+		t.Fatalf("CreateSession s2: %v", err)
+	}
+	if _, err := s.SetTitle("s1", "My Session"); err != nil {
+		t.Fatalf("SetTitle: %v", err)
+	}
+
+	restored, warnings, err := LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatalf("LoadAllFromDisk: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none", warnings)
+	}
+	if len(restored.AllSessions()) != 2 {
+		t.Fatalf("expected 2 restored sessions, got %+v", restored.AllSessions())
+	}
+
+	s1, err := restored.Get("s1")
+	if err != nil {
+		t.Fatalf("Get s1: %v", err)
+	}
+	if s1.Title != "My Session" {
+		t.Errorf("s1.Title = %q, want %q", s1.Title, "My Session")
+	}
+
+	s2, err := restored.Get("s2")
+	if err != nil {
+		t.Fatalf("Get s2: %v", err)
+	}
+	if s2.ParentID != "s1" || s2.Visible {
+		t.Errorf("s2 = %+v, want ParentID=s1 Visible=false", s2)
+	}
+}
+
+func TestLoadAllFromDiskWarnsOnCorruptMetaButRestoresOthers(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := s.CreateSession("good", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	// Simulate a corrupted/truncated sidecar file for a second session.
+	if err := os.WriteFile(filepath.Join(dir, "bad.meta.json"), []byte(`{not json`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	restored, warnings, err := LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatalf("LoadAllFromDisk: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %+v, want exactly 1 for the corrupt session", warnings)
+	}
+	if _, err := restored.Get("good"); err != nil {
+		t.Errorf("expected the good session to still be restored despite the other one's corrupt meta: %v", err)
+	}
+	if _, err := restored.Get("bad"); err == nil {
+		t.Error("expected the corrupt session to not be restored")
 	}
 }

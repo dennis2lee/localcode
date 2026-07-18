@@ -81,6 +81,7 @@ func run() error {
 	if *headless {
 		return runDaemon(*configPath, *listen)
 	}
+	printBanner()
 	if *server != "" {
 		return runTUIClient(*server, *agentName)
 	}
@@ -106,9 +107,12 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 	sessionDir := filepath.Join(home, ".localcode", "sessions")
-	store, err := session.NewStore(sessionDir)
+	store, sessionWarnings, err := session.LoadAllFromDisk(sessionDir)
 	if err != nil {
 		return nil, err
+	}
+	for _, w := range sessionWarnings {
+		log.Printf("session restore: %v", w)
 	}
 
 	broker := agent.NewPermissionBroker(store)
@@ -184,6 +188,12 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	loop.Commands = cmdList
 	loop.ProjectDir = cwd
 	loop.MemoryDir = memDir
+	// Restores conversation history and /cost totals for every session
+	// just loaded from disk — the event log survives a restart on its
+	// own, but Loop's in-memory history/usage maps don't, so without this
+	// a resumed session would replay its old transcript on screen while
+	// the model itself had no memory of any of it.
+	loop.RehydrateAll()
 	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
 
 	// The Task tool only makes sense once there's more than one agent role

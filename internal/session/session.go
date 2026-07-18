@@ -5,11 +5,13 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,11 +90,32 @@ func (s *Store) CreateSession(id, parentID, agent string, visible bool) (*Sessio
 			return nil, fmt.Errorf("open session log: %w", err)
 		}
 		st.file = f
+		if err := writeSessionMeta(s.dir, meta); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
 	}
 
 	s.sessions[id] = st
 	metaCopy := meta
 	return &metaCopy, nil
+}
+
+// writeSessionMeta persists Session metadata (everything Append's jsonl
+// event log doesn't capture — Agent/Title/Visible/ParentID/CreatedAt) to
+// <dir>/<id>.meta.json, so a restart can reconstruct the session list and
+// its per-session settings, not just replay the event log. Rewritten
+// wholesale on every metadata change (CreateSession/SetAgent/SetTitle);
+// small enough that this is simpler and safer than patching in place.
+func writeSessionMeta(dir string, meta Session) error {
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal session meta: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, meta.ID+".meta.json"), data, 0o644); err != nil {
+		return fmt.Errorf("write session meta: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Get(id string) (*Session, error) {
@@ -120,6 +143,11 @@ func (s *Store) SetAgent(sessionID, agent string) (*Session, error) {
 	}
 	st.meta.Agent = agent
 	metaCopy := st.meta
+	if s.dir != "" {
+		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
+			return nil, err
+		}
+	}
 	return &metaCopy, nil
 }
 
@@ -135,6 +163,11 @@ func (s *Store) SetTitle(sessionID, title string) (*Session, error) {
 	}
 	st.meta.Title = title
 	metaCopy := st.meta
+	if s.dir != "" {
+		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
+			return nil, err
+		}
+	}
 	return &metaCopy, nil
 }
 
@@ -160,6 +193,9 @@ func (s *Store) Delete(sessionID string) error {
 		if err := os.Remove(filepath.Join(dir, sessionID+".jsonl")); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove session log: %w", err)
 		}
+		if err := os.Remove(filepath.Join(dir, sessionID+".meta.json")); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove session meta: %w", err)
+		}
 	}
 	return nil
 }
@@ -179,6 +215,21 @@ func (s *Store) ListVisible() []Session {
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
+	return out
+}
+
+// AllSessions returns every session regardless of Visible — unlike
+// ListVisible, this also includes background-task child sessions. Used by
+// callers that need to rehydrate every session's in-memory state (e.g.
+// agent.Loop's conversation history) after a restart, not just the ones a
+// user would pick from.
+func (s *Store) AllSessions() []Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Session, 0, len(s.sessions))
+	for _, st := range s.sessions {
+		out = append(out, st.meta)
+	}
 	return out
 }
 
@@ -286,39 +337,87 @@ func (s *Store) Subscribe(sessionID string) (<-chan events.Event, func(), error)
 	return sub.ch, unsub, nil
 }
 
-// LoadFromDisk replays a persisted session log back into memory, e.g. after
-// a daemon restart. It re-establishes the session metadata and log but not
-// live subscribers.
-func LoadFromDisk(dir, id, parentID, agent string, visible bool) (*Store, error) {
+// LoadAllFromDisk restores every session found in dir (one <id>.meta.json +
+// <id>.jsonl pair each) into a fresh, persisting Store — e.g. at daemon
+// startup, so a restart doesn't wipe the session list the way a bare
+// NewStore(dir) would. A directory with no sessions yet (or that doesn't
+// exist) just yields an empty, working Store, same as NewStore.
+//
+// A <id>.jsonl with no matching <id>.meta.json (a log from before this
+// sidecar file existed, or one that failed to write) is skipped with a
+// warning appended to the returned slice rather than failing the whole
+// restore — one corrupt session shouldn't take every other session down
+// with it.
+func LoadAllFromDisk(dir string) (*Store, []error, error) {
 	s, err := NewStore(dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if _, err := s.CreateSession(id, parentID, agent, visible); err != nil {
-		return nil, err
+	if dir == "" {
+		return s, nil, nil
 	}
-	path := filepath.Join(dir, id+".jsonl")
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	st := s.sessions[id]
-	for scanner.Scan() {
-		var ev events.Event
-		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-			continue
-		}
-		st.log = append(st.log, ev)
-		if ev.Seq > st.nextSeq {
-			st.nextSeq = ev.Seq
+	metaFiles, err := filepath.Glob(filepath.Join(dir, "*.meta.json"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("glob session metadata: %w", err)
+	}
+
+	var warnings []error
+	for _, metaPath := range metaFiles {
+		id := strings.TrimSuffix(filepath.Base(metaPath), ".meta.json")
+		if err := s.restoreOne(dir, id); err != nil {
+			warnings = append(warnings, fmt.Errorf("session %s: %w", id, err))
 		}
 	}
-	return s, scanner.Err()
+	return s, warnings, nil
+}
+
+// restoreOne loads one session's metadata + event log into s, opening its
+// jsonl file in append mode so future Append calls continue the same file.
+func (s *Store) restoreOne(dir, id string) error {
+	metaData, err := os.ReadFile(filepath.Join(dir, id+".meta.json"))
+	if err != nil {
+		return fmt.Errorf("read meta: %w", err)
+	}
+	var meta Session
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		return fmt.Errorf("parse meta: %w", err)
+	}
+	if meta.ID == "" {
+		meta.ID = id
+	}
+
+	f, err := os.OpenFile(filepath.Join(dir, id+".jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open session log: %w", err)
+	}
+
+	st := &sessionState{
+		meta: meta,
+		subs: map[int]*subscriber{},
+		file: f,
+	}
+
+	if logData, err := os.ReadFile(filepath.Join(dir, id+".jsonl")); err == nil {
+		scanner := bufio.NewScanner(bytes.NewReader(logData))
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			var ev events.Event
+			if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+				continue
+			}
+			st.log = append(st.log, ev)
+			if ev.Seq > st.nextSeq {
+				st.nextSeq = ev.Seq
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		_ = f.Close()
+		return fmt.Errorf("read session log: %w", err)
+	}
+
+	s.mu.Lock()
+	s.sessions[id] = st
+	s.mu.Unlock()
+	return nil
 }

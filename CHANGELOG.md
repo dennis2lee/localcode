@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.12.0
+
+- **Sessions survive a daemon restart.** Previously a restart wiped the session list and all conversation context — the event log was persisted, but nothing restored it. Session metadata (agent/title/visible/parent) is now written to a `<id>.meta.json` sidecar alongside each session's `<id>.jsonl`, `session.LoadAllFromDisk` restores every session pair at startup, and a new `agent.Loop.RehydrateAll()` replays each session's event log back into the in-memory conversation history and `/cost` token totals the model needs to actually remember anything, not just the transcript a client re-renders. A session that fails to restore (corrupt metadata) is skipped with a logged warning rather than blocking every other session's restore.
+- Fix (caught during this work): rehydrating history from the event log could surface a local-only command's confirmation text (e.g. "대화가 압축되었습니다" from `/compact`, or `/cost`'s own answer) as if the model had said it, since those commands log their reply through the same event types as a real turn. `message.user` events are now tagged `"local": true` when they never reach the model, and rehydration skips both the command and its paired reply.
+- `localcode` now prints a "LOCALCODE" startup banner (opencode-style) before the interactive TUI takes the screen, in both the default embedded mode and `--server`-attached mode. `--headless` skips it, since that's meant to run unattended.
+
 ## v0.11.1
 
 - Fix: `localcode mcp add/add-json/remove` no longer drops config.json keys it doesn't recognize. The previous implementation round-tripped the entire file through the Config struct, so any field outside the known schema (a typo, a future version's field) was silently deleted on save. Now only the `mcp_servers` key is rewritten (`config.UpdateMCPServersInFile`); everything else is preserved as raw JSON. `remove` also no longer rewrites/reformats the file when the name isn't found.
