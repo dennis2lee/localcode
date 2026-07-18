@@ -20,6 +20,17 @@ func (Bash) InputSchema() json.RawMessage {
 }
 func (Bash) RequiresPermission(json.RawMessage) bool { return true }
 
+// Subject exposes the shell command itself as the permission-rule
+// pattern subject, so config can e.g. allow "git *" while asking for
+// everything else.
+func (Bash) Subject(input json.RawMessage) string {
+	var args struct {
+		Command string `json:"command"`
+	}
+	_ = json.Unmarshal(input, &args)
+	return args.Command
+}
+
 func (b Bash) Execute(ctx context.Context, input json.RawMessage) Result {
 	var args struct {
 		Command string `json:"command"`

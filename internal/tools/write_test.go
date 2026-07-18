@@ -51,3 +51,10 @@ func TestWriteFileRequiresPermission(t *testing.T) {
 		t.Error("write_file should always require permission")
 	}
 }
+
+func TestWriteFileSubjectExposesPath(t *testing.T) {
+	got := WriteFile{}.Subject(json.RawMessage(`{"path":"dist/out.js","content":"x"}`))
+	if got != "dist/out.js" {
+		t.Errorf("Subject() = %q, want %q", got, "dist/out.js")
+	}
+}

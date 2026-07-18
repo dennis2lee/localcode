@@ -19,6 +19,17 @@ func (WriteFile) InputSchema() json.RawMessage {
 }
 func (WriteFile) RequiresPermission(json.RawMessage) bool { return true }
 
+// Subject exposes the target file path as the permission-rule pattern
+// subject, so config can e.g. allow writes under "dist/*" while asking
+// for everything else.
+func (WriteFile) Subject(input json.RawMessage) string {
+	var args struct {
+		Path string `json:"path"`
+	}
+	_ = json.Unmarshal(input, &args)
+	return args.Path
+}
+
 func (WriteFile) Execute(_ context.Context, input json.RawMessage) Result {
 	var args struct {
 		Path    string `json:"path"`

@@ -1,6 +1,6 @@
 # localcode
 
-Bedrock + Anthropic API 직접 + OpenAI-compatible(로컬 LLM) 세 가지에 다 붙는 코딩 에이전트. Claude Code처럼 파일 읽기/쓰기, 셸 실행, MCP, Skills를 모델이 직접 호출할 수 있고, 클라우드 모델(Bedrock, Anthropic API)과 로컬 모델(LM Studio 등)을 config 하나로 전환합니다. `localcode login bedrock`(AWS SSO 디바이스 플로우, AWS CLI 불필요)과 `localcode login anthropic`(API 키 저장)으로 인증을 CLI에서 바로 끝낼 수 있습니다. 역할별로 다른 모델·프롬프트·툴 범위를 가진 여러 에이전트를 정의하고 `Task` 툴로 서로 위임하게 할 수도 있습니다(oh-my-opencode 스타일). `AGENTS.md`(opencode/Claude Code와 같은 관례) 프로젝트 규칙 자동 인식(`@경로` 임포트 포함), `/init`으로 초안 생성, `.localcode/commands/*.md` 사용자 정의 슬래시 명령, Claude Code 스타일 auto memory(모델이 세션 간 스스로 기록하는 메모)도 지원합니다. 코어는 헤드리스 데몬이고, TUI와 브라우저(Web UI)는 둘 다 그 위의 대등한 클라이언트입니다.
+Bedrock + Anthropic API 직접 + OpenAI-compatible(로컬 LLM) 세 가지에 다 붙는 코딩 에이전트. Claude Code처럼 파일 읽기/쓰기, 셸 실행, MCP, Skills를 모델이 직접 호출할 수 있고, 클라우드 모델(Bedrock, Anthropic API)과 로컬 모델(LM Studio 등)을 config 하나로 전환합니다. `localcode login bedrock`(AWS SSO 디바이스 플로우, AWS CLI 불필요)과 `localcode login anthropic`(API 키 저장)으로 인증을 CLI에서 바로 끝낼 수 있습니다. `permission` config로 opencode 스타일 세밀한 허용/거부/확인 규칙(예: `git *`는 자동 허용, `rm *`는 자동 차단)도 지정할 수 있습니다. 역할별로 다른 모델·프롬프트·툴 범위를 가진 여러 에이전트를 정의하고 `Task` 툴로 서로 위임하게 할 수도 있습니다(oh-my-opencode 스타일). `AGENTS.md`(opencode/Claude Code와 같은 관례) 프로젝트 규칙 자동 인식(`@경로` 임포트 포함), `/init`으로 초안 생성, `.localcode/commands/*.md` 사용자 정의 슬래시 명령, Claude Code 스타일 auto memory(모델이 세션 간 스스로 기록하는 메모)도 지원합니다. 코어는 헤드리스 데몬이고, TUI와 브라우저(Web UI)는 둘 다 그 위의 대등한 클라이언트입니다.
 
 - [설치 방법](INSTALL.md) — 소스 빌드, macOS/Windows 배포 패키지 만들기
 - [사용 방법](USAGE.md) — config.json 작성법(Provider/MCP/Skills), 화면 조작, 백그라운드 태스크

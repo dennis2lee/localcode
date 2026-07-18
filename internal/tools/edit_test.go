@@ -77,3 +77,10 @@ func TestEditRequiresPermission(t *testing.T) {
 		t.Error("edit should always require permission")
 	}
 }
+
+func TestEditSubjectExposesPath(t *testing.T) {
+	got := Edit{}.Subject(json.RawMessage(`{"path":"src/main.go","old_string":"a","new_string":"b"}`))
+	if got != "src/main.go" {
+		t.Errorf("Subject() = %q, want %q", got, "src/main.go")
+	}
+}

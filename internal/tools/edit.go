@@ -19,6 +19,16 @@ func (Edit) InputSchema() json.RawMessage {
 }
 func (Edit) RequiresPermission(json.RawMessage) bool { return true }
 
+// Subject exposes the target file path as the permission-rule pattern
+// subject (see WriteFile.Subject).
+func (Edit) Subject(input json.RawMessage) string {
+	var args struct {
+		Path string `json:"path"`
+	}
+	_ = json.Unmarshal(input, &args)
+	return args.Path
+}
+
 func (Edit) Execute(_ context.Context, input json.RawMessage) Result {
 	var args struct {
 		Path       string `json:"path"`

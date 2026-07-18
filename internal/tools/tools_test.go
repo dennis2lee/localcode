@@ -113,6 +113,119 @@ func TestRegistryCallPermissionFuncError(t *testing.T) {
 	}
 }
 
+// fakeSubjectTool additionally implements PermissionSubject, for testing
+// that Registry.Call passes the right subject string through to Resolver.
+type fakeSubjectTool struct {
+	fakeTool
+	subject string
+}
+
+func (f *fakeSubjectTool) Subject(json.RawMessage) string { return f.subject }
+
+func TestRegistryCallResolverAllowSkipsPermissionFunc(t *testing.T) {
+	permCalled := false
+	r := NewRegistry(func(context.Context, string, string) (bool, error) {
+		permCalled = true
+		return true, nil
+	})
+	r.Resolver = func(toolName, subject string, static bool) Decision { return DecisionAllow }
+
+	ft := &fakeTool{name: "bash", needsPerm: true}
+	r.Register(ft)
+
+	result := r.Call(context.Background(), "bash", nil, "")
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+	if !ft.executed {
+		t.Error("expected the tool to execute when Resolver says allow")
+	}
+	if permCalled {
+		t.Error("permission func should not be consulted when Resolver says allow")
+	}
+}
+
+func TestRegistryCallResolverDenyBlocksWithoutAsking(t *testing.T) {
+	permCalled := false
+	r := NewRegistry(func(context.Context, string, string) (bool, error) {
+		permCalled = true
+		return true, nil
+	})
+	r.Resolver = func(toolName, subject string, static bool) Decision { return DecisionDeny }
+
+	// Even a tool whose static default is "no permission needed" can be
+	// blocked outright by the resolver.
+	ft := &fakeTool{name: "read_file", needsPerm: false}
+	r.Register(ft)
+
+	result := r.Call(context.Background(), "read_file", nil, "")
+	if !result.IsError {
+		t.Error("expected an error when Resolver says deny")
+	}
+	if ft.executed {
+		t.Error("tool should not execute when Resolver says deny")
+	}
+	if permCalled {
+		t.Error("permission func should not be consulted when Resolver says deny")
+	}
+}
+
+func TestRegistryCallResolverAskStillGoesThroughPermissionFunc(t *testing.T) {
+	r := NewRegistry(func(context.Context, string, string) (bool, error) { return true, nil })
+	r.Resolver = func(toolName, subject string, static bool) Decision { return DecisionAsk }
+
+	ft := &fakeTool{name: "safe", needsPerm: false} // static says no permission needed...
+	r.Register(ft)
+
+	result := r.Call(context.Background(), "safe", nil, "")
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content) // ...but Resolver overrides to "ask", and the func approves
+	}
+	if !ft.executed {
+		t.Error("expected the tool to execute after the permission func approved")
+	}
+}
+
+func TestRegistryCallResolverReceivesSubjectFromPermissionSubjectTool(t *testing.T) {
+	var gotName, gotSubject string
+	var gotStatic bool
+	r := NewRegistry(nil)
+	r.Resolver = func(toolName, subject string, static bool) Decision {
+		gotName, gotSubject, gotStatic = toolName, subject, static
+		return DecisionAllow
+	}
+
+	ft := &fakeSubjectTool{fakeTool: fakeTool{name: "bash", needsPerm: true}, subject: "git status"}
+	r.Register(ft)
+
+	r.Call(context.Background(), "bash", json.RawMessage(`{"command":"git status"}`), "")
+
+	if gotName != "bash" {
+		t.Errorf("toolName = %q, want %q", gotName, "bash")
+	}
+	if gotSubject != "git status" {
+		t.Errorf("subject = %q, want %q", gotSubject, "git status")
+	}
+	if !gotStatic {
+		t.Error("staticRequiresPermission should reflect the tool's own RequiresPermission()")
+	}
+}
+
+func TestRegistryCallResolverSubjectEmptyForNonPermissionSubjectTool(t *testing.T) {
+	var gotSubject string
+	r := NewRegistry(nil)
+	r.Resolver = func(toolName, subject string, static bool) Decision {
+		gotSubject = subject
+		return DecisionAllow
+	}
+	r.Register(&fakeTool{name: "plain"})
+
+	r.Call(context.Background(), "plain", nil, "")
+	if gotSubject != "" {
+		t.Errorf("subject = %q, want empty for a tool that doesn't implement PermissionSubject", gotSubject)
+	}
+}
+
 func TestRegistrySpecsPreservesRegistrationOrder(t *testing.T) {
 	r := NewRegistry(nil)
 	r.Register(&fakeTool{name: "b"})

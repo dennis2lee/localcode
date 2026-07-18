@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.0
+
+- Fine-grained permission rules (opencode-style): `config.json`'s new `permission` field maps a tool name (or `"*"` fallback) to either a flat `"allow"/"ask"/"deny"` or an ordered array of `{"match": glob, "decision": ...}` rules matched against the call's subject (the bash command string, or a file path for `write_file`/`edit`) — last match wins. Lets safe commands (`git *`) run without a prompt while dangerous ones (`rm *`) are blocked outright, and can even restrict tools that previously never asked (e.g. deny reading `*.env`). No `permission` config at all preserves exactly today's behavior.
+
 ## v0.7.0
 
 - `localcode login bedrock`: native AWS IAM Identity Center (SSO) device-authorization flow — no AWS CLI required. Writes the same artifacts the AWS CLI does (`~/.aws/sso/cache/<sha1(start-url)>.json`, a `[profile ...]` block in `~/.aws/config`), so the default AWS credential chain (which `provider.Bedrock` already relies on) picks it up automatically. `config.json`'s `providers.<name>.profile` selects the named profile.

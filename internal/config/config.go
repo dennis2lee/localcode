@@ -24,6 +24,11 @@ type Config struct {
 	// memory directory — see internal/memory). A nil pointer means
 	// unset, which defaults to enabled.
 	AutoMemoryEnabled *bool `json:"auto_memory_enabled,omitempty"`
+
+	// Permissions holds opencode-style fine-grained allow/ask/deny rules,
+	// keyed by tool name (or "*" for a fallback applied to every tool).
+	// See ResolvePermission.
+	Permissions map[string]ToolPermission `json:"permission,omitempty"`
 }
 
 // MemoryEnabled reports whether auto memory is on — the default when

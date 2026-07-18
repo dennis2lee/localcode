@@ -106,6 +106,9 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 
 	broker := agent.NewPermissionBroker(store)
 	registry := tools.NewRegistry(broker.Func())
+	registry.Resolver = func(toolName, subject string, staticRequiresPermission bool) tools.Decision {
+		return tools.Decision(cfg.ResolvePermission(toolName, subject, staticRequiresPermission))
+	}
 	registry.Register(tools.ReadFile{})
 	registry.Register(tools.WriteFile{})
 	registry.Register(tools.Edit{})

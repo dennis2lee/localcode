@@ -49,3 +49,17 @@ func TestBashRequiresPermission(t *testing.T) {
 		t.Error("bash should always require permission")
 	}
 }
+
+func TestBashSubjectExposesCommand(t *testing.T) {
+	got := Bash{}.Subject(json.RawMessage(`{"command":"git status"}`))
+	if got != "git status" {
+		t.Errorf("Subject() = %q, want %q", got, "git status")
+	}
+}
+
+func TestBashSubjectInvalidInputReturnsEmpty(t *testing.T) {
+	got := Bash{}.Subject(json.RawMessage(`not json`))
+	if got != "" {
+		t.Errorf("Subject() = %q, want empty for malformed input", got)
+	}
+}

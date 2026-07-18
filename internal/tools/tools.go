@@ -35,12 +35,45 @@ type Tool interface {
 // runs. description is human-readable ("run: rm -rf build/").
 type PermissionFunc func(ctx context.Context, toolName, description string) (bool, error)
 
+// Decision is a resolved permission outcome for one tool call — mirrors
+// config.Decision (same underlying string values: "allow"/"ask"/"deny")
+// without this package importing internal/config, so the two stay
+// decoupled; Loop is what bridges them via Resolver.
+type Decision string
+
+const (
+	DecisionAllow Decision = "allow"
+	DecisionAsk   Decision = "ask"
+	DecisionDeny  Decision = "deny"
+)
+
+// PermissionResolver decides allow/ask/deny for a call to toolName given
+// subject (see PermissionSubject) and the tool's own static default
+// (staticRequiresPermission, from Tool.RequiresPermission). A Registry
+// with no Resolver set falls back to exactly that static default (ask iff
+// RequiresPermission, else allow) — today's pre-permission-config
+// behavior.
+type PermissionResolver func(toolName, subject string, staticRequiresPermission bool) Decision
+
+// PermissionSubject is implemented by tools whose input has a natural
+// pattern-matchable "subject" — a shell command for Bash, a file path for
+// WriteFile/Edit — so permission rules can match against it (e.g. allow
+// "git *" but ask for everything else). Tools that don't implement it
+// only match a rule's "*" pattern.
+type PermissionSubject interface {
+	Subject(input json.RawMessage) string
+}
+
 // Registry holds the tools available to an agent loop and mediates
 // permission checks around execution.
 type Registry struct {
 	tools      map[string]Tool
 	order      []string
 	permission PermissionFunc
+
+	// Resolver, if set, is consulted before the static
+	// Tool.RequiresPermission check — see PermissionResolver.
+	Resolver PermissionResolver
 }
 
 func NewRegistry(permission PermissionFunc) *Registry {
@@ -101,27 +134,44 @@ func toSet(names []string) map[string]bool {
 	return set
 }
 
-// Call runs a tool by name, applying the permission gate first if the tool
-// requires it. describe, if non-empty, overrides the default permission
-// prompt text.
+// Call runs a tool by name, first resolving allow/ask/deny (via Resolver
+// if set, else the tool's own static RequiresPermission default) and
+// gating on the permission broker if the resolution is "ask". describe, if
+// non-empty, overrides the default permission prompt text.
 func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage, describe string) Result {
 	t, ok := r.tools[name]
 	if !ok {
 		return Result{Content: fmt.Sprintf("unknown tool %q", name), IsError: true}
 	}
 
-	if t.RequiresPermission(input) {
+	decision := DecisionAsk
+	if !t.RequiresPermission(input) {
+		decision = DecisionAllow
+	}
+	if r.Resolver != nil {
+		subject := ""
+		if ps, ok := t.(PermissionSubject); ok {
+			subject = ps.Subject(input)
+		}
+		decision = r.Resolver(name, subject, t.RequiresPermission(input))
+	}
+
+	switch decision {
+	case DecisionDeny:
+		return Result{Content: fmt.Sprintf("tool %q is denied by permission policy", name), IsError: true}
+
+	case DecisionAsk:
 		if r.permission == nil {
 			return Result{Content: fmt.Sprintf("tool %q requires permission but no permission handler is configured", name), IsError: true}
 		}
 		if describe == "" {
 			describe = fmt.Sprintf("%s %s", name, string(input))
 		}
-		ok, err := r.permission(ctx, name, describe)
+		allowed, err := r.permission(ctx, name, describe)
 		if err != nil {
 			return Result{Content: fmt.Sprintf("permission check failed: %v", err), IsError: true}
 		}
-		if !ok {
+		if !allowed {
 			return Result{Content: "denied by user", IsError: true}
 		}
 	}

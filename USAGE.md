@@ -78,6 +78,30 @@ localcode --server http://localhost:4096   # 터미널
 
 설정이 틀리면(예: 존재하지 않는 provider를 가리키는 profile) 실행 시작 시점에 바로 에러를 내고 종료합니다.
 
+## 세밀한 권한 규칙 (`permission`)
+
+기본 동작은 지금까지와 같습니다 — `write_file`/`edit`/`bash`/MCP 툴은 항상 확인을 거치고, `read_file`/`glob`/`grep`은 그냥 실행됩니다. `config.json`에 `permission`을 추가하면 opencode 스타일로 툴별·패턴별 allow/ask/deny를 세밀하게 지정할 수 있습니다 — 안전한 명령은 자동 허용하고, 위험한 건 아예 차단하고, 나머지만 물어보게 할 수 있습니다.
+
+```json
+{
+  "permission": {
+    "bash": [
+      { "match": "*",       "decision": "ask" },
+      { "match": "git *",   "decision": "allow" },
+      { "match": "rm *",    "decision": "deny" }
+    ],
+    "read_file": "allow",
+    "*": "ask"
+  }
+}
+```
+
+- **값이 문자열**(`"allow"`/`"ask"`/`"deny"`)이면 그 툴의 모든 호출에 적용됩니다.
+- **값이 배열**이면 `{"match": 패턴, "decision": ...}` 목록을 순서대로 매치하고 **마지막으로 매치한 규칙이 이깁니다** — 위 예시에서 `git status`는 `*`(ask)와 `git *`(allow) 둘 다 매치하지만 나중 규칙인 allow가 이깁니다. `rm -rf`는 `*`(ask)와 `rm *`(deny)가 매치해서 deny가 이깁니다. 패턴은 `*`(문자 0개 이상)/`?`(문자 1개) 글롭이고, `bash`는 실행할 명령 문자열 전체, `write_file`/`edit`는 대상 파일 경로가 매치 대상입니다 — 그 외 툴(예: MCP 툴)은 패턴 없이 `"*"` 규칙만 적용됩니다.
+- **`"*"` 키**는 이름이 정확히 일치하는 규칙이 없는 모든 툴에 적용되는 폴백입니다. 정확히 일치하는 툴 이름의 규칙이 항상 `"*"`보다 우선합니다.
+- **아무 규칙도 매치하지 않으면** 그 툴의 원래 기본 동작(위 표 참고)으로 돌아갑니다 — 규칙을 안 써도 지금까지와 동일하게 동작합니다.
+- **`deny`는 원래 확인이 필요 없던 툴도 완전히 차단할 수 있습니다** — 예를 들어 `"read_file": [{"match": "*.env", "decision": "deny"}, {"match": "*", "decision": "allow"}]`로 `.env` 파일만 못 읽게 막을 수 있습니다.
+
 ## `/login`으로 인증하기
 
 `localcode login <bedrock|anthropic>`는 클라우드 provider 인증을 대화식으로 끝내주는 CLI 서브커맨드입니다 (데몬/TUI를 띄우기 전에 터미널에서 직접 실행). config.json에 `api_key`를 직접 적어 넣거나 AWS CLI를 미리 설치해야 하는 수고를 없애줍니다.
