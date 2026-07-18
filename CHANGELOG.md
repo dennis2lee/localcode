@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.12.5
+
+- Change the startup banner's tagline from "Local & cloud LLM coding agent" to "Multi LLM coding agent".
+
 ## v0.12.4
 
 - Move the startup banner's tagline onto the same line as the last row of stars (next to the third `✦`), matching the original layout, instead of a separate line below the wordmark.

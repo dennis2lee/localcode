@@ -18,5 +18,5 @@ const logoTop = `
 // unattended, where a big banner in a log file is just noise.
 func printBanner() {
 	fmt.Print(logoTop)
-	fmt.Printf("Local & cloud LLM coding agent · v%s\n\n", version)
+	fmt.Printf("Multi LLM coding agent · v%s\n\n", version)
 }
