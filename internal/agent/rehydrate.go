@@ -117,7 +117,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 		toolsDone = nil
 	}
 
-	// A "local" user message (/cost, /compact, /config, /memory, a
+	// A "local" user message (/usage, /compact, /config, /memory, a
 	// blocked/unknown command, ...) never reached the model, so it isn't
 	// part of history — and neither is the message.part.end that follows
 	// it, which is just that command's own display-only echo of its
@@ -190,7 +190,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 
 // rehydrateUsage replays TypeUsage/TypeCompacted events to reconstruct the
 // latest-known usage snapshot (for context-% and auto-compact triggering)
-// and the cumulative per-model totals /cost reports — the same two things
+// and the cumulative per-model totals /usage reports — the same two things
 // recordUsage/addCumulativeUsage maintain live, sourced from what's already
 // in the log instead.
 func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cum map[string]modelTotals) {

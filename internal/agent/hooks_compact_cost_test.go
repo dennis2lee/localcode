@@ -202,7 +202,7 @@ func TestCompactCommandNoHistoryErrors(t *testing.T) {
 	}
 }
 
-// --- /cost ---
+// --- /usage ---
 
 func TestCostCommandNoUsageYet(t *testing.T) {
 	loop, store := newCustomCommandTestLoop(t, "", nil)
@@ -211,7 +211,7 @@ func TestCostCommandNoUsageYet(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/cost"); err != nil {
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/usage"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	text := lastMessagePartEnd(t, store, sid)
@@ -241,8 +241,8 @@ func TestCostCommandBreaksDownByModel(t *testing.T) {
 		t.Fatalf("SendMessage (review): %v", err)
 	}
 
-	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/cost"); err != nil {
-		t.Fatalf("SendMessage (/cost): %v", err)
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/usage"); err != nil {
+		t.Fatalf("SendMessage (/usage): %v", err)
 	}
 
 	text := lastMessagePartEnd(t, store, sid)
@@ -269,15 +269,15 @@ func TestCostCommandIncludesCompactionCallUsage(t *testing.T) {
 	}
 
 	// One normal turn (100 in / 20 out per the mock) + one manual
-	// compaction (500 in / 50 out): /cost must count both calls.
+	// compaction (500 in / 50 out): /usage must count both calls.
 	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "hi"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/compact"); err != nil {
 		t.Fatalf("SendMessage (/compact): %v", err)
 	}
-	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/cost"); err != nil {
-		t.Fatalf("SendMessage (/cost): %v", err)
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/usage"); err != nil {
+		t.Fatalf("SendMessage (/usage): %v", err)
 	}
 
 	text := lastMessagePartEnd(t, store, sid)

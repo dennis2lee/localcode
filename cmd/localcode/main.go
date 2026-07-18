@@ -188,7 +188,7 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	loop.Commands = cmdList
 	loop.ProjectDir = cwd
 	loop.MemoryDir = memDir
-	// Restores conversation history and /cost totals for every session
+	// Restores conversation history and /usage totals for every session
 	// just loaded from disk — the event log survives a restart on its
 	// own, but Loop's in-memory history/usage maps don't, so without this
 	// a resumed session would replay its old transcript on screen while

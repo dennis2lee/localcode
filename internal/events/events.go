@@ -11,7 +11,7 @@ const (
 	// "model_text","local"}. "model_text", if present, is what the model
 	// actually received when it differs from the displayed "text" (e.g.
 	// "/skill foo" expands to that skill's full body). "local": true
-	// marks a message answered without any model call (/cost, /compact,
+	// marks a message answered without any model call (/usage, /compact,
 	// /config, /memory, a blocked/unknown command, ...) — its paired
 	// reply is a display-only echo, not something the model ever said,
 	// and both are skipped when reconstructing model history from the

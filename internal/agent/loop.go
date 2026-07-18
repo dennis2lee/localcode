@@ -58,7 +58,7 @@ type sessionUsage struct {
 // snapshot, used for context-window-fill %), this is a running sum: each
 // API call is billed for its own full request (history included), so
 // summing every call's tokens is the correct "how much has this session
-// used" figure — see /cost.
+// used" figure — see /usage.
 type modelTotals struct {
 	InputTokens  int
 	OutputTokens int
@@ -99,7 +99,7 @@ type Loop struct {
 	mu                 sync.Mutex
 	messages           map[string][]provider.Message     // sessionID -> history
 	usage              map[string]sessionUsage           // sessionID -> latest known usage
-	cumulativeUsage    map[string]map[string]modelTotals // sessionID -> model -> running totals, see /cost
+	cumulativeUsage    map[string]map[string]modelTotals // sessionID -> model -> running totals, see /usage
 	autoCompactEnabled bool                              // process-global runtime setting, toggleable via "/config"
 	showTPS            bool                              // process-global runtime setting, toggleable via "/config"
 }
@@ -217,7 +217,7 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		return l.handleCompactCommand(ctx, sessionID, agentName, text, arg)
 	}
 
-	if strings.TrimSpace(text) == "/cost" {
+	if strings.TrimSpace(text) == "/usage" {
 		return l.handleCostCommand(sessionID, text)
 	}
 
@@ -655,7 +655,7 @@ func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, d
 	return nil
 }
 
-// handleCostCommand answers "/cost" locally — no model call — with a
+// handleCostCommand answers "/usage" locally — no model call — with a
 // per-model breakdown of cumulative token usage for this session (input,
 // output, total, number of API calls), plus a grand total. Tokens only,
 // deliberately no dollar figures: this project has no per-model pricing
@@ -856,7 +856,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		return fmt.Errorf("compaction request: %w", err)
 	}
 	// The summarization call is billed like any other — fold it into
-	// /cost's totals even though it never appears in the transcript.
+	// /usage's totals even though it never appears in the transcript.
 	if usage.hasUsage {
 		l.addCumulativeUsage(sessionID, profile.Model, usage.inputTokens, usage.outputTokens)
 	}
@@ -914,7 +914,7 @@ func drainText(ctx context.Context, stream <-chan provider.StreamEvent) (string,
 }
 
 // addCumulativeUsage folds one off-transcript model call (e.g. the
-// compaction summarization) into /cost's running totals, without touching
+// compaction summarization) into /usage's running totals, without touching
 // the latest-usage snapshot or emitting a usage event.
 func (l *Loop) addCumulativeUsage(sessionID, model string, inputTokens, outputTokens int) {
 	l.mu.Lock()

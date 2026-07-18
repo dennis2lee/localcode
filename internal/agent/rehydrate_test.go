@@ -159,7 +159,7 @@ func TestRehydrateHistoryOldCompactedEventWithoutSummaryIsIgnored(t *testing.T) 
 }
 
 func TestRehydrateHistorySkipsLocalCommandAndItsReply(t *testing.T) {
-	// /compact, /cost, /config, /memory, etc. append a "local" user
+	// /compact, /usage, /config, /memory, etc. append a "local" user
 	// message (never sent to the model) followed by a message.part.end
 	// that's just that command's own display-only answer — not something
 	// the model ever said. Both must be excluded from rehydrated history,
@@ -270,7 +270,7 @@ func TestRehydrateUsageCompactionClearsSnapshotButKeepsCumulative(t *testing.T) 
 // against a Loop backed by a persisted session store, then simulate a
 // daemon restart (fresh Store loaded from the same directory, fresh Loop,
 // RehydrateAll), and confirm the next turn's request carries the
-// rehydrated history and /cost still reports the pre-restart totals.
+// rehydrated history and /usage still reports the pre-restart totals.
 func TestRehydrateAllRestoresContextAndCostAcrossRestart(t *testing.T) {
 	srv := &recordingServer{summary: "OLD_SUMMARY"}
 	server := httptest.NewServer(srv.handler(t))
@@ -339,17 +339,17 @@ func TestRehydrateAllRestoresContextAndCostAcrossRestart(t *testing.T) {
 		t.Errorf("request after restart = %+v, want it to include the rehydrated summary from before the restart", msgs)
 	}
 
-	// /cost must also carry over the pre-restart totals (the first turn's
+	// /usage must also carry over the pre-restart totals (the first turn's
 	// call plus the compaction call), not reset to zero.
-	if err := restoredLoop.SendMessage(context.Background(), sid, "general-purpose", "/cost"); err != nil {
-		t.Fatalf("SendMessage /cost: %v", err)
+	if err := restoredLoop.SendMessage(context.Background(), sid, "general-purpose", "/usage"); err != nil {
+		t.Fatalf("SendMessage /usage: %v", err)
 	}
 	text := lastMessagePartEnd(t, restoredStore, sid)
 	if strings.Contains(text, "아직 사용량이 없습니다") {
-		t.Errorf("/cost text = %q, want rehydrated totals, not \"no usage yet\"", text)
+		t.Errorf("/usage text = %q, want rehydrated totals, not \"no usage yet\"", text)
 	}
 	if !strings.Contains(text, "호출") {
-		t.Errorf("/cost text = %q, want a call count reflecting rehydrated usage", text)
+		t.Errorf("/usage text = %q, want a call count reflecting rehydrated usage", text)
 	}
 }
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.12.1
+
+- Rename `/cost` to `/usage` — the command only ever showed raw token counts (deliberately no dollar figures), so "cost" was misleading terminology; the underlying behavior is unchanged.
+
 ## v0.12.0
 
 - **Sessions survive a daemon restart.** Previously a restart wiped the session list and all conversation context — the event log was persisted, but nothing restored it. Session metadata (agent/title/visible/parent) is now written to a `<id>.meta.json` sidecar alongside each session's `<id>.jsonl`, `session.LoadAllFromDisk` restores every session pair at startup, and a new `agent.Loop.RehydrateAll()` replays each session's event log back into the in-memory conversation history and `/cost` token totals the model needs to actually remember anything, not just the transcript a client re-renders. A session that fails to restore (corrupt metadata) is skipped with a logged warning rather than blocking every other session's restore.
