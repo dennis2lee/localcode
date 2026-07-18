@@ -257,6 +257,38 @@ func TestCostCommandBreaksDownByModel(t *testing.T) {
 	}
 }
 
+func TestCostCommandIncludesCompactionCallUsage(t *testing.T) {
+	srv := &recordingServer{summary: "SUMMARY"}
+	server := httptest.NewServer(srv.handler(t))
+	defer server.Close()
+
+	loop, store := newUsageTestLoop(t, server.URL)
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// One normal turn (100 in / 20 out per the mock) + one manual
+	// compaction (500 in / 50 out): /cost must count both calls.
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "hi"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/compact"); err != nil {
+		t.Fatalf("SendMessage (/compact): %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/cost"); err != nil {
+		t.Fatalf("SendMessage (/cost): %v", err)
+	}
+
+	text := lastMessagePartEnd(t, store, sid)
+	if !strings.Contains(text, "입력 600") || !strings.Contains(text, "출력 70") {
+		t.Errorf("text = %q, want totals including the compaction call (600 in / 70 out)", text)
+	}
+	if !strings.Contains(text, "호출 2회") {
+		t.Errorf("text = %q, want the compaction call counted as a call", text)
+	}
+}
+
 func TestClearSessionStateRemovesCumulativeUsage(t *testing.T) {
 	srv := &recordingServer{}
 	srv.response = func(body map[string]any) (string, int, int) { return "ok", 100, 20 }

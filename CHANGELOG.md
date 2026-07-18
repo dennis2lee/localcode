@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.11.1
+
+- Fix: `localcode mcp add/add-json/remove` no longer drops config.json keys it doesn't recognize. The previous implementation round-tripped the entire file through the Config struct, so any field outside the known schema (a typo, a future version's field) was silently deleted on save. Now only the `mcp_servers` key is rewritten (`config.UpdateMCPServersInFile`); everything else is preserved as raw JSON. `remove` also no longer rewrites/reformats the file when the name isn't found.
+- Fix: hook `matcher` regexes are now anchored to the full tool name. `"bash"` previously matched any tool whose name merely contained "bash" (e.g. `mcp__server__run_bash`); it now matches exactly the `bash` tool. Alternation (`"bash|edit"`) and explicit patterns (`"mcp__github__.*"`) work as before.
+- Fix: the compaction summarization call's own token usage now counts toward `/cost` (it's a billed API call like any other, previously invisible in the totals).
+- Fix: compaction summaries were capped at 1,024 output tokens, which could truncate the summary of a long session mid-sentence — the cap is now 4,096 (the default turn budget).
+
 ## v0.11.0
 
 - `localcode mcp` CLI subcommand (Claude Code's `claude mcp` equivalent): `add [-e KEY=VALUE]... [-s global|project] <name> -- <command> [args...]`, `add-json`, `list`, `get <name>`, and `remove [-s global|project] <name>` manage `mcp_servers` entries in `~/.localcode/config.json` (default) or `./.localcode/config.json` (`-s project`) without hand-editing JSON. `list`/`get` read both scopes and report which one a server actually lives in (project overrides global on name collision, matching runtime merge semantics); `remove` requires an explicit `-s` when a name exists in both scopes rather than guessing. Runs standalone like `localcode login`, no daemon required — edits take effect on the daemon's next start. Added `config.LoadFile`/`config.SaveFile` to read/write a single config file for editing, and `omitempty` on `providers`/`profiles`/`agents`/`default_profile`/`max_concurrent_tasks` so a freshly-created config (e.g. one that only has `mcp_servers` so far) doesn't get cluttered with `null`/`0` entries.

@@ -84,7 +84,11 @@ func Run(ctx context.Context, cfg Config, event string, payload map[string]any) 
 
 	for _, h := range list {
 		if h.Matcher != "" {
-			matched, err := regexp.MatchString(h.Matcher, toolName)
+			// Anchored to the full tool name (like Claude Code's matchers):
+			// "bash" matches only the bash tool, not every tool whose name
+			// happens to contain "bash". Alternation ("bash|edit") and
+			// patterns ("mcp__github__.*") still work as expected.
+			matched, err := regexp.MatchString("^(?:"+h.Matcher+")$", toolName)
 			if err != nil {
 				warnings = append(warnings, fmt.Errorf("hook %q: invalid matcher %q: %w", h.Command, h.Matcher, err))
 				continue

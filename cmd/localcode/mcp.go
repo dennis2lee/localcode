@@ -135,22 +135,16 @@ loop:
 	if err != nil {
 		return err
 	}
-	cfg, err := config.LoadFile(path)
-	if err != nil {
+	sc := config.MCPServerConfig{Command: command, Args: cmdArgs, Env: env}
+	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
+		if _, exists := servers[name]; exists {
+			fmt.Printf("mcp server %q already exists in %s — overwriting\n", name, path)
+		}
+		servers[name] = sc
+	}); err != nil {
 		return err
 	}
-	if cfg.MCPServers == nil {
-		cfg.MCPServers = map[string]config.MCPServerConfig{}
-	}
-	if _, exists := cfg.MCPServers[name]; exists {
-		fmt.Printf("mcp server %q already exists in %s — overwriting\n", name, path)
-	}
-	cfg.MCPServers[name] = config.MCPServerConfig{Command: command, Args: cmdArgs, Env: env}
-
-	if err := config.SaveFile(path, cfg); err != nil {
-		return err
-	}
-	fmt.Printf("Added MCP server %q (%s scope) to %s\n  %s\n", name, scopeLabel(scope), path, formatMCPCommand(cfg.MCPServers[name]))
+	fmt.Printf("Added MCP server %q (%s scope) to %s\n  %s\n", name, scopeLabel(scope), path, formatMCPCommand(sc))
 	return nil
 }
 
@@ -189,19 +183,12 @@ func mcpAddJSON(args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config.LoadFile(path)
-	if err != nil {
-		return err
-	}
-	if cfg.MCPServers == nil {
-		cfg.MCPServers = map[string]config.MCPServerConfig{}
-	}
-	if _, exists := cfg.MCPServers[name]; exists {
-		fmt.Printf("mcp server %q already exists in %s — overwriting\n", name, path)
-	}
-	cfg.MCPServers[name] = sc
-
-	if err := config.SaveFile(path, cfg); err != nil {
+	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
+		if _, exists := servers[name]; exists {
+			fmt.Printf("mcp server %q already exists in %s — overwriting\n", name, path)
+		}
+		servers[name] = sc
+	}); err != nil {
 		return err
 	}
 	fmt.Printf("Added MCP server %q (%s scope) to %s\n  %s\n", name, scopeLabel(scope), path, formatMCPCommand(sc))
@@ -341,15 +328,7 @@ func mcpRemove(args []string) error {
 		if err != nil {
 			return err
 		}
-		cfg, err := config.LoadFile(path)
-		if err != nil {
-			return err
-		}
-		if _, ok := cfg.MCPServers[name]; !ok {
-			return fmt.Errorf("mcp server %q not found in %s", name, path)
-		}
-		delete(cfg.MCPServers, name)
-		if err := config.SaveFile(path, cfg); err != nil {
+		if err := removeMCPServerFromFile(path, name); err != nil {
 			return err
 		}
 		fmt.Printf("Removed MCP server %q from %s (%s)\n", name, path, scopeLabel(scope))
@@ -367,14 +346,12 @@ func mcpRemove(args []string) error {
 	case inGlobal && inProject:
 		return fmt.Errorf("mcp server %q exists in both global and project config — specify --scope global or --scope project", name)
 	case inProject:
-		delete(project.MCPServers, name)
-		if err := config.SaveFile(projectPath, project); err != nil {
+		if err := removeMCPServerFromFile(projectPath, name); err != nil {
 			return err
 		}
 		fmt.Printf("Removed MCP server %q from %s (project)\n", name, projectPath)
 	case inGlobal:
-		delete(global.MCPServers, name)
-		if err := config.SaveFile(globalPath, global); err != nil {
+		if err := removeMCPServerFromFile(globalPath, name); err != nil {
 			return err
 		}
 		fmt.Printf("Removed MCP server %q from %s (global)\n", name, globalPath)
@@ -382,6 +359,21 @@ func mcpRemove(args []string) error {
 		return fmt.Errorf("mcp server %q not found", name)
 	}
 	return nil
+}
+
+// removeMCPServerFromFile checks existence first so a not-found name
+// doesn't rewrite (reformat) the file as a side effect.
+func removeMCPServerFromFile(path, name string) error {
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return err
+	}
+	if _, ok := cfg.MCPServers[name]; !ok {
+		return fmt.Errorf("mcp server %q not found in %s", name, path)
+	}
+	return config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
+		delete(servers, name)
+	})
 }
 
 func formatMCPCommand(sc config.MCPServerConfig) string {

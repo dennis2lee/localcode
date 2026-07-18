@@ -831,14 +831,19 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		Model:     profile.Model,
 		System:    systemPrompt,
 		Messages:  summaryMessages,
-		MaxTokens: 1024,
+		MaxTokens: defaultMaxTokens, // a long session's summary can easily overflow a smaller cap
 	})
 	if err != nil {
 		return fmt.Errorf("compaction request: %w", err)
 	}
-	summary, err := drainText(ctx, stream)
+	summary, usage, err := drainText(ctx, stream)
 	if err != nil {
 		return fmt.Errorf("compaction request: %w", err)
+	}
+	// The summarization call is billed like any other — fold it into
+	// /cost's totals even though it never appears in the transcript.
+	if usage.hasUsage {
+		l.addCumulativeUsage(sessionID, profile.Model, usage.inputTokens, usage.outputTokens)
 	}
 	if summary == "" {
 		return fmt.Errorf("model returned an empty summary")
@@ -854,26 +859,48 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 }
 
 // drainText concatenates every text delta from stream and returns the
-// final text — used for the internal compaction call, which must NOT go
-// through consumeStream (that would write message.part.delta/end events
-// into the visible transcript, making an internal summarization call look
-// like a normal assistant reply).
-func drainText(ctx context.Context, stream <-chan provider.StreamEvent) (string, error) {
+// final text plus any token usage the provider reported — used for the
+// internal compaction call, which must NOT go through consumeStream (that
+// would write message.part.delta/end events into the visible transcript,
+// making an internal summarization call look like a normal assistant
+// reply).
+func drainText(ctx context.Context, stream <-chan provider.StreamEvent) (string, streamUsage, error) {
 	var text strings.Builder
+	var usage streamUsage
 	for {
 		select {
 		case ev, ok := <-stream:
 			if !ok {
-				return text.String(), nil
+				return text.String(), usage, nil
 			}
 			switch ev.Type {
 			case provider.EventTextDelta:
 				text.WriteString(ev.TextDelta)
+			case provider.EventUsage:
+				usage.hasUsage = true
+				usage.inputTokens = ev.InputTokens
+				usage.outputTokens = ev.OutputTokens
 			case provider.EventError:
-				return "", ev.Err
+				return "", usage, ev.Err
 			}
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", usage, ctx.Err()
 		}
 	}
+}
+
+// addCumulativeUsage folds one off-transcript model call (e.g. the
+// compaction summarization) into /cost's running totals, without touching
+// the latest-usage snapshot or emitting a usage event.
+func (l *Loop) addCumulativeUsage(sessionID, model string, inputTokens, outputTokens int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.cumulativeUsage[sessionID] == nil {
+		l.cumulativeUsage[sessionID] = map[string]modelTotals{}
+	}
+	mt := l.cumulativeUsage[sessionID][model]
+	mt.InputTokens += inputTokens
+	mt.OutputTokens += outputTokens
+	mt.Calls++
+	l.cumulativeUsage[sessionID][model] = mt
 }

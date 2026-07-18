@@ -319,14 +319,14 @@ func TestLoadFileReturnsEmptyConfigWhenMissing(t *testing.T) {
 	}
 }
 
-func TestSaveFileThenLoadFileRoundTrips(t *testing.T) {
+func TestUpdateMCPServersInFileCreatesNewFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.json")
-	cfg := &Config{MCPServers: map[string]MCPServerConfig{
-		"github": {Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-github"}, Env: map[string]string{"GITHUB_TOKEN": "abc"}},
-	}}
 
-	if err := SaveFile(path, cfg); err != nil {
-		t.Fatalf("SaveFile: %v", err)
+	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) {
+		servers["github"] = MCPServerConfig{Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-github"}, Env: map[string]string{"GITHUB_TOKEN": "abc"}}
+	})
+	if err != nil {
+		t.Fatalf("UpdateMCPServersInFile: %v", err)
 	}
 
 	got, err := LoadFile(path)
@@ -334,26 +334,78 @@ func TestSaveFileThenLoadFileRoundTrips(t *testing.T) {
 		t.Fatalf("LoadFile: %v", err)
 	}
 	if got.MCPServers["github"].Command != "npx" {
-		t.Errorf("round-tripped MCPServers = %+v, want the github entry preserved", got.MCPServers)
+		t.Errorf("MCPServers = %+v, want the github entry", got.MCPServers)
 	}
 	if got.MCPServers["github"].Env["GITHUB_TOKEN"] != "abc" {
-		t.Errorf("round-tripped env = %+v, want GITHUB_TOKEN=abc", got.MCPServers["github"].Env)
+		t.Errorf("env = %+v, want GITHUB_TOKEN=abc", got.MCPServers["github"].Env)
 	}
 }
 
-func TestSaveFileOmitsEmptyFieldsForMinimalConfig(t *testing.T) {
+func TestUpdateMCPServersInFilePreservesUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	cfg := &Config{MCPServers: map[string]MCPServerConfig{"x": {Command: "echo"}}}
-	if err := SaveFile(path, cfg); err != nil {
-		t.Fatalf("SaveFile: %v", err)
+	original := `{
+  "default_profile": "main",
+  "some_future_field": {"nested": [1, 2, 3]},
+  "mcp_servers": {"old": {"command": "echo"}}
+}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
+
+	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) {
+		servers["new"] = MCPServerConfig{Command: "npx"}
+	})
+	if err != nil {
+		t.Fatalf("UpdateMCPServersInFile: %v", err)
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	for _, absent := range []string{`"providers"`, `"profiles"`, `"agents"`, `"default_profile"`, `"max_concurrent_tasks"`} {
-		if strings.Contains(string(data), absent) {
-			t.Errorf("saved config = %s, did not want %s to appear when unset", data, absent)
+	for _, want := range []string{`"some_future_field"`, `"nested"`, `"default_profile"`, `"main"`, `"old"`, `"new"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("rewritten config = %s, want it to still contain %s", data, want)
 		}
+	}
+}
+
+func TestUpdateMCPServersInFileRemovingLastServerDropsKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"mcp_servers": {"x": {"command": "echo"}}, "show_tps": false}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) {
+		delete(servers, "x")
+	})
+	if err != nil {
+		t.Fatalf("UpdateMCPServersInFile: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), "mcp_servers") {
+		t.Errorf("rewritten config = %s, want mcp_servers key dropped when empty", data)
+	}
+	if !strings.Contains(string(data), `"show_tps"`) {
+		t.Errorf("rewritten config = %s, want other keys kept", data)
+	}
+}
+
+func TestUpdateMCPServersInFileRejectsInvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{not json`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) {})
+	if err == nil {
+		t.Fatal("expected an error for invalid JSON, got nil")
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != `{not json` {
+		t.Errorf("file = %s, want the broken original left untouched", data)
 	}
 }

@@ -208,19 +208,52 @@ func LoadFile(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// SaveFile writes cfg as indented JSON to path, creating the parent
-// directory if needed. Used by `localcode mcp add/remove` to edit
-// ~/.localcode/config.json or ./.localcode/config.json in place.
-func SaveFile(path string, cfg *Config) error {
+// UpdateMCPServersInFile rewrites only the "mcp_servers" key of the JSON
+// config at path, leaving every other top-level key intact — including
+// keys this version of localcode doesn't know about, which a full
+// Config-struct round-trip would silently drop. Used by `localcode mcp
+// add/remove`. A missing file starts from an empty object; update
+// receives the current entries (never nil) and mutates them in place.
+func UpdateMCPServersInFile(path string, update func(map[string]MCPServerConfig)) error {
+	raw := map[string]json.RawMessage{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parse config %s: %w", path, err)
+		}
+	case !os.IsNotExist(err):
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+
+	servers := map[string]MCPServerConfig{}
+	if rawServers, ok := raw["mcp_servers"]; ok {
+		if err := json.Unmarshal(rawServers, &servers); err != nil {
+			return fmt.Errorf("parse mcp_servers in %s: %w", path, err)
+		}
+	}
+
+	update(servers)
+
+	if len(servers) == 0 {
+		delete(raw, "mcp_servers")
+	} else {
+		encoded, err := json.Marshal(servers)
+		if err != nil {
+			return fmt.Errorf("marshal mcp_servers: %w", err)
+		}
+		raw["mcp_servers"] = encoded
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	out = append(out, '\n')
+	if err := os.WriteFile(path, out, 0o644); err != nil {
 		return fmt.Errorf("write config %s: %w", path, err)
 	}
 	return nil

@@ -86,6 +86,39 @@ func TestRunMatcherFiltersRegisteredHooks(t *testing.T) {
 	}
 }
 
+func TestRunMatcherIsAnchoredToFullToolName(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	cfg := Config{EventPreToolUse: {{Matcher: "bash", Command: "echo ran > " + marker}}}
+
+	Run(context.Background(), cfg, EventPreToolUse, map[string]any{"tool_name": "mcp__server__run_bash"})
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("matcher \"bash\" should not match tool \"mcp__server__run_bash\" (substring match)")
+	}
+
+	Run(context.Background(), cfg, EventPreToolUse, map[string]any{"tool_name": "bash"})
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("matcher \"bash\" should match tool \"bash\" exactly")
+	}
+}
+
+func TestRunMatcherAlternationAndWildcards(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	cfg := Config{EventPreToolUse: {{Matcher: "bash|mcp__github__.*", Command: "echo ran > " + marker}}}
+
+	Run(context.Background(), cfg, EventPreToolUse, map[string]any{"tool_name": "mcp__github__create_issue"})
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("matcher alternation with a wildcard arm should match mcp__github__create_issue")
+	}
+
+	os.Remove(marker)
+	Run(context.Background(), cfg, EventPreToolUse, map[string]any{"tool_name": "edit"})
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("matcher \"bash|mcp__github__.*\" should not match tool \"edit\"")
+	}
+}
+
 func TestRunEmptyMatcherAlwaysRuns(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
