@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.12.4
+
+- Move the startup banner's tagline onto the same line as the last row of stars (next to the third `✦`), matching the original layout, instead of a separate line below the wordmark.
+
 ## v0.12.3
 
 - Redesign the startup banner: a small star-scattered "localcode" wordmark instead of the block-letter version, with an English tagline ("Local & cloud LLM coding agent").
