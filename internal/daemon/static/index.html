@@ -15,6 +15,7 @@
     --accent: #58a6ff;
     --warn: #d29922;
     --err: #f85149;
+    --ok: #3fb950;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -35,13 +36,6 @@
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
   header .right { display: flex; align-items: center; gap: 10px; }
   header .session-id { color: var(--muted); font-size: 12px; font-family: monospace; }
-  header .switch-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 12px;
-    padding: 4px 10px;
-  }
   header .agent-select {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -66,18 +60,47 @@
   #transcript .msg-tool { color: var(--muted); font-style: italic; }
   #transcript .msg-error { color: var(--err); font-weight: 600; }
   aside {
-    width: 260px;
+    width: 280px;
     border-left: 1px solid var(--border);
     padding: 12px;
     overflow-y: auto;
     font-size: 12px;
   }
-  aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+  .side-section { margin-bottom: 18px; }
+  .side-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 0; }
+  .icon-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    line-height: 1.4;
+  }
   .task { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; }
   .task .agent { color: var(--muted); }
   .task .status-running { color: var(--warn); }
-  .task .status-completed { color: #3fb950; }
+  .task .status-completed { color: var(--ok); }
   .task .status-failed, .task .status-cancelled { color: var(--err); }
+  .session-item {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+  }
+  .session-item.active { border-color: var(--accent); }
+  .session-item .meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
+  .session-item .actions { display: flex; gap: 4px; }
+  .session-item button { padding: 3px 8px; font-size: 11px; }
+  .session-item .danger-btn { background: var(--err); color: #fff; }
+  .mcp-item {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    font-family: monospace;
+  }
   footer {
     border-top: 1px solid var(--border);
     padding: 10px 16px;
@@ -98,6 +121,7 @@
     max-height: 240px;
     line-height: 1.4;
   }
+  #input.drag-over { border-color: var(--accent); border-style: dashed; }
   button {
     background: var(--accent);
     color: #05131f;
@@ -128,42 +152,29 @@
   #permission-modal h3 { margin-top: 0; color: var(--warn); }
   #permission-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
   #permission-modal .deny { background: var(--err); }
-  #status { color: var(--muted); font-size: 12px; padding: 0 16px 8px; }
 
-  #session-picker {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.6);
-    display: none;
-    align-items: center;
-    justify-content: center;
-    z-index: 10;
-  }
-  #session-picker.open { display: flex; }
-  #session-picker .box {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 20px;
-    width: 420px;
-    max-height: 70vh;
+  #prompt-status {
+    padding: 0 16px 10px;
     display: flex;
-    flex-direction: column;
-  }
-  #session-picker h3 { margin: 0 0 12px; }
-  #session-list { overflow-y: auto; margin-bottom: 12px; }
-  .session-item {
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 10px;
-    margin-bottom: 6px;
-    display: flex;
-    justify-content: space-between;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    min-height: 16px;
   }
-  .session-item .meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .session-item button { padding: 4px 10px; font-size: 12px; }
+  #prompt-status.ctx-warn { color: var(--warn); }
+  #prompt-status.ctx-crit { color: var(--err); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+  .comm-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .comm-dot.active { background: var(--warn); animation: pulse 1s infinite; }
+  .comm-dot.flash { background: var(--ok); animation: pulse .3s 2; }
 </style>
 </head>
 <body>
@@ -172,21 +183,36 @@
   <div class="right">
     <select class="agent-select" id="agent-select" title="에이전트 전환"></select>
     <span class="session-id" id="session-id">connecting…</span>
-    <button class="switch-btn" id="switch-session">세션 전환</button>
   </div>
 </header>
 <main>
   <div id="transcript"></div>
   <aside>
-    <h2>Background tasks</h2>
-    <div id="tasks"></div>
+    <div class="side-section">
+      <div class="side-header">
+        <h2>세션</h2>
+        <button class="icon-btn" id="new-session-btn" title="새 세션 시작">+ 새 세션</button>
+      </div>
+      <div id="session-list"></div>
+    </div>
+    <div class="side-section">
+      <h2>Background tasks</h2>
+      <div id="tasks"></div>
+    </div>
+    <div class="side-section">
+      <h2>MCP 서버</h2>
+      <div id="mcp-servers"></div>
+    </div>
   </aside>
 </main>
-<div id="status"></div>
 <footer>
-  <textarea id="input" rows="1" placeholder="메시지를 입력하세요 (Enter로 전송, /help로 도움말)" autofocus></textarea>
+  <textarea id="input" rows="1" placeholder="메시지를 입력하세요 (Enter로 전송, /help로 도움말, 파일을 드래그해서 첨부)" autofocus></textarea>
   <button id="send">전송</button>
 </footer>
+<div id="prompt-status">
+  <span class="comm-dot" id="comm-dot" title="LLM과 통신 중"></span>
+  <span id="status-text"></span>
+</div>
 
 <div id="permission-modal">
   <div class="box">
@@ -199,19 +225,10 @@
   </div>
 </div>
 
-<div id="session-picker">
-  <div class="box">
-    <h3>세션 선택</h3>
-    <div id="session-list"></div>
-    <button id="new-session-btn">새 세션 시작</button>
-  </div>
-</div>
-
 <script>
 (function () {
   const transcriptEl = document.getElementById('transcript');
   const tasksEl = document.getElementById('tasks');
-  const statusEl = document.getElementById('status');
   const sessionIdEl = document.getElementById('session-id');
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send');
@@ -219,11 +236,13 @@
   const permissionTextEl = document.getElementById('permission-text');
   const permissionAllowBtn = document.getElementById('permission-allow');
   const permissionDenyBtn = document.getElementById('permission-deny');
-  const pickerEl = document.getElementById('session-picker');
   const sessionListEl = document.getElementById('session-list');
   const newSessionBtn = document.getElementById('new-session-btn');
-  const switchSessionBtn = document.getElementById('switch-session');
   const agentSelectEl = document.getElementById('agent-select');
+  const mcpServersEl = document.getElementById('mcp-servers');
+  const statusTextEl = document.getElementById('status-text');
+  const statusBarEl = document.getElementById('prompt-status');
+  const commDotEl = document.getElementById('comm-dot');
 
   let sessionID = null;
   let eventSource = null;
@@ -233,6 +252,11 @@
   let agents = []; // [{name, description}]
   let currentAgent = null;
   let customCommands = []; // [{name, description}]
+  let sessions = []; // cached list rendered in the aside
+  let mcpServers = [];
+  let lastUsage = null; // {input_tokens, output_tokens, max_context, percent, tps, show_tps, model}
+  let autoCompactEnabled = true;
+  let showTPS = true;
 
   function appendLine(html) {
     transcriptEl.insertAdjacentHTML('beforeend', html);
@@ -254,7 +278,38 @@
   function setWaiting(v) {
     waiting = v;
     sendBtn.disabled = v;
-    statusEl.textContent = v ? '응답 대기 중…' : '';
+    if (v) {
+      commDotEl.classList.remove('flash');
+      commDotEl.classList.add('active');
+    } else {
+      commDotEl.classList.remove('active');
+      commDotEl.classList.add('flash');
+      setTimeout(() => commDotEl.classList.remove('flash'), 600);
+    }
+    renderStatusBar();
+  }
+
+  // renderStatusBar draws the single line below the prompt box: current
+  // agent/model, context-window usage, tokens-per-second (if enabled), and
+  // (via commDotEl, toggled from setWaiting) whether a turn is in flight.
+  function renderStatusBar() {
+    const parts = [];
+    parts.push(`agent: ${currentAgent || '?'}`);
+    if (lastUsage && lastUsage.model) parts.push(`model: ${lastUsage.model}`);
+    if (lastUsage && typeof lastUsage.percent === 'number') {
+      parts.push(`context: ${lastUsage.percent.toFixed(1)}%`);
+    }
+    if (showTPS && lastUsage && lastUsage.tps) {
+      parts.push(`${lastUsage.tps.toFixed(1)} tok/s`);
+    }
+    if (waiting) parts.push('응답 대기 중…');
+    statusTextEl.textContent = parts.join('  ·  ');
+
+    statusBarEl.classList.remove('ctx-warn', 'ctx-crit');
+    if (lastUsage && typeof lastUsage.percent === 'number') {
+      if (lastUsage.percent >= 90) statusBarEl.classList.add('ctx-crit');
+      else if (lastUsage.percent >= 70) statusBarEl.classList.add('ctx-warn');
+    }
   }
 
   function renderTasks() {
@@ -329,6 +384,22 @@
       case 'agent.switched':
         setCurrentAgent(ev.data.agent);
         appendLine(`<div class="msg-tool">→ ${escapeHtml(ev.data.agent)} 에이전트로 전환</div>`);
+        renderStatusBar();
+        break;
+      case 'usage':
+        lastUsage = ev.data;
+        renderStatusBar();
+        break;
+      case 'compacted':
+        appendLine(`<div class="msg-tool">[system] 대화가 context 절약을 위해 압축되었습니다 (요약 ${ev.data.summary_length || 0}자).</div>`);
+        break;
+      case 'config.changed':
+        if (typeof ev.data.auto_compact_enabled === 'boolean') autoCompactEnabled = ev.data.auto_compact_enabled;
+        if (typeof ev.data.show_tps === 'boolean') showTPS = ev.data.show_tps;
+        renderStatusBar();
+        break;
+      case 'session.renamed':
+        loadSessions();
         break;
       case 'error':
         setWaiting(false);
@@ -358,6 +429,40 @@
       customCommands = await api('GET', '/api/commands');
     } catch (err) {
       customCommands = [];
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      const s = await api('GET', '/api/settings');
+      autoCompactEnabled = s.auto_compact_enabled;
+      showTPS = s.show_tps;
+    } catch (err) {
+      // keep defaults
+    }
+    renderStatusBar();
+  }
+
+  async function loadMCPServers() {
+    try {
+      mcpServers = await api('GET', '/api/mcp-servers');
+    } catch (err) {
+      mcpServers = [];
+    }
+    renderMCPServers();
+  }
+
+  function renderMCPServers() {
+    mcpServersEl.innerHTML = '';
+    if (!mcpServers || mcpServers.length === 0) {
+      mcpServersEl.innerHTML = '<div style="color:var(--muted)">연결된 서버 없음</div>';
+      return;
+    }
+    for (const name of mcpServers) {
+      const div = document.createElement('div');
+      div.className = 'mcp-item';
+      div.textContent = name;
+      mcpServersEl.appendChild(div);
     }
   }
 
@@ -404,34 +509,86 @@
     } catch { return iso; }
   }
 
-  async function openSessionPicker() {
-    let sessions;
+  async function loadSessions() {
     try {
       sessions = await api('GET', '/api/sessions');
     } catch (err) {
       sessions = [];
     }
-
-    sessionListEl.innerHTML = '';
-    if (!sessions || sessions.length === 0) {
-      sessionListEl.innerHTML = '<div style="color:var(--muted); font-size:12px;">기존 세션이 없습니다.</div>';
-    } else {
-      for (const s of sessions) {
-        const div = document.createElement('div');
-        div.className = 'session-item';
-        div.innerHTML = `<div class="meta">${escapeHtml(s.id)}<br>${escapeHtml(s.agent)} · ${escapeHtml(formatTime(s.created_at))}</div>`;
-        const btn = document.createElement('button');
-        btn.textContent = '이어하기';
-        btn.addEventListener('click', () => selectSession(s.id, s.agent));
-        div.appendChild(btn);
-        sessionListEl.appendChild(div);
-      }
-    }
-    pickerEl.classList.add('open');
+    renderSessionList();
   }
 
-  function closeSessionPicker() {
-    pickerEl.classList.remove('open');
+  function renderSessionList() {
+    sessionListEl.innerHTML = '';
+    if (!sessions || sessions.length === 0) {
+      sessionListEl.innerHTML = '<div style="color:var(--muted)">세션 없음</div>';
+      return;
+    }
+    for (const s of sessions) {
+      const div = document.createElement('div');
+      div.className = 'session-item' + (s.id === sessionID ? ' active' : '');
+
+      const label = s.title ? s.title : s.id;
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.title = s.id;
+      meta.innerHTML = `${escapeHtml(label)}<br>${escapeHtml(s.agent)} · ${escapeHtml(formatTime(s.created_at))}`;
+      div.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+
+      const switchBtn = document.createElement('button');
+      switchBtn.textContent = '전환';
+      switchBtn.disabled = s.id === sessionID;
+      switchBtn.addEventListener('click', () => selectSession(s.id, s.agent));
+      actions.appendChild(switchBtn);
+
+      const renameBtn = document.createElement('button');
+      renameBtn.textContent = '이름변경';
+      renameBtn.addEventListener('click', () => renameSession(s));
+      actions.appendChild(renameBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '삭제';
+      delBtn.className = 'danger-btn';
+      delBtn.addEventListener('click', () => deleteSession(s));
+      actions.appendChild(delBtn);
+
+      div.appendChild(actions);
+      sessionListEl.appendChild(div);
+    }
+  }
+
+  async function renameSession(s) {
+    const newTitle = window.prompt('새 세션 이름:', s.title || '');
+    if (newTitle === null) return;
+    try {
+      await api('POST', `/api/sessions/${s.id}/rename`, { title: newTitle });
+      await loadSessions();
+    } catch (err) {
+      appendLine(`<div class="msg-error">이름 변경 실패: ${escapeHtml(String(err))}</div>`);
+    }
+  }
+
+  async function deleteSession(s) {
+    if (!window.confirm(`"${s.title || s.id}" 세션을 삭제하시겠습니까? 되돌릴 수 없습니다.`)) return;
+    try {
+      await api('DELETE', `/api/sessions/${s.id}`);
+    } catch (err) {
+      appendLine(`<div class="msg-error">세션 삭제 실패: ${escapeHtml(String(err))}</div>`);
+      return;
+    }
+    if (s.id === sessionID) {
+      await loadSessions();
+      if (sessions.length > 0) {
+        selectSession(sessions[0].id, sessions[0].agent);
+      } else {
+        await createNewSession();
+      }
+    } else {
+      await loadSessions();
+    }
   }
 
   function selectSession(id, agent) {
@@ -440,15 +597,17 @@
     transcriptEl.innerHTML = '';
     tasks = new Map();
     renderTasks();
+    lastUsage = null;
     setWaiting(false);
     setCurrentAgent(agent);
-    closeSessionPicker();
+    renderSessionList();
     connectEvents();
   }
 
   async function createNewSession() {
     try {
       const sess = await api('POST', '/api/sessions', { agent: 'general-purpose' });
+      await loadSessions();
       selectSession(sess.id, sess.agent);
     } catch (err) {
       sessionIdEl.textContent = 'error';
@@ -457,7 +616,6 @@
   }
 
   newSessionBtn.addEventListener('click', createNewSession);
-  switchSessionBtn.addEventListener('click', openSessionPicker);
 
   const HELP_TEXT = [
     '사용 가능한 명령:',
@@ -469,9 +627,14 @@
     '  /agent <이름>        해당 에이전트로 전환 (헤더 드롭다운으로도 가능)',
     '  /init              저장소를 스캔해서 AGENTS.md 규칙 파일 생성/개선',
     '  /memory            auto memory 디렉터리/인덱스(MEMORY.md) 확인',
+    '  /config            현재 설정(auto_compact, show_tps) 확인',
+    '  /config auto_compact on|off   context 80% 초과 시 자동 압축 켜기/끄기',
+    '  /config show_tps on|off       프롬프트 하단 tokens/sec 표시 켜기/끄기',
     '  /commands          등록된 사용자 정의 명령 목록 표시',
     '  /<사용자 정의 명령>   .localcode/commands/*.md 로 정의한 명령 실행',
     '  exit, :q            안내만 표시 (브라우저 탭은 직접 닫아주세요)',
+    '',
+    '파일을 입력창에 드래그해서 첨부할 수 있습니다.',
   ].join('\n');
 
   // Commands handled entirely client-side — never touch the session's
@@ -538,6 +701,10 @@
       return true;
     }
 
+    // "/config" itself is handled server-side (agent.Loop) like /memory —
+    // not intercepted here, so it falls through to sendMessage() below and
+    // its response/config.changed event flow back over SSE like anything
+    // else the model or a local command answers.
     return false;
   }
 
@@ -565,6 +732,51 @@
     inputEl.style.height = 'auto';
     inputEl.style.height = inputEl.scrollHeight + 'px';
   }
+
+  function insertAtCursor(el, text) {
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    el.value = el.value.slice(0, start) + text + el.value.slice(end);
+    const pos = start + text.length;
+    el.selectionStart = el.selectionEnd = pos;
+    el.focus();
+  }
+
+  // uploadFile posts one dropped file to the daemon and returns its
+  // absolute server-side path — the model reads it with its own file
+  // tools; there's no separate "attachment" wire concept.
+  async function uploadFile(file) {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    const resp = await fetch(`/api/sessions/${sessionID}/uploads`, { method: 'POST', body: form });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      throw new Error(`${resp.status} ${text}`);
+    }
+    const data = await resp.json();
+    return data.path;
+  }
+
+  inputEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    inputEl.classList.add('drag-over');
+  });
+  inputEl.addEventListener('dragleave', () => inputEl.classList.remove('drag-over'));
+  inputEl.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    inputEl.classList.remove('drag-over');
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || files.length === 0 || !sessionID) return;
+    for (const file of files) {
+      try {
+        const path = await uploadFile(file);
+        insertAtCursor(inputEl, `[첨부 파일: ${path}]\n`);
+      } catch (err) {
+        appendLine(`<div class="msg-error">파일 업로드 실패 (${escapeHtml(file.name)}): ${escapeHtml(String(err))}</div>`);
+      }
+    }
+    autoResizeInput();
+  });
 
   sendBtn.addEventListener('click', sendMessage);
   inputEl.addEventListener('input', autoResizeInput);
@@ -594,17 +806,14 @@
     renderTasks();
     await loadAgents();
     await loadCommands();
-    let sessions;
-    try {
-      sessions = await api('GET', '/api/sessions');
-    } catch (err) {
-      sessions = [];
-    }
+    await loadSettings();
+    await loadMCPServers();
+    await loadSessions();
 
     if (!sessions || sessions.length === 0) {
       await createNewSession();
     } else {
-      await openSessionPicker();
+      selectSession(sessions[0].id, sessions[0].agent);
     }
   }
 

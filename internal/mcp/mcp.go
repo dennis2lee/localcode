@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 
@@ -36,6 +37,22 @@ func newManager() *Manager {
 		sessions: map[string]*mcpsdk.ClientSession{},
 		configs:  map[string]config.MCPServerConfig{},
 	}
+}
+
+// Servers returns the names of every MCP server currently connected
+// (i.e. it came up successfully at startup — see Connect's warnings for
+// ones that didn't). A session that's since died is still listed here
+// until the next tool call against it triggers a reconnect attempt; this
+// package has no background health check.
+func (m *Manager) Servers() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make([]string, 0, len(m.sessions))
+	for name := range m.sessions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // Connect starts every configured MCP server over stdio and lists each

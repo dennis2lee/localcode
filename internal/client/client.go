@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 
@@ -109,6 +110,21 @@ func (c *Client) SwitchAgent(ctx context.Context, sessionID, agentName string) (
 	return sess, err
 }
 
+// RenameSession sets sessionID's cosmetic Title (session picker display
+// only — resolution/resumption is always by ID).
+func (c *Client) RenameSession(ctx context.Context, sessionID, title string) (session.Session, error) {
+	var sess session.Session
+	err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/rename", map[string]string{"title": title}, &sess)
+	return sess, err
+}
+
+// DeleteSession removes sessionID (and its persisted log, if any)
+// entirely. Fails with a conflict error if the session has a turn in
+// progress.
+func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/api/sessions/"+sessionID, nil, nil)
+}
+
 // CommandInfo is one loaded custom slash command, as offered by the
 // daemon's GET /api/commands — for a /help listing or autocomplete.
 // Running the command still goes through SendMessage like any other text.
@@ -134,6 +150,76 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 	}
 	err := c.doJSON(ctx, http.MethodGet, "/api/version", nil, &out)
 	return out.Version, err
+}
+
+// Settings is the daemon's current live "/config" settings.
+type Settings struct {
+	AutoCompactEnabled bool `json:"auto_compact_enabled"`
+	ShowTPS            bool `json:"show_tps"`
+}
+
+// GetSettings fetches the daemon's current process-global settings — for
+// a client that just opened to know the current state without waiting for
+// a config.changed event.
+func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
+	var out Settings
+	err := c.doJSON(ctx, http.MethodGet, "/api/settings", nil, &out)
+	return out, err
+}
+
+// ListMCPServers returns the names of every MCP server currently
+// connected to the daemon (empty if none are configured).
+func (c *Client) ListMCPServers(ctx context.Context) ([]string, error) {
+	var out []string
+	err := c.doJSON(ctx, http.MethodGet, "/api/mcp-servers", nil, &out)
+	return out, err
+}
+
+// UploadFile uploads a file's contents to sessionID (drag-and-drop
+// attachments), returning its absolute path on the daemon's machine — the
+// caller then splices a reference to that path into the next chat
+// message so the model can read it with its own file tools.
+func (c *Client) UploadFile(ctx context.Context, sessionID, filename string, data io.Reader) (string, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		return "", fmt.Errorf("build multipart form: %w", err)
+	}
+	if _, err := io.Copy(part, data); err != nil {
+		return "", fmt.Errorf("copy file data: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return "", fmt.Errorf("close multipart form: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/sessions/"+sessionID+"/uploads", &buf)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		var apiErr struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&apiErr)
+		return "", fmt.Errorf("upload %s: %d: %s", sessionID, resp.StatusCode, apiErr.Error)
+	}
+
+	var out struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	return out.Path, nil
 }
 
 func (c *Client) SendMessage(ctx context.Context, sessionID, text string) error {

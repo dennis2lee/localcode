@@ -21,6 +21,7 @@ type Session struct {
 	ParentID  string    `json:"parent_id,omitempty"`
 	Visible   bool      `json:"visible"`
 	Agent     string    `json:"agent,omitempty"`
+	Title     string    `json:"title,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -120,6 +121,47 @@ func (s *Store) SetAgent(sessionID, agent string) (*Session, error) {
 	st.meta.Agent = agent
 	metaCopy := st.meta
 	return &metaCopy, nil
+}
+
+// SetTitle renames a session — purely cosmetic (a user-facing label for
+// the session picker), doesn't affect resolution or resumption, both of
+// which are always by ID.
+func (s *Store) SetTitle(sessionID, title string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	st.meta.Title = title
+	metaCopy := st.meta
+	return &metaCopy, nil
+}
+
+// Delete removes a session from the store and, if persisted, deletes its
+// on-disk JSONL log. It does not cascade to child sessions (background
+// tasks spawned from it) — those are simply left as orphaned, invisible
+// entries (Visible:false already keeps them out of any session list).
+func (s *Store) Delete(sessionID string) error {
+	s.mu.Lock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("session %s not found", sessionID)
+	}
+	delete(s.sessions, sessionID)
+	dir := s.dir
+	if st.file != nil {
+		_ = st.file.Close()
+	}
+	s.mu.Unlock()
+
+	if dir != "" {
+		if err := os.Remove(filepath.Join(dir, sessionID+".jsonl")); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove session log: %w", err)
+		}
+	}
+	return nil
 }
 
 // ListVisible returns all top-level (visible:true) sessions — i.e. the

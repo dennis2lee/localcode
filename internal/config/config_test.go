@@ -226,3 +226,45 @@ func TestMergeCarriesAutoMemoryEnabledFromProject(t *testing.T) {
 		t.Error("expected the project override's AutoMemoryEnabled=false to win after merge")
 	}
 }
+
+func TestCompactEnabledDefaultsTrue(t *testing.T) {
+	c := &Config{}
+	if !c.CompactEnabled() {
+		t.Error("CompactEnabled() should default to true when AutoCompactEnabled is unset")
+	}
+}
+
+func TestCompactEnabledExplicitFalse(t *testing.T) {
+	disabled := false
+	c := &Config{AutoCompactEnabled: &disabled}
+	if c.CompactEnabled() {
+		t.Error("CompactEnabled() should be false when AutoCompactEnabled is explicitly false")
+	}
+}
+
+func TestTPSEnabledDefaultsTrue(t *testing.T) {
+	c := &Config{}
+	if !c.TPSEnabled() {
+		t.Error("TPSEnabled() should default to true when ShowTPS is unset")
+	}
+}
+
+func TestTPSEnabledExplicitFalse(t *testing.T) {
+	disabled := false
+	c := &Config{ShowTPS: &disabled}
+	if c.TPSEnabled() {
+		t.Error("TPSEnabled() should be false when ShowTPS is explicitly false")
+	}
+}
+
+func TestMergeCarriesAutoCompactAndShowTPS(t *testing.T) {
+	disabled := false
+	base := &Config{}
+	base.merge(&Config{AutoCompactEnabled: &disabled, ShowTPS: &disabled})
+	if base.CompactEnabled() {
+		t.Error("expected the project override's AutoCompactEnabled=false to win after merge")
+	}
+	if base.TPSEnabled() {
+		t.Error("expected the project override's ShowTPS=false to win after merge")
+	}
+}

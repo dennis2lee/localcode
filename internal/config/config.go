@@ -29,12 +29,35 @@ type Config struct {
 	// keyed by tool name (or "*" for a fallback applied to every tool).
 	// See ResolvePermission.
 	Permissions map[string]ToolPermission `json:"permission,omitempty"`
+
+	// AutoCompactEnabled toggles automatically summarizing a session's
+	// history once its context window usage crosses 80%, freeing up
+	// space to keep the conversation going. A nil pointer means unset,
+	// defaulting to enabled. Also runtime-toggleable via "/config".
+	AutoCompactEnabled *bool `json:"auto_compact_enabled,omitempty"`
+
+	// ShowTPS toggles whether a tokens-per-second figure is included in
+	// usage events for clients to display. A nil pointer means unset,
+	// defaulting to enabled. Also runtime-toggleable via "/config".
+	ShowTPS *bool `json:"show_tps,omitempty"`
 }
 
 // MemoryEnabled reports whether auto memory is on — the default when
 // AutoMemoryEnabled is unset.
 func (c *Config) MemoryEnabled() bool {
 	return c.AutoMemoryEnabled == nil || *c.AutoMemoryEnabled
+}
+
+// CompactEnabled reports whether auto-compaction is on — the default
+// when AutoCompactEnabled is unset.
+func (c *Config) CompactEnabled() bool {
+	return c.AutoCompactEnabled == nil || *c.AutoCompactEnabled
+}
+
+// TPSEnabled reports whether tokens-per-second display is on — the
+// default when ShowTPS is unset.
+func (c *Config) TPSEnabled() bool {
+	return c.ShowTPS == nil || *c.ShowTPS
 }
 
 // MCPServerConfig launches one MCP server over stdio, same shape as Claude
@@ -210,6 +233,12 @@ func (c *Config) merge(other *Config) {
 	}
 	if other.AutoMemoryEnabled != nil {
 		c.AutoMemoryEnabled = other.AutoMemoryEnabled
+	}
+	if other.AutoCompactEnabled != nil {
+		c.AutoCompactEnabled = other.AutoCompactEnabled
+	}
+	if other.ShowTPS != nil {
+		c.ShowTPS = other.ShowTPS
 	}
 }
 

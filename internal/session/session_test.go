@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -74,6 +76,94 @@ func TestGetUnknownSession(t *testing.T) {
 	s, _ := NewStore("")
 	if _, err := s.Get("nope"); err == nil {
 		t.Error("expected an error getting an unknown session")
+	}
+}
+
+func TestSetTitleUpdatesSessionAndPersistsAcrossGet(t *testing.T) {
+	s, _ := NewStore("")
+	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	updated, err := s.SetTitle("s1", "My renamed session")
+	if err != nil {
+		t.Fatalf("SetTitle: %v", err)
+	}
+	if updated.Title != "My renamed session" {
+		t.Errorf("SetTitle returned Title = %q, want %q", updated.Title, "My renamed session")
+	}
+
+	got, err := s.Get("s1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Title != "My renamed session" {
+		t.Errorf("Get after SetTitle returned Title = %q, want %q", got.Title, "My renamed session")
+	}
+}
+
+func TestSetTitleUnknownSession(t *testing.T) {
+	s, _ := NewStore("")
+	if _, err := s.SetTitle("nope", "x"); err == nil {
+		t.Error("expected an error renaming an unknown session")
+	}
+}
+
+func TestDeleteRemovesSessionFromStore(t *testing.T) {
+	s, _ := NewStore("")
+	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	if err := s.Delete("s1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.Get("s1"); err == nil {
+		t.Error("expected Get to fail after Delete")
+	}
+}
+
+func TestDeleteUnknownSession(t *testing.T) {
+	s, _ := NewStore("")
+	if err := s.Delete("nope"); err == nil {
+		t.Error("expected an error deleting an unknown session")
+	}
+}
+
+func TestDeleteRemovesPersistedFile(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	s.Append("s1", events.TypeUserMessage, map[string]any{"text": "hi"})
+
+	path := filepath.Join(dir, "s1.jsonl")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected the session log to exist before Delete: %v", err)
+	}
+
+	if err := s.Delete("s1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected the session log to be removed after Delete, stat err = %v", err)
+	}
+}
+
+func TestDeleteThenRecreateSameID(t *testing.T) {
+	s, _ := NewStore("")
+	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := s.Delete("s1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Errorf("expected CreateSession to succeed again with the same ID after Delete, got %v", err)
 	}
 }
 

@@ -60,6 +60,45 @@ func TestConnectAndCallTool(t *testing.T) {
 	}
 }
 
+// TestServersListsConnectedNames confirms Manager.Servers() reports
+// exactly the servers that came up successfully — sorted, and excluding
+// ones that failed to connect (those only show up in Connect's warnings).
+func TestServersListsConnectedNames(t *testing.T) {
+	bin := buildEchoServer(t)
+	ctx := context.Background()
+
+	servers := map[string]config.MCPServerConfig{
+		"zzz-echo": {Command: bin},
+		"aaa-echo": {Command: bin},
+		"broken":   {Command: "this-binary-does-not-exist-anywhere"},
+	}
+
+	m, _, warnings := Connect(ctx, servers)
+	defer m.Close()
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly 1 warning for the broken server, got %d: %v", len(warnings), warnings)
+	}
+
+	got := m.Servers()
+	want := []string{"aaa-echo", "zzz-echo"}
+	if len(got) != len(want) {
+		t.Fatalf("Servers() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Servers()[%d] = %q, want %q (sorted)", i, got[i], want[i])
+		}
+	}
+}
+
+func TestServersEmptyWhenNoneConfigured(t *testing.T) {
+	m, _, _ := Connect(context.Background(), nil)
+	defer m.Close()
+	if got := m.Servers(); len(got) != 0 {
+		t.Errorf("Servers() = %v, want empty", got)
+	}
+}
+
 // TestConnectPartialFailure confirms one bad server doesn't stop the
 // others from connecting: a nonexistent command should show up as a
 // warning, not prevent the working echo server's tools from being

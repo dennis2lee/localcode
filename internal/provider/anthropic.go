@@ -95,10 +95,26 @@ type anthStreamEvent struct {
 		StopReason  string `json:"stop_reason"`
 	} `json:"delta,omitempty"`
 
+	// Message carries message_start's nested usage (input tokens are
+	// known up front; output_tokens there is usually 0/an early estimate).
+	Message *struct {
+		Usage *anthUsage `json:"usage"`
+	} `json:"message,omitempty"`
+
+	// Usage is message_delta's top-level usage field (cumulative
+	// output_tokens for the response so far — input_tokens isn't
+	// repeated here since it doesn't change mid-response).
+	Usage *anthUsage `json:"usage,omitempty"`
+
 	Error *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
+}
+
+type anthUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
 }
 
 func toAnthropicMessages(msgs []Message) []anthMessage {
@@ -199,6 +215,11 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		}
 		toolByIndex := map[int]*pending{}
 
+		// inputTokens is captured once from message_start (Anthropic
+		// doesn't repeat it in message_delta's usage, which only reports
+		// cumulative output_tokens).
+		var inputTokens int
+
 		send := func(ev StreamEvent) bool {
 			select {
 			case out <- ev:
@@ -224,6 +245,14 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 			}
 
 			switch ev.Type {
+			case "message_start":
+				if ev.Message != nil && ev.Message.Usage != nil {
+					inputTokens = ev.Message.Usage.InputTokens
+					if !send(StreamEvent{Type: EventUsage, InputTokens: inputTokens, OutputTokens: ev.Message.Usage.OutputTokens}) {
+						return
+					}
+				}
+
 			case "content_block_start":
 				if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
 					toolByIndex[ev.Index] = &pending{id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
@@ -263,6 +292,11 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 				}
 
 			case "message_delta":
+				if ev.Usage != nil {
+					if !send(StreamEvent{Type: EventUsage, InputTokens: inputTokens, OutputTokens: ev.Usage.OutputTokens}) {
+						return
+					}
+				}
 				if ev.Delta != nil && ev.Delta.StopReason != "" {
 					if !send(StreamEvent{Type: EventMessageStop, StopReason: mapAnthropicStopReason(ev.Delta.StopReason)}) {
 						return

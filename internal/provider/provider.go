@@ -83,6 +83,9 @@ type StreamEvent struct {
 
 	StopReason string // EventMessageStop: "end_turn" | "tool_use" | "max_tokens"
 
+	InputTokens  int // EventUsage: size of this request's system+history+tools
+	OutputTokens int // EventUsage: tokens generated so far this response
+
 	Err error // EventError
 }
 
@@ -94,7 +97,13 @@ const (
 	EventToolUseInputDelta StreamEventType = "tool_use_input_delta"
 	EventToolUseEnd        StreamEventType = "tool_use_end"
 	EventMessageStop       StreamEventType = "message_stop"
-	EventError             StreamEventType = "error"
+	// EventUsage reports token usage for the in-progress response. A
+	// provider may emit it multiple times (e.g. once early with just
+	// InputTokens known, again at the end with final OutputTokens) —
+	// consumers should treat each occurrence as the latest known totals,
+	// not something to sum across events.
+	EventUsage StreamEventType = "usage"
+	EventError StreamEventType = "error"
 )
 
 // Provider is the single seam every model backend implements. Chat streams

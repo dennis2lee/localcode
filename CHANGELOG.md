@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.0
+
+- Token usage tracking: all three providers (Bedrock, Anthropic direct, OpenAI-compat) now report input/output token usage per turn (`provider.EventUsage`), surfaced as a new `usage` session event with context-window fill percentage (via a new `internal/modelinfo` best-effort max-context lookup) and tokens-per-second.
+- Auto-compaction: once a session's context usage crosses 80%, the conversation history is summarized by the model in place and replaced with the summary before the next turn — toggle with `config.json`'s `auto_compact_enabled` or live via `/config auto_compact on|off`. A new `compacted` event marks when it happens.
+- `/config` command: view or toggle `auto_compact` and `show_tps` (tokens-per-second display) live, process-wide, without restarting; `GET /api/settings` reports current values for clients that just connected.
+- Session rename (`Session.Title`, `Store.SetTitle`, `POST /api/sessions/{id}/rename`) and delete (`Store.Delete`, `DELETE /api/sessions/{id}`, refuses while a turn is in-flight) — both exposed as buttons in the Web UI's session list.
+- `mcp.Manager.Servers()` + `GET /api/mcp-servers`: lists currently-connected MCP server names, shown in the Web UI's right panel.
+- File uploads (`POST /api/sessions/{id}/uploads`) for the Web UI's new drag-and-drop attachment support — saves to `~/.localcode/uploads/<session-id>/<filename>` and inserts a path reference into the prompt for the model to read with its own file tools.
+- Web UI: persistent right-panel session list (switch/rename/delete) replacing the old modal picker, a connected-MCP-servers list below it, drag-and-drop file attachment on the prompt box, and a status line under the prompt showing current agent/model, context-window fill %, TPS, and a pulsing "communicating" indicator that flashes on completion.
+
 ## v0.8.0
 
 - Fine-grained permission rules (opencode-style): `config.json`'s new `permission` field maps a tool name (or `"*"` fallback) to either a flat `"allow"/"ask"/"deny"` or an ordered array of `{"match": glob, "decision": ...}` rules matched against the call's subject (the bash command string, or a file path for `write_file`/`edit`) — last match wins. Lets safe commands (`git *`) run without a prompt while dangerous ones (`rm *`) are blocked outright, and can even restrict tools that previously never asked (e.g. deny reading `*.env`). No `permission` config at all preserves exactly today's behavior.

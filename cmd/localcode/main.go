@@ -145,13 +145,17 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 		memorySection = memory.SystemPromptSection(memDir, memory.LoadIndex(memDir))
 	}
 
+	var mcpManager *mcpclient.Manager
 	if len(cfg.MCPServers) > 0 {
 		// A server that fails to connect or list tools is skipped (logged as
 		// a warning), not fatal: one bad MCP server shouldn't take down the
-		// whole daemon. The Manager itself is intentionally not tracked for
-		// a clean shutdown here — this MVP has no signal handling yet, and
-		// the child MCP server processes exit when this process does.
-		_, mcpTools, warnings := mcpclient.Connect(ctx, cfg.MCPServers)
+		// whole daemon. The Manager is kept (for GET /api/mcp-servers) but
+		// not otherwise tracked for a clean shutdown — this MVP has no
+		// signal handling yet, and the child MCP server processes exit when
+		// this process does.
+		var mcpTools []tools.Tool
+		var warnings []error
+		mcpManager, mcpTools, warnings = mcpclient.Connect(ctx, cfg.MCPServers)
 		for _, w := range warnings {
 			log.Printf("mcp: %v", w)
 		}
@@ -183,7 +187,7 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 		registry.Register(agent.NewTaskTool(tasks, cfg.Agents))
 	}
 
-	return daemon.New(loop, broker, tasks, daemon.WebFS(), version), nil
+	return daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version), nil
 }
 
 // loadSkills scans the project-local skills dir (if run from within a

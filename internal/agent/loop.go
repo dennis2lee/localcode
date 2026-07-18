@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"localcode/internal/commands"
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/memory"
+	"localcode/internal/modelinfo"
 	"localcode/internal/provider"
 	"localcode/internal/session"
 	"localcode/internal/skills"
@@ -29,6 +31,25 @@ const defaultMaxTokens = 4096
 // future turns (in this project or picked up by opencode/Claude Code too,
 // since both read AGENTS.md/CLAUDE.md) start with real project context.
 const initPrompt = `Scan this repository (file listing, README, package/build manifests, existing build/lint/test tooling) and create or update an AGENTS.md file at the project root with concise, project-specific guidance for a coding agent: build/lint/test commands, an architecture overview, and code conventions. If AGENTS.md already exists, improve it in place rather than replacing it wholesale. Use your file tools (Glob/Grep/Read to explore, Write or Edit to save AGENTS.md).`
+
+// compactThresholdPercent is the context-window fill percentage that
+// triggers auto-compaction (when Loop.AutoCompactEnabled is true).
+const compactThresholdPercent = 80.0
+
+// compactionPrompt asks the model to summarize the conversation so far in
+// place of running any tools — deliberately sent as a bare Chat call (see
+// drainText), not through the normal turn machinery, so it never appears
+// in the visible transcript as an ordinary assistant reply.
+const compactionPrompt = "Summarize our conversation so far concisely, preserving important facts, decisions, file paths, and outstanding tasks needed for continuity. Output ONLY the summary, with no preamble."
+
+// sessionUsage is the latest known token usage for one session, used to
+// compute the context-window-fill percentage and drive auto-compaction.
+type sessionUsage struct {
+	InputTokens  int
+	OutputTokens int
+	MaxContext   int
+	TPS          float64
+}
 
 // Loop wires a session store, tool registry, and the set of configured
 // model providers together. One Loop instance is shared across sessions;
@@ -61,19 +82,56 @@ type Loop struct {
 	// happens via the model's ordinary file tools, not here.
 	MemoryDir string
 
-	mu       sync.Mutex
-	messages map[string][]provider.Message // sessionID -> history
+	mu                 sync.Mutex
+	messages           map[string][]provider.Message // sessionID -> history
+	usage              map[string]sessionUsage       // sessionID -> latest known usage
+	autoCompactEnabled bool                           // process-global runtime setting, toggleable via "/config"
+	showTPS            bool                           // process-global runtime setting, toggleable via "/config"
 }
 
 func New(store *session.Store, reg *tools.Registry, providers map[string]provider.Provider, cfg *config.Config) *Loop {
 	return &Loop{
-		Store:        store,
-		Tools:        reg,
-		Providers:    providers,
-		Config:       cfg,
-		SystemPrompt: defaultSystemPrompt,
-		messages:     map[string][]provider.Message{},
+		Store:              store,
+		Tools:              reg,
+		Providers:          providers,
+		Config:             cfg,
+		SystemPrompt:       defaultSystemPrompt,
+		autoCompactEnabled: cfg.CompactEnabled(),
+		showTPS:            cfg.TPSEnabled(),
+		messages:           map[string][]provider.Message{},
+		usage:              map[string]sessionUsage{},
 	}
+}
+
+// AutoCompactEnabled reports whether auto-compaction is currently on —
+// process-global, toggleable live via "/config auto_compact on|off".
+func (l *Loop) AutoCompactEnabled() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.autoCompactEnabled
+}
+
+// SetAutoCompactEnabled changes the live auto-compaction setting.
+func (l *Loop) SetAutoCompactEnabled(v bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.autoCompactEnabled = v
+}
+
+// ShowTPS reports whether usage events should carry a tokens-per-second
+// figure for display — process-global, toggleable live via "/config
+// show_tps on|off".
+func (l *Loop) ShowTPS() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.showTPS
+}
+
+// SetShowTPS changes the live TPS-display setting.
+func (l *Loop) SetShowTPS(v bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.showTPS = v
 }
 
 // SendMessage appends a user turn to sessionID's history and drives the
@@ -108,6 +166,10 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 
 	if strings.TrimSpace(text) == "/memory" {
 		return l.showMemoryInfo(sessionID, text)
+	}
+
+	if arg, ok := parseConfigCommand(text); ok {
+		return l.handleConfigCommand(sessionID, text, arg)
 	}
 
 	if cmd, args, ok := l.matchCustomCommand(text); ok {
@@ -186,6 +248,8 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		systemPrompt = systemPrompt + "\n\n" + agentCfg.Prompt
 	}
 
+	l.maybeAutoCompact(ctx, sessionID, p, profile, systemPrompt)
+
 	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
 
 	l.appendHistory(sessionID, provider.Message{
@@ -211,9 +275,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return fmt.Errorf("chat request: %w", err)
 		}
 
-		assistantBlocks, toolUses, stopReason, err := l.consumeStream(sessionID, stream)
+		assistantBlocks, toolUses, stopReason, usage, err := l.consumeStream(sessionID, stream)
 		if err != nil {
 			return err
+		}
+		if usage.hasUsage {
+			l.recordUsage(sessionID, profile.Model, usage)
 		}
 
 		l.appendHistory(sessionID, provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})
@@ -227,10 +294,22 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	}
 }
 
+// streamUsage carries the token usage seen while draining one stream, plus
+// enough timing information to compute tokens-per-second.
+type streamUsage struct {
+	hasUsage     bool
+	inputTokens  int
+	outputTokens int
+	elapsed      time.Duration
+}
+
 // consumeStream drains one model response, mirroring each piece into the
-// session's event log, and returns the assistant's content blocks plus any
-// tool_use blocks it requested.
-func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEvent) (blocks []provider.Block, toolUses []provider.Block, stopReason string, err error) {
+// session's event log, and returns the assistant's content blocks, any
+// tool_use blocks it requested, and whatever token usage the provider
+// reported (see provider.EventUsage — not every provider/request reports
+// it, hence streamUsage.hasUsage).
+func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEvent) (blocks []provider.Block, toolUses []provider.Block, stopReason string, usage streamUsage, err error) {
+	start := time.Now()
 	var text strings.Builder
 	toolNames := map[string]string{}
 	toolInputs := map[string]*strings.Builder{}
@@ -275,11 +354,17 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 		case provider.EventMessageStop:
 			stopReason = ev.StopReason
 
+		case provider.EventUsage:
+			usage.hasUsage = true
+			usage.inputTokens = ev.InputTokens
+			usage.outputTokens = ev.OutputTokens
+
 		case provider.EventError:
 			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": ev.Err.Error()})
-			return nil, nil, "", fmt.Errorf("provider stream error: %w", ev.Err)
+			return nil, nil, "", usage, fmt.Errorf("provider stream error: %w", ev.Err)
 		}
 	}
+	usage.elapsed = time.Since(start)
 
 	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String()})
 
@@ -287,7 +372,7 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 		blocks = append(blocks, provider.TextBlock(text.String()))
 	}
 	blocks = append(blocks, toolUses...)
-	return blocks, toolUses, stopReason, nil
+	return blocks, toolUses, stopReason, usage, nil
 }
 
 // runTools executes each requested tool call in order and returns the
@@ -379,6 +464,74 @@ func (l *Loop) showMemoryInfo(sessionID, displayText string) error {
 	return nil
 }
 
+// parseConfigCommand recognizes "/config" and "/config <rest>". ok is
+// false for anything else.
+func parseConfigCommand(text string) (arg string, ok bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "/config" {
+		return "", true
+	}
+	if rest, found := strings.CutPrefix(trimmed, "/config "); found {
+		return strings.TrimSpace(rest), true
+	}
+	return "", false
+}
+
+// handleConfigCommand answers "/config" locally — no model call. With no
+// argument it reports the current live settings; "/config <setting>
+// on|off" toggles auto_compact or show_tps process-wide (every session on
+// this daemon, not just the one issuing the command — see
+// Loop.autoCompactEnabled/showTPS) and broadcasts an events.TypeConfigChanged
+// event so this session's clients update their display immediately.
+func (l *Loop) handleConfigCommand(sessionID, displayText, arg string) error {
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText})
+
+	fields := strings.Fields(arg)
+	var text string
+
+	switch {
+	case arg == "":
+		text = l.configSummary()
+
+	case len(fields) == 2 && (fields[1] == "on" || fields[1] == "off"):
+		enabled := fields[1] == "on"
+		switch fields[0] {
+		case "auto_compact":
+			l.SetAutoCompactEnabled(enabled)
+			text = fmt.Sprintf("auto_compact: %s", onOff(enabled))
+		case "show_tps":
+			l.SetShowTPS(enabled)
+			text = fmt.Sprintf("show_tps: %s", onOff(enabled))
+		default:
+			text = fmt.Sprintf("알 수 없는 설정 %q. 사용법: /config, /config auto_compact on|off, /config show_tps on|off", fields[0])
+		}
+		if text != "" && (fields[0] == "auto_compact" || fields[0] == "show_tps") {
+			l.Store.Append(sessionID, events.TypeConfigChanged, map[string]any{
+				"auto_compact_enabled": l.AutoCompactEnabled(),
+				"show_tps":             l.ShowTPS(),
+			})
+		}
+
+	default:
+		text = "사용법: /config, /config auto_compact on|off, /config show_tps on|off"
+	}
+
+	l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": text})
+	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text})
+	return nil
+}
+
+func (l *Loop) configSummary() string {
+	return fmt.Sprintf("auto_compact: %s\nshow_tps: %s", onOff(l.AutoCompactEnabled()), onOff(l.ShowTPS()))
+}
+
+func onOff(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
+}
+
 func (l *Loop) findSkill(name string) (skills.Skill, bool) {
 	for _, s := range l.Skills {
 		if strings.EqualFold(s.Name, name) {
@@ -408,4 +561,141 @@ func (l *Loop) history(sessionID string) []provider.Message {
 	out := make([]provider.Message, len(l.messages[sessionID]))
 	copy(out, l.messages[sessionID])
 	return out
+}
+
+// setHistory replaces sessionID's entire in-memory history — used only by
+// auto-compaction to swap in a summary.
+func (l *Loop) setHistory(sessionID string, msgs []provider.Message) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.messages[sessionID] = msgs
+}
+
+// recordUsage stores usage as sessionID's latest known token usage (each
+// call overwrites, since a provider's input_tokens already reflects the
+// full history sent so far — not something to accumulate across calls)
+// and appends an events.TypeUsage event so any subscribed client can
+// update its context-window/TPS display.
+func (l *Loop) recordUsage(sessionID, model string, usage streamUsage) {
+	maxContext := modelinfo.MaxContextTokens(model)
+	tps := 0.0
+	if usage.elapsed > 0 {
+		tps = float64(usage.outputTokens) / usage.elapsed.Seconds()
+	}
+
+	u := sessionUsage{
+		InputTokens:  usage.inputTokens,
+		OutputTokens: usage.outputTokens,
+		MaxContext:   maxContext,
+		TPS:          tps,
+	}
+
+	l.mu.Lock()
+	l.usage[sessionID] = u
+	l.mu.Unlock()
+
+	percent := 0.0
+	if maxContext > 0 {
+		percent = float64(u.InputTokens+u.OutputTokens) / float64(maxContext) * 100
+	}
+	l.Store.Append(sessionID, events.TypeUsage, map[string]any{
+		"input_tokens":  u.InputTokens,
+		"output_tokens": u.OutputTokens,
+		"max_context":   u.MaxContext,
+		"percent":       percent,
+		"tps":           tps,
+		"show_tps":      l.ShowTPS(),
+		"model":         model,
+	})
+}
+
+func (l *Loop) getUsage(sessionID string) (sessionUsage, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	u, ok := l.usage[sessionID]
+	return u, ok
+}
+
+func (l *Loop) clearUsage(sessionID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.usage, sessionID)
+}
+
+// maybeAutoCompact summarizes sessionID's history in place when
+// AutoCompactEnabled is on and the last recorded usage crossed
+// compactThresholdPercent — freeing up context space before the next
+// user turn is appended. Best-effort: any failure (including the
+// summarization call itself erroring) just leaves the full history intact
+// rather than blocking the real turn.
+func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt string) {
+	if !l.AutoCompactEnabled() {
+		return
+	}
+	u, ok := l.getUsage(sessionID)
+	if !ok || u.MaxContext <= 0 {
+		return
+	}
+	percent := float64(u.InputTokens+u.OutputTokens) / float64(u.MaxContext) * 100
+	if percent < compactThresholdPercent {
+		return
+	}
+
+	history := l.history(sessionID)
+	if len(history) == 0 {
+		return
+	}
+
+	summaryMessages := make([]provider.Message, len(history), len(history)+1)
+	copy(summaryMessages, history)
+	summaryMessages = append(summaryMessages, provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Block{provider.TextBlock(compactionPrompt)},
+	})
+
+	stream, err := p.Chat(ctx, provider.ChatRequest{
+		Model:     profile.Model,
+		System:    systemPrompt,
+		Messages:  summaryMessages,
+		MaxTokens: 1024,
+	})
+	if err != nil {
+		return
+	}
+	summary, err := drainText(ctx, stream)
+	if err != nil || summary == "" {
+		return
+	}
+
+	l.setHistory(sessionID, []provider.Message{{
+		Role:    provider.RoleUser,
+		Content: []provider.Block{provider.TextBlock("[이전 대화가 context 절약을 위해 요약되었습니다]\n\n" + summary)},
+	}})
+	l.clearUsage(sessionID)
+	l.Store.Append(sessionID, events.TypeCompacted, map[string]any{"summary_length": len(summary)})
+}
+
+// drainText concatenates every text delta from stream and returns the
+// final text — used for the internal compaction call, which must NOT go
+// through consumeStream (that would write message.part.delta/end events
+// into the visible transcript, making an internal summarization call look
+// like a normal assistant reply).
+func drainText(ctx context.Context, stream <-chan provider.StreamEvent) (string, error) {
+	var text strings.Builder
+	for {
+		select {
+		case ev, ok := <-stream:
+			if !ok {
+				return text.String(), nil
+			}
+			switch ev.Type {
+			case provider.EventTextDelta:
+				text.WriteString(ev.TextDelta)
+			case provider.EventError:
+				return "", ev.Err
+			}
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
 }

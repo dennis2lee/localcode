@@ -18,6 +18,19 @@ const (
 	TypeTaskStatus         Type = "task.status"
 	TypeAgentSwitched      Type = "agent.switched"
 	TypeError              Type = "error"
+
+	// TypeUsage reports the latest known token usage/context-window fill
+	// for a turn: {"input_tokens","output_tokens","max_context","percent",
+	// "tps","show_tps","model"}.
+	TypeUsage Type = "usage"
+	// TypeCompacted marks that auto-compaction replaced a session's
+	// in-memory history with a summary: {"summary_length"}.
+	TypeCompacted Type = "compacted"
+	// TypeConfigChanged reports a live settings change from "/config":
+	// {"auto_compact_enabled","show_tps"}.
+	TypeConfigChanged Type = "config.changed"
+	// TypeSessionRenamed reports a session's title changing: {"title"}.
+	TypeSessionRenamed Type = "session.renamed"
 )
 
 // Event is one entry in a session's append-only log. Seq is monotonically

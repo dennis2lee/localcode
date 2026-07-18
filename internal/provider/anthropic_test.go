@@ -250,3 +250,46 @@ func TestAnthropicChatNonOKStatusReturnsError(t *testing.T) {
 		t.Fatal("expected an error for a 401 response")
 	}
 }
+
+// TestAnthropicChatEmitsUsageFromMessageStartAndDelta confirms input
+// tokens are captured from message_start and carried forward into the
+// message_delta usage event alongside the (growing) output token count.
+func TestAnthropicChatEmitsUsageFromMessageStartAndDelta(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprint(w, sseLine(map[string]any{"type": "message_start", "message": map[string]any{"usage": map[string]int{"input_tokens": 1500, "output_tokens": 0}}}))
+		fmt.Fprint(w, sseLine(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]string{"type": "text"}}))
+		fmt.Fprint(w, sseLine(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": "hi"}}))
+		fmt.Fprint(w, sseLine(map[string]any{"type": "content_block_stop", "index": 0}))
+		fmt.Fprint(w, sseLine(map[string]any{"type": "message_delta", "delta": map[string]string{"stop_reason": "end_turn"}, "usage": map[string]int{"output_tokens": 42}}))
+		fmt.Fprint(w, sseLine(map[string]any{"type": "message_stop"}))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	p := NewAnthropicDirect("key")
+	p.BaseURL = srv.URL
+
+	stream, err := p.Chat(context.Background(), ChatRequest{Model: "m", Messages: []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	var usageEvents []StreamEvent
+	for ev := range stream {
+		if ev.Type == EventUsage {
+			usageEvents = append(usageEvents, ev)
+		}
+	}
+
+	if len(usageEvents) != 2 {
+		t.Fatalf("expected 2 usage events (message_start + message_delta), got %d: %+v", len(usageEvents), usageEvents)
+	}
+	if usageEvents[0].InputTokens != 1500 || usageEvents[0].OutputTokens != 0 {
+		t.Errorf("first usage event = %+v, want InputTokens=1500 OutputTokens=0", usageEvents[0])
+	}
+	if usageEvents[1].InputTokens != 1500 || usageEvents[1].OutputTokens != 42 {
+		t.Errorf("second usage event = %+v, want InputTokens=1500 (carried forward) OutputTokens=42", usageEvents[1])
+	}
+}

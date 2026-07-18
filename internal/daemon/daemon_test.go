@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,7 +103,7 @@ func newTestDaemon(t *testing.T, modelURL string) *Daemon {
 	loop := agent.New(store, registry, providers, cfg)
 	tasks := agent.NewTaskManager(context.Background(), loop, cfg.MaxConcurrentTasks)
 
-	return New(loop, broker, tasks, nil, "test-version")
+	return New(loop, broker, tasks, nil, nil, "test-version")
 }
 
 // TestDaemonEndToEnd drives the daemon purely over HTTP via internal/client,
@@ -407,6 +408,145 @@ func TestDaemonListCommands(t *testing.T) {
 	}
 }
 
+// TestDaemonGetSettings confirms GET /api/settings reflects the Loop's
+// live "/config" toggles, both defaults and after they're changed.
+func TestDaemonGetSettings(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	got, err := c.GetSettings(context.Background())
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if !got.AutoCompactEnabled || !got.ShowTPS {
+		t.Errorf("Settings = %+v, want both true by default", got)
+	}
+
+	d.Loop.SetAutoCompactEnabled(false)
+	got, err = c.GetSettings(context.Background())
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if got.AutoCompactEnabled {
+		t.Error("expected AutoCompactEnabled=false to be reflected after SetAutoCompactEnabled(false)")
+	}
+}
+
+// TestDaemonUploadFile confirms POST /api/sessions/{id}/uploads saves the
+// file under ~/.localcode/uploads/<session-id>/<filename> and returns that
+// absolute path, with content intact.
+func TestDaemonUploadFile(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	path, err := c.UploadFile(ctx, sess.ID, "notes.txt", strings.NewReader("hello upload"))
+	if err != nil {
+		t.Fatalf("UploadFile: %v", err)
+	}
+
+	wantPath := filepath.Join(fakeHome, ".localcode", "uploads", sess.ID, "notes.txt")
+	if path != wantPath {
+		t.Errorf("path = %q, want %q", path, wantPath)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read uploaded file: %v", err)
+	}
+	if string(data) != "hello upload" {
+		t.Errorf("uploaded content = %q, want %q", data, "hello upload")
+	}
+}
+
+func TestDaemonUploadFileUnknownSession(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+	t.Setenv("HOME", t.TempDir())
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	if _, err := c.UploadFile(context.Background(), "does-not-exist", "x.txt", strings.NewReader("x")); err == nil {
+		t.Error("expected an error uploading to an unknown session")
+	}
+}
+
+// TestDaemonUploadFileSanitizesPathTraversal confirms a filename with
+// directory-traversal components can't escape the session's uploads dir.
+func TestDaemonUploadFileSanitizesPathTraversal(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	path, err := c.UploadFile(ctx, sess.ID, "../../../etc/evil.txt", strings.NewReader("x"))
+	if err != nil {
+		t.Fatalf("UploadFile: %v", err)
+	}
+	wantDir := filepath.Join(fakeHome, ".localcode", "uploads", sess.ID)
+	if filepath.Dir(path) != wantDir {
+		t.Errorf("saved to %q, want it confined to %q", path, wantDir)
+	}
+	if filepath.Base(path) != "evil.txt" {
+		t.Errorf("filename = %q, want traversal components stripped to \"evil.txt\"", filepath.Base(path))
+	}
+}
+
+// TestDaemonListMCPServersEmptyWhenNilManager confirms GET /api/mcp-servers
+// returns an empty (not null) array when no MCP servers are configured —
+// the daemon's MCP field is nil in that case.
+func TestDaemonListMCPServersEmptyWhenNilManager(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	got, err := c.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatalf("ListMCPServers: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListMCPServers() = %v, want empty", got)
+	}
+}
+
 // TestDaemonSwitchAgent confirms switching a session's agent mid-
 // conversation updates the session (visible via GET /api/sessions/{id})
 // and emits an agent.switched event, without touching anything else about
@@ -482,5 +622,144 @@ func TestDaemonSwitchAgentUnknownAgent(t *testing.T) {
 
 	if _, err := c.SwitchAgent(ctx, sess.ID, "does-not-exist"); err == nil {
 		t.Error("expected an error switching to an unconfigured agent name")
+	}
+}
+
+// TestDaemonRenameSession confirms POST /api/sessions/{id}/rename sets the
+// session's Title (visible via GET /api/sessions/{id}) and emits a
+// session.renamed event.
+func TestDaemonRenameSession(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	updated, err := c.RenameSession(ctx, sess.ID, "My renamed session")
+	if err != nil {
+		t.Fatalf("RenameSession: %v", err)
+	}
+	if updated.Title != "My renamed session" {
+		t.Errorf("RenameSession returned Title = %q, want %q", updated.Title, "My renamed session")
+	}
+
+	got, err := d.Loop.Store.Get(sess.ID)
+	if err != nil {
+		t.Fatalf("re-fetch session: %v", err)
+	}
+	if got.Title != "My renamed session" {
+		t.Errorf("session Title after rename = %q, want %q", got.Title, "My renamed session")
+	}
+
+	all, err := d.Loop.Store.Events(sess.ID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var sawRenamed bool
+	for _, ev := range all {
+		if ev.Type == events.TypeSessionRenamed {
+			sawRenamed = true
+			if ev.Data["title"] != "My renamed session" {
+				t.Errorf("session.renamed event data = %+v, want title=\"My renamed session\"", ev.Data)
+			}
+		}
+	}
+	if !sawRenamed {
+		t.Error("expected a session.renamed event")
+	}
+}
+
+func TestDaemonRenameSessionUnknownSession(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	if _, err := c.RenameSession(context.Background(), "does-not-exist", "x"); err == nil {
+		t.Error("expected an error renaming an unknown session")
+	}
+}
+
+// TestDaemonDeleteSession confirms DELETE /api/sessions/{id} removes the
+// session — a subsequent GET 404s.
+func TestDaemonDeleteSession(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	if err := c.DeleteSession(ctx, sess.ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	if _, err := d.Loop.Store.Get(sess.ID); err == nil {
+		t.Error("expected the session to be gone after DeleteSession")
+	}
+}
+
+func TestDaemonDeleteSessionUnknownSession(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	if err := c.DeleteSession(context.Background(), "does-not-exist"); err == nil {
+		t.Error("expected an error deleting an unknown session")
+	}
+}
+
+// TestDaemonDeleteSessionRefusesWhileBusy confirms a session with a turn
+// in progress can't be deleted out from under it (409, not deleted).
+func TestDaemonDeleteSessionRefusesWhileBusy(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	d.busyMu.Lock()
+	d.busy[sess.ID] = true
+	d.busyMu.Unlock()
+
+	if err := c.DeleteSession(ctx, sess.ID); err == nil {
+		t.Error("expected an error deleting a session with a turn in progress")
+	}
+
+	if _, err := d.Loop.Store.Get(sess.ID); err != nil {
+		t.Error("expected the session to still exist after a refused delete")
 	}
 }

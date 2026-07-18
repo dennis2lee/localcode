@@ -60,6 +60,15 @@ type oaRequest struct {
 	Stream      bool        `json:"stream"`
 	MaxTokens   int         `json:"max_tokens,omitempty"`
 	Temperature float64     `json:"temperature,omitempty"`
+
+	// StreamOptions requests a final usage-only chunk (empty "choices")
+	// at the end of the stream — an OpenAI-compat server that doesn't
+	// recognize this field just ignores it, so it's safe to always send.
+	StreamOptions *oaStreamOptions `json:"stream_options,omitempty"`
+}
+
+type oaStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type oaStreamChunk struct {
@@ -77,6 +86,13 @@ type oaStreamChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+
+	// Usage arrives on its own final chunk with empty Choices, only when
+	// the request set stream_options.include_usage.
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage,omitempty"`
 }
 
 // toOpenAIMessages translates our block-based messages (plus system prompt)
@@ -155,12 +171,13 @@ func mapFinishReason(r string) string {
 
 func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	body := oaRequest{
-		Model:       req.Model,
-		Messages:    toOpenAIMessages(req.System, req.Messages),
-		Tools:       toOpenAITools(req.Tools),
-		Stream:      true,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
+		Model:         req.Model,
+		Messages:      toOpenAIMessages(req.System, req.Messages),
+		Tools:         toOpenAITools(req.Tools),
+		Stream:        true,
+		MaxTokens:     req.MaxTokens,
+		Temperature:   req.Temperature,
+		StreamOptions: &oaStreamOptions{IncludeUsage: true},
 	}
 
 	payload, err := json.Marshal(body)
@@ -228,6 +245,13 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 				continue // ignore malformed keep-alive/comment lines
 			}
 			if len(chunk.Choices) == 0 {
+				if chunk.Usage != nil {
+					select {
+					case out <- StreamEvent{Type: EventUsage, InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens}:
+					case <-ctx.Done():
+						return
+					}
+				}
 				continue
 			}
 			choice := chunk.Choices[0]

@@ -215,6 +215,13 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 				if !send(StreamEvent{Type: EventMessageStop, StopReason: mapBedrockStopReason(e.Value.StopReason)}) {
 					return
 				}
+
+			case *types.ConverseStreamOutputMemberMetadata:
+				if u := e.Value.Usage; u != nil {
+					if !send(StreamEvent{Type: EventUsage, InputTokens: int(aws.ToInt32(u.InputTokens)), OutputTokens: int(aws.ToInt32(u.OutputTokens))}) {
+						return
+					}
+				}
 			}
 		}
 

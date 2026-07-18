@@ -12,9 +12,12 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
@@ -22,6 +25,7 @@ import (
 
 	"localcode/internal/agent"
 	"localcode/internal/events"
+	"localcode/internal/mcp"
 )
 
 type Daemon struct {
@@ -29,6 +33,11 @@ type Daemon struct {
 	Broker  *agent.PermissionBroker
 	Tasks   *agent.TaskManager
 	Version string
+
+	// MCP is nil when no MCP servers are configured — handleListMCPServers
+	// reports an empty list in that case rather than requiring callers to
+	// special-case it.
+	MCP *mcp.Manager
 
 	mux *http.ServeMux
 
@@ -40,12 +49,14 @@ type Daemon struct {
 // (the embedded Web UI); pass nil to run headless (TUI-only). version is
 // reported back to clients via GET /api/version (e.g. for the /version
 // prompt command) — it identifies the *daemon's* build, which matters when
-// a TUI is attached to a remote core over --server.
-func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskManager, webFS fs.FS, version string) *Daemon {
+// a TUI is attached to a remote core over --server. mcpManager may be nil
+// (no MCP servers configured).
+func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskManager, mcpManager *mcp.Manager, webFS fs.FS, version string) *Daemon {
 	d := &Daemon{
 		Loop:    loop,
 		Broker:  broker,
 		Tasks:   tasks,
+		MCP:     mcpManager,
 		Version: version,
 		mux:     http.NewServeMux(),
 		busy:    map[string]bool{},
@@ -58,13 +69,18 @@ func (d *Daemon) Handler() http.Handler { return d.mux }
 
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
+	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
+	d.mux.HandleFunc("GET /api/mcp-servers", d.handleListMCPServers)
 	d.mux.HandleFunc("GET /api/agents", d.handleListAgents)
 	d.mux.HandleFunc("GET /api/commands", d.handleListCommands)
 	d.mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
 	d.mux.HandleFunc("GET /api/sessions", d.handleListSessions)
 	d.mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)
+	d.mux.HandleFunc("DELETE /api/sessions/{id}", d.handleDeleteSession)
 	d.mux.HandleFunc("POST /api/sessions/{id}/agent", d.handleSwitchAgent)
+	d.mux.HandleFunc("POST /api/sessions/{id}/rename", d.handleRenameSession)
 	d.mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleSendMessage)
+	d.mux.HandleFunc("POST /api/sessions/{id}/uploads", d.handleUploadFile)
 	d.mux.HandleFunc("GET /api/sessions/{id}/events", d.handleEvents)
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions/{permId}", d.handleResolvePermission)
 	d.mux.HandleFunc("POST /api/sessions/{id}/tasks", d.handleSpawnTask)
@@ -88,6 +104,26 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func (d *Daemon) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"version": d.Version})
+}
+
+// handleGetSettings reports the daemon's current live "/config" settings
+// (process-global, not per-session) — for a client that just opened to
+// know the current state without waiting for a config.changed event.
+func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
+		"show_tps":             d.Loop.ShowTPS(),
+	})
+}
+
+// handleListMCPServers reports which MCP servers are currently connected
+// (an empty list if none are configured, or MCP itself is nil).
+func (d *Daemon) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
+	names := []string{}
+	if d.MCP != nil {
+		names = append(names, d.MCP.Servers()...)
+	}
+	writeJSON(w, http.StatusOK, names)
 }
 
 // AgentInfo is the client-facing view of a configured agent — enough to
@@ -169,6 +205,55 @@ func (d *Daemon) handleSwitchAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+// handleRenameSession sets a session's cosmetic Title (session picker
+// display only — resolution/resumption is always by ID).
+func (d *Daemon) handleRenameSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := d.Loop.Store.Get(id); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	var req struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	sess, err := d.Loop.Store.SetTitle(id, req.Title)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	d.Loop.Store.Append(id, events.TypeSessionRenamed, map[string]any{"title": req.Title})
+
+	writeJSON(w, http.StatusOK, sess)
+}
+
+// handleDeleteSession removes a session (and its persisted log, if any)
+// entirely. Refuses to delete a session with an in-flight turn (the same
+// busy guard handleSendMessage uses) so a running turn never writes to a
+// session whose file handle was just closed out from under it.
+func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	d.busyMu.Lock()
+	busy := d.busy[id]
+	d.busyMu.Unlock()
+	if busy {
+		writeError(w, http.StatusConflict, fmt.Errorf("session %s has a turn in progress", id))
+		return
+	}
+
+	if err := d.Loop.Store.Delete(id); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Agent string `json:"agent"`
@@ -205,6 +290,69 @@ func (d *Daemon) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sess)
+}
+
+// maxUploadBytes bounds one uploaded file (drag-and-drop attachments,
+// mainly) — generous enough for source files/screenshots without letting
+// a client exhaust disk space.
+const maxUploadBytes = 32 << 20 // 32MB
+
+// handleUploadFile saves a drag-and-dropped file to
+// ~/.localcode/uploads/<session-id>/<sanitized-filename> and returns its
+// absolute path, so the caller can splice a reference to it into the next
+// chat message (the model then reads it with its own file tools — there's
+// no separate "attachment" concept in the wire protocol).
+func (d *Daemon) handleUploadFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := d.Loop.Store.Get(id); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("parse upload: %w", err))
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf(`missing "file" form field: %w`, err))
+		return
+	}
+	defer file.Close()
+
+	// filepath.Base strips any directory components the client sent, so a
+	// crafted filename like "../../etc/passwd" can't escape the uploads
+	// dir; "." and ".." themselves are rejected outright.
+	name := filepath.Base(header.Filename)
+	if name == "" || name == "." || name == ".." {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid filename %q", header.Filename))
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("resolve home dir: %w", err))
+		return
+	}
+	dir := filepath.Join(home, ".localcode", "uploads", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("create uploads dir: %w", err))
+		return
+	}
+
+	path := filepath.Join(dir, name)
+	dst, err := os.Create(path)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("create %s: %w", path, err))
+		return
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, io.LimitReader(file, maxUploadBytes)); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("write %s: %w", path, err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"path": path})
 }
 
 func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
