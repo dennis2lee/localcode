@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.17.0
+
+- Fix Bedrock `ValidationException: ... 'temperature' is deprecated for this model` on some newer models (Opus, confirmed by a user; Sonnet unaffected). Root cause: `Chat()` always sent `Temperature` to the Bedrock Converse API, even at its Go zero-value (0.0) when a profile never configured one in `config.json` — a field these models reject outright regardless of value. The OpenAI-compat and Anthropic-direct providers already skip this via `omitempty` on their wire structs; Bedrock's typed `InferenceConfiguration` has no such tag, so `buildInferenceConfig` now only sets `Temperature` when a profile explicitly configured a non-zero value. See MODELS.md item 7.
+- Fix TUI: a model reply with no line breaks in it (the common case for prose) used to run past the terminal's right edge and become unreadable — bubbles' `viewport.Model` doesn't wrap text on its own, it clips/truncates each stored line to fit the viewport width, silently discarding everything past it rather than moving it to the next line. The transcript is now word-wrapped to the viewport's width (via lipgloss) before every `SetContent` call, including on terminal resize, so long replies read as normal multi-line text instead of losing content.
+
 ## v0.16.0
 
 - Bedrock: support the `[1m]` 1M-context suffix on `profiles.<name>.model` (e.g. `"us.anthropic.claude-sonnet-4-6[1m]"`), matching the shorthand Claude Code's own model settings use. localcode strips the suffix before sending the real model ID and passes Anthropic's 1M-context beta flag via Bedrock's `AdditionalModelRequestFields`. **Not verified against a real Bedrock account** — the beta flag name is carried over from Anthropic's direct-API convention, not confirmed against AWS's own docs; see MODELS.md if it doesn't work for you.

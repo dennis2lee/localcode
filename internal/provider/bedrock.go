@@ -171,6 +171,24 @@ func parseModelID(model string) (id string, oneMillionContext bool) {
 	return trimmed, false
 }
 
+// buildInferenceConfig only sets Temperature when temperature is
+// non-zero — i.e. when the profile actually configured one in
+// config.json. Some newer models (certain Opus versions among them)
+// reject the field outright — "ValidationException: ... 'temperature'
+// is deprecated for this model" — even at its zero value, which is what
+// every profile that never set "temperature" sends by default if this
+// were passed unconditionally. The OpenAI-compat and Anthropic-direct
+// providers already dodge this for free via their wire structs'
+// `omitempty` tag; the Bedrock SDK's typed InferenceConfiguration has no
+// such tag, so it needs the same "don't send zero" check done explicitly.
+func buildInferenceConfig(maxTokens int, temperature float64) *types.InferenceConfiguration {
+	cfg := &types.InferenceConfiguration{MaxTokens: aws.Int32(int32(maxTokens))}
+	if temperature != 0 {
+		cfg.Temperature = aws.Float32(float32(temperature))
+	}
+	return cfg
+}
+
 func mapBedrockStopReason(r types.StopReason) string {
 	switch r {
 	case types.StopReasonToolUse:
@@ -195,13 +213,10 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	modelID, oneMillionContext := parseModelID(req.Model)
 
 	input := &bedrockruntime.ConverseStreamInput{
-		ModelId:    aws.String(modelID),
-		Messages:   messages,
-		ToolConfig: toolConfig,
-		InferenceConfig: &types.InferenceConfiguration{
-			MaxTokens:   aws.Int32(int32(req.MaxTokens)),
-			Temperature: aws.Float32(float32(req.Temperature)),
-		},
+		ModelId:         aws.String(modelID),
+		Messages:        messages,
+		ToolConfig:      toolConfig,
+		InferenceConfig: buildInferenceConfig(req.MaxTokens, req.Temperature),
 	}
 	if req.System != "" {
 		input.System = []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: req.System}}

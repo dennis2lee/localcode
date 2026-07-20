@@ -231,7 +231,24 @@ func (m Model) currentModel() (string, bool) {
 // part of the session's event log either way).
 func (m *Model) appendLocal(text string) {
 	m.transcript += toolStyle.Render(text) + "\n\n"
-	m.viewport.SetContent(m.transcript)
+	m.refreshViewport()
+}
+
+// refreshViewport pushes the current transcript into the viewport,
+// word-wrapped to the viewport's width first. The viewport itself never
+// wraps on its own — bubbles/viewport just renders whatever lines it's
+// given and lets long ones run off the right edge — so without this, a
+// model reply with no newlines in it (the common case) streams straight
+// off-screen instead of becoming readable multi-line text. lipgloss's
+// Width() wraps at rune boundaries while still measuring printable width
+// correctly around the ANSI styling userStyle/toolStyle/etc. already
+// applied to parts of the transcript.
+func (m *Model) refreshViewport() {
+	w := m.viewport.Width
+	if w <= 0 {
+		w = 80
+	}
+	m.viewport.SetContent(lipgloss.NewStyle().Width(w).Render(m.transcript))
 	m.viewport.GotoBottom()
 }
 
@@ -263,6 +280,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = msg.Width
 		m.input.SetWidth(msg.Width - 2)
 		m.resizeLayout()
+		// Re-wrap the existing transcript at the new width — it was
+		// wrapped for whatever width was current the last time something
+		// was appended, which a resize just invalidated.
+		m.refreshViewport()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -448,8 +469,7 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.errMsg = msg
 		}
 	}
-	m.viewport.SetContent(m.transcript)
-	m.viewport.GotoBottom()
+	m.refreshViewport()
 }
 
 // inputBorder draws a horizontal rule spanning the input box's width, used

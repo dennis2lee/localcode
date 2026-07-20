@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"localcode/internal/client"
 	"localcode/internal/events"
@@ -326,5 +327,42 @@ func TestViewFooterShowsModelNotTabHint(t *testing.T) {
 	}
 	if strings.Contains(view, "tab to switch") {
 		t.Errorf("View() = %q, want the Tab-cycle hint removed in favor of the model name", view)
+	}
+}
+
+// TestLongModelReplyWrapsToViewportWidth is a regression test for a real
+// bug: bubbles' viewport.View() renders each stored line through a
+// lipgloss style with both Width() and MaxWidth() applied — the latter
+// *truncates* a too-long line rather than wrapping it. Since a model
+// reply is appended as one continuous string with no embedded newlines
+// (the common case for prose), the whole reply became a single very
+// long "line" internally, and only the first viewport-width's worth of
+// it ever became visible — the rest was silently cut off, not just
+// visually overflowing but actually unreachable (this TUI has no
+// horizontal-scroll keybinding). refreshViewport now word-wraps the
+// transcript into real newlines at the viewport's width *before* it
+// reaches the viewport, so MaxWidth never has anything to truncate.
+func TestLongModelReplyWrapsToViewportWidth(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	m = updated.(Model)
+
+	// Distinct numbered tokens, not repeated ones, so a truncated-vs-
+	// wrapped render is actually distinguishable in the assertion below.
+	words := make([]string, 60)
+	for i := range words {
+		words[i] = fmt.Sprintf("word%d", i)
+	}
+	long := strings.Join(words, " ") // one long unbroken line, no newlines
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": long}})
+
+	rendered := m.viewport.View()
+	for _, line := range strings.Split(rendered, "\n") {
+		if lipgloss.Width(line) > 40 {
+			t.Errorf("viewport line %q is %d cells wide, want it wrapped to <= 40", line, lipgloss.Width(line))
+		}
+	}
+	if !strings.Contains(rendered, "word59") {
+		t.Errorf("viewport view = %q, want the tail of a long reply (\"word59\") still visible — MaxWidth truncation used to silently drop it", rendered)
 	}
 }

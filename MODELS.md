@@ -114,6 +114,7 @@ localcode --agent general-purpose
    - **Bedrock Converse API가 아직 지원하지 않는 모델**을 넣은 경우 (예: `claude-opus-4-8`) — 위 4번째 표(`실제 사용 가능한 모델 ID`)에 없는 모델은 대부분 이 경우입니다. 표에 있는 모델로 바꾸거나, 꼭 그 모델이 필요하면 [Anthropic API 직접 사용](#anthropic-api-직접-사용) provider로 우회하세요.
    - **`[1m]` 접미사를 붙였는데도 이 에러가 난다면** — v0.16.0부터 localcode가 `[1m]`을 인식해서 실제 모델 ID로 자르고 1M-context beta 플래그(`anthropic_beta: context-1m-2025-08-07`)를 `AdditionalModelRequestFields`로 함께 보내지만, **이 beta 플래그 이름/동작은 AWS 문서에서 직접 재확인한 게 아니라 Anthropic 다이렉트 API 관례를 그대로 옮긴 추정치입니다** — Bedrock 쪽에서 다른 이름을 요구하거나 아직 이 beta 자체를 지원하지 않을 수 있습니다. 이 경우 계정에 1M context 모델 access가 켜져 있는지 콘솔에서 확인하고, 여전히 안 되면 `[1m]` 없이 기본 컨텍스트로 우선 시도해보세요.
    - 콘솔의 **Bedrock → Model access**에서 그 모델의 access가 실제로 활성화되어 있는지도 다시 확인하세요 (특정 모델만 안 켜져 있는 경우가 흔합니다).
+7. `ValidationException: The model returned the following errors: 'temperature' is deprecated for this model.` → 일부 최신 모델(Opus 계열에서 확인됨)은 `temperature` 필드 자체를 아예 거부합니다. `config.json`의 `profiles.<name>.temperature`를 지정하지 않았어도 예전 localcode는 항상 0.0(기본값)을 Bedrock에 같이 보냈는데, 이 모델들은 그 필드가 존재하는 것 자체를 문제 삼습니다. v0.17.0부터는 `temperature`를 실제로 설정한 프로필에서만 그 필드를 보내므로 별도 조치 없이 해결됩니다 — 이 에러가 계속 나면 localcode 버전을 업데이트하세요.
 
 ### 1M context (`[1m]`)
 

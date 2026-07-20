@@ -235,6 +235,26 @@ func TestParseModelIDStripsOneMillionContextSuffix(t *testing.T) {
 	}
 }
 
+func TestBuildInferenceConfigOmitsZeroTemperature(t *testing.T) {
+	cfg := buildInferenceConfig(4096, 0)
+	if cfg.Temperature != nil {
+		t.Errorf("Temperature = %v, want nil when the profile never configured one (some models reject the field entirely at any value)", cfg.Temperature)
+	}
+	if aws.ToInt32(cfg.MaxTokens) != 4096 {
+		t.Errorf("MaxTokens = %d, want 4096", aws.ToInt32(cfg.MaxTokens))
+	}
+}
+
+func TestBuildInferenceConfigSetsExplicitTemperature(t *testing.T) {
+	cfg := buildInferenceConfig(4096, 0.7)
+	if cfg.Temperature == nil {
+		t.Fatal("Temperature = nil, want it set when the profile explicitly configured 0.7")
+	}
+	if got := aws.ToFloat32(cfg.Temperature); got != 0.7 {
+		t.Errorf("Temperature = %v, want 0.7", got)
+	}
+}
+
 func TestMapBedrockStopReason(t *testing.T) {
 	cases := []struct {
 		in   types.StopReason
