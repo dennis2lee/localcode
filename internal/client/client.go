@@ -87,10 +87,13 @@ func (c *Client) ListSessions(ctx context.Context) ([]session.Session, error) {
 
 // AgentInfo is one configured agent, as offered by the daemon's agent
 // picker (GET /api/agents) — enough to build a Tab-cycle or dropdown
-// without exposing that agent's system prompt or tool restrictions.
+// without exposing that agent's system prompt or tool restrictions. Model
+// is the underlying model ID its profile resolves to (e.g.
+// "us.anthropic.claude-sonnet-4-6"), for display next to the agent name.
 type AgentInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	Model       string `json:"model,omitempty"`
 }
 
 // ListAgents returns every agent configured on the daemon, sorted by name.

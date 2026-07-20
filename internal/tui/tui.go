@@ -212,12 +212,17 @@ func (m Model) nextAgent() (string, bool) {
 	return m.agents[0].Name, true
 }
 
-func (m Model) agentNames() []string {
-	names := make([]string, len(m.agents))
-	for i, a := range m.agents {
-		names[i] = a.Name
+// currentModel returns the model ID m.currentAgent's profile resolves to
+// (e.g. "us.anthropic.claude-sonnet-4-6"), for display in the footer.
+// Returns "", false if the current agent isn't in the known list yet
+// (e.g. GET /api/agents hasn't come back) or its profile has no model set.
+func (m Model) currentModel() (string, bool) {
+	for _, a := range m.agents {
+		if a.Name == m.currentAgent {
+			return a.Model, a.Model != ""
+		}
 	}
-	return names
+	return "", false
 }
 
 // appendLocal writes text straight into the transcript without going
@@ -483,10 +488,13 @@ func (m Model) View() string {
 
 	// Agent status lives below the input box (not above it), so it reads
 	// as "what will the next message use" right next to where the next
-	// message gets typed.
+	// message gets typed. Shows the model the current agent resolves to
+	// instead of the Tab-cycle hint — the model is what actually answers
+	// the next message, and Tab's behavior doesn't need restating here on
+	// every single frame.
 	footer := "agent: " + m.currentAgent
-	if len(m.agents) > 1 {
-		footer += "  (tab to switch: " + strings.Join(m.agentNames(), " → ") + ")"
+	if model, ok := m.currentModel(); ok {
+		footer += "  ·  model: " + model
 	}
 	b.WriteString(statusStyle.Render(footer))
 

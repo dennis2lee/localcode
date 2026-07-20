@@ -278,3 +278,53 @@ func TestRepeatedTabSwitchesDoNotPanic(t *testing.T) {
 		}
 	}
 }
+
+func TestCurrentModelResolvesFromAgentsList(t *testing.T) {
+	m := newTestModel()
+	m.currentAgent = "explore"
+	m.agents = []client.AgentInfo{
+		{Name: "build", Model: "us.anthropic.claude-opus-4-6-v1"},
+		{Name: "explore", Model: "qwen3-30b-a3b"},
+	}
+
+	model, ok := m.currentModel()
+	if !ok || model != "qwen3-30b-a3b" {
+		t.Errorf("currentModel() = (%q, %v), want (\"qwen3-30b-a3b\", true)", model, ok)
+	}
+}
+
+func TestCurrentModelFalseWhenUnknownOrUnset(t *testing.T) {
+	m := newTestModel()
+	m.currentAgent = "explore"
+
+	if _, ok := m.currentModel(); ok {
+		t.Error("currentModel() should report ok=false before the agents list has loaded")
+	}
+
+	m.agents = []client.AgentInfo{{Name: "explore", Model: ""}}
+	if _, ok := m.currentModel(); ok {
+		t.Error("currentModel() should report ok=false when the matched agent has no model set")
+	}
+}
+
+func TestViewFooterShowsModelNotTabHint(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	m.currentAgent = "explore"
+	m.agents = []client.AgentInfo{
+		{Name: "build", Model: "us.anthropic.claude-opus-4-6-v1"},
+		{Name: "explore", Model: "qwen3-30b-a3b"},
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "agent: explore") {
+		t.Errorf("View() = %q, want it to show the current agent", view)
+	}
+	if !strings.Contains(view, "model: qwen3-30b-a3b") {
+		t.Errorf("View() = %q, want it to show the current agent's model", view)
+	}
+	if strings.Contains(view, "tab to switch") {
+		t.Errorf("View() = %q, want the Tab-cycle hint removed in favor of the model name", view)
+	}
+}

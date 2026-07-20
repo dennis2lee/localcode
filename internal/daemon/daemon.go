@@ -130,10 +130,13 @@ func (d *Daemon) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
 
 // AgentInfo is the client-facing view of a configured agent — enough to
 // build a picker (TUI Tab-cycle, Web UI dropdown) without exposing the
-// full config.AgentConfig (system prompt, tool list).
+// full config.AgentConfig (system prompt, tool list). Model is resolved
+// from the agent's profile so clients can show e.g. "agent: explore ·
+// model: qwen3-30b-a3b" without needing their own copy of config.json.
 type AgentInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	Model       string `json:"model,omitempty"`
 }
 
 // handleListAgents returns every agent defined in config.json's agents
@@ -148,7 +151,12 @@ func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]AgentInfo, 0, len(names))
 	for _, name := range names {
-		out = append(out, AgentInfo{Name: name, Description: d.Loop.Config.Agents[name].Description})
+		agentCfg := d.Loop.Config.Agents[name]
+		info := AgentInfo{Name: name, Description: agentCfg.Description}
+		if profile, ok := d.Loop.Config.Profiles[agentCfg.Profile]; ok {
+			info.Model = profile.Model
+		}
+		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

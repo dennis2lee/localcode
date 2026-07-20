@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.15.0
+
+- TUI status line: replace the "(tab to switch: a → b → c)" hint next to `agent: <name>` with the model ID the current agent's profile actually resolves to (`agent: explore  ·  model: qwen3-30b-a3b`) — `GET /api/agents` now reports each agent's resolved model, so this needed no client-side config access.
+- Docs (MODELS.md): add a troubleshooting entry for `ValidationException: ... Your account is not authorized to invoke this API operation` on Bedrock — usually a malformed model ID (a `[1m]` "1M context" suffix copied from a UI label isn't part of the real model ID) or a model not yet supported by the Converse API.
+
 ## v0.14.0
 
 - **Fix a TUI crash on repeated Tab presses**: `strings: illegal use of non-zero Builder copied by value`. Root cause — `Model.transcript` was a `strings.Builder`, but `Model.Update` has a value receiver (bubbletea's Program copies the whole model on every call), and `strings.Builder` embeds a self-referential pointer it uses to detect illegal copies. Once the transcript had any content, the next copy-then-write panicked. `transcript` is now a plain string, which has no such restriction. Added a regression test that drives 50 rapid Tab presses after seeding the transcript.

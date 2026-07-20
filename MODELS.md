@@ -110,6 +110,10 @@ localcode --agent general-purpose
 3. `... with on-demand throughput isn't supported` → 모델 ID에 리전 프리픽스(`us.` 등)가 빠짐
 4. `ValidationException: model identifier is invalid` → 오타 또는 해당 리전에서 미지원 모델
 5. `no EC2 IMDS role found` / `failed to refresh cached credentials` → **AWS 기본 자격 증명 체인이 아무 것도 못 찾고 EC2 인스턴스 메타데이터까지 떨어진 것**입니다 (당연히 노트북/PC에선 실패). `aws sso login`이나 `localcode login bedrock`을 이미 실행해서 다른 도구(예: AWS CLI, 실제 Claude Code)에서는 되는데 localcode에서만 이 에러가 난다면, 그 세션 자체는 문제가 아니라 **localcode가 그 프로필을 쓰도록 지정을 안 한 것**이 원인일 가능성이 큽니다 — `config.json`의 `providers.<name>.profile`에 그 AWS 프로필 이름을 명시하거나(`localcode login bedrock`은 기본으로 `localcode-bedrock`을 씁니다), 셸에서 `AWS_PROFILE` 환경 변수를 지정하세요. localcode 최신 버전은 이 에러를 감지하면 콘솔에 바로 이 해결법을 안내하는 힌트를 덧붙입니다.
+6. `ValidationException: ... StatusCode: 400 ... Your account is not authorized to invoke this API operation` → 자격 증명은 정상적으로 찾았는데(그래서 위 5번과 다르게 IMDS 에러가 아님) **모델 ID 자체가 유효하지 않거나, 그 계정/역할에 그 모델 access가 없는 것**입니다. 흔한 원인:
+   - **모델 ID에 `[1m]` 같은 대괄호 표기가 섞여 들어간 경우** (예: `us.anthropic.claude-sonnet-4-6[1m]`) — 이건 유효한 Bedrock 모델 ID가 아닙니다. Claude Code 같은 도구가 화면에 "Sonnet 4.6 (1M context)"라고 표시하는 건 그냥 사람이 보는 라벨이지 모델 ID의 일부가 아닙니다. `config.json`의 `profiles.<name>.model`에는 대괄호 없이 정확한 ID(`us.anthropic.claude-sonnet-4-6`)만 넣으세요.
+   - **Bedrock Converse API가 아직 지원하지 않는 모델**을 넣은 경우 (예: `claude-opus-4-8`) — 위 4번째 표(`실제 사용 가능한 모델 ID`)에 없는 모델은 대부분 이 경우입니다. 표에 있는 모델로 바꾸거나, 꼭 그 모델이 필요하면 [Anthropic API 직접 사용](#anthropic-api-직접-사용) provider로 우회하세요.
+   - 콘솔의 **Bedrock → Model access**에서 그 모델의 access가 실제로 활성화되어 있는지도 다시 확인하세요 (특정 모델만 안 켜져 있는 경우가 흔합니다).
 
 ## Anthropic API 직접 사용
 

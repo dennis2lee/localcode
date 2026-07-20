@@ -376,6 +376,9 @@ func TestDaemonListAgents(t *testing.T) {
 		if a.Name == "plan" && a.Description != "Read-only planning." {
 			t.Errorf("plan agent description = %q, want %q", a.Description, "Read-only planning.")
 		}
+		if a.Model != "test-model" {
+			t.Errorf("agent %q Model = %q, want %q (resolved from its profile)", a.Name, a.Model, "test-model")
+		}
 	}
 }
 
