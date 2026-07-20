@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.18.0
+
+- **Queue prompts sent while a turn is in progress**, in both the TUI and Web UI. Previously, submitting a message while the model was still streaming a reply either did nothing (TUI) or was blocked by a disabled Send button (Web UI) — the user had to notice and retype it later. A plain prompt submitted mid-turn now queues instead: it's echoed immediately as `[queued] <text>`, the status line shows `(N queued)`, and each queued prompt sends automatically, in order, the moment the current turn actually finishes (`message.part.end`/error) — no need to press Enter/Send again. Multiple prompts can queue up. `/`-prefixed commands and `exit`/`:q` are never queued (replaying them later would send them as literal chat text instead of running them), so they keep the old wait-for-the-turn-to-finish behavior.
+
 ## v0.17.0
 
 - Fix Bedrock `ValidationException: ... 'temperature' is deprecated for this model` on some newer models (Opus, confirmed by a user; Sonnet unaffected). Root cause: `Chat()` always sent `Temperature` to the Bedrock Converse API, even at its Go zero-value (0.0) when a profile never configured one in `config.json` — a field these models reject outright regardless of value. The OpenAI-compat and Anthropic-direct providers already skip this via `omitempty` on their wire structs; Bedrock's typed `InferenceConfiguration` has no such tag, so `buildInferenceConfig` now only sets `Temperature` when a profile explicitly configured a non-zero value. See MODELS.md item 7.

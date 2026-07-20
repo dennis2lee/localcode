@@ -86,6 +86,7 @@ type Model struct {
 	transcript   string
 	pending      *pendingPermission
 	waiting      bool
+	queue        []string
 	errMsg       string
 	currentAgent string
 	agents       []client.AgentInfo
@@ -153,6 +154,30 @@ func (m Model) sendMessage(text string) tea.Cmd {
 		err := m.client.SendMessage(context.Background(), m.sessionID, text)
 		return turnDoneMsg{err: err}
 	}
+}
+
+// isPlainPrompt reports whether text is an ordinary chat message rather
+// than something the TUI itself intercepts (a "/"-prefixed local or
+// server-side command, or exit/:q). Only plain prompts are safe to queue
+// while a turn is in progress — queueing a command would mean replaying it
+// as literal chat text to the model once dequeued, instead of running it.
+func isPlainPrompt(text string) bool {
+	lower := strings.ToLower(text)
+	return !strings.HasPrefix(text, "/") && lower != "exit" && lower != ":q"
+}
+
+// dequeue sends the next queued prompt once the current turn has actually
+// finished (m.waiting was just cleared) — the common case for someone who
+// kept typing while the model was still streaming a reply. Returns nil if
+// nothing is queued or a turn is still in progress.
+func (m *Model) dequeue() tea.Cmd {
+	if m.waiting || len(m.queue) == 0 {
+		return nil
+	}
+	next := m.queue[0]
+	m.queue = m.queue[1:]
+	m.waiting = true
+	return m.sendMessage(next)
 }
 
 func (m Model) resolvePermission(id string, allow bool) tea.Cmd {
@@ -310,9 +335,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil // waiting for y/n, ignore stray enters
 			}
 			text := strings.TrimSpace(m.input.Value())
-			if text == "" || m.waiting {
+			if text == "" {
 				return m, nil
 			}
+
+			// A turn is already streaming: queue a plain prompt so it sends
+			// automatically the moment the current one finishes, instead of
+			// silently dropping it and making the user remember to retype
+			// it. Local commands and /agent still wait for the turn to
+			// finish first, same as before — they don't go through
+			// sendMessage, so queueing them would mean replaying them as
+			// literal chat text later.
+			if m.waiting {
+				if isPlainPrompt(text) {
+					m.queue = append(m.queue, text)
+					m.appendLocal(fmt.Sprintf("[queued] %s", text))
+				}
+				m.input.Reset()
+				m.resizeLayout()
+				return m, nil
+			}
+
 			m.input.Reset()
 			m.resizeLayout()
 
@@ -363,12 +406,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		m.applyEvent(events.Event(msg))
+		if cmd := m.dequeue(); cmd != nil {
+			return m, tea.Batch(listenForEvent(m.events), cmd)
+		}
 		return m, listenForEvent(m.events)
 
 	case turnDoneMsg:
 		if msg.err != nil {
 			m.waiting = false
 			m.errMsg = msg.err.Error()
+			if cmd := m.dequeue(); cmd != nil {
+				return m, cmd
+			}
 		}
 		// On success we leave m.waiting as-is: the daemon accepted the
 		// message and is streaming the actual turn via events; waiting
@@ -492,7 +541,11 @@ func (m Model) View() string {
 		b.WriteString(modalStyle.Render(fmt.Sprintf("Permission request [%s]: %s  (y/n)", m.pending.tool, m.pending.description)))
 		b.WriteString("\n")
 	} else if m.waiting {
-		b.WriteString(statusStyle.Render("Waiting for response..."))
+		status := "Waiting for response..."
+		if n := len(m.queue); n > 0 {
+			status += fmt.Sprintf(" (%d queued)", n)
+		}
+		b.WriteString(statusStyle.Render(status))
 		b.WriteString("\n")
 	} else if m.errMsg != "" {
 		b.WriteString(errorStyle.Render("Error: " + m.errMsg))

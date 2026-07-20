@@ -262,6 +262,7 @@
   let lastUsage = null; // {input_tokens, output_tokens, max_context, percent, tps, show_tps, model}
   let autoCompactEnabled = true;
   let showTPS = true;
+  let promptQueue = []; // plain prompts submitted while a turn is in flight
 
   function appendLine(html) {
     transcriptEl.insertAdjacentHTML('beforeend', html);
@@ -282,7 +283,6 @@
 
   function setWaiting(v) {
     waiting = v;
-    sendBtn.disabled = v;
     if (v) {
       commDotEl.classList.remove('flash');
       commDotEl.classList.add('active');
@@ -290,8 +290,31 @@
       commDotEl.classList.remove('active');
       commDotEl.classList.add('flash');
       setTimeout(() => commDotEl.classList.remove('flash'), 600);
+      dequeueNext();
     }
     renderStatusBar();
+  }
+
+  // isPlainPrompt reports whether text is an ordinary chat message rather
+  // than a "/"-prefixed command. Only plain prompts are safe to queue while
+  // a turn is in flight — queueing a command would mean replaying it as
+  // literal chat text to the model once dequeued, instead of running it.
+  function isPlainPrompt(text) {
+    return !text.startsWith('/');
+  }
+
+  // dequeueNext sends the next queued prompt once the current turn has
+  // actually finished (setWaiting(false) was just called) — the common
+  // case for someone who kept typing while the model was still streaming a
+  // reply. No-op if nothing is queued.
+  function dequeueNext() {
+    if (promptQueue.length === 0) return;
+    const next = promptQueue.shift();
+    setWaiting(true);
+    api('POST', `/api/sessions/${sessionID}/messages`, { text: next }).catch((err) => {
+      setWaiting(false);
+      appendLine(`<div class="msg-error">Error: ${escapeHtml(String(err))}</div>`);
+    });
   }
 
   // renderStatusBar draws the single line below the prompt box: current
@@ -307,7 +330,7 @@
     if (showTPS && lastUsage && lastUsage.tps) {
       parts.push(`${lastUsage.tps.toFixed(1)} tok/s`);
     }
-    if (waiting) parts.push('waiting for response…');
+    if (waiting) parts.push(promptQueue.length > 0 ? `waiting for response… (${promptQueue.length} queued)` : 'waiting for response…');
     statusTextEl.textContent = parts.join('  ·  ');
 
     statusBarEl.classList.remove('ctx-warn', 'ctx-crit');
@@ -607,6 +630,10 @@
     tasks = new Map();
     renderTasks();
     lastUsage = null;
+    // A queued prompt belongs to the session it was typed in — carrying it
+    // over to whatever session is selected next would send it somewhere
+    // the user never intended.
+    promptQueue = [];
     setWaiting(false);
     setCurrentAgent(agent);
     renderSessionList();
@@ -734,7 +761,25 @@
 
   async function sendMessage() {
     const text = inputEl.value.trim();
-    if (!text || waiting) return;
+    if (!text) return;
+
+    // A turn is already streaming: queue a plain prompt so it sends
+    // automatically the moment the current one finishes, instead of
+    // silently doing nothing and making the user remember to retype it.
+    // Commands still wait for the turn to finish first — they don't go
+    // through the /messages endpoint, so queueing them would mean
+    // replaying them as literal chat text later.
+    if (waiting) {
+      if (isPlainPrompt(text)) {
+        promptQueue.push(text);
+        appendLine(`<div class="msg-tool">[queued] ${escapeHtml(text)}</div>`);
+        renderStatusBar();
+        inputEl.value = '';
+        autoResizeInput();
+      }
+      return;
+    }
+
     inputEl.value = '';
     autoResizeInput();
 

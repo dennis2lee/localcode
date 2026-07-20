@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -364,5 +365,128 @@ func TestLongModelReplyWrapsToViewportWidth(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "word59") {
 		t.Errorf("viewport view = %q, want the tail of a long reply (\"word59\") still visible — MaxWidth truncation used to silently drop it", rendered)
+	}
+}
+
+// TestEnterQueuesPlainPromptWhileWaiting is a regression test for a UX gap:
+// pressing Enter while a turn is streaming used to silently drop the typed
+// text (the input was cleared? no — text just sat there and Update did
+// nothing), forcing the user to notice and retype it once the reply
+// finished. A plain prompt typed mid-turn should queue instead.
+func TestEnterQueuesPlainPromptWhileWaiting(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+
+	m, cmd := pressEnterWith(t, m, "second question")
+
+	if cmd != nil {
+		t.Errorf("queueing a prompt should not issue a send command yet, got %v", cmd)
+	}
+	if len(m.queue) != 1 || m.queue[0] != "second question" {
+		t.Errorf("queue = %v, want [\"second question\"]", m.queue)
+	}
+	if m.input.Value() != "" {
+		t.Errorf("input = %q, want it cleared after queueing", m.input.Value())
+	}
+	if !strings.Contains(m.transcript, "second question") {
+		t.Errorf("transcript = %q, want the queued prompt echoed so the user can see it was accepted", m.transcript)
+	}
+	if !m.waiting {
+		t.Error("waiting should remain true — the original turn hasn't finished")
+	}
+}
+
+// TestEnterQueuesMultiplePrompts confirms the queue holds more than one
+// message, per the requirement that several prompts can stack up while a
+// single long turn is in progress.
+func TestEnterQueuesMultiplePrompts(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+
+	m, _ = pressEnterWith(t, m, "first")
+	m, _ = pressEnterWith(t, m, "second")
+	m, _ = pressEnterWith(t, m, "third")
+
+	if got, want := m.queue, []string{"first", "second", "third"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("queue = %v, want %v", got, want)
+	}
+}
+
+// TestEnterDoesNotQueueCommandsWhileWaiting: local/server commands aren't
+// queued, since replaying them later via sendMessage would send them as
+// literal chat text to the model instead of running them as commands.
+func TestEnterDoesNotQueueCommandsWhileWaiting(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+
+	m, cmd := pressEnterWith(t, m, "/help")
+
+	if cmd != nil {
+		t.Errorf("a command while waiting should still be a no-op, got %v", cmd)
+	}
+	if len(m.queue) != 0 {
+		t.Errorf("queue = %v, want commands never queued", m.queue)
+	}
+}
+
+// TestQueuedPromptAutoSendsWhenTurnFinishes drives the full loop: a prompt
+// queued during a turn should be sent automatically — without the user
+// pressing Enter again — the moment that turn's message.part.end event
+// arrives.
+func TestQueuedPromptAutoSendsWhenTurnFinishes(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m.waiting = true
+	m, _ = pressEnterWith(t, m, "queued prompt")
+	if len(m.queue) != 1 {
+		t.Fatalf("queue = %v, want 1 queued prompt before the turn finishes", m.queue)
+	}
+
+	// applyEvent is exactly what Update's eventMsg case calls before
+	// checking whether to dequeue — drive it directly rather than through
+	// Update/tea.Batch, since Batch's Cmd only returns a BatchMsg describing
+	// the sub-commands rather than running them, which would make cmd()
+	// here a no-op instead of the real HTTP send this test wants to check.
+	m.applyEvent(events.Event{Type: events.TypeMessagePartEnd})
+	cmd := m.dequeue()
+
+	if len(m.queue) != 0 {
+		t.Errorf("queue = %v, want it drained once the turn finished", m.queue)
+	}
+	if !m.waiting {
+		t.Error("waiting should be true again — the queued prompt is now its own in-flight turn")
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to send the queued prompt")
+	}
+	cmd() // execute the HTTP send synchronously
+	if !strings.Contains(gotBody, "queued prompt") {
+		t.Errorf("POST body = %q, want it to contain the queued prompt", gotBody)
+	}
+}
+
+// TestDequeueNoopWhenEmptyOrStillWaiting guards the two conditions under
+// which dequeue must do nothing: no turn has actually finished yet, or
+// there's simply nothing queued.
+func TestDequeueNoopWhenEmptyOrStillWaiting(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+	m.queue = []string{"pending"}
+	if cmd := m.dequeue(); cmd != nil {
+		t.Error("dequeue while still waiting should be a no-op")
+	}
+
+	m.waiting = false
+	m.queue = nil
+	if cmd := m.dequeue(); cmd != nil {
+		t.Error("dequeue with an empty queue should be a no-op")
 	}
 }
