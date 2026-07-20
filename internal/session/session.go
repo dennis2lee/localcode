@@ -200,6 +200,27 @@ func (s *Store) Delete(sessionID string) error {
 	return nil
 }
 
+// DeleteAll removes every session in the store — visible sessions and
+// background-task children alike — and their persisted files, if any.
+// Unlike Delete, callers that need to refuse this while some session has
+// a turn in-flight (see daemon.handleDeleteAllSessions) must check that
+// themselves first; DeleteAll itself has no such guard.
+func (s *Store) DeleteAll() error {
+	s.mu.Lock()
+	ids := make([]string, 0, len(s.sessions))
+	for id := range s.sessions {
+		ids = append(ids, id)
+	}
+	s.mu.Unlock()
+
+	for _, id := range ids {
+		if err := s.Delete(id); err != nil {
+			return fmt.Errorf("delete session %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
 // ListVisible returns all top-level (visible:true) sessions — i.e. the
 // ones a user picks from when resuming, not background tasks — newest
 // first.

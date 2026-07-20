@@ -125,8 +125,8 @@ func TestHelpCommandRendersLocally(t *testing.T) {
 	if cmd != nil {
 		t.Errorf("/help should not issue a command (no server round trip), got %v", cmd)
 	}
-	if !strings.Contains(m.transcript.String(), "Available commands") {
-		t.Errorf("transcript = %q, want it to contain the help text", m.transcript.String())
+	if !strings.Contains(m.transcript, "Available commands") {
+		t.Errorf("transcript = %q, want it to contain the help text", m.transcript)
 	}
 	if m.input.Value() != "" {
 		t.Errorf("input should be cleared after /help, got %q", m.input.Value())
@@ -153,8 +153,8 @@ func TestVersionCommandFetchesFromDaemon(t *testing.T) {
 	updated, _ := m.Update(msg)
 	m = updated.(Model)
 
-	if !strings.Contains(m.transcript.String(), "1.2.3") {
-		t.Errorf("transcript = %q, want it to contain the fetched version", m.transcript.String())
+	if !strings.Contains(m.transcript, "1.2.3") {
+		t.Errorf("transcript = %q, want it to contain the fetched version", m.transcript)
 	}
 }
 
@@ -231,8 +231,8 @@ func TestAgentSwitchedEventUpdatesCurrentAgent(t *testing.T) {
 	// line — View() already renders the current agent in the footer on
 	// every frame, so writing one here as well would leave a permanent
 	// "switched to X" line behind on every single Tab press.
-	if m.transcript.String() != "" {
-		t.Errorf("transcript = %q, want it untouched by an agent.switched event (footer already shows the current agent)", m.transcript.String())
+	if m.transcript != "" {
+		t.Errorf("transcript = %q, want it untouched by an agent.switched event (footer already shows the current agent)", m.transcript)
 	}
 }
 
@@ -244,7 +244,37 @@ func TestAgentCommandListsLocally(t *testing.T) {
 	if cmd != nil {
 		t.Errorf("/agent (list) should not issue a command, got %v", cmd)
 	}
-	if !strings.Contains(m.transcript.String(), "build") || !strings.Contains(m.transcript.String(), "implements features") {
-		t.Errorf("transcript = %q, want it to list the known agent", m.transcript.String())
+	if !strings.Contains(m.transcript, "build") || !strings.Contains(m.transcript, "implements features") {
+		t.Errorf("transcript = %q, want it to list the known agent", m.transcript)
+	}
+}
+
+// TestRepeatedTabSwitchesDoNotPanic is a regression test for a real crash:
+// Model.Update has a value receiver, so bubbletea's Program copies the
+// whole Model by value on every call. transcript used to be a
+// strings.Builder, which embeds a self-referential pointer it uses to
+// detect illegal copies — once the transcript had any content, copying
+// the Model (as every Update call does) and then writing to the copy
+// panicked with "strings: illegal use of non-zero Builder copied by
+// value". Rapid repeated Tab presses hit this reliably in practice.
+// transcript is now a plain string; this drives the exact repro sequence
+// (write something to the transcript, then cycle Tab many times) to
+// guard against a regression back to a self-referential type.
+func TestRepeatedTabSwitchesDoNotPanic(t *testing.T) {
+	m := newTestModel()
+	m.agents = []client.AgentInfo{{Name: "build"}, {Name: "explore"}, {Name: "plan"}, {Name: "review"}}
+
+	// Give the transcript non-empty content first, the same way a real
+	// session would (a /help response, a streamed reply, etc.).
+	m, _ = pressEnterWith(t, m, "/help")
+
+	for i := 0; i < 50; i++ {
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = updated.(Model)
+		if cmd != nil {
+			msg := cmd()
+			updated, _ = m.Update(msg)
+			m = updated.(Model)
+		}
 	}
 }

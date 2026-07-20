@@ -125,6 +125,13 @@ func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/api/sessions/"+sessionID, nil, nil)
 }
 
+// DeleteAllSessions removes every session on the daemon — visible sessions
+// and background-task children alike. Fails with a conflict error if any
+// session has a turn in progress (nothing is deleted in that case).
+func (c *Client) DeleteAllSessions(ctx context.Context) error {
+	return c.doJSON(ctx, http.MethodDelete, "/api/sessions", nil, nil)
+}
+
 // CommandInfo is one loaded custom slash command, as offered by the
 // daemon's GET /api/commands — for a /help listing or autocomplete.
 // Running the command still goes through SendMessage like any other text.

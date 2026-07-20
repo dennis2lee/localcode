@@ -78,6 +78,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/sessions", d.handleListSessions)
 	d.mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)
 	d.mux.HandleFunc("DELETE /api/sessions/{id}", d.handleDeleteSession)
+	d.mux.HandleFunc("DELETE /api/sessions", d.handleDeleteAllSessions)
 	d.mux.HandleFunc("POST /api/sessions/{id}/agent", d.handleSwitchAgent)
 	d.mux.HandleFunc("POST /api/sessions/{id}/rename", d.handleRenameSession)
 	d.mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleSendMessage)
@@ -253,6 +254,37 @@ func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Loop.ClearSessionState(id)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteAllSessions wipes every session (visible and background-task
+// children alike) — the "delete all" bulk action. Refuses if ANY session
+// has a turn in-flight, same guard as a single delete, so a running turn
+// never writes to a session whose file handle just got closed out from
+// under it.
+func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request) {
+	sessions := d.Loop.Store.AllSessions()
+
+	d.busyMu.Lock()
+	var busyIDs []string
+	for _, s := range sessions {
+		if d.busy[s.ID] {
+			busyIDs = append(busyIDs, s.ID)
+		}
+	}
+	d.busyMu.Unlock()
+	if len(busyIDs) > 0 {
+		writeError(w, http.StatusConflict, fmt.Errorf("sessions with a turn in progress: %v", busyIDs))
+		return
+	}
+
+	if err := d.Loop.Store.DeleteAll(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, s := range sessions {
+		d.Loop.ClearSessionState(s.ID)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

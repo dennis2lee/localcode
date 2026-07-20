@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.14.0
+
+- **Fix a TUI crash on repeated Tab presses**: `strings: illegal use of non-zero Builder copied by value`. Root cause — `Model.transcript` was a `strings.Builder`, but `Model.Update` has a value receiver (bubbletea's Program copies the whole model on every call), and `strings.Builder` embeds a self-referential pointer it uses to detect illegal copies. Once the transcript had any content, the next copy-then-write panicked. `transcript` is now a plain string, which has no such restriction. Added a regression test that drives 50 rapid Tab presses after seeding the transcript.
+- **Delete sessions, one or all at once.** Previously the TUI had no session-management UI at all (only resume-by-number or start-new), and the Web UI could only delete one session at a time.
+  - New `DELETE /api/sessions` bulk-delete endpoint (`session.Store.DeleteAll`, `client.DeleteAllSessions`) — refuses (409) if *any* session has a turn in progress, so a bulk delete never partially succeeds.
+  - TUI: the startup session picker now supports `d<N>` (delete session N, e.g. `d1`) and `da` (delete every session, with a typed "yes" confirmation).
+  - Web UI: a **delete all** button next to **+ new session** in the Sessions panel.
+
 ## v0.13.0
 
 - **All program-facing output is now in English** — TUI (`internal/tui`), Web UI (`internal/daemon/static/index.html`), CLI (`localcode login`/`localcode mcp`/session picker), and agent-loop local command replies (`/skill`, `/memory`, `/config`, `/compact`, `/usage`) no longer mix in Korean strings. Documentation files (README/USAGE/MODELS/CHANGELOG/IMPROVEMENTS) are unaffected — this covers only what the running program prints or renders.

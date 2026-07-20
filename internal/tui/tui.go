@@ -75,7 +75,15 @@ type Model struct {
 	termHeight int
 	events     <-chan events.Event
 
-	transcript   strings.Builder
+	// transcript is a plain string, deliberately not a strings.Builder:
+	// Model.Update has a value receiver (bubbletea's Program stores/passes
+	// the model by value between calls), and strings.Builder embeds a
+	// self-referential pointer it uses to detect copies — once non-empty,
+	// copying the containing struct and then writing to the copy panics
+	// with "illegal use of non-zero Builder copied by value". That's
+	// exactly what repeatedly pressing Tab (or any rapid sequence of
+	// events) used to trigger. Plain strings have no such restriction.
+	transcript   string
 	pending      *pendingPermission
 	waiting      bool
 	errMsg       string
@@ -217,8 +225,8 @@ func (m Model) agentNames() []string {
 // client-side (well, /version does hit the daemon, but the answer isn't
 // part of the session's event log either way).
 func (m *Model) appendLocal(text string) {
-	m.transcript.WriteString(toolStyle.Render(text) + "\n\n")
-	m.viewport.SetContent(m.transcript.String())
+	m.transcript += toolStyle.Render(text) + "\n\n"
+	m.viewport.SetContent(m.transcript)
 	m.viewport.GotoBottom()
 }
 
@@ -387,25 +395,25 @@ func (m *Model) applyEvent(ev events.Event) {
 	switch ev.Type {
 	case events.TypeUserMessage:
 		if text, ok := ev.Data["text"].(string); ok {
-			m.transcript.WriteString(userStyle.Render("You: ") + text + "\n\n")
+			m.transcript += userStyle.Render("You: ") + text + "\n\n"
 		}
 	case events.TypeMessagePartDelta:
 		if text, ok := ev.Data["text"].(string); ok {
-			m.transcript.WriteString(text)
+			m.transcript += text
 		}
 	case events.TypeMessagePartEnd:
-		m.transcript.WriteString("\n\n")
+		m.transcript += "\n\n"
 		m.waiting = false
 	case events.TypeToolStart:
 		name, _ := ev.Data["name"].(string)
-		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[tool] running %s...\n", name)))
+		m.transcript += toolStyle.Render(fmt.Sprintf("[tool] running %s...\n", name))
 	case events.TypeToolEnd:
 		isErr, _ := ev.Data["is_error"].(bool)
 		status := "done"
 		if isErr {
 			status = "failed"
 		}
-		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[tool] %s\n\n", status)))
+		m.transcript += toolStyle.Render(fmt.Sprintf("[tool] %s\n\n", status))
 	case events.TypePermissionRequest:
 		id, _ := ev.Data["id"].(string)
 		tool, _ := ev.Data["tool"].(string)
@@ -414,11 +422,11 @@ func (m *Model) applyEvent(ev events.Event) {
 	case events.TypeTaskSpawned:
 		taskID, _ := ev.Data["task_id"].(string)
 		agentName, _ := ev.Data["agent"].(string)
-		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[task] %s (%s) started in background\n", taskID, agentName)))
+		m.transcript += toolStyle.Render(fmt.Sprintf("[task] %s (%s) started in background\n", taskID, agentName))
 	case events.TypeTaskStatus:
 		taskID, _ := ev.Data["task_id"].(string)
 		status, _ := ev.Data["status"].(string)
-		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[task] %s: %s\n", taskID, status)))
+		m.transcript += toolStyle.Render(fmt.Sprintf("[task] %s: %s\n", taskID, status))
 	case events.TypeAgentSwitched:
 		// Just update the status line the footer already renders every
 		// frame — do NOT also write a transcript line here. This event
@@ -435,7 +443,7 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.errMsg = msg
 		}
 	}
-	m.viewport.SetContent(m.transcript.String())
+	m.viewport.SetContent(m.transcript)
 	m.viewport.GotoBottom()
 }
 

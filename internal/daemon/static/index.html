@@ -94,6 +94,7 @@
   .session-item .actions { display: flex; gap: 4px; }
   .session-item button { padding: 3px 8px; font-size: 11px; }
   .session-item .danger-btn { background: var(--err); color: #fff; }
+  .icon-btn.danger-btn { background: var(--err); color: #fff; border-color: var(--err); }
   .mcp-item {
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -191,7 +192,10 @@
     <div class="side-section">
       <div class="side-header">
         <h2>Sessions</h2>
-        <button class="icon-btn" id="new-session-btn" title="start a new session">+ new session</button>
+        <div style="display:flex; gap:4px;">
+          <button class="icon-btn" id="new-session-btn" title="start a new session">+ new session</button>
+          <button class="icon-btn danger-btn" id="delete-all-sessions-btn" title="delete all sessions">delete all</button>
+        </div>
       </div>
       <div id="session-list"></div>
     </div>
@@ -238,6 +242,7 @@
   const permissionDenyBtn = document.getElementById('permission-deny');
   const sessionListEl = document.getElementById('session-list');
   const newSessionBtn = document.getElementById('new-session-btn');
+  const deleteAllSessionsBtn = document.getElementById('delete-all-sessions-btn');
   const agentSelectEl = document.getElementById('agent-select');
   const mcpServersEl = document.getElementById('mcp-servers');
   const statusTextEl = document.getElementById('status-text');
@@ -619,7 +624,19 @@
     }
   }
 
+  async function deleteAllSessions() {
+    if (!window.confirm('Delete ALL sessions? This cannot be undone.')) return;
+    try {
+      await api('DELETE', '/api/sessions');
+    } catch (err) {
+      appendLine(`<div class="msg-error">failed to delete all sessions: ${escapeHtml(String(err))}</div>`);
+      return;
+    }
+    await createNewSession();
+  }
+
   newSessionBtn.addEventListener('click', createNewSession);
+  deleteAllSessionsBtn.addEventListener('click', deleteAllSessions);
 
   const HELP_TEXT = [
     'Available commands:',

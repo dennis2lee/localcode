@@ -279,31 +279,68 @@ func runTUIClient(serverURL, agentName string) error {
 // screen. This runs before tea.NewProgram's alt-screen, so plain
 // stdin/stdout is fine here. A listing failure or an empty list falls
 // back to creating a new session without prompting.
+//
+// Besides picking a session by number or starting a new one ("n"), the
+// prompt also supports deleting sessions right here — "d<N>" deletes one
+// listed session and re-shows the (shorter) list, "da" deletes every
+// session after a yes/no confirmation. There's no other session-management
+// screen in the TUI, so this is where it lives.
 func pickOrCreateSession(ctx context.Context, c *client.Client, agentName string) (session.Session, error) {
-	sessions, err := c.ListSessions(ctx)
-	if err != nil || len(sessions) == 0 {
-		return c.CreateSession(ctx, agentName)
-	}
-
-	fmt.Println("Pick a session to resume:")
-	for i, s := range sessions {
-		fmt.Printf("  [%d] %s  (%s, %s)\n", i+1, s.ID, s.Agent, s.CreatedAt.Local().Format("2006-01-02 15:04"))
-	}
-	fmt.Print("  [n] start a new session\nChoice (number or n, default n): ")
-
 	reader := bufio.NewReader(os.Stdin)
-	line, _ := reader.ReadString('\n')
-	line = strings.TrimSpace(line)
 
-	if line == "" || strings.EqualFold(line, "n") {
-		return c.CreateSession(ctx, agentName)
+	for {
+		sessions, err := c.ListSessions(ctx)
+		if err != nil || len(sessions) == 0 {
+			return c.CreateSession(ctx, agentName)
+		}
+
+		fmt.Println("Pick a session to resume:")
+		for i, s := range sessions {
+			fmt.Printf("  [%d] %s  (%s, %s)\n", i+1, s.ID, s.Agent, s.CreatedAt.Local().Format("2006-01-02 15:04"))
+		}
+		fmt.Print("  [n] start a new session\n  [d<N>] delete session N (e.g. d1)\n  [da] delete ALL sessions\nChoice (number, n, d<N>, or da; default n): ")
+
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+
+		switch {
+		case line == "" || strings.EqualFold(line, "n"):
+			return c.CreateSession(ctx, agentName)
+
+		case strings.EqualFold(line, "da"):
+			fmt.Print("Delete ALL sessions? This cannot be undone. Type \"yes\" to confirm: ")
+			confirm, _ := reader.ReadString('\n')
+			if strings.TrimSpace(strings.ToLower(confirm)) != "yes" {
+				fmt.Println("Cancelled.")
+				continue
+			}
+			if err := c.DeleteAllSessions(ctx); err != nil {
+				fmt.Println("Failed to delete all sessions:", err)
+				continue
+			}
+			fmt.Println("All sessions deleted.")
+			return c.CreateSession(ctx, agentName)
+
+		default:
+			if rest, ok := strings.CutPrefix(strings.ToLower(line), "d"); ok {
+				if idx, convErr := strconv.Atoi(strings.TrimSpace(rest)); convErr == nil && idx >= 1 && idx <= len(sessions) {
+					target := sessions[idx-1]
+					if err := c.DeleteSession(ctx, target.ID); err != nil {
+						fmt.Println("Failed to delete:", err)
+					} else {
+						fmt.Printf("Deleted session %s.\n", target.ID)
+					}
+					continue
+				}
+			}
+			idx, convErr := strconv.Atoi(line)
+			if convErr != nil || idx < 1 || idx > len(sessions) {
+				fmt.Println("Invalid input — starting a new session.")
+				return c.CreateSession(ctx, agentName)
+			}
+			return sessions[idx-1], nil
+		}
 	}
-	idx, err := strconv.Atoi(line)
-	if err != nil || idx < 1 || idx > len(sessions) {
-		fmt.Println("Invalid input — starting a new session.")
-		return c.CreateSession(ctx, agentName)
-	}
-	return sessions[idx-1], nil
 }
 
 func loadConfig(explicitPath string) (*config.Config, error) {

@@ -791,3 +791,87 @@ func TestDaemonDeleteSessionRefusesWhileBusy(t *testing.T) {
 		t.Error("expected the session to still exist after a refused delete")
 	}
 }
+
+func TestDaemonDeleteAllSessions(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	s1, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	s2, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	if err := c.DeleteAllSessions(ctx); err != nil {
+		t.Fatalf("DeleteAllSessions: %v", err)
+	}
+
+	for _, id := range []string{s1.ID, s2.ID} {
+		if _, err := d.Loop.Store.Get(id); err == nil {
+			t.Errorf("expected session %s to be gone after DeleteAllSessions", id)
+		}
+	}
+}
+
+// TestDaemonDeleteAllSessionsRefusesWhileAnyBusy confirms a single busy
+// session blocks the whole bulk delete — nothing gets deleted, not even
+// the sessions that weren't busy.
+func TestDaemonDeleteAllSessionsRefusesWhileAnyBusy(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	idle, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	busySess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	d.busyMu.Lock()
+	d.busy[busySess.ID] = true
+	d.busyMu.Unlock()
+
+	if err := c.DeleteAllSessions(ctx); err == nil {
+		t.Error("expected an error when any session has a turn in progress")
+	}
+
+	if _, err := d.Loop.Store.Get(idle.ID); err != nil {
+		t.Error("expected the idle session to still exist after a refused bulk delete")
+	}
+	if _, err := d.Loop.Store.Get(busySess.ID); err != nil {
+		t.Error("expected the busy session to still exist after a refused bulk delete")
+	}
+}
+
+func TestDaemonDeleteAllSessionsOnEmptyStoreIsNoop(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	if err := c.DeleteAllSessions(context.Background()); err != nil {
+		t.Errorf("DeleteAllSessions on an empty daemon should not error, got %v", err)
+	}
+}

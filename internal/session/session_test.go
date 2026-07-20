@@ -167,6 +167,67 @@ func TestDeleteThenRecreateSameID(t *testing.T) {
 	}
 }
 
+func TestDeleteAllRemovesEveryVisibleAndChildSession(t *testing.T) {
+	s, _ := NewStore("")
+	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession s1: %v", err)
+	}
+	if _, err := s.CreateSession("s2", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession s2: %v", err)
+	}
+	if _, err := s.CreateSession("child", "s1", "explore", false); err != nil {
+		t.Fatalf("CreateSession child: %v", err)
+	}
+
+	if err := s.DeleteAll(); err != nil {
+		t.Fatalf("DeleteAll: %v", err)
+	}
+
+	if len(s.AllSessions()) != 0 {
+		t.Errorf("expected no sessions left after DeleteAll, got %+v", s.AllSessions())
+	}
+	for _, id := range []string{"s1", "s2", "child"} {
+		if _, err := s.Get(id); err == nil {
+			t.Errorf("expected Get(%q) to fail after DeleteAll", id)
+		}
+	}
+}
+
+func TestDeleteAllRemovesPersistedFiles(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := s.CreateSession("s2", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	s.Append("s1", events.TypeUserMessage, map[string]any{"text": "hi"})
+
+	if err := s.DeleteAll(); err != nil {
+		t.Fatalf("DeleteAll: %v", err)
+	}
+
+	for _, id := range []string{"s1", "s2"} {
+		for _, suffix := range []string{".jsonl", ".meta.json"} {
+			path := filepath.Join(dir, id+suffix)
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("expected %s to be removed after DeleteAll, stat err = %v", path, err)
+			}
+		}
+	}
+}
+
+func TestDeleteAllOnEmptyStoreIsNoop(t *testing.T) {
+	s, _ := NewStore("")
+	if err := s.DeleteAll(); err != nil {
+		t.Errorf("DeleteAll on an empty store should not error, got %v", err)
+	}
+}
+
 func TestChildrenFiltersToParent(t *testing.T) {
 	s, _ := NewStore("")
 	s.CreateSession("parent", "", "a", true)
