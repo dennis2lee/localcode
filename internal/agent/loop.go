@@ -494,10 +494,10 @@ func parseSkillCommand(text string) (arg string, ok bool) {
 func (l *Loop) listSkills(sessionID, displayText string) error {
 	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText, "local": true})
 
-	text := "등록된 skill이 없습니다."
+	text := "No skills registered."
 	if len(l.Skills) > 0 {
 		var b strings.Builder
-		b.WriteString("사용 가능한 skill (/skill <이름> 으로 로드):\n")
+		b.WriteString("Available skills (/skill <name> to load):\n")
 		for _, s := range l.Skills {
 			fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
 		}
@@ -517,14 +517,14 @@ func (l *Loop) showMemoryInfo(sessionID, displayText string) error {
 
 	var text string
 	if l.MemoryDir == "" {
-		text = "Auto memory가 비활성화되어 있습니다 (config.json의 \"auto_memory_enabled\": false)."
+		text = "Auto memory is disabled (config.json's \"auto_memory_enabled\": false)."
 	} else {
 		index := memory.LoadIndex(l.MemoryDir)
 		var b strings.Builder
-		fmt.Fprintf(&b, "Auto memory 디렉터리: %s\n", l.MemoryDir)
-		fmt.Fprintf(&b, "인덱스 파일: %s\n\n", memory.IndexPath(l.MemoryDir))
+		fmt.Fprintf(&b, "Auto memory directory: %s\n", l.MemoryDir)
+		fmt.Fprintf(&b, "Index file: %s\n\n", memory.IndexPath(l.MemoryDir))
 		if index == "" {
-			b.WriteString("아직 저장된 메모리가 없습니다.")
+			b.WriteString("No memory saved yet.")
 		} else {
 			b.WriteString(index)
 		}
@@ -575,7 +575,7 @@ func (l *Loop) handleConfigCommand(sessionID, displayText, arg string) error {
 			l.SetShowTPS(enabled)
 			text = fmt.Sprintf("show_tps: %s", onOff(enabled))
 		default:
-			text = fmt.Sprintf("알 수 없는 설정 %q. 사용법: /config, /config auto_compact on|off, /config show_tps on|off", fields[0])
+			text = fmt.Sprintf("unknown setting %q. usage: /config, /config auto_compact on|off, /config show_tps on|off", fields[0])
 		}
 		if text != "" && (fields[0] == "auto_compact" || fields[0] == "show_tps") {
 			l.Store.Append(sessionID, events.TypeConfigChanged, map[string]any{
@@ -585,7 +585,7 @@ func (l *Loop) handleConfigCommand(sessionID, displayText, arg string) error {
 		}
 
 	default:
-		text = "사용법: /config, /config auto_compact on|off, /config show_tps on|off"
+		text = "usage: /config, /config auto_compact on|off, /config show_tps on|off"
 	}
 
 	l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": text})
@@ -648,7 +648,7 @@ func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, d
 		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": fmt.Sprintf("compaction failed: %v", err)})
 		return nil
 	}
-	text = "대화가 압축되었습니다."
+	text = "Conversation compacted."
 
 	l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": text})
 	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text})
@@ -673,7 +673,7 @@ func (l *Loop) handleCostCommand(sessionID, displayText string) error {
 
 	var text string
 	if len(totals) == 0 {
-		text = "아직 사용량이 없습니다."
+		text = "No usage yet."
 	} else {
 		models := make([]string, 0, len(totals))
 		for m := range totals {
@@ -682,16 +682,16 @@ func (l *Loop) handleCostCommand(sessionID, displayText string) error {
 		sort.Strings(models)
 
 		var b strings.Builder
-		b.WriteString("모델별 토큰 사용량:\n")
+		b.WriteString("Token usage by model:\n")
 		var grandInput, grandOutput, grandCalls int
 		for _, m := range models {
 			t := totals[m]
-			fmt.Fprintf(&b, "- %s: 입력 %d · 출력 %d · 합계 %d (호출 %d회)\n", m, t.InputTokens, t.OutputTokens, t.InputTokens+t.OutputTokens, t.Calls)
+			fmt.Fprintf(&b, "- %s: input %d · output %d · total %d (%d calls)\n", m, t.InputTokens, t.OutputTokens, t.InputTokens+t.OutputTokens, t.Calls)
 			grandInput += t.InputTokens
 			grandOutput += t.OutputTokens
 			grandCalls += t.Calls
 		}
-		fmt.Fprintf(&b, "\n전체 합계: 입력 %d · 출력 %d · 총 %d (호출 %d회)", grandInput, grandOutput, grandInput+grandOutput, grandCalls)
+		fmt.Fprintf(&b, "\nGrand total: input %d · output %d · total %d (%d calls)", grandInput, grandOutput, grandInput+grandOutput, grandCalls)
 		text = b.String()
 	}
 
@@ -866,7 +866,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 
 	l.setHistory(sessionID, []provider.Message{{
 		Role:    provider.RoleUser,
-		Content: []provider.Block{provider.TextBlock("[이전 대화가 요약되었습니다]\n\n" + summary)},
+		Content: []provider.Block{provider.TextBlock("[Previous conversation was summarized]\n\n" + summary)},
 	}})
 	l.clearUsage(sessionID)
 	// "summary" (not just its length) and the compaction call's own usage

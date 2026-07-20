@@ -285,11 +285,11 @@ func pickOrCreateSession(ctx context.Context, c *client.Client, agentName string
 		return c.CreateSession(ctx, agentName)
 	}
 
-	fmt.Println("이어서 사용할 세션을 선택하세요:")
+	fmt.Println("Pick a session to resume:")
 	for i, s := range sessions {
 		fmt.Printf("  [%d] %s  (%s, %s)\n", i+1, s.ID, s.Agent, s.CreatedAt.Local().Format("2006-01-02 15:04"))
 	}
-	fmt.Print("  [n] 새 세션 시작\n선택 (번호 또는 n, 기본값 n): ")
+	fmt.Print("  [n] start a new session\nChoice (number or n, default n): ")
 
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
@@ -300,7 +300,7 @@ func pickOrCreateSession(ctx context.Context, c *client.Client, agentName string
 	}
 	idx, err := strconv.Atoi(line)
 	if err != nil || idx < 1 || idx > len(sessions) {
-		fmt.Println("잘못된 입력입니다 — 새 세션을 시작합니다.")
+		fmt.Println("Invalid input — starting a new session.")
 		return c.CreateSession(ctx, agentName)
 	}
 	return sessions[idx-1], nil

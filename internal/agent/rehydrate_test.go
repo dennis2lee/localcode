@@ -170,13 +170,13 @@ func TestRehydrateHistorySkipsLocalCommandAndItsReply(t *testing.T) {
 		ev(events.TypeMessagePartEnd, map[string]any{"text": "reply 1"}),
 		ev(events.TypeUserMessage, map[string]any{"text": "/compact", "local": true}),
 		ev(events.TypeCompacted, map[string]any{"summary": "SUMMARY"}),
-		ev(events.TypeMessagePartEnd, map[string]any{"text": "대화가 압축되었습니다."}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "Conversation compacted."}),
 		ev(events.TypeUserMessage, map[string]any{"text": "turn 2"}),
 		ev(events.TypeMessagePartEnd, map[string]any{"text": "reply 2"}),
 	})
 
 	// Compaction resets to [summary], then turn 2's user+assistant — the
-	// /compact command itself and its "압축되었습니다" confirmation must
+	// /compact command itself and its "compacted" confirmation must
 	// never appear.
 	if len(history) != 3 {
 		t.Fatalf("history = %+v, want exactly 3 messages (summary, turn 2 user, turn 2 assistant)", history)
@@ -191,7 +191,7 @@ func TestRehydrateHistorySkipsLocalCommandAndItsReply(t *testing.T) {
 		t.Errorf("history[2] = %+v, want turn 2's reply, not the compaction confirmation", history[2])
 	}
 	for _, m := range history {
-		if strings.Contains(m.Content[0].Text, "압축되었습니다") || m.Content[0].Text == "/compact" {
+		if strings.Contains(m.Content[0].Text, "compacted") || m.Content[0].Text == "/compact" {
 			t.Errorf("history contains the local /compact command or its confirmation: %+v", m)
 		}
 	}
@@ -345,10 +345,10 @@ func TestRehydrateAllRestoresContextAndCostAcrossRestart(t *testing.T) {
 		t.Fatalf("SendMessage /usage: %v", err)
 	}
 	text := lastMessagePartEnd(t, restoredStore, sid)
-	if strings.Contains(text, "아직 사용량이 없습니다") {
+	if strings.Contains(text, "No usage yet") {
 		t.Errorf("/usage text = %q, want rehydrated totals, not \"no usage yet\"", text)
 	}
-	if !strings.Contains(text, "호출") {
+	if !strings.Contains(text, "calls") {
 		t.Errorf("/usage text = %q, want a call count reflecting rehydrated usage", text)
 	}
 }

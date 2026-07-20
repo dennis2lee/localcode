@@ -32,7 +32,7 @@ func TestResizeLayoutGrowsWithContent(t *testing.T) {
 		t.Fatalf("initial LineCount = %d, want %d", got, want)
 	}
 	initialViewportHeight := m.viewport.Height
-	if want := 24 - 2 - 1 - headerLines; initialViewportHeight != want {
+	if want := 24 - 2 - borderLines - footerLines - 1; initialViewportHeight != want {
 		t.Errorf("initial viewport height = %d, want %d", initialViewportHeight, want)
 	}
 
@@ -45,7 +45,7 @@ func TestResizeLayoutGrowsWithContent(t *testing.T) {
 	if m.viewport.Height >= initialViewportHeight {
 		t.Errorf("viewport height = %d, expected it to shrink below the 1-line baseline %d", m.viewport.Height, initialViewportHeight)
 	}
-	if want := 24 - 2 - 4 - headerLines; m.viewport.Height != want {
+	if want := 24 - 2 - borderLines - footerLines - 4; m.viewport.Height != want {
 		t.Errorf("viewport height = %d, want %d", m.viewport.Height, want)
 	}
 }
@@ -125,7 +125,7 @@ func TestHelpCommandRendersLocally(t *testing.T) {
 	if cmd != nil {
 		t.Errorf("/help should not issue a command (no server round trip), got %v", cmd)
 	}
-	if !strings.Contains(m.transcript.String(), "사용 가능한 명령") {
+	if !strings.Contains(m.transcript.String(), "Available commands") {
 		t.Errorf("transcript = %q, want it to contain the help text", m.transcript.String())
 	}
 	if m.input.Value() != "" {
@@ -227,8 +227,12 @@ func TestAgentSwitchedEventUpdatesCurrentAgent(t *testing.T) {
 	if m.currentAgent != "build" {
 		t.Errorf("currentAgent = %q, want %q after an agent.switched event", m.currentAgent, "build")
 	}
-	if !strings.Contains(m.transcript.String(), "build") {
-		t.Errorf("transcript = %q, want it to mention the new agent", m.transcript.String())
+	// Regression check: agent.switched must NOT also write a transcript
+	// line — View() already renders the current agent in the footer on
+	// every frame, so writing one here as well would leave a permanent
+	// "switched to X" line behind on every single Tab press.
+	if m.transcript.String() != "" {
+		t.Errorf("transcript = %q, want it untouched by an agent.switched event (footer already shows the current agent)", m.transcript.String())
 	}
 }
 

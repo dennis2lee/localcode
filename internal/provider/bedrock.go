@@ -37,6 +37,39 @@ func NewBedrock(ctx context.Context, region, profile string) (*Bedrock, error) {
 	return &Bedrock{client: bedrockruntime.NewFromConfig(cfg)}, nil
 }
 
+// credentialHintSubstrings are fragments the AWS SDK's error text contains
+// when it fell through the *entire* default credential chain (env vars,
+// shared config, container role, EC2 IMDS) and found nothing — the
+// exact symptom of "providers.bedrock.profile isn't set (or is wrong),
+// and there's no AWS_PROFILE/default profile with working credentials
+// either." This is easy to hit on Windows: a working `aws sso login` /
+// `localcode login bedrock` profile does nothing unless something tells
+// the SDK to actually use it.
+var credentialHintSubstrings = []string{
+	"no ec2imds role found",
+	"failed to refresh cached credentials",
+	"no valid credential sources",
+	"unable to find credentials",
+}
+
+// wrapCredentialError appends an actionable hint to err when it looks like
+// the AWS SDK never found any usable credentials, rather than leaving the
+// user with only a raw multi-line SDK error dump (get identity: get
+// credentials: failed to refresh cached credentials, no EC2 IMDS role
+// found, operation error ec2imds: GetMetadata, ...).
+func wrapCredentialError(err error) error {
+	if err == nil {
+		return nil
+	}
+	lower := strings.ToLower(err.Error())
+	for _, s := range credentialHintSubstrings {
+		if strings.Contains(lower, s) {
+			return fmt.Errorf("%w\n\nhint: no AWS credentials were found. If you already ran `localcode login bedrock` or `aws sso login`, set providers.<name>.profile in config.json to that profile's name (localcode login bedrock defaults to \"localcode-bedrock\"), or set the AWS_PROFILE environment variable. If the SSO session expired, re-run the login command", err)
+		}
+	}
+	return err
+}
+
 func toBedrockMessages(msgs []Message) ([]types.Message, error) {
 	out := make([]types.Message, 0, len(msgs))
 	for _, m := range msgs {
@@ -145,7 +178,7 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 
 	resp, err := p.client.ConverseStream(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("bedrock ConverseStream: %w", err)
+		return nil, wrapCredentialError(fmt.Errorf("bedrock ConverseStream: %w", err))
 	}
 
 	out := make(chan StreamEvent, 16)

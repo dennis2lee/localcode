@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -181,7 +181,7 @@
 <header>
   <h1>LocalCode</h1>
   <div class="right">
-    <select class="agent-select" id="agent-select" title="에이전트 전환"></select>
+    <select class="agent-select" id="agent-select" title="switch agent"></select>
     <span class="session-id" id="session-id">connecting…</span>
   </div>
 </header>
@@ -190,8 +190,8 @@
   <aside>
     <div class="side-section">
       <div class="side-header">
-        <h2>세션</h2>
-        <button class="icon-btn" id="new-session-btn" title="새 세션 시작">+ 새 세션</button>
+        <h2>Sessions</h2>
+        <button class="icon-btn" id="new-session-btn" title="start a new session">+ new session</button>
       </div>
       <div id="session-list"></div>
     </div>
@@ -200,27 +200,27 @@
       <div id="tasks"></div>
     </div>
     <div class="side-section">
-      <h2>MCP 서버</h2>
+      <h2>MCP servers</h2>
       <div id="mcp-servers"></div>
     </div>
   </aside>
 </main>
 <footer>
-  <textarea id="input" rows="1" placeholder="메시지를 입력하세요 (Enter로 전송, /help로 도움말, 파일을 드래그해서 첨부)" autofocus></textarea>
-  <button id="send">전송</button>
+  <textarea id="input" rows="1" placeholder="Type a message (Enter to send, /help for help, drag a file to attach)" autofocus></textarea>
+  <button id="send">Send</button>
 </footer>
 <div id="prompt-status">
-  <span class="comm-dot" id="comm-dot" title="LLM과 통신 중"></span>
+  <span class="comm-dot" id="comm-dot" title="talking to the LLM"></span>
   <span id="status-text"></span>
 </div>
 
 <div id="permission-modal">
   <div class="box">
-    <h3>권한 요청</h3>
+    <h3>Permission request</h3>
     <p id="permission-text"></p>
     <div class="actions">
-      <button class="deny" id="permission-deny">거부</button>
-      <button id="permission-allow">승인</button>
+      <button class="deny" id="permission-deny">Deny</button>
+      <button id="permission-allow">Allow</button>
     </div>
   </div>
 </div>
@@ -302,7 +302,7 @@
     if (showTPS && lastUsage && lastUsage.tps) {
       parts.push(`${lastUsage.tps.toFixed(1)} tok/s`);
     }
-    if (waiting) parts.push('응답 대기 중…');
+    if (waiting) parts.push('waiting for response…');
     statusTextEl.textContent = parts.join('  ·  ');
 
     statusBarEl.classList.remove('ctx-warn', 'ctx-crit');
@@ -315,7 +315,7 @@
   function renderTasks() {
     tasksEl.innerHTML = '';
     if (tasks.size === 0) {
-      tasksEl.innerHTML = '<div style="color:var(--muted)">없음</div>';
+      tasksEl.innerHTML = '<div style="color:var(--muted)">none</div>';
       return;
     }
     for (const [id, t] of tasks) {
@@ -358,10 +358,10 @@
         setWaiting(false);
         break;
       case 'tool.start':
-        appendLine(`<div class="msg-tool">[tool] ${escapeHtml(ev.data.name || '')} 실행 중...</div>`);
+        appendLine(`<div class="msg-tool">[tool] running ${escapeHtml(ev.data.name || '')}...</div>`);
         break;
       case 'tool.end':
-        appendLine(`<div class="msg-tool">[tool] ${ev.data.is_error ? '실패' : '완료'}</div>`);
+        appendLine(`<div class="msg-tool">[tool] ${ev.data.is_error ? 'failed' : 'done'}</div>`);
         break;
       case 'permission.request':
         pendingPermissionID = ev.data.id;
@@ -374,7 +374,7 @@
       case 'task.spawned':
         tasks.set(ev.data.task_id, { agent: ev.data.agent, status: 'spawned' });
         renderTasks();
-        appendLine(`<div class="msg-tool">[task] ${ev.data.task_id} (${ev.data.agent}) 백그라운드 실행 시작</div>`);
+        appendLine(`<div class="msg-tool">[task] ${ev.data.task_id} (${ev.data.agent}) started in background</div>`);
         break;
       case 'task.status':
         if (tasks.has(ev.data.task_id)) tasks.get(ev.data.task_id).status = ev.data.status;
@@ -382,8 +382,12 @@
         renderTasks();
         break;
       case 'agent.switched':
+        // Just update the state the status bar already renders every time
+        // — no transcript line here. setCurrentAgent + renderStatusBar
+        // already reflect the new agent; writing a line here too would
+        // leave a permanent "switched to X" entry in the transcript on
+        // every single switch.
         setCurrentAgent(ev.data.agent);
-        appendLine(`<div class="msg-tool">→ ${escapeHtml(ev.data.agent)} 에이전트로 전환</div>`);
         renderStatusBar();
         break;
       case 'usage':
@@ -391,7 +395,7 @@
         renderStatusBar();
         break;
       case 'compacted':
-        appendLine(`<div class="msg-tool">[system] 대화가 context 절약을 위해 압축되었습니다 (요약 ${ev.data.summary_length || 0}자).</div>`);
+        appendLine(`<div class="msg-tool">[system] conversation compacted to save context (summary: ${ev.data.summary_length || 0} chars).</div>`);
         break;
       case 'config.changed':
         if (typeof ev.data.auto_compact_enabled === 'boolean') autoCompactEnabled = ev.data.auto_compact_enabled;
@@ -403,7 +407,7 @@
         break;
       case 'error':
         setWaiting(false);
-        appendLine(`<div class="msg-error">오류: ${escapeHtml(ev.data.error || '')}</div>`);
+        appendLine(`<div class="msg-error">Error: ${escapeHtml(ev.data.error || '')}</div>`);
         break;
     }
   }
@@ -455,7 +459,7 @@
   function renderMCPServers() {
     mcpServersEl.innerHTML = '';
     if (!mcpServers || mcpServers.length === 0) {
-      mcpServersEl.innerHTML = '<div style="color:var(--muted)">연결된 서버 없음</div>';
+      mcpServersEl.innerHTML = '<div style="color:var(--muted)">no connected servers</div>';
       return;
     }
     for (const name of mcpServers) {
@@ -483,7 +487,7 @@
       // every client (including this one) reacts the same way.
     } catch (err) {
       agentSelectEl.value = currentAgent; // revert the dropdown on failure
-      appendLine(`<div class="msg-error">에이전트 전환 실패: ${escapeHtml(String(err))}</div>`);
+      appendLine(`<div class="msg-error">failed to switch agent: ${escapeHtml(String(err))}</div>`);
     }
   });
 
@@ -521,7 +525,7 @@
   function renderSessionList() {
     sessionListEl.innerHTML = '';
     if (!sessions || sessions.length === 0) {
-      sessionListEl.innerHTML = '<div style="color:var(--muted)">세션 없음</div>';
+      sessionListEl.innerHTML = '<div style="color:var(--muted)">no sessions</div>';
       return;
     }
     for (const s of sessions) {
@@ -539,18 +543,18 @@
       actions.className = 'actions';
 
       const switchBtn = document.createElement('button');
-      switchBtn.textContent = '전환';
+      switchBtn.textContent = 'switch';
       switchBtn.disabled = s.id === sessionID;
       switchBtn.addEventListener('click', () => selectSession(s.id, s.agent));
       actions.appendChild(switchBtn);
 
       const renameBtn = document.createElement('button');
-      renameBtn.textContent = '이름변경';
+      renameBtn.textContent = 'rename';
       renameBtn.addEventListener('click', () => renameSession(s));
       actions.appendChild(renameBtn);
 
       const delBtn = document.createElement('button');
-      delBtn.textContent = '삭제';
+      delBtn.textContent = 'delete';
       delBtn.className = 'danger-btn';
       delBtn.addEventListener('click', () => deleteSession(s));
       actions.appendChild(delBtn);
@@ -561,22 +565,22 @@
   }
 
   async function renameSession(s) {
-    const newTitle = window.prompt('새 세션 이름:', s.title || '');
+    const newTitle = window.prompt('New session name:', s.title || '');
     if (newTitle === null) return;
     try {
       await api('POST', `/api/sessions/${s.id}/rename`, { title: newTitle });
       await loadSessions();
     } catch (err) {
-      appendLine(`<div class="msg-error">이름 변경 실패: ${escapeHtml(String(err))}</div>`);
+      appendLine(`<div class="msg-error">failed to rename: ${escapeHtml(String(err))}</div>`);
     }
   }
 
   async function deleteSession(s) {
-    if (!window.confirm(`"${s.title || s.id}" 세션을 삭제하시겠습니까? 되돌릴 수 없습니다.`)) return;
+    if (!window.confirm(`Delete session "${s.title || s.id}"? This cannot be undone.`)) return;
     try {
       await api('DELETE', `/api/sessions/${s.id}`);
     } catch (err) {
-      appendLine(`<div class="msg-error">세션 삭제 실패: ${escapeHtml(String(err))}</div>`);
+      appendLine(`<div class="msg-error">failed to delete session: ${escapeHtml(String(err))}</div>`);
       return;
     }
     if (s.id === sessionID) {
@@ -611,33 +615,33 @@
       selectSession(sess.id, sess.agent);
     } catch (err) {
       sessionIdEl.textContent = 'error';
-      appendLine(`<div class="msg-error">세션 생성 실패: ${escapeHtml(String(err))}</div>`);
+      appendLine(`<div class="msg-error">failed to create session: ${escapeHtml(String(err))}</div>`);
     }
   }
 
   newSessionBtn.addEventListener('click', createNewSession);
 
   const HELP_TEXT = [
-    '사용 가능한 명령:',
-    '  /help              이 도움말 표시',
-    '  /version            데몬 버전 표시',
-    '  /skill              등록된 skill 목록 표시',
-    '  /skill <이름>        해당 skill을 로드해서 바로 이어서 질문',
-    '  /agent              등록된 에이전트 목록 표시',
-    '  /agent <이름>        해당 에이전트로 전환 (헤더 드롭다운으로도 가능)',
-    '  /init              저장소를 스캔해서 AGENTS.md 규칙 파일 생성/개선',
-    '  /memory            auto memory 디렉터리/인덱스(MEMORY.md) 확인',
-    '  /config            현재 설정(auto_compact, show_tps) 확인',
-    '  /config auto_compact on|off   context 80% 초과 시 자동 압축 켜기/끄기',
-    '  /config show_tps on|off       프롬프트 하단 tokens/sec 표시 켜기/끄기',
-    '  /compact           지금까지 대화를 즉시 요약해서 압축',
-    '  /compact <지침>      압축 시 반영할 지침을 직접 지정',
-    '  /usage              모델별 누적 토큰 사용량 확인',
-    '  /commands          등록된 사용자 정의 명령 목록 표시',
-    '  /<사용자 정의 명령>   .localcode/commands/*.md 로 정의한 명령 실행',
-    '  exit, :q            안내만 표시 (브라우저 탭은 직접 닫아주세요)',
+    'Available commands:',
+    '  /help              show this help',
+    '  /version            show the daemon version',
+    '  /skill              list registered skills',
+    '  /skill <name>        load that skill and continue with it',
+    '  /agent              list registered agents',
+    '  /agent <name>        switch to that agent (also available via the header dropdown)',
+    '  /init              scan the repo and create/improve an AGENTS.md rules file',
+    '  /memory            show the auto memory directory/index (MEMORY.md)',
+    '  /config            show current settings (auto_compact, show_tps)',
+    '  /config auto_compact on|off   toggle auto-compaction above 80% context usage',
+    '  /config show_tps on|off       toggle the tokens/sec display under the prompt',
+    '  /compact           summarize and compact the conversation right now',
+    '  /compact <instructions>      give instructions for how to compact',
+    '  /usage              show cumulative token usage per model',
+    '  /commands          list registered custom commands',
+    '  /<custom command>   run a command defined in .localcode/commands/*.md',
+    '  exit, :q            just show a message (close the browser tab yourself)',
     '',
-    '파일을 입력창에 드래그해서 첨부할 수 있습니다.',
+    'You can drag a file onto the input box to attach it.',
   ].join('\n');
 
   // Commands handled entirely client-side — never touch the session's
@@ -648,7 +652,7 @@
 
     if (lower === 'exit' || lower === ':q') {
       appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
-      appendLine(`<div class="msg-tool">브라우저 탭을 닫으면 종료됩니다 (Web UI는 프로그램을 직접 종료할 수 없습니다).</div>`);
+      appendLine(`<div class="msg-tool">Closing the browser tab ends the session (the Web UI can't quit the program directly).</div>`);
       return true;
     }
 
@@ -664,7 +668,7 @@
         const v = await api('GET', '/api/version');
         appendLine(`<div class="msg-tool">localcode ${escapeHtml(v.version)}</div>`);
       } catch (err) {
-        appendLine(`<div class="msg-error">버전 조회 실패: ${escapeHtml(String(err))}</div>`);
+        appendLine(`<div class="msg-error">failed to fetch version: ${escapeHtml(String(err))}</div>`);
       }
       return true;
     }
@@ -672,9 +676,9 @@
     if (lower === '/agent') {
       appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
       if (agents.length === 0) {
-        appendLine(`<div class="msg-tool">등록된 에이전트가 없습니다.</div>`);
+        appendLine(`<div class="msg-tool">No agents registered.</div>`);
       } else {
-        const lines = [`사용 가능한 에이전트 (/agent &lt;이름&gt; 으로 전환, 현재: ${escapeHtml(currentAgent || '')}):`]
+        const lines = [`Available agents (/agent &lt;name&gt; to switch, current: ${escapeHtml(currentAgent || '')}):`]
           .concat(agents.map(a => `- ${escapeHtml(a.name)}: ${escapeHtml(a.description || '')}`));
         appendLine(`<div class="msg-tool">${lines.join('<br>')}</div>`);
       }
@@ -684,9 +688,9 @@
     if (lower === '/commands') {
       appendLine(`<div class="msg-user">You: ${escapeHtml(text)}</div>`);
       if (customCommands.length === 0) {
-        appendLine(`<div class="msg-tool">등록된 사용자 정의 명령이 없습니다. (.localcode/commands/*.md 로 추가)</div>`);
+        appendLine(`<div class="msg-tool">No custom commands registered. (add one under .localcode/commands/*.md)</div>`);
       } else {
-        const lines = ['사용 가능한 사용자 정의 명령:']
+        const lines = ['Available custom commands:']
           .concat(customCommands.map(c => `- /${escapeHtml(c.name)}: ${escapeHtml(c.description || '')}`));
         appendLine(`<div class="msg-tool">${lines.join('<br>')}</div>`);
       }
@@ -699,7 +703,7 @@
       try {
         await api('POST', `/api/sessions/${sessionID}/agent`, { agent: agentMatch[1] });
       } catch (err) {
-        appendLine(`<div class="msg-error">에이전트 전환 실패: ${escapeHtml(String(err))}</div>`);
+        appendLine(`<div class="msg-error">failed to switch agent: ${escapeHtml(String(err))}</div>`);
       }
       return true;
     }
@@ -727,7 +731,7 @@
       await api('POST', `/api/sessions/${sessionID}/messages`, { text });
     } catch (err) {
       setWaiting(false);
-      appendLine(`<div class="msg-error">오류: ${escapeHtml(String(err))}</div>`);
+      appendLine(`<div class="msg-error">Error: ${escapeHtml(String(err))}</div>`);
     }
   }
 
@@ -773,9 +777,9 @@
     for (const file of files) {
       try {
         const path = await uploadFile(file);
-        insertAtCursor(inputEl, `[첨부 파일: ${path}]\n`);
+        insertAtCursor(inputEl, `[attached file: ${path}]\n`);
       } catch (err) {
-        appendLine(`<div class="msg-error">파일 업로드 실패 (${escapeHtml(file.name)}): ${escapeHtml(String(err))}</div>`);
+        appendLine(`<div class="msg-error">upload failed (${escapeHtml(file.name)}): ${escapeHtml(String(err))}</div>`);
       }
     }
     autoResizeInput();
@@ -801,7 +805,7 @@
     try {
       await api('POST', `/api/sessions/${sessionID}/permissions/${id}`, { allow });
     } catch (err) {
-      appendLine(`<div class="msg-error">권한 응답 실패: ${escapeHtml(String(err))}</div>`);
+      appendLine(`<div class="msg-error">failed to respond to permission request: ${escapeHtml(String(err))}</div>`);
     }
   }
 

@@ -131,7 +131,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			if summary := dataString(ev.Data, "summary"); summary != "" {
 				out = []provider.Message{{
 					Role:    provider.RoleUser,
-					Content: []provider.Block{provider.TextBlock("[이전 대화가 요약되었습니다]\n\n" + summary)},
+					Content: []provider.Block{provider.TextBlock("[Previous conversation was summarized]\n\n" + summary)},
 				}}
 				resetPending()
 			}

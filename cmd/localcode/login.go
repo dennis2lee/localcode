@@ -42,9 +42,9 @@ func loginAnthropic() error {
 		return fmt.Errorf("resolve home dir: %w", err)
 	}
 
-	fmt.Println("Anthropic API 키를 입력하세요 (console.anthropic.com > API Keys에서 발급).")
-	fmt.Println("이 키는 Anthropic API 사용량만큼 별도 과금되며, claude.ai Pro/Max 구독과는 무관합니다.")
-	fmt.Print("API 키: ")
+	fmt.Println("Enter your Anthropic API key (from console.anthropic.com > API Keys).")
+	fmt.Println("This key is billed separately by Anthropic API usage, unrelated to a claude.ai Pro/Max subscription.")
+	fmt.Print("API key: ")
 
 	key, err := readSecret()
 	if err != nil {
@@ -52,10 +52,10 @@ func loginAnthropic() error {
 	}
 	key = strings.TrimSpace(key)
 	if key == "" {
-		return fmt.Errorf("빈 API 키는 저장할 수 없습니다")
+		return fmt.Errorf("cannot save an empty API key")
 	}
 	if !strings.HasPrefix(key, "sk-ant-") {
-		fmt.Println("경고: 일반적인 Anthropic API 키는 \"sk-ant-\"로 시작합니다 — 그래도 입력한 값을 저장합니다.")
+		fmt.Println("warning: a typical Anthropic API key starts with \"sk-ant-\" — saving the entered value anyway.")
 	}
 
 	if err := credentials.SaveAnthropicAPIKey(home, key); err != nil {
@@ -63,8 +63,8 @@ func loginAnthropic() error {
 	}
 
 	fmt.Println()
-	fmt.Println("저장 완료: ~/.localcode/credentials.json")
-	fmt.Println(`config.json에 아래와 같이 provider를 추가하세요 (api_key 필드는 생략 가능 — 저장된 키를 자동으로 사용합니다):`)
+	fmt.Println("Saved to: ~/.localcode/credentials.json")
+	fmt.Println(`Add this provider to config.json (the api_key field can be omitted — the saved key is used automatically):`)
 	fmt.Println(`  "providers": { "anthropic": { "type": "anthropic" } }`)
 	return nil
 }
@@ -105,20 +105,20 @@ func loginBedrock(args []string) error {
 	reader := bufio.NewReader(os.Stdin)
 
 	if *startURL == "" {
-		fmt.Print("AWS SSO 시작 URL (예: https://my-sso.awsapps.com/start): ")
+		fmt.Print("AWS SSO start URL (e.g. https://my-sso.awsapps.com/start): ")
 		line, _ := reader.ReadString('\n')
 		*startURL = strings.TrimSpace(line)
 	}
 	if *startURL == "" {
-		return fmt.Errorf("시작 URL이 필요합니다")
+		return fmt.Errorf("a start URL is required")
 	}
 	if *ssoRegion == "" {
-		fmt.Print("SSO 리전 (예: us-east-1): ")
+		fmt.Print("SSO region (e.g. us-east-1): ")
 		line, _ := reader.ReadString('\n')
 		*ssoRegion = strings.TrimSpace(line)
 	}
 	if *ssoRegion == "" {
-		return fmt.Errorf("SSO 리전이 필요합니다")
+		return fmt.Errorf("an SSO region is required")
 	}
 	if *region == "" {
 		*region = *ssoRegion
@@ -132,20 +132,20 @@ func loginBedrock(args []string) error {
 	ctx := context.Background()
 	tok, err := awssso.Login(ctx, *startURL, *ssoRegion, func(auth awssso.DeviceAuth) {
 		fmt.Println()
-		fmt.Println("브라우저에서 아래 URL을 열어 로그인을 완료하세요:")
+		fmt.Println("Open this URL in a browser to finish logging in:")
 		fmt.Println("  " + auth.VerificationURIComplete)
 		if auth.UserCode != "" {
-			fmt.Println("  (코드가 자동 입력되지 않으면 직접 입력: " + auth.UserCode + ")")
+			fmt.Println("  (if the code isn't filled in automatically, enter it yourself: " + auth.UserCode + ")")
 		}
 		if err := openBrowser(auth.VerificationURIComplete); err != nil {
-			fmt.Println("(브라우저 자동 실행 실패 — 위 URL을 직접 열어주세요)")
+			fmt.Println("(couldn't open a browser automatically — open the URL above yourself)")
 		}
-		fmt.Println("승인을 기다리는 중...")
+		fmt.Println("Waiting for approval...")
 	})
 	if err != nil {
-		return fmt.Errorf("SSO 로그인 실패: %w", err)
+		return fmt.Errorf("SSO login failed: %w", err)
 	}
-	fmt.Println("로그인 성공.")
+	fmt.Println("Login succeeded.")
 
 	if *accountID == "" {
 		accounts, err := awssso.ListAccounts(ctx, *ssoRegion, tok.AccessToken)
@@ -153,21 +153,21 @@ func loginBedrock(args []string) error {
 			return fmt.Errorf("list accounts: %w", err)
 		}
 		if len(accounts) == 0 {
-			return fmt.Errorf("이 SSO 로그인으로 접근 가능한 AWS 계정이 없습니다")
+			return fmt.Errorf("no AWS accounts are reachable with this SSO login")
 		}
 		if len(accounts) == 1 {
 			*accountID = accounts[0].ID
-			fmt.Printf("계정 자동 선택: %s (%s)\n", accounts[0].Name, accounts[0].ID)
+			fmt.Printf("Auto-selected account: %s (%s)\n", accounts[0].Name, accounts[0].ID)
 		} else {
-			fmt.Println("사용 가능한 AWS 계정:")
+			fmt.Println("Available AWS accounts:")
 			for i, a := range accounts {
 				fmt.Printf("  [%d] %s (%s)\n", i+1, a.Name, a.ID)
 			}
-			fmt.Print("선택 (번호): ")
+			fmt.Print("Choose (number): ")
 			line, _ := reader.ReadString('\n')
 			idx, convErr := strconv.Atoi(strings.TrimSpace(line))
 			if convErr != nil || idx < 1 || idx > len(accounts) {
-				return fmt.Errorf("잘못된 선택입니다")
+				return fmt.Errorf("invalid choice")
 			}
 			*accountID = accounts[idx-1].ID
 		}
@@ -179,21 +179,21 @@ func loginBedrock(args []string) error {
 			return fmt.Errorf("list account roles: %w", err)
 		}
 		if len(roles) == 0 {
-			return fmt.Errorf("계정 %s에서 사용 가능한 SSO 역할이 없습니다", *accountID)
+			return fmt.Errorf("no SSO roles are available on account %s", *accountID)
 		}
 		if len(roles) == 1 {
 			*roleName = roles[0].Name
-			fmt.Printf("역할 자동 선택: %s\n", roles[0].Name)
+			fmt.Printf("Auto-selected role: %s\n", roles[0].Name)
 		} else {
-			fmt.Println("사용 가능한 역할:")
+			fmt.Println("Available roles:")
 			for i, r := range roles {
 				fmt.Printf("  [%d] %s\n", i+1, r.Name)
 			}
-			fmt.Print("선택 (번호): ")
+			fmt.Print("Choose (number): ")
 			line, _ := reader.ReadString('\n')
 			idx, convErr := strconv.Atoi(strings.TrimSpace(line))
 			if convErr != nil || idx < 1 || idx > len(roles) {
-				return fmt.Errorf("잘못된 선택입니다")
+				return fmt.Errorf("invalid choice")
 			}
 			*roleName = roles[idx-1].Name
 		}
@@ -207,8 +207,8 @@ func loginBedrock(args []string) error {
 	}
 
 	fmt.Println()
-	fmt.Printf("저장 완료: ~/.aws/config에 [profile %s], ~/.aws/sso/cache에 토큰 캐시\n", *profileName)
-	fmt.Println(`config.json에 아래와 같이 provider를 추가하세요:`)
+	fmt.Printf("Saved: [profile %s] in ~/.aws/config, token cache in ~/.aws/sso/cache\n", *profileName)
+	fmt.Println(`Add this provider to config.json:`)
 	fmt.Printf("  \"providers\": { \"bedrock\": { \"type\": \"bedrock\", \"region\": %q, \"profile\": %q } }\n", *region, *profileName)
 	return nil
 }

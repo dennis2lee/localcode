@@ -109,6 +109,7 @@ localcode --agent general-purpose
 2. `AccessDeniedException` → 콘솔에서 해당 모델 access 활성화 안 함
 3. `... with on-demand throughput isn't supported` → 모델 ID에 리전 프리픽스(`us.` 등)가 빠짐
 4. `ValidationException: model identifier is invalid` → 오타 또는 해당 리전에서 미지원 모델
+5. `no EC2 IMDS role found` / `failed to refresh cached credentials` → **AWS 기본 자격 증명 체인이 아무 것도 못 찾고 EC2 인스턴스 메타데이터까지 떨어진 것**입니다 (당연히 노트북/PC에선 실패). `aws sso login`이나 `localcode login bedrock`을 이미 실행해서 다른 도구(예: AWS CLI, 실제 Claude Code)에서는 되는데 localcode에서만 이 에러가 난다면, 그 세션 자체는 문제가 아니라 **localcode가 그 프로필을 쓰도록 지정을 안 한 것**이 원인일 가능성이 큽니다 — `config.json`의 `providers.<name>.profile`에 그 AWS 프로필 이름을 명시하거나(`localcode login bedrock`은 기본으로 `localcode-bedrock`을 씁니다), 셸에서 `AWS_PROFILE` 환경 변수를 지정하세요. localcode 최신 버전은 이 에러를 감지하면 콘솔에 바로 이 해결법을 안내하는 힌트를 덧붙입니다.
 
 ## Anthropic API 직접 사용
 
@@ -170,9 +171,32 @@ Bedrock 없이 완전히 로컬에서 돌리고 싶을 때, 또는 가볍고 빠
 }
 ```
 
-### vLLM / 그 외 OpenAI 호환 서버
+### vLLM / 그 외 OpenAI 호환 서버 (API 키가 필요한 원격 프록시 포함)
 
 `/chat/completions`를 제공하는 서버라면 무엇이든 `base_url`만 맞추면 동일하게 동작합니다. 인증이 필요하면 `providers.<name>.api_key`를 지정하세요 (`Authorization: Bearer <key>` 헤더로 전달됩니다). 사내망을 거친다면 리버스 프록시/방화벽에서 해당 포트가 열려 있는지 확인하세요.
+
+opencode의 `opencode.jsonc`에서 `@ai-sdk/openai-compatible` provider로 `baseURL`/`apiKey`를 지정해 쓰던 사내 LiteLLM 같은 프록시가 있다면, localcode에서는 같은 정보를 `config.json`에 그대로 옮기면 됩니다:
+
+```json
+{
+  "providers": {
+    "itg": {
+      "type": "openai-compat",
+      "base_url": "http://105.140.238.68:4000/v1",
+      "api_key": "sk-PtnU_sKmNlLLjLjsERblibA"
+    }
+  },
+  "profiles": {
+    "nemo": { "provider": "itg", "model": "nvidia/nemotron-3-super", "max_tokens": 4096 }
+  },
+  "agents": {
+    "general-purpose": { "profile": "nemo" }
+  },
+  "default_profile": "nemo"
+}
+```
+
+opencode 설정의 `npm`/`name`/`models.<id>.name`/`tool_call` 필드는 opencode의 provider 어댑터 등록 방식(어떤 SDK 패키지를 쓸지, UI에 표시할 이름, 도구 호출 지원 여부 선언)이라 localcode에는 대응 필드가 없습니다 — localcode는 모든 openai-compat provider가 `/chat/completions`에 `tools`를 함께 보내는 방식(OpenAI 함수 호출 규격)으로 동작하고, 서버가 그 요청 형식을 실제로 지원하는지는 별도 설정 없이 그대로 시도합니다.
 
 ## Bedrock + 로컬 모델 같이 쓰기
 

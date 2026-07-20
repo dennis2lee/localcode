@@ -2,11 +2,42 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
+
+func TestWrapCredentialErrorAddsHintForIMDSFallback(t *testing.T) {
+	original := errors.New("bedrock ConverseStream: operation error Bedrock Runtime: ConverseStream, exceeded maximum number of attempts, 3, get identity: get credentials: failed to refresh cached credentials, no EC2 IMDS role found, operation error ec2imds: GetMetadata, exceeded maximum number of attempts, 3, request send failed")
+
+	wrapped := wrapCredentialError(original)
+
+	if !strings.Contains(wrapped.Error(), "hint:") {
+		t.Errorf("wrapped error = %q, want it to contain an actionable hint", wrapped.Error())
+	}
+	if !strings.Contains(wrapped.Error(), "providers.<name>.profile") {
+		t.Errorf("wrapped error = %q, want it to mention setting providers.<name>.profile", wrapped.Error())
+	}
+	if !strings.Contains(wrapped.Error(), original.Error()) {
+		t.Errorf("wrapped error = %q, want the original error text preserved", wrapped.Error())
+	}
+}
+
+func TestWrapCredentialErrorLeavesUnrelatedErrorsAlone(t *testing.T) {
+	original := errors.New("bedrock ConverseStream: model not found")
+	if wrapped := wrapCredentialError(original); wrapped.Error() != original.Error() {
+		t.Errorf("wrapped error = %q, want unrelated errors passed through unchanged", wrapped.Error())
+	}
+}
+
+func TestWrapCredentialErrorNilIsNil(t *testing.T) {
+	if wrapCredentialError(nil) != nil {
+		t.Error("wrapCredentialError(nil) should return nil")
+	}
+}
 
 // These tests exercise only the pure translation functions (block model
 // <-> Bedrock SDK types); none of them touch the network or need AWS

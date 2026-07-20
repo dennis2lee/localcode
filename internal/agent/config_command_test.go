@@ -104,7 +104,7 @@ func TestConfigCommandInvalidUsage(t *testing.T) {
 	}
 
 	text := lastMessagePartEnd(t, store, sid)
-	if !strings.Contains(text, "사용법") {
+	if !strings.Contains(text, "usage") {
 		t.Errorf("text = %q, want a usage message for invalid input", text)
 	}
 }

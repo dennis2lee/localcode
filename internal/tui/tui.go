@@ -32,30 +32,35 @@ var (
 // transcript viewport down to nothing.
 const inputMaxHeight = 10
 
-const helpText = `사용 가능한 명령:
-  /help              이 도움말 표시
-  /version            데몬 버전 표시
-  /skill              등록된 skill 목록 표시
-  /skill <이름>        해당 skill을 로드해서 바로 이어서 질문
-  /agent              등록된 에이전트 목록 표시
-  /agent <이름>        해당 에이전트로 전환 (Tab으로도 순환 전환 가능)
-  /init              저장소를 스캔해서 AGENTS.md 규칙 파일 생성/개선
-  /memory            auto memory 디렉터리/인덱스(MEMORY.md) 확인
-  /config            현재 설정(auto_compact, show_tps) 확인
-  /config auto_compact on|off   context 80% 초과 시 자동 압축 켜기/끄기
-  /config show_tps on|off       프롬프트 하단 tokens/sec 표시 켜기/끄기
-  /compact           지금까지 대화를 즉시 요약해서 압축
-  /compact <지침>      압축 시 반영할 지침을 직접 지정
-  /usage              모델별 누적 토큰 사용량 확인
-  /commands          등록된 사용자 정의 명령 목록 표시
-  /<사용자 정의 명령>   .localcode/commands/*.md 로 정의한 명령 실행
-  exit, :q            TUI 종료 (Ctrl+C와 동일)
+const helpText = `Available commands:
+  /help              show this help
+  /version            show the daemon version
+  /skill              list registered skills
+  /skill <name>        load that skill and continue with it
+  /agent              list registered agents
+  /agent <name>        switch to that agent (Tab also cycles through them)
+  /init              scan the repo and create/improve an AGENTS.md rules file
+  /memory            show the auto memory directory/index (MEMORY.md)
+  /config            show current settings (auto_compact, show_tps)
+  /config auto_compact on|off   toggle auto-compaction above 80% context usage
+  /config show_tps on|off       toggle the tokens/sec display under the prompt
+  /compact           summarize and compact the conversation right now
+  /compact <instructions>      give instructions for how to compact
+  /usage              show cumulative token usage per model
+  /commands          list registered custom commands
+  /<custom command>   run a command defined in .localcode/commands/*.md
+  exit, :q            quit the TUI (same as Ctrl+C)
 
-Enter로 전송, Ctrl+J로 줄바꿈, Tab으로 에이전트 전환.`
+Enter to send, Ctrl+J for a newline, Tab to switch agents.`
 
-// headerLines is how many rows View() reserves above the viewport for the
-// current-agent status line, so resizeLayout can size the viewport to fit.
-const headerLines = 1
+// footerLines is how many rows View() reserves below the prompt input box
+// for the current-agent status line, so resizeLayout can size the viewport
+// to fit.
+const footerLines = 1
+
+// borderLines is how many rows View() reserves for the top/bottom border
+// drawn around the prompt input box.
+const borderLines = 2
 
 type pendingPermission struct {
 	id, tool, description string
@@ -81,7 +86,7 @@ type Model struct {
 
 func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Event) Model {
 	ta := textarea.New()
-	ta.Placeholder = "메시지를 입력하세요 (Enter로 전송, /help로 도움말, exit로 종료)"
+	ta.Placeholder = "Type a message (Enter to send, /help for help, exit to quit)"
 	ta.ShowLineNumbers = false
 	ta.MaxHeight = inputMaxHeight
 	ta.SetHeight(1)
@@ -231,7 +236,7 @@ func (m *Model) resizeLayout() {
 	m.input.SetHeight(inputHeight)
 
 	const chromeLines = 2 // status/permission line + blank separator
-	vh := m.termHeight - chromeLines - inputHeight - headerLines
+	vh := m.termHeight - chromeLines - borderLines - footerLines - inputHeight
 	if vh < 3 {
 		vh = 3
 	}
@@ -287,10 +292,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.fetchVersion()
 			case "/agent":
 				if len(m.agents) == 0 {
-					m.appendLocal("등록된 에이전트가 없습니다.")
+					m.appendLocal("No agents registered.")
 				} else {
 					var b strings.Builder
-					b.WriteString("사용 가능한 에이전트 (/agent <이름> 으로 전환, 현재: " + m.currentAgent + "):\n")
+					b.WriteString("Available agents (/agent <name> to switch, current: " + m.currentAgent + "):\n")
 					for _, a := range m.agents {
 						fmt.Fprintf(&b, "- %s: %s\n", a.Name, a.Description)
 					}
@@ -299,10 +304,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "/commands":
 				if len(m.commandsList) == 0 {
-					m.appendLocal("등록된 사용자 정의 명령이 없습니다. (.localcode/commands/*.md 로 추가)")
+					m.appendLocal("No custom commands registered. (add one under .localcode/commands/*.md)")
 				} else {
 					var b strings.Builder
-					b.WriteString("사용 가능한 사용자 정의 명령:\n")
+					b.WriteString("Available custom commands:\n")
 					for _, c := range m.commandsList {
 						fmt.Fprintf(&b, "- /%s: %s\n", c.Name, c.Description)
 					}
@@ -344,7 +349,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case versionMsg:
 		if msg.err != nil {
-			m.appendLocal("버전 조회 실패: " + msg.err.Error())
+			m.appendLocal("failed to fetch version: " + msg.err.Error())
 		} else {
 			m.appendLocal("localcode " + msg.version)
 		}
@@ -393,12 +398,12 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.waiting = false
 	case events.TypeToolStart:
 		name, _ := ev.Data["name"].(string)
-		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[tool] %s 실행 중...\n", name)))
+		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[tool] running %s...\n", name)))
 	case events.TypeToolEnd:
 		isErr, _ := ev.Data["is_error"].(bool)
-		status := "완료"
+		status := "done"
 		if isErr {
-			status = "실패"
+			status = "failed"
 		}
 		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[tool] %s\n\n", status)))
 	case events.TypePermissionRequest:
@@ -409,15 +414,20 @@ func (m *Model) applyEvent(ev events.Event) {
 	case events.TypeTaskSpawned:
 		taskID, _ := ev.Data["task_id"].(string)
 		agentName, _ := ev.Data["agent"].(string)
-		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[task] %s (%s) 백그라운드 실행 시작\n", taskID, agentName)))
+		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[task] %s (%s) started in background\n", taskID, agentName)))
 	case events.TypeTaskStatus:
 		taskID, _ := ev.Data["task_id"].(string)
 		status, _ := ev.Data["status"].(string)
 		m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("[task] %s: %s\n", taskID, status)))
 	case events.TypeAgentSwitched:
+		// Just update the status line the footer already renders every
+		// frame — do NOT also write a transcript line here. This event
+		// fires on every Tab press/switch, and appending to the
+		// (persistent, ever-growing) transcript made each press leave a
+		// permanent "switched to X" line on screen forever instead of
+		// just updating the one-line status shown below the prompt.
 		if name, ok := ev.Data["agent"].(string); ok {
 			m.currentAgent = name
-			m.transcript.WriteString(toolStyle.Render(fmt.Sprintf("→ %s 에이전트로 전환\n\n", name)))
 		}
 	case events.TypeError:
 		if msg, ok := ev.Data["error"].(string); ok {
@@ -429,30 +439,48 @@ func (m *Model) applyEvent(ev events.Event) {
 	m.viewport.GotoBottom()
 }
 
+// inputBorder draws a horizontal rule spanning the input box's width, used
+// above and below it so its boundary reads clearly against the transcript.
+func (m Model) inputBorder() string {
+	w := m.viewport.Width
+	if w <= 0 {
+		w = 40
+	}
+	return statusStyle.Render(strings.Repeat("─", w))
+}
+
 func (m Model) View() string {
 	var b strings.Builder
-
-	header := "agent: " + m.currentAgent
-	if len(m.agents) > 1 {
-		header += "  (Tab로 전환: " + strings.Join(m.agentNames(), " → ") + ")"
-	}
-	b.WriteString(statusStyle.Render(header))
-	b.WriteString("\n")
 
 	b.WriteString(m.viewport.View())
 	b.WriteString("\n")
 
 	if m.pending != nil {
-		b.WriteString(modalStyle.Render(fmt.Sprintf("권한 요청 [%s]: %s  (y/n)", m.pending.tool, m.pending.description)))
+		b.WriteString(modalStyle.Render(fmt.Sprintf("Permission request [%s]: %s  (y/n)", m.pending.tool, m.pending.description)))
 		b.WriteString("\n")
 	} else if m.waiting {
-		b.WriteString(statusStyle.Render("응답 대기 중..."))
+		b.WriteString(statusStyle.Render("Waiting for response..."))
 		b.WriteString("\n")
 	} else if m.errMsg != "" {
-		b.WriteString(errorStyle.Render("오류: " + m.errMsg))
+		b.WriteString(errorStyle.Render("Error: " + m.errMsg))
 		b.WriteString("\n")
 	}
 
+	b.WriteString(m.inputBorder())
+	b.WriteString("\n")
 	b.WriteString(m.input.View())
+	b.WriteString("\n")
+	b.WriteString(m.inputBorder())
+	b.WriteString("\n")
+
+	// Agent status lives below the input box (not above it), so it reads
+	// as "what will the next message use" right next to where the next
+	// message gets typed.
+	footer := "agent: " + m.currentAgent
+	if len(m.agents) > 1 {
+		footer += "  (tab to switch: " + strings.Join(m.agentNames(), " → ") + ")"
+	}
+	b.WriteString(statusStyle.Render(footer))
+
 	return b.String()
 }

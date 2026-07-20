@@ -27,7 +27,7 @@ func TestMemoryCommandDisabled(t *testing.T) {
 	}
 
 	text := lastMessagePartEnd(t, store, sid)
-	if !strings.Contains(text, "비활성화") {
+	if !strings.Contains(text, "disabled") {
 		t.Errorf("text = %q, want it to mention auto memory is disabled", text)
 	}
 }
@@ -51,7 +51,7 @@ func TestMemoryCommandShowsEmptyIndex(t *testing.T) {
 	if !strings.Contains(text, loop.MemoryDir) {
 		t.Errorf("text = %q, want it to contain the memory dir %q", text, loop.MemoryDir)
 	}
-	if !strings.Contains(text, "아직 저장된 메모리가 없습니다") {
+	if !strings.Contains(text, "No memory saved yet") {
 		t.Errorf("text = %q, want it to note nothing is saved yet", text)
 	}
 }

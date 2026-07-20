@@ -139,7 +139,7 @@ func TestCompactCommandWithHistory(t *testing.T) {
 		t.Error("expected a compacted event")
 	}
 	text := lastMessagePartEnd(t, store, sid)
-	if !strings.Contains(text, "압축") {
+	if !strings.Contains(text, "compact") {
 		t.Errorf("text = %q, want a confirmation mentioning compaction", text)
 	}
 }
@@ -215,7 +215,7 @@ func TestCostCommandNoUsageYet(t *testing.T) {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	text := lastMessagePartEnd(t, store, sid)
-	if !strings.Contains(text, "사용량이 없습니다") {
+	if !strings.Contains(text, "No usage yet") {
 		t.Errorf("text = %q, want a \"no usage yet\" message", text)
 	}
 }
@@ -249,10 +249,10 @@ func TestCostCommandBreaksDownByModel(t *testing.T) {
 	if !strings.Contains(text, "balanced-model") || !strings.Contains(text, "strong-model") {
 		t.Errorf("text = %q, want it to break down both models used", text)
 	}
-	if !strings.Contains(text, "입력 100") {
+	if !strings.Contains(text, "input 100") {
 		t.Errorf("text = %q, want per-model input token counts", text)
 	}
-	if !strings.Contains(text, "전체 합계") {
+	if !strings.Contains(text, "Grand total") {
 		t.Errorf("text = %q, want a grand total line", text)
 	}
 }
@@ -281,10 +281,10 @@ func TestCostCommandIncludesCompactionCallUsage(t *testing.T) {
 	}
 
 	text := lastMessagePartEnd(t, store, sid)
-	if !strings.Contains(text, "입력 600") || !strings.Contains(text, "출력 70") {
+	if !strings.Contains(text, "input 600") || !strings.Contains(text, "output 70") {
 		t.Errorf("text = %q, want totals including the compaction call (600 in / 70 out)", text)
 	}
-	if !strings.Contains(text, "호출 2회") {
+	if !strings.Contains(text, "2 calls") {
 		t.Errorf("text = %q, want the compaction call counted as a call", text)
 	}
 }

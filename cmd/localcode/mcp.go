@@ -16,20 +16,20 @@ import (
 	"localcode/internal/config"
 )
 
-const mcpUsage = `사용법: localcode mcp <subcommand>
+const mcpUsage = `usage: localcode mcp <subcommand>
 
   localcode mcp add [-e KEY=VALUE]... [-s global|project] <name> -- <command> [args...]
-                       새 MCP 서버 등록 (stdio 실행, .mcp.json의 mcpServers 항목과 같은 모양)
+                       register a new MCP server (runs over stdio, same shape as .mcp.json's mcpServers entries)
   localcode mcp add-json [-s global|project] <name> '<json>'
-                       {"command":...,"args":[...],"env":{...}} 형태의 JSON으로 직접 등록
-  localcode mcp list    등록된 MCP 서버 전체 목록 (global/project 출처 표시)
-  localcode mcp get <name>       서버 하나의 상세 설정 확인
+                       register directly from JSON of the form {"command":...,"args":[...],"env":{...}}
+  localcode mcp list    list every registered MCP server (shows global/project origin)
+  localcode mcp get <name>       show one server's detailed config
   localcode mcp remove [-s global|project] <name>
-                       서버 제거 (scope 생략 시 project 우선, 양쪽에 다 있으면 --scope 필요)
+                       remove a server (project wins if --scope is omitted; --scope is required if the name exists in both)
 
-  -s, --scope   global (기본값, ~/.localcode/config.json) 또는 project (./.localcode/config.json)
+  -s, --scope   global (default, ~/.localcode/config.json) or project (./.localcode/config.json)
 
-편집한 내용은 다음 데몬 시작(또는 재연결) 시점부터 반영됩니다.`
+Changes take effect the next time the daemon starts (or reconnects).`
 
 func runMCP(args []string) error {
 	if len(args) == 0 {
@@ -225,7 +225,7 @@ func mcpList() error {
 		return err
 	}
 	if len(global.MCPServers) == 0 && len(project.MCPServers) == 0 {
-		fmt.Println("등록된 MCP 서버가 없습니다. `localcode mcp add`로 추가하세요.")
+		fmt.Println("No MCP servers registered. Add one with `localcode mcp add`.")
 		return nil
 	}
 
@@ -246,7 +246,7 @@ func mcpList() error {
 		if sc, ok := project.MCPServers[n]; ok {
 			note := ""
 			if _, alsoGlobal := global.MCPServers[n]; alsoGlobal {
-				note = " (global 설정을 덮어씀)"
+				note = " (overrides the global setting)"
 			}
 			fmt.Printf("%s  [project]%s\n  %s\n  %s\n", n, note, formatMCPCommand(sc), projectPath)
 			continue
@@ -271,7 +271,7 @@ func mcpGet(args []string) error {
 	if sc, ok := project.MCPServers[name]; ok {
 		printMCPServerDetail(name, "project", projectPath, sc)
 		if _, alsoGlobal := global.MCPServers[name]; alsoGlobal {
-			fmt.Println("  (global 설정도 있지만 project 설정이 우선 적용됩니다)")
+			fmt.Println("  (a global setting also exists, but the project setting takes priority)")
 		}
 		return nil
 	}

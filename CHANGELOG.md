@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.13.0
+
+- **All program-facing output is now in English** — TUI (`internal/tui`), Web UI (`internal/daemon/static/index.html`), CLI (`localcode login`/`localcode mcp`/session picker), and agent-loop local command replies (`/skill`, `/memory`, `/config`, `/compact`, `/usage`) no longer mix in Korean strings. Documentation files (README/USAGE/MODELS/CHANGELOG/IMPROVEMENTS) are unaffected — this covers only what the running program prints or renders.
+- Fix: switching agents (Tab in the TUI, the dropdown in the Web UI, or `/agent <name>`) no longer writes a permanent "switched to X" line into the transcript on every switch. Both clients already show the current agent in a persistent status line; the transcript write was pure duplication, and on the TUI (where Tab is the primary way to switch) it meant the screen filled up with one throwaway line per keypress.
+- TUI layout: the current-agent status line now lives directly below the prompt input box instead of above the transcript, and the input box is now visually bordered top and bottom so its boundary is unambiguous.
+- Bedrock: when the AWS SDK's default credential chain finds nothing and falls all the way through to an EC2 instance-metadata lookup (the exact failure you get on a non-EC2 machine when `providers.<name>.profile` isn't set to a working SSO/login profile), the error now includes an actionable hint pointing at `providers.<name>.profile` and `AWS_PROFILE` instead of just the raw SDK error dump. See [MODELS.md](MODELS.md) for the full troubleshooting entry.
+- Docs: added a concrete `config.json` example for pointing an `openai-compat` provider at a remote API-key-gated proxy (the `api_key` field already existed and works exactly like opencode's `@ai-sdk/openai-compatible` `apiKey` — this was a documentation gap, not a missing feature).
+
 ## v0.12.5
 
 - Change the startup banner's tagline from "Local & cloud LLM coding agent" to "Multi LLM coding agent".
