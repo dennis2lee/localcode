@@ -215,6 +215,26 @@ func TestToBedrockToolsEmpty(t *testing.T) {
 	}
 }
 
+func TestParseModelIDStripsOneMillionContextSuffix(t *testing.T) {
+	cases := []struct {
+		in       string
+		wantID   string
+		wantOneM bool
+	}{
+		{"us.anthropic.claude-sonnet-4-6[1m]", "us.anthropic.claude-sonnet-4-6", true},
+		{"us.anthropic.claude-sonnet-4-6[1M]", "us.anthropic.claude-sonnet-4-6", true},  // case-insensitive
+		{"us.anthropic.claude-sonnet-4-6 [1m]", "us.anthropic.claude-sonnet-4-6", true}, // tolerates a space before it
+		{"us.anthropic.claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6", false},
+		{"", "", false},
+	}
+	for _, c := range cases {
+		gotID, gotOneM := parseModelID(c.in)
+		if gotID != c.wantID || gotOneM != c.wantOneM {
+			t.Errorf("parseModelID(%q) = (%q, %v), want (%q, %v)", c.in, gotID, gotOneM, c.wantID, c.wantOneM)
+		}
+	}
+}
+
 func TestMapBedrockStopReason(t *testing.T) {
 	cases := []struct {
 		in   types.StopReason

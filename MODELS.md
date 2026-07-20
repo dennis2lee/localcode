@@ -111,9 +111,13 @@ localcode --agent general-purpose
 4. `ValidationException: model identifier is invalid` → 오타 또는 해당 리전에서 미지원 모델
 5. `no EC2 IMDS role found` / `failed to refresh cached credentials` → **AWS 기본 자격 증명 체인이 아무 것도 못 찾고 EC2 인스턴스 메타데이터까지 떨어진 것**입니다 (당연히 노트북/PC에선 실패). `aws sso login`이나 `localcode login bedrock`을 이미 실행해서 다른 도구(예: AWS CLI, 실제 Claude Code)에서는 되는데 localcode에서만 이 에러가 난다면, 그 세션 자체는 문제가 아니라 **localcode가 그 프로필을 쓰도록 지정을 안 한 것**이 원인일 가능성이 큽니다 — `config.json`의 `providers.<name>.profile`에 그 AWS 프로필 이름을 명시하거나(`localcode login bedrock`은 기본으로 `localcode-bedrock`을 씁니다), 셸에서 `AWS_PROFILE` 환경 변수를 지정하세요. localcode 최신 버전은 이 에러를 감지하면 콘솔에 바로 이 해결법을 안내하는 힌트를 덧붙입니다.
 6. `ValidationException: ... StatusCode: 400 ... Your account is not authorized to invoke this API operation` → 자격 증명은 정상적으로 찾았는데(그래서 위 5번과 다르게 IMDS 에러가 아님) **모델 ID 자체가 유효하지 않거나, 그 계정/역할에 그 모델 access가 없는 것**입니다. 흔한 원인:
-   - **모델 ID에 `[1m]` 같은 대괄호 표기가 섞여 들어간 경우** (예: `us.anthropic.claude-sonnet-4-6[1m]`) — 이건 유효한 Bedrock 모델 ID가 아닙니다. Claude Code 같은 도구가 화면에 "Sonnet 4.6 (1M context)"라고 표시하는 건 그냥 사람이 보는 라벨이지 모델 ID의 일부가 아닙니다. `config.json`의 `profiles.<name>.model`에는 대괄호 없이 정확한 ID(`us.anthropic.claude-sonnet-4-6`)만 넣으세요.
    - **Bedrock Converse API가 아직 지원하지 않는 모델**을 넣은 경우 (예: `claude-opus-4-8`) — 위 4번째 표(`실제 사용 가능한 모델 ID`)에 없는 모델은 대부분 이 경우입니다. 표에 있는 모델로 바꾸거나, 꼭 그 모델이 필요하면 [Anthropic API 직접 사용](#anthropic-api-직접-사용) provider로 우회하세요.
+   - **`[1m]` 접미사를 붙였는데도 이 에러가 난다면** — v0.16.0부터 localcode가 `[1m]`을 인식해서 실제 모델 ID로 자르고 1M-context beta 플래그(`anthropic_beta: context-1m-2025-08-07`)를 `AdditionalModelRequestFields`로 함께 보내지만, **이 beta 플래그 이름/동작은 AWS 문서에서 직접 재확인한 게 아니라 Anthropic 다이렉트 API 관례를 그대로 옮긴 추정치입니다** — Bedrock 쪽에서 다른 이름을 요구하거나 아직 이 beta 자체를 지원하지 않을 수 있습니다. 이 경우 계정에 1M context 모델 access가 켜져 있는지 콘솔에서 확인하고, 여전히 안 되면 `[1m]` 없이 기본 컨텍스트로 우선 시도해보세요.
    - 콘솔의 **Bedrock → Model access**에서 그 모델의 access가 실제로 활성화되어 있는지도 다시 확인하세요 (특정 모델만 안 켜져 있는 경우가 흔합니다).
+
+### 1M context (`[1m]`)
+
+`profiles.<name>.model`에 `[1m]` 접미사를 붙이면(예: `"us.anthropic.claude-sonnet-4-6[1m]"`) localcode가 그 접미사를 떼어 실제 모델 ID로 요청하고, Anthropic의 1M-context beta 플래그(`anthropic_beta: context-1m-2025-08-07`)를 `AdditionalModelRequestFields`로 함께 보냅니다 — Claude Code 설정 화면에 나오는 "Sonnet 4.6 (1M context)" 표기와 같은 관례를 그대로 흉내낸 것입니다. Sonnet 4/4.5/4.6처럼 이 beta를 지원하는 모델을 염두에 두고 만들었지만, **정확한 필드 이름과 동작을 실제 Bedrock 계정으로 검증하지는 못했습니다** — Anthropic 다이렉트 API의 관례를 그대로 옮긴 추정치입니다. 지원하지 않는 모델에 붙이면 Bedrock이 그 필드를 무시할 수도, 에러를 낼 수도 있습니다. 안 되면 위 6번 항목을 참고하고, `[1m]` 없이 기본 컨텍스트로 먼저 시도해보세요.
 
 ## Anthropic API 직접 사용
 

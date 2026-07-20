@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.16.0
+
+- Bedrock: support the `[1m]` 1M-context suffix on `profiles.<name>.model` (e.g. `"us.anthropic.claude-sonnet-4-6[1m]"`), matching the shorthand Claude Code's own model settings use. localcode strips the suffix before sending the real model ID and passes Anthropic's 1M-context beta flag via Bedrock's `AdditionalModelRequestFields`. **Not verified against a real Bedrock account** — the beta flag name is carried over from Anthropic's direct-API convention, not confirmed against AWS's own docs; see MODELS.md if it doesn't work for you.
+
 ## v0.15.0
 
 - TUI status line: replace the "(tab to switch: a → b → c)" hint next to `agent: <name>` with the model ID the current agent's profile actually resolves to (`agent: explore  ·  model: qwen3-30b-a3b`) — `GET /api/agents` now reports each agent's resolved model, so this needed no client-side config access.

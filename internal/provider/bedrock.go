@@ -142,6 +142,35 @@ func toBedrockTools(tools []Tool) (*types.ToolConfiguration, error) {
 	return &types.ToolConfiguration{Tools: specs}, nil
 }
 
+// oneMillionContextBeta is the Anthropic beta flag that unlocks the
+// 1M-token context window on supported Claude Sonnet models. On direct
+// Anthropic API calls this is sent as an "anthropic-beta" HTTP header;
+// Bedrock's Converse API has no such header, so it's passed via
+// AdditionalModelRequestFields instead (see parseModelID/Chat below).
+const oneMillionContextBeta = "context-1m-2025-08-07"
+
+// oneMillionContextSuffix is the "[1m]" marker Claude Code's own model
+// config uses as shorthand for "enable the 1M-context beta on this
+// model" — it's a convenience for humans configuring Claude Code, not
+// part of the real Bedrock model ID, and sending it to the API as-is
+// fails with "ValidationException: ... not authorized to invoke this
+// API operation" (the ID simply doesn't exist). parseModelID recognizes
+// the same shorthand so a config.json copied from Claude Code's settings
+// (e.g. "us.anthropic.claude-sonnet-4-6[1m]") works as expected instead
+// of silently failing.
+const oneMillionContextSuffix = "[1m]"
+
+// parseModelID splits a configured model string into the real model ID
+// Bedrock expects and whether the "[1m]" 1M-context shorthand was
+// present, case-insensitively and tolerant of surrounding whitespace.
+func parseModelID(model string) (id string, oneMillionContext bool) {
+	trimmed := strings.TrimSpace(model)
+	if strings.HasSuffix(strings.ToLower(trimmed), oneMillionContextSuffix) {
+		return strings.TrimSpace(trimmed[:len(trimmed)-len(oneMillionContextSuffix)]), true
+	}
+	return trimmed, false
+}
+
 func mapBedrockStopReason(r types.StopReason) string {
 	switch r {
 	case types.StopReasonToolUse:
@@ -163,8 +192,10 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 		return nil, err
 	}
 
+	modelID, oneMillionContext := parseModelID(req.Model)
+
 	input := &bedrockruntime.ConverseStreamInput{
-		ModelId:    aws.String(req.Model),
+		ModelId:    aws.String(modelID),
 		Messages:   messages,
 		ToolConfig: toolConfig,
 		InferenceConfig: &types.InferenceConfiguration{
@@ -174,6 +205,11 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	}
 	if req.System != "" {
 		input.System = []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: req.System}}
+	}
+	if oneMillionContext {
+		input.AdditionalModelRequestFields = document.NewLazyDocument(map[string]any{
+			"anthropic_beta": []string{oneMillionContextBeta},
+		})
 	}
 
 	resp, err := p.client.ConverseStream(ctx, input)
