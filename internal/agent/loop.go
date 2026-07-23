@@ -90,6 +90,11 @@ type Loop struct {
 	// "!`shell`" and "@file" expansions against.
 	ProjectDir string
 
+	// Tasks runs sub-agents in their own sessions. Set by NewTaskManager,
+	// so a Loop built without one (a bare Loop in a test) simply has no
+	// delegation rather than a nil dereference.
+	Tasks *TaskManager
+
 	// MemoryDir is this project's auto-memory directory (see
 	// internal/memory) — "" if auto memory is disabled. Backs the
 	// "/memory" local command; the actual read/write of memory files
@@ -102,6 +107,7 @@ type Loop struct {
 	cumulativeUsage    map[string]map[string]modelTotals // sessionID -> model -> running totals, see /usage
 	autoCompactEnabled bool                              // process-global runtime setting, toggleable via "/config"
 	showTPS            bool                              // process-global runtime setting, toggleable via "/config"
+	autoDelegate       bool                              // process-global runtime setting, toggleable via "/config"
 }
 
 func New(store *session.Store, reg *tools.Registry, providers map[string]provider.Provider, cfg *config.Config) *Loop {
@@ -113,6 +119,7 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 		SystemPrompt:       defaultSystemPrompt,
 		autoCompactEnabled: cfg.CompactEnabled(),
 		showTPS:            cfg.TPSEnabled(),
+		autoDelegate:       cfg.DelegateEnabled(),
 		messages:           map[string][]provider.Message{},
 		usage:              map[string]sessionUsage{},
 		cumulativeUsage:    map[string]map[string]modelTotals{},
@@ -159,6 +166,24 @@ func (l *Loop) SetShowTPS(v bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.showTPS = v
+}
+
+// AutoDelegateEnabled reports whether prompts matching the auto_delegate
+// rules are routed to the configured sub-agent — process-global,
+// toggleable live via "/config auto_delegate on|off".
+func (l *Loop) AutoDelegateEnabled() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.autoDelegate
+}
+
+// SetAutoDelegateEnabled changes the live auto-delegation setting. It has
+// no effect when the config has no auto_delegate block to say which agent
+// to delegate to — see delegateTarget.
+func (l *Loop) SetAutoDelegateEnabled(v bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.autoDelegate = v
 }
 
 // SendMessage appends a user turn to sessionID's history and drives the
@@ -245,7 +270,99 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		return l.sendWithModelText(ctx, sessionID, agentName, text, skillModelText(sk, args), "", "")
 	}
 
+	// Everything above is a command of some kind. What's left is an
+	// ordinary prompt, the only thing worth handing to a cheaper agent.
+	if target, ok := l.delegateTarget(sessionID, agentName, text); ok {
+		return l.delegatePrompt(ctx, sessionID, target, text)
+	}
+
 	return l.sendWithModelText(ctx, sessionID, agentName, text, text, "", "")
+}
+
+// delegateTarget decides whether this prompt should be answered by a
+// cheaper sub-agent instead of the session's own, and names that agent.
+//
+// The guards matter more than the match: delegating from within a
+// delegated session, or to the agent already running, would recurse
+// forever, so both are refused before the patterns are even consulted.
+func (l *Loop) delegateTarget(sessionID, agentName, text string) (string, bool) {
+	cfg := l.Config.AutoDelegate
+	if cfg == nil || !l.AutoDelegateEnabled() {
+		return "", false
+	}
+	// Delegating to the agent that's already running would spawn a child
+	// whose prompt matches the same rule, and so on without end.
+	if cfg.Agent == "" || cfg.Agent == agentName {
+		return "", false
+	}
+	// Task and delegated sessions are children (they carry a parent ID and
+	// are hidden from the session list). Recursing from one is the other
+	// half of the same infinite-regress problem.
+	if sess, err := l.Store.Get(sessionID); err == nil && sess.ParentID != "" {
+		return "", false
+	}
+	if !cfg.MatchesPrompt(text) {
+		return "", false
+	}
+	return cfg.Agent, true
+}
+
+// delegatePrompt answers a turn from a sub-agent instead of the session's
+// own model, and is the whole point of the feature: the sub-agent runs in
+// its own session, so its (different) model never touches this session's
+// cached prefix. Switching the session's own model would have invalidated
+// tools, system prompt, and every prior turn at once.
+//
+// The transcript records the prompt and the answer exactly as an ordinary
+// turn would, plus a marker naming the agent that handled it, so the
+// delegation is visible rather than silently swapping models underneath
+// the user.
+func (l *Loop) delegatePrompt(ctx context.Context, sessionID, targetAgent, text string) error {
+	if l.Tasks == nil {
+		// No task manager wired up (a bare Loop in a test, say). Fall back
+		// to answering normally rather than failing the turn.
+		return l.sendWithModelText(ctx, sessionID, l.sessionAgent(sessionID), text, text, "", "")
+	}
+
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
+	l.Store.Append(sessionID, events.TypeDelegated, map[string]any{"agent": targetAgent, "prompt": text})
+
+	answer, err := l.Tasks.SpawnSync(ctx, sessionID, targetAgent, text)
+	if err != nil {
+		l.Store.Append(sessionID, events.TypeError, map[string]any{
+			"error": fmt.Sprintf("delegation to %q failed: %v", targetAgent, err),
+		})
+		return nil
+	}
+
+	// Record both halves in the history the main model sees, so its next
+	// turn has the exchange as context even though it never ran for it.
+	// Both are needed: appending only the answer would leave the history
+	// with two assistant turns in a row, which some providers reject.
+	l.appendDelegatedTurn(sessionID, text, answer)
+	l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": answer})
+	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": answer})
+	return nil
+}
+
+// sessionAgent reads a session's current agent, falling back to the
+// configured default when the session is unknown.
+func (l *Loop) sessionAgent(sessionID string) string {
+	if sess, err := l.Store.Get(sessionID); err == nil && sess.Agent != "" {
+		return sess.Agent
+	}
+	return "general-purpose"
+}
+
+// appendDelegatedTurn adds the prompt and the sub-agent's answer to the
+// in-memory history the main model sees, without any provider call.
+func (l *Loop) appendDelegatedTurn(sessionID, prompt, answer string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.messages[sessionID] = append(l.messages[sessionID],
+		provider.Message{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(prompt)}},
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock(answer)}},
+	)
 }
 
 // matchSkillName recognizes "/<skill-name>" and "/<skill-name> <args>"
@@ -622,18 +739,28 @@ func (l *Loop) handleConfigCommand(sessionID, displayText, arg string) error {
 		case "show_tps":
 			l.SetShowTPS(enabled)
 			text = fmt.Sprintf("show_tps: %s", onOff(enabled))
+		case "auto_delegate":
+			l.SetAutoDelegateEnabled(enabled)
+			text = fmt.Sprintf("auto_delegate: %s", onOff(enabled))
+			// Turning it on without an auto_delegate block configured
+			// would silently do nothing, so say so rather than letting the
+			// user think it took effect.
+			if enabled && l.Config.AutoDelegate == nil {
+				text += "\n(no auto_delegate block in config.json, so nothing will be delegated — see docs/USAGE.md)"
+			}
 		default:
-			text = fmt.Sprintf("unknown setting %q. usage: /config, /config auto_compact on|off, /config show_tps on|off", fields[0])
+			text = fmt.Sprintf("unknown setting %q. usage: /config, /config auto_compact on|off, /config show_tps on|off, /config auto_delegate on|off", fields[0])
 		}
-		if text != "" && (fields[0] == "auto_compact" || fields[0] == "show_tps") {
+		if text != "" && knownSetting(fields[0]) {
 			l.Store.Append(sessionID, events.TypeConfigChanged, map[string]any{
 				"auto_compact_enabled": l.AutoCompactEnabled(),
 				"show_tps":             l.ShowTPS(),
+				"auto_delegate":        l.AutoDelegateEnabled(),
 			})
 		}
 
 	default:
-		text = "usage: /config, /config auto_compact on|off, /config show_tps on|off"
+		text = "usage: /config, /config auto_compact on|off, /config show_tps on|off, /config auto_delegate on|off"
 	}
 
 	l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": text})
@@ -641,8 +768,25 @@ func (l *Loop) handleConfigCommand(sessionID, displayText, arg string) error {
 	return nil
 }
 
+func knownSetting(name string) bool {
+	switch name {
+	case "auto_compact", "show_tps", "auto_delegate":
+		return true
+	}
+	return false
+}
+
 func (l *Loop) configSummary() string {
-	return fmt.Sprintf("auto_compact: %s\nshow_tps: %s", onOff(l.AutoCompactEnabled()), onOff(l.ShowTPS()))
+	delegate := onOff(l.AutoDelegateEnabled())
+	// The target agent is the useful part of this line — "on" alone
+	// doesn't say where prompts are going.
+	if cfg := l.Config.AutoDelegate; cfg != nil && cfg.Agent != "" {
+		delegate += fmt.Sprintf(" (-> %s)", cfg.Agent)
+	} else {
+		delegate += " (not configured)"
+	}
+	return fmt.Sprintf("auto_compact: %s\nshow_tps: %s\nauto_delegate: %s",
+		onOff(l.AutoCompactEnabled()), onOff(l.ShowTPS()), delegate)
 }
 
 func onOff(v bool) string {

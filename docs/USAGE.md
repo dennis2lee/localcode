@@ -10,7 +10,7 @@
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt) |
-| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Plan mode](#plan-mode), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
+| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
 ## Part 1. Getting started
@@ -473,13 +473,14 @@ Prints the current project's auto memory directory path and `MEMORY.md` index co
 
 ### `/config`
 
-Two settings that can be toggled while running. Both apply daemon wide rather than per session, so changing either from any session takes effect everywhere immediately.
+Settings that can be toggled while running. They apply daemon wide rather than per session, so changing one from any session takes effect everywhere immediately.
 
 | Command | Effect |
 |---|---|
 | `/config` | Shows current values, no model call |
 | `/config auto_compact on\|off` | Automatic compaction past 80% context |
 | `/config show_tps on\|off` | The tokens per second reading under the prompt |
+| `/config auto_delegate on\|off` | Sending matching prompts to a cheaper sub agent, see [Auto delegation](#auto-delegation) |
 
 Each change records a `config.changed` event on that session and the Web UI updates its status bar right away. A newly opened client reads current values from `GET /api/settings`.
 
@@ -667,6 +668,49 @@ opencode implements Plan mode through an ask permission instead, which has produ
 Switching posts to `POST /api/sessions/{id}/agent`. On success an `agent.switched` event goes to the session, so every attached client, including a TUI and Web UI open at once, updates together.
 
 The usual flow: let `plan` analyze and design with no ability to change files, then Tab to `build` and carry straight on with the context intact.
+
+### Auto delegation
+
+Small, mechanical prompts can be answered by a cheaper agent automatically, without you switching models and without the main model running at all.
+
+The reason to do this is prompt cache economics, not just the per token price difference. A cache entry is keyed by model as well as by prompt bytes, so changing the session's model part way through throws away the whole cached prefix (tools, system prompt, and every prior turn) and rewrites it at the write premium. On a long session that prefix is the expensive part.
+
+| Operation | Cost against base input price |
+|---|---|
+| Cache read | about 0.1x |
+| Cache write, 5 minute TTL | 1.25x |
+| Cache write, 1 hour TTL | 2x |
+
+Delegating sidesteps that entirely. The sub agent runs in its own session with its own history, so the main session's model and prefix never change and its cache survives.
+
+Turn it on in config.json:
+
+```json
+{
+  "auto_delegate": {
+    "enabled": true,
+    "agent": "explore",
+    "match": ["find *", "where is *", "which file *", "search *", "list *", "grep *"]
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `enabled` | The starting value. `/config auto_delegate on\|off` changes it while running. |
+| `agent` | Which entry in `agents` handles delegated prompts. Must exist, or startup fails with an error. |
+| `match` | Globs (`*` for any run of characters, `?` for one) tried case insensitively against the whole trimmed prompt. Any one matching delegates the prompt. |
+
+Behavior:
+
+* The delegated turn shows `[delegated to <agent>]` in the transcript, so a cheaper model answering is visible rather than silent.
+* The prompt and the sub agent's answer both enter the main session's history, so the main model has the exchange as context on its next turn even though it never ran for this one.
+* Commands are never delegated. `/`-prefixed commands, skills, and `exit`/`:q` are all handled before the delegation check, so a pattern of `*` still leaves them working.
+* An empty `match` list delegates nothing. A half written config is inert rather than quietly routing everything to the cheap model.
+* Delegation never recurses. A session that already has a parent (any sub agent session) does not delegate again, and an agent never delegates to itself.
+* Turning it on with no `auto_delegate` block in config.json tells you so rather than silently doing nothing.
+
+Pick patterns that match work you are happy to have answered at lower quality. Exploration and lookup are good candidates; anything that writes code is not.
 
 ### Background tasks
 

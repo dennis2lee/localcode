@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.22.0
+
+- **Auto-delegate matching prompts to a cheaper sub-agent**, so small lookups do not cost a model switch. New `auto_delegate` config block (`enabled`, `agent`, `match` globs) plus a runtime toggle, `/config auto_delegate on|off`, alongside `auto_compact` and `show_tps`.
+  * The point is prompt-cache economics, not the per-token price. A cache entry is keyed by model as well as prompt bytes, so switching the session's model mid-conversation discards the entire cached prefix (tools, system prompt, every prior turn) and rewrites it at 1.25x (5m TTL) or 2x (1h TTL), against a 0.1x read. Delegation avoids that: the sub-agent runs in its own session, so the main session's model and prefix never change.
+  * The delegated turn is visible as `[delegated to <agent>]` in both clients, and both halves of the exchange enter the main history so the main model has it as context next turn.
+  * Guards: commands, skills, and `exit`/`:q` are resolved before the delegation check; an empty `match` list delegates nothing; a session that already has a parent never delegates again; an agent never delegates to itself. Off unless configured, so existing setups are unchanged.
+  * `GET /api/settings` and the `config.changed` event now carry `auto_delegate`.
+
 ## v0.21.0
 
 - **Up and Down recall previous prompts** in both the TUI and Web UI, the way shell history works.

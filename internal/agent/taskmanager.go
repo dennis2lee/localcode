@@ -30,12 +30,17 @@ func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *Tas
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
 	}
-	return &TaskManager{
+	tm := &TaskManager{
 		loop:    loop,
 		sem:     make(chan struct{}, maxConcurrent),
 		rootCtx: rootCtx,
 		cancels: map[string]context.CancelFunc{},
 	}
+	// Back-reference so the loop can delegate a turn on its own (see
+	// Loop.delegatePrompt) rather than only when the model calls the Task
+	// tool. Loop.Tasks stays nil for a Loop built without a task manager.
+	loop.Tasks = tm
+	return tm
 }
 
 func (tm *TaskManager) nextTaskID() string {

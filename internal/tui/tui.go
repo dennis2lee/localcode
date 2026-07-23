@@ -41,9 +41,10 @@ const helpText = `Available commands:
   /agent <name>        switch to that agent (Tab also cycles through them)
   /init              scan the repo and create/improve an AGENTS.md rules file
   /memory            show the auto memory directory/index (MEMORY.md)
-  /config            show current settings (auto_compact, show_tps)
+  /config            show current settings (auto_compact, show_tps, auto_delegate)
   /config auto_compact on|off   toggle auto-compaction above 80% context usage
   /config show_tps on|off       toggle the tokens/sec display under the prompt
+  /config auto_delegate on|off  send matching prompts to a cheaper sub-agent
   /compact           summarize and compact the conversation right now
   /compact <instructions>      give instructions for how to compact
   /usage              show cumulative token usage per model
@@ -685,6 +686,10 @@ func (m *Model) applyEvent(ev events.Event) {
 		// just updating the one-line status shown below the prompt.
 		if name, ok := ev.Data["agent"].(string); ok {
 			m.currentAgent = name
+		}
+	case events.TypeDelegated:
+		if name, ok := ev.Data["agent"].(string); ok {
+			m.transcript += toolStyle.Render(fmt.Sprintf("[delegated to %s]", name)) + "\n\n"
 		}
 	case events.TypeTurnCancelled:
 		m.waiting = false

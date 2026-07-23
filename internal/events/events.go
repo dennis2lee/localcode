@@ -44,6 +44,10 @@ const (
 	TypeConfigChanged Type = "config.changed"
 	// TypeSessionRenamed reports a session's title changing: {"title"}.
 	TypeSessionRenamed Type = "session.renamed"
+	// TypeDelegated marks a turn answered by a sub-agent on its own model
+	// instead of the session's own: {"agent", "prompt"}. Clients show it so
+	// a cheaper model answering is visible rather than silent.
+	TypeDelegated Type = "delegated"
 	// TypeTurnCancelled marks a turn stopped on purpose by the user
 	// (Esc in the TUI, POST /api/sessions/{id}/cancel), as opposed to
 	// TypeError which means something went wrong. Clients use it to stop

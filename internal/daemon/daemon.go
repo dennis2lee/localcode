@@ -123,6 +123,7 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
 		"show_tps":             d.Loop.ShowTPS(),
+		"auto_delegate":        d.Loop.AutoDelegateEnabled(),
 	})
 }
 

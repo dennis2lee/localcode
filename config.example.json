@@ -56,5 +56,17 @@
     }
   },
   "default_profile": "balanced",
-  "max_concurrent_tasks": 5
+  "max_concurrent_tasks": 5,
+  "auto_delegate": {
+    "enabled": false,
+    "agent": "explore",
+    "match": [
+      "find *",
+      "where is *",
+      "which file *",
+      "search *",
+      "list *",
+      "grep *"
+    ]
+  }
 }

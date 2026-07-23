@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"localcode/internal/hooks"
 )
@@ -47,6 +48,65 @@ type Config struct {
 	// pre_tool_use/post_tool_use/user_prompt_submit/stop/session_start),
 	// keyed by event name. See internal/hooks.
 	Hooks hooks.Config `json:"hooks,omitempty"`
+
+	// AutoDelegate routes matching prompts to a cheaper agent instead of
+	// the session's own. Off unless configured. Also runtime-toggleable
+	// via "/config auto_delegate on|off".
+	AutoDelegate *AutoDelegateConfig `json:"auto_delegate,omitempty"`
+}
+
+// AutoDelegateConfig sends small, mechanical prompts to a named agent
+// running its own (typically cheaper) model, in its own session, instead
+// of the session's main agent.
+//
+// The motivation is prompt-cache economics rather than raw model price.
+// A cache read costs about a tenth of base input; a cache write costs
+// 1.25x (or 2x on the 1h TTL). Because a cache entry is keyed by model as
+// well as by prompt bytes, switching the *session's* model part-way
+// through throws away the whole cached prefix — tools, system prompt, and
+// every prior turn — and re-writes it at the write premium. On a long
+// coding session that prefix is the expensive part.
+//
+// Delegating sidesteps that: the sub-agent's model runs against its own
+// separate session, so the main session's model and prefix never change
+// and its cache survives intact.
+type AutoDelegateConfig struct {
+	// Enabled is the configured default. Runtime toggling goes through
+	// the loop's live setting, not this field.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Agent names which entry in Agents handles delegated prompts. It
+	// must exist in the agents map.
+	Agent string `json:"agent"`
+
+	// Match is a list of opencode-style globs ("*" for any run of
+	// characters, "?" for one) tried case-insensitively against the whole
+	// trimmed prompt. A prompt matching any one of them is delegated. An
+	// empty list delegates nothing, so a half-written config is inert
+	// rather than silently routing every prompt to the cheap model.
+	Match []string `json:"match,omitempty"`
+}
+
+// DelegateEnabled reports the configured default for auto-delegation. It
+// is off unless a valid block turns it on, so adding the feature changes
+// nothing for existing configs.
+func (c *Config) DelegateEnabled() bool {
+	return c.AutoDelegate != nil && c.AutoDelegate.Enabled
+}
+
+// MatchesPrompt reports whether text should be delegated. Matching is
+// case-insensitive because these are natural-language prompts, not paths.
+func (a *AutoDelegateConfig) MatchesPrompt(text string) bool {
+	if a == nil {
+		return false
+	}
+	subject := strings.ToLower(strings.TrimSpace(text))
+	for _, pattern := range a.Match {
+		if globMatch(strings.ToLower(pattern), subject) {
+			return true
+		}
+	}
+	return false
 }
 
 // MemoryEnabled reports whether auto memory is on — the default when
@@ -344,6 +404,15 @@ func (c *Config) Validate() error {
 	for event := range c.Hooks {
 		if !hooks.KnownEvents[event] {
 			return fmt.Errorf("hooks: unknown event %q (want one of pre_tool_use, post_tool_use, user_prompt_submit, stop, session_start)", event)
+		}
+	}
+
+	if c.AutoDelegate != nil {
+		if c.AutoDelegate.Agent == "" {
+			return fmt.Errorf("auto_delegate: agent is required")
+		}
+		if _, ok := c.Agents[c.AutoDelegate.Agent]; !ok {
+			return fmt.Errorf("auto_delegate references unknown agent %q", c.AutoDelegate.Agent)
 		}
 	}
 

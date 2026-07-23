@@ -267,6 +267,7 @@
   let lastUsage = null; // {input_tokens, output_tokens, max_context, percent, tps, show_tps, model}
   let autoCompactEnabled = true;
   let showTPS = true;
+  let autoDelegate = false;
   let promptQueue = []; // plain prompts submitted while a turn is in flight
   // Up/Down prompt recall, mirroring the TUI. Client-side and in-memory:
   // a typing convenience, not session state.
@@ -502,10 +503,14 @@
       case 'config.changed':
         if (typeof ev.data.auto_compact_enabled === 'boolean') autoCompactEnabled = ev.data.auto_compact_enabled;
         if (typeof ev.data.show_tps === 'boolean') showTPS = ev.data.show_tps;
+        if (typeof ev.data.auto_delegate === 'boolean') autoDelegate = ev.data.auto_delegate;
         renderStatusBar();
         break;
       case 'session.renamed':
         loadSessions();
+        break;
+      case 'delegated':
+        appendLine(`<div class="msg-tool">[delegated to ${escapeHtml(ev.data.agent || '')}]</div>`);
         break;
       case 'turn.cancelled':
         promptQueue = [];
@@ -548,6 +553,7 @@
       const s = await api('GET', '/api/settings');
       autoCompactEnabled = s.auto_compact_enabled;
       showTPS = s.show_tps;
+      autoDelegate = !!s.auto_delegate;
     } catch (err) {
       // keep defaults
     }
@@ -759,9 +765,10 @@
     '  /agent <name>        switch to that agent (also available via the header dropdown)',
     '  /init              scan the repo and create/improve an AGENTS.md rules file',
     '  /memory            show the auto memory directory/index (MEMORY.md)',
-    '  /config            show current settings (auto_compact, show_tps)',
+    '  /config            show current settings (auto_compact, show_tps, auto_delegate)',
     '  /config auto_compact on|off   toggle auto-compaction above 80% context usage',
     '  /config show_tps on|off       toggle the tokens/sec display under the prompt',
+    '  /config auto_delegate on|off  send matching prompts to a cheaper sub-agent',
     '  /compact           summarize and compact the conversation right now',
     '  /compact <instructions>      give instructions for how to compact',
     '  /usage              show cumulative token usage per model',
