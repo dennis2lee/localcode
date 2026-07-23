@@ -10,15 +10,18 @@ The model calls tools itself for file reads and writes, shell execution, MCP, an
 |---|---|
 | Providers | Bedrock, Anthropic API, OpenAI-compatible. Switch with one config file. |
 | Auth | `localcode login bedrock` (AWS SSO device flow, no AWS CLI needed), `localcode login anthropic` (stores an API key) |
-| Permissions | opencode style allow/deny/ask rules. Auto allow `git *`, auto block `rm *`, and so on. |
+| Permissions | opencode style allow/deny/ask rules, plus allow once, allow for session, or always allow at the prompt. `git` runs without asking by default; a bash line is checked per command, so an allowed prefix cannot carry `&& rm -rf ~` along with it. `skip_permissions` turns every confirmation off, and is off by default. |
 | Hooks | Claude Code style shell hooks on `pre_tool_use`, `post_tool_use`, `user_prompt_submit`, `stop`, `session_start` |
-| Multi agent | Per role model, prompt, and tool scope. Agents delegate through the `Task` tool. Tab or `/agent` switches agent without losing session context. |
+| Multi agent | Per role model, prompt, and tool scope. Agents delegate through the `Task` tool. Tab or `/agent` switches agent without losing session context. Matching prompts can auto delegate to a cheaper agent, keeping the main session's prompt cache intact. |
 | Project context | `AGENTS.md` with `@path` imports and a `CLAUDE.md` fallback, `/init` to draft one, custom slash commands in `.localcode/commands/*.md`, auto memory the model writes for itself across sessions |
 | Conversation | `/compact [instructions]` on demand, automatic compaction past 80% context, `/usage` for cumulative tokens per model (token counts only, no dollar figures) |
 | Restart safety | Session list, conversation context, and `/usage` totals all restore from disk after a daemon restart |
 | Web UI | Drag and drop file attach, live status bar under the prompt (agent, model, context use, TPS, activity light), right panel with session rename and delete plus connected MCP servers |
 | MCP | `localcode mcp add/list/get/remove` edits config.json for you, the same way `claude mcp` does |
-| Prompt queue | Messages typed while the model is still answering queue up and send in order as soon as the turn ends |
+| Prompt queue | Messages typed during a turn, tool execution included, queue up and send in order when the turn ends. A background task does not block the prompt, since it runs in its own session. |
+| Running work | An animated line below the prompt names the running tool, the queue depth, and background tasks, and clears when the turn ends. `/tasks` inspects a background task mid run. |
+| Editing | Up and Down recall previous prompts. Esc cancels a running turn. IME composition renders inside the prompt box. |
+| Windows | Shell execution resolves to `sh`, then Git for Windows' `bash.exe`, then `cmd /c`, so the bash tool works without Git Bash on PATH. |
 
 ## Documentation
 

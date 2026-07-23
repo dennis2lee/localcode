@@ -813,4 +813,4 @@ See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for mor
 * If an MCP server dies and the reconnect also fails, for example because the executable is gone, its tools return an error on every later call until the daemon restarts.
 * There is no auth token. Anyone who can reach the `--listen` address gets the entire API, shell execution included. Expose it only over loopback plus an SSH tunnel.
 * On Windows, shell execution resolves to `sh` on PATH, then Git for Windows' `bash.exe` at its usual install paths, then `cmd /c`. Under the `cmd` fallback, bash-only syntax does not work; the bash tool tells the model so in its description. Installing Git for Windows gives the full POSIX behavior.
-* Two clients on the same session can still start overlapping turns. The prompt queue serializes one client, not two.
+* `/compact` can still overlap a running turn on the same session. Ordinary messages are serialized (the daemon refuses a second turn, and the client queues and retries it), but compaction does not go through that path.

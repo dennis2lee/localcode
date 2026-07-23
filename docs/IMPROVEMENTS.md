@@ -22,9 +22,9 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 ## Remaining work, highest value first
 
 1. ~~**`sh -c` dependency on Windows.**~~ Done in v0.23.0. Shell execution now resolves per OS in `internal/shell`: `sh` on PATH, then Git for Windows' `bash.exe` at known install paths, then `cmd /c`, and the bash tool's description warns the model when it is talking to `cmd`.
-2. **No server side turn lock.** Two messages arriving for the same session at nearly the same time can interleave the history. v0.18.0 added a client side prompt queue in both the TUI and Web UI, which covers the common case of one person typing ahead, but two different clients on the same session can still race. A per session lock that returns 409 or queues while a turn is running would close it. `/compact` overlapping a running turn has the same problem.
-3. **Bash permission globs are too coarse.** An allow rule of `"git *"` also lets `git status && rm -rf ~` through. The command string should be split on shell syntax so each segment matches on its own. At minimum, fall back to ask when `&&`, `;`, or `|` appears.
-4. **Hook timeout and shell are not configurable.** The timeout is fixed at 30 seconds. A per hook `timeout` field would help, and killing the process group would make sure children spawned by `sh -c` get cleaned up.
+2. **Partially done: turn serialization.** The daemon does hold a per session busy flag and returns 409 while a turn is running, and since v0.24.0 a client that gets that 409 queues the message and retries on `turn.done` instead of erroring, so two clients on one session no longer interleave or lose a message. What is still missing is the same treatment for `/compact`, which can overlap a running turn.
+3. ~~**Bash permission globs are too coarse.**~~ Done in v0.20.0. A bash command is split on `&&`, `||`, `;`, `|`, and newlines (quote aware), every segment has to earn `allow` on its own, any `deny` anywhere denies the whole line, and command substitution or output redirection never auto-allows.
+4. **Hook timeout is not configurable.** The timeout is fixed at 30 seconds. A per hook `timeout` field would help, and killing the process group would make sure children spawned by the shell get cleaned up. (Which shell runs hooks is resolved per OS as of v0.23.0; only the timeout is still fixed.)
 5. **MCP is stdio only.** HTTP and SSE transport servers cannot be attached yet, unlike Claude Code. Room for something like `localcode mcp add --transport http <name> <url>`.
 6. **`localcode mcp list` shows a static list.** It prints what is registered in config, but whether a server actually starts is only known once the daemon runs. When a daemon is up, querying `GET /api/mcp-servers` and showing connection state alongside would be more useful.
 7. **Compaction can fail when history already exceeds the context.** If the history is right at the model limit, the summarization request itself can fail. A truncation fallback that drops the oldest turns would make auto compaction more robust.
@@ -41,7 +41,7 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 | Markdown rendering with code highlighting | Model replies render as plain text today. For a coding tool, code block highlighting is the single biggest readability win. Prefer a light library that bundles without an external CDN. |
 | Collapsible tool call cards | Show tool input and output as a folded card that expands on click. Long sessions become much easier to follow. |
 | Diff viewer | Render `edit` and `write_file` results as a before and after diff. |
-| "Always allow" on permission prompts | Only one time allow and deny exist today. An always allow button that writes the matching `permission` rule into config would save a lot of clicking. |
+| ~~"Always allow" on permission prompts~~ | Done in v0.20.0. Prompts now offer allow once, allow for session, and always allow, the last of which writes the matching rule into config.json. |
 | `/usage` visualization | Bars for tokens per model, a gauge for context use. |
 | Session search and filter | The session list in the right panel needs title search once it gets long. |
 | Scroll control | Stop auto scrolling when the user scrolls up mid stream, and show a jump to bottom button. |
@@ -54,7 +54,7 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 |---|---|
 | Markdown and code block rendering | A renderer such as glamour would make replies far easier to read. |
 | Session picker inside the TUI | Today you type a number at a plain terminal prompt before the TUI starts. A Bubble Tea list with arrow key selection would feel native. |
-| Tool progress display | Running tool name with a spinner, and elapsed time on completion. |
+| ~~Tool progress display~~ | Done in v0.25.0. An animated line below the prompt box names the running tool, the queue depth, and the background-task count, and clears at the turn boundary. Elapsed time is still not shown. |
 | Context gauge | Turn the percentage in the status line into a colored bar, yellow at 70%, red at 85%. |
 | History scroll and search | Search earlier output in long sessions with the `/` key. |
 
