@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"localcode/internal/client"
 	"localcode/internal/events"
@@ -36,7 +36,7 @@ const helpText = `Available commands:
   /help              show this help
   /version            show the daemon version
   /skill              list registered skills
-  /skill <name>        load that skill and continue with it
+  /<skill name>        run that skill (e.g. /pdf-tools)
   /agent              list registered agents
   /agent <name>        switch to that agent (Tab also cycles through them)
   /init              scan the repo and create/improve an AGENTS.md rules file
@@ -104,9 +104,16 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 	// distinct shift+enter sequence, so we bind to something that works
 	// everywhere instead.
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
+	// Drive the *real* terminal cursor rather than the textarea's own
+	// drawn-in-reverse-video one. This is what makes IME composition (a
+	// half-typed Hangul syllable, kana, pinyin) appear inside the prompt
+	// box: the terminal paints in-progress "marked text" wherever the
+	// physical cursor sits, and with a virtual cursor the physical one is
+	// left parked wherever the frame happened to end. See View().
+	ta.SetVirtualCursor(false)
 	ta.Focus()
 
-	vp := viewport.New(80, 20)
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
 
 	return Model{
 		client:       c,
@@ -269,7 +276,7 @@ func (m *Model) appendLocal(text string) {
 // correctly around the ANSI styling userStyle/toolStyle/etc. already
 // applied to parts of the transcript.
 func (m *Model) refreshViewport() {
-	w := m.viewport.Width
+	w := m.viewport.Width()
 	if w <= 0 {
 		w = 80
 	}
@@ -295,14 +302,14 @@ func (m *Model) resizeLayout() {
 	if vh < 3 {
 		vh = 3
 	}
-	m.viewport.Height = vh
+	m.viewport.SetHeight(vh)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.termHeight = msg.Height
-		m.viewport.Width = msg.Width
+		m.viewport.SetWidth(msg.Width)
 		m.input.SetWidth(msg.Width - 2)
 		m.resizeLayout()
 		// Re-wrap the existing transcript at the new width — it was
@@ -524,40 +531,38 @@ func (m *Model) applyEvent(ev events.Event) {
 // inputBorder draws a horizontal rule spanning the input box's width, used
 // above and below it so its boundary reads clearly against the transcript.
 func (m Model) inputBorder() string {
-	w := m.viewport.Width
+	w := m.viewport.Width()
 	if w <= 0 {
 		w = 40
 	}
 	return statusStyle.Render(strings.Repeat("─", w))
 }
 
-func (m Model) View() string {
-	var b strings.Builder
-
-	b.WriteString(m.viewport.View())
-	b.WriteString("\n")
+// View assembles the frame as a slice of lines rather than one appended
+// string, because it needs to know which row the prompt box starts on to
+// place the real terminal cursor (see the tea.Cursor handoff at the end).
+func (m Model) View() tea.View {
+	lines := strings.Split(m.viewport.View(), "\n")
 
 	if m.pending != nil {
-		b.WriteString(modalStyle.Render(fmt.Sprintf("Permission request [%s]: %s  (y/n)", m.pending.tool, m.pending.description)))
-		b.WriteString("\n")
+		lines = append(lines, modalStyle.Render(fmt.Sprintf("Permission request [%s]: %s  (y/n)", m.pending.tool, m.pending.description)))
 	} else if m.waiting {
 		status := "Waiting for response..."
 		if n := len(m.queue); n > 0 {
 			status += fmt.Sprintf(" (%d queued)", n)
 		}
-		b.WriteString(statusStyle.Render(status))
-		b.WriteString("\n")
+		lines = append(lines, statusStyle.Render(status))
 	} else if m.errMsg != "" {
-		b.WriteString(errorStyle.Render("Error: " + m.errMsg))
-		b.WriteString("\n")
+		lines = append(lines, errorStyle.Render("Error: "+m.errMsg))
 	}
 
-	b.WriteString(m.inputBorder())
-	b.WriteString("\n")
-	b.WriteString(m.input.View())
-	b.WriteString("\n")
-	b.WriteString(m.inputBorder())
-	b.WriteString("\n")
+	lines = append(lines, m.inputBorder())
+	// Row the prompt box's first line lands on. Derived from the frame
+	// built so far rather than a hardcoded sum, so it stays correct as the
+	// optional status/permission line above it comes and goes.
+	inputRow := len(lines)
+	lines = append(lines, strings.Split(m.input.View(), "\n")...)
+	lines = append(lines, m.inputBorder())
 
 	// Agent status lives below the input box (not above it), so it reads
 	// as "what will the next message use" right next to where the next
@@ -569,7 +574,25 @@ func (m Model) View() string {
 	if model, ok := m.currentModel(); ok {
 		footer += "  ·  model: " + model
 	}
-	b.WriteString(statusStyle.Render(footer))
+	lines = append(lines, statusStyle.Render(footer))
 
-	return b.String()
+	v := tea.NewView(strings.Join(lines, "\n"))
+	// Alt screen is a property of the frame in bubbletea v2, not a program
+	// option, so it's declared here rather than at tea.NewProgram.
+	v.AltScreen = true
+
+	// Put the *physical* terminal cursor at the text insertion point inside
+	// the prompt box. Terminals draw IME composition ("marked text" — a
+	// Hangul syllable mid-assembly, kana being converted, pinyin) at the
+	// physical cursor, so without this the half-finished characters render
+	// wherever the cursor happened to be parked, which is the end of the
+	// frame: the footer line *below* the prompt box. They then jumped up
+	// into the box only once the syllable committed and arrived as a real
+	// key event. textarea.Cursor() reports a position relative to the
+	// prompt box itself, so it needs the box's own row added to it.
+	if cur := m.input.Cursor(); cur != nil {
+		cur.Position.Y += inputRow
+		v.Cursor = cur
+	}
+	return v
 }

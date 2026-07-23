@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"localcode/internal/agent"
 	"localcode/internal/client"
@@ -269,7 +269,7 @@ func runTUIClient(serverURL, agentName string) error {
 	}
 
 	model := tui.New(c, sess.ID, sess.Agent, eventCh)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 	_, err = p.Run()
 	return err
 }

@@ -185,20 +185,26 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	// starts following it immediately instead of the user hoping the
 	// model decides to call the Skill tool on its own. Either way the
 	// displayed transcript keeps the short "/skill ..." the user typed.
+	//
+	// "/skill <name>" is the older spelling, kept working so it doesn't
+	// break under anyone's fingers; "/<name>" below is the documented one.
 	if arg, ok := parseSkillCommand(text); ok {
 		if arg == "" {
 			return l.listSkills(sessionID, text)
 		}
-		sk, found := l.findSkill(arg)
+		name, args := arg, ""
+		if idx := strings.IndexAny(arg, " \t"); idx >= 0 {
+			name, args = arg[:idx], strings.TrimSpace(arg[idx+1:])
+		}
+		sk, found := l.findSkill(name)
 		if !found {
 			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 			l.Store.Append(sessionID, events.TypeError, map[string]any{
-				"error": fmt.Sprintf("unknown skill %q. Available: %s", arg, l.skillNames()),
+				"error": fmt.Sprintf("unknown skill %q. Available: %s", name, l.skillNames()),
 			})
 			return nil
 		}
-		return l.sendWithModelText(ctx, sessionID, agentName, text,
-			fmt.Sprintf("Follow the %q skill's instructions below to help with my request.\n\n---\n%s\n---", sk.Name, sk.Body), "", "")
+		return l.sendWithModelText(ctx, sessionID, agentName, text, skillModelText(sk, args), "", "")
 	}
 
 	if strings.TrimSpace(text) == "/init" {
@@ -231,7 +237,49 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		return l.sendWithModelText(ctx, sessionID, agentName, text, modelText, cmd.Agent, cmd.Model)
 	}
 
+	// A registered skill runs by its own name, "/<skill-name>", the same
+	// shape custom commands use. Checked last so nothing user-facing can
+	// be shadowed by a skill that happens to share a name: built-in
+	// commands win first, then custom commands, then skills.
+	if sk, args, ok := l.matchSkillName(text); ok {
+		return l.sendWithModelText(ctx, sessionID, agentName, text, skillModelText(sk, args), "", "")
+	}
+
 	return l.sendWithModelText(ctx, sessionID, agentName, text, text, "", "")
+}
+
+// matchSkillName recognizes "/<skill-name>" and "/<skill-name> <args>"
+// against a registered skill.
+func (l *Loop) matchSkillName(text string) (skills.Skill, string, bool) {
+	trimmed := strings.TrimSpace(text)
+	rest, ok := strings.CutPrefix(trimmed, "/")
+	if !ok {
+		return skills.Skill{}, "", false
+	}
+	name, args := rest, ""
+	if idx := strings.IndexAny(rest, " \t"); idx >= 0 {
+		name, args = rest[:idx], strings.TrimSpace(rest[idx+1:])
+	}
+	if name == "" {
+		return skills.Skill{}, "", false
+	}
+	sk, found := l.findSkill(name)
+	if !found {
+		return skills.Skill{}, "", false
+	}
+	return sk, args, true
+}
+
+// skillModelText builds what the model actually receives when a skill is
+// invoked: the skill's whole body, plus whatever the user typed after the
+// command name, if anything. The transcript keeps only the short
+// "/<name> ..." line the user typed.
+func skillModelText(sk skills.Skill, args string) string {
+	text := fmt.Sprintf("Follow the %q skill's instructions below to help with my request.\n\n---\n%s\n---", sk.Name, sk.Body)
+	if args != "" {
+		text += "\n\nMy request: " + args
+	}
+	return text
 }
 
 // matchCustomCommand recognizes "/<name>" or "/<name> <args>" against a
@@ -497,7 +545,7 @@ func (l *Loop) listSkills(sessionID, displayText string) error {
 	text := "No skills registered."
 	if len(l.Skills) > 0 {
 		var b strings.Builder
-		b.WriteString("Available skills (/skill <name> to load):\n")
+		b.WriteString("Available skills (/<name> to run one):\n")
 		for _, s := range l.Skills {
 			fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
 		}

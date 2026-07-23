@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"localcode/internal/client"
 	"localcode/internal/events"
@@ -33,7 +33,7 @@ func TestResizeLayoutGrowsWithContent(t *testing.T) {
 	if got, want := m.input.LineCount(), 1; got != want {
 		t.Fatalf("initial LineCount = %d, want %d", got, want)
 	}
-	initialViewportHeight := m.viewport.Height
+	initialViewportHeight := m.viewport.Height()
 	if want := 24 - 2 - borderLines - footerLines - 1; initialViewportHeight != want {
 		t.Errorf("initial viewport height = %d, want %d", initialViewportHeight, want)
 	}
@@ -44,11 +44,11 @@ func TestResizeLayoutGrowsWithContent(t *testing.T) {
 	if got, want := m.input.Height(), 4; got != want {
 		t.Errorf("input height after 4-line content = %d, want %d", got, want)
 	}
-	if m.viewport.Height >= initialViewportHeight {
-		t.Errorf("viewport height = %d, expected it to shrink below the 1-line baseline %d", m.viewport.Height, initialViewportHeight)
+	if m.viewport.Height() >= initialViewportHeight {
+		t.Errorf("viewport height = %d, expected it to shrink below the 1-line baseline %d", m.viewport.Height(), initialViewportHeight)
 	}
-	if want := 24 - 2 - borderLines - footerLines - 4; m.viewport.Height != want {
-		t.Errorf("viewport height = %d, want %d", m.viewport.Height, want)
+	if want := 24 - 2 - borderLines - footerLines - 4; m.viewport.Height() != want {
+		t.Errorf("viewport height = %d, want %d", m.viewport.Height(), want)
 	}
 }
 
@@ -67,8 +67,8 @@ func TestResizeLayoutClampsToMaxHeight(t *testing.T) {
 	if got := m.input.Height(); got != inputMaxHeight {
 		t.Errorf("input height = %d, want it clamped to inputMaxHeight = %d", got, inputMaxHeight)
 	}
-	if m.viewport.Height < 3 {
-		t.Errorf("viewport height = %d, want it floored at 3 even when input maxes out", m.viewport.Height)
+	if m.viewport.Height() < 3 {
+		t.Errorf("viewport height = %d, want it floored at 3 even when input maxes out", m.viewport.Height())
 	}
 }
 
@@ -79,7 +79,7 @@ func TestResizeLayoutShrinksBackAfterClear(t *testing.T) {
 
 	m.input.SetValue("line one\nline two\nline three")
 	m.resizeLayout()
-	grownHeight := m.viewport.Height
+	grownHeight := m.viewport.Height()
 
 	m.input.Reset()
 	m.resizeLayout()
@@ -87,8 +87,8 @@ func TestResizeLayoutShrinksBackAfterClear(t *testing.T) {
 	if m.input.LineCount() != 1 {
 		t.Fatalf("expected LineCount 1 after Reset, got %d", m.input.LineCount())
 	}
-	if m.viewport.Height <= grownHeight {
-		t.Errorf("viewport height = %d, expected it to grow back above the grown-input height %d", m.viewport.Height, grownHeight)
+	if m.viewport.Height() <= grownHeight {
+		t.Errorf("viewport height = %d, expected it to grow back above the grown-input height %d", m.viewport.Height(), grownHeight)
 	}
 }
 
@@ -97,7 +97,7 @@ func TestResizeLayoutShrinksBackAfterClear(t *testing.T) {
 func pressEnterWith(t *testing.T, m Model, text string) (Model, tea.Cmd) {
 	t.Helper()
 	m.input.SetValue(text)
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	return updated.(Model), cmd
 }
 
@@ -208,7 +208,7 @@ func TestTabKeySwitchesAgent(t *testing.T) {
 	m := New(client.New(srv.URL), "s1", "plan", make(chan events.Event))
 	m.agents = []client.AgentInfo{{Name: "build"}, {Name: "plan"}}
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if cmd == nil {
 		t.Fatal("Tab with 2+ known agents should issue a switch command")
 	}
@@ -271,7 +271,7 @@ func TestRepeatedTabSwitchesDoNotPanic(t *testing.T) {
 	m, _ = pressEnterWith(t, m, "/help")
 
 	for i := 0; i < 50; i++ {
-		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 		m = updated.(Model)
 		if cmd != nil {
 			msg := cmd()
@@ -319,7 +319,7 @@ func TestViewFooterShowsModelNotTabHint(t *testing.T) {
 		{Name: "explore", Model: "qwen3-30b-a3b"},
 	}
 
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "agent: explore") {
 		t.Errorf("View() = %q, want it to show the current agent", view)
 	}
@@ -328,6 +328,63 @@ func TestViewFooterShowsModelNotTabHint(t *testing.T) {
 	}
 	if strings.Contains(view, "tab to switch") {
 		t.Errorf("View() = %q, want the Tab-cycle hint removed in favor of the model name", view)
+	}
+}
+
+// TestViewPutsCursorInsidePromptBox is the regression test for Korean (and
+// any other IME) input appearing below the prompt box. Terminals draw IME
+// composition — a Hangul syllable still being assembled — at the *physical*
+// cursor. The TUI used to leave that cursor wherever the frame ended, which
+// is the footer line below the prompt box, so half-typed characters showed
+// up there and only jumped into the box once committed. View() must now
+// report a cursor, and it must land on the prompt box's own line.
+func TestViewPutsCursorInsidePromptBox(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	m.input.SetValue("hello")
+
+	v := m.View()
+	if v.Cursor == nil {
+		t.Fatal("View().Cursor = nil, want a real terminal cursor so the IME composes inside the prompt box")
+	}
+
+	lines := strings.Split(v.Content, "\n")
+	if v.Cursor.Position.Y < 0 || v.Cursor.Position.Y >= len(lines) {
+		t.Fatalf("cursor row = %d, outside the frame's %d lines", v.Cursor.Position.Y, len(lines))
+	}
+	if got := lines[v.Cursor.Position.Y]; !strings.Contains(got, "hello") {
+		t.Errorf("cursor sits on row %d (%q), want the prompt box row holding the typed text", v.Cursor.Position.Y, got)
+	}
+	if v.Cursor.Position.Y == len(lines)-1 {
+		t.Error("cursor is on the last frame row (the agent/model footer) — that is exactly the old bug, IME text renders below the prompt box")
+	}
+}
+
+// TestViewCursorAccountsForWideRunes checks the cursor column advances by
+// display width, not rune count: Hangul is double width, so a 2-rune "한글"
+// has to move the cursor 4 cells. Getting this wrong puts the IME
+// composition (and the caret) in the middle of the text already typed.
+func TestViewCursorAccountsForWideRunes(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+
+	// Baseline with an empty prompt: whatever X the textarea's own prompt
+	// glyph occupies, so the test doesn't hardcode bubbles' prompt width.
+	base := m.View()
+	if base.Cursor == nil {
+		t.Fatal("View().Cursor = nil on an empty prompt")
+	}
+	originX := base.Cursor.Position.X
+
+	m.input.SetValue("한글")
+	got := m.View()
+	if got.Cursor == nil {
+		t.Fatal("View().Cursor = nil after typing")
+	}
+	if want := originX + 4; got.Cursor.Position.X != want {
+		t.Errorf("cursor column after typing 2 Hangul runes = %d, want %d (4 cells, not 2 — Hangul is double width)", got.Cursor.Position.X, want)
 	}
 }
 

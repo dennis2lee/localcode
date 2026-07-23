@@ -1,55 +1,66 @@
-# 개선 목록 (Improvements)
+# Improvements
 
-2026-07-18 코드 점검 결과. ✅는 그 자리에서 바로 수정해서 v0.11.1/v0.12.0에 포함된 항목, 나머지는 앞으로의 개선 후보입니다.
+Findings from a code review on 2026-07-18. Items marked done were fixed on the spot and shipped in the version noted. The rest are candidates for later work.
 
-## v0.12.0에서 구현한 항목
+## Shipped in v0.12.0
 
-- ✅ **데몬 재시작 시 대화 맥락 소실 (이 목록의 남은 개선 1번이었음)** — 세션 메타데이터를 `<id>.meta.json`으로 별도 저장하고(`session.LoadAllFromDisk`), 이벤트 로그에서 모델 히스토리·토큰 사용량을 재구성하는 `agent.Loop.RehydrateAll()`을 추가해 데몬 시작 시 연결했습니다. 이 작업 중 실제로 라이브 검증에서 버그 하나를 더 발견해서 같이 고쳤습니다: `/compact`·`/usage`처럼 모델을 호출하지 않는 로컬 명령의 확인 메시지("대화가 압축되었습니다" 등)가 복원된 히스토리에 모델이 실제로 한 말인 것처럼 섞여 들어가는 문제 — `message.user` 이벤트에 `"local": true` 표시를 추가해 복원 시 건너뛰도록 수정했습니다.
-- ✅ **시작 로고 추가** — opencode처럼 TUI 시작 시 "LOCALCODE" 블록 문자 배너를 표시합니다 (`--headless`는 제외).
+| Item | What changed |
+|---|---|
+| Conversation context lost on daemon restart | Session metadata now saves to a separate `<id>.meta.json` via `session.LoadAllFromDisk`, and `agent.Loop.RehydrateAll()` rebuilds model history and token usage from the event log at daemon start. |
+| Local command replies leaking into history | Found during live verification of the restart work. Confirmation text from commands that never call the model (`/compact`, `/usage`) was being replayed as if the model had said it. `message.user` events now carry `"local": true` so rehydration skips them. |
+| Startup logo | The TUI prints a "LOCALCODE" block banner at startup, the way opencode does. `--headless` skips it. |
 
-## 이번에 발견해서 수정한 버그 (v0.11.1)
+## Shipped in v0.11.1
 
-- ✅ **`localcode mcp add/remove`가 config.json의 모르는 필드를 삭제** — 파일 전체를 Config 구조체로 읽고 다시 저장해서, 구조체에 없는 키(오타로 들어간 키, 미래 버전의 필드 등)가 조용히 사라졌습니다. 이제 `mcp_servers` 키만 수술적으로 고치고 나머지는 raw JSON 그대로 보존합니다. 이름이 없을 때 `remove`가 파일을 다시 포맷해버리는 부작용도 제거.
-- ✅ **hook matcher가 부분 일치** — `"bash"` matcher가 이름에 bash가 들어간 다른 툴(`mcp__server__run_bash` 등)에도 걸렸습니다. 이제 툴 이름 전체 일치로 앵커링됩니다 (`"bash|edit"`, `"mcp__github__.*"` 같은 패턴은 그대로 동작).
-- ✅ **압축(compaction) 호출의 토큰이 `/usage`에서 누락** — 요약 호출도 과금되는 API 호출인데 집계에 안 잡혔습니다.
-- ✅ **압축 요약이 1,024 토큰에서 잘림** — 긴 세션의 요약이 중간에 끊길 수 있었습니다. 4,096(기본 턴 예산)으로 상향.
+| Item | What changed |
+|---|---|
+| `localcode mcp add/remove` dropped unknown config.json fields | The whole file was being round tripped through the Config struct, so any key not in the struct (a typo, a field from a future version) silently vanished. Only the `mcp_servers` key is rewritten now, everything else stays as raw JSON. `remove` also no longer reformats the file when the name is not found. |
+| Hook matcher matched partial names | A `"bash"` matcher also caught tools that merely contained bash, such as `mcp__server__run_bash`. Matchers are anchored to the full tool name now. Patterns like `"bash\|edit"` and `"mcp__github__.*"` work as before. |
+| Compaction tokens missing from `/usage` | The summarization call is a billed API call, but it was not counted. |
+| Compaction summary truncated at 1,024 tokens | Summaries of long sessions could get cut off mid sentence. Raised to 4,096, the default turn budget. |
 
-## 완성도를 높이기 위한 남은 개선 (우선순위순)
+## Remaining work, highest value first
 
-1. **Windows에서 `sh -c` 의존** — bash 툴, hooks, 커스텀 명령의 `` !`shell` `` 확장이 전부 `sh -c`로 실행됩니다. Windows 배포판(MSI)에서는 Git Bash 등이 PATH에 없으면 전부 실패합니다. `runtime.GOOS == "windows"`일 때 `cmd /c`(또는 PowerShell)로 폴백하는 처리가 필요합니다.
-2. **동시 턴 경합 보호** — 같은 세션에 메시지 두 개가 거의 동시에 들어오면 히스토리가 섞일 수 있습니다. 세션별 턴 lock(진행 중이면 409 또는 큐잉)이 필요합니다. `/compact`가 진행 중 턴과 겹치는 경우도 동일합니다.
-3. **bash 권한 글롭의 한계** — `"git *"` allow 규칙은 `git status && rm -rf ~` 같은 연결 명령도 통과시킵니다. 명령 문자열을 셸 문법으로 분해해서 각 파이프/연결 구간을 개별 매치하거나, 최소한 `&&`, `;`, `|`가 포함되면 보수적으로 ask로 떨어뜨리는 보완이 필요합니다.
-4. **hook 타임아웃/셸 설정 불가** — 30초 고정입니다. hook마다 `timeout` 필드를 받을 수 있게 하고, `sh -c`가 만든 자식 프로세스까지 확실히 정리되도록 process group kill도 검토할 만합니다.
-5. **MCP stdio 전용** — Claude Code처럼 HTTP/SSE transport MCP 서버(`--transport http`)는 아직 붙일 수 없습니다. `localcode mcp add --transport http <name> <url>` 형태의 확장 여지가 있습니다.
-6. **`localcode mcp list`가 정적 목록만 표시** — config에 등록된 항목만 보여주고, 실제로 연결 가능한지(command 존재, 서버 기동 성공)는 데몬을 띄워야 압니다. 데몬이 떠 있으면 `GET /api/mcp-servers`를 조회해 연결 상태를 함께 표시하면 유용합니다.
-7. **압축 요약 자체가 context를 초과하는 경우** — 히스토리가 이미 모델 한도를 넘기 직전이면 요약 요청 자체가 실패할 수 있습니다. 실패 시 오래된 턴부터 잘라내는 폴백(truncation)이 있으면 auto-compact가 더 견고해집니다.
-8. **config 편집 시 키 순서 미보존** — `localcode mcp`가 파일을 다시 쓰면 최상위 키가 알파벳순으로 정렬됩니다. 데이터는 보존되지만 diff가 지저분해집니다 (사소).
-9. **`/usage`에 세션 간/일별 누적 없음** — 현재 세션 하나의 총합만 보여줍니다. 세션을 넘나드는 일/주 단위 리포트는 별도 집계가 필요합니다.
-10. **압축 요약 텍스트가 이벤트 로그에 평문으로 남음** — v0.12.0에서 재시작 복원을 위해 `compacted` 이벤트에 요약 전문을 저장하도록 바꿨습니다. 세션 로그에 민감한 내용이 있었다면 그 요약도 그대로 로그 파일에 남는다는 뜻입니다 — 로그 파일 접근 권한/보관 정책을 이 사실에 맞게 검토할 필요가 있습니다.
+1. **`sh -c` dependency on Windows.** The bash tool, hooks, and `` !`shell` `` expansion in custom commands all run through `sh -c`. On the Windows MSI build they all fail unless something like Git Bash is on PATH. Needs a `cmd /c` or PowerShell fallback when `runtime.GOOS == "windows"`.
+2. **No server side turn lock.** Two messages arriving for the same session at nearly the same time can interleave the history. v0.18.0 added a client side prompt queue in both the TUI and Web UI, which covers the common case of one person typing ahead, but two different clients on the same session can still race. A per session lock that returns 409 or queues while a turn is running would close it. `/compact` overlapping a running turn has the same problem.
+3. **Bash permission globs are too coarse.** An allow rule of `"git *"` also lets `git status && rm -rf ~` through. The command string should be split on shell syntax so each segment matches on its own. At minimum, fall back to ask when `&&`, `;`, or `|` appears.
+4. **Hook timeout and shell are not configurable.** The timeout is fixed at 30 seconds. A per hook `timeout` field would help, and killing the process group would make sure children spawned by `sh -c` get cleaned up.
+5. **MCP is stdio only.** HTTP and SSE transport servers cannot be attached yet, unlike Claude Code. Room for something like `localcode mcp add --transport http <name> <url>`.
+6. **`localcode mcp list` shows a static list.** It prints what is registered in config, but whether a server actually starts is only known once the daemon runs. When a daemon is up, querying `GET /api/mcp-servers` and showing connection state alongside would be more useful.
+7. **Compaction can fail when history already exceeds the context.** If the history is right at the model limit, the summarization request itself can fail. A truncation fallback that drops the oldest turns would make auto compaction more robust.
+8. **Config key order is not preserved.** When `localcode mcp` rewrites the file, top level keys come back alphabetically sorted. No data is lost, but diffs get noisy. Minor.
+9. **`/usage` has no cross session or daily totals.** It reports one session. Daily or weekly reporting across sessions needs separate aggregation.
+10. **Compaction summaries sit in the event log as plain text.** v0.12.0 started storing the full summary in the `compacted` event so restarts can restore it. If a session contained sensitive material, the summary of it now lives in the log file too. Worth reviewing log file permissions and retention against that.
 
-## UI 개선 아이디어
+## UI ideas
 
 ### Web UI
 
-- **마크다운 렌더링 + 코드 하이라이트** — 현재 모델 응답이 플레인 텍스트로 표시됩니다. 코딩 도구 특성상 코드블록 하이라이트가 체감 효과가 가장 큽니다 (외부 CDN 없이 번들 가능한 경량 라이브러리 권장).
-- **툴 호출 접기/펼치기 카드** — 툴 실행 로그(입력/출력)를 접힌 카드로 표시하고 클릭 시 펼치기. 긴 세션에서 대화 흐름 가독성이 크게 좋아집니다.
-- **diff 뷰어** — `edit`/`write_file` 툴 결과를 변경 전/후 diff로 표시.
-- **권한 요청에 "항상 허용" 선택지** — 지금은 1회 허용/거부만 가능합니다. "이 패턴 항상 허용"을 누르면 `permission` 규칙을 config에 자동 추가해 주는 흐름이 편합니다.
-- **`/usage` 시각화** — 모델별 토큰 사용량을 막대로, context 사용률을 게이지로.
-- **세션 검색/필터** — 오른쪽 패널 세션 목록이 길어지면 제목 검색이 필요합니다.
-- **자동 스크롤 제어** — 스트리밍 중 위로 스크롤하면 자동 스크롤을 멈추고, "맨 아래로" 버튼 표시.
-- **다크/라이트 테마 토글**과 모바일 반응형 레이아웃.
-- **MCP 서버 상태 표시** — 오른쪽 패널의 MCP 목록에 연결됨/실패 상태 점 + 재연결 버튼.
+| Idea | Why |
+|---|---|
+| Markdown rendering with code highlighting | Model replies render as plain text today. For a coding tool, code block highlighting is the single biggest readability win. Prefer a light library that bundles without an external CDN. |
+| Collapsible tool call cards | Show tool input and output as a folded card that expands on click. Long sessions become much easier to follow. |
+| Diff viewer | Render `edit` and `write_file` results as a before and after diff. |
+| "Always allow" on permission prompts | Only one time allow and deny exist today. An always allow button that writes the matching `permission` rule into config would save a lot of clicking. |
+| `/usage` visualization | Bars for tokens per model, a gauge for context use. |
+| Session search and filter | The session list in the right panel needs title search once it gets long. |
+| Scroll control | Stop auto scrolling when the user scrolls up mid stream, and show a jump to bottom button. |
+| Dark and light theme toggle | Plus a responsive layout for mobile. |
+| MCP server status | A connected or failed dot next to each MCP server in the right panel, with a reconnect button. |
 
 ### TUI
 
-- **마크다운/코드블록 렌더링** — glamour(charmbracelet) 같은 렌더러로 응답 가독성 개선.
-- **시작 시 세션 픽커를 TUI 안으로** — 지금은 TUI가 뜨기 전 터미널 텍스트 프롬프트로 번호를 입력합니다. Bubble Tea 리스트로 화살표 선택이 자연스럽습니다.
-- **툴 실행 진행 표시** — 실행 중인 툴 이름 + 스피너, 완료 시 소요 시간.
-- **context 게이지 시각화** — 상태줄의 % 숫자를 색상 게이지 바(70% 노랑, 85% 빨강)로.
-- **히스토리 스크롤/검색** — 긴 세션에서 이전 출력 검색(`/` 키).
+| Idea | Why |
+|---|---|
+| Markdown and code block rendering | A renderer such as glamour would make replies far easier to read. |
+| Session picker inside the TUI | Today you type a number at a plain terminal prompt before the TUI starts. A Bubble Tea list with arrow key selection would feel native. |
+| Tool progress display | Running tool name with a spinner, and elapsed time on completion. |
+| Context gauge | Turn the percentage in the status line into a colored bar, yellow at 70%, red at 85%. |
+| History scroll and search | Search earlier output in long sessions with the `/` key. |
 
-### 공통
+### Both clients
 
-- **`/help`를 서버에서 내려주기** — 현재 TUI/Web UI가 각자 도움말 문자열을 하드코딩해서 명령 추가 시 두 곳을 고쳐야 합니다 (이번에도 두 곳을 따로 수정). `GET /api/commands/help` 같은 단일 소스로 옮기면 어긋날 일이 없습니다.
-- **에러 메시지 한글/영문 혼재 정리** — 시스템 안내는 한글, 내부 에러는 영문이 섞여 있습니다. 톤을 통일하거나 locale 스위치를 두는 방법이 있습니다.
+| Idea | Why |
+|---|---|
+| Serve `/help` from the daemon | The TUI and Web UI each hardcode their own help string, so adding a command means editing two places. A single source such as `GET /api/commands/help` would keep them in sync. |
+| ~~Mixed Korean and English error messages~~ | Done in v0.13.0. All program output is English now, and the documentation followed in v0.19.0. |
