@@ -21,7 +21,7 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 
 ## Remaining work, highest value first
 
-1. **`sh -c` dependency on Windows.** The bash tool, hooks, and `` !`shell` `` expansion in custom commands all run through `sh -c`. On the Windows MSI build they all fail unless something like Git Bash is on PATH. Needs a `cmd /c` or PowerShell fallback when `runtime.GOOS == "windows"`.
+1. ~~**`sh -c` dependency on Windows.**~~ Done in v0.23.0. Shell execution now resolves per OS in `internal/shell`: `sh` on PATH, then Git for Windows' `bash.exe` at known install paths, then `cmd /c`, and the bash tool's description warns the model when it is talking to `cmd`.
 2. **No server side turn lock.** Two messages arriving for the same session at nearly the same time can interleave the history. v0.18.0 added a client side prompt queue in both the TUI and Web UI, which covers the common case of one person typing ahead, but two different clients on the same session can still race. A per session lock that returns 409 or queues while a turn is running would close it. `/compact` overlapping a running turn has the same problem.
 3. **Bash permission globs are too coarse.** An allow rule of `"git *"` also lets `git status && rm -rf ~` through. The command string should be split on shell syntax so each segment matches on its own. At minimum, fall back to ask when `&&`, `;`, or `|` appears.
 4. **Hook timeout and shell are not configurable.** The timeout is fixed at 30 seconds. A per hook `timeout` field would help, and killing the process group would make sure children spawned by `sh -c` get cleaned up.

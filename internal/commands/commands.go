@@ -9,9 +9,11 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
+
+	"localcode/internal/shell"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -107,7 +109,7 @@ func parseCommandFile(path string) (Command, error) {
 // reference. Matching all four in one alternation lets Expand run a single
 // left-to-right pass — so substituted content (a shell command's output,
 // or an argument value) is never itself re-scanned for further directives.
-// That matters for safety: without it, `!`echo @/etc/passwd`` would read
+// That matters for safety: without it, `!`echo @/etc/passwd“ would read
 // /etc/passwd, and an argument like "@/secret" spliced via $ARGUMENTS
 // would too.
 var expandPattern = regexp.MustCompile("\\$ARGUMENTS|\\$[1-9]|!`[^`]*`|@\\S+")
@@ -181,7 +183,7 @@ func substituteArgs(s, args string, fields []string) string {
 }
 
 func runShell(cmdStr, cwd string) (string, error) {
-	c := exec.Command("sh", "-c", cmdStr)
+	c := shell.Command(context.Background(), cmdStr)
 	c.Dir = cwd
 	var buf bytes.Buffer
 	c.Stdout = &buf

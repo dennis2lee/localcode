@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
+
+	"localcode/internal/shell"
 	"time"
 )
 
@@ -13,8 +14,14 @@ type Bash struct {
 	Timeout time.Duration
 }
 
-func (Bash) Name() string        { return "bash" }
-func (Bash) Description() string { return "Run a shell command and return its combined stdout/stderr." }
+func (Bash) Name() string { return "bash" }
+
+// Description carries shell.Notice so that on a Windows machine with no
+// POSIX sh the model is told it is talking to cmd.exe and writes cmd
+// syntax instead of bash-isms.
+func (Bash) Description() string {
+	return "Run a shell command and return its combined stdout/stderr." + shell.Notice()
+}
 func (Bash) InputSchema() json.RawMessage {
 	return schema(`{"command":{"type":"string"}}`, "command")
 }
@@ -46,7 +53,7 @@ func (b Bash) Execute(ctx context.Context, input json.RawMessage) Result {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", args.Command)
+	cmd := shell.Command(ctx, args.Command)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return Result{Content: fmt.Sprintf("%s\n(exit error: %v)", out, err), IsError: true}

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.23.0
+
+- **Fix every shell execution failing on Windows.** The bash tool, hooks, and custom-command `` !`shell` `` expansion all hardcoded `sh -c`, so on a Windows machine without Git Bash on PATH the model could not run so much as `git pull`: every call died with `exec: "sh": executable file not found in %PATH%` and the agent kept asking the user to run commands by hand.
+  * New `internal/shell` package resolves the shell once per process: `sh` on PATH first (Git for Windows), then `bash.exe` at Git's usual install locations for installs that never touched PATH, then `cmd /c` as the always-present last resort. WSL cannot be selected by accident, since it ships `bash.exe` but never `sh.exe` and its install paths are not probed.
+  * Under the `cmd` fallback, the bash tool's description tells the model it is talking to `cmd.exe`, so it writes cmd syntax instead of bash-isms that would fail confusingly.
+  * Non-Windows behavior is unchanged: plain `sh -c` as before, covered by a regression test.
+
 ## v0.22.0
 
 - **Auto-delegate matching prompts to a cheaper sub-agent**, so small lookups do not cost a model switch. New `auto_delegate` config block (`enabled`, `agent`, `match` globs) plus a runtime toggle, `/config auto_delegate on|off`, alongside `auto_compact` and `show_tps`.

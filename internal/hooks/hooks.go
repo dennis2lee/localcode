@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+
+	"localcode/internal/shell"
 	"regexp"
 	"strings"
 	"time"
@@ -99,7 +101,7 @@ func Run(ctx context.Context, cfg Config, event string, payload map[string]any) 
 		}
 
 		hookCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
-		cmd := exec.CommandContext(hookCtx, "sh", "-c", h.Command)
+		cmd := shell.Command(hookCtx, h.Command)
 		cmd.Stdin = bytes.NewReader(data)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
