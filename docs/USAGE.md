@@ -385,6 +385,7 @@ Common to the TUI and Web UI:
 | Insert a newline | **Ctrl+J** in the TUI, **Shift+Enter** in the Web UI |
 | Answer a permission prompt | `y`, `n`, `s`, or `a` in the TUI; buttons in the Web UI — see [answering a permission prompt](#answering-a-permission-prompt-once-this-session-or-always) |
 | Cancel the running turn | **Esc**, in either client |
+| Recall a previous prompt | **Up** and **Down**, in either client |
 | Quit the TUI | **Ctrl+C**, or type `exit` or `:q` |
 
 Other behavior:
@@ -395,6 +396,12 @@ Other behavior:
 * The TUI places the real terminal cursor at the insertion point inside the prompt box, so IME composition for Korean, Japanese, and Chinese renders in the box while you type rather than below it.
 
 **Esc cancels whatever is running.** Press it while the model is answering (the status line says "esc to cancel") to stop that turn immediately. Cancelling also clears anything waiting in the prompt queue — the point of cancelling is to stop, so letting a queued message fire right after would defeat it. A `[cancelled]` line marks where it stopped; nothing about it is treated as an error. Pressing Esc with nothing running does nothing.
+
+**Up and Down recall previous prompts**, the way a shell's history does. Up walks back through what you have already sent, newest first, and Down walks forward again. Stepping forward past the newest entry restores whatever you had half-typed before you started recalling, so reaching for history never costs you a draft.
+
+Recall only kicks in at the edges of the prompt box: the cursor has to already be on the first line before Up reaches for history, and on the last line before Down does. Inside a multi-line prompt the arrows just move the cursor as usual. Repeating the same message twice in a row stores it once.
+
+The list lives in the client, in memory, and is not part of the session. It starts empty each time you launch the TUI, and the Web UI clears it when you switch sessions.
 
 **Messages sent while the model is still answering are queued.** The transcript shows `[queued] <text>` immediately and the status line shows `(N queued)`. The first queued message sends automatically the moment the current turn ends, and several stack up and go out in order.
 

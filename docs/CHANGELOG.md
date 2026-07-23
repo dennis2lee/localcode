@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.21.0
+
+- **Up and Down recall previous prompts** in both the TUI and Web UI, the way shell history works.
+  * Up walks back through prompts already sent, newest first. Down walks forward again.
+  * Stepping forward past the newest entry restores the draft being composed before recall started, so reaching for history never eats unsent text.
+  * Recall only triggers at the box's edges. The cursor has to already be on the first line for Up, and the last line for Down, so arrows still move the cursor normally inside a multi-line prompt.
+  * Consecutive duplicates collapse to one entry.
+  * The list is client-side and in memory. It is a typing convenience, not session state, so it never reaches the event log.
+
 ## v0.20.0
 
 - **git commands run without asking.** Any `git` subcommand through the `bash` tool is auto-allowed by default, no config needed. This is only safe because of a hardening fix landing in the same release: a `bash` permission rule now resolves per command rather than as one raw string, so `git status && rm -rf ~` can no longer ride an allowed `git *` prefix — the line is split on `&&`, `||`, `;`, `|`, and newlines (quote-aware, so a separator inside a commit message is left alone), every segment has to earn `allow` on its own, and any `deny` anywhere denies the whole line. Command substitution and output redirection (`$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`) never auto-allow, since they can run or write to something the per-segment check can't see. See docs/USAGE.md's permission rules section.

@@ -547,3 +547,135 @@ func TestDequeueNoopWhenEmptyOrStillWaiting(t *testing.T) {
 		t.Error("dequeue with an empty queue should be a no-op")
 	}
 }
+
+// pressKey drives one keypress through Update the way a real one would flow.
+func pressKey(t *testing.T, m Model, code rune) (Model, tea.Cmd) {
+	t.Helper()
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: code})
+	return updated.(Model), cmd
+}
+
+// newHistoryModel returns a sized model that has already submitted two
+// prompts, so history recall has something to walk through.
+func newHistoryModel(t *testing.T) Model {
+	t.Helper()
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	m.waiting = true // keeps submissions in the queue path, no HTTP needed
+	m, _ = pressEnterWith(t, m, "first prompt")
+	m, _ = pressEnterWith(t, m, "second prompt")
+	m.waiting = false
+	return m
+}
+
+// TestHistoryUpRecallsPreviousPrompts walks backwards through history the
+// way Up does in a shell: newest first, then older, stopping at the oldest.
+func TestHistoryUpRecallsPreviousPrompts(t *testing.T) {
+	m := newHistoryModel(t)
+
+	m, _ = pressKey(t, m, tea.KeyUp)
+	if got := m.input.Value(); got != "second prompt" {
+		t.Errorf("after one Up, input = %q, want the most recent prompt", got)
+	}
+	m, _ = pressKey(t, m, tea.KeyUp)
+	if got := m.input.Value(); got != "first prompt" {
+		t.Errorf("after two Ups, input = %q, want the older prompt", got)
+	}
+	// Past the oldest entry there is nothing to recall, so it stays put
+	// rather than blanking the box.
+	m, _ = pressKey(t, m, tea.KeyUp)
+	if got := m.input.Value(); got != "first prompt" {
+		t.Errorf("Up past the oldest entry changed the input to %q, want it unchanged", got)
+	}
+}
+
+// TestHistoryDownRestoresTheDraft is the part that is easy to get wrong:
+// text typed but not sent must survive a trip into history and come back
+// when you walk forward past the newest entry.
+func TestHistoryDownRestoresTheDraft(t *testing.T) {
+	m := newHistoryModel(t)
+	m.input.SetValue("half-typed thought")
+
+	m, _ = pressKey(t, m, tea.KeyUp)
+	if got := m.input.Value(); got != "second prompt" {
+		t.Fatalf("after Up, input = %q, want the recalled prompt", got)
+	}
+	m, _ = pressKey(t, m, tea.KeyDown)
+	if got := m.input.Value(); got != "half-typed thought" {
+		t.Errorf("after Down back past the newest entry, input = %q, want the stashed draft restored", got)
+	}
+}
+
+// TestHistoryDownWithoutNavigatingIsANoop: Down on a fresh prompt should
+// not wipe what is being typed.
+func TestHistoryDownWithoutNavigatingIsANoop(t *testing.T) {
+	m := newHistoryModel(t)
+	m.input.SetValue("in progress")
+
+	m, _ = pressKey(t, m, tea.KeyDown)
+	if got := m.input.Value(); got != "in progress" {
+		t.Errorf("Down while not navigating history changed the input to %q, want it untouched", got)
+	}
+}
+
+// TestUpMovesCursorInsideMultiLinePromptBeforeRecalling is the boundary
+// rule: history recall must not steal Up from a multi-line prompt. Only
+// once the cursor is already on the first row does Up reach for history.
+func TestUpMovesCursorInsideMultiLinePromptBeforeRecalling(t *testing.T) {
+	m := newHistoryModel(t)
+	m.input.SetValue("line one\nline two")
+	m.resizeLayout()
+	if m.input.Line() != 1 {
+		t.Fatalf("cursor starts on line %d, want the last line of a 2-line prompt", m.input.Line())
+	}
+
+	// First Up: still inside the prompt, so it moves the cursor and leaves
+	// the text alone.
+	m, _ = pressKey(t, m, tea.KeyUp)
+	if got := m.input.Value(); got != "line one\nline two" {
+		t.Fatalf("first Up recalled history (%q) instead of moving the cursor within the prompt", got)
+	}
+	if m.input.Line() != 0 {
+		t.Fatalf("first Up left the cursor on line %d, want it moved to line 0", m.input.Line())
+	}
+
+	// Second Up: now at the top, so history takes over.
+	m, _ = pressKey(t, m, tea.KeyUp)
+	if got := m.input.Value(); got != "second prompt" {
+		t.Errorf("Up at the top of the prompt = %q, want it to recall history", got)
+	}
+}
+
+// TestSubmittingResetsHistoryNavigation confirms a recalled-and-sent entry
+// puts navigation back at the composing position rather than leaving it
+// parked mid-history.
+func TestSubmittingResetsHistoryNavigation(t *testing.T) {
+	m := newHistoryModel(t)
+	m.waiting = true
+
+	m, _ = pressKey(t, m, tea.KeyUp)
+	m, _ = pressEnterWith(t, m, m.input.Value())
+
+	if m.historyIdx != len(m.history) {
+		t.Errorf("historyIdx = %d after submitting, want %d (back at the composing position)", m.historyIdx, len(m.history))
+	}
+	if got := m.input.Value(); got != "" {
+		t.Errorf("input = %q after submitting, want it cleared", got)
+	}
+}
+
+// TestHistoryCollapsesConsecutiveDuplicates keeps a repeated message from
+// burying everything older behind copies of itself.
+func TestHistoryCollapsesConsecutiveDuplicates(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	m.waiting = true
+	for i := 0; i < 3; i++ {
+		m, _ = pressEnterWith(t, m, "same thing")
+	}
+	if len(m.history) != 1 {
+		t.Errorf("history = %q, want consecutive duplicates collapsed to one entry", m.history)
+	}
+}

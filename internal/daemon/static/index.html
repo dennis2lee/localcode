@@ -268,6 +268,11 @@
   let autoCompactEnabled = true;
   let showTPS = true;
   let promptQueue = []; // plain prompts submitted while a turn is in flight
+  // Up/Down prompt recall, mirroring the TUI. Client-side and in-memory:
+  // a typing convenience, not session state.
+  let history = [];              // submitted prompts, oldest first
+  let historyIdx = 0;            // === history.length means "not navigating"
+  let historyDraft = '';         // text stashed when recall started
 
   function appendLine(html) {
     transcriptEl.insertAdjacentHTML('beforeend', html);
@@ -306,6 +311,50 @@
   // literal chat text to the model once dequeued, instead of running it.
   function isPlainPrompt(text) {
     return !text.startsWith('/');
+  }
+
+  function rememberPrompt(text) {
+    if (history.length === 0 || history[history.length - 1] !== text) history.push(text);
+    historyIdx = history.length;
+    historyDraft = '';
+  }
+
+  // Recall only fires when the caret is already at the very start (Up) or
+  // very end (Down) of the box, so arrows still move through a multi-line
+  // prompt normally and only reach for history at the boundary.
+  function atInputStart() {
+    return inputEl.selectionStart === 0 && inputEl.selectionEnd === 0;
+  }
+  function atInputEnd() {
+    const n = inputEl.value.length;
+    return inputEl.selectionStart === n && inputEl.selectionEnd === n;
+  }
+
+  function setInputTo(text) {
+    inputEl.value = text;
+    autoResizeInput();
+    const n = inputEl.value.length;
+    inputEl.setSelectionRange(n, n);
+  }
+
+  function historyPrev() {
+    if (history.length === 0 || historyIdx === 0) return false;
+    if (historyIdx === history.length) historyDraft = inputEl.value;
+    historyIdx--;
+    setInputTo(history[historyIdx]);
+    return true;
+  }
+
+  function historyNext() {
+    if (historyIdx >= history.length) return false;
+    historyIdx++;
+    if (historyIdx === history.length) {
+      setInputTo(historyDraft);
+      historyDraft = '';
+    } else {
+      setInputTo(history[historyIdx]);
+    }
+    return true;
   }
 
   // cancelTurn stops the running turn. The transcript line and the cleared
@@ -662,8 +711,12 @@
     lastUsage = null;
     // A queued prompt belongs to the session it was typed in — carrying it
     // over to whatever session is selected next would send it somewhere
-    // the user never intended.
+    // the user never intended. Prompt recall history goes with it, for the
+    // same reason: it is that conversation's history, not the window's.
     promptQueue = [];
+    history = [];
+    historyIdx = 0;
+    historyDraft = '';
     setWaiting(false);
     setCurrentAgent(agent);
     renderSessionList();
@@ -805,12 +858,14 @@
         promptQueue.push(text);
         appendLine(`<div class="msg-tool">[queued] ${escapeHtml(text)}</div>`);
         renderStatusBar();
+        rememberPrompt(text);
         inputEl.value = '';
         autoResizeInput();
       }
       return;
     }
 
+    rememberPrompt(text);
     inputEl.value = '';
     autoResizeInput();
 
@@ -887,6 +942,10 @@
     } else if (e.key === 'Escape') {
       e.preventDefault();
       cancelTurn();
+    } else if (e.key === 'ArrowUp' && atInputStart()) {
+      if (historyPrev()) e.preventDefault();
+    } else if (e.key === 'ArrowDown' && atInputEnd()) {
+      if (historyNext()) e.preventDefault();
     }
   });
   // Esc works even when focus is not in the prompt box, matching the TUI.
