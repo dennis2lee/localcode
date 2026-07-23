@@ -7,6 +7,7 @@
   * The delegated turn is visible as `[delegated to <agent>]` in both clients, and both halves of the exchange enter the main history so the main model has it as context next turn.
   * Guards: commands, skills, and `exit`/`:q` are resolved before the delegation check; an empty `match` list delegates nothing; a session that already has a parent never delegates again; an agent never delegates to itself. Off unless configured, so existing setups are unchanged.
   * `GET /api/settings` and the `config.changed` event now carry `auto_delegate`.
+  * docs/USAGE.md gained a "Choosing what to delegate" section: the one decision to make (which questions may be answered at lower quality), a read-only vs produces-or-changes rule of thumb, and a start-narrow-then-widen loop.
 
 ## v0.21.0
 

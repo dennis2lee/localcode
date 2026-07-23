@@ -673,6 +673,8 @@ The usual flow: let `plan` analyze and design with no ability to change files, t
 
 Small, mechanical prompts can be answered by a cheaper agent automatically, without you switching models and without the main model running at all.
 
+**This is off unless you configure it.** With no `auto_delegate` block in config.json, nothing changes from before, so there is nothing you have to do to keep current behavior.
+
 The reason to do this is prompt cache economics, not just the per token price difference. A cache entry is keyed by model as well as by prompt bytes, so changing the session's model part way through throws away the whole cached prefix (tools, system prompt, and every prior turn) and rewrites it at the write premium. On a long session that prefix is the expensive part.
 
 | Operation | Cost against base input price |
@@ -690,10 +692,12 @@ Turn it on in config.json:
   "auto_delegate": {
     "enabled": true,
     "agent": "explore",
-    "match": ["find *", "where is *", "which file *", "search *", "list *", "grep *"]
+    "match": ["find *", "where is *", "which file *"]
   }
 }
 ```
+
+Start with a narrow list like this one and widen it once you have seen the answers. `config.example.json` carries a longer list (`search *`, `list *`, `grep *`) you can copy from.
 
 | Field | Meaning |
 |---|---|
@@ -710,7 +714,30 @@ Behavior:
 * Delegation never recurses. A session that already has a parent (any sub agent session) does not delegate again, and an agent never delegates to itself.
 * Turning it on with no `auto_delegate` block in config.json tells you so rather than silently doing nothing.
 
-Pick patterns that match work you are happy to have answered at lower quality. Exploration and lookup are good candidates; anything that writes code is not.
+#### Choosing what to delegate
+
+There is really only one decision to make here, and the rest of this feature follows from it:
+
+> Which questions are you happy to have answered by the cheaper model?
+
+A delegated prompt is answered at that model's quality. Widen the patterns and you save more but get weaker answers on whatever you swept in.
+
+| Good candidates | Keep on the main model |
+|---|---|
+| Finding a file or a symbol | Writing or changing code |
+| Searching, listing, counting | Design and refactoring |
+| "Where is this function?" | "Why is this failing?" (debugging) |
+
+The short version: questions that only **read** are safe to delegate; anything that **produces or changes** something is not.
+
+Practical loop:
+
+1. Start with two or three narrow patterns.
+2. Watch for `[delegated to <agent>]` in the transcript and read those answers.
+3. Widen the list if they hold up, drop a pattern if they do not.
+4. `/config auto_delegate off` turns it off mid-conversation with no restart, and `/config` shows the current state and target agent.
+
+How much this saves depends on how often you ask lookup questions. If you mostly ask for code to be written, little will match and the effect will be small. That is a fine reason to leave it off.
 
 ### Background tasks
 
