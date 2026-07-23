@@ -512,7 +512,9 @@ func TestQueuedPromptAutoSendsWhenTurnFinishes(t *testing.T) {
 	// Update/tea.Batch, since Batch's Cmd only returns a BatchMsg describing
 	// the sub-commands rather than running them, which would make cmd()
 	// here a no-op instead of the real HTTP send this test wants to check.
-	m.applyEvent(events.Event{Type: events.TypeMessagePartEnd})
+	// turn.done, not message.part.end, is the drain signal: part.end fires
+	// per model message and a turn with tool calls has several.
+	m.applyEvent(events.Event{Type: events.TypeTurnDone})
 	cmd := m.dequeue()
 
 	if len(m.queue) != 0 {
@@ -677,5 +679,83 @@ func TestHistoryCollapsesConsecutiveDuplicates(t *testing.T) {
 	}
 	if len(m.history) != 1 {
 		t.Errorf("history = %q, want consecutive duplicates collapsed to one entry", m.history)
+	}
+}
+
+// TestMidTurnPartEndKeepsWaiting is the regression test for typing during
+// tool execution 409ing instead of queuing. message.part.end fires per
+// model message — a turn with a tool call streams one before the tool
+// runs and another after — so the first one must NOT end the wait. Only
+// turn.done, emitted by the daemon after it clears its busy flag, does.
+func TestMidTurnPartEndKeepsWaiting(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	m.waiting = true
+
+	// First model message ends; the daemon is about to run a tool.
+	m.applyEvent(events.Event{Type: events.TypeMessagePartEnd, Data: map[string]any{"text": "running git pull"}})
+	if !m.waiting {
+		t.Fatal("waiting cleared on a mid-turn message.part.end — this is exactly what made prompts typed during tool execution 409")
+	}
+
+	// A prompt typed right now must queue, not send.
+	m, cmd := pressEnterWith(t, m, "typed during the tool")
+	if cmd != nil {
+		t.Error("a prompt typed mid-turn issued a send command, want it queued")
+	}
+	if len(m.queue) != 1 || m.queue[0] != "typed during the tool" {
+		t.Errorf("queue = %v, want the mid-turn prompt queued", m.queue)
+	}
+
+	// The real turn boundary arrives; now the wait ends.
+	m.applyEvent(events.Event{Type: events.TypeTurnDone})
+	if m.waiting {
+		t.Error("waiting should clear on turn.done")
+	}
+}
+
+// TestBusySendRequeuesInsteadOfError covers the fallback: if a send does
+// reach the daemon while it is busy (a race, or a turn another client
+// started), the 409 becomes a queued prompt rather than a red error line.
+func TestBusySendRequeuesInsteadOfError(t *testing.T) {
+	m := newTestModel()
+	m.queue = []string{"already queued"}
+
+	updated, _ := m.Update(turnDoneMsg{
+		text: "bounced prompt",
+		err:  &client.StatusError{Status: http.StatusConflict, Message: "409: busy"},
+	})
+	m = updated.(Model)
+
+	if m.errMsg != "" {
+		t.Errorf("errMsg = %q, want no error shown for a busy bounce", m.errMsg)
+	}
+	if len(m.queue) != 2 || m.queue[0] != "bounced prompt" {
+		t.Errorf("queue = %v, want the bounced prompt re-queued at the front", m.queue)
+	}
+	if !m.waiting {
+		t.Error("waiting should be true after a busy bounce, so the next turn.done drains the queue")
+	}
+	if !strings.Contains(m.transcript, "[queued] bounced prompt") {
+		t.Errorf("transcript = %q, want a [queued] line so the user sees what happened", m.transcript)
+	}
+}
+
+// TestNonBusySendErrorStillShows guards the other direction: only 409
+// gets the queue treatment; a real failure still surfaces.
+func TestNonBusySendErrorStillShows(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(turnDoneMsg{
+		text: "some prompt",
+		err:  &client.StatusError{Status: http.StatusInternalServerError, Message: "500: boom"},
+	})
+	m = updated.(Model)
+
+	if m.errMsg == "" {
+		t.Error("a 500 should still show as an error")
+	}
+	if len(m.queue) != 0 {
+		t.Errorf("queue = %v, want a non-busy failure not silently re-queued", m.queue)
 	}
 }

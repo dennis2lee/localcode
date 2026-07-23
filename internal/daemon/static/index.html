@@ -382,6 +382,11 @@
     const next = promptQueue.shift();
     setWaiting(true);
     api('POST', `/api/sessions/${sessionID}/messages`, { text: next }).catch((err) => {
+      if (err && err.status === 409) {
+        // Still busy — put it back and wait for the next turn.done.
+        promptQueue.unshift(next);
+        return;
+      }
       setWaiting(false);
       appendLine(`<div class="msg-error">Error: ${escapeHtml(String(err))}</div>`);
     });
@@ -434,7 +439,9 @@
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
-      throw new Error(`${method} ${path}: ${resp.status} ${text}`);
+      const err = new Error(`${method} ${path}: ${resp.status} ${text}`);
+      err.status = resp.status;
+      throw err;
     }
     if (resp.status === 204) return null;
     const ct = resp.headers.get('content-type') || '';
@@ -452,7 +459,15 @@
         if (ev.data && typeof ev.data.text === 'string') appendText(ev.data.text);
         break;
       case 'message.part.end':
+        // One model message ended, NOT the turn — a turn with tool calls
+        // streams several of these. Ending the wait here is what used to
+        // make a prompt typed during tool execution skip the queue and
+        // bounce off the daemon's busy flag with a 409.
         appendText('\n\n');
+        break;
+      case 'turn.done':
+        // The daemon's real turn boundary, emitted after its busy flag is
+        // cleared — safe to stop waiting and let the queue drain.
         setWaiting(false);
         break;
       case 'tool.start':
@@ -885,6 +900,16 @@
     try {
       await api('POST', `/api/sessions/${sessionID}/messages`, { text });
     } catch (err) {
+      if (err && err.status === 409) {
+        // The daemon already has a turn running (a race window, or a turn
+        // another client started). Queue material, not an error: the
+        // running turn's turn.done will drain it. waiting stays true so
+        // further prompts queue too.
+        promptQueue.unshift(text);
+        appendLine(`<div class="msg-tool">[queued] ${escapeHtml(text)}</div>`);
+        renderStatusBar();
+        return;
+      }
       setWaiting(false);
       appendLine(`<div class="msg-error">Error: ${escapeHtml(String(err))}</div>`);
     }

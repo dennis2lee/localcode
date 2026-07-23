@@ -403,7 +403,7 @@ Recall only kicks in at the edges of the prompt box: the cursor has to already b
 
 The list lives in the client, in memory, and is not part of the session. It starts empty each time you launch the TUI, and the Web UI clears it when you switch sessions.
 
-**Messages sent while the model is still answering are queued.** The transcript shows `[queued] <text>` immediately and the status line shows `(N queued)`. The first queued message sends automatically the moment the current turn ends, and several stack up and go out in order.
+**Messages sent while a turn is still running are queued.** This covers the whole turn, tool execution included, not just while text is streaming. The transcript shows `[queued] <text>` immediately and the status line shows `(N queued)`. The first queued message sends automatically the moment the turn actually ends, and several stack up and go out in order. If a send does slip through while the daemon is busy (for example, a turn started from another client on the same session), it is queued and retried rather than shown as an error.
 
 Commands starting with `/`, along with `exit` and `:q`, are not queued. They keep the old behavior of being ignored until the turn finishes, because replaying them later would send them to the model as ordinary text instead of running them.
 

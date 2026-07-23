@@ -456,25 +456,41 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	d.busyMu.Unlock()
 
 	go func() {
-		defer func() {
-			cancel()
-			d.busyMu.Lock()
-			delete(d.busy, id)
-			delete(d.cancels, id)
-			d.busyMu.Unlock()
-		}()
 		err := d.Loop.SendMessage(turnCtx, id, sess.Agent, req.Text)
+
+		// Read the cancellation state BEFORE calling cancel() below —
+		// cancel() makes turnCtx.Err() non-nil unconditionally, so
+		// checking it afterwards would classify every successful turn as
+		// user-cancelled.
+		wasCancelled := turnCtx.Err() != nil
+
+		// Clear busy BEFORE appending the terminal event. Clients send
+		// their next (possibly queued) message the moment they see it, so
+		// the other order is a race: event observed, busy still set, 409.
+		cancel()
+		d.busyMu.Lock()
+		delete(d.busy, id)
+		delete(d.cancels, id)
+		d.busyMu.Unlock()
+
 		// A cancelled turn is a user action, not a failure: record it as
 		// its own event so clients can drop the spinner without showing an
 		// error. Checking the context rather than the error keeps this
 		// correct no matter which layer noticed the cancellation first.
-		if turnCtx.Err() != nil {
+		if wasCancelled {
 			d.Loop.Store.Append(id, events.TypeTurnCancelled, map[string]any{})
 			return
 		}
 		if err != nil {
 			log.Printf("session %s: SendMessage: %v", id, err)
 		}
+		// The turn boundary clients act on. message.part.end is NOT that
+		// boundary — it fires per model message, and a turn with tool
+		// calls has several, which is exactly what used to make clients
+		// think the turn was over mid-tool and 409 on their next send.
+		// Emitted on the error path too (the error event itself already
+		// told the user what went wrong; this just marks the turn over).
+		d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})

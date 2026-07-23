@@ -994,3 +994,100 @@ func TestCancelTurnOnIdleSessionIsNotAnError(t *testing.T) {
 		t.Errorf("cancelling an idle session should be a no-op, got %v", err)
 	}
 }
+
+// TestTurnDoneMarksTheRealTurnBoundary is the daemon half of the
+// typing-during-tool-execution 409 fix. A turn with a tool call streams
+// two message.part.end events (the pre-tool text and the post-tool
+// answer), so clients cannot use part.end as the turn boundary. The
+// daemon must emit exactly one turn.done, after everything else, and by
+// the time a client observes it the busy flag must already be clear —
+// meaning a send fired the instant turn.done arrives can never 409.
+func TestTurnDoneMarksTheRealTurnBoundary(t *testing.T) {
+	writePath := filepath.Join(t.TempDir(), "out.txt")
+	model := mockModelServer(t, writePath)
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	evCtx, cancelEvents := context.WithCancel(ctx)
+	defer cancelEvents()
+	evCh, err := c.SubscribeEvents(evCtx, sess.ID, 0)
+	if err != nil {
+		t.Fatalf("SubscribeEvents: %v", err)
+	}
+
+	var order []events.Type
+	var sendAfterTurnDone error
+	sent := false
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ev := range evCh {
+			switch ev.Type {
+			case events.TypePermissionRequest:
+				id, _ := ev.Data["id"].(string)
+				if err := c.ResolvePermission(ctx, sess.ID, id, true, ""); err != nil {
+					t.Errorf("ResolvePermission: %v", err)
+				}
+			case events.TypeMessagePartEnd, events.TypeTurnDone:
+				order = append(order, ev.Type)
+			}
+			if ev.Type == events.TypeTurnDone && !sent {
+				sent = true
+				// The property under test: react to turn.done with an
+				// immediate send. If busy were cleared after the event,
+				// this would intermittently 409.
+				sendAfterTurnDone = c.SendMessage(ctx, sess.ID, "follow-up")
+				return
+			}
+		}
+	}()
+
+	if err := c.SendMessage(ctx, sess.ID, "write the file"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("never saw turn.done")
+	}
+
+	if sendAfterTurnDone != nil {
+		t.Errorf("send fired on seeing turn.done failed: %v — busy must be cleared before the event is appended", sendAfterTurnDone)
+	}
+
+	// Exactly one turn.done for the first turn, strictly after both of the
+	// turn's message.part.end events.
+	var partEnds, turnDones int
+	for _, typ := range order {
+		switch typ {
+		case events.TypeMessagePartEnd:
+			if turnDones > 0 {
+				continue // the follow-up turn's events, not the first turn's
+			}
+			partEnds++
+		case events.TypeTurnDone:
+			turnDones++
+		}
+	}
+	if partEnds < 2 {
+		t.Errorf("saw %d message.part.end before turn.done, want at least 2 (pre-tool text + post-tool answer) — the premise of the bug", partEnds)
+	}
+	if turnDones != 1 {
+		t.Errorf("saw %d turn.done for one turn, want exactly 1", turnDones)
+	}
+	if len(order) > 0 && order[len(order)-1] != events.TypeTurnDone {
+		t.Errorf("event order = %v, want turn.done last", order)
+	}
+}

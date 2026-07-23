@@ -165,7 +165,10 @@ func (m Model) Init() tea.Cmd {
 }
 
 type eventMsg events.Event
-type turnDoneMsg struct{ err error }
+type turnDoneMsg struct {
+	text string
+	err  error
+}
 type permissionResolvedMsg struct{ err error }
 type versionMsg struct {
 	version string
@@ -195,7 +198,7 @@ func listenForEvent(ch <-chan events.Event) tea.Cmd {
 func (m Model) sendMessage(text string) tea.Cmd {
 	return func() tea.Msg {
 		err := m.client.SendMessage(context.Background(), m.sessionID, text)
-		return turnDoneMsg{err: err}
+		return turnDoneMsg{text: text, err: err}
 	}
 }
 
@@ -577,6 +580,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listenForEvent(m.events)
 
 	case turnDoneMsg:
+		if client.IsBusy(msg.err) {
+			// The daemon already has a turn running (typed during a race
+			// window, or another client's turn). That is queue material,
+			// not an error: put it back at the front and wait for the
+			// running turn's turn.done to drain it.
+			m.queue = append([]string{msg.text}, m.queue...)
+			m.waiting = true
+			m.appendLocal(fmt.Sprintf("[queued] %s", msg.text))
+			return m, nil
+		}
 		if msg.err != nil {
 			m.waiting = false
 			m.errMsg = msg.err.Error()
@@ -650,7 +663,14 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.transcript += text
 		}
 	case events.TypeMessagePartEnd:
+		// One model message ended — NOT the turn. A turn with tool calls
+		// streams several of these (text, then the post-tool follow-up),
+		// and treating the first as end-of-turn is what used to make a
+		// prompt typed during tool execution skip the queue and 409.
 		m.transcript += "\n\n"
+	case events.TypeTurnDone:
+		// The daemon's real turn boundary, emitted after its busy flag is
+		// cleared — safe to stop waiting and let the queue drain.
 		m.waiting = false
 	case events.TypeToolStart:
 		name, _ := ev.Data["name"].(string)

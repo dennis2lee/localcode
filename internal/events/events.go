@@ -48,6 +48,14 @@ const (
 	// instead of the session's own: {"agent", "prompt"}. Clients show it so
 	// a cheaper model answering is visible rather than silent.
 	TypeDelegated Type = "delegated"
+	// TypeTurnDone marks the real end of a turn: every model message,
+	// tool call, and follow-up response has finished and the daemon has
+	// already cleared the session's busy flag, so a message sent on
+	// seeing this event cannot hit 409. Clients gate their "waiting"
+	// state and prompt-queue drain on this, not on message.part.end —
+	// that one fires per model message, and a turn with tool calls has
+	// several.
+	TypeTurnDone Type = "turn.done"
 	// TypeTurnCancelled marks a turn stopped on purpose by the user
 	// (Esc in the TUI, POST /api/sessions/{id}/cancel), as opposed to
 	// TypeError which means something went wrong. Clients use it to stop

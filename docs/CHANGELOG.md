@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.24.0
+
+- **Fix prompts typed during tool execution erroring with 409 instead of queuing.** `message.part.end` fires once per model message, and a turn with tool calls streams several (the pre-tool text, then the post-tool answer), so both clients treated the first one as the end of the turn, skipped the queue, sent immediately, and bounced off the daemon's busy flag with `409: session is already processing a message`.
+  * The daemon now emits a `turn.done` event as the real turn boundary, appended only after the busy flag is cleared, so a message sent the instant a client sees it can never 409. Clients clear their waiting state and drain the prompt queue on `turn.done`, `turn.cancelled`, or `error`, never on `message.part.end`.
+  * Belt and suspenders: if a send still reaches a busy daemon (a race, or a turn another client started on the same session), the 409 is turned into a queued prompt with a `[queued]` line instead of a red error, and it goes out on the next `turn.done`. The client library now exposes the HTTP status as a typed error for this.
+  * Update the daemon and clients together: a new client attached to an older daemon never receives `turn.done` and will not clear its waiting state.
+
 ## v0.23.0
 
 - **Fix every shell execution failing on Windows.** The bash tool, hooks, and custom-command `` !`shell` `` expansion all hardcoded `sh -c`, so on a Windows machine without Git Bash on PATH the model could not run so much as `git pull`: every call died with `exec: "sh": executable file not found in %PATH%` and the agent kept asking the user to run commands by hand.

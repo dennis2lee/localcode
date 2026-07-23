@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -58,16 +59,35 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 			Error string `json:"error"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&apiErr)
+		msg := fmt.Sprintf("%s %s: %d", method, path, resp.StatusCode)
 		if apiErr.Error != "" {
-			return fmt.Errorf("%s %s: %d: %s", method, path, resp.StatusCode, apiErr.Error)
+			msg += ": " + apiErr.Error
 		}
-		return fmt.Errorf("%s %s: %d", method, path, resp.StatusCode)
+		return &StatusError{Status: resp.StatusCode, Message: msg}
 	}
 
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
+}
+
+// StatusError is a non-2xx API response, keeping the HTTP status
+// inspectable so callers can branch on it (409 busy, say) without
+// matching substrings of the message.
+type StatusError struct {
+	Status  int
+	Message string
+}
+
+func (e *StatusError) Error() string { return e.Message }
+
+// IsBusy reports whether err is the daemon refusing a message because the
+// session already has a turn in flight — the one error a client should
+// queue-and-retry rather than surface.
+func IsBusy(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Status == http.StatusConflict
 }
 
 func (c *Client) CreateSession(ctx context.Context, agentName string) (session.Session, error) {
