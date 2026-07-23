@@ -51,7 +51,7 @@ const helpText = `Available commands:
   /<custom command>   run a command defined in .localcode/commands/*.md
   exit, :q            quit the TUI (same as Ctrl+C)
 
-Enter to send, Ctrl+J for a newline, Tab to switch agents.`
+Enter to send, Ctrl+J for a newline, Tab to switch agents, Esc to cancel a running turn.`
 
 // footerLines is how many rows View() reserves below the prompt input box
 // for the current-agent status line, so resizeLayout can size the viewport
@@ -64,6 +64,26 @@ const borderLines = 2
 
 type pendingPermission struct {
 	id, tool, description string
+	// rule is the pattern a "session" or "always" answer would grant
+	// (e.g. "git *" for a bash call, or the exact path for a file tool) —
+	// shown in the prompt so approving a wider scope is an informed
+	// choice, not a guess.
+	rule string
+	// canAlways is false when the daemon has no config.json path to write
+	// to (started with neither --config nor a resolvable global config),
+	// in which case "always" isn't offered — only once/session/deny.
+	canAlways bool
+}
+
+// prompt renders the permission modal's single line, listing exactly the
+// answers this request will accept — "a" only appears when the daemon
+// actually has somewhere to persist it.
+func (p pendingPermission) prompt() string {
+	keys := "y: allow once  n: deny  s: allow for session"
+	if p.canAlways {
+		keys += fmt.Sprintf("  a: always allow %q", p.rule)
+	}
+	return fmt.Sprintf("Permission request [%s]: %s\n%s", p.tool, p.description, keys)
 }
 
 type Model struct {
@@ -141,6 +161,7 @@ type agentsMsg struct {
 	err    error
 }
 type switchAgentMsg struct{ err error }
+type turnCancelledMsg struct{ err error }
 type commandsMsg struct {
 	commands []client.CommandInfo
 	err      error
@@ -187,9 +208,25 @@ func (m *Model) dequeue() tea.Cmd {
 	return m.sendMessage(next)
 }
 
-func (m Model) resolvePermission(id string, allow bool) tea.Cmd {
+// cancelTurn asks the daemon to stop the running turn. The transcript
+// line and the cleared spinner come from the turn.cancelled event the
+// daemon broadcasts, not from here, so every attached client reacts to a
+// cancel the same way regardless of which one pressed Esc.
+func (m Model) cancelTurn() tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.ResolvePermission(context.Background(), m.sessionID, id, allow)
+		err := m.client.CancelTurn(context.Background(), m.sessionID)
+		return turnCancelledMsg{err: err}
+	}
+}
+
+// resolvePermission answers a pending permission request. scope is
+// "once" (or ""), "session", or "always" — see agent.PermissionBroker.
+// The actual policy change (remembering the grant, writing it to
+// config.json) happens server-side; this only reports what the user
+// chose.
+func (m Model) resolvePermission(id string, allow bool, scope string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.ResolvePermission(context.Background(), m.sessionID, id, allow, scope)
 		return permissionResolvedMsg{err: err}
 	}
 }
@@ -323,12 +360,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 
-		case "y", "n":
+		case "esc":
+			// Esc stops whatever is running. Queued prompts go with it:
+			// the whole point of cancelling is to stop, so letting the
+			// queue immediately fire the next message would be the
+			// opposite of what was asked for.
+			if m.waiting {
+				m.queue = nil
+				return m, m.cancelTurn()
+			}
+			return m, nil
+
+		case "y", "n", "s", "a":
 			if m.pending != nil {
-				allow := msg.String() == "y"
 				id := m.pending.id
+				canAlways := m.pending.canAlways
 				m.pending = nil
-				return m, m.resolvePermission(id, allow)
+				switch msg.String() {
+				case "n":
+					return m, m.resolvePermission(id, false, "")
+				case "s":
+					return m, m.resolvePermission(id, true, "session")
+				case "a":
+					if !canAlways {
+						return m, nil // no config.json to write to; "a" isn't offered
+					}
+					return m, m.resolvePermission(id, true, "always")
+				default: // "y"
+					return m, m.resolvePermission(id, true, "")
+				}
 			}
 
 		case "tab":
@@ -457,6 +517,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case turnCancelledMsg:
+		if msg.err != nil {
+			m.errMsg = msg.err.Error()
+		}
+		// m.waiting is cleared by the turn.cancelled event, the same way
+		// it is for a turn that ends normally.
+		return m, nil
+
 	case switchAgentMsg:
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
@@ -500,7 +568,9 @@ func (m *Model) applyEvent(ev events.Event) {
 		id, _ := ev.Data["id"].(string)
 		tool, _ := ev.Data["tool"].(string)
 		desc, _ := ev.Data["description"].(string)
-		m.pending = &pendingPermission{id: id, tool: tool, description: desc}
+		rule, _ := ev.Data["rule"].(string)
+		canAlways, _ := ev.Data["can_always"].(bool)
+		m.pending = &pendingPermission{id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways}
 	case events.TypeTaskSpawned:
 		taskID, _ := ev.Data["task_id"].(string)
 		agentName, _ := ev.Data["agent"].(string)
@@ -519,6 +589,9 @@ func (m *Model) applyEvent(ev events.Event) {
 		if name, ok := ev.Data["agent"].(string); ok {
 			m.currentAgent = name
 		}
+	case events.TypeTurnCancelled:
+		m.waiting = false
+		m.transcript += toolStyle.Render("[cancelled]") + "\n\n"
 	case events.TypeError:
 		if msg, ok := ev.Data["error"].(string); ok {
 			m.waiting = false
@@ -545,9 +618,9 @@ func (m Model) View() tea.View {
 	lines := strings.Split(m.viewport.View(), "\n")
 
 	if m.pending != nil {
-		lines = append(lines, modalStyle.Render(fmt.Sprintf("Permission request [%s]: %s  (y/n)", m.pending.tool, m.pending.description)))
+		lines = append(lines, modalStyle.Render(m.pending.prompt()))
 	} else if m.waiting {
-		status := "Waiting for response..."
+		status := "Waiting for response... (esc to cancel)"
 		if n := len(m.queue); n > 0 {
 			status += fmt.Sprintf(" (%d queued)", n)
 		}

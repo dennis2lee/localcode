@@ -33,8 +33,11 @@ type Tool interface {
 }
 
 // PermissionFunc is asked to approve a side-effecting tool call before it
-// runs. description is human-readable ("run: rm -rf build/").
-type PermissionFunc func(ctx context.Context, toolName, description string) (bool, error)
+// runs. subject is the same pattern-matchable string PermissionSubject
+// exposes ("" if the tool has none) — passed through so an "always allow"
+// decision knows what pattern it's actually granting. description is
+// human-readable ("run: rm -rf build/").
+type PermissionFunc func(ctx context.Context, toolName, subject, description string) (bool, error)
 
 // Decision is a resolved permission outcome for one tool call — mirrors
 // config.Decision (same underlying string values: "allow"/"ask"/"deny")
@@ -161,15 +164,16 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		}
 	}
 
+	subject := ""
+	if ps, ok := t.(PermissionSubject); ok {
+		subject = ps.Subject(input)
+	}
+
 	decision := DecisionAsk
 	if !t.RequiresPermission(input) {
 		decision = DecisionAllow
 	}
 	if r.Resolver != nil {
-		subject := ""
-		if ps, ok := t.(PermissionSubject); ok {
-			subject = ps.Subject(input)
-		}
 		decision = r.Resolver(name, subject, t.RequiresPermission(input))
 	}
 
@@ -184,7 +188,7 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		if describe == "" {
 			describe = fmt.Sprintf("%s %s", name, string(input))
 		}
-		allowed, err := r.permission(ctx, name, describe)
+		allowed, err := r.permission(ctx, name, subject, describe)
 		if err != nil {
 			return Result{Content: fmt.Sprintf("permission check failed: %v", err), IsError: true}
 		}

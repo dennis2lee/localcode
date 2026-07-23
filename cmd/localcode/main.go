@@ -116,6 +116,14 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	}
 
 	broker := agent.NewPermissionBroker(store)
+	if path, err := resolvedConfigPath(configPath); err != nil {
+		// Not fatal: "always allow" just falls back to session-only
+		// approvals (ConfigPath == "" disables persisting), same as
+		// today's behavior before this feature existed.
+		log.Printf("permission: could not resolve a config.json path for \"always allow\", falling back to session-only approvals: %v", err)
+	} else {
+		broker.ConfigPath = path
+	}
 	registry := tools.NewRegistry(broker.Func())
 	registry.Resolver = func(toolName, subject string, staticRequiresPermission bool) tools.Decision {
 		return tools.Decision(cfg.ResolvePermission(toolName, subject, staticRequiresPermission))
@@ -341,6 +349,19 @@ func pickOrCreateSession(ctx context.Context, c *client.Client, agentName string
 			return sessions[idx-1], nil
 		}
 	}
+}
+
+// resolvedConfigPath is where an "always allow" permission decision gets
+// written: the explicit --config file if one was given (that's the only
+// config in play, so there's no ambiguity about which file "always" means),
+// otherwise the global ~/.localcode/config.json — not the project-local
+// override — so an approval survives switching projects, matching what
+// "always" reads like to someone answering the prompt.
+func resolvedConfigPath(explicitPath string) (string, error) {
+	if explicitPath != "" {
+		return explicitPath, nil
+	}
+	return config.DefaultGlobalPath()
 }
 
 func loadConfig(explicitPath string) (*config.Config, error) {

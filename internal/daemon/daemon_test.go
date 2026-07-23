@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,7 +153,7 @@ func TestDaemonEndToEnd(t *testing.T) {
 			switch ev.Type {
 			case events.TypePermissionRequest:
 				permissionID, _ = ev.Data["id"].(string)
-				if err := c.ResolvePermission(ctx, sess.ID, permissionID, true); err != nil {
+				if err := c.ResolvePermission(ctx, sess.ID, permissionID, true, ""); err != nil {
 					t.Errorf("ResolvePermission: %v", err)
 				}
 			case events.TypeToolStart:
@@ -876,5 +877,120 @@ func TestDaemonDeleteAllSessionsOnEmptyStoreIsNoop(t *testing.T) {
 	c := client.New(httpSrv.URL)
 	if err := c.DeleteAllSessions(context.Background()); err != nil {
 		t.Errorf("DeleteAllSessions on an empty daemon should not error, got %v", err)
+	}
+}
+
+// slowModelServer streams a token every 100ms until the request context
+// dies, so a test can cancel mid-stream and observe that the turn actually
+// stops rather than running to completion.
+func slowModelServer(t *testing.T, started chan<- struct{}) *httptest.Server {
+	t.Helper()
+	var once sync.Once
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		once.Do(func() { close(started) })
+		for i := 0; i < 100; i++ {
+			select {
+			case <-r.Context().Done():
+				return
+			default:
+			}
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"tok \"}}]}\n\n")
+			flusher.Flush()
+			time.Sleep(100 * time.Millisecond)
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+}
+
+// TestCancelTurnStopsAStreamingTurn is the Esc-key path end to end: start a
+// turn against a model that streams forever, cancel it over HTTP, and
+// confirm a turn.cancelled event lands and the session stops being busy so
+// the next message is accepted rather than 409'd.
+func TestCancelTurnStopsAStreamingTurn(t *testing.T) {
+	started := make(chan struct{})
+	model := slowModelServer(t, started)
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := c.SendMessage(ctx, sess.ID, "hello"); err != nil {
+		t.Fatalf("send message: %v", err)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("model was never called")
+	}
+
+	if err := c.CancelTurn(ctx, sess.ID); err != nil {
+		t.Fatalf("cancel turn: %v", err)
+	}
+
+	// The turn goroutine records turn.cancelled and clears the busy flag.
+	deadline := time.Now().Add(5 * time.Second)
+	var sawCancelled bool
+	for time.Now().Before(deadline) {
+		evs, err := d.Loop.Store.Events(sess.ID, 0)
+		if err != nil {
+			t.Fatalf("events: %v", err)
+		}
+		for _, ev := range evs {
+			if ev.Type == events.TypeTurnCancelled {
+				sawCancelled = true
+			}
+		}
+		if sawCancelled {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !sawCancelled {
+		t.Fatal("no turn.cancelled event after cancelling")
+	}
+
+	// Busy must be cleared, otherwise the session is wedged and every
+	// later message 409s.
+	for time.Now().Before(deadline) {
+		if err := c.SendMessage(ctx, sess.ID, "again"); err == nil {
+			c.CancelTurn(ctx, sess.ID)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("session still busy after the turn was cancelled")
+}
+
+// TestCancelTurnOnIdleSessionIsNotAnError covers mashing Esc at an idle
+// prompt: nothing is running, so it reports cancelled=false rather than
+// failing.
+func TestCancelTurnOnIdleSessionIsNotAnError(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := c.CancelTurn(ctx, sess.ID); err != nil {
+		t.Errorf("cancelling an idle session should be a no-op, got %v", err)
 	}
 }

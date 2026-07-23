@@ -66,7 +66,7 @@ func TestRegistryCallMissingPermissionHandler(t *testing.T) {
 }
 
 func TestRegistryCallPermissionDenied(t *testing.T) {
-	r := NewRegistry(func(ctx context.Context, toolName, description string) (bool, error) {
+	r := NewRegistry(func(ctx context.Context, toolName, subject, description string) (bool, error) {
 		return false, nil
 	})
 	ft := &fakeTool{name: "dangerous", needsPerm: true}
@@ -83,7 +83,7 @@ func TestRegistryCallPermissionDenied(t *testing.T) {
 
 func TestRegistryCallPermissionApproved(t *testing.T) {
 	var gotToolName, gotDescription string
-	r := NewRegistry(func(ctx context.Context, toolName, description string) (bool, error) {
+	r := NewRegistry(func(ctx context.Context, toolName, subject, description string) (bool, error) {
 		gotToolName, gotDescription = toolName, description
 		return true, nil
 	})
@@ -106,7 +106,7 @@ func TestRegistryCallPermissionApproved(t *testing.T) {
 }
 
 func TestRegistryCallPermissionFuncError(t *testing.T) {
-	r := NewRegistry(func(ctx context.Context, toolName, description string) (bool, error) {
+	r := NewRegistry(func(ctx context.Context, toolName, subject, description string) (bool, error) {
 		return false, errors.New("broker unavailable")
 	})
 	ft := &fakeTool{name: "dangerous", needsPerm: true}
@@ -129,7 +129,7 @@ func (f *fakeSubjectTool) Subject(json.RawMessage) string { return f.subject }
 
 func TestRegistryCallResolverAllowSkipsPermissionFunc(t *testing.T) {
 	permCalled := false
-	r := NewRegistry(func(context.Context, string, string) (bool, error) {
+	r := NewRegistry(func(context.Context, string, string, string) (bool, error) {
 		permCalled = true
 		return true, nil
 	})
@@ -152,7 +152,7 @@ func TestRegistryCallResolverAllowSkipsPermissionFunc(t *testing.T) {
 
 func TestRegistryCallResolverDenyBlocksWithoutAsking(t *testing.T) {
 	permCalled := false
-	r := NewRegistry(func(context.Context, string, string) (bool, error) {
+	r := NewRegistry(func(context.Context, string, string, string) (bool, error) {
 		permCalled = true
 		return true, nil
 	})
@@ -176,7 +176,7 @@ func TestRegistryCallResolverDenyBlocksWithoutAsking(t *testing.T) {
 }
 
 func TestRegistryCallResolverAskStillGoesThroughPermissionFunc(t *testing.T) {
-	r := NewRegistry(func(context.Context, string, string) (bool, error) { return true, nil })
+	r := NewRegistry(func(context.Context, string, string, string) (bool, error) { return true, nil })
 	r.Resolver = func(toolName, subject string, static bool) Decision { return DecisionAsk }
 
 	ft := &fakeTool{name: "safe", needsPerm: false} // static says no permission needed...
@@ -233,7 +233,7 @@ func TestRegistryCallResolverSubjectEmptyForNonPermissionSubjectTool(t *testing.
 
 func TestRegistryCallPreToolUseHookBlocksBeforePermission(t *testing.T) {
 	permCalled := false
-	r := NewRegistry(func(context.Context, string, string) (bool, error) {
+	r := NewRegistry(func(context.Context, string, string, string) (bool, error) {
 		permCalled = true
 		return true, nil
 	})

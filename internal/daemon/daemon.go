@@ -44,6 +44,12 @@ type Daemon struct {
 
 	busyMu sync.Mutex
 	busy   map[string]bool // sessionID -> a message is currently being processed
+	// cancels holds the cancel func for each in-flight turn, so Esc in a
+	// client (POST /api/sessions/{id}/cancel) can stop one. Guarded by
+	// busyMu, since it is written and cleared at exactly the same points
+	// as busy and the two must never disagree about whether a turn is
+	// running.
+	cancels map[string]context.CancelFunc
 }
 
 // New builds the daemon's HTTP handler. webFS, if non-nil, is served at "/"
@@ -61,6 +67,7 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 		Version: version,
 		mux:     http.NewServeMux(),
 		busy:    map[string]bool{},
+		cancels: map[string]context.CancelFunc{},
 	}
 	d.routes(webFS)
 	return d
@@ -87,6 +94,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions/{permId}", d.handleResolvePermission)
 	d.mux.HandleFunc("POST /api/sessions/{id}/tasks", d.handleSpawnTask)
 	d.mux.HandleFunc("GET /api/sessions/{id}/tasks", d.handleListTasks)
+	d.mux.HandleFunc("POST /api/sessions/{id}/cancel", d.handleCancelTurn)
 	d.mux.HandleFunc("POST /api/tasks/{taskId}/cancel", d.handleCancelTask)
 
 	if webFS != nil {
@@ -262,6 +270,7 @@ func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Loop.ClearSessionState(id)
+	d.Broker.ForgetSession(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -292,6 +301,7 @@ func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request)
 	}
 	for _, s := range sessions {
 		d.Loop.ClearSessionState(s.ID)
+		d.Broker.ForgetSession(s.ID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -427,24 +437,41 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Deliberately rooted at context.Background(), not r.Context(): the HTTP
+	// request returns immediately (202) and must not cancel the turn when
+	// the client disconnects. It is cancellable only on purpose, via
+	// handleCancelTurn.
+	turnCtx, cancel := context.WithCancel(context.Background())
+
 	d.busyMu.Lock()
 	if d.busy[id] {
 		d.busyMu.Unlock()
+		cancel()
 		writeError(w, http.StatusConflict, fmt.Errorf("session %s is already processing a message", id))
 		return
 	}
 	d.busy[id] = true
+	d.cancels[id] = cancel
 	d.busyMu.Unlock()
 
 	go func() {
 		defer func() {
+			cancel()
 			d.busyMu.Lock()
 			delete(d.busy, id)
+			delete(d.cancels, id)
 			d.busyMu.Unlock()
 		}()
-		// Deliberately not r.Context(): the HTTP request returns immediately
-		// (202) and must not cancel the turn when the client disconnects.
-		if err := d.Loop.SendMessage(context.Background(), id, sess.Agent, req.Text); err != nil {
+		err := d.Loop.SendMessage(turnCtx, id, sess.Agent, req.Text)
+		// A cancelled turn is a user action, not a failure: record it as
+		// its own event so clients can drop the spinner without showing an
+		// error. Checking the context rather than the error keeps this
+		// correct no matter which layer noticed the cancellation first.
+		if turnCtx.Err() != nil {
+			d.Loop.Store.Append(id, events.TypeTurnCancelled, map[string]any{})
+			return
+		}
+		if err != nil {
 			log.Printf("session %s: SendMessage: %v", id, err)
 		}
 	}()
@@ -537,12 +564,15 @@ func (d *Daemon) handleResolvePermission(w http.ResponseWriter, r *http.Request)
 	permID := r.PathValue("permId")
 	var req struct {
 		Allow bool `json:"allow"`
+		// Scope is one of "once" (default), "session", or "always". See
+		// agent.PermissionBroker.Resolve.
+		Scope string `json:"scope"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	d.Broker.Resolve(permID, req.Allow)
+	d.Broker.Resolve(permID, req.Allow, req.Scope)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
 }
 
@@ -572,6 +602,25 @@ func (d *Daemon) handleSpawnTask(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	writeJSON(w, http.StatusOK, d.Tasks.List(id))
+}
+
+// handleCancelTurn stops the turn currently running for a session, the
+// endpoint behind Esc in the clients. Cancelling when nothing is running
+// is not an error, just {"cancelled": false} — a user mashing Esc at an
+// idle prompt should not see a failure.
+func (d *Daemon) handleCancelTurn(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	d.busyMu.Lock()
+	cancel, running := d.cancels[id]
+	d.busyMu.Unlock()
+
+	if running {
+		// The turn's own goroutine clears busy/cancels and records the
+		// turn.cancelled event, so this only has to pull the trigger.
+		cancel()
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"cancelled": running})
 }
 
 func (d *Daemon) handleCancelTask(w http.ResponseWriter, r *http.Request) {

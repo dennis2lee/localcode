@@ -236,9 +236,20 @@ func (c *Client) SendMessage(ctx context.Context, sessionID, text string) error 
 	return c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/messages", map[string]string{"text": text}, nil)
 }
 
-func (c *Client) ResolvePermission(ctx context.Context, sessionID, permID string, allow bool) error {
+// ResolvePermission answers a pending permission request. scope is one of
+// "" or "once" (this call only), "session" (don't ask again this
+// session), or "always" (don't ask again ever — writes a rule to
+// config.json server-side).
+func (c *Client) ResolvePermission(ctx context.Context, sessionID, permID string, allow bool, scope string) error {
 	path := fmt.Sprintf("/api/sessions/%s/permissions/%s", sessionID, permID)
-	return c.doJSON(ctx, http.MethodPost, path, map[string]bool{"allow": allow}, nil)
+	return c.doJSON(ctx, http.MethodPost, path, map[string]any{"allow": allow, "scope": scope}, nil)
+}
+
+// CancelTurn stops the turn currently running for a session. Cancelling
+// an idle session is a no-op, not an error.
+func (c *Client) CancelTurn(ctx context.Context, sessionID string) error {
+	path := fmt.Sprintf("/api/sessions/%s/cancel", sessionID)
+	return c.doJSON(ctx, http.MethodPost, path, map[string]string{}, nil)
 }
 
 func (c *Client) SpawnTask(ctx context.Context, sessionID, agentName, prompt string) (string, error) {

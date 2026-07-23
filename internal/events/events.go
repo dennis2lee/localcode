@@ -44,6 +44,11 @@ const (
 	TypeConfigChanged Type = "config.changed"
 	// TypeSessionRenamed reports a session's title changing: {"title"}.
 	TypeSessionRenamed Type = "session.renamed"
+	// TypeTurnCancelled marks a turn stopped on purpose by the user
+	// (Esc in the TUI, POST /api/sessions/{id}/cancel), as opposed to
+	// TypeError which means something went wrong. Clients use it to stop
+	// showing a spinner without printing a scary message.
+	TypeTurnCancelled Type = "turn.cancelled"
 )
 
 // Event is one entry in a session's append-only log. Seq is monotonically

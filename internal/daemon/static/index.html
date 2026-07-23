@@ -224,7 +224,9 @@
     <p id="permission-text"></p>
     <div class="actions">
       <button class="deny" id="permission-deny">Deny</button>
-      <button id="permission-allow">Allow</button>
+      <button id="permission-allow-session" title="don't ask again this session">Allow for session</button>
+      <button id="permission-allow-always" title="don't ask again — writes a rule to config.json">Always allow</button>
+      <button id="permission-allow">Allow once</button>
     </div>
   </div>
 </div>
@@ -239,6 +241,8 @@
   const modalEl = document.getElementById('permission-modal');
   const permissionTextEl = document.getElementById('permission-text');
   const permissionAllowBtn = document.getElementById('permission-allow');
+  const permissionAllowSessionBtn = document.getElementById('permission-allow-session');
+  const permissionAllowAlwaysBtn = document.getElementById('permission-allow-always');
   const permissionDenyBtn = document.getElementById('permission-deny');
   const sessionListEl = document.getElementById('session-list');
   const newSessionBtn = document.getElementById('new-session-btn');
@@ -252,6 +256,7 @@
   let sessionID = null;
   let eventSource = null;
   let pendingPermissionID = null;
+  let pendingPermissionCanAlways = false;
   let waiting = false;
   let tasks = new Map(); // task_id -> {agent, status}
   let agents = []; // [{name, description}]
@@ -303,6 +308,21 @@
     return !text.startsWith('/');
   }
 
+  // cancelTurn stops the running turn. The transcript line and the cleared
+  // spinner come from the turn.cancelled event the daemon broadcasts, so a
+  // cancel from any client updates every client the same way.
+  async function cancelTurn() {
+    if (!waiting || !sessionID) return;
+    // Drop the queue here rather than waiting for the event, so a second
+    // Esc press cannot race an already queued prompt out the door.
+    promptQueue = [];
+    try {
+      await api('POST', `/api/sessions/${sessionID}/cancel`, {});
+    } catch (err) {
+      appendLine(`<div class="msg-error">Error: ${escapeHtml(String(err))}</div>`);
+    }
+  }
+
   // dequeueNext sends the next queued prompt once the current turn has
   // actually finished (setWaiting(false) was just called) — the common
   // case for someone who kept typing while the model was still streaming a
@@ -330,7 +350,7 @@
     if (showTPS && lastUsage && lastUsage.tps) {
       parts.push(`${lastUsage.tps.toFixed(1)} tok/s`);
     }
-    if (waiting) parts.push(promptQueue.length > 0 ? `waiting for response… (${promptQueue.length} queued)` : 'waiting for response…');
+    if (waiting) parts.push(promptQueue.length > 0 ? `waiting for response… esc to cancel (${promptQueue.length} queued)` : 'waiting for response… esc to cancel');
     statusTextEl.textContent = parts.join('  ·  ');
 
     statusBarEl.classList.remove('ctx-warn', 'ctx-crit');
@@ -393,7 +413,12 @@
         break;
       case 'permission.request':
         pendingPermissionID = ev.data.id;
+        pendingPermissionCanAlways = !!ev.data.can_always;
         permissionTextEl.textContent = `[${ev.data.tool}] ${ev.data.description}`;
+        permissionAllowAlwaysBtn.style.display = pendingPermissionCanAlways ? '' : 'none';
+        if (pendingPermissionCanAlways) {
+          permissionAllowAlwaysBtn.title = `don't ask again — writes "${ev.data.rule}" to config.json`;
+        }
         modalEl.classList.add('open');
         break;
       case 'permission.resolved':
@@ -432,6 +457,11 @@
         break;
       case 'session.renamed':
         loadSessions();
+        break;
+      case 'turn.cancelled':
+        promptQueue = [];
+        setWaiting(false);
+        appendLine(`<div class="msg-tool">[cancelled]</div>`);
         break;
       case 'error':
         setWaiting(false);
@@ -671,6 +701,7 @@
     '  /version            show the daemon version',
     '  /skill              list registered skills',
     '  /&lt;skill name&gt;        run that skill (e.g. /pdf-tools)',
+    '  Esc                 cancel the running turn',
     '  /agent              list registered agents',
     '  /agent <name>        switch to that agent (also available via the header dropdown)',
     '  /init              scan the repo and create/improve an AGENTS.md rules file',
@@ -853,19 +884,33 @@
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelTurn();
     }
   });
+  // Esc works even when focus is not in the prompt box, matching the TUI.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && e.target !== inputEl && !modalEl.classList.contains('open')) cancelTurn();
+  });
 
-  permissionAllowBtn.addEventListener('click', () => resolvePermission(true));
-  permissionDenyBtn.addEventListener('click', () => resolvePermission(false));
+  permissionAllowBtn.addEventListener('click', () => resolvePermission(true, 'once'));
+  permissionAllowSessionBtn.addEventListener('click', () => resolvePermission(true, 'session'));
+  permissionAllowAlwaysBtn.addEventListener('click', () => resolvePermission(true, 'always'));
+  permissionDenyBtn.addEventListener('click', () => resolvePermission(false, 'once'));
 
-  async function resolvePermission(allow) {
+  // resolvePermission answers a pending permission request. scope is
+  // 'once', 'session' (don't ask again this session), or 'always' (don't
+  // ask again ever — the daemon writes a matching rule to config.json).
+  // The policy change itself happens server-side; this only reports what
+  // the user chose.
+  async function resolvePermission(allow, scope) {
     if (!pendingPermissionID) return;
     const id = pendingPermissionID;
     pendingPermissionID = null;
     modalEl.classList.remove('open');
     try {
-      await api('POST', `/api/sessions/${sessionID}/permissions/${id}`, { allow });
+      await api('POST', `/api/sessions/${sessionID}/permissions/${id}`, { allow, scope });
     } catch (err) {
       appendLine(`<div class="msg-error">failed to respond to permission request: ${escapeHtml(String(err))}</div>`);
     }

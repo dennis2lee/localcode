@@ -71,7 +71,7 @@ So `profiles.<name>.model` in config.json needs the full prefixed ID.
 
 ### 4. Usable model IDs, as of 2026-07
 
-This table reflects the **Bedrock Converse and ConverseStream API**, which is what localcode actually calls through `bedrockruntime.ConverseStream` in [internal/provider/bedrock.go](internal/provider/bedrock.go). Names here may lag the newest Anthropic model names, because Bedrock manages its own rollout schedule and naming separately.
+This table reflects the **Bedrock Converse and ConverseStream API**, which is what localcode actually calls through `bedrockruntime.ConverseStream` in [internal/provider/bedrock.go](../internal/provider/bedrock.go). Names here may lag the newest Anthropic model names, because Bedrock manages its own rollout schedule and naming separately.
 
 | Model | Base model ID | Region prefixes | Converse API |
 |---|---|---|---|

@@ -163,9 +163,12 @@ Default behavior without any rules:
 | Tool | Confirmation |
 |---|---|
 | `read_file`, `glob`, `grep` | Runs immediately |
-| `write_file`, `edit`, `bash`, MCP tools | Always asks |
+| `bash` running a `git` command | Runs immediately (built in default, see below) |
+| `write_file`, `edit`, `bash` running anything else, MCP tools | Always asks |
 
-Adding a `permission` block gives you opencode style per tool and per pattern control, so safe commands run automatically, dangerous ones are blocked outright, and only the rest prompt.
+**git runs without asking by default.** Any `git` subcommand through the `bash` tool is auto-allowed out of the box, no config needed, because an agent that has to ask before every `git status` is unusable and git is close to always either read only or recoverable through the reflog. Add your own `bash` rule for `git` in `permission` (see below) to turn this back into ask or deny.
+
+Adding a `permission` block gives you opencode style per tool and per pattern control, so safe commands run automatically, dangerous ones are blocked outright, and only the rest prompt. A rule you write for a tool always overrides that tool's built in default, including the git one.
 
 ```json
 {
@@ -205,6 +208,29 @@ Patterns are globs where `*` is zero or more characters and `?` is exactly one.
 ```json
 { "read_file": [{ "match": "*.env", "decision": "deny" }, { "match": "*", "decision": "allow" }] }
 ```
+
+**A `bash` rule matches per command, not per line.** `git status && rm -rf ~` is not treated as one string matched against `git *` — the line is split on `&&`, `||`, `;`, `|`, and newlines (quoted separators, like one inside a commit message, are left alone), and every resulting command has to earn `allow` on its own. Any `deny` anywhere in the line denies the whole thing. This is why allowing `git *` (or relying on the built in git default) is safe: it cannot be used to smuggle an unrelated command through alongside a git one.
+
+Command substitution and output redirection (`$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`) never auto-allow, even inside an otherwise-allowed command, since they can run a nested command or write to an arbitrary file that the per-segment check never sees. Those always fall back to asking, unless an explicit `deny` rule matches, in which case deny still wins.
+
+### Answering a permission prompt: once, this session, or always
+
+A permission prompt offers four answers:
+
+| Answer | TUI key | Effect |
+|---|---|---|
+| Allow once | `y` | Approves exactly this call. Asks again next time. |
+| Deny | `n` | Refuses this call. Asks again next time. |
+| Allow for session | `s` | Approves this call and every later call in the current session that matches the same rule pattern (e.g. any `npm *` command), without asking again — until the session ends or the daemon restarts. Nothing is written to disk. |
+| Always allow | `a` (only shown when available) | Everything "allow for session" does, plus writes a matching rule to config.json, so the same pattern is auto-allowed in every future session too. |
+
+The Web UI shows the same four as buttons: Deny, Allow for session, Always allow, Allow once.
+
+For a `bash` call, the rule an "allow for session" or "always allow" grants is generalized to the command's first word — approving `npm test` grants `npm *`, not just that exact command — since approving a shell command usually means approving that program. Every other tool (file paths, MCP tools) grants the exact subject rather than widening it, so approving one file doesn't silently approve a whole directory. The prompt always shows the exact pattern before you answer, so nothing is granted invisibly.
+
+"Always allow" writes to whichever config.json the daemon loaded: the file passed via `--config`, or the global `~/.localcode/config.json` if none was given — never the project-local override, so an approval survives switching projects. It edits only the `permission` key, preserving every other key and value in the file byte for byte, the same careful merge `localcode mcp` uses. If the daemon has no writable config.json to target, "always allow" isn't offered — only once, session, and deny are.
+
+Session grants are forgotten when a session is deleted, and when the daemon restarts. Permanent ("always") grants live in config.json and survive both.
 
 ### Hooks
 
@@ -357,15 +383,18 @@ Common to the TUI and Web UI:
 |---|---|
 | Send a message | **Enter**. The Web UI also has a Send button. |
 | Insert a newline | **Ctrl+J** in the TUI, **Shift+Enter** in the Web UI |
-| Answer a permission prompt | `y` or `n` in the TUI, Allow or Deny buttons in the Web UI |
+| Answer a permission prompt | `y`, `n`, `s`, or `a` in the TUI; buttons in the Web UI — see [answering a permission prompt](#answering-a-permission-prompt-once-this-session-or-always) |
+| Cancel the running turn | **Esc**, in either client |
 | Quit the TUI | **Ctrl+C**, or type `exit` or `:q` |
 
 Other behavior:
 
 * The input box grows as you type, up to about 10 lines, then scrolls internally.
-* A permission prompt appears whenever the model wants `write_file`, `edit`, `bash`, or an MCP tool. Any client attached to the session can answer it, and answering closes the prompt on every other client.
+* A permission prompt appears whenever the model wants `write_file`, `edit`, a non-git `bash` command, or an MCP tool. Any client attached to the session can answer it, and answering closes the prompt on every other client.
 * The TUI draws a rule above and below the input box, with a status line directly underneath showing `agent: <name>  ·  model: <model id>`. Switching with Tab updates only that line and adds nothing to the transcript.
 * The TUI places the real terminal cursor at the insertion point inside the prompt box, so IME composition for Korean, Japanese, and Chinese renders in the box while you type rather than below it.
+
+**Esc cancels whatever is running.** Press it while the model is answering (the status line says "esc to cancel") to stop that turn immediately. Cancelling also clears anything waiting in the prompt queue — the point of cancelling is to stop, so letting a queued message fire right after would defeat it. A `[cancelled]` line marks where it stopped; nothing about it is treated as an error. Pressing Esc with nothing running does nothing.
 
 **Messages sent while the model is still answering are queued.** The transcript shows `[queued] <text>` immediately and the status line shows `(N queued)`. The first queued message sends automatically the moment the current turn ends, and several stack up and go out in order.
 
@@ -507,7 +536,7 @@ Sessions are identified and resumed by ID, so a `title` is purely for display.
 
 At the end of every turn, the token usage the provider reports is recorded as a `usage` event. Bedrock, Anthropic, and any OpenAI compatible server asked for `stream_options.include_usage` all supply it.
 
-Each event carries input and output token counts, the model's known maximum context from the best effort table in [internal/modelinfo](internal/modelinfo/modelinfo.go) defaulting to 128000 for unknown models, the percentage filled, and tokens per second. Both clients drive their status bar from this.
+Each event carries input and output token counts, the model's known maximum context from the best effort table in [internal/modelinfo](../internal/modelinfo/modelinfo.go) defaulting to 128000 for unknown models, the percentage filled, and tokens per second. Both clients drive their status bar from this.
 
 **Automatic compaction.** Once context use passes **80%**, and `auto_compact` is on, the next message triggers a one time summarization of the whole conversation. That summary replaces the history and the new message is sent after it. The transcript notes that compaction happened.
 

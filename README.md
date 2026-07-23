@@ -24,11 +24,11 @@ The model calls tools itself for file reads and writes, shell execution, MCP, an
 
 | Document | Contents |
 |---|---|
-| [INSTALL.md](INSTALL.md) | Building from source, producing macOS and Windows packages |
-| [USAGE.md](USAGE.md) | config.json, commands, screen controls, session and agent management |
-| [MODELS.md](MODELS.md) | Real setup for Bedrock and Claude, local LLMs, and verified model IDs |
-| [IMPROVEMENTS.md](IMPROVEMENTS.md) | Known gaps and UI ideas |
-| [CHANGELOG.md](CHANGELOG.md) | Version history |
+| [INSTALL.md](docs/INSTALL.md) | Building from source, producing macOS and Windows packages |
+| [USAGE.md](docs/USAGE.md) | config.json, commands, screen controls, session and agent management |
+| [MODELS.md](docs/MODELS.md) | Real setup for Bedrock and Claude, local LLMs, and verified model IDs |
+| [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) | Known gaps and UI ideas |
+| [CHANGELOG.md](docs/CHANGELOG.md) | Version history |
 | [LICENSE](LICENSE) | MIT |
 
 ## Architecture
@@ -59,7 +59,7 @@ Edit `~/.localcode/config.json` and set your Bedrock region and model IDs, or th
 
 The default run starts a local daemon and attaches the TUI to it. Open the same address (`http://127.0.0.1:4096`) in a browser to use the Web UI at the same time.
 
-To run the daemon on a remote machine with `--headless` and attach from your laptop with `--server`, see [USAGE.md](USAGE.md#remote-daemon-over-an-ssh-tunnel).
+To run the daemon on a remote machine with `--headless` and attach from your laptop with `--server`, see [USAGE.md](docs/USAGE.md#remote-daemon-over-an-ssh-tunnel).
 
 ## Tests
 
@@ -72,4 +72,4 @@ go test ./...
 * macOS code signing and notarization, and Windows MSI code signing. Both install, but neither is signed.
 * Windows arm64 MSI. Only amd64 ships an MSI today, arm64 ships a portable zip.
 
-See [USAGE.md](USAGE.md#known-limitations) for the full list of limitations.
+See [USAGE.md](docs/USAGE.md#known-limitations) for the full list of limitations.
