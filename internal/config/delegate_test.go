@@ -32,7 +32,7 @@ func TestMatchesPromptIsCaseInsensitiveGlob(t *testing.T) {
 	cfg := delegateConfig("find *", "where is *", "list *")
 	for _, prompt := range []string{
 		"find the config loader",
-		"FIND the config loader", // case-insensitive
+		"FIND the config loader",         // case-insensitive
 		"  where is globMatch defined  ", // surrounding space trimmed
 		"list every TODO",
 	} {
@@ -84,5 +84,50 @@ func TestValidateRejectsUnknownDelegateAgent(t *testing.T) {
 
 	if err := delegateConfig("find *").Validate(); err != nil {
 		t.Fatalf("a well-formed auto_delegate config should validate, got %v", err)
+	}
+}
+
+// TestSkipPermissionsDefaultsOff: adding the feature must not change any
+// existing setup — a config that never mentions it still prompts.
+func TestSkipPermissionsDefaultsOff(t *testing.T) {
+	cfg := &Config{}
+	if cfg.PermissionsSkipped() {
+		t.Error("skip_permissions must default to off")
+	}
+	if got := cfg.ResolvePermission("write_file", "/tmp/x", true); got != DecisionAsk {
+		t.Errorf("write_file = %q with no config, want ask", got)
+	}
+}
+
+// TestSkipPermissionsTurnsAskIntoAllow is the feature itself.
+func TestSkipPermissionsTurnsAskIntoAllow(t *testing.T) {
+	on := true
+	cfg := &Config{SkipPermissions: &on}
+	for _, tc := range []struct{ tool, subject string }{
+		{"write_file", "/etc/hosts"},
+		{"bash", "npm install"},
+		{"mcp__github__create_pr", ""},
+	} {
+		if got := cfg.ResolvePermission(tc.tool, tc.subject, true); got != DecisionAllow {
+			t.Errorf("%s(%q) = %q with skip_permissions on, want allow", tc.tool, tc.subject, got)
+		}
+	}
+}
+
+// TestSkipPermissionsStillHonorsDeny is the safety line: skipping
+// confirmations must not override a rule written to forbid something.
+func TestSkipPermissionsStillHonorsDeny(t *testing.T) {
+	on := true
+	cfg := &Config{
+		SkipPermissions: &on,
+		Permissions: map[string]ToolPermission{
+			"bash": {Rules: []PermissionRule{{Match: "rm *", Decision: DecisionDeny}}},
+		},
+	}
+	if got := cfg.ResolvePermission("bash", "rm -rf ~", true); got != DecisionDeny {
+		t.Errorf("denied command = %q with skip_permissions on, want deny to still win", got)
+	}
+	if got := cfg.ResolvePermission("bash", "echo hi && rm -rf ~", true); got != DecisionDeny {
+		t.Errorf("chained denied command = %q, want deny", got)
 	}
 }

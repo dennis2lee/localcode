@@ -88,8 +88,8 @@ func TestResolvePermissionRulesLastMatchWins(t *testing.T) {
 		command string
 		want    Decision
 	}{
-		{"ls -la", DecisionAsk},        // only "*" matches
-		{"git status", DecisionAllow},  // "*" then "git *" — last wins
+		{"ls -la", DecisionAsk},           // only "*" matches
+		{"git status", DecisionAllow},     // "*" then "git *" — last wins
 		{"git push origin", DecisionDeny}, // all three match — last ("git push*") wins
 	}
 	for _, tc := range cases {

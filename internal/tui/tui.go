@@ -7,7 +7,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -48,6 +50,8 @@ const helpText = `Available commands:
   /compact           summarize and compact the conversation right now
   /compact <instructions>      give instructions for how to compact
   /usage              show cumulative token usage per model
+  /tasks              list background tasks and their status
+  /tasks <id>          show everything that task has produced so far
   /commands          list registered custom commands
   /<custom command>   run a command defined in .localcode/commands/*.md
   exit, :q            quit the TUI (same as Ctrl+C)
@@ -126,7 +130,35 @@ type Model struct {
 	// started, so walking back down past the newest entry returns it
 	// instead of losing it.
 	draft string
+
+	// runningTool is the tool currently executing, shown in the busy
+	// indicator below the prompt box. Tool activity is deliberately NOT
+	// written into the transcript anymore — the indicator is its home.
+	runningTool string
+	// spin/spinning drive the indicator's animation. spinning guards
+	// against starting a second tick loop: one loop keeps rescheduling
+	// itself while the client is busy and dies on its first tick after
+	// that clears, so only an idle->busy transition may start one.
+	spin     int
+	spinning bool
+
+	// tasks tracks background tasks by ID, built from task.spawned and
+	// task.status events (replayed from the start of the session on
+	// connect, so the map is correct after a reattach too). It feeds the
+	// busy indicator's task count and the /tasks command.
+	tasks map[string]taskState
 }
+
+// taskState is what the TUI knows about one background task, entirely
+// from the parent session's events.
+type taskState struct {
+	agent  string
+	status string // spawned | running | completed | failed | cancelled
+	prompt string
+}
+
+// active reports whether the task is still doing work.
+func (t taskState) active() bool { return t.status == "spawned" || t.status == "running" }
 
 func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Event) Model {
 	ta := textarea.New()
@@ -157,6 +189,7 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 		input:        ta,
 		events:       eventCh,
 		currentAgent: agentName,
+		tasks:        map[string]taskState{},
 	}
 }
 
@@ -180,9 +213,101 @@ type agentsMsg struct {
 }
 type switchAgentMsg struct{ err error }
 type turnCancelledMsg struct{ err error }
+type taskOutputMsg struct {
+	taskID string
+	output string
+	err    error
+}
+
 type commandsMsg struct {
 	commands []client.CommandInfo
 	err      error
+}
+
+type spinTickMsg struct{}
+
+// spinFrames is the busy indicator's animation. Braille spinners render
+// in every terminal the TUI targets (Windows Terminal included).
+var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func spinTick() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return spinTickMsg{} })
+}
+
+// startSpin begins the indicator's tick loop, unless one is already
+// running — a second loop would double the animation speed and never
+// stop cleanly.
+func (m *Model) startSpin() tea.Cmd {
+	if m.spinning {
+		return nil
+	}
+	m.spinning = true
+	return spinTick()
+}
+
+// activeTasks counts background tasks still doing work.
+func (m Model) activeTasks() int {
+	n := 0
+	for _, t := range m.tasks {
+		if t.active() {
+			n++
+		}
+	}
+	return n
+}
+
+// busy reports whether anything is running that the indicator should
+// show: this client's own turn, or background tasks.
+func (m Model) busy() bool { return m.waiting || m.activeTasks() > 0 }
+
+// busyLine renders the indicator shown below the prompt box while
+// anything is running: an animation frame, what the turn is doing (the
+// running tool's name when one is executing), the queue depth, and the
+// background-task count. It replaces the old per-event "[tool] ..."
+// transcript lines entirely.
+func (m Model) busyLine() string {
+	frame := spinFrames[m.spin%len(spinFrames)]
+	var parts []string
+	if m.waiting {
+		what := "working"
+		if m.runningTool != "" {
+			what = m.runningTool
+		}
+		part := what + "… esc to cancel"
+		if n := len(m.queue); n > 0 {
+			part += fmt.Sprintf(" (%d queued)", n)
+		}
+		parts = append(parts, part)
+	}
+	if n := m.activeTasks(); n > 0 {
+		noun := "background task"
+		if n > 1 {
+			noun += "s"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s (/tasks to inspect)", n, noun))
+	}
+	return frame + " " + strings.Join(parts, "  ·  ")
+}
+
+// tasksSummary renders the /tasks listing from the state built out of
+// task.spawned/task.status events — no server round trip needed for the
+// list itself; /tasks <id> fetches that task's output.
+func (m Model) tasksSummary() string {
+	if len(m.tasks) == 0 {
+		return "No background tasks in this session."
+	}
+	ids := make([]string, 0, len(m.tasks))
+	for id := range m.tasks {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var b strings.Builder
+	b.WriteString("Background tasks (/tasks <id> for its output so far):\n")
+	for _, id := range ids {
+		t := m.tasks[id]
+		fmt.Fprintf(&b, "- %s [%s] %s: %s\n", id, t.status, t.agent, t.prompt)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func listenForEvent(ch <-chan events.Event) tea.Cmd {
@@ -331,6 +456,16 @@ func (m Model) fetchAgents() tea.Cmd {
 	}
 }
 
+// fetchTaskOutput pulls everything a background task has produced so far
+// (works mid-run — a task is a session, so its stream is readable while
+// it is still going).
+func (m Model) fetchTaskOutput(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		out, err := m.client.TaskOutput(context.Background(), taskID)
+		return taskOutputMsg{taskID: taskID, output: out, err: err}
+	}
+}
+
 func (m Model) fetchCommands() tea.Cmd {
 	return func() tea.Msg {
 		cmds, err := m.client.ListCommands(context.Background())
@@ -419,6 +554,7 @@ func (m *Model) resizeLayout() {
 		inputHeight = 1
 	}
 	m.input.SetHeight(inputHeight)
+	m.scrollInputToTop()
 
 	const chromeLines = 2 // status/permission line + blank separator
 	vh := m.termHeight - chromeLines - borderLines - footerLines - inputHeight
@@ -428,8 +564,42 @@ func (m *Model) resizeLayout() {
 	m.viewport.SetHeight(vh)
 }
 
+// scrollInputToTop pulls the prompt box's internal viewport back to the
+// first line when the whole value fits in the box, preserving the cursor.
+//
+// Without this, a multi-line paste renders as a blank black block. The
+// paste arrives while the box is still one row tall, so the textarea
+// scrolls down to keep the cursor visible; resizeLayout then grows the
+// box, but the textarea's repositionView only ever scrolls to bring the
+// cursor *into* view, never back up once everything fits. The offset
+// therefore sticks, the first lines stay scrolled out of sight, and the
+// rows past the end render as black-on-black filler — while Value() is
+// perfectly correct, which is why sending it worked.
+func (m *Model) scrollInputToTop() {
+	if m.input.LineCount() > m.input.Height() {
+		return // genuinely taller than the box; the offset is doing real work
+	}
+	row := m.input.Line()
+	col := m.input.LineInfo().ColumnOffset
+	m.input.MoveToBegin() // scrolls the internal viewport back to line 0
+	for i := 0; i < row; i++ {
+		m.input.CursorDown()
+	}
+	m.input.SetCursorColumn(col)
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinTickMsg:
+		if !m.busy() {
+			// Nothing running anymore — let this loop die. The next
+			// idle->busy transition starts a fresh one.
+			m.spinning = false
+			return m, nil
+		}
+		m.spin++
+		return m, spinTick()
+
 	case tea.WindowSizeMsg:
 		m.termHeight = msg.Height
 		m.viewport.SetWidth(msg.Width)
@@ -512,6 +682,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// finish first, same as before — they don't go through
 			// sendMessage, so queueing them would mean replaying them as
 			// literal chat text later.
+			// Only a foreground turn blocks: background tasks run in their
+			// own child sessions, so the daemon's per-session busy flag is
+			// clear and a new prompt can go out immediately.
 			if m.waiting {
 				if isPlainPrompt(text) {
 					m.queue = append(m.queue, text)
@@ -564,20 +737,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				name = strings.TrimSpace(name)
 				return m, m.switchAgent(name)
 			}
+			if strings.ToLower(text) == "/tasks" {
+				m.appendLocal(m.tasksSummary())
+				return m, nil
+			}
+			if id, ok := strings.CutPrefix(text, "/tasks "); ok {
+				return m, m.fetchTaskOutput(strings.TrimSpace(id))
+			}
 
 			// The user line itself renders from the message.user event (see
 			// applyEvent), not optimistically here, so a resumed/replayed
 			// session shows the same transcript a live one did.
 			m.waiting = true
-			return m, m.sendMessage(text)
+			return m, tea.Batch(m.sendMessage(text), m.startSpin())
 		}
 
 	case eventMsg:
 		m.applyEvent(events.Event(msg))
+		cmds := []tea.Cmd{listenForEvent(m.events)}
 		if cmd := m.dequeue(); cmd != nil {
-			return m, tea.Batch(listenForEvent(m.events), cmd)
+			cmds = append(cmds, cmd)
 		}
-		return m, listenForEvent(m.events)
+		// An event can make us busy without a keypress (a background task
+		// spawned, a queued prompt just went out) — make sure the
+		// indicator animates then too. startSpin is a no-op when a loop
+		// is already running.
+		if m.busy() {
+			if cmd := m.startSpin(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		return m, tea.Batch(cmds...)
 
 	case turnDoneMsg:
 		if client.IsBusy(msg.err) {
@@ -588,7 +778,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.queue = append([]string{msg.text}, m.queue...)
 			m.waiting = true
 			m.appendLocal(fmt.Sprintf("[queued] %s", msg.text))
-			return m, nil
+			return m, m.startSpin()
 		}
 		if msg.err != nil {
 			m.waiting = false
@@ -606,6 +796,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 		}
+		return m, nil
+
+	case taskOutputMsg:
+		if msg.err != nil {
+			m.appendLocal(fmt.Sprintf("failed to fetch %s: %v", msg.taskID, msg.err))
+			return m, nil
+		}
+		t := m.tasks[msg.taskID]
+		header := fmt.Sprintf("--- %s [%s] %s ---", msg.taskID, t.status, t.prompt)
+		out := msg.output
+		if strings.TrimSpace(out) == "" {
+			out = "(no output yet)"
+		}
+		m.appendLocal(header + "\n" + out)
 		return m, nil
 
 	case versionMsg:
@@ -672,16 +876,14 @@ func (m *Model) applyEvent(ev events.Event) {
 		// The daemon's real turn boundary, emitted after its busy flag is
 		// cleared — safe to stop waiting and let the queue drain.
 		m.waiting = false
+		m.runningTool = ""
 	case events.TypeToolStart:
-		name, _ := ev.Data["name"].(string)
-		m.transcript += toolStyle.Render(fmt.Sprintf("[tool] running %s...\n", name))
+		// No transcript line — tool activity lives in the busy indicator
+		// below the prompt box, which names the running tool and vanishes
+		// when the turn ends.
+		m.runningTool, _ = ev.Data["name"].(string)
 	case events.TypeToolEnd:
-		isErr, _ := ev.Data["is_error"].(bool)
-		status := "done"
-		if isErr {
-			status = "failed"
-		}
-		m.transcript += toolStyle.Render(fmt.Sprintf("[tool] %s\n\n", status))
+		m.runningTool = ""
 	case events.TypePermissionRequest:
 		id, _ := ev.Data["id"].(string)
 		tool, _ := ev.Data["tool"].(string)
@@ -690,13 +892,18 @@ func (m *Model) applyEvent(ev events.Event) {
 		canAlways, _ := ev.Data["can_always"].(bool)
 		m.pending = &pendingPermission{id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways}
 	case events.TypeTaskSpawned:
+		// No transcript line — background tasks surface in the busy
+		// indicator below the prompt box, and /tasks inspects them.
 		taskID, _ := ev.Data["task_id"].(string)
 		agentName, _ := ev.Data["agent"].(string)
-		m.transcript += toolStyle.Render(fmt.Sprintf("[task] %s (%s) started in background\n", taskID, agentName))
+		prompt, _ := ev.Data["prompt"].(string)
+		m.tasks[taskID] = taskState{agent: agentName, status: "spawned", prompt: prompt}
 	case events.TypeTaskStatus:
 		taskID, _ := ev.Data["task_id"].(string)
 		status, _ := ev.Data["status"].(string)
-		m.transcript += toolStyle.Render(fmt.Sprintf("[task] %s: %s\n", taskID, status))
+		t := m.tasks[taskID]
+		t.status = status
+		m.tasks[taskID] = t
 	case events.TypeAgentSwitched:
 		// Just update the status line the footer already renders every
 		// frame — do NOT also write a transcript line here. This event
@@ -713,10 +920,12 @@ func (m *Model) applyEvent(ev events.Event) {
 		}
 	case events.TypeTurnCancelled:
 		m.waiting = false
+		m.runningTool = ""
 		m.transcript += toolStyle.Render("[cancelled]") + "\n\n"
 	case events.TypeError:
 		if msg, ok := ev.Data["error"].(string); ok {
 			m.waiting = false
+			m.runningTool = ""
 			m.errMsg = msg
 		}
 	}
@@ -739,18 +948,6 @@ func (m Model) inputBorder() string {
 func (m Model) View() tea.View {
 	lines := strings.Split(m.viewport.View(), "\n")
 
-	if m.pending != nil {
-		lines = append(lines, modalStyle.Render(m.pending.prompt()))
-	} else if m.waiting {
-		status := "Waiting for response... (esc to cancel)"
-		if n := len(m.queue); n > 0 {
-			status += fmt.Sprintf(" (%d queued)", n)
-		}
-		lines = append(lines, statusStyle.Render(status))
-	} else if m.errMsg != "" {
-		lines = append(lines, errorStyle.Render("Error: "+m.errMsg))
-	}
-
 	lines = append(lines, m.inputBorder())
 	// Row the prompt box's first line lands on. Derived from the frame
 	// built so far rather than a hardcoded sum, so it stays correct as the
@@ -758,6 +955,17 @@ func (m Model) View() tea.View {
 	inputRow := len(lines)
 	lines = append(lines, strings.Split(m.input.View(), "\n")...)
 	lines = append(lines, m.inputBorder())
+
+	// The status band lives BELOW the prompt box: the permission prompt,
+	// the busy indicator (own turn and/or background tasks), or the last
+	// error — one at a time, gone when there is nothing to say.
+	if m.pending != nil {
+		lines = append(lines, modalStyle.Render(m.pending.prompt()))
+	} else if m.busy() {
+		lines = append(lines, statusStyle.Render(m.busyLine()))
+	} else if m.errMsg != "" {
+		lines = append(lines, errorStyle.Render("Error: "+m.errMsg))
+	}
 
 	// Agent status lives below the input box (not above it), so it reads
 	// as "what will the next message use" right next to where the next

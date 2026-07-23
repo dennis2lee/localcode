@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.25.0
+
+- **Tool activity moved out of the conversation and into a live indicator.** `[tool] running bash...` / `[tool] done` / `[task] ...` lines no longer appear in the transcript. Instead, while anything is running, a line below the prompt box animates and says what is happening: the running tool's name, the prompt-queue depth, and the number of background tasks. It clears at the turn boundary, however the turn ends (`turn.done`, `turn.cancelled`, or an error). The Web UI carries the same information in its status bar.
+- **Background tasks are visible and inspectable.** A running task shows in that indicator, and two new commands cover the detail: `/tasks` lists every task in the session with status, agent, and prompt (client-side, no model call), and `/tasks <id>` shows everything that task has produced so far. It reads the task's event log, so it works mid-run as a progress view rather than only a post-mortem. New endpoint `GET /api/tasks/{id}/output`.
+- **A background task no longer blocks the prompt.** Tasks run in their own child sessions, so the parent session is idle: a prompt typed while only a task is running now sends immediately instead of sitting in the queue. Only a turn in the same session queues what you type.
+- **Fix multi-line paste rendering as a blank black block in the TUI.** The paste arrives while the prompt box is still one row tall, so the textarea scrolls down to keep the cursor visible; the box then grows, but bubbles' `repositionView` only ever scrolls to bring the cursor *into* view and never back up once everything fits. The stale offset hid the first lines and painted the rows past the end black on black, while `Value()` stayed correct, which is why sending the text worked. The prompt box is now scrolled back to the top whenever the whole value fits, preserving the cursor.
+- **New `skip_permissions` setting**, the equivalent of Claude Code's `--dangerously-skip-permissions`: every `ask` becomes `allow`. Defaults to **off** and must be opted into deliberately, since with it on the model writes files and runs shell commands with no confirmation. Explicit `deny` rules still deny, so a rule written to forbid something keeps forbidding it.
+
 ## v0.24.0
 
 - **Fix prompts typed during tool execution erroring with 409 instead of queuing.** `message.part.end` fires once per model message, and a turn with tool calls streams several (the pre-tool text, then the post-tool answer), so both clients treated the first one as the end of the turn, skipped the queue, sent immediately, and bounced off the daemon's busy flag with `409: session is already processing a message`.

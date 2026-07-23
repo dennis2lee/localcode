@@ -97,6 +97,18 @@ func (c *Config) ResolvePermission(toolName, subject string, staticRequiresPermi
 }
 
 func (c *Config) resolveOne(toolName, subject string, staticRequiresPermission bool) Decision {
+	d := c.resolveOneStrict(toolName, subject, staticRequiresPermission)
+	// skip_permissions downgrades "ask" to "allow" but never touches
+	// "deny": a rule written specifically to forbid something keeps
+	// forbidding it. Skipping confirmations is a convenience; overriding
+	// an explicit prohibition would be a different, much worse promise.
+	if d == DecisionAsk && c.PermissionsSkipped() {
+		return DecisionAllow
+	}
+	return d
+}
+
+func (c *Config) resolveOneStrict(toolName, subject string, staticRequiresPermission bool) Decision {
 	if tp, ok := c.Permissions[toolName]; ok {
 		if d, matched := tp.resolve(subject); matched {
 			return d

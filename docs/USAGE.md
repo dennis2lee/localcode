@@ -7,7 +7,7 @@
 | [1. Getting started](#part-1-getting-started) | [Run modes](#run-modes), [Remote daemon over an SSH tunnel](#remote-daemon-over-an-ssh-tunnel) |
 | [2. Configuration](#part-2-configuration) | [Config file (config.json)](#config-file-configjson), [Managing MCP servers](#managing-mcp-servers-with-localcode-mcp), [Permission rules](#fine-grained-permission-rules), [Hooks](#hooks), [Authenticating with /login](#authenticating-with-login) |
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [AGENTS.md](#agentsmd-project-rules), [Auto memory](#auto-memory) |
-| [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
+| [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt) |
 | [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
@@ -203,6 +203,25 @@ What each pattern matches:
 
 Patterns are globs where `*` is zero or more characters and `?` is exactly one.
 
+#### Skipping confirmations entirely
+
+`"skip_permissions": true` turns every `ask` into `allow`, the equivalent of Claude Code's `--dangerously-skip-permissions`. It defaults to **off** and has to be opted into deliberately.
+
+```json
+{ "skip_permissions": true }
+```
+
+With it on, the model writes files and runs shell commands with no confirmation at all. Turn it on only where that is acceptable: a scratch repository, a container, a machine whose state you do not mind losing.
+
+`deny` rules still deny. Skipping confirmations is a convenience; overriding a rule written specifically to forbid something would be a different and much worse promise. Pairing the two is a reasonable middle ground:
+
+```json
+{
+  "skip_permissions": true,
+  "permission": { "bash": [{ "match": "rm *", "decision": "deny" }] }
+}
+```
+
 `deny` can block tools that never needed confirmation. For example, this blocks reading `.env` files while leaving every other read alone:
 
 ```json
@@ -394,6 +413,7 @@ Other behavior:
 * A permission prompt appears whenever the model wants `write_file`, `edit`, a non-git `bash` command, or an MCP tool. Any client attached to the session can answer it, and answering closes the prompt on every other client.
 * The TUI draws a rule above and below the input box, with a status line directly underneath showing `agent: <name>  ·  model: <model id>`. Switching with Tab updates only that line and adds nothing to the transcript.
 * The TUI places the real terminal cursor at the insertion point inside the prompt box, so IME composition for Korean, Japanese, and Chinese renders in the box while you type rather than below it.
+* **Running work shows below the prompt box, not in the conversation.** While a turn is in flight the TUI animates a line naming what it is doing (the running tool's name, or `working`), the queue depth, and how many background tasks are going. It disappears the moment the turn ends. The Web UI shows the same information in its status bar. Tool starts and finishes no longer write `[tool] ...` lines into the transcript.
 
 **Esc cancels whatever is running.** Press it while the model is answering (the status line says "esc to cancel") to stop that turn immediately. Cancelling also clears anything waiting in the prompt queue — the point of cancelling is to stop, so letting a queued message fire right after would defeat it. A `[cancelled]` line marks where it stopped; nothing about it is treated as an error. Pressing Esc with nothing running does nothing.
 
@@ -466,6 +486,19 @@ Body substitutions:
 | `@path` | That file's contents, resolved relative to the working directory rather than the command file |
 
 For example `/hello World` sends the body with `$1` and `$ARGUMENTS` both replaced by `World`, while the transcript shows only `/hello World`. Use `/commands` to list what is registered.
+
+### `/tasks`
+
+Background tasks produce no transcript lines. Inspect them here instead.
+
+| Command | Effect |
+|---|---|
+| `/tasks` | Lists every background task in this session with its status, agent, and prompt. Answered from client state, no model call. |
+| `/tasks <id>` | Shows everything that task has produced so far. Works while it is still running, so it doubles as a progress view. |
+
+A running task also appears in the indicator below the prompt box, and in the Web UI's right panel.
+
+**A background task does not block the prompt.** Tasks run in their own child sessions, so the session you are typing in stays free: a new prompt goes out immediately rather than queuing. Only a turn in *this* session queues what you type.
 
 ### `/memory`
 

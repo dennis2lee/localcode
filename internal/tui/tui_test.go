@@ -759,3 +759,198 @@ func TestNonBusySendErrorStillShows(t *testing.T) {
 		t.Errorf("queue = %v, want a non-busy failure not silently re-queued", m.queue)
 	}
 }
+
+// TestToolEventsLeaveNoTranscriptLines is the headline of this change:
+// the "[tool] running bash..." / "[tool] done" noise is gone from the
+// conversation. The activity lives in the indicator below the prompt box
+// instead.
+func TestToolEventsLeaveNoTranscriptLines(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+
+	m.applyEvent(events.Event{Type: events.TypeToolStart, Data: map[string]any{"name": "bash"}})
+	if strings.Contains(m.transcript, "[tool]") {
+		t.Errorf("transcript = %q, want no [tool] line", m.transcript)
+	}
+	if m.runningTool != "bash" {
+		t.Errorf("runningTool = %q, want the indicator to know which tool is running", m.runningTool)
+	}
+	if !strings.Contains(m.busyLine(), "bash") {
+		t.Errorf("busyLine = %q, want it to name the running tool", m.busyLine())
+	}
+
+	m.applyEvent(events.Event{Type: events.TypeToolEnd, Data: map[string]any{"is_error": false}})
+	if strings.Contains(m.transcript, "[tool]") {
+		t.Errorf("transcript = %q, want no [tool] line after tool.end either", m.transcript)
+	}
+	if m.runningTool != "" {
+		t.Errorf("runningTool = %q, want it cleared when the tool ends", m.runningTool)
+	}
+}
+
+// TestIndicatorClearsAtEveryTurnBoundary: the indicator must vanish when
+// the model stops, however the turn ends.
+func TestIndicatorClearsAtEveryTurnBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ev   events.Event
+	}{
+		{"turn.done", events.Event{Type: events.TypeTurnDone}},
+		{"turn.cancelled", events.Event{Type: events.TypeTurnCancelled}},
+		{"error", events.Event{Type: events.TypeError, Data: map[string]any{"error": "boom"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel()
+			m.waiting = true
+			m.applyEvent(events.Event{Type: events.TypeToolStart, Data: map[string]any{"name": "bash"}})
+
+			m.applyEvent(tc.ev)
+
+			if m.waiting {
+				t.Error("waiting should clear at the turn boundary")
+			}
+			if m.runningTool != "" {
+				t.Errorf("runningTool = %q, want cleared", m.runningTool)
+			}
+			if m.busy() {
+				t.Error("busy() should be false, so the indicator disappears")
+			}
+		})
+	}
+}
+
+// TestBackgroundTaskShowsInIndicator covers the second request: a running
+// background task is visible even though it produces no transcript lines.
+func TestBackgroundTaskShowsInIndicator(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypeTaskSpawned, Data: map[string]any{
+		"task_id": "t1", "agent": "explore", "prompt": "find TODOs",
+	}})
+
+	if strings.Contains(m.transcript, "[task]") {
+		t.Errorf("transcript = %q, want no [task] line", m.transcript)
+	}
+	if !m.busy() {
+		t.Error("busy() should be true while a background task runs, so the indicator shows")
+	}
+	if !strings.Contains(m.busyLine(), "1 background task") {
+		t.Errorf("busyLine = %q, want the background task count", m.busyLine())
+	}
+
+	m.applyEvent(events.Event{Type: events.TypeTaskStatus, Data: map[string]any{"task_id": "t1", "status": "completed"}})
+	if m.busy() {
+		t.Error("busy() should be false once the task completes, so the indicator disappears")
+	}
+}
+
+// TestBackgroundTaskDoesNotQueuePrompts is the key interaction: a task
+// runs in its own child session, so the parent session is idle and a new
+// prompt must go out immediately rather than sitting in the queue.
+func TestBackgroundTaskDoesNotQueuePrompts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m.tasks = map[string]taskState{"t1": {agent: "explore", status: "running"}}
+
+	m, cmd := pressEnterWith(t, m, "a new question")
+
+	if len(m.queue) != 0 {
+		t.Errorf("queue = %v, want the prompt sent immediately — a background task does not block the foreground session", m.queue)
+	}
+	if cmd == nil {
+		t.Fatal("expected a send command while only a background task is running")
+	}
+	if !m.waiting {
+		t.Error("waiting should be true after sending")
+	}
+}
+
+// TestTasksCommandListsAndIsLocal: /tasks answers from client-side state,
+// no model call and no server round trip for the listing itself.
+func TestTasksCommandListsAndIsLocal(t *testing.T) {
+	m := newTestModel()
+	m.tasks = map[string]taskState{
+		"t1": {agent: "explore", status: "running", prompt: "find TODOs"},
+	}
+
+	m, cmd := pressEnterWith(t, m, "/tasks")
+	if cmd != nil {
+		t.Errorf("/tasks should answer locally, got %v", cmd)
+	}
+	for _, want := range []string{"t1", "running", "explore", "find TODOs"} {
+		if !strings.Contains(m.transcript, want) {
+			t.Errorf("transcript = %q, want it to mention %q", m.transcript, want)
+		}
+	}
+}
+
+// TestSpinnerLoopIsSingle guards the animation: only an idle->busy edge
+// may start a tick loop, or the indicator animates at double speed and
+// never stops cleanly.
+func TestSpinnerLoopIsSingle(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+
+	if cmd := m.startSpin(); cmd == nil {
+		t.Fatal("first startSpin should return a tick command")
+	}
+	if cmd := m.startSpin(); cmd != nil {
+		t.Error("a second startSpin while already spinning must be a no-op")
+	}
+
+	// The loop dies on its first tick after the work finishes.
+	m.waiting = false
+	updated, cmd := m.Update(spinTickMsg{})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Error("the tick loop should stop rescheduling once nothing is running")
+	}
+	if m.spinning {
+		t.Error("spinning should be false after the loop stops, so a later turn can start a fresh one")
+	}
+}
+
+// TestPastedTextRendersInThePromptBox is the regression test for pasted
+// content showing as a blank/black run in the prompt box while Enter
+// still sent the right thing — i.e. the value was correct but the frame
+// did not show it.
+func TestPastedTextRendersInThePromptBox(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.PasteMsg{Content: "pasted content here"})
+	m = updated.(Model)
+
+	if got := m.input.Value(); got != "pasted content here" {
+		t.Fatalf("input value = %q, want the pasted text", got)
+	}
+	if !strings.Contains(m.View().Content, "pasted content here") {
+		t.Errorf("rendered frame does not show the pasted text; input box renders as %q", m.input.View())
+	}
+}
+
+// TestPastedMultilineTextGrowsTheBox: a multi-line paste must make the
+// prompt box taller, or later lines render outside it.
+func TestPastedMultilineTextGrowsTheBox(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+
+	updated, _ = m.Update(tea.PasteMsg{Content: "line one\nline two\nline three"})
+	m = updated.(Model)
+
+	if got := m.input.Height(); got < 3 {
+		t.Errorf("input height = %d after a 3-line paste, want at least 3 — resizeLayout must run on paste", got)
+	}
+	content := m.View().Content
+	for _, want := range []string{"line one", "line two", "line three"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("rendered frame missing %q from the multi-line paste", want)
+		}
+	}
+}

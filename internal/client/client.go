@@ -287,6 +287,16 @@ func (c *Client) ListTasks(ctx context.Context, sessionID string) ([]agent.Sessi
 	return out, err
 }
 
+// TaskOutput returns everything taskID's model has produced so far —
+// readable mid-run, since a task is just a session with an event log.
+func (c *Client) TaskOutput(ctx context.Context, taskID string) (string, error) {
+	var out struct {
+		Output string `json:"output"`
+	}
+	err := c.doJSON(ctx, http.MethodGet, "/api/tasks/"+taskID+"/output", nil, &out)
+	return out.Output, err
+}
+
 func (c *Client) CancelTask(ctx context.Context, taskID string) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/tasks/"+taskID+"/cancel", map[string]string{}, nil)
 }

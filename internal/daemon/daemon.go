@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,6 +97,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/sessions/{id}/tasks", d.handleListTasks)
 	d.mux.HandleFunc("POST /api/sessions/{id}/cancel", d.handleCancelTurn)
 	d.mux.HandleFunc("POST /api/tasks/{taskId}/cancel", d.handleCancelTask)
+	d.mux.HandleFunc("GET /api/tasks/{taskId}/output", d.handleTaskOutput)
 
 	if webFS != nil {
 		d.mux.Handle("/", http.FileServerFS(webFS))
@@ -638,6 +640,31 @@ func (d *Daemon) handleCancelTurn(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"cancelled": running})
+}
+
+// handleTaskOutput returns everything a background task's model has said
+// so far — a task is a session, so this reads its event log and works
+// mid-run, which is what makes "/tasks <id>" useful as a progress view
+// rather than only a post-mortem.
+func (d *Daemon) handleTaskOutput(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskId")
+	evs, err := d.Loop.Store.Events(taskID, 0)
+	if err != nil {
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown task %s", taskID))
+		return
+	}
+	var out strings.Builder
+	for _, ev := range evs {
+		switch ev.Type {
+		case events.TypeMessagePartDelta:
+			if text, ok := ev.Data["text"].(string); ok {
+				out.WriteString(text)
+			}
+		case events.TypeMessagePartEnd:
+			out.WriteString("\n")
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"output": strings.TrimRight(out.String(), "\n")})
 }
 
 func (d *Daemon) handleCancelTask(w http.ResponseWriter, r *http.Request) {

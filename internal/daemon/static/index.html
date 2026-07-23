@@ -268,6 +268,7 @@
   let autoCompactEnabled = true;
   let showTPS = true;
   let autoDelegate = false;
+  let runningTool = ''; // tool currently executing, shown in the status bar
   let promptQueue = []; // plain prompts submitted while a turn is in flight
   // Up/Down prompt recall, mirroring the TUI. Client-side and in-memory:
   // a typing convenience, not session state.
@@ -405,7 +406,13 @@
     if (showTPS && lastUsage && lastUsage.tps) {
       parts.push(`${lastUsage.tps.toFixed(1)} tok/s`);
     }
-    if (waiting) parts.push(promptQueue.length > 0 ? `waiting for response… esc to cancel (${promptQueue.length} queued)` : 'waiting for response… esc to cancel');
+    if (waiting) {
+      let busyText = runningTool ? `${runningTool}… esc to cancel` : 'working… esc to cancel';
+      if (promptQueue.length > 0) busyText += ` (${promptQueue.length} queued)`;
+      parts.push(busyText);
+    }
+    const activeTasks = [...tasks.values()].filter(t => t.status === 'spawned' || t.status === 'running').length;
+    if (activeTasks > 0) parts.push(`${activeTasks} background task${activeTasks > 1 ? 's' : ''}`);
     statusTextEl.textContent = parts.join('  ·  ');
 
     statusBarEl.classList.remove('ctx-warn', 'ctx-crit');
@@ -468,13 +475,18 @@
       case 'turn.done':
         // The daemon's real turn boundary, emitted after its busy flag is
         // cleared — safe to stop waiting and let the queue drain.
+        runningTool = '';
         setWaiting(false);
         break;
       case 'tool.start':
-        appendLine(`<div class="msg-tool">[tool] running ${escapeHtml(ev.data.name || '')}...</div>`);
+        // No transcript line — tool activity shows in the status bar
+        // under the prompt while it runs, and vanishes with the turn.
+        runningTool = ev.data.name || '';
+        renderStatusBar();
         break;
       case 'tool.end':
-        appendLine(`<div class="msg-tool">[tool] ${ev.data.is_error ? 'failed' : 'done'}</div>`);
+        runningTool = '';
+        renderStatusBar();
         break;
       case 'permission.request':
         pendingPermissionID = ev.data.id;
@@ -490,14 +502,16 @@
         modalEl.classList.remove('open');
         break;
       case 'task.spawned':
+        // Sidebar + status bar carry this; no transcript line.
         tasks.set(ev.data.task_id, { agent: ev.data.agent, status: 'spawned' });
         renderTasks();
-        appendLine(`<div class="msg-tool">[task] ${ev.data.task_id} (${ev.data.agent}) started in background</div>`);
+        renderStatusBar();
         break;
       case 'task.status':
         if (tasks.has(ev.data.task_id)) tasks.get(ev.data.task_id).status = ev.data.status;
         else tasks.set(ev.data.task_id, { agent: '', status: ev.data.status });
         renderTasks();
+        renderStatusBar();
         break;
       case 'agent.switched':
         // Just update the state the status bar already renders every time
@@ -529,10 +543,12 @@
         break;
       case 'turn.cancelled':
         promptQueue = [];
+        runningTool = '';
         setWaiting(false);
         appendLine(`<div class="msg-tool">[cancelled]</div>`);
         break;
       case 'error':
+        runningTool = '';
         setWaiting(false);
         appendLine(`<div class="msg-error">Error: ${escapeHtml(ev.data.error || '')}</div>`);
         break;

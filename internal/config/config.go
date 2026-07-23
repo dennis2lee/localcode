@@ -53,6 +53,23 @@ type Config struct {
 	// the session's own. Off unless configured. Also runtime-toggleable
 	// via "/config auto_delegate on|off".
 	AutoDelegate *AutoDelegateConfig `json:"auto_delegate,omitempty"`
+
+	// SkipPermissions turns every "ask" decision into "allow" — the
+	// equivalent of Claude Code's --dangerously-skip-permissions. A nil
+	// pointer means unset, which defaults to OFF: it has to be opted into
+	// deliberately, because with it on the model writes files and runs
+	// shell commands with no confirmation at all.
+	//
+	// Explicit "deny" rules still deny. Skipping the prompts is a
+	// convenience; silently overriding a rule someone wrote specifically
+	// to forbid something would be a different, much worse promise.
+	SkipPermissions *bool `json:"skip_permissions,omitempty"`
+}
+
+// PermissionsSkipped reports whether permission prompts are suppressed —
+// false unless skip_permissions is explicitly true.
+func (c *Config) PermissionsSkipped() bool {
+	return c.SkipPermissions != nil && *c.SkipPermissions
 }
 
 // AutoDelegateConfig sends small, mechanical prompts to a named agent
