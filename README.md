@@ -22,6 +22,7 @@ The model calls tools itself for file reads and writes, shell execution, MCP, an
 | Running work | An animated line below the prompt names the running tool, the queue depth, and background tasks, and clears when the turn ends. `/tasks` inspects a background task mid run. |
 | Editing | Up and Down recall previous prompts. Esc cancels a running turn. IME composition renders inside the prompt box. |
 | Windows | Shell execution resolves to `sh`, then Git for Windows' `bash.exe`, then `cmd /c`, so the bash tool works without Git Bash on PATH. |
+| Desktop window | Experimental `localcode-gui --gui` opens the Web UI in a native OS window (no browser, no visible server), built opt in with `-tags gui`. See [USAGE.md](docs/USAGE.md#desktop-window-experimental). |
 
 ## Documentation
 

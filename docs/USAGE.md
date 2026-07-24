@@ -39,6 +39,24 @@ Three useful combinations:
 | `localcode` | Starts a local daemon and attaches the TUI. Open `http://127.0.0.1:4096` in a browser to use the Web UI on the same sessions at the same time. |
 | `localcode --headless --listen 0.0.0.0:4096` | Daemon only. Meant for a remote server. |
 | `localcode --server http://host:4096` | TUI only, attached to a daemon that is already running. |
+| `localcode-gui --gui` | A native desktop window instead of the TUI. Experimental, opt in, built with `-tags gui`. See [Desktop window](#desktop-window-experimental). |
+
+### Desktop window (experimental)
+
+Instead of the TUI or a browser, localcode can open its Web UI in a native desktop window, so it is one app to launch rather than a server to start and a browser tab to open.
+
+```bash
+./localcode-gui --gui
+```
+
+It starts the daemon in-process on a private loopback port and shows the same Web UI in an OS native window (WKWebView on macOS, WebView2 on Windows). Nothing is exposed off the machine and there is no fixed port to collide with.
+
+This is opt in and not in the released binaries yet, because the window links a native webview through CGo, which cannot be cross compiled the way the pure Go daemon and TUI are. Build it on the machine you will run it on:
+
+* macOS: `make gui-mac` produces `localcode-gui`. macOS always has WKWebView.
+* Windows: build `./cmd/localcode` with `-tags gui` on Windows. It needs the WebView2 runtime, which ships with Windows 11 and recent Windows 10; older systems install it once from Microsoft's Evergreen bootstrapper.
+
+A build made without `-tags gui` still accepts `--gui` but returns an error saying so, rather than failing to build. The daemon, TUI, and browser modes are unchanged.
 
 ### Remote daemon over an SSH tunnel
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Experimental native desktop window.** `localcode --gui` (on a build made with `-tags gui`) opens the existing Web UI in an OS native window instead of the TUI or a browser: the daemon runs in-process on a private loopback port and the same UI renders in a WKWebView (macOS) or WebView2 (Windows) window, so it is one app to launch rather than a server plus a browser tab. It is a thin shell over the unchanged daemon, so the TUI and browser modes are untouched. Not in the released binaries yet: the window links a native webview through CGo, which cannot be cross compiled like the pure Go builds, so it is built per OS (`make gui-mac`, or `-tags gui` on Windows). A non-gui build accepts `--gui` but returns an explanatory error rather than failing to compile.
+
 ## v0.25.0
 
 - **Tool activity moved out of the conversation and into a live indicator.** `[tool] running bash...` / `[tool] done` / `[task] ...` lines no longer appear in the transcript. Instead, while anything is running, a line below the prompt box animates and says what is happening: the running tool's name, the prompt-queue depth, and the number of background tasks. It clears at the turn boundary, however the turn ends (`turn.done`, `turn.cancelled`, or an error). The Web UI carries the same information in its status bar.

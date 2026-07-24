@@ -26,6 +26,7 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/credentials"
 	"localcode/internal/daemon"
+	"localcode/internal/gui"
 	mcpclient "localcode/internal/mcp"
 	"localcode/internal/memory"
 	"localcode/internal/provider"
@@ -70,6 +71,7 @@ func run() error {
 	listen := flag.String("listen", "127.0.0.1:4096", "address the daemon listens on (also where the Web UI is served)")
 	server := flag.String("server", "", "connect the TUI to an already-running daemon at this URL instead of starting one locally (e.g. http://localhost:4096, or an SSH-tunneled remote core)")
 	headless := flag.Bool("headless", false, "run only the daemon (HTTP API + Web UI), no TUI — for a remote box you'll attach to over SSH or the network")
+	gui := flag.Bool("gui", false, "open a native desktop window instead of the TUI (requires a build made with -tags gui)")
 	showVersion := flag.Bool("version", false, "print version and exit (same as the \"localcode version\" subcommand)")
 	flag.Parse()
 
@@ -80,6 +82,9 @@ func run() error {
 
 	if *headless {
 		return runDaemon(*configPath, *listen)
+	}
+	if *gui {
+		return runGUI(*configPath)
 	}
 	printBanner()
 	if *server != "" {
@@ -242,6 +247,18 @@ func runDaemon(configPath, listen string) error {
 // it over real HTTP/SSE — the TUI and daemon are still separate,
 // independently-addressable components, just sharing a process for
 // single-binary convenience.
+// runGUI builds the daemon in-process and hands its HTTP handler to a
+// native window (see internal/gui). No fixed port, no browser: the window
+// owns a private loopback server for its own lifetime. On a build without
+// the "gui" tag, gui.Launch returns an explanatory error instead.
+func runGUI(configPath string) error {
+	d, err := buildDaemon(context.Background(), configPath)
+	if err != nil {
+		return err
+	}
+	return gui.Launch("localcode", d.Handler())
+}
+
 func runEmbedded(configPath, listen, agentName string) error {
 	d, err := buildDaemon(context.Background(), configPath)
 	if err != nil {

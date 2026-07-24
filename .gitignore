@@ -1,4 +1,5 @@
 /localcode
+/localcode-gui
 /dist/
 *.tar.gz
 *.zip
