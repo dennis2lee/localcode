@@ -4,7 +4,7 @@
 
 - **Experimental native desktop window.** `localcode --gui` (on a build made with `-tags gui`) opens the existing Web UI in an OS native window instead of the TUI or a browser: the daemon runs in-process on a private loopback port and the same UI renders in a WKWebView (macOS) or WebView2 (Windows) window, so it is one app to launch rather than a server plus a browser tab. It is a thin shell over the unchanged daemon, so the TUI and browser modes are untouched. A non-gui build accepts `--gui` but returns an explanatory error rather than failing to compile.
   * macOS: `make dist-mac-gui` builds a double-clickable universal `LocalCode.app` (arm64 + amd64, lipo'd from a native arm64 build and an amd64 build via `clang -arch x86_64`). Verified: the `.app` launches and serves the Web UI on a loopback port.
-  * Windows: `.github/workflows/gui-windows.yml` builds and smoke-tests `localcode-gui.exe` on a Windows runner, since the CGo webview cannot be cross compiled from macOS. Runtime needs the WebView2 runtime (bundled on Windows 11 and recent Windows 10). Not yet verified on a real Windows machine, and not yet in the MSI. Those follow once the CI build is confirmed green.
+  * Windows: `.github/workflows/gui-windows.yml` builds and smoke-tests `localcode-gui.exe` on a Windows runner, since the CGo webview cannot be cross compiled from macOS. The CI run is green: the `-tags gui` binary links and runs on Windows (the smoke step ran `localcode-gui.exe version`). Still open: the window itself needs a real desktop with the WebView2 runtime (bundled on Windows 11 and recent Windows 10) to confirm, and the GUI is not in the MSI yet.
 
 ## v0.25.0
 
