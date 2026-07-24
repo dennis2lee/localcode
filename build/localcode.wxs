@@ -39,6 +39,20 @@
             <File Id='LocalCodeEXE' Name='localcode.exe' Source='$(var.ExePath)' KeyPath='yes' />
             <Environment Id='PathEnv' Name='PATH' Value='[INSTALLDIR]' Permanent='no' Part='last' Action='set' System='yes' />
           </Component>
+          <Component Id='GuiExecutable' Guid='*'>
+            <File Id='LocalCodeGuiEXE' Name='localcode-gui.exe' Source='$(var.GuiExePath)' KeyPath='yes' />
+          </Component>
+          <!--
+            The GUI window needs the WebView2 runtime. Windows 11 and
+            recent Windows 10 ship it already; older systems do not.
+            Install Microsoft's official Evergreen Bootstrapper (a ~2MB
+            downloader/installer, not the full runtime) alongside the
+            binaries and run it silently below, so localcode-gui.exe
+            works out of the box either way.
+          -->
+          <Component Id='WebView2BootstrapperFile' Guid='*'>
+            <File Id='WebView2BootstrapperEXE' Name='MicrosoftEdgeWebview2Setup.exe' Source='$(var.WebView2BootstrapperPath)' KeyPath='yes' />
+          </Component>
         </Directory>
       </Directory>
 
@@ -58,13 +72,48 @@
                             Value='1'
                             KeyPath='yes' />
           </Component>
+          <Component Id='GuiStartMenuShortcut' Guid='*'>
+            <Shortcut Id='LocalCodeGuiStartMenuShortcut'
+                      Name='LocalCode (Desktop)'
+                      Description='LocalCode in a native desktop window'
+                      Target='[INSTALLDIR]localcode-gui.exe'
+                      Arguments='--gui'
+                      WorkingDirectory='INSTALLDIR' />
+            <RegistryValue Root='HKCU'
+                            Key='Software\LocalCode'
+                            Name='gui_installed'
+                            Type='integer'
+                            Value='1'
+                            KeyPath='yes' />
+          </Component>
         </Directory>
       </Directory>
     </Directory>
 
+    <!--
+      Run the bundled bootstrapper silently after files land, elevated
+      (perMachine install, Impersonate='no') since it installs a
+      machine-wide runtime. Return='ignore' so a machine with no internet
+      access, or the runtime already present, does not fail the whole
+      install over this step.
+    -->
+    <CustomAction Id='InstallWebView2Runtime'
+                  FileKey='WebView2BootstrapperEXE'
+                  ExeCommand='/silent /install'
+                  Execute='deferred'
+                  Return='ignore'
+                  Impersonate='no' />
+
+    <InstallExecuteSequence>
+      <Custom Action='InstallWebView2Runtime' After='InstallFiles'>NOT REMOVE</Custom>
+    </InstallExecuteSequence>
+
     <Feature Id='Complete' Level='1'>
       <ComponentRef Id='MainExecutable' />
       <ComponentRef Id='StartMenuShortcut' />
+      <ComponentRef Id='GuiExecutable' />
+      <ComponentRef Id='GuiStartMenuShortcut' />
+      <ComponentRef Id='WebView2BootstrapperFile' />
     </Feature>
   </Product>
 </Wix>

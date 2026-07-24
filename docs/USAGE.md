@@ -51,10 +51,10 @@ Instead of the TUI or a browser, localcode can open its Web UI in a native deskt
 
 It starts the daemon in-process on a private loopback port and shows the same Web UI in an OS native window (WKWebView on macOS, WebView2 on Windows). Nothing is exposed off the machine and there is no fixed port to collide with.
 
-This is opt in and not in the released installers yet, because the window links a native webview through CGo, which cannot be cross compiled the way the pure Go daemon and TUI are. It is built per OS:
+This is opt in, because the window links a native webview through CGo, which cannot be cross compiled the way the pure Go daemon and TUI are. It is built per OS:
 
 * macOS: `make dist-mac-gui` produces a double-clickable `LocalCode.app` (universal, arm64 + amd64). `make gui-mac` builds just the bare `localcode-gui` binary. macOS always has WKWebView.
-* Windows: built in CI by `.github/workflows/gui-windows.yml` on a Windows runner (CGo cannot cross compile from macOS), which uploads `localcode-gui.exe` as an artifact. It needs the WebView2 runtime, which ships with Windows 11 and recent Windows 10; older systems install it once from Microsoft's Evergreen bootstrapper. Bundling that into the MSI is a later step.
+* Windows: built in CI by `.github/workflows/gui-windows.yml` on a Windows runner (CGo cannot cross compile from macOS), which uploads `localcode-gui.exe` as an artifact. The Windows MSI (`make dist-msi VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe`) installs it alongside the TUI binary with its own Start Menu shortcut ("LocalCode (Desktop)"), and runs Microsoft's WebView2 Evergreen Bootstrapper silently during install so the runtime is there even on older Windows 10 systems that do not ship it already. That install step is skipped quietly (not a failed install) if there is no network access at install time or the runtime is already present.
 
 The macOS `.app` is unsigned, so Gatekeeper needs a right click then Open the first time, same as the TUI app.
 

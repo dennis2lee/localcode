@@ -37,11 +37,23 @@ script cannot judge, so they are on you.
 
 ## Then
 
+The Windows MSI bundles `localcode-gui.exe`, which is CGo and cannot be
+cross-compiled from macOS. Get a build from CI before packaging:
+
 ```bash
-make dist VERSION=x.y.z          # runs the preflight first; refuses if docs are stale
-git add -A && git commit         # code + docs together, never docs "later"
+gh run list --workflow=gui-windows.yml --limit 1 --json databaseId,conclusion
+gh run download <run-id> -n localcode-gui-windows-amd64 -D /tmp/gui-exe
+```
+
+```bash
+make dist VERSION=x.y.z GUI_EXE=/tmp/gui-exe/localcode-gui.exe  # runs the preflight first; refuses if docs are stale
+git add -A && git commit                                        # code + docs together, never docs "later"
 git push origin main
-gh release create vx.y.z dist/windows/localcode-x.y.z-windows-amd64.msi \
+gh release create vx.y.z \
+  dist/windows/localcode-x.y.z-windows-amd64.msi \
+  dist/windows/localcode-x.y.z-windows-amd64.zip \
+  dist/windows/localcode-x.y.z-windows-arm64.zip \
+  dist/mac/LocalCode-x.y.z-darwin-universal.tar.gz \
   --repo dennis2lee/localcode --title "vx.y.z" --notes "..."
 rm -rf dist
 ```
