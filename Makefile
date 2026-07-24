@@ -4,7 +4,7 @@ VERSION     ?= 0.1.0
 DIST        := dist
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 
-.PHONY: build gui-mac test clean release-check dist dist-mac dist-windows dist-msi
+.PHONY: build gui-mac test clean release-check dist dist-mac dist-mac-gui dist-windows dist-msi
 
 build:
 	go build -o $(BIN_NAME) ./cmd/localcode
@@ -17,6 +17,10 @@ build:
 # with `./localcode-gui --gui`.
 gui-mac:
 	go build -tags gui -ldflags "$(LDFLAGS)" -o $(BIN_NAME)-gui ./cmd/localcode
+
+# --- macOS: universal .app bundle of the native-window build ---
+dist-mac-gui:
+	./build/package-mac-gui.sh "$(VERSION)" "$(DIST)"
 
 test:
 	go test ./...

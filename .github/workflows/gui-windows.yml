@@ -1,0 +1,57 @@
+# Builds the native-window (webview) build of localcode on Windows.
+#
+# This lives in CI, not the Makefile, on purpose: the GUI links a native
+# WebView2 through CGo, which cannot be cross-compiled from the macOS box
+# the pure-Go release artifacts are built on. A real Windows runner is the
+# only place this binary can be produced and smoke-tested.
+#
+# The artifact it uploads is the bare localcode-gui.exe. Running it needs
+# the WebView2 runtime, which ships with Windows 11 and recent Windows 10;
+# older systems install it once from Microsoft's Evergreen bootstrapper.
+# Bundling that into the MSI is a separate step, deliberately deferred
+# until this build is confirmed green and testable on a real Windows box.
+name: gui-windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/gui-windows.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      # CGo needs a C compiler. The windows-latest image ships MinGW-w64;
+      # print it so a failure here is obvious in the log rather than a
+      # confusing linker error later.
+      - name: Show C toolchain
+        run: gcc --version
+
+      - name: Build GUI (-tags gui, CGo)
+        env:
+          CGO_ENABLED: '1'
+        run: go build -tags gui -ldflags "-s -w" -o localcode-gui.exe ./cmd/localcode
+
+      # Proves the CGo binary actually links and runs on Windows. The
+      # `version` subcommand prints and exits without opening a window or
+      # needing a config, so it works headlessly in CI.
+      - name: Smoke check
+        run: ./localcode-gui.exe version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localcode-gui-windows-amd64
+          path: localcode-gui.exe
+          if-no-files-found: error
