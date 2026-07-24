@@ -4,7 +4,7 @@ VERSION     ?= 0.1.0
 DIST        := dist
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 
-.PHONY: build gui-mac test clean dist dist-mac dist-windows dist-msi
+.PHONY: build gui-mac test clean release-check dist dist-mac dist-windows dist-msi
 
 build:
 	go build -o $(BIN_NAME) ./cmd/localcode
@@ -36,5 +36,11 @@ dist-windows:
 dist-msi:
 	./build/package-msi.sh "$(VERSION)" "$(DIST)"
 
-dist: dist-mac dist-windows dist-msi
+# Refuses to build a release until the docs are updated for VERSION (see
+# RELEASING.md). This is deliberately a prerequisite of dist so a release
+# tarball cannot be produced with a stale CHANGELOG or broken doc links.
+release-check:
+	@./scripts/release-preflight.sh "$(VERSION)"
+
+dist: release-check dist-mac dist-windows dist-msi
 	@echo "Packages written to $(DIST)/"
