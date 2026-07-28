@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.27.0
 
 - **GUI launches directly, no `--gui` needed.** A build made with `-tags gui` now defaults `--gui` to on, so `./localcode-gui` opens the native window immediately. Pass `--gui=false` to force the TUI on that same build. A plain (non-gui) build is unaffected: `--gui` still defaults to off and returns the same explanatory error as before.
 - **Model output renders as markdown**, in both the Web UI and the native GUI window (same page). A small dependency-free renderer handles headers, bold/italic, inline code, fenced code blocks, lists, blockquotes, links, and rules; everything else streams as plain escaped text, so nothing the model writes can inject markup. Streamed text now accumulates per-message and re-renders on each delta rather than growing a single flat text node, which is also what makes an in-progress code fence render sanely mid-stream.
