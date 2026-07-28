@@ -26,9 +26,11 @@ const mcpUsage = `usage: localcode mcp <subcommand>
   localcode mcp get <name>       show one server's detailed config
   localcode mcp remove [-s global|project] <name>
                        remove a server (project wins if --scope is omitted; --scope is required if the name exists in both)
-  localcode mcp import-claude [-s global|project] [--force]
+  localcode mcp import-claude [-s global|project] [--skip-existing]
                        import an existing Claude Code user's MCP servers from ./.mcp.json and ~/.claude.json
-                       (stdio servers only; remote/url-based servers aren't supported and are skipped)
+                       (stdio servers only; remote/url-based servers aren't supported and are skipped).
+                       Re-running overwrites a server already registered under the same name unless
+                       --skip-existing is given.
 
   -s, --scope   global (default, ~/.localcode/config.json) or project (./.localcode/config.json)
 
@@ -464,7 +466,7 @@ func collectClaudeMCPServers(cwd, home string) (servers map[string]config.MCPSer
 
 func mcpImportClaude(args []string) error {
 	var scope string
-	force := false
+	skipExisting := false
 	for idx := 0; idx < len(args); idx++ {
 		switch a := args[idx]; {
 		case a == "-s" || a == "--scope":
@@ -473,10 +475,10 @@ func mcpImportClaude(args []string) error {
 			}
 			scope = args[idx+1]
 			idx++
-		case a == "--force":
-			force = true
+		case a == "--skip-existing":
+			skipExisting = true
 		default:
-			return fmt.Errorf("unknown argument %q (usage: localcode mcp import-claude [-s global|project] [--force])", a)
+			return fmt.Errorf("unknown argument %q (usage: localcode mcp import-claude [-s global|project] [--skip-existing])", a)
 		}
 	}
 
@@ -513,32 +515,45 @@ func mcpImportClaude(args []string) error {
 	}
 	sort.Strings(names)
 
-	imported := []string{}
+	// Re-running the import is the common case (a Claude Code setup
+	// changed, or the first run only partially matched what's local), so
+	// a name that's already registered gets overwritten with the freshly
+	// imported definition by default, the same way `mcp add` does.
+	// --skip-existing opts back into leaving those alone.
+	added := []string{}
+	overwritten := []string{}
 	skippedExisting := []string{}
 	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
 		for _, name := range names {
-			if _, exists := existing.MCPServers[name]; exists && !force {
-				skippedExisting = append(skippedExisting, name)
-				continue
+			if _, exists := existing.MCPServers[name]; exists {
+				if skipExisting {
+					skippedExisting = append(skippedExisting, name)
+					continue
+				}
+				overwritten = append(overwritten, name)
+			} else {
+				added = append(added, name)
 			}
 			servers[name] = found[name]
-			imported = append(imported, name)
 		}
 	}); err != nil {
 		return err
 	}
 
 	fmt.Printf("Read from: %s\n", strings.Join(sources, ", "))
-	if len(imported) == 0 {
-		fmt.Printf("Nothing new to import into %s (%s scope) — every server already exists (use --force to overwrite).\n", path, scopeLabel(scope))
+	if len(added) == 0 && len(overwritten) == 0 {
+		fmt.Printf("Nothing new to import into %s (%s scope) — every server already exists (drop --skip-existing to overwrite them).\n", path, scopeLabel(scope))
 		return nil
 	}
-	fmt.Printf("Imported %d MCP server(s) into %s (%s scope):\n", len(imported), path, scopeLabel(scope))
-	for _, name := range imported {
+	fmt.Printf("Imported into %s (%s scope):\n", path, scopeLabel(scope))
+	for _, name := range added {
 		fmt.Printf("  %s: %s\n", name, formatMCPCommand(found[name]))
 	}
+	for _, name := range overwritten {
+		fmt.Printf("  %s: %s  (overwrote the existing entry)\n", name, formatMCPCommand(found[name]))
+	}
 	if len(skippedExisting) > 0 {
-		fmt.Printf("Skipped %d already-registered server(s) (use --force to overwrite): %s\n", len(skippedExisting), strings.Join(skippedExisting, ", "))
+		fmt.Printf("Skipped %d already-registered server(s) (--skip-existing was set): %s\n", len(skippedExisting), strings.Join(skippedExisting, ", "))
 	}
 	if skippedRemote > 0 {
 		fmt.Printf("Skipped %d remote/url-based server(s) — localcode only supports stdio MCP servers.\n", skippedRemote)

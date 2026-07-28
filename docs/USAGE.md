@@ -188,12 +188,12 @@ These commands only read and write the `mcp_servers` map, so editing config.json
 `localcode mcp import-claude` reads every stdio MCP server a Claude Code install already knows about for the current directory — this project's checked-in `./.mcp.json`, plus `~/.claude.json`'s global servers and its per-project block — and registers them the same way `mcp add` would. Project-scoped Claude entries win over global ones on a name collision, matching Claude Code's own precedence.
 
 ```bash
-localcode mcp import-claude              # into ~/.localcode/config.json (global, the default)
-localcode mcp import-claude -s project   # into ./.localcode/config.json instead
-localcode mcp import-claude --force      # overwrite servers that already exist under that name
+localcode mcp import-claude                  # into ~/.localcode/config.json (global, the default)
+localcode mcp import-claude -s project       # into ./.localcode/config.json instead
+localcode mcp import-claude --skip-existing  # leave servers that already exist under that name alone
 ```
 
-Remote (url-based, SSE/HTTP) MCP servers aren't imported — localcode only supports stdio servers — and are reported as a skipped count rather than silently dropped. An entry that already exists locally is left alone unless `--force`.
+Re-running it is the common case — a Claude Code setup changed, or the first run only partially matched what's local — so by default it **overwrites** a server already registered under the same name with the freshly imported definition, the same way `mcp add` does. Pass `--skip-existing` to leave those alone instead. Remote (url-based, SSE/HTTP) MCP servers aren't imported either way — localcode only supports stdio servers — and are reported as a skipped count rather than silently dropped.
 
 ### Fine grained permission rules
 
