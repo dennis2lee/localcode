@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"localcode/internal/hooks"
 )
@@ -64,12 +65,104 @@ type Config struct {
 	// convenience; silently overriding a rule someone wrote specifically
 	// to forbid something would be a different, much worse promise.
 	SkipPermissions *bool `json:"skip_permissions,omitempty"`
+
+	// permMu guards SkipPermissions and Permissions against the daemon's
+	// permission-settings endpoints changing them at runtime (a client
+	// toggling skip_permissions, or adding/removing a rule) while a tool
+	// call on another goroutine is resolving a decision. Both are read
+	// unlocked at load time, before the daemon exists to race with.
+	permMu sync.RWMutex
 }
 
 // PermissionsSkipped reports whether permission prompts are suppressed —
 // false unless skip_permissions is explicitly true.
 func (c *Config) PermissionsSkipped() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
 	return c.SkipPermissions != nil && *c.SkipPermissions
+}
+
+// SetSkipPermissionsRuntime changes the live skip_permissions setting —
+// the in-memory counterpart to SetSkipPermissionsInFile, which persists it.
+func (c *Config) SetSkipPermissionsRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.SkipPermissions = &v
+}
+
+// AddPermissionRuleRuntime mirrors AddPermissionRuleToFile's rule-append
+// logic against the in-memory config, so a rule just persisted to disk also
+// takes effect immediately rather than only after a restart.
+func (c *Config) AddPermissionRuleRuntime(toolName string, rule PermissionRule) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	if c.Permissions == nil {
+		c.Permissions = map[string]ToolPermission{}
+	}
+	tp := c.Permissions[toolName]
+	if tp.Flat != "" {
+		tp.Rules = []PermissionRule{{Match: "*", Decision: tp.Flat}}
+		tp.Flat = ""
+	}
+	for _, existing := range tp.Rules {
+		if existing.Match == rule.Match && existing.Decision == rule.Decision {
+			return
+		}
+	}
+	tp.Rules = append(tp.Rules, rule)
+	c.Permissions[toolName] = tp
+}
+
+// RemovePermissionRuleRuntime mirrors RemovePermissionRuleFromFile against
+// the in-memory config.
+func (c *Config) RemovePermissionRuleRuntime(toolName string, rule PermissionRule) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	tp, ok := c.Permissions[toolName]
+	if !ok {
+		return
+	}
+	if tp.Flat != "" {
+		if tp.Flat == rule.Decision && rule.Match == "*" {
+			delete(c.Permissions, toolName)
+		}
+		return
+	}
+	kept := tp.Rules[:0]
+	for _, existing := range tp.Rules {
+		if existing.Match == rule.Match && existing.Decision == rule.Decision {
+			continue
+		}
+		kept = append(kept, existing)
+	}
+	if len(kept) == 0 {
+		delete(c.Permissions, toolName)
+	} else {
+		tp.Rules = kept
+		c.Permissions[toolName] = tp
+	}
+}
+
+// PermissionsSnapshot returns the current skip_permissions state and a copy
+// of every configured rule, tool by tool, for a client to display (e.g. a
+// settings panel). It does not include the built-in defaults (see
+// builtinRules) since those aren't something a user wrote and can't be
+// removed the same way.
+func (c *Config) PermissionsSnapshot() (skip bool, rules map[string][]PermissionRule) {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	skip = c.SkipPermissions != nil && *c.SkipPermissions
+	rules = map[string][]PermissionRule{}
+	for tool, tp := range c.Permissions {
+		if tp.Flat != "" {
+			rules[tool] = []PermissionRule{{Match: "*", Decision: tp.Flat}}
+			continue
+		}
+		cp := make([]PermissionRule, len(tp.Rules))
+		copy(cp, tp.Rules)
+		rules[tool] = cp
+	}
+	return skip, rules
 }
 
 // AutoDelegateConfig sends small, mechanical prompts to a named agent

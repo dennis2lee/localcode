@@ -5,11 +5,11 @@
 | Part | Sections |
 |---|---|
 | [1. Getting started](#part-1-getting-started) | [Run modes](#run-modes), [Remote daemon over an SSH tunnel](#remote-daemon-over-an-ssh-tunnel) |
-| [2. Configuration](#part-2-configuration) | [Config file (config.json)](#config-file-configjson), [Managing MCP servers](#managing-mcp-servers-with-localcode-mcp), [Permission rules](#fine-grained-permission-rules), [Hooks](#hooks), [Authenticating with /login](#authenticating-with-login) |
+| [2. Configuration](#part-2-configuration) | [Config file (config.json)](#config-file-configjson), [Managing MCP servers](#managing-mcp-servers-with-localcode-mcp), [Permission rules](#fine-grained-permission-rules), [Permission settings panel](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt), [Switching the workspace directory](#switching-the-workspace-directory), [Hooks](#hooks), [Authenticating with /login](#authenticating-with-login) |
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [AGENTS.md](#agentsmd-project-rules), [Auto memory](#auto-memory) |
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
-| [6. Web UI](#part-6-web-ui) | [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt) |
+| [6. Web UI](#part-6-web-ui) | [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Markdown rendering](#model-output-renders-as-markdown) |
 | [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
@@ -39,26 +39,30 @@ Three useful combinations:
 | `localcode` | Starts a local daemon and attaches the TUI. Open `http://127.0.0.1:4096` in a browser to use the Web UI on the same sessions at the same time. |
 | `localcode --headless --listen 0.0.0.0:4096` | Daemon only. Meant for a remote server. |
 | `localcode --server http://host:4096` | TUI only, attached to a daemon that is already running. |
-| `localcode-gui --gui` | A native desktop window instead of the TUI. Experimental, opt in, built with `-tags gui`. See [Desktop window](#desktop-window-experimental). |
+| `localcode-gui` | A native desktop window instead of the TUI. Experimental, built with `-tags gui`, opens by default on such a build (no `--gui` needed). See [Desktop window](#desktop-window-experimental). |
 
 ### Desktop window (experimental)
 
 Instead of the TUI or a browser, localcode can open its Web UI in a native desktop window, so it is one app to launch rather than a server to start and a browser tab to open.
 
 ```bash
-./localcode-gui --gui
+./localcode-gui
 ```
+
+A `-tags gui` build defaults `--gui` to on, so no flag is needed — running the binary opens the window directly. Pass `--gui=false` to force the TUI on that same build instead.
 
 It starts the daemon in-process on a private loopback port and shows the same Web UI in an OS native window (WKWebView on macOS, WebView2 on Windows). Nothing is exposed off the machine and there is no fixed port to collide with.
 
-This is opt in, because the window links a native webview through CGo, which cannot be cross compiled the way the pure Go daemon and TUI are. It is built per OS:
+The window links a native webview through CGo, which cannot be cross compiled the way the pure Go daemon and TUI are, so it's built per OS:
 
 * macOS: `make dist-mac-gui` produces a double-clickable `LocalCode.app` (universal, arm64 + amd64). `make gui-mac` builds just the bare `localcode-gui` binary. macOS always has WKWebView.
 * Windows: built in CI by `.github/workflows/gui-windows.yml` on a Windows runner (CGo cannot cross compile from macOS), which uploads `localcode-gui.exe` as an artifact. The Windows MSI (`make dist-msi VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe`) installs it alongside the TUI binary with its own Start Menu shortcut ("LocalCode (Desktop)"), and runs Microsoft's WebView2 Evergreen Bootstrapper silently during install so the runtime is there even on older Windows 10 systems that do not ship it already. That install step is skipped quietly (not a failed install) if there is no network access at install time or the runtime is already present.
 
 The macOS `.app` is unsigned, so Gatekeeper needs a right click then Open the first time, same as the TUI app.
 
-A build made without `-tags gui` still accepts `--gui` but returns an error saying so, rather than failing to build. The daemon, TUI, and browser modes are unchanged.
+A build made without `-tags gui` still accepts `--gui` but returns an error saying so, rather than failing to build (and `--gui` defaults to off on such a build, so the TUI still starts normally with no flags at all). The daemon, TUI, and browser modes are unchanged.
+
+The window shows the current workspace directory at the top — see [Switching the workspace directory](#switching-the-workspace-directory).
 
 ### Remote daemon over an SSH tunnel
 
@@ -165,6 +169,9 @@ localcode mcp add-json weather '{"command":"node","args":["weather-server.js"],"
 localcode mcp list          # shows whether each came from global or project
 localcode mcp get github    # full command, args, and env for one server
 localcode mcp remove github # unregister
+
+# already using Claude Code? pull its MCP servers in instead of retyping them
+localcode mcp import-claude
 ```
 
 | Detail | Behavior |
@@ -175,6 +182,18 @@ localcode mcp remove github # unregister
 | `remove` without `-s` | If the same name exists in both global and project, nothing is deleted and you get an ambiguity error. Say which with `-s global` or `-s project`. |
 
 These commands only read and write the `mcp_servers` map, so editing config.json by hand works exactly the same. The CLI is a convenience.
+
+#### Importing from Claude Code
+
+`localcode mcp import-claude` reads every stdio MCP server a Claude Code install already knows about for the current directory — this project's checked-in `./.mcp.json`, plus `~/.claude.json`'s global servers and its per-project block — and registers them the same way `mcp add` would. Project-scoped Claude entries win over global ones on a name collision, matching Claude Code's own precedence.
+
+```bash
+localcode mcp import-claude              # into ~/.localcode/config.json (global, the default)
+localcode mcp import-claude -s project   # into ./.localcode/config.json instead
+localcode mcp import-claude --force      # overwrite servers that already exist under that name
+```
+
+Remote (url-based, SSE/HTTP) MCP servers aren't imported — localcode only supports stdio servers — and are reported as a skipped count rather than silently dropped. An entry that already exists locally is left alone unless `--force`.
 
 ### Fine grained permission rules
 
@@ -270,6 +289,24 @@ For a `bash` call, the rule an "allow for session" or "always allow" grants is g
 "Always allow" writes to whichever config.json the daemon loaded: the file passed via `--config`, or the global `~/.localcode/config.json` if none was given — never the project-local override, so an approval survives switching projects. It edits only the `permission` key, preserving every other key and value in the file byte for byte, the same careful merge `localcode mcp` uses. If the daemon has no writable config.json to target, "always allow" isn't offered — only once, session, and deny are.
 
 Session grants are forgotten when a session is deleted, and when the daemon restarts. Permanent ("always") grants live in config.json and survive both.
+
+**A permission modal locks the prompt box while it's open**, in the Web UI, with a placeholder pointing back at it — typing an answer into the chat box instead of clicking a button no longer silently queues as a follow-up message. The TUI equivalent doesn't lock (its permission line is already a separate prompt), but prints a one-time hint if Enter is pressed while a request is pending, rather than doing nothing with no explanation.
+
+### Viewing and changing permission settings without waiting for a prompt
+
+A pill under the prompt box (Web UI and the GUI window, same page) always shows the current permission state: `permissions: ask (N rules)`, or `permissions: skip` in warn color when `skip_permissions` is on. Click it to open a panel that:
+
+* toggles `skip_permissions` on or off
+* lists every rule currently in `permission`, with a remove button per rule
+* adds a new rule by tool name, match pattern, and decision (allow/ask/deny)
+
+Every change applies immediately (the running daemon's decisions reflect it on the very next tool call) and is written to config.json the same way "always allow" is — the daemon needs a config.json path to persist to (see `--config` above); if it doesn't have one, the panel still shows the current state but the controls are disabled with a note explaining why.
+
+### Switching the workspace directory
+
+The workspace is the directory every relative file path and bash command resolves against — set once at startup from wherever you ran `localcode`. It's shown at the top of the GUI window, and in the Web UI's header, and can be changed without restarting: click it, enter a new absolute path, and save.
+
+Switching is refused while any session has a turn in flight, since redirecting it mid-tool-call would silently change what an already-running command is operating on. It's process-wide, not per-session — one workspace at a time, the same way opening a different folder in an editor replaces what was open before.
 
 ### Hooks
 
@@ -648,6 +685,11 @@ One line directly below the input box:
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Shown when `show_tps` is on |
 | Activity dot | Pulses yellow while talking to the model, flashes green briefly when the reply finishes, then goes dark |
+| Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
+
+### Model output renders as markdown
+
+Headers, bold/italic, inline code, fenced code blocks, lists, blockquotes, links, and horizontal rules render as formatted HTML instead of raw text, in both the Web UI and the native GUI window. It's a small built-in renderer with no external dependency, since this stays a fully offline app; anything it doesn't recognize as markdown (including any raw HTML the model writes) shows as plain escaped text rather than being interpreted, so nothing the model outputs can inject markup.
 
 ## Part 7. Agents and automation
 

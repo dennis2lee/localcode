@@ -26,6 +26,9 @@ const mcpUsage = `usage: localcode mcp <subcommand>
   localcode mcp get <name>       show one server's detailed config
   localcode mcp remove [-s global|project] <name>
                        remove a server (project wins if --scope is omitted; --scope is required if the name exists in both)
+  localcode mcp import-claude [-s global|project] [--force]
+                       import an existing Claude Code user's MCP servers from ./.mcp.json and ~/.claude.json
+                       (stdio servers only; remote/url-based servers aren't supported and are skipped)
 
   -s, --scope   global (default, ~/.localcode/config.json) or project (./.localcode/config.json)
 
@@ -47,6 +50,8 @@ func runMCP(args []string) error {
 		return mcpGet(args[1:])
 	case "remove", "rm":
 		return mcpRemove(args[1:])
+	case "import-claude":
+		return mcpImportClaude(args[1:])
 	case "help", "-h", "--help":
 		fmt.Println(mcpUsage)
 		return nil
@@ -374,6 +379,171 @@ func removeMCPServerFromFile(path, name string) error {
 	return config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
 		delete(servers, name)
 	})
+}
+
+// claudeMCPEntry is one entry of a Claude Code mcpServers map — both
+// ~/.claude.json (global and per-project) and a shared ./.mcp.json use
+// this shape. URL is set instead of Command for remote (SSE/HTTP)
+// servers, which localcode's stdio-only MCPServerConfig can't represent,
+// so those are detected and skipped rather than imported silently wrong.
+type claudeMCPEntry struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
+	URL     string            `json:"url"`
+}
+
+// claudeUserConfig is the relevant slice of ~/.claude.json: a top-level
+// mcpServers map (servers available everywhere) plus a per-project block
+// keyed by absolute project path (servers only registered for that one
+// project, e.g. via `claude mcp add --scope project`).
+type claudeUserConfig struct {
+	MCPServers map[string]claudeMCPEntry `json:"mcpServers"`
+	Projects   map[string]struct {
+		MCPServers map[string]claudeMCPEntry `json:"mcpServers"`
+	} `json:"projects"`
+}
+
+// claudeProjectMCPFile is a shared ./.mcp.json: just a top-level
+// mcpServers map, meant to be checked into the repo.
+type claudeProjectMCPFile struct {
+	MCPServers map[string]claudeMCPEntry `json:"mcpServers"`
+}
+
+// collectClaudeMCPServers gathers every stdio MCP server Claude Code knows
+// about for the current directory: this project's checked-in ./.mcp.json,
+// plus ~/.claude.json's global servers and its per-project block for cwd.
+// Later sources win on a name collision (project-scoped Claude entries are
+// the most specific, so they're read last). Returns the merged servers,
+// the source files that actually contributed something, and how many
+// remote/url-based entries were skipped as unsupported.
+func collectClaudeMCPServers(cwd, home string) (servers map[string]config.MCPServerConfig, sources []string, skippedRemote int) {
+	servers = map[string]config.MCPServerConfig{}
+
+	addEntries := func(entries map[string]claudeMCPEntry) bool {
+		contributed := false
+		for name, e := range entries {
+			if e.Command == "" {
+				skippedRemote++
+				continue
+			}
+			servers[name] = config.MCPServerConfig{Command: e.Command, Args: e.Args, Env: e.Env}
+			contributed = true
+		}
+		return contributed
+	}
+
+	mcpJSONPath := filepath.Join(cwd, ".mcp.json")
+	if data, err := os.ReadFile(mcpJSONPath); err == nil {
+		var f claudeProjectMCPFile
+		if json.Unmarshal(data, &f) == nil && addEntries(f.MCPServers) {
+			sources = append(sources, mcpJSONPath)
+		}
+	}
+
+	if home != "" {
+		claudeJSONPath := filepath.Join(home, ".claude.json")
+		if data, err := os.ReadFile(claudeJSONPath); err == nil {
+			var cc claudeUserConfig
+			if json.Unmarshal(data, &cc) == nil {
+				contributed := addEntries(cc.MCPServers)
+				if proj, ok := cc.Projects[cwd]; ok {
+					if addEntries(proj.MCPServers) {
+						contributed = true
+					}
+				}
+				if contributed {
+					sources = append(sources, claudeJSONPath)
+				}
+			}
+		}
+	}
+
+	return servers, sources, skippedRemote
+}
+
+func mcpImportClaude(args []string) error {
+	var scope string
+	force := false
+	for idx := 0; idx < len(args); idx++ {
+		switch a := args[idx]; {
+		case a == "-s" || a == "--scope":
+			if idx+1 >= len(args) {
+				return fmt.Errorf("--scope requires an argument (global|project)")
+			}
+			scope = args[idx+1]
+			idx++
+		case a == "--force":
+			force = true
+		default:
+			return fmt.Errorf("unknown argument %q (usage: localcode mcp import-claude [-s global|project] [--force])", a)
+		}
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "" // still try ./.mcp.json even if the home dir can't be resolved
+	}
+
+	found, sources, skippedRemote := collectClaudeMCPServers(cwd, home)
+	if len(found) == 0 {
+		fmt.Println("No importable Claude Code MCP servers found (checked ./.mcp.json and ~/.claude.json).")
+		if skippedRemote > 0 {
+			fmt.Printf("(%d remote/url-based server(s) were seen but can't be imported — localcode only supports stdio MCP servers.)\n", skippedRemote)
+		}
+		return nil
+	}
+
+	path, err := resolveScopePath(scope)
+	if err != nil {
+		return err
+	}
+	existing, err := config.LoadFile(path)
+	if err != nil {
+		return err
+	}
+
+	names := make([]string, 0, len(found))
+	for name := range found {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	imported := []string{}
+	skippedExisting := []string{}
+	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
+		for _, name := range names {
+			if _, exists := existing.MCPServers[name]; exists && !force {
+				skippedExisting = append(skippedExisting, name)
+				continue
+			}
+			servers[name] = found[name]
+			imported = append(imported, name)
+		}
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("Read from: %s\n", strings.Join(sources, ", "))
+	if len(imported) == 0 {
+		fmt.Printf("Nothing new to import into %s (%s scope) — every server already exists (use --force to overwrite).\n", path, scopeLabel(scope))
+		return nil
+	}
+	fmt.Printf("Imported %d MCP server(s) into %s (%s scope):\n", len(imported), path, scopeLabel(scope))
+	for _, name := range imported {
+		fmt.Printf("  %s: %s\n", name, formatMCPCommand(found[name]))
+	}
+	if len(skippedExisting) > 0 {
+		fmt.Printf("Skipped %d already-registered server(s) (use --force to overwrite): %s\n", len(skippedExisting), strings.Join(skippedExisting, ", "))
+	}
+	if skippedRemote > 0 {
+		fmt.Printf("Skipped %d remote/url-based server(s) — localcode only supports stdio MCP servers.\n", skippedRemote)
+	}
+	return nil
 }
 
 func formatMCPCommand(sc config.MCPServerConfig) string {

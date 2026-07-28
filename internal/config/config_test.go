@@ -10,7 +10,7 @@ import (
 	"localcode/internal/hooks"
 )
 
-func writeConfig(t *testing.T, path string, cfg Config) {
+func writeConfig(t *testing.T, path string, cfg *Config) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -120,7 +120,7 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	cfg := validConfig()
 	cfg.DefaultProfile = "ghost"
-	writeConfig(t, path, cfg)
+	writeConfig(t, path, &cfg)
 
 	if _, err := Load(path); err == nil {
 		t.Error("expected Load to reject an invalid config")
@@ -155,14 +155,14 @@ func TestLoadMergedProjectOverridesGlobal(t *testing.T) {
 		},
 		DefaultProfile: "balanced",
 	}
-	writeConfig(t, filepath.Join(home, ".localcode", "config.json"), global)
+	writeConfig(t, filepath.Join(home, ".localcode", "config.json"), &global)
 
 	projectCfg := Config{
 		Profiles: map[string]Profile{
 			"balanced": {Provider: "local", Model: "project-model"}, // overrides global's "balanced"
 		},
 	}
-	writeConfig(t, filepath.Join(project, ".localcode", "config.json"), projectCfg)
+	writeConfig(t, filepath.Join(project, ".localcode", "config.json"), &projectCfg)
 
 	merged, err := LoadMerged(project)
 	if err != nil {
@@ -185,7 +185,8 @@ func TestLoadMergedOnlyGlobalExists(t *testing.T) {
 	project := t.TempDir() // no .localcode/config.json here
 	t.Setenv("HOME", home)
 
-	writeConfig(t, filepath.Join(home, ".localcode", "config.json"), validConfig())
+	global := validConfig()
+	writeConfig(t, filepath.Join(home, ".localcode", "config.json"), &global)
 
 	merged, err := LoadMerged(project)
 	if err != nil {

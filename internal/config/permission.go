@@ -109,13 +109,17 @@ func (c *Config) resolveOne(toolName, subject string, staticRequiresPermission b
 }
 
 func (c *Config) resolveOneStrict(toolName, subject string, staticRequiresPermission bool) Decision {
-	if tp, ok := c.Permissions[toolName]; ok {
+	c.permMu.RLock()
+	tp, ok := c.Permissions[toolName]
+	fallback, hasFallback := c.Permissions["*"]
+	c.permMu.RUnlock()
+	if ok {
 		if d, matched := tp.resolve(subject); matched {
 			return d
 		}
 	}
-	if tp, ok := c.Permissions["*"]; ok {
-		if d, matched := tp.resolve(subject); matched {
+	if hasFallback {
+		if d, matched := fallback.resolve(subject); matched {
 			return d
 		}
 	}
@@ -344,6 +348,107 @@ func AddPermissionRuleToFile(path, toolName string, rule PermissionRule) error {
 		return fmt.Errorf("marshal permission: %w", err)
 	}
 	raw["permission"] = encoded
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	out = append(out, '\n')
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	return nil
+}
+
+// RemovePermissionRuleFromFile removes one rule from path's "permission"
+// map for toolName, matched by exact (Match, Decision). It leaves every
+// other key untouched, the same surgical approach as AddPermissionRuleToFile.
+// Removing the last rule for a tool drops that tool's key entirely rather
+// than leaving an empty array behind.
+func RemovePermissionRuleFromFile(path, toolName string, rule PermissionRule) error {
+	raw := map[string]json.RawMessage{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parse config %s: %w", path, err)
+		}
+	case !os.IsNotExist(err):
+		return fmt.Errorf("read config %s: %w", path, err)
+	default:
+		return nil // no file, nothing to remove
+	}
+
+	perms := map[string]ToolPermission{}
+	if rawPerms, ok := raw["permission"]; ok {
+		if err := json.Unmarshal(rawPerms, &perms); err != nil {
+			return fmt.Errorf("parse permission in %s: %w", path, err)
+		}
+	}
+
+	tp, ok := perms[toolName]
+	if !ok {
+		return nil
+	}
+	if tp.Flat != "" {
+		if tp.Flat == rule.Decision && rule.Match == "*" {
+			delete(perms, toolName)
+		}
+	} else {
+		kept := tp.Rules[:0]
+		for _, existing := range tp.Rules {
+			if existing.Match == rule.Match && existing.Decision == rule.Decision {
+				continue
+			}
+			kept = append(kept, existing)
+		}
+		if len(kept) == 0 {
+			delete(perms, toolName)
+		} else {
+			tp.Rules = kept
+			perms[toolName] = tp
+		}
+	}
+
+	encoded, err := json.Marshal(perms)
+	if err != nil {
+		return fmt.Errorf("marshal permission: %w", err)
+	}
+	raw["permission"] = encoded
+
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	out = append(out, '\n')
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	return nil
+}
+
+// SetSkipPermissionsInFile writes the top-level "skip_permissions" key,
+// leaving every other key untouched. See Config.SkipPermissions.
+func SetSkipPermissionsInFile(path string, enabled bool) error {
+	raw := map[string]json.RawMessage{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parse config %s: %w", path, err)
+		}
+	case !os.IsNotExist(err):
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+
+	encoded, err := json.Marshal(enabled)
+	if err != nil {
+		return fmt.Errorf("marshal skip_permissions: %w", err)
+	}
+	raw["skip_permissions"] = encoded
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)

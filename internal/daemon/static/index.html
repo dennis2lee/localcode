@@ -59,6 +59,42 @@
   #transcript .msg-user { color: var(--accent); font-weight: 600; }
   #transcript .msg-tool { color: var(--muted); font-style: italic; }
   #transcript .msg-error { color: var(--err); font-weight: 600; }
+  #transcript .msg-model { margin-bottom: 4px; }
+  #transcript .msg-model > *:first-child { margin-top: 0; }
+  #transcript .msg-model > *:last-child { margin-bottom: 0; }
+  #transcript .msg-model p { margin: 0 0 10px; }
+  #transcript .msg-model h1, #transcript .msg-model h2, #transcript .msg-model h3,
+  #transcript .msg-model h4, #transcript .msg-model h5, #transcript .msg-model h6 {
+    margin: 14px 0 8px;
+    line-height: 1.3;
+  }
+  #transcript .msg-model ul, #transcript .msg-model ol { margin: 0 0 10px; padding-left: 22px; }
+  #transcript .msg-model li { margin-bottom: 2px; }
+  #transcript .msg-model code {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.9em;
+  }
+  #transcript .msg-model pre {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    margin: 0 0 10px;
+  }
+  #transcript .msg-model pre code { background: none; border: none; padding: 0; }
+  #transcript .msg-model blockquote {
+    border-left: 3px solid var(--border);
+    color: var(--muted);
+    margin: 0 0 10px;
+    padding: 2px 0 2px 12px;
+  }
+  #transcript .msg-model a { color: var(--accent); }
+  #transcript .msg-model hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
   aside {
     width: 280px;
     border-left: 1px solid var(--border);
@@ -176,16 +212,131 @@
   }
   .comm-dot.active { background: var(--warn); animation: pulse 1s infinite; }
   .comm-dot.flash { background: var(--ok); animation: pulse .3s 2; }
+  #permission-status-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    margin-left: auto;
+  }
+  #permission-status-btn.skip { color: var(--warn); border-color: var(--warn); }
+  #permission-settings-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  #permission-settings-modal.open { display: flex; }
+  #permission-settings-modal .box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    width: 480px;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  #permission-settings-modal h3 { margin-top: 0; }
+  #permission-settings-modal .skip-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  #permission-settings-modal .rule-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  #permission-settings-modal .rule-row .rule-text { flex: 1; overflow-wrap: anywhere; }
+  #permission-settings-modal .rule-row button { padding: 2px 8px; font-size: 11px; background: var(--err); }
+  #permission-settings-modal .add-rule-row { display: flex; gap: 6px; margin-top: 12px; }
+  #permission-settings-modal .add-rule-row input, #permission-settings-modal .add-rule-row select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 12px;
+  }
+  #permission-settings-modal .add-rule-row input[name="tool"] { width: 70px; }
+  #permission-settings-modal .add-rule-row input[name="match"] { flex: 1; }
+  #permission-settings-modal .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
+  #permission-settings-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
+  #workspace-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    max-width: 480px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #workspace-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  #workspace-modal.open { display: flex; }
+  #workspace-modal .box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    width: 480px;
+  }
+  #workspace-modal h3 { margin-top: 0; }
+  #workspace-modal input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    box-sizing: border-box;
+  }
+  #workspace-modal .note { color: var(--muted); font-size: 11px; margin-top: 8px; }
+  #workspace-modal .note.err { color: var(--err); }
+  #workspace-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 </style>
 </head>
 <body>
 <header>
   <h1>LocalCode</h1>
+  <button id="workspace-btn" title="click to change the workspace directory"></button>
   <div class="right">
     <select class="agent-select" id="agent-select" title="switch agent"></select>
     <span class="session-id" id="session-id">connecting…</span>
   </div>
 </header>
+
+<div id="workspace-modal">
+  <div class="box">
+    <h3>Workspace</h3>
+    <input type="text" id="workspace-input">
+    <p class="note" id="workspace-note">Changing this restarts relative-path resolution for every tool from the new directory. Refused while a turn is in progress.</p>
+    <div class="actions">
+      <button id="workspace-cancel">Cancel</button>
+      <button id="workspace-save">Save</button>
+    </div>
+  </div>
+</div>
 <main>
   <div id="transcript"></div>
   <aside>
@@ -216,6 +367,30 @@
 <div id="prompt-status">
   <span class="comm-dot" id="comm-dot" title="talking to the LLM"></span>
   <span id="status-text"></span>
+  <button id="permission-status-btn" title="click to view or change permission settings"></button>
+</div>
+
+<div id="permission-settings-modal">
+  <div class="box">
+    <h3>Permissions</h3>
+    <div class="skip-row">
+      <input type="checkbox" id="skip-permissions-checkbox">
+      <label for="skip-permissions-checkbox">Skip all permission prompts (dangerous — every tool call runs without asking; explicit deny rules still deny)</label>
+    </div>
+    <div id="permission-rules-list"></div>
+    <div class="add-rule-row">
+      <input type="text" name="tool" id="rule-tool-input" placeholder="tool (e.g. bash)">
+      <input type="text" name="match" id="rule-match-input" placeholder="match pattern (e.g. npm *)">
+      <select id="rule-decision-select">
+        <option value="allow">allow</option>
+        <option value="ask">ask</option>
+        <option value="deny">deny</option>
+      </select>
+      <button id="rule-add-btn">Add</button>
+    </div>
+    <p class="note" id="permission-settings-note"></p>
+    <div class="close-row"><button id="permission-settings-close">Close</button></div>
+  </div>
 </div>
 
 <div id="permission-modal">
@@ -252,6 +427,22 @@
   const statusTextEl = document.getElementById('status-text');
   const statusBarEl = document.getElementById('prompt-status');
   const commDotEl = document.getElementById('comm-dot');
+  const permissionStatusBtn = document.getElementById('permission-status-btn');
+  const permissionSettingsModal = document.getElementById('permission-settings-modal');
+  const skipPermissionsCheckbox = document.getElementById('skip-permissions-checkbox');
+  const permissionRulesListEl = document.getElementById('permission-rules-list');
+  const ruleToolInput = document.getElementById('rule-tool-input');
+  const ruleMatchInput = document.getElementById('rule-match-input');
+  const ruleDecisionSelect = document.getElementById('rule-decision-select');
+  const ruleAddBtn = document.getElementById('rule-add-btn');
+  const permissionSettingsNote = document.getElementById('permission-settings-note');
+  const permissionSettingsCloseBtn = document.getElementById('permission-settings-close');
+  const workspaceBtn = document.getElementById('workspace-btn');
+  const workspaceModal = document.getElementById('workspace-modal');
+  const workspaceInput = document.getElementById('workspace-input');
+  const workspaceNote = document.getElementById('workspace-note');
+  const workspaceSaveBtn = document.getElementById('workspace-save');
+  const workspaceCancelBtn = document.getElementById('workspace-cancel');
 
   let sessionID = null;
   let eventSource = null;
@@ -265,6 +456,11 @@
   let sessions = []; // cached list rendered in the aside
   let mcpServers = [];
   let lastUsage = null; // {input_tokens, output_tokens, max_context, percent, tps, show_tps, model}
+  let workspacePath = '';
+  const workspaceNoteDefault = 'Changing this restarts relative-path resolution for every tool from the new directory. Refused while a turn is in progress.';
+  let skipPermissions = false;
+  let permissionRules = {}; // tool -> [{match, decision}]
+  let canEditPermissions = false; // false when the daemon has no config.json path to persist to
   let autoCompactEnabled = true;
   let showTPS = true;
   let autoDelegate = false;
@@ -281,16 +477,43 @@
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   }
 
-  function appendText(text) {
-    // Append raw text to the last text node run so streaming deltas don't
-    // each get their own DOM element.
-    const last = transcriptEl.lastChild;
-    if (last && last.nodeType === Node.TEXT_NODE) {
-      last.textContent += text;
-    } else {
-      transcriptEl.appendChild(document.createTextNode(text));
+  // Model output streams as markdown, so it renders as one growing bubble
+  // per model message rather than raw text nodes: currentModelEl is that
+  // bubble, currentModelBuffer the raw markdown accumulated for it so far
+  // (re-rendering the whole buffer per delta is what lets a construct that
+  // only makes sense once complete, like a closing code fence, still
+  // render correctly instead of needing incremental HTML patching).
+  let currentModelEl = null;
+  let currentModelBuffer = '';
+
+  function appendModelText(text) {
+    if (!currentModelEl) {
+      currentModelEl = document.createElement('div');
+      currentModelEl.className = 'msg-model';
+      transcriptEl.appendChild(currentModelEl);
+      currentModelBuffer = '';
     }
+    currentModelBuffer += text;
+    currentModelEl.innerHTML = renderMarkdown(currentModelBuffer);
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  }
+
+  function endModelText() {
+    currentModelEl = null;
+    currentModelBuffer = '';
+  }
+
+  const defaultInputPlaceholder = inputEl.placeholder;
+
+  // Locks the prompt box while a permission request is pending, so a typed
+  // reply can never silently land in promptQueue instead of answering the
+  // modal above — `waiting` stays true for the whole time the daemon is
+  // blocked on that decision, which is otherwise indistinguishable from
+  // "the model is still working" from this client's point of view.
+  function setInputLocked(locked, hint) {
+    inputEl.disabled = locked;
+    sendBtn.disabled = locked;
+    inputEl.placeholder = locked ? hint : defaultInputPlaceholder;
   }
 
   function setWaiting(v) {
@@ -422,6 +645,100 @@
     }
   }
 
+  // renderPermissionStatus draws the small pill next to the status line:
+  // "permissions: skip" (in warn color) when skip_permissions is on, or the
+  // count of custom rules otherwise. Click opens the settings modal in
+  // both the browser Web UI and the native GUI window (same page).
+  function renderPermissionStatus() {
+    const ruleCount = Object.values(permissionRules).reduce((n, rs) => n + rs.length, 0);
+    permissionStatusBtn.classList.toggle('skip', skipPermissions);
+    if (skipPermissions) {
+      permissionStatusBtn.textContent = 'permissions: skip';
+    } else if (ruleCount > 0) {
+      permissionStatusBtn.textContent = `permissions: ask (${ruleCount} rule${ruleCount > 1 ? 's' : ''})`;
+    } else {
+      permissionStatusBtn.textContent = 'permissions: ask';
+    }
+  }
+
+  function renderPermissionRulesList() {
+    permissionRulesListEl.innerHTML = '';
+    const tools = Object.keys(permissionRules).sort();
+    if (tools.length === 0) {
+      permissionRulesListEl.innerHTML = '<div class="note">No custom rules yet. Built-in defaults (e.g. git auto-allowed) aren\'t listed here.</div>';
+      return;
+    }
+    for (const tool of tools) {
+      for (const rule of permissionRules[tool]) {
+        const row = document.createElement('div');
+        row.className = 'rule-row';
+        const text = document.createElement('span');
+        text.className = 'rule-text';
+        text.textContent = `${tool}: "${rule.match}" -> ${rule.decision}`;
+        row.appendChild(text);
+        if (canEditPermissions) {
+          const removeBtn = document.createElement('button');
+          removeBtn.textContent = 'remove';
+          removeBtn.addEventListener('click', () => removePermissionRule(tool, rule));
+          row.appendChild(removeBtn);
+        }
+        permissionRulesListEl.appendChild(row);
+      }
+    }
+  }
+
+  function openPermissionSettings() {
+    skipPermissionsCheckbox.checked = skipPermissions;
+    skipPermissionsCheckbox.disabled = !canEditPermissions;
+    ruleToolInput.disabled = ruleMatchInput.disabled = ruleDecisionSelect.disabled = ruleAddBtn.disabled = !canEditPermissions;
+    permissionSettingsNote.textContent = canEditPermissions
+      ? 'Changes apply immediately and are written to config.json.'
+      : 'No config.json path is available in this run, so settings are read-only.';
+    renderPermissionRulesList();
+    permissionSettingsModal.classList.add('open');
+  }
+
+  async function toggleSkipPermissions(enabled) {
+    try {
+      await api('POST', '/api/permissions/skip', { enabled });
+      skipPermissions = enabled;
+      renderPermissionStatus();
+    } catch (err) {
+      skipPermissionsCheckbox.checked = skipPermissions; // revert on failure
+      permissionSettingsNote.textContent = `Failed to change: ${String(err)}`;
+    }
+  }
+
+  async function addPermissionRule() {
+    const tool = ruleToolInput.value.trim();
+    const match = ruleMatchInput.value.trim();
+    const decision = ruleDecisionSelect.value;
+    if (!tool || !match) return;
+    try {
+      await api('POST', '/api/permissions/rules', { tool, match, decision });
+      permissionRules[tool] = permissionRules[tool] || [];
+      permissionRules[tool].push({ match, decision });
+      ruleToolInput.value = '';
+      ruleMatchInput.value = '';
+      renderPermissionRulesList();
+      renderPermissionStatus();
+    } catch (err) {
+      permissionSettingsNote.textContent = `Failed to add rule: ${String(err)}`;
+    }
+  }
+
+  async function removePermissionRule(tool, rule) {
+    try {
+      await api('POST', '/api/permissions/rules/remove', { tool, match: rule.match, decision: rule.decision });
+      permissionRules[tool] = (permissionRules[tool] || []).filter(r => !(r.match === rule.match && r.decision === rule.decision));
+      if (permissionRules[tool].length === 0) delete permissionRules[tool];
+      renderPermissionRulesList();
+      renderPermissionStatus();
+    } catch (err) {
+      permissionSettingsNote.textContent = `Failed to remove rule: ${String(err)}`;
+    }
+  }
+
   function renderTasks() {
     tasksEl.innerHTML = '';
     if (tasks.size === 0) {
@@ -463,14 +780,14 @@
         }
         break;
       case 'message.part.delta':
-        if (ev.data && typeof ev.data.text === 'string') appendText(ev.data.text);
+        if (ev.data && typeof ev.data.text === 'string') appendModelText(ev.data.text);
         break;
       case 'message.part.end':
         // One model message ended, NOT the turn — a turn with tool calls
         // streams several of these. Ending the wait here is what used to
         // make a prompt typed during tool execution skip the queue and
         // bounce off the daemon's busy flag with a 409.
-        appendText('\n\n');
+        endModelText();
         break;
       case 'turn.done':
         // The daemon's real turn boundary, emitted after its busy flag is
@@ -491,15 +808,17 @@
       case 'permission.request':
         pendingPermissionID = ev.data.id;
         pendingPermissionCanAlways = !!ev.data.can_always;
-        permissionTextEl.textContent = `[${ev.data.tool}] ${ev.data.description}`;
+        permissionTextEl.textContent = `[${ev.data.tool}] ${ev.data.description || '(no description given)'}`;
         permissionAllowAlwaysBtn.style.display = pendingPermissionCanAlways ? '' : 'none';
         if (pendingPermissionCanAlways) {
           permissionAllowAlwaysBtn.title = `don't ask again — writes "${ev.data.rule}" to config.json`;
         }
         modalEl.classList.add('open');
+        setInputLocked(true, 'Resolve the permission request above to continue.');
         break;
       case 'permission.resolved':
         modalEl.classList.remove('open');
+        setInputLocked(false);
         break;
       case 'task.spawned':
         // Sidebar + status bar carry this; no transcript line.
@@ -585,10 +904,54 @@
       autoCompactEnabled = s.auto_compact_enabled;
       showTPS = s.show_tps;
       autoDelegate = !!s.auto_delegate;
+      skipPermissions = !!s.skip_permissions;
+      permissionRules = s.permission_rules || {};
+      canEditPermissions = !!s.can_edit_permissions;
     } catch (err) {
       // keep defaults
     }
     renderStatusBar();
+    renderPermissionStatus();
+  }
+
+  async function loadWorkspace() {
+    try {
+      const w = await api('GET', '/api/workspace');
+      workspacePath = w.path || '';
+    } catch (err) {
+      workspacePath = '';
+    }
+    renderWorkspace();
+  }
+
+  function renderWorkspace() {
+    workspaceBtn.textContent = workspacePath || '(unknown workspace)';
+    workspaceBtn.title = `${workspacePath}\nclick to change the workspace directory`;
+  }
+
+  function openWorkspaceModal() {
+    workspaceInput.value = workspacePath;
+    workspaceNote.textContent = workspaceNoteDefault;
+    workspaceNote.classList.remove('err');
+    workspaceModal.classList.add('open');
+    workspaceInput.focus();
+  }
+
+  async function saveWorkspace() {
+    const path = workspaceInput.value.trim();
+    if (!path || path === workspacePath) {
+      workspaceModal.classList.remove('open');
+      return;
+    }
+    try {
+      const w = await api('POST', '/api/workspace', { path });
+      workspacePath = w.path;
+      renderWorkspace();
+      workspaceModal.classList.remove('open');
+    } catch (err) {
+      workspaceNote.textContent = String(err);
+      workspaceNote.classList.add('err');
+    }
   }
 
   async function loadMCPServers() {
@@ -637,6 +1000,92 @@
 
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // renderMarkdown turns model output into safe HTML for display. It is
+  // deliberately small (no dependency, this is a fully offline app) and
+  // covers what models actually produce in practice: fenced/inline code,
+  // headers, bold/italic, links, block quotes, lists, and a rule. It is
+  // re-run on the full buffer for every streamed delta, so it also has to
+  // tolerate a mid-render document (an unclosed fence, a half-typed link)
+  // without throwing or leaking unescaped input — every code path below
+  // escapes raw text before it is placed in the output, never after.
+  function renderMarkdown(src) {
+    // 1. Pull out fenced code blocks first so nothing else touches their
+    // contents, replacing each with a placeholder token to splice back in
+    // at the end. An unterminated trailing fence (still streaming) is
+    // rendered as-is rather than left as literal ``` markers.
+    const blocks = [];
+    let text = src.replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
+      const cls = lang.trim() ? ` class="language-${escapeHtml(lang.trim())}"` : '';
+      const html = `<pre><code${cls}>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`;
+      blocks.push(html);
+      return ` ${blocks.length - 1} `;
+    });
+
+    // 2. Escape everything else as plain text now, before any markup is
+    // introduced, so nothing the model wrote can inject an element.
+    text = escapeHtml(text);
+
+    // 3. Inline code spans.
+    text = text.replace(/`([^`\n]+)`/g, (_, code) => `<code>${code}</code>`);
+
+    // 4. Block-level constructs, line by line: headers, quotes, rules,
+    // and list runs (consecutive - / * / N. lines become one <ul>/<ol>).
+    const lines = text.split('\n');
+    const out = [];
+    let listTag = null; // 'ul' | 'ol' | null — the list currently open
+    const closeList = () => { if (listTag) { out.push(`</${listTag}>`); listTag = null; } };
+    for (const line of lines) {
+      const h = line.match(/^(#{1,6})\s+(.*)$/);
+      const bullet = line.match(/^[-*]\s+(.*)$/);
+      const numbered = line.match(/^\d+\.\s+(.*)$/);
+      const quote = line.match(/^&gt;\s?(.*)$/);
+      const placeholder = /^ \d+ $/.test(line);
+      if (placeholder) {
+        // A spliced-in code block: pass the line through untouched rather
+        // than wrapping it in <p>, which would nest <pre> inside <p>.
+        closeList();
+        out.push(line);
+      } else if (h) {
+        closeList();
+        out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
+      } else if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
+        closeList();
+        out.push('<hr>');
+      } else if (bullet) {
+        if (listTag !== 'ul') { closeList(); out.push('<ul>'); listTag = 'ul'; }
+        out.push(`<li>${inline(bullet[1])}</li>`);
+      } else if (numbered) {
+        if (listTag !== 'ol') { closeList(); out.push('<ol>'); listTag = 'ol'; }
+        out.push(`<li>${inline(numbered[1])}</li>`);
+      } else if (quote) {
+        closeList();
+        out.push(`<blockquote>${inline(quote[1])}</blockquote>`);
+      } else if (line.trim() === '') {
+        closeList();
+        out.push('');
+      } else {
+        closeList();
+        out.push(`<p>${inline(line)}</p>`);
+      }
+    }
+    closeList();
+    text = out.join('\n');
+
+    // 5. Splice the fenced code blocks back in.
+    text = text.replace(/ (\d+) /g, (_, i) => blocks[+i]);
+    return text;
+  }
+
+  // inline applies span-level markdown (bold, italic, links) to text that
+  // has already been through escapeHtml — it only ever matches the plain
+  // characters left behind (*, _, [, ], (, )), never entities.
+  function inline(s) {
+    return s
+      .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_, a, b) => `<strong>${a || b}</strong>`)
+      .replace(/\*([^*]+)\*|_([^_]+)_/g, (_, a, b) => `<em>${a || b}</em>`)
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
   }
 
   function connectEvents() {
@@ -743,6 +1192,8 @@
     sessionID = id;
     sessionIdEl.textContent = sessionID;
     transcriptEl.innerHTML = '';
+    currentModelEl = null;
+    currentModelBuffer = '';
     tasks = new Map();
     renderTasks();
     lastUsage = null;
@@ -755,6 +1206,9 @@
     historyIdx = 0;
     historyDraft = '';
     setWaiting(false);
+    pendingPermissionID = null;
+    modalEl.classList.remove('open');
+    setInputLocked(false);
     setCurrentAgent(agent);
     renderSessionList();
     connectEvents();
@@ -1006,6 +1460,18 @@
   permissionAllowAlwaysBtn.addEventListener('click', () => resolvePermission(true, 'always'));
   permissionDenyBtn.addEventListener('click', () => resolvePermission(false, 'once'));
 
+  permissionStatusBtn.addEventListener('click', openPermissionSettings);
+  permissionSettingsCloseBtn.addEventListener('click', () => permissionSettingsModal.classList.remove('open'));
+  skipPermissionsCheckbox.addEventListener('change', () => toggleSkipPermissions(skipPermissionsCheckbox.checked));
+  ruleAddBtn.addEventListener('click', addPermissionRule);
+
+  workspaceBtn.addEventListener('click', openWorkspaceModal);
+  workspaceCancelBtn.addEventListener('click', () => workspaceModal.classList.remove('open'));
+  workspaceSaveBtn.addEventListener('click', saveWorkspace);
+  workspaceInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); saveWorkspace(); }
+  });
+
   // resolvePermission answers a pending permission request. scope is
   // 'once', 'session' (don't ask again this session), or 'always' (don't
   // ask again ever — the daemon writes a matching rule to config.json).
@@ -1028,6 +1494,7 @@
     await loadAgents();
     await loadCommands();
     await loadSettings();
+    await loadWorkspace();
     await loadMCPServers();
     await loadSessions();
 

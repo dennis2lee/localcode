@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"localcode/internal/agent"
+	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/hooks"
 	"localcode/internal/mcp"
@@ -79,6 +80,11 @@ func (d *Daemon) Handler() http.Handler { return d.mux }
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
+	d.mux.HandleFunc("POST /api/permissions/skip", d.handleSetSkipPermissions)
+	d.mux.HandleFunc("POST /api/permissions/rules", d.handleAddPermissionRule)
+	d.mux.HandleFunc("POST /api/permissions/rules/remove", d.handleRemovePermissionRule)
+	d.mux.HandleFunc("GET /api/workspace", d.handleGetWorkspace)
+	d.mux.HandleFunc("POST /api/workspace", d.handleSetWorkspace)
 	d.mux.HandleFunc("GET /api/mcp-servers", d.handleListMCPServers)
 	d.mux.HandleFunc("GET /api/agents", d.handleListAgents)
 	d.mux.HandleFunc("GET /api/commands", d.handleListCommands)
@@ -122,11 +128,135 @@ func (d *Daemon) handleVersion(w http.ResponseWriter, r *http.Request) {
 // (process-global, not per-session) — for a client that just opened to
 // know the current state without waiting for a config.changed event.
 func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	skip, rules := d.Loop.Config.PermissionsSnapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
 		"show_tps":             d.Loop.ShowTPS(),
 		"auto_delegate":        d.Loop.AutoDelegateEnabled(),
+		"skip_permissions":     skip,
+		"permission_rules":     rules,
+		"can_edit_permissions": d.Broker.ConfigPath != "",
 	})
+}
+
+// handleSetSkipPermissions toggles skip_permissions at runtime and, when a
+// config.json path is known (see Broker.ConfigPath, the same path "always
+// allow" writes to), persists it so the setting survives a restart.
+func (d *Daemon) handleSetSkipPermissions(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	d.Loop.Config.SetSkipPermissionsRuntime(req.Enabled)
+	if d.Broker.ConfigPath != "" {
+		if err := config.SetSkipPermissionsInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
+			http.Error(w, fmt.Sprintf("saved for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// permissionRuleRequest is the body for both add and remove: which tool,
+// and the exact rule (match pattern + decision) to add or remove.
+type permissionRuleRequest struct {
+	Tool     string `json:"tool"`
+	Match    string `json:"match"`
+	Decision string `json:"decision"`
+}
+
+func (d *Daemon) handleAddPermissionRule(w http.ResponseWriter, r *http.Request) {
+	var req permissionRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Tool == "" || req.Match == "" || req.Decision == "" {
+		http.Error(w, "tool, match, and decision are all required", http.StatusBadRequest)
+		return
+	}
+	rule := config.PermissionRule{Match: req.Match, Decision: config.Decision(req.Decision)}
+	d.Loop.Config.AddPermissionRuleRuntime(req.Tool, rule)
+	if d.Broker.ConfigPath != "" {
+		if err := config.AddPermissionRuleToFile(d.Broker.ConfigPath, req.Tool, rule); err != nil {
+			http.Error(w, fmt.Sprintf("saved for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (d *Daemon) handleRemovePermissionRule(w http.ResponseWriter, r *http.Request) {
+	var req permissionRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Tool == "" || req.Match == "" || req.Decision == "" {
+		http.Error(w, "tool, match, and decision are all required", http.StatusBadRequest)
+		return
+	}
+	rule := config.PermissionRule{Match: req.Match, Decision: config.Decision(req.Decision)}
+	d.Loop.Config.RemovePermissionRuleRuntime(req.Tool, rule)
+	if d.Broker.ConfigPath != "" {
+		if err := config.RemovePermissionRuleFromFile(d.Broker.ConfigPath, req.Tool, rule); err != nil {
+			http.Error(w, fmt.Sprintf("saved for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGetWorkspace reports the daemon's current working directory — the
+// root every relative file path and bash command resolves against.
+func (d *Daemon) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"path": d.Loop.GetProjectDir()})
+}
+
+// handleSetWorkspace changes the daemon's working directory for the rest of
+// this run: os.Chdir (which every tool's relative-path resolution follows,
+// since none of them carry their own base directory) plus updating
+// Loop.ProjectDir (which only custom-command expansion reads directly).
+//
+// This is process-wide, not per-session — there is one workspace at a
+// time, same as opening a different folder in an editor. Refused while any
+// session has a turn in flight, since a tool call that's mid-execution
+// against the old directory would otherwise silently start seeing the new
+// one partway through.
+func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+
+	d.busyMu.Lock()
+	for _, b := range d.busy {
+		if b {
+			d.busyMu.Unlock()
+			http.Error(w, "a turn is in progress; cancel or wait for it before switching workspace", http.StatusConflict)
+			return
+		}
+	}
+	d.busyMu.Unlock()
+
+	abs, err := filepath.Abs(req.Path)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("resolve path: %v", err), http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("stat %s: %v", abs, err), http.StatusBadRequest)
+		return
+	}
+	if !info.IsDir() {
+		http.Error(w, fmt.Sprintf("%s is not a directory", abs), http.StatusBadRequest)
+		return
+	}
+	if err := os.Chdir(abs); err != nil {
+		http.Error(w, fmt.Sprintf("chdir %s: %v", abs, err), http.StatusInternalServerError)
+		return
+	}
+	d.Loop.SetProjectDir(abs)
+	writeJSON(w, http.StatusOK, map[string]any{"path": abs})
 }
 
 // handleListMCPServers reports which MCP servers are currently connected

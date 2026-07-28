@@ -186,6 +186,26 @@ func (l *Loop) SetAutoDelegateEnabled(v bool) {
 	l.autoDelegate = v
 }
 
+// GetProjectDir reads ProjectDir under the same lock SetProjectDir writes
+// it with — the daemon's workspace-switch endpoint changes it at runtime,
+// so a concurrent "!`shell`"/"@file" expansion (see handleConfigCommand)
+// must not observe a half-written value.
+func (l *Loop) GetProjectDir() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ProjectDir
+}
+
+// SetProjectDir changes the live project directory. The caller is
+// responsible for also os.Chdir-ing the process, since ProjectDir alone
+// only affects custom-command expansion — tools resolve relative paths
+// against the process's actual working directory.
+func (l *Loop) SetProjectDir(dir string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ProjectDir = dir
+}
+
 // SendMessage appends a user turn to sessionID's history and drives the
 // agent loop (model call -> optional tool calls -> model call -> ...) until
 // the model produces a final answer. agentName selects which model profile
@@ -253,7 +273,7 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	}
 
 	if cmd, args, ok := l.matchCustomCommand(text); ok {
-		modelText, err := commands.Expand(cmd, args, l.ProjectDir)
+		modelText, err := commands.Expand(cmd, args, l.GetProjectDir())
 		if err != nil {
 			l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})

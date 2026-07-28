@@ -108,9 +108,10 @@ type Model struct {
 	// with "illegal use of non-zero Builder copied by value". That's
 	// exactly what repeatedly pressing Tab (or any rapid sequence of
 	// events) used to trigger. Plain strings have no such restriction.
-	transcript   string
-	pending      *pendingPermission
-	waiting      bool
+	transcript       string
+	pending          *pendingPermission
+	pendingHintShown bool // has the "resolve the permission above" hint already fired for this pending request
+	waiting          bool
 	queue        []string
 	errMsg       string
 	currentAgent string
@@ -632,6 +633,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				id := m.pending.id
 				canAlways := m.pending.canAlways
 				m.pending = nil
+				m.pendingHintShown = false
 				switch msg.String() {
 				case "n":
 					return m, m.resolvePermission(id, false, "")
@@ -668,7 +670,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter":
 			if m.pending != nil {
-				return m, nil // waiting for y/n, ignore stray enters
+				// Typing an answer and hitting Enter here used to do
+				// nothing with no explanation, which reads as broken —
+				// the permission line below the box is easy to miss.
+				// Point at it once instead of silently eating the
+				// keystroke (and not spamming it on every repeat press).
+				if !m.pendingHintShown {
+					m.pendingHintShown = true
+					m.appendLocal("Resolve the permission request above (y/n/s/a) before sending a message.")
+				}
+				return m, nil
 			}
 			text := strings.TrimSpace(m.input.Value())
 			if text == "" {
@@ -890,7 +901,11 @@ func (m *Model) applyEvent(ev events.Event) {
 		desc, _ := ev.Data["description"].(string)
 		rule, _ := ev.Data["rule"].(string)
 		canAlways, _ := ev.Data["can_always"].(bool)
+		if desc == "" {
+			desc = "(no description given)"
+		}
 		m.pending = &pendingPermission{id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways}
+		m.pendingHintShown = false
 	case events.TypeTaskSpawned:
 		// No transcript line — background tasks surface in the busy
 		// indicator below the prompt box, and /tasks inspects them.
