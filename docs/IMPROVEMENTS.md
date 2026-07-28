@@ -38,7 +38,7 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 
 | Idea | Why |
 |---|---|
-| Markdown rendering with code highlighting | Model replies render as plain text today. For a coding tool, code block highlighting is the single biggest readability win. Prefer a light library that bundles without an external CDN. |
+| ~~Markdown rendering~~ | Done in the Unreleased build. A small dependency-free renderer handles headers, bold/italic, inline code, fenced code blocks, lists, blockquotes, links, and rules, in both the Web UI and the GUI window. No syntax highlighting inside code blocks yet — still an opening if that matters more than the current plain monospace block. |
 | Collapsible tool call cards | Show tool input and output as a folded card that expands on click. Long sessions become much easier to follow. |
 | Diff viewer | Render `edit` and `write_file` results as a before and after diff. |
 | ~~"Always allow" on permission prompts~~ | Done in v0.20.0. Prompts now offer allow once, allow for session, and always allow, the last of which writes the matching rule into config.json. |
