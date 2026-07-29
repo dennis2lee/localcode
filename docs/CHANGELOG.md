@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.28.0
 
 - **Switching sessions now moves the workspace with them.** Each session already recorded the directory it was created in; selecting one now also switches the daemon's working directory to it, so reopening a conversation about another project puts you back in that project instead of leaving its transcript pointed at wherever you happened to be. A `[workspace] <path>` line marks it in the transcript, since it changes where every later tool call and bash command resolves from. Sessions with no recorded workspace (written before the field existed) leave it alone rather than guessing, and a refused switch — another session mid-turn, or a directory since deleted — is reported without blocking the session switch itself.
 - **Clicking the workspace in the desktop window opens the OS folder picker** instead of a box to type an absolute path into. New `internal/dialog` package, deliberately pure Go: it shells out to `osascript` (macOS), a WinForms `FolderBrowserDialog` via PowerShell (Windows), or zenity/kdialog (Linux), rather than binding a native toolkit — the GUI already carries one CGo dependency that can't be cross-compiled, and a second one would push that cost onto the plain daemon and TUI builds too. Paths are passed to the helpers as AppleScript string literals or environment variables, never interpolated into a command line.
