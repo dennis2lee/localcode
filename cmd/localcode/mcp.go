@@ -6,14 +6,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"localcode/internal/config"
+	mcpclient "localcode/internal/mcp"
 )
 
 const mcpUsage = `usage: localcode mcp <subcommand>
@@ -22,7 +25,9 @@ const mcpUsage = `usage: localcode mcp <subcommand>
                        register a new MCP server (runs over stdio, same shape as .mcp.json's mcpServers entries)
   localcode mcp add-json [-s global|project] <name> '<json>'
                        register directly from JSON of the form {"command":...,"args":[...],"env":{...}}
-  localcode mcp list    list every registered MCP server (shows global/project origin)
+  localcode mcp list [--no-test]
+                       list every registered MCP server (shows global/project origin) and
+                       start each one to verify it connects; --no-test lists without connecting
   localcode mcp get <name>       show one server's detailed config
   localcode mcp remove [-s global|project] <name>
                        remove a server (project wins if --scope is omitted; --scope is required if the name exists in both)
@@ -47,7 +52,7 @@ func runMCP(args []string) error {
 	case "add-json":
 		return mcpAddJSON(args[1:])
 	case "list", "ls":
-		return mcpList()
+		return mcpList(args[1:])
 	case "get":
 		return mcpGet(args[1:])
 	case "remove", "rm":
@@ -226,7 +231,23 @@ func loadBothScopes() (global, project *config.Config, globalPath, projectPath s
 	return global, project, globalPath, projectPath, nil
 }
 
-func mcpList() error {
+// mcpPingTimeout bounds one server's connectivity check in `mcp list`. It
+// covers process start plus the MCP handshake and a tools/list round trip;
+// servers that fetch something over the network at startup (an `npx` package
+// that isn't cached yet, say) are the slow case this has to leave room for.
+const mcpPingTimeout = 20 * time.Second
+
+func mcpList(args []string) error {
+	test := true
+	for _, a := range args {
+		switch a {
+		case "--no-test", "--no-connect":
+			test = false
+		default:
+			return fmt.Errorf("unknown argument %q (usage: localcode mcp list [--no-test])", a)
+		}
+	}
+
 	global, project, globalPath, projectPath, err := loadBothScopes()
 	if err != nil {
 		return err
@@ -249,19 +270,54 @@ func mcpList() error {
 	}
 	sort.Strings(sorted)
 
+	failures := 0
 	for _, n := range sorted {
-		if sc, ok := project.MCPServers[n]; ok {
+		sc, ok := project.MCPServers[n]
+		if ok {
 			note := ""
 			if _, alsoGlobal := global.MCPServers[n]; alsoGlobal {
 				note = " (overrides the global setting)"
 			}
 			fmt.Printf("%s  [project]%s\n  %s\n  %s\n", n, note, formatMCPCommand(sc), projectPath)
-			continue
+		} else {
+			sc = global.MCPServers[n]
+			fmt.Printf("%s  [global]\n  %s\n  %s\n", n, formatMCPCommand(sc), globalPath)
 		}
-		sc := global.MCPServers[n]
-		fmt.Printf("%s  [global]\n  %s\n  %s\n", n, formatMCPCommand(sc), globalPath)
+		if test {
+			if !checkMCPServer(n, sc) {
+				failures++
+			}
+		}
+	}
+
+	if test && failures > 0 {
+		// Reported, not returned as an error: the listing itself succeeded,
+		// and a server being down is information about that server rather
+		// than a failure of the command the user ran.
+		fmt.Printf("\n%d of %d server(s) failed to connect.\n", failures, len(sorted))
 	}
 	return nil
+}
+
+// checkMCPServer starts one server for real and reports whether it came up,
+// printing a per-server result line. Registration in config.json says
+// nothing about whether the command exists or speaks MCP, which is the whole
+// point of doing this rather than trusting the file.
+func checkMCPServer(name string, sc config.MCPServerConfig) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), mcpPingTimeout)
+	defer cancel()
+
+	toolNames, err := mcpclient.Ping(ctx, sc)
+	if err != nil {
+		fmt.Printf("  connection: FAILED — %v\n", err)
+		return false
+	}
+	if len(toolNames) == 0 {
+		fmt.Printf("  connection: OK (connected, but the server advertises no tools)\n")
+		return true
+	}
+	fmt.Printf("  connection: OK (%d tool(s): %s)\n", len(toolNames), strings.Join(toolNames, ", "))
+	return true
 }
 
 func mcpGet(args []string) error {

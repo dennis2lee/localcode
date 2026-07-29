@@ -464,6 +464,60 @@ func SetSkipPermissionsInFile(path string, enabled bool) error {
 	return nil
 }
 
+// SetAutoDelegateEnabledInFile flips only the "enabled" field inside the
+// top-level "auto_delegate" block at path, leaving the rest of that block
+// (agent, match) and every other key in the file untouched — the same
+// surgical approach the permission writers above take.
+//
+// Enabling when no auto_delegate block exists yet writes one with just
+// {"enabled": true} and no agent. That config is inert (Validate rejects an
+// agent-less block, and MatchesPrompt with no patterns delegates nothing),
+// which is why callers are expected to tell the user that a block still has
+// to be filled in — writing a guessed agent name here would be worse.
+func SetAutoDelegateEnabledInFile(path string, enabled bool) error {
+	raw := map[string]json.RawMessage{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parse config %s: %w", path, err)
+		}
+	case !os.IsNotExist(err):
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+
+	block := map[string]json.RawMessage{}
+	if rawBlock, ok := raw["auto_delegate"]; ok {
+		if err := json.Unmarshal(rawBlock, &block); err != nil {
+			return fmt.Errorf("parse auto_delegate in %s: %w", path, err)
+		}
+	}
+	encodedEnabled, err := json.Marshal(enabled)
+	if err != nil {
+		return fmt.Errorf("marshal auto_delegate.enabled: %w", err)
+	}
+	block["enabled"] = encodedEnabled
+
+	encodedBlock, err := json.Marshal(block)
+	if err != nil {
+		return fmt.Errorf("marshal auto_delegate: %w", err)
+	}
+	raw["auto_delegate"] = encodedBlock
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	out = append(out, '\n')
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	return nil
+}
+
 // PermissionRuleFor proposes the rule that "always allow" should write for
 // one tool call. For bash it generalizes to the command's first word
 // ("npm *" from "npm test"), because approving a shell command usually

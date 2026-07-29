@@ -11,6 +11,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,6 +27,7 @@ import (
 
 	"localcode/internal/agent"
 	"localcode/internal/config"
+	"localcode/internal/dialog"
 	"localcode/internal/events"
 	"localcode/internal/hooks"
 	"localcode/internal/mcp"
@@ -41,6 +43,17 @@ type Daemon struct {
 	// reports an empty list in that case rather than requiring callers to
 	// special-case it.
 	MCP *mcp.Manager
+
+	// PickDirectory opens a native folder picker on the machine the daemon
+	// runs on, and is nil unless that machine is also the one looking at
+	// the screen — i.e. only the desktop-window mode sets it. A daemon
+	// reached over the network must never set it: the dialog would open on
+	// the server, where nobody can answer it, and block a request until it
+	// was cancelled. Clients read GET /api/workspace's "can_browse" to know
+	// whether to offer the button at all.
+	//
+	// It returns dialog.ErrCancelled when the user dismisses the dialog.
+	PickDirectory func(ctx context.Context, startDir string) (string, error)
 
 	mux *http.ServeMux
 
@@ -80,11 +93,13 @@ func (d *Daemon) Handler() http.Handler { return d.mux }
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
+	d.mux.HandleFunc("POST /api/settings/auto-delegate", d.handleSetAutoDelegate)
 	d.mux.HandleFunc("POST /api/permissions/skip", d.handleSetSkipPermissions)
 	d.mux.HandleFunc("POST /api/permissions/rules", d.handleAddPermissionRule)
 	d.mux.HandleFunc("POST /api/permissions/rules/remove", d.handleRemovePermissionRule)
 	d.mux.HandleFunc("GET /api/workspace", d.handleGetWorkspace)
 	d.mux.HandleFunc("POST /api/workspace", d.handleSetWorkspace)
+	d.mux.HandleFunc("POST /api/workspace/browse", d.handleBrowseWorkspace)
 	d.mux.HandleFunc("GET /api/mcp-servers", d.handleListMCPServers)
 	d.mux.HandleFunc("GET /api/agents", d.handleListAgents)
 	d.mux.HandleFunc("GET /api/commands", d.handleListCommands)
@@ -129,14 +144,47 @@ func (d *Daemon) handleVersion(w http.ResponseWriter, r *http.Request) {
 // know the current state without waiting for a config.changed event.
 func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	skip, rules := d.Loop.Config.PermissionsSnapshot()
+	// auto_delegate_agent is empty when config.json has no auto_delegate
+	// block. Turning the setting on in that state is legal but does nothing,
+	// so clients report that rather than showing an "on" that silently
+	// delegates no prompt at all.
+	delegateAgent := ""
+	if d.Loop.Config.AutoDelegate != nil {
+		delegateAgent = d.Loop.Config.AutoDelegate.Agent
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
 		"show_tps":             d.Loop.ShowTPS(),
 		"auto_delegate":        d.Loop.AutoDelegateEnabled(),
+		"auto_delegate_agent":  delegateAgent,
 		"skip_permissions":     skip,
 		"permission_rules":     rules,
 		"can_edit_permissions": d.Broker.ConfigPath != "",
 	})
+}
+
+// handleSetAutoDelegate toggles auto-delegation live (same setting "/config
+// auto_delegate on|off" changes) and, when a config.json path is known,
+// persists it so the choice survives a restart. The runtime change lands
+// first and is never rolled back by a persistence failure: a caller that
+// asked for the setting to apply "right now" gets that, and the error tells
+// them only the saving part failed.
+func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	d.Loop.SetAutoDelegateEnabled(req.Enabled)
+	if d.Broker.ConfigPath != "" {
+		if err := config.SetAutoDelegateEnabledInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
+			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleSetSkipPermissions toggles skip_permissions at runtime and, when a
@@ -203,9 +251,47 @@ func (d *Daemon) handleRemovePermissionRule(w http.ResponseWriter, r *http.Reque
 }
 
 // handleGetWorkspace reports the daemon's current working directory — the
-// root every relative file path and bash command resolves against.
+// root every relative file path and bash command resolves against — and
+// whether this daemon can open a native folder picker for it.
 func (d *Daemon) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"path": d.Loop.GetProjectDir()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":       d.Loop.GetProjectDir(),
+		"can_browse": d.PickDirectory != nil,
+	})
+}
+
+// handleBrowseWorkspace opens the OS folder picker and returns the chosen
+// directory, without applying it — the caller still POSTs it to
+// /api/workspace, so picking and switching stay separately reportable (a
+// switch can be refused mid-turn long after the dialog closed).
+//
+// A cancelled dialog is 204, not an error: dismissing a picker is a normal
+// thing to do and shouldn't surface as a failure.
+func (d *Daemon) handleBrowseWorkspace(w http.ResponseWriter, r *http.Request) {
+	if d.PickDirectory == nil {
+		http.Error(w, "this daemon has no native folder picker (it is only available in the desktop-window mode)", http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		Start string `json:"start"`
+	}
+	// A missing or unreadable body just means "no starting directory".
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	// Tied to the request context so closing the tab or window takes the
+	// dialog down with it, rather than leaving an orphaned helper process
+	// waiting for an answer nobody is going to give.
+	path, err := d.PickDirectory(r.Context(), req.Start)
+	if errors.Is(err, dialog.ErrCancelled) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"path": path})
 }
 
 // handleSetWorkspace changes the daemon's working directory for the rest of
@@ -452,7 +538,11 @@ func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := fmt.Sprintf("s-%d", time.Now().UnixNano())
-	sess, err := d.Loop.Store.CreateSession(id, "", req.Agent, true)
+	// Stamped with the workspace live at creation time. Switching the
+	// workspace later doesn't rewrite existing sessions: the point of the
+	// field is to say which project a conversation belongs to, which is
+	// exactly what would be lost by keeping them all in sync.
+	sess, err := d.Loop.Store.CreateSessionIn(id, "", req.Agent, d.Loop.GetProjectDir(), true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

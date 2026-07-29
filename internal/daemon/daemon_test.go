@@ -17,6 +17,7 @@ import (
 	"localcode/internal/client"
 	"localcode/internal/commands"
 	"localcode/internal/config"
+	"localcode/internal/dialog"
 	"localcode/internal/events"
 	"localcode/internal/hooks"
 	"localcode/internal/provider"
@@ -1089,5 +1090,193 @@ func TestTurnDoneMarksTheRealTurnBoundary(t *testing.T) {
 	}
 	if len(order) > 0 && order[len(order)-1] != events.TypeTurnDone {
 		t.Errorf("event order = %v, want turn.done last", order)
+	}
+}
+
+// TestDaemonSetAutoDelegate covers the endpoint behind the GUI's
+// auto-delegate pill: the change has to take effect on the running loop
+// immediately (not at the next restart) *and* land in config.json.
+func TestDaemonSetAutoDelegate(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"auto_delegate":{"enabled":false,"agent":"plan","match":["what is *"]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d.Broker.ConfigPath = cfgPath
+	d.Loop.Config.AutoDelegate = &config.AutoDelegateConfig{Agent: "plan", Match: []string{"what is *"}}
+
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	if d.Loop.AutoDelegateEnabled() {
+		t.Fatal("auto-delegate started enabled, so this test would prove nothing")
+	}
+
+	post := func(enabled bool) {
+		t.Helper()
+		body := strings.NewReader(fmt.Sprintf(`{"enabled":%t}`, enabled))
+		resp, err := http.Post(httpSrv.URL+"/api/settings/auto-delegate", "application/json", body)
+		if err != nil {
+			t.Fatalf("POST auto-delegate: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("POST auto-delegate status = %d, want 204", resp.StatusCode)
+		}
+	}
+
+	post(true)
+	if !d.Loop.AutoDelegateEnabled() {
+		t.Error("the running loop still reports auto-delegate off after enabling it")
+	}
+	saved, err := config.LoadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if saved.AutoDelegate == nil || !saved.AutoDelegate.Enabled {
+		t.Errorf("config.json auto_delegate = %+v, want enabled", saved.AutoDelegate)
+	}
+	if saved.AutoDelegate.Agent != "plan" {
+		t.Errorf("config.json agent = %q, want it preserved", saved.AutoDelegate.Agent)
+	}
+
+	post(false)
+	if d.Loop.AutoDelegateEnabled() {
+		t.Error("the running loop still reports auto-delegate on after disabling it")
+	}
+
+	// The setting is also what GET /api/settings reports, which is how a
+	// second client (or a reloaded page) picks up the change.
+	c := client.New(httpSrv.URL)
+	if _, err := c.GetSettings(context.Background()); err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+}
+
+// TestDaemonCreatedSessionRecordsWorkspace pins that a session created over
+// the API is stamped with the daemon's current workspace, which is what the
+// Web UI's session panel shows per row.
+func TestDaemonCreatedSessionRecordsWorkspace(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	workspace := t.TempDir()
+	d.Loop.SetProjectDir(workspace)
+
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if sess.Workspace != workspace {
+		t.Errorf("new session workspace = %q, want %q", sess.Workspace, workspace)
+	}
+
+	// Switching the workspace afterwards must not rewrite sessions that
+	// already exist — the field records where a conversation started.
+	elsewhere := t.TempDir()
+	d.Loop.SetProjectDir(elsewhere)
+	listed, err := c.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("listed %d sessions, want 1", len(listed))
+	}
+	if listed[0].Workspace != workspace {
+		t.Errorf("workspace = %q after switching the daemon workspace, want the original %q", listed[0].Workspace, workspace)
+	}
+}
+
+// TestDaemonBrowseWorkspace covers the folder-picker endpoint's three
+// outcomes without opening a real dialog: a chosen path, a dismissed
+// dialog, and a daemon that has no picker at all (every mode except the
+// desktop window, where opening one would put it in front of nobody).
+func TestDaemonBrowseWorkspace(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	browse := func(body string) *http.Response {
+		t.Helper()
+		resp, err := http.Post(httpSrv.URL+"/api/workspace/browse", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST browse: %v", err)
+		}
+		return resp
+	}
+
+	// No picker configured: the route exists but reports it is unavailable,
+	// rather than 500ing on a nil func.
+	resp := browse(`{}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status with no picker = %d, want 404", resp.StatusCode)
+	}
+	// ...and GET /api/workspace says so, which is what makes the client
+	// fall back to the typed-path modal instead of offering a dead button.
+	wsResp, err := http.Get(httpSrv.URL + "/api/workspace")
+	if err != nil {
+		t.Fatalf("GET workspace: %v", err)
+	}
+	var ws struct {
+		Path      string `json:"path"`
+		CanBrowse bool   `json:"can_browse"`
+	}
+	if err := json.NewDecoder(wsResp.Body).Decode(&ws); err != nil {
+		t.Fatalf("decode workspace: %v", err)
+	}
+	wsResp.Body.Close()
+	if ws.CanBrowse {
+		t.Error("can_browse = true with no picker configured")
+	}
+
+	// A picker that returns a path.
+	var gotStart string
+	d.PickDirectory = func(ctx context.Context, startDir string) (string, error) {
+		gotStart = startDir
+		return "/chosen/dir", nil
+	}
+	resp = browse(`{"start":"/where/i/am"}`)
+	var picked struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&picked); err != nil {
+		t.Fatalf("decode picked: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || picked.Path != "/chosen/dir" {
+		t.Errorf("browse = %d %q, want 200 /chosen/dir", resp.StatusCode, picked.Path)
+	}
+	if gotStart != "/where/i/am" {
+		t.Errorf("picker opened at %q, want the caller's start directory", gotStart)
+	}
+
+	// A dismissed dialog is 204, not an error — cancelling a picker is a
+	// normal thing to do, and the client treats it as "change nothing".
+	d.PickDirectory = func(ctx context.Context, startDir string) (string, error) {
+		return "", dialog.ErrCancelled
+	}
+	resp = browse(`{}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("status for a cancelled dialog = %d, want 204", resp.StatusCode)
+	}
+
+	// Browsing never changes the workspace by itself; applying is a
+	// separate POST, so a picked directory can still be refused mid-turn.
+	if d.Loop.GetProjectDir() == "/chosen/dir" {
+		t.Error("browsing changed the workspace on its own")
 	}
 }

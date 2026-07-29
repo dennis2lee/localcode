@@ -26,7 +26,7 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 3. ~~**Bash permission globs are too coarse.**~~ Done in v0.20.0. A bash command is split on `&&`, `||`, `;`, `|`, and newlines (quote aware), every segment has to earn `allow` on its own, any `deny` anywhere denies the whole line, and command substitution or output redirection never auto-allows.
 4. **Hook timeout is not configurable.** The timeout is fixed at 30 seconds. A per hook `timeout` field would help, and killing the process group would make sure children spawned by the shell get cleaned up. (Which shell runs hooks is resolved per OS as of v0.23.0; only the timeout is still fixed.)
 5. **MCP is stdio only.** HTTP and SSE transport servers cannot be attached yet, unlike Claude Code. Room for something like `localcode mcp add --transport http <name> <url>`.
-6. **`localcode mcp list` shows a static list.** It prints what is registered in config, but whether a server actually starts is only known once the daemon runs. When a daemon is up, querying `GET /api/mcp-servers` and showing connection state alongside would be more useful.
+6. ~~**`localcode mcp list` shows a static list.**~~ Done in the Unreleased build. `mcp list` now starts each registered server, handshakes, lists its tools, and reports `connection: OK (N tools)` or `connection: FAILED — <reason>` per entry, bounded by a 20s timeout; `--no-test` keeps the old instant listing. Querying a *running* daemon's `GET /api/mcp-servers` instead of starting a throwaway process is still an opening, and would be faster when a daemon happens to be up.
 7. **Compaction can fail when history already exceeds the context.** If the history is right at the model limit, the summarization request itself can fail. A truncation fallback that drops the oldest turns would make auto compaction more robust.
 8. **Config key order is not preserved.** When `localcode mcp` rewrites the file, top level keys come back alphabetically sorted. No data is lost, but diffs get noisy. Minor.
 9. **`/usage` has no cross session or daily totals.** It reports one session. Daily or weekly reporting across sessions needs separate aggregation.
@@ -43,8 +43,9 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 | Diff viewer | Render `edit` and `write_file` results as a before and after diff. |
 | ~~"Always allow" on permission prompts~~ | Done in v0.20.0. Prompts now offer allow once, allow for session, and always allow, the last of which writes the matching rule into config.json. |
 | `/usage` visualization | Bars for tokens per model, a gauge for context use. |
-| Session search and filter | The session list in the right panel needs title search once it gets long. |
+| Session search and filter | The session list in the left panel needs title (and workspace) search once it gets long. |
 | Scroll control | Stop auto scrolling when the user scrolls up mid stream, and show a jump to bottom button. |
+| ~~Per-session workspace~~ | Done in the Unreleased build. Selecting a session switches the daemon's working directory to the one that session was created in, announced with a `[workspace]` line. Still process-wide underneath: two clients on one daemon share a workspace, so one of them switching sessions moves the other's too. |
 | Dark and light theme toggle | Plus a responsive layout for mobile. |
 | MCP server status | A connected or failed dot next to each MCP server in the right panel, with a reconnect button. |
 

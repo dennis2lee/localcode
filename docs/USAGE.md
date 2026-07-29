@@ -9,7 +9,7 @@
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [AGENTS.md](#agentsmd-project-rules), [Auto memory](#auto-memory) |
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
-| [6. Web UI](#part-6-web-ui) | [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Markdown rendering](#model-output-renders-as-markdown) |
+| [6. Web UI](#part-6-web-ui) | [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown) |
 | [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
@@ -56,13 +56,13 @@ It starts the daemon in-process on a private loopback port and shows the same We
 The window links a native webview through CGo, which cannot be cross compiled the way the pure Go daemon and TUI are, so it's built per OS:
 
 * macOS: `make dist-mac-gui` produces a double-clickable `LocalCode.app` (universal, arm64 + amd64). `make gui-mac` builds just the bare `localcode-gui` binary. macOS always has WKWebView.
-* Windows: built in CI by `.github/workflows/gui-windows.yml` on a Windows runner (CGo cannot cross compile from macOS), which uploads `localcode-gui.exe` as an artifact. The Windows MSI (`make dist-msi VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe`) installs it alongside the TUI binary with its own Start Menu shortcut ("LocalCode (Desktop)"), and runs Microsoft's WebView2 Evergreen Bootstrapper silently during install so the runtime is there even on older Windows 10 systems that do not ship it already. That install step is skipped quietly (not a failed install) if there is no network access at install time or the runtime is already present.
+* Windows: built in CI by `.github/workflows/gui-windows.yml` on a Windows runner (CGo cannot cross compile from macOS), which uploads `localcode-gui.exe` as an artifact. It is linked with `-H windowsgui`, so starting it from `cmd` opens the window and **gives the prompt straight back** instead of tying up the console until the window closes (and launching it from Explorer doesn't flash an empty console box). The trade-off is that a GUI-subsystem process has no console of its own, so the console-only subcommands — `version`, `mcp`, `login` — print nowhere useful from `localcode-gui.exe`; run those from `localcode.exe`, which the same MSI installs. The Windows MSI (`make dist-msi VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe`) installs it alongside the TUI binary with its own Start Menu shortcut ("LocalCode (Desktop)"), and runs Microsoft's WebView2 Evergreen Bootstrapper silently during install so the runtime is there even on older Windows 10 systems that do not ship it already. That install step is skipped quietly (not a failed install) if there is no network access at install time or the runtime is already present.
 
 The macOS `.app` is unsigned, so Gatekeeper needs a right click then Open the first time, same as the TUI app.
 
 A build made without `-tags gui` still accepts `--gui` but returns an error saying so, rather than failing to build (and `--gui` defaults to off on such a build, so the TUI still starts normally with no flags at all). The daemon, TUI, and browser modes are unchanged.
 
-The window shows the current workspace directory at the top — see [Switching the workspace directory](#switching-the-workspace-directory).
+The window shows the current workspace directory at the top; clicking it opens the OS folder picker — see [Switching the workspace directory](#switching-the-workspace-directory).
 
 ### Remote daemon over an SSH tunnel
 
@@ -166,7 +166,8 @@ localcode mcp add local-fs -s project -- npx -y @modelcontextprotocol/server-fil
 # copy an existing .mcp.json entry across as raw JSON
 localcode mcp add-json weather '{"command":"node","args":["weather-server.js"],"env":{"API_KEY":"xyz"}}'
 
-localcode mcp list          # shows whether each came from global or project
+localcode mcp list          # scope, command, and a live connection test per server
+localcode mcp list --no-test # just the listing, without starting anything
 localcode mcp get github    # full command, args, and env for one server
 localcode mcp remove github # unregister
 
@@ -182,6 +183,26 @@ localcode mcp import-claude
 | `remove` without `-s` | If the same name exists in both global and project, nothing is deleted and you get an ambiguity error. Say which with `-s global` or `-s project`. |
 
 These commands only read and write the `mcp_servers` map, so editing config.json by hand works exactly the same. The CLI is a convenience.
+
+#### `mcp list` tests each connection
+
+Being registered in config.json says nothing about whether a server's command exists, starts, or speaks MCP. So `localcode mcp list` starts each one for real, completes the MCP handshake, lists its tools, and shuts it back down, printing the result under each entry:
+
+```
+github  [global]
+  npx -y @modelcontextprotocol/server-github (env: GITHUB_TOKEN)
+  /Users/you/.localcode/config.json
+  connection: OK (26 tool(s): add_issue_comment, create_branch, ...)
+
+weather  [project]
+  node weather-server.js
+  /Users/you/project/.localcode/config.json
+  connection: FAILED — connect (node): fork/exec node: no such file or directory
+
+1 of 2 server(s) failed to connect.
+```
+
+A failure is reported, not returned as an error — the listing itself succeeded, and a server being down is information about that server. Each check is bounded by a 20 second timeout, so an unresponsive server delays the listing rather than hanging it. Servers with expensive startup (an `npx` package that isn't cached yet) make this noticeably slower than a plain listing; `--no-test` skips the connecting entirely.
 
 #### Importing from Claude Code
 
@@ -304,9 +325,18 @@ Every change applies immediately (the running daemon's decisions reflect it on t
 
 ### Switching the workspace directory
 
-The workspace is the directory every relative file path and bash command resolves against — set once at startup from wherever you ran `localcode`. It's shown at the top of the GUI window, and in the Web UI's header, and can be changed without restarting: click it, enter a new absolute path, and save.
+The workspace is the directory every relative file path and bash command resolves against — set once at startup from wherever you ran `localcode`. It's shown at the top of the GUI window, and in the Web UI's header, and can be changed without restarting by clicking it.
+
+What that click does depends on where you are:
+
+| Where | Clicking the workspace |
+|---|---|
+| GUI window | Opens the operating system's own folder picker (macOS `choose folder`, Windows' folder browser, zenity/kdialog on Linux), starting in the current workspace. Choosing a folder applies it immediately; dismissing the dialog changes nothing. |
+| Browser | Opens a box to type an absolute path into. The web platform gives no way to get a real filesystem path out of a file dialog — neither `<input webkitdirectory>` nor `showDirectoryPicker()` exposes one — and a daemon you reached over the network would open its dialog on the *server*, so the picker is deliberately offered only in the desktop window. |
 
 Switching is refused while any session has a turn in flight, since redirecting it mid-tool-call would silently change what an already-running command is operating on. It's process-wide, not per-session — one workspace at a time, the same way opening a different folder in an editor replaces what was open before.
+
+**Switching sessions moves the workspace with them.** Each session records the directory it was created in, and selecting one in the [left panel](#left-panel-sessions) switches the workspace to that directory, so reopening a conversation about another project actually puts you back in that project instead of leaving its transcript pointed at wherever you happen to be. A `[workspace] <path>` line marks it in the transcript, since it changes where every later command runs. Sessions from before this was recorded leave the workspace alone rather than guessing, and if the switch is refused (another session mid-turn) or the directory has since been deleted, that's reported and the session still opens.
 
 ### Hooks
 
@@ -462,6 +492,7 @@ Common to the TUI and Web UI:
 | Answer a permission prompt | `y`, `n`, `s`, or `a` in the TUI; buttons in the Web UI — see [answering a permission prompt](#answering-a-permission-prompt-once-this-session-or-always) |
 | Cancel the running turn | **Esc**, in either client |
 | Recall a previous prompt | **Up** and **Down**, in either client |
+| Switch agent | **Tab** for the next, **Shift+Tab** for the previous, in either client |
 | Quit the TUI | **Ctrl+C**, or type `exit` or `:q` |
 
 Other behavior:
@@ -610,7 +641,7 @@ These are typed into the message box but never reach the event log, so replaying
 A session is an append only event log that lives as long as the daemon, so reopening the TUI or a browser tab picks the conversation back up.
 
 * **TUI**: at startup, if any session exists, the terminal lists them with session ID, agent, and creation time. Enter a number to resume, or `n` or an empty line to start fresh. From the same screen, `d<number>` such as `d1` deletes one session and reshows the list, and `da` deletes every session after you type `yes` to confirm.
-* **Web UI**: the right panel always shows the session list. Switching clears the screen and replays that session's whole event log, including user messages, model replies, and tool runs.
+* **Web UI**: the left panel always shows the session list, each entry labelled with the workspace directory it was created in. Click a session to switch to it — the screen clears and that session's whole event log replays, including user messages, model replies, and tool runs. See [Left panel: sessions](#left-panel-sessions).
 
 `GET /api/sessions` returns the same list. Background tasks are `visible:false` and do not appear there. Use `GET /api/sessions/{id}/tasks` for those.
 
@@ -620,7 +651,7 @@ Sessions are identified and resumed by ID, so a `title` is purely for display.
 
 | Action | API | Also available from |
 |---|---|---|
-| Rename | `POST /api/sessions/{id}/rename` with `{"title": "..."}` | The rename button in the Web UI right panel |
+| Rename | `POST /api/sessions/{id}/rename` with `{"title": "..."}` | The rename button on the session card in the Web UI left panel |
 | Delete one | `DELETE /api/sessions/{id}` | The delete button per session in the Web UI, or `d<number>` in the TUI startup picker |
 | Delete all | `DELETE /api/sessions` | The delete all button in the Web UI, or `da` in the TUI startup picker |
 
@@ -659,13 +690,28 @@ If one session fails to restore, for example a corrupt `.meta.json`, the rest st
 
 ## Part 6. Web UI
 
-### Right panel
+### Left panel: sessions
 
-Three sections, top to bottom:
+Every session on the daemon, newest first. Each card shows:
+
+| Line | Contents |
+|---|---|
+| Title | The session's title, or its ID if it has never been renamed |
+| Workspace | The directory the session was created in, shortened from the front (the full path is in the tooltip). This is what distinguishes two sessions that would otherwise look identical because they belong to different projects. |
+| Created | Local date and time |
+
+**Clicking anywhere on a card switches to that session** — the transcript, agent, and status bar all follow. The `rename` and `delete` buttons on the card act on that session without switching to it. Above the list is **+ new**, below it **delete all sessions**; both destructive actions confirm first.
+
+The workspace is recorded when the session is created and never rewritten afterwards, so [switching the workspace](#switching-the-workspace-directory) changes where *new* sessions start without relabelling old ones. Sessions created before this field existed show `(workspace not recorded)`.
+
+**Switching to a session also switches the workspace to its directory** — see [Switching the workspace directory](#switching-the-workspace-directory).
+
+The agent isn't shown here — the header dropdown and the [status bar](#status-bar-under-the-prompt) both already carry the current agent, and it's a property of the next message rather than of the session's identity.
+
+### Right panel
 
 | Section | Contents |
 |---|---|
-| Sessions | Every session on the daemon with its title or ID, agent, and creation time. Each has switch, rename, and delete. Plus **+ new session** and **delete all**, both of which confirm first. |
 | Background tasks | Live status of subtasks started by the `Task` tool or the background task API |
 | MCP servers | Names of currently connected servers, from `GET /api/mcp-servers`. Configured servers that failed to connect are absent here and logged as a daemon warning. |
 
@@ -681,11 +727,18 @@ One line directly below the input box:
 
 | Element | Behavior |
 |---|---|
-| Agent and model | Which agent answers the next message, and the model its profile resolves to |
+| Agent and model | Which agent answers the next message, and the model its profile resolves to. The model shows from the moment a session opens, taken from the agent's profile, and switches to whatever the provider actually reports once the first reply arrives. |
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Shown when `show_tps` is on |
-| Activity dot | Pulses yellow while talking to the model, flashes green briefly when the reply finishes, then goes dark |
+| Activity light | Three states: **gray** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — the model is running your prompt. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. |
+| Auto-delegate pill | `auto-delegate: on` / `off`. Click to toggle — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
+
+### Switching agents with Tab
+
+`Tab` switches to the next agent and `Shift+Tab` to the previous one, the same as in the TUI — the browser's normal "move focus to the next control" behavior is suppressed so the key means the same thing in both clients. Focus stays in the prompt box. Inside a modal (permissions, workspace) Tab still moves between fields, which is the only thing it could usefully mean there.
+
+The header dropdown does the same thing and lists each agent with the model it resolves to, e.g. `explore (qwen3-1.7b)`; the agent's description is in the option's tooltip.
 
 ### Model output renders as markdown
 
@@ -796,7 +849,7 @@ Start with a narrow list like this one and widen it once you have seen the answe
 
 | Field | Meaning |
 |---|---|
-| `enabled` | The starting value. `/config auto_delegate on\|off` changes it while running. |
+| `enabled` | The starting value. `/config auto_delegate on\|off`, or the auto-delegate pill under the prompt box, changes it while running. |
 | `agent` | Which entry in `agents` handles delegated prompts. Must exist, or startup fails with an error. |
 | `match` | Globs (`*` for any run of characters, `?` for one) tried case insensitively against the whole trimmed prompt. Any one matching delegates the prompt. |
 
@@ -808,6 +861,12 @@ Behavior:
 * An empty `match` list delegates nothing. A half written config is inert rather than quietly routing everything to the cheap model.
 * Delegation never recurses. A session that already has a parent (any sub agent session) does not delegate again, and an agent never delegates to itself.
 * Turning it on with no `auto_delegate` block in config.json tells you so rather than silently doing nothing.
+
+#### Toggling it from the Web UI or GUI window
+
+The `auto-delegate: on|off` pill under the prompt box toggles the same setting with a click. The change takes effect for the very next prompt — no restart — and is written back to config.json, so it survives one. Only the `enabled` field is rewritten; the `agent` and `match` you configured are left exactly as they were.
+
+If config.json has no `auto_delegate` block at all, the pill still toggles but reads `auto-delegate: on (unconfigured)`, because there is no agent to delegate to and no patterns to match — turning it on that way writes `{"enabled": true}` and delegates nothing until you add the rest of the block.
 
 #### Choosing what to delegate
 

@@ -19,11 +19,18 @@ import (
 )
 
 type Session struct {
-	ID        string    `json:"id"`
-	ParentID  string    `json:"parent_id,omitempty"`
-	Visible   bool      `json:"visible"`
-	Agent     string    `json:"agent,omitempty"`
-	Title     string    `json:"title,omitempty"`
+	ID       string `json:"id"`
+	ParentID string `json:"parent_id,omitempty"`
+	Visible  bool   `json:"visible"`
+	Agent    string `json:"agent,omitempty"`
+	Title    string `json:"title,omitempty"`
+	// Workspace is the directory the session was created in. The daemon has
+	// one live workspace at a time (see daemon.handleSetWorkspace), so this
+	// is a record of where a conversation started, not a per-session
+	// setting: it's what lets a session list distinguish two sessions that
+	// otherwise look identical because they were opened in different
+	// projects. Empty for sessions created before this field existed.
+	Workspace string    `json:"workspace,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -60,10 +67,17 @@ func NewStore(persistDir string) (*Store, error) {
 	}, nil
 }
 
-// CreateSession creates a new session. parentID is empty for a top-level
-// (user-facing) session, or set when this is a background task spawned by
-// another session.
+// CreateSession creates a new session with no recorded workspace. parentID
+// is empty for a top-level (user-facing) session, or set when this is a
+// background task spawned by another session.
 func (s *Store) CreateSession(id, parentID, agent string, visible bool) (*Session, error) {
+	return s.CreateSessionIn(id, parentID, agent, "", visible)
+}
+
+// CreateSessionIn is CreateSession plus the workspace directory to stamp on
+// the session — see Session.Workspace. The daemon uses this so a session
+// list can show where each conversation was started.
+func (s *Store) CreateSessionIn(id, parentID, agent, workspace string, visible bool) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -76,6 +90,7 @@ func (s *Store) CreateSession(id, parentID, agent string, visible bool) (*Sessio
 		ParentID:  parentID,
 		Visible:   visible,
 		Agent:     agent,
+		Workspace: workspace,
 		CreatedAt: time.Now().UTC(),
 	}
 

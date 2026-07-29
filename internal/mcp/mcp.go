@@ -66,7 +66,7 @@ func Connect(ctx context.Context, servers map[string]config.MCPServerConfig) (*M
 	var warnings []error
 
 	for name, sc := range servers {
-		session, err := connectOne(ctx, name, sc)
+		session, err := connectOne(ctx, sc)
 		if err != nil {
 			warnings = append(warnings, fmt.Errorf("mcp server %q: %w — skipping, its tools won't be available", name, err))
 			continue
@@ -103,7 +103,35 @@ func Connect(ctx context.Context, servers map[string]config.MCPServerConfig) (*M
 	return m, out, warnings
 }
 
-func connectOne(ctx context.Context, name string, sc config.MCPServerConfig) (*mcpsdk.ClientSession, error) {
+// Ping starts one configured MCP server, completes the MCP handshake, lists
+// its tools, and shuts it back down, returning the tool names it advertised.
+// It is a connectivity check for `localcode mcp list` — the config file on
+// its own can only say a server is *registered*, never that its command
+// exists, starts, and speaks MCP.
+//
+// The server process is started and killed for real, so a server with
+// expensive startup work pays that cost here; callers should bound this with
+// a context deadline.
+func Ping(ctx context.Context, sc config.MCPServerConfig) ([]string, error) {
+	session, err := connectOne(ctx, sc)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
+	result, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{})
+	if err != nil {
+		return nil, fmt.Errorf("list tools: %w", err)
+	}
+	names := make([]string, 0, len(result.Tools))
+	for _, t := range result.Tools {
+		names = append(names, t.Name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func connectOne(ctx context.Context, sc config.MCPServerConfig) (*mcpsdk.ClientSession, error) {
 	cmd := exec.Command(sc.Command, sc.Args...)
 	if len(sc.Env) > 0 {
 		cmd.Env = os.Environ()
@@ -142,7 +170,7 @@ func (m *Manager) reconnect(ctx context.Context, server string) (*mcpsdk.ClientS
 		_ = old.Close()
 	}
 
-	session, err := connectOne(ctx, server, sc)
+	session, err := connectOne(ctx, sc)
 	if err != nil {
 		return nil, err
 	}

@@ -7,9 +7,21 @@
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #0d1117;
-    --panel: #161b22;
-    --border: #30363d;
+    /* Neutral greys, no blue tint: --bg is the side panels and the
+       header/footer chrome (rgb 24,24,24), --center the transcript column
+       (rgb 32,32,32), so the conversation reads as the lit surface and
+       everything around it recedes. --panel is the raised-surface grey used
+       for inputs, code blocks, and modals; it matches --center so a control
+       sitting on the chrome still stands off it. */
+    --bg: #181818;
+    --center: #202020;
+    --panel: #202020;
+    /* One step up from --center, for things that sit *on* a surface and
+       have to read as raised from it: the prompt box, code blocks, the
+       agent dropdown. --panel alone can't do this job any more now that it
+       matches the transcript it would be drawn on. */
+    --raised: #2a2a2a;
+    --border: #333333;
     --text: #e6edf3;
     --muted: #8b949e;
     --accent: #58a6ff;
@@ -37,7 +49,7 @@
   header .right { display: flex; align-items: center; gap: 10px; }
   header .session-id { color: var(--muted); font-size: 12px; font-family: monospace; }
   header .agent-select {
-    background: var(--panel);
+    background: var(--raised);
     border: 1px solid var(--border);
     color: var(--text);
     font-size: 12px;
@@ -51,6 +63,7 @@
   }
   #transcript {
     flex: 1;
+    background: var(--center);
     overflow-y: auto;
     padding: 16px;
     white-space: pre-wrap;
@@ -71,7 +84,7 @@
   #transcript .msg-model ul, #transcript .msg-model ol { margin: 0 0 10px; padding-left: 22px; }
   #transcript .msg-model li { margin-bottom: 2px; }
   #transcript .msg-model code {
-    background: var(--panel);
+    background: var(--raised);
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 1px 5px;
@@ -79,7 +92,7 @@
     font-size: 0.9em;
   }
   #transcript .msg-model pre {
-    background: var(--panel);
+    background: var(--raised);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 10px 12px;
@@ -97,10 +110,22 @@
   #transcript .msg-model hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
   aside {
     width: 280px;
+    /* Stated rather than inherited from body, so the panel/centre contrast
+       survives anything that later changes the page background. */
+    background: var(--bg);
     border-left: 1px solid var(--border);
     padding: 12px;
     overflow-y: auto;
     font-size: 12px;
+    flex-shrink: 0;
+  }
+  /* The session list gets its own panel on the left, opposite the tasks /
+     MCP panel, so switching conversations is a first-class move rather
+     than something buried under two other sections. */
+  aside.left {
+    width: 260px;
+    border-left: none;
+    border-right: 1px solid var(--border);
   }
   .side-section { margin-bottom: 18px; }
   .side-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
@@ -124,9 +149,30 @@
     border-radius: 6px;
     padding: 8px 10px;
     margin-bottom: 6px;
+    cursor: pointer;
   }
-  .session-item.active { border-color: var(--accent); }
-  .session-item .meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
+  .session-item:hover { border-color: var(--accent); }
+  .session-item.active { border-color: var(--accent); background: var(--panel); cursor: default; }
+  .session-item .title {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 2px;
+  }
+  /* The workspace is what tells two otherwise identical sessions apart.
+     Long paths are shortened from the front in JS (see shortenPath) rather
+     than by CSS ellipsis, because the tail — the project directory — is
+     the part that identifies the session. */
+  .session-item .workspace {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--accent);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .session-item .meta { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
   .session-item .actions { display: flex; gap: 4px; }
   .session-item button { padding: 3px 8px; font-size: 11px; }
   .session-item .danger-btn { background: var(--err); color: #fff; }
@@ -147,7 +193,7 @@
   }
   #input {
     flex: 1;
-    background: var(--panel);
+    background: var(--raised);
     border: 1px solid var(--border);
     color: var(--text);
     border-radius: 6px;
@@ -202,6 +248,10 @@
   #prompt-status.ctx-warn { color: var(--warn); }
   #prompt-status.ctx-crit { color: var(--err); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+  /* Three states, and only three: gray = no live connection to the model,
+     solid green = connected and idle, blinking green = a turn is running.
+     Blink is the *same* green rather than a second color, so "is it
+     working?" reads as motion and "is it up?" reads as color. */
   .comm-dot {
     width: 8px;
     height: 8px;
@@ -210,8 +260,20 @@
     display: inline-block;
     flex-shrink: 0;
   }
-  .comm-dot.active { background: var(--warn); animation: pulse 1s infinite; }
-  .comm-dot.flash { background: var(--ok); animation: pulse .3s 2; }
+  .comm-dot.connected { background: var(--ok); }
+  .comm-dot.connected.active { animation: pulse 1s infinite; }
+  #auto-delegate-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    margin-left: auto; /* both pills ride the right edge as one group */
+  }
+  #auto-delegate-btn.on { color: var(--accent); border-color: var(--accent); }
+  #auto-delegate-btn:disabled { cursor: not-allowed; }
   #permission-status-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -220,7 +282,6 @@
     padding: 2px 8px;
     border-radius: 10px;
     cursor: pointer;
-    margin-left: auto;
   }
   #permission-status-btn.skip { color: var(--warn); border-color: var(--warn); }
   #permission-settings-modal {
@@ -338,18 +399,18 @@
   </div>
 </div>
 <main>
-  <div id="transcript"></div>
-  <aside>
+  <aside class="left">
     <div class="side-section">
       <div class="side-header">
         <h2>Sessions</h2>
-        <div style="display:flex; gap:4px;">
-          <button class="icon-btn" id="new-session-btn" title="start a new session">+ new session</button>
-          <button class="icon-btn danger-btn" id="delete-all-sessions-btn" title="delete all sessions">delete all</button>
-        </div>
+        <button class="icon-btn" id="new-session-btn" title="start a new session">+ new</button>
       </div>
       <div id="session-list"></div>
+      <button class="icon-btn danger-btn" id="delete-all-sessions-btn" title="delete all sessions" style="width:100%">delete all sessions</button>
     </div>
+  </aside>
+  <div id="transcript"></div>
+  <aside>
     <div class="side-section">
       <h2>Background tasks</h2>
       <div id="tasks"></div>
@@ -365,8 +426,9 @@
   <button id="send">Send</button>
 </footer>
 <div id="prompt-status">
-  <span class="comm-dot" id="comm-dot" title="talking to the LLM"></span>
+  <span class="comm-dot" id="comm-dot"></span>
   <span id="status-text"></span>
+  <button id="auto-delegate-btn" title="click to toggle auto-delegation"></button>
   <button id="permission-status-btn" title="click to view or change permission settings"></button>
 </div>
 
@@ -427,6 +489,7 @@
   const statusTextEl = document.getElementById('status-text');
   const statusBarEl = document.getElementById('prompt-status');
   const commDotEl = document.getElementById('comm-dot');
+  const autoDelegateBtn = document.getElementById('auto-delegate-btn');
   const permissionStatusBtn = document.getElementById('permission-status-btn');
   const permissionSettingsModal = document.getElementById('permission-settings-modal');
   const skipPermissionsCheckbox = document.getElementById('skip-permissions-checkbox');
@@ -450,13 +513,14 @@
   let pendingPermissionCanAlways = false;
   let waiting = false;
   let tasks = new Map(); // task_id -> {agent, status}
-  let agents = []; // [{name, description}]
+  let agents = []; // [{name, description, model}]
   let currentAgent = null;
   let customCommands = []; // [{name, description}]
   let sessions = []; // cached list rendered in the aside
   let mcpServers = [];
   let lastUsage = null; // {input_tokens, output_tokens, max_context, percent, tps, show_tps, model}
   let workspacePath = '';
+  let canBrowseWorkspace = false; // true only in the desktop-window mode
   const workspaceNoteDefault = 'Changing this restarts relative-path resolution for every tool from the new directory. Refused while a turn is in progress.';
   let skipPermissions = false;
   let permissionRules = {}; // tool -> [{match, decision}]
@@ -464,6 +528,11 @@
   let autoCompactEnabled = true;
   let showTPS = true;
   let autoDelegate = false;
+  let autoDelegateAgent = ''; // '' when config.json has no auto_delegate block
+  // connected tracks the SSE stream to the daemon, which is this client's
+  // only channel to the model: while it's down, nothing typed here can
+  // reach one, so it's what the status light reports as "connected".
+  let connected = false;
   let runningTool = ''; // tool currently executing, shown in the status bar
   let promptQueue = []; // plain prompts submitted while a turn is in flight
   // Up/Down prompt recall, mirroring the TUI. Client-side and in-memory:
@@ -518,16 +587,31 @@
 
   function setWaiting(v) {
     waiting = v;
-    if (v) {
-      commDotEl.classList.remove('flash');
-      commDotEl.classList.add('active');
-    } else {
-      commDotEl.classList.remove('active');
-      commDotEl.classList.add('flash');
-      setTimeout(() => commDotEl.classList.remove('flash'), 600);
-      dequeueNext();
-    }
+    renderCommDot();
+    if (!v) dequeueNext();
     renderStatusBar();
+  }
+
+  // renderCommDot draws the three-state light left of the status text:
+  // gray when there's no live event stream to the daemon (so no path to
+  // the model), solid green when there is, blinking green while a turn is
+  // actually running.
+  function renderCommDot() {
+    commDotEl.classList.toggle('connected', connected);
+    commDotEl.classList.toggle('active', connected && waiting);
+    if (!connected) {
+      commDotEl.title = 'not connected to the model (event stream is down)';
+    } else if (waiting) {
+      commDotEl.title = 'model is running your prompt';
+    } else {
+      commDotEl.title = 'connected to the model, idle';
+    }
+  }
+
+  function setConnected(v) {
+    if (connected === v) return;
+    connected = v;
+    renderCommDot();
   }
 
   // isPlainPrompt reports whether text is an ordinary chat message rather
@@ -619,10 +703,22 @@
   // renderStatusBar draws the single line below the prompt box: current
   // agent/model, context-window usage, tokens-per-second (if enabled), and
   // (via commDotEl, toggled from setWaiting) whether a turn is in flight.
+  // modelForAgent returns the model configured for an agent, from the
+  // /api/agents listing. It is what lets the status line name a model
+  // before the first usage event of a session has arrived — otherwise a
+  // freshly opened session shows no model at all until it answers once.
+  function modelForAgent(name) {
+    const a = agents.find(x => x.name === name);
+    return (a && a.model) || '';
+  }
+
   function renderStatusBar() {
     const parts = [];
     parts.push(`agent: ${currentAgent || '?'}`);
-    if (lastUsage && lastUsage.model) parts.push(`model: ${lastUsage.model}`);
+    // Prefer what the model actually reported over what config says it
+    // should be; they differ when a profile is overridden server-side.
+    const model = (lastUsage && lastUsage.model) || modelForAgent(currentAgent);
+    if (model) parts.push(`model: ${model}`);
     if (lastUsage && typeof lastUsage.percent === 'number') {
       parts.push(`context: ${lastUsage.percent.toFixed(1)}%`);
     }
@@ -658,6 +754,35 @@
       permissionStatusBtn.textContent = `permissions: ask (${ruleCount} rule${ruleCount > 1 ? 's' : ''})`;
     } else {
       permissionStatusBtn.textContent = 'permissions: ask';
+    }
+  }
+
+  // renderAutoDelegate draws the auto-delegation pill next to the
+  // permission pill. Auto-delegation needs an auto_delegate block in
+  // config.json to say which agent handles delegated prompts; with no such
+  // block the setting can still be flipped but delegates nothing, so the
+  // pill says so rather than showing a bare "on" that does nothing.
+  function renderAutoDelegate() {
+    autoDelegateBtn.classList.toggle('on', autoDelegate);
+    if (autoDelegate && !autoDelegateAgent) {
+      autoDelegateBtn.textContent = 'auto-delegate: on (unconfigured)';
+      autoDelegateBtn.title = 'auto-delegate is on but config.json has no auto_delegate block naming an agent and match patterns, so nothing is delegated — click to turn it off';
+      return;
+    }
+    autoDelegateBtn.textContent = `auto-delegate: ${autoDelegate ? 'on' : 'off'}`;
+    autoDelegateBtn.title = autoDelegateAgent
+      ? `matching prompts ${autoDelegate ? 'go' : 'would go'} to the "${autoDelegateAgent}" agent — click to turn ${autoDelegate ? 'off' : 'on'}`
+      : 'click to toggle auto-delegation (config.json has no auto_delegate block yet, so nothing would be delegated)';
+  }
+
+  async function toggleAutoDelegate() {
+    const next = !autoDelegate;
+    try {
+      await api('POST', '/api/settings/auto-delegate', { enabled: next });
+      autoDelegate = next;
+      renderAutoDelegate();
+    } catch (err) {
+      appendLine(`<div class="msg-error">failed to change auto-delegate: ${escapeHtml(String(err))}</div>`);
     }
   }
 
@@ -851,7 +976,10 @@
       case 'config.changed':
         if (typeof ev.data.auto_compact_enabled === 'boolean') autoCompactEnabled = ev.data.auto_compact_enabled;
         if (typeof ev.data.show_tps === 'boolean') showTPS = ev.data.show_tps;
-        if (typeof ev.data.auto_delegate === 'boolean') autoDelegate = ev.data.auto_delegate;
+        if (typeof ev.data.auto_delegate === 'boolean') {
+          autoDelegate = ev.data.auto_delegate;
+          renderAutoDelegate();
+        }
         renderStatusBar();
         break;
       case 'session.renamed':
@@ -884,10 +1012,31 @@
     for (const a of agents) {
       const opt = document.createElement('option');
       opt.value = a.name;
-      opt.textContent = a.description ? `${a.name} — ${a.description}` : a.name;
+      // The model is the part that decides cost and capability, so it goes
+      // in the option text itself; the description is long and varies
+      // wildly in length, so it goes in the tooltip instead of pushing the
+      // model off the end of a narrow dropdown.
+      opt.textContent = a.model ? `${a.name} (${a.model})` : a.name;
+      if (a.description) opt.title = a.description;
       agentSelectEl.appendChild(opt);
     }
     if (currentAgent) agentSelectEl.value = currentAgent;
+  }
+
+  // cycleAgent switches to the next (or previous) agent in the dropdown,
+  // the Web UI counterpart of the TUI's Tab key. The switch itself goes
+  // through the daemon, so currentAgent updates from the agent.switched
+  // event like every other client's does.
+  async function cycleAgent(step) {
+    if (!sessionID || agents.length < 2) return;
+    const idx = agents.findIndex(a => a.name === currentAgent);
+    const next = agents[((idx < 0 ? 0 : idx) + step + agents.length) % agents.length];
+    if (!next || next.name === currentAgent) return;
+    try {
+      await api('POST', `/api/sessions/${sessionID}/agent`, { agent: next.name });
+    } catch (err) {
+      appendLine(`<div class="msg-error">failed to switch agent: ${escapeHtml(String(err))}</div>`);
+    }
   }
 
   async function loadCommands() {
@@ -904,6 +1053,7 @@
       autoCompactEnabled = s.auto_compact_enabled;
       showTPS = s.show_tps;
       autoDelegate = !!s.auto_delegate;
+      autoDelegateAgent = s.auto_delegate_agent || '';
       skipPermissions = !!s.skip_permissions;
       permissionRules = s.permission_rules || {};
       canEditPermissions = !!s.can_edit_permissions;
@@ -912,21 +1062,70 @@
     }
     renderStatusBar();
     renderPermissionStatus();
+    renderAutoDelegate();
   }
 
   async function loadWorkspace() {
     try {
       const w = await api('GET', '/api/workspace');
       workspacePath = w.path || '';
+      canBrowseWorkspace = !!w.can_browse;
     } catch (err) {
       workspacePath = '';
+      canBrowseWorkspace = false;
     }
     renderWorkspace();
   }
 
   function renderWorkspace() {
     workspaceBtn.textContent = workspacePath || '(unknown workspace)';
-    workspaceBtn.title = `${workspacePath}\nclick to change the workspace directory`;
+    workspaceBtn.title = canBrowseWorkspace
+      ? `${workspacePath}\nclick to pick a workspace folder`
+      : `${workspacePath}\nclick to change the workspace directory`;
+  }
+
+  // The desktop window can open the OS folder picker, so clicking the
+  // workspace goes straight to it rather than to a box you have to type an
+  // absolute path into. A browser can't: neither <input webkitdirectory>
+  // nor showDirectoryPicker() hands back a real filesystem path, and asking
+  // the *daemon* to open a dialog only makes sense when it's on the same
+  // machine as the screen — so that case keeps the typed-path modal.
+  function openWorkspacePicker() {
+    if (canBrowseWorkspace) browseWorkspace();
+    else openWorkspaceModal();
+  }
+
+  async function browseWorkspace() {
+    let picked;
+    try {
+      picked = await api('POST', '/api/workspace/browse', { start: workspacePath });
+    } catch (err) {
+      // The picker itself failed (not a cancel) — fall back to typing,
+      // rather than leaving the click doing nothing at all.
+      appendLine(`<div class="msg-error">could not open the folder picker: ${escapeHtml(String(err))}</div>`);
+      openWorkspaceModal();
+      return;
+    }
+    if (!picked || !picked.path) return; // 204: dialog dismissed, nothing to do
+    await applyWorkspace(picked.path);
+  }
+
+  // applyWorkspace switches the daemon's working directory and reports the
+  // outcome in the transcript, since this changes where every later tool
+  // call and bash command resolves from — too consequential to happen
+  // silently. Returns whether it took effect.
+  async function applyWorkspace(path) {
+    if (path === workspacePath) return true;
+    try {
+      const w = await api('POST', '/api/workspace', { path });
+      workspacePath = w.path;
+      renderWorkspace();
+      appendLine(`<div class="msg-tool">[workspace] ${escapeHtml(w.path)}</div>`);
+      return true;
+    } catch (err) {
+      appendLine(`<div class="msg-error">could not switch the workspace to ${escapeHtml(path)}: ${escapeHtml(String(err))}</div>`);
+      return false;
+    }
   }
 
   function openWorkspaceModal() {
@@ -949,6 +1148,8 @@
       renderWorkspace();
       workspaceModal.classList.remove('open');
     } catch (err) {
+      // Stays open with the error inline, so a typo can be corrected
+      // without retyping the whole path.
       workspaceNote.textContent = String(err);
       workspaceNote.classList.add('err');
     }
@@ -1090,12 +1291,20 @@
 
   function connectEvents() {
     if (eventSource) eventSource.close();
+    setConnected(false);
     eventSource = new EventSource(`/api/sessions/${sessionID}/events`);
+    eventSource.onopen = () => setConnected(true);
     eventSource.onmessage = (e) => {
+      // An event arriving is itself proof the stream is up, which matters
+      // because onopen doesn't fire again after an auto-reconnect in every
+      // browser.
+      setConnected(true);
       try { applyEvent(JSON.parse(e.data)); } catch (err) { console.error('bad event', err); }
     };
     eventSource.onerror = () => {
-      // EventSource auto-reconnects using Last-Event-ID; nothing to do.
+      // EventSource auto-reconnects using Last-Event-ID, so there's nothing
+      // to do but show the light as down until it comes back.
+      setConnected(false);
     };
   }
 
@@ -1115,6 +1324,19 @@
     renderSessionList();
   }
 
+  // shortenPath trims a long path from the front, keeping the tail — the
+  // project directory, which is what identifies the session — and dropping
+  // the leading directories, which for most people are the same on every
+  // row. The full path stays in the title attribute.
+  function shortenPath(path, max = 32) {
+    if (path.length <= max) return path;
+    const tail = path.slice(-(max - 1));
+    const cut = tail.indexOf('/');
+    // Prefer starting at a path separator so the result reads as a path
+    // rather than a word chopped in half.
+    return '…' + (cut > 0 && cut < 8 ? tail.slice(cut) : tail);
+  }
+
   function renderSessionList() {
     sessionListEl.innerHTML = '';
     if (!sessions || sessions.length === 0) {
@@ -1124,32 +1346,47 @@
     for (const s of sessions) {
       const div = document.createElement('div');
       div.className = 'session-item' + (s.id === sessionID ? ' active' : '');
+      // The whole card switches to the session — the old dedicated "switch"
+      // button made the single most common action the smallest target on
+      // the row. The rename/delete buttons below stop propagation so they
+      // don't switch as a side effect of being clicked.
+      div.title = `${s.id}\nclick to switch to this session`;
+      div.addEventListener('click', () => {
+        if (s.id !== sessionID) selectSession(s.id, s.agent, s.workspace);
+      });
 
-      const label = s.title ? s.title : s.id;
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = s.title ? s.title : s.id;
+      div.appendChild(title);
+
+      // Which project a conversation belongs to is the thing that
+      // distinguishes otherwise identical sessions, so it's shown here
+      // instead of the agent name (which the header dropdown and the
+      // status line under the prompt both already carry).
+      const workspace = document.createElement('div');
+      workspace.className = 'workspace';
+      workspace.textContent = s.workspace ? shortenPath(s.workspace) : '(workspace not recorded)';
+      workspace.title = s.workspace || 'this session predates workspace tracking';
+      div.appendChild(workspace);
+
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.title = s.id;
-      meta.innerHTML = `${escapeHtml(label)}<br>${escapeHtml(s.agent)} · ${escapeHtml(formatTime(s.created_at))}`;
+      meta.textContent = formatTime(s.created_at);
       div.appendChild(meta);
 
       const actions = document.createElement('div');
       actions.className = 'actions';
 
-      const switchBtn = document.createElement('button');
-      switchBtn.textContent = 'switch';
-      switchBtn.disabled = s.id === sessionID;
-      switchBtn.addEventListener('click', () => selectSession(s.id, s.agent));
-      actions.appendChild(switchBtn);
-
       const renameBtn = document.createElement('button');
       renameBtn.textContent = 'rename';
-      renameBtn.addEventListener('click', () => renameSession(s));
+      renameBtn.addEventListener('click', (e) => { e.stopPropagation(); renameSession(s); });
       actions.appendChild(renameBtn);
 
       const delBtn = document.createElement('button');
       delBtn.textContent = 'delete';
       delBtn.className = 'danger-btn';
-      delBtn.addEventListener('click', () => deleteSession(s));
+      delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteSession(s); });
       actions.appendChild(delBtn);
 
       div.appendChild(actions);
@@ -1179,7 +1416,7 @@
     if (s.id === sessionID) {
       await loadSessions();
       if (sessions.length > 0) {
-        selectSession(sessions[0].id, sessions[0].agent);
+        selectSession(sessions[0].id, sessions[0].agent, sessions[0].workspace);
       } else {
         await createNewSession();
       }
@@ -1188,7 +1425,14 @@
     }
   }
 
-  function selectSession(id, agent) {
+  // selectSession switches the UI to a session and, if that session was
+  // started somewhere else, moves the daemon's workspace to match — so
+  // opening a conversation about another project actually puts you back in
+  // that project rather than leaving its old transcript pointed at the
+  // current directory. workspace is that session's recorded directory;
+  // sessions from before the field existed have none, and those leave the
+  // workspace alone rather than guessing.
+  function selectSession(id, agent, workspace) {
     sessionID = id;
     sessionIdEl.textContent = sessionID;
     transcriptEl.innerHTML = '';
@@ -1210,15 +1454,22 @@
     modalEl.classList.remove('open');
     setInputLocked(false);
     setCurrentAgent(agent);
+    renderStatusBar(); // the new session's agent/model, before any event arrives
     renderSessionList();
     connectEvents();
+    // Deliberately not awaited: the session is already switched and its
+    // transcript already replaying. The workspace change lands a moment
+    // later and announces itself in the transcript, and if it's refused
+    // (another session mid-turn) that's reported without having blocked
+    // the switch the user actually asked for.
+    if (workspace) applyWorkspace(workspace);
   }
 
   async function createNewSession() {
     try {
       const sess = await api('POST', '/api/sessions', { agent: 'general-purpose' });
       await loadSessions();
-      selectSession(sess.id, sess.agent);
+      selectSession(sess.id, sess.agent, sess.workspace);
     } catch (err) {
       sessionIdEl.textContent = 'error';
       appendLine(`<div class="msg-error">failed to create session: ${escapeHtml(String(err))}</div>`);
@@ -1246,6 +1497,7 @@
     '  /skill              list registered skills',
     '  /&lt;skill name&gt;        run that skill (e.g. /pdf-tools)',
     '  Esc                 cancel the running turn',
+    '  Tab / Shift+Tab      switch to the next/previous agent',
     '  /agent              list registered agents',
     '  /agent <name>        switch to that agent (also available via the header dropdown)',
     '  /init              scan the repo and create/improve an AGENTS.md rules file',
@@ -1254,6 +1506,7 @@
     '  /config auto_compact on|off   toggle auto-compaction above 80% context usage',
     '  /config show_tps on|off       toggle the tokens/sec display under the prompt',
     '  /config auto_delegate on|off  send matching prompts to a cheaper sub-agent',
+    '                        (also the clickable pill under the prompt box)',
     '  /compact           summarize and compact the conversation right now',
     '  /compact <instructions>      give instructions for how to compact',
     '  /usage              show cumulative token usage per model',
@@ -1450,9 +1703,33 @@
       if (historyNext()) e.preventDefault();
     }
   });
+  function anyModalOpen() {
+    return modalEl.classList.contains('open')
+      || permissionSettingsModal.classList.contains('open')
+      || workspaceModal.classList.contains('open');
+  }
+
   // Esc works even when focus is not in the prompt box, matching the TUI.
+  //
+  // Tab does too, and for the same reason: in the TUI it cycles the agent,
+  // and someone moving between the two shouldn't find that the same key
+  // instead walks the focus ring around the page. preventDefault is what
+  // takes it back from the browser. Tab still does its normal job inside a
+  // modal and in the modals' own fields, where moving between inputs is
+  // the only thing it could reasonably mean.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && e.target !== inputEl && !modalEl.classList.contains('open')) cancelTurn();
+    if (e.key === 'Escape' && e.target !== inputEl && !modalEl.classList.contains('open')) {
+      cancelTurn();
+      return;
+    }
+    if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !anyModalOpen()) {
+      const inOtherField = e.target !== inputEl
+        && e.target !== document.body
+        && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT');
+      if (inOtherField) return;
+      e.preventDefault();
+      cycleAgent(e.shiftKey ? -1 : 1);
+    }
   });
 
   permissionAllowBtn.addEventListener('click', () => resolvePermission(true, 'once'));
@@ -1460,12 +1737,13 @@
   permissionAllowAlwaysBtn.addEventListener('click', () => resolvePermission(true, 'always'));
   permissionDenyBtn.addEventListener('click', () => resolvePermission(false, 'once'));
 
+  autoDelegateBtn.addEventListener('click', toggleAutoDelegate);
   permissionStatusBtn.addEventListener('click', openPermissionSettings);
   permissionSettingsCloseBtn.addEventListener('click', () => permissionSettingsModal.classList.remove('open'));
   skipPermissionsCheckbox.addEventListener('change', () => toggleSkipPermissions(skipPermissionsCheckbox.checked));
   ruleAddBtn.addEventListener('click', addPermissionRule);
 
-  workspaceBtn.addEventListener('click', openWorkspaceModal);
+  workspaceBtn.addEventListener('click', openWorkspacePicker);
   workspaceCancelBtn.addEventListener('click', () => workspaceModal.classList.remove('open'));
   workspaceSaveBtn.addEventListener('click', saveWorkspace);
   workspaceInput.addEventListener('keydown', (e) => {
@@ -1501,7 +1779,7 @@
     if (!sessions || sessions.length === 0) {
       await createNewSession();
     } else {
-      selectSession(sessions[0].id, sessions[0].agent);
+      selectSession(sessions[0].id, sessions[0].agent, sessions[0].workspace);
     }
   }
 

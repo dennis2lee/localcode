@@ -26,6 +26,7 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/credentials"
 	"localcode/internal/daemon"
+	"localcode/internal/dialog"
 	"localcode/internal/gui"
 	mcpclient "localcode/internal/mcp"
 	"localcode/internal/memory"
@@ -255,6 +256,16 @@ func runGUI(configPath string) error {
 	d, err := buildDaemon(context.Background(), configPath)
 	if err != nil {
 		return err
+	}
+	// Only here. The window and the daemon share a machine and a user in
+	// this mode, so a folder picker opens where the person clicking is
+	// sitting. Every other mode leaves d.PickDirectory nil — over --server
+	// (or a browser on another box) the dialog would open on the daemon's
+	// machine, in front of nobody.
+	if dialog.Available() {
+		d.PickDirectory = func(ctx context.Context, startDir string) (string, error) {
+			return dialog.PickDirectory(ctx, "Choose a workspace folder", startDir)
+		}
 	}
 	return gui.Launch("localcode", d.Handler())
 }

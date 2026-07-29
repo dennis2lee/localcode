@@ -39,16 +39,30 @@ jobs:
       - name: Show C toolchain
         run: gcc --version
 
+      # -H windowsgui makes this a GUI-subsystem binary: launched from cmd
+      # or Explorer it opens its window and hands the shell prompt straight
+      # back, instead of pinning the console for the window's whole
+      # lifetime (and, from Explorer, flashing an empty console box).
+      #
+      # The trade-off is that a GUI-subsystem process has no console of its
+      # own, so console-only subcommands (`version`, `mcp`, `login`) print
+      # nowhere useful from this binary — those belong to the regular
+      # console-subsystem localcode.exe, which ships in the same MSI.
       - name: Build GUI (-tags gui, CGo)
         env:
           CGO_ENABLED: '1'
-        run: go build -tags gui -ldflags "-s -w" -o localcode-gui.exe ./cmd/localcode
+        run: go build -tags gui -ldflags "-s -w -H windowsgui" -o localcode-gui.exe ./cmd/localcode
 
-      # Proves the CGo binary actually links and runs on Windows. The
-      # `version` subcommand prints and exits without opening a window or
-      # needing a config, so it works headlessly in CI.
+      # Proves the CGo binary actually links and runs on Windows. Because
+      # the binary is GUI-subsystem, PowerShell does not wait for it and its
+      # stdout goes nowhere — Start-Process -Wait is what makes the exit
+      # code observable, so a link error or an instant crash still fails CI.
+      # `version` exits immediately without opening a window or reading a
+      # config, so this stays headless.
       - name: Smoke check
-        run: ./localcode-gui.exe version
+        run: |
+          $p = Start-Process -FilePath ./localcode-gui.exe -ArgumentList 'version' -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "localcode-gui.exe version exited $($p.ExitCode)" }
 
       - uses: actions/upload-artifact@v4
         with:

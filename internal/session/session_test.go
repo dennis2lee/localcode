@@ -504,3 +504,62 @@ func TestLoadAllFromDiskWarnsOnCorruptMetaButRestoresOthers(t *testing.T) {
 		t.Error("expected the corrupt session to not be restored")
 	}
 }
+
+// TestWorkspaceSurvivesRestart pins that the workspace a session was
+// created in is metadata, not a runtime detail: it has to come back after a
+// daemon restart, or a restored session list would go blank in exactly the
+// column that tells two projects' sessions apart.
+func TestWorkspaceSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := s.CreateSessionIn("s1", "", "general-purpose", "/projects/alpha", true); err != nil {
+		t.Fatalf("CreateSessionIn: %v", err)
+	}
+	// A session created through the plain constructor records nothing,
+	// which is also what a session written by an older build looks like.
+	if _, err := s.CreateSession("s2", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	restored, _, err := LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatalf("LoadAllFromDisk: %v", err)
+	}
+
+	got, err := restored.Get("s1")
+	if err != nil {
+		t.Fatalf("Get s1: %v", err)
+	}
+	if got.Workspace != "/projects/alpha" {
+		t.Errorf("restored workspace = %q, want %q", got.Workspace, "/projects/alpha")
+	}
+
+	legacy, err := restored.Get("s2")
+	if err != nil {
+		t.Fatalf("Get s2: %v", err)
+	}
+	if legacy.Workspace != "" {
+		t.Errorf("workspace = %q for a session created without one, want empty", legacy.Workspace)
+	}
+
+	// Renaming rewrites the metadata file wholesale, so it's the operation
+	// most likely to quietly drop a field that isn't part of the rename.
+	if _, err := restored.SetTitle("s1", "renamed"); err != nil {
+		t.Fatalf("SetTitle: %v", err)
+	}
+	again, _, err := LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatalf("second LoadAllFromDisk: %v", err)
+	}
+	after, err := again.Get("s1")
+	if err != nil {
+		t.Fatalf("Get s1 after rename: %v", err)
+	}
+	if after.Workspace != "/projects/alpha" {
+		t.Errorf("workspace = %q after a rename, want it preserved", after.Workspace)
+	}
+}
