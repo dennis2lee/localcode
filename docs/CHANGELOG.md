@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: `LocalCode.app` dropped every argument it was given.** The bundle's launcher script ran `exec localcode-bin --gui` without `"$@"`, so `open LocalCode.app --args --config /path/to/config.json` silently ignored the flag and the app fell back to `~/.localcode/config.json` — with no way to reach `--config` at all once localcode is an `.app` rather than a command. Found while opening the real window to verify the folder picker.
+- Verified on a real macOS desktop (v0.28.0 build): the desktop window opens from the `.app`, clicking the workspace opens the system folder picker titled "Choose a workspace folder" starting at the current workspace, and choosing a folder applies it — header, transcript `[workspace]` line, and the process's actual working directory all follow. Sessions written by older builds correctly show `(workspace not recorded)`.
+
 ## v0.28.0
 
 - **Switching sessions now moves the workspace with them.** Each session already recorded the directory it was created in; selecting one now also switches the daemon's working directory to it, so reopening a conversation about another project puts you back in that project instead of leaving its transcript pointed at wherever you happened to be. A `[workspace] <path>` line marks it in the transcript, since it changes where every later tool call and bash command resolves from. Sessions with no recorded workspace (written before the field existed) leave it alone rather than guessing, and a refused switch — another session mid-turn, or a directory since deleted — is reported without blocking the session switch itself.

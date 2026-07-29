@@ -51,10 +51,14 @@ rm "$OUT/${BIN_NAME}-bin"
 # Entry point: run the real binary with --gui so Finder launch opens the
 # native window directly (no terminal). exec keeps it as the app's process
 # so the Dock/window associate with the bundle.
+#
+# "$@" is forwarded so the bundle can still be given flags, which is the
+# only way to reach them once localcode is an .app rather than a command:
+#   open LocalCode.app --args --config /path/to/config.json
 cat > "$APP/Contents/MacOS/${APP_NAME}" <<'LAUNCHER'
 #!/bin/bash
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$DIR/localcode-bin" --gui
+exec "$DIR/localcode-bin" --gui "$@"
 LAUNCHER
 chmod +x "$APP/Contents/MacOS/${APP_NAME}"
 
