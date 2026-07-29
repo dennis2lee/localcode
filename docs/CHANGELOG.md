@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.29.0
 
 - **Remote MCP servers are supported, so `mcp import-claude` no longer skips them.** Until now only stdio servers could be represented, and a url-based entry in a Claude Code config was counted and dropped — which meant the import silently left behind exactly the servers that are hardest to set up by hand. All three MCP transports now connect: `stdio` (a local child process), `http` (streamable HTTP), and `sse` (the older HTTP+SSE).
   * `MCPServerConfig` gained `type`, `url`, and `headers`, matching Claude Code's own field names so an entry copies across verbatim. `type` may be omitted: an entry with a `url` infers `http`, anything else `stdio`, so every existing stdio config keeps working untouched and is still written in its old shape.
