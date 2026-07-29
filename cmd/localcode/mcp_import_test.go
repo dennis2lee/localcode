@@ -3,14 +3,15 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // TestCollectClaudeMCPServers confirms the three Claude Code sources (a
 // shared ./.mcp.json, ~/.claude.json's global mcpServers, and its
-// per-project block) all contribute, that a remote/url-based entry is
-// counted as skipped rather than imported, and that a later source
-// (the project-scoped Claude entry) wins a name collision.
+// per-project block) all contribute, that remote entries import alongside
+// local ones, and that a later source (the project-scoped Claude entry)
+// wins a name collision.
 func TestCollectClaudeMCPServers(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()
@@ -23,7 +24,10 @@ func TestCollectClaudeMCPServers(t *testing.T) {
 	claudeJSON := `{
 		"mcpServers": {
 			"filesystem": {"command": "npx", "args": ["-y", "server-filesystem"]},
-			"remote": {"url": "https://example.com/mcp"},
+			"bare-url": {"url": "https://example.com/mcp"},
+			"remote-http": {"type": "http", "url": "https://example.com/mcp", "headers": {"Authorization": "Bearer t"}},
+			"remote-sse": {"type": "sse", "url": "https://example.com/sse"},
+			"broken": {"env": {"NOTHING": "useful"}},
 			"github": {"command": "old-github-command"}
 		},
 		"projects": {
@@ -38,19 +42,38 @@ func TestCollectClaudeMCPServers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	servers, sources, skippedRemote := collectClaudeMCPServers(cwd, home)
+	servers, sources, unusable := collectClaudeMCPServers(cwd, home)
 
 	if len(sources) != 2 {
 		t.Errorf("sources = %v, want 2 contributing files", sources)
 	}
-	if skippedRemote != 1 {
-		t.Errorf("skippedRemote = %d, want 1 (the url-based \"remote\" entry)", skippedRemote)
-	}
-	if _, ok := servers["remote"]; ok {
-		t.Error("url-based server should not appear in the imported set")
-	}
 	if got := servers["filesystem"].Command; got != "npx" {
 		t.Errorf("filesystem.command = %q, want npx", got)
+	}
+
+	// Remote servers import too, keeping their transport, url, and headers.
+	if got := servers["remote-http"]; got.Transport() != "http" || got.URL != "https://example.com/mcp" {
+		t.Errorf("remote-http = %+v, want an http server at https://example.com/mcp", got)
+	}
+	if got := servers["remote-http"].Headers["Authorization"]; got != "Bearer t" {
+		t.Errorf("remote-http Authorization header = %q, want it carried across", got)
+	}
+	if got := servers["remote-sse"].Transport(); got != "sse" {
+		t.Errorf("remote-sse transport = %q, want sse — an explicit type must not be rewritten", got)
+	}
+	// A url with no type is a remote server; http is the current spec's
+	// transport, so that is what a bare url infers.
+	if got := servers["bare-url"].Transport(); got != "http" {
+		t.Errorf("bare-url transport = %q, want http", got)
+	}
+
+	// An entry that says neither how to start a process nor where to
+	// connect is reported by name rather than silently dropped.
+	if _, ok := servers["broken"]; ok {
+		t.Error("an entry with neither command nor url should not be imported")
+	}
+	if len(unusable) != 1 || !strings.Contains(unusable[0], "broken") {
+		t.Errorf("unusable = %v, want the one unreadable \"broken\" entry", unusable)
 	}
 	// The project-scoped Claude entry (read last) should win over both the
 	// project's own ./.mcp.json entry and Claude's global entry.
@@ -63,9 +86,9 @@ func TestCollectClaudeMCPServersNoSources(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()
 
-	servers, sources, skippedRemote := collectClaudeMCPServers(cwd, home)
-	if len(servers) != 0 || len(sources) != 0 || skippedRemote != 0 {
-		t.Errorf("expected nothing found, got servers=%v sources=%v skippedRemote=%d", servers, sources, skippedRemote)
+	servers, sources, unusable := collectClaudeMCPServers(cwd, home)
+	if len(servers) != 0 || len(sources) != 0 || len(unusable) != 0 {
+		t.Errorf("expected nothing found, got servers=%v sources=%v unusable=%v", servers, sources, unusable)
 	}
 }
 

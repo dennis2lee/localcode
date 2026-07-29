@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Remote MCP servers are supported, so `mcp import-claude` no longer skips them.** Until now only stdio servers could be represented, and a url-based entry in a Claude Code config was counted and dropped — which meant the import silently left behind exactly the servers that are hardest to set up by hand. All three MCP transports now connect: `stdio` (a local child process), `http` (streamable HTTP), and `sse` (the older HTTP+SSE).
+  * `MCPServerConfig` gained `type`, `url`, and `headers`, matching Claude Code's own field names so an entry copies across verbatim. `type` may be omitted: an entry with a `url` infers `http`, anything else `stdio`, so every existing stdio config keeps working untouched and is still written in its old shape.
+  * `headers` is how an auth token reaches a remote server. The SDK's transports expose no header field, so this goes through a `RoundTripper` that adds them — only when absent, so a config entry can't clobber a header the protocol itself controls. Header **values are never printed** by `mcp list` or `mcp get`, only key names.
+  * Remote servers get no whole-request timeout (a tool call may legitimately run long) but a 60s response-header timeout. Deliberately not `http.Client.Timeout`, which also covers reading the body and would tear down the long-lived SSE streams both remote transports keep open.
+  * `localcode mcp add --transport http|sse <name> <url>` registers one, with `-H "Key: Value"` (repeatable) for credentials; `add-json` accepts either shape. Config validation now rejects a half-written entry (stdio with no command, remote with no url, a non-http scheme) at startup with a clear message instead of at connect time.
+  * Verified against a real MCP server over both remote transports: tools list and call correctly, a server requiring an `Authorization` header is reachable with it configured and fails without it or with a wrong token, and a Claude Code config containing http/sse/bare-url entries imports and connects end to end.
+- **`localcode mcp list` is one line per server.** It now prints just the name, scope, and connection status — the config file path, command line/url, and env/header key names are gone, since a status view shouldn't require reading four lines per server to find the one that's down. `mcp get <name>` remains the full definition.
+
 ## v0.28.1
 
 - **Fix: `LocalCode.app` dropped every argument it was given.** The bundle's launcher script ran `exec localcode-bin --gui` without `"$@"`, so `open LocalCode.app --args --config /path/to/config.json` silently ignored the flag and the app fell back to `~/.localcode/config.json` — with no way to reach `--config` at all once localcode is an `.app` rather than a command. Found while opening the real window to verify the folder picker.

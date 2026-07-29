@@ -143,9 +143,23 @@ See [Combining agents](#combining-agents) for the full picture.
 
 #### MCP notes
 
-* Each server is launched over stdio, and its tools appear as `mcp__<server>__<tool>`.
+* Three transports are supported, the same ones Claude Code writes: `stdio` (a local child process), `http` (streamable HTTP), and `sse` (the older HTTP+SSE). Tools appear as `mcp__<server>__<tool>` whichever transport they came over.
+
+```json
+{
+  "mcp_servers": {
+    "github":  { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": { "GITHUB_TOKEN": "..." } },
+    "hosted":  { "type": "http", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer ..." } },
+    "legacy":  { "type": "sse", "url": "https://example.com/sse" }
+  }
+}
+```
+
+* `type` may be omitted: an entry with a `url` is treated as `http`, anything else as `stdio`. Set `"type": "sse"` explicitly for a server that still speaks the older protocol — a bare url will not infer it.
+* `headers` is where a remote server's API token goes. Its **values are never printed** by `mcp list` or `mcp get`, only the key names, since that output routinely lands in a scrollback or a pasted bug report. They are also only ever *added* to a request, never overriding a header the protocol itself sets.
+* A remote server has no request timeout (a tool call may legitimately run long), but a server that accepts a connection and then never answers is given up on after 60 seconds.
 * **MCP tools always require permission confirmation.** A server claiming its own tool is read only through annotations is not trusted.
-* If one server fails to connect, from a bad command or a crash, only that server is skipped. The rest register normally and the daemon still starts, logging a warning.
+* If one server fails to connect — a bad command, a crash, an unreachable endpoint, a rejected token — only that server is skipped. The rest register normally and the daemon still starts, logging a warning.
 * If a connected server's session dies, the next call retries the connection once.
 
 A broken config, such as a profile pointing at a provider that does not exist, fails at startup with an error instead of running.
@@ -163,7 +177,13 @@ localcode mcp add github -e GITHUB_TOKEN=ghp_xxx -- npx -y @modelcontextprotocol
 # register for this project only, in ./.localcode/config.json
 localcode mcp add local-fs -s project -- npx -y @modelcontextprotocol/server-filesystem .
 
-# copy an existing .mcp.json entry across as raw JSON
+# register a remote server (streamable HTTP), with an auth header
+localcode mcp add --transport http -H "Authorization: Bearer xyz" hosted https://example.com/mcp
+
+# a server that still speaks the older HTTP+SSE protocol
+localcode mcp add --transport sse legacy https://example.com/sse
+
+# copy an existing .mcp.json entry across as raw JSON (either shape)
 localcode mcp add-json weather '{"command":"node","args":["weather-server.js"],"env":{"API_KEY":"xyz"}}'
 
 localcode mcp list          # scope, command, and a live connection test per server
@@ -177,7 +197,9 @@ localcode mcp import-claude
 
 | Detail | Behavior |
 |---|---|
-| `-e`, `--env KEY=VALUE` | Repeatable |
+| `-t`, `--transport` | `stdio` (the default), `http`, or `sse`. With `http`/`sse` the single positional argument after the name is the server's url instead of a command. |
+| `-e`, `--env KEY=VALUE` | Repeatable. stdio servers only. |
+| `-H`, `--header "Key: Value"` | Repeatable. Remote servers only — this is where an auth token goes. |
 | `-s`, `--scope` | `global`, the default, or `project` |
 | `--` | Everything after it is the command and its arguments. Always use it so flags meant for the server, such as `-y`, do not get read as flags for `localcode mcp` itself. |
 | `remove` without `-s` | If the same name exists in both global and project, nothing is deleted and you get an ambiguity error. Say which with `-s global` or `-s project`. |
@@ -186,27 +208,26 @@ These commands only read and write the `mcp_servers` map, so editing config.json
 
 #### `mcp list` tests each connection
 
-Being registered in config.json says nothing about whether a server's command exists, starts, or speaks MCP. So `localcode mcp list` starts each one for real, completes the MCP handshake, lists its tools, and shuts it back down, printing the result under each entry:
+Being registered in config.json says nothing about whether a server's command exists, its endpoint is reachable, or either speaks MCP. So `localcode mcp list` brings each one up for real — starting the process or dialing the URL, completing the MCP handshake, listing its tools — and prints **one line per server**: its name, which scope it is registered in, and whether it answered.
 
 ```
-github  [global]
-  npx -y @modelcontextprotocol/server-github (env: GITHUB_TOKEN)
-  /Users/you/.localcode/config.json
-  connection: OK (26 tool(s): add_issue_comment, create_branch, ...)
+github         global    ok (26 tools)
+hosted         global    ok (4 tools)
+local-fs       project   ok (11 tools)
+weather        project   failed: connect (node): fork/exec node: no such file or directory
 
-weather  [project]
-  node weather-server.js
-  /Users/you/project/.localcode/config.json
-  connection: FAILED — connect (node): fork/exec node: no such file or directory
-
-1 of 2 server(s) failed to connect.
+1 of 4 server(s) failed to connect.
 ```
 
-A failure is reported, not returned as an error — the listing itself succeeded, and a server being down is information about that server. Each check is bounded by a 20 second timeout, so an unresponsive server delays the listing rather than hanging it. Servers with expensive startup (an `npx` package that isn't cached yet) make this noticeably slower than a plain listing; `--no-test` skips the connecting entirely.
+That is the whole output — no config file paths, no command lines or urls, no env or header keys. This is a status view; `localcode mcp get <name>` is where a server's full definition lives.
+
+A failure is reported, not returned as an error — the listing itself succeeded, and a server being down is information about that server. Each check is bounded by a 20 second timeout, so an unresponsive server delays the listing rather than hanging it. Servers with expensive startup (an `npx` package that isn't cached yet) make this noticeably slower than a plain listing; `--no-test` skips the connecting entirely and just names what is registered.
 
 #### Importing from Claude Code
 
-`localcode mcp import-claude` reads every stdio MCP server a Claude Code install already knows about for the current directory — this project's checked-in `./.mcp.json`, plus `~/.claude.json`'s global servers and its per-project block — and registers them the same way `mcp add` would. Project-scoped Claude entries win over global ones on a name collision, matching Claude Code's own precedence.
+`localcode mcp import-claude` reads every MCP server a Claude Code install already knows about for the current directory — this project's checked-in `./.mcp.json`, plus `~/.claude.json`'s global servers and its per-project block — and registers them the same way `mcp add` would. Project-scoped Claude entries win over global ones on a name collision, matching Claude Code's own precedence.
+
+Local and remote servers both import: an entry's `type`, `url`, and `headers` carry across unchanged alongside `command`/`args`/`env`, because localcode's own config uses the same field names.
 
 ```bash
 localcode mcp import-claude                  # into ~/.localcode/config.json (global, the default)
@@ -214,7 +235,9 @@ localcode mcp import-claude -s project       # into ./.localcode/config.json ins
 localcode mcp import-claude --skip-existing  # leave servers that already exist under that name alone
 ```
 
-Re-running it is the common case — a Claude Code setup changed, or the first run only partially matched what's local — so by default it **overwrites** a server already registered under the same name with the freshly imported definition, the same way `mcp add` does. Pass `--skip-existing` to leave those alone instead. Remote (url-based, SSE/HTTP) MCP servers aren't imported either way — localcode only supports stdio servers — and are reported as a skipped count rather than silently dropped.
+Re-running it is the common case — a Claude Code setup changed, or the first run only partially matched what's local — so by default it **overwrites** a server already registered under the same name with the freshly imported definition, the same way `mcp add` does. Pass `--skip-existing` to leave those alone instead.
+
+An entry that says neither how to start a process nor where to connect can't be imported by any build, and is listed by name with the reason rather than silently dropped.
 
 ### Fine grained permission rules
 

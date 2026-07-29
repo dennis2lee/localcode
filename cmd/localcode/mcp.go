@@ -22,20 +22,22 @@ import (
 const mcpUsage = `usage: localcode mcp <subcommand>
 
   localcode mcp add [-e KEY=VALUE]... [-s global|project] <name> -- <command> [args...]
-                       register a new MCP server (runs over stdio, same shape as .mcp.json's mcpServers entries)
+                       register a local MCP server run as a child process over stdio
+  localcode mcp add --transport http|sse [-H "Key: Value"]... [-s global|project] <name> <url>
+                       register a remote MCP server; -H repeats, for an auth token
   localcode mcp add-json [-s global|project] <name> '<json>'
-                       register directly from JSON of the form {"command":...,"args":[...],"env":{...}}
+                       register directly from JSON, either {"command":...,"args":[...],"env":{...}}
+                       or {"type":"http","url":...,"headers":{...}}
   localcode mcp list [--no-test]
-                       list every registered MCP server (shows global/project origin) and
-                       start each one to verify it connects; --no-test lists without connecting
-  localcode mcp get <name>       show one server's detailed config
+                       one line per server: name, scope, and whether it connects.
+                       --no-test lists without connecting to anything.
+  localcode mcp get <name>       show one server's full definition
   localcode mcp remove [-s global|project] <name>
                        remove a server (project wins if --scope is omitted; --scope is required if the name exists in both)
   localcode mcp import-claude [-s global|project] [--skip-existing]
-                       import an existing Claude Code user's MCP servers from ./.mcp.json and ~/.claude.json
-                       (stdio servers only; remote/url-based servers aren't supported and are skipped).
-                       Re-running overwrites a server already registered under the same name unless
-                       --skip-existing is given.
+                       import an existing Claude Code user's MCP servers from ./.mcp.json and ~/.claude.json,
+                       local and remote alike. Re-running overwrites a server already registered under the
+                       same name unless --skip-existing is given.
 
   -s, --scope   global (default, ~/.localcode/config.json) or project (./.localcode/config.json)
 
@@ -96,9 +98,14 @@ func scopeLabel(scope string) string {
 	}
 }
 
+const mcpAddUsage = `usage:
+  localcode mcp add [-e KEY=VALUE]... [-s global|project] <name> -- <command> [args...]
+  localcode mcp add --transport http|sse [-H "Key: Value"]... [-s global|project] <name> <url>`
+
 func mcpAdd(args []string) error {
-	var name, scope string
+	var name, scope, transport string
 	env := map[string]string{}
+	headers := map[string]string{}
 
 	idx := 0
 loop:
@@ -114,6 +121,22 @@ loop:
 				return fmt.Errorf("--env value %q must be KEY=VALUE", args[idx+1])
 			}
 			env[k] = v
+			idx += 2
+		case a == "-H" || a == "--header":
+			if idx+1 >= len(args) {
+				return fmt.Errorf(`--header requires a "Key: Value" argument`)
+			}
+			k, v, ok := strings.Cut(args[idx+1], ":")
+			if !ok {
+				return fmt.Errorf(`--header value %q must be "Key: Value"`, args[idx+1])
+			}
+			headers[strings.TrimSpace(k)] = strings.TrimSpace(v)
+			idx += 2
+		case a == "-t" || a == "--transport":
+			if idx+1 >= len(args) {
+				return fmt.Errorf("--transport requires an argument (stdio|http|sse)")
+			}
+			transport = args[idx+1]
 			idx += 2
 		case a == "-s" || a == "--scope":
 			if idx+1 >= len(args) {
@@ -136,18 +159,43 @@ loop:
 	rest := args[idx:]
 
 	if name == "" {
-		return fmt.Errorf("usage: localcode mcp add [-e KEY=VALUE]... [-s global|project] <name> -- <command> [args...]")
+		return fmt.Errorf("%s", mcpAddUsage)
 	}
-	if len(rest) == 0 {
-		return fmt.Errorf("missing command to run the MCP server, e.g.: localcode mcp add %s -- npx -y @modelcontextprotocol/server-github", name)
+
+	var sc config.MCPServerConfig
+	switch transport {
+	case config.MCPTransportHTTP, config.MCPTransportSSE:
+		if len(rest) != 1 {
+			return fmt.Errorf("a %s server takes exactly one argument, its url, e.g.: localcode mcp add --transport %s %s https://example.com/mcp", transport, transport, name)
+		}
+		if len(env) > 0 {
+			return fmt.Errorf("--env applies to stdio servers only; use --header for a remote server's credentials")
+		}
+		sc = config.MCPServerConfig{Type: transport, URL: rest[0], Headers: headers}
+
+	case "", config.MCPTransportStdio:
+		if len(rest) == 0 {
+			return fmt.Errorf("missing command to run the MCP server, e.g.: localcode mcp add %s -- npx -y @modelcontextprotocol/server-github\n(for a remote server: localcode mcp add --transport http %s https://example.com/mcp)", name, name)
+		}
+		if len(headers) > 0 {
+			return fmt.Errorf("--header applies to remote servers only; use --env for a stdio server's environment")
+		}
+		// Left as "" rather than written out, so a stdio entry keeps the
+		// same shape it has always had in config.json.
+		sc = config.MCPServerConfig{Command: rest[0], Args: rest[1:], Env: env}
+
+	default:
+		return fmt.Errorf("unknown transport %q (want stdio, http, or sse)", transport)
 	}
-	command, cmdArgs := rest[0], rest[1:]
+
+	if err := sc.Validate(); err != nil {
+		return err
+	}
 
 	path, err := resolveScopePath(scope)
 	if err != nil {
 		return err
 	}
-	sc := config.MCPServerConfig{Command: command, Args: cmdArgs, Env: env}
 	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
 		if _, exists := servers[name]; exists {
 			fmt.Printf("mcp server %q already exists in %s — overwriting\n", name, path)
@@ -187,8 +235,8 @@ func mcpAddJSON(args []string) error {
 	if err := json.Unmarshal([]byte(jsonStr), &sc); err != nil {
 		return fmt.Errorf("parse server json: %w", err)
 	}
-	if sc.Command == "" {
-		return fmt.Errorf(`server json must include a "command" field`)
+	if err := sc.Validate(); err != nil {
+		return fmt.Errorf("server json: %w", err)
 	}
 
 	path, err := resolveScopePath(scope)
@@ -248,7 +296,7 @@ func mcpList(args []string) error {
 		}
 	}
 
-	global, project, globalPath, projectPath, err := loadBothScopes()
+	global, project, _, _, err := loadBothScopes()
 	if err != nil {
 		return err
 	}
@@ -270,24 +318,36 @@ func mcpList(args []string) error {
 	}
 	sort.Strings(sorted)
 
+	// One line per server: name, where it is registered, and whether it
+	// answers. The command line, url, env/header keys, and the config file
+	// path are all deliberately absent — this is a status view, and
+	// `mcp get <name>` is the place that shows a server's full definition.
+	width := 0
+	for _, n := range sorted {
+		if len(n) > width {
+			width = len(n)
+		}
+	}
+
 	failures := 0
 	for _, n := range sorted {
-		sc, ok := project.MCPServers[n]
-		if ok {
-			note := ""
-			if _, alsoGlobal := global.MCPServers[n]; alsoGlobal {
-				note = " (overrides the global setting)"
-			}
-			fmt.Printf("%s  [project]%s\n  %s\n  %s\n", n, note, formatMCPCommand(sc), projectPath)
+		sc, inProject := project.MCPServers[n]
+		scope := "global"
+		if inProject {
+			scope = "project"
 		} else {
 			sc = global.MCPServers[n]
-			fmt.Printf("%s  [global]\n  %s\n  %s\n", n, formatMCPCommand(sc), globalPath)
 		}
-		if test {
-			if !checkMCPServer(n, sc) {
-				failures++
-			}
+
+		if !test {
+			fmt.Printf("%-*s  %s\n", width, n, scope)
+			continue
 		}
+		ok, status := checkMCPServer(sc)
+		if !ok {
+			failures++
+		}
+		fmt.Printf("%-*s  %-8s  %s\n", width, n, scope, status)
 	}
 
 	if test && failures > 0 {
@@ -299,25 +359,43 @@ func mcpList(args []string) error {
 	return nil
 }
 
-// checkMCPServer starts one server for real and reports whether it came up,
-// printing a per-server result line. Registration in config.json says
-// nothing about whether the command exists or speaks MCP, which is the whole
-// point of doing this rather than trusting the file.
-func checkMCPServer(name string, sc config.MCPServerConfig) bool {
+// checkMCPServer brings one server up for real and returns whether it
+// answered, plus a short status phrase for the listing. Registration in
+// config.json says nothing about whether the command exists, the endpoint is
+// reachable, or either speaks MCP — which is the whole point of connecting
+// rather than trusting the file.
+func checkMCPServer(sc config.MCPServerConfig) (bool, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), mcpPingTimeout)
 	defer cancel()
 
 	toolNames, err := mcpclient.Ping(ctx, sc)
 	if err != nil {
-		fmt.Printf("  connection: FAILED — %v\n", err)
-		return false
+		return false, "failed: " + oneLine(err.Error())
 	}
 	if len(toolNames) == 0 {
-		fmt.Printf("  connection: OK (connected, but the server advertises no tools)\n")
-		return true
+		return true, "ok (no tools advertised)"
 	}
-	fmt.Printf("  connection: OK (%d tool(s): %s)\n", len(toolNames), strings.Join(toolNames, ", "))
-	return true
+	return true, fmt.Sprintf("ok (%d tool%s)", len(toolNames), plural(len(toolNames)))
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// oneLine flattens an error onto a single line, since a connection failure
+// can carry a multi-line body from the server and each entry here gets
+// exactly one row.
+func oneLine(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	const max = 100
+	if len(s) > max {
+		return s[:max-1] + "…"
+	}
+	return s
 }
 
 func mcpGet(args []string) error {
@@ -347,19 +425,22 @@ func mcpGet(args []string) error {
 
 func printMCPServerDetail(name, scope, path string, sc config.MCPServerConfig) {
 	fmt.Printf("%s  [%s]  (%s)\n", name, scope, path)
-	fmt.Printf("  command: %s\n", sc.Command)
-	if len(sc.Args) > 0 {
-		fmt.Printf("  args:    %s\n", strings.Join(sc.Args, " "))
+	fmt.Printf("  transport: %s\n", sc.Transport())
+	if sc.IsRemote() {
+		fmt.Printf("  url:       %s\n", sc.URL)
+		// Names only. A header value is almost always a bearer token, and
+		// this output gets pasted into issues and chat windows.
+		if keys := sortedKeys(sc.Headers); len(keys) > 0 {
+			fmt.Printf("  headers:   %s (values hidden)\n", strings.Join(keys, ", "))
+		}
+		return
 	}
-	if len(sc.Env) > 0 {
-		keys := make([]string, 0, len(sc.Env))
-		for k := range sc.Env {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Printf("  env:     %s=%s\n", k, sc.Env[k])
-		}
+	fmt.Printf("  command:   %s\n", sc.Command)
+	if len(sc.Args) > 0 {
+		fmt.Printf("  args:      %s\n", strings.Join(sc.Args, " "))
+	}
+	for _, k := range sortedKeys(sc.Env) {
+		fmt.Printf("  env:       %s=%s\n", k, sc.Env[k])
 	}
 }
 
@@ -441,14 +522,16 @@ func removeMCPServerFromFile(path, name string) error {
 
 // claudeMCPEntry is one entry of a Claude Code mcpServers map — both
 // ~/.claude.json (global and per-project) and a shared ./.mcp.json use
-// this shape. URL is set instead of Command for remote (SSE/HTTP)
-// servers, which localcode's stdio-only MCPServerConfig can't represent,
-// so those are detected and skipped rather than imported silently wrong.
+// this shape. A remote server carries URL (plus Headers, and usually a
+// Type of "http" or "sse") instead of Command; localcode's own
+// MCPServerConfig has the same fields, so either kind imports directly.
 type claudeMCPEntry struct {
+	Type    string            `json:"type"`
 	Command string            `json:"command"`
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env"`
 	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers"`
 }
 
 // claudeUserConfig is the relevant slice of ~/.claude.json: a top-level
@@ -468,24 +551,36 @@ type claudeProjectMCPFile struct {
 	MCPServers map[string]claudeMCPEntry `json:"mcpServers"`
 }
 
-// collectClaudeMCPServers gathers every stdio MCP server Claude Code knows
-// about for the current directory: this project's checked-in ./.mcp.json,
-// plus ~/.claude.json's global servers and its per-project block for cwd.
-// Later sources win on a name collision (project-scoped Claude entries are
-// the most specific, so they're read last). Returns the merged servers,
-// the source files that actually contributed something, and how many
-// remote/url-based entries were skipped as unsupported.
-func collectClaudeMCPServers(cwd, home string) (servers map[string]config.MCPServerConfig, sources []string, skippedRemote int) {
+// collectClaudeMCPServers gathers every MCP server Claude Code knows about
+// for the current directory — local (stdio) and remote (http/sse) alike:
+// this project's checked-in ./.mcp.json, plus ~/.claude.json's global
+// servers and its per-project block for cwd. Later sources win on a name
+// collision (project-scoped Claude entries are the most specific, so
+// they're read last). Returns the merged servers, the source files that
+// actually contributed something, and any entries that couldn't be
+// imported at all, each with the reason.
+func collectClaudeMCPServers(cwd, home string) (servers map[string]config.MCPServerConfig, sources []string, unusable []string) {
 	servers = map[string]config.MCPServerConfig{}
 
 	addEntries := func(entries map[string]claudeMCPEntry) bool {
 		contributed := false
 		for name, e := range entries {
-			if e.Command == "" {
-				skippedRemote++
+			sc := config.MCPServerConfig{
+				Type:    e.Type,
+				Command: e.Command,
+				Args:    e.Args,
+				Env:     e.Env,
+				URL:     e.URL,
+				Headers: e.Headers,
+			}
+			// An entry that says neither how to start a process nor where
+			// to connect is not something this build can guess at — record
+			// it by name so the import reports it instead of dropping it.
+			if err := sc.Validate(); err != nil {
+				unusable = append(unusable, fmt.Sprintf("%s (%v)", name, err))
 				continue
 			}
-			servers[name] = config.MCPServerConfig{Command: e.Command, Args: e.Args, Env: e.Env}
+			servers[name] = sc
 			contributed = true
 		}
 		return contributed
@@ -517,7 +612,7 @@ func collectClaudeMCPServers(cwd, home string) (servers map[string]config.MCPSer
 		}
 	}
 
-	return servers, sources, skippedRemote
+	return servers, sources, unusable
 }
 
 func mcpImportClaude(args []string) error {
@@ -547,11 +642,11 @@ func mcpImportClaude(args []string) error {
 		home = "" // still try ./.mcp.json even if the home dir can't be resolved
 	}
 
-	found, sources, skippedRemote := collectClaudeMCPServers(cwd, home)
+	found, sources, unusable := collectClaudeMCPServers(cwd, home)
 	if len(found) == 0 {
 		fmt.Println("No importable Claude Code MCP servers found (checked ./.mcp.json and ~/.claude.json).")
-		if skippedRemote > 0 {
-			fmt.Printf("(%d remote/url-based server(s) were seen but can't be imported — localcode only supports stdio MCP servers.)\n", skippedRemote)
+		if len(unusable) > 0 {
+			fmt.Printf("Skipped %d entry/entries that couldn't be read: %s\n", len(unusable), strings.Join(unusable, ", "))
 		}
 		return nil
 	}
@@ -611,22 +706,39 @@ func mcpImportClaude(args []string) error {
 	if len(skippedExisting) > 0 {
 		fmt.Printf("Skipped %d already-registered server(s) (--skip-existing was set): %s\n", len(skippedExisting), strings.Join(skippedExisting, ", "))
 	}
-	if skippedRemote > 0 {
-		fmt.Printf("Skipped %d remote/url-based server(s) — localcode only supports stdio MCP servers.\n", skippedRemote)
+	if len(unusable) > 0 {
+		fmt.Printf("Skipped %d entry/entries that couldn't be read: %s\n", len(unusable), strings.Join(unusable, ", "))
 	}
 	return nil
 }
 
+// formatMCPCommand renders a one-line summary of a server for listings.
+// Header and env *values* are never printed, only their key names: a remote
+// server's headers are where its API token lives, and `mcp list` output
+// routinely ends up in a terminal scrollback or a pasted bug report.
 func formatMCPCommand(sc config.MCPServerConfig) string {
-	parts := append([]string{sc.Command}, sc.Args...)
-	s := strings.Join(parts, " ")
-	if len(sc.Env) > 0 {
-		keys := make([]string, 0, len(sc.Env))
-		for k := range sc.Env {
-			keys = append(keys, k)
+	if sc.IsRemote() {
+		s := fmt.Sprintf("%s %s", sc.Transport(), sc.URL)
+		if keys := sortedKeys(sc.Headers); len(keys) > 0 {
+			s += fmt.Sprintf(" (headers: %s)", strings.Join(keys, ", "))
 		}
-		sort.Strings(keys)
+		return s
+	}
+	s := strings.Join(append([]string{sc.Command}, sc.Args...), " ")
+	if keys := sortedKeys(sc.Env); len(keys) > 0 {
 		s += fmt.Sprintf(" (env: %s)", strings.Join(keys, ", "))
 	}
 	return s
+}
+
+func sortedKeys(m map[string]string) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
