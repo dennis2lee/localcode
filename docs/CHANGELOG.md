@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.28.1
 
 - **Fix: `LocalCode.app` dropped every argument it was given.** The bundle's launcher script ran `exec localcode-bin --gui` without `"$@"`, so `open LocalCode.app --args --config /path/to/config.json` silently ignored the flag and the app fell back to `~/.localcode/config.json` — with no way to reach `--config` at all once localcode is an `.app` rather than a command. Found while opening the real window to verify the folder picker.
+- **The macOS desktop app now ships as a release artifact**: `LocalCode-<version>-darwin-universal-gui-app.tar.gz`. It was buildable (`make dist-mac-gui`) but never attached to a release, so the double-clickable native window documented in the README existed only for people building from source — and the argument fix above would have reached nobody. `make dist` still builds the TUI app; the GUI bundle is built separately because its CGo webview cannot be cross-compiled, and it is attached to releases cut on a Mac.
 - Verified on a real macOS desktop (v0.28.0 build): the desktop window opens from the `.app`, clicking the workspace opens the system folder picker titled "Choose a workspace folder" starting at the current workspace, and choosing a folder applies it — header, transcript `[workspace]` line, and the process's actual working directory all follow. Sessions written by older builds correctly show `(workspace not recorded)`.
 
 ## v0.28.0
