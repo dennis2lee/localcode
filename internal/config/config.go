@@ -106,18 +106,7 @@ func (c *Config) AddPermissionRuleRuntime(toolName string, rule PermissionRule) 
 	if c.Permissions == nil {
 		c.Permissions = map[string]ToolPermission{}
 	}
-	tp := c.Permissions[toolName]
-	if tp.Flat != "" {
-		tp.Rules = []PermissionRule{{Match: "*", Decision: tp.Flat}}
-		tp.Flat = ""
-	}
-	for _, existing := range tp.Rules {
-		if existing.Match == rule.Match && existing.Decision == rule.Decision {
-			return
-		}
-	}
-	tp.Rules = append(tp.Rules, rule)
-	c.Permissions[toolName] = tp
+	addRule(c.Permissions, toolName, rule)
 }
 
 // RemovePermissionRuleRuntime mirrors RemovePermissionRuleFromFile against
@@ -125,29 +114,7 @@ func (c *Config) AddPermissionRuleRuntime(toolName string, rule PermissionRule) 
 func (c *Config) RemovePermissionRuleRuntime(toolName string, rule PermissionRule) {
 	c.permMu.Lock()
 	defer c.permMu.Unlock()
-	tp, ok := c.Permissions[toolName]
-	if !ok {
-		return
-	}
-	if tp.Flat != "" {
-		if tp.Flat == rule.Decision && rule.Match == "*" {
-			delete(c.Permissions, toolName)
-		}
-		return
-	}
-	kept := tp.Rules[:0]
-	for _, existing := range tp.Rules {
-		if existing.Match == rule.Match && existing.Decision == rule.Decision {
-			continue
-		}
-		kept = append(kept, existing)
-	}
-	if len(kept) == 0 {
-		delete(c.Permissions, toolName)
-	} else {
-		tp.Rules = kept
-		c.Permissions[toolName] = tp
-	}
+	removeRule(c.Permissions, toolName, rule)
 }
 
 // PermissionsSnapshot returns the current skip_permissions state and a copy
@@ -501,51 +468,34 @@ func LoadFile(path string) (*Config, error) {
 // config at path, leaving every other top-level key intact — including
 // keys this version of localcode doesn't know about, which a full
 // Config-struct round-trip would silently drop. Used by `localcode mcp
-// add/remove`. A missing file starts from an empty object; update
-// receives the current entries (never nil) and mutates them in place.
-func UpdateMCPServersInFile(path string, update func(map[string]MCPServerConfig)) error {
-	raw := map[string]json.RawMessage{}
-	data, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parse config %s: %w", path, err)
+// add/remove`. A missing file starts from an empty object; update receives
+// the current entries (never nil) and mutates them in place. update may
+// return an error (e.g. "server not found") to abort the whole operation —
+// nothing is written in that case.
+func UpdateMCPServersInFile(path string, update func(servers map[string]MCPServerConfig) error) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		servers := map[string]MCPServerConfig{}
+		if rawServers, ok := raw["mcp_servers"]; ok {
+			if err := json.Unmarshal(rawServers, &servers); err != nil {
+				return fmt.Errorf("parse mcp_servers in %s: %w", path, err)
+			}
 		}
-	case !os.IsNotExist(err):
-		return fmt.Errorf("read config %s: %w", path, err)
-	}
 
-	servers := map[string]MCPServerConfig{}
-	if rawServers, ok := raw["mcp_servers"]; ok {
-		if err := json.Unmarshal(rawServers, &servers); err != nil {
-			return fmt.Errorf("parse mcp_servers in %s: %w", path, err)
+		if err := update(servers); err != nil {
+			return err
 		}
-	}
 
-	update(servers)
-
-	if len(servers) == 0 {
-		delete(raw, "mcp_servers")
-	} else {
+		if len(servers) == 0 {
+			delete(raw, "mcp_servers")
+			return nil
+		}
 		encoded, err := json.Marshal(servers)
 		if err != nil {
 			return fmt.Errorf("marshal mcp_servers: %w", err)
 		}
 		raw["mcp_servers"] = encoded
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	out = append(out, '\n')
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return fmt.Errorf("write config %s: %w", path, err)
-	}
-	return nil
+		return nil
+	})
 }
 
 func loadOptional(path string) (*Config, error) {

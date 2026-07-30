@@ -196,11 +196,12 @@ loop:
 	if err != nil {
 		return err
 	}
-	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
+	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) error {
 		if _, exists := servers[name]; exists {
 			fmt.Printf("mcp server %q already exists in %s — overwriting\n", name, path)
 		}
 		servers[name] = sc
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -243,11 +244,12 @@ func mcpAddJSON(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
+	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) error {
 		if _, exists := servers[name]; exists {
 			fmt.Printf("mcp server %q already exists in %s — overwriting\n", name, path)
 		}
 		servers[name] = sc
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -505,18 +507,17 @@ func mcpRemove(args []string) error {
 	return nil
 }
 
-// removeMCPServerFromFile checks existence first so a not-found name
-// doesn't rewrite (reformat) the file as a side effect.
+// removeMCPServerFromFile aborts with "not found" from inside the update
+// callback rather than checking existence with a separate read first, so a
+// not-found name still doesn't rewrite (reformat) the file — the mutate
+// error leaves it untouched — without needing to parse it twice.
 func removeMCPServerFromFile(path, name string) error {
-	cfg, err := config.LoadFile(path)
-	if err != nil {
-		return err
-	}
-	if _, ok := cfg.MCPServers[name]; !ok {
-		return fmt.Errorf("mcp server %q not found in %s", name, path)
-	}
-	return config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
+	return config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) error {
+		if _, ok := servers[name]; !ok {
+			return fmt.Errorf("mcp server %q not found in %s", name, path)
+		}
 		delete(servers, name)
+		return nil
 	})
 }
 
@@ -674,7 +675,7 @@ func mcpImportClaude(args []string) error {
 	added := []string{}
 	overwritten := []string{}
 	skippedExisting := []string{}
-	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) {
+	if err := config.UpdateMCPServersInFile(path, func(servers map[string]config.MCPServerConfig) error {
 		for _, name := range names {
 			if _, exists := existing.MCPServers[name]; exists {
 				if skipExisting {
@@ -687,6 +688,7 @@ func mcpImportClaude(args []string) error {
 			}
 			servers[name] = found[name]
 		}
+		return nil
 	}); err != nil {
 		return err
 	}

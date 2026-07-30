@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -70,6 +69,62 @@ func (t ToolPermission) resolve(subject string) (Decision, bool) {
 		}
 	}
 	return last, matched
+}
+
+// addRule appends rule to m[tool], first promoting a legacy flat decision
+// to an explicit "*" rule, and refusing an exact duplicate so repeated
+// approvals don't grow the list forever. Shared by the runtime
+// (AddPermissionRuleRuntime) and file (AddPermissionRuleToFile) writers, so
+// the two can never drift apart on what "add a rule" means.
+func addRule(m map[string]ToolPermission, tool string, rule PermissionRule) {
+	tp := m[tool]
+	if tp.Flat != "" {
+		tp.Rules = []PermissionRule{{Match: "*", Decision: tp.Flat}}
+		tp.Flat = ""
+	}
+	for _, existing := range tp.Rules {
+		if existing.Match == rule.Match && existing.Decision == rule.Decision {
+			return // already covered, don't grow the file on every approval
+		}
+	}
+	tp.Rules = append(tp.Rules, rule)
+	m[tool] = tp
+}
+
+// removeRule removes the rule matching (Match, Decision) exactly from
+// m[tool], dropping the tool's key entirely once its last rule is gone
+// rather than leaving an empty array behind. Shared by the runtime
+// (RemovePermissionRuleRuntime) and file (RemovePermissionRuleFromFile)
+// writers.
+func removeRule(m map[string]ToolPermission, tool string, rule PermissionRule) {
+	tp, ok := m[tool]
+	if !ok {
+		return
+	}
+	if tp.Flat != "" {
+		if tp.Flat == rule.Decision && rule.Match == "*" {
+			delete(m, tool)
+		}
+		return
+	}
+	// A fresh slice rather than filtering tp.Rules in place: the in-place
+	// filter (tp.Rules[:0]) aliases the caller's backing array, which for
+	// the runtime path is the live config's — anything else holding that
+	// slice (e.g. a snapshot taken before this call) would see it mutated
+	// out from under it.
+	kept := make([]PermissionRule, 0, len(tp.Rules))
+	for _, existing := range tp.Rules {
+		if existing.Match == rule.Match && existing.Decision == rule.Decision {
+			continue
+		}
+		kept = append(kept, existing)
+	}
+	if len(kept) == 0 {
+		delete(m, tool)
+	} else {
+		tp.Rules = kept
+		m[tool] = tp
+	}
 }
 
 // BashToolName is the one tool whose subject is a shell command rather
@@ -309,58 +364,14 @@ func (t ToolPermission) MarshalJSON() ([]byte, error) {
 // resolves with last-match-wins: a later rule is what overrides an earlier
 // broader one.
 func AddPermissionRuleToFile(path, toolName string, rule PermissionRule) error {
-	raw := map[string]json.RawMessage{}
-	data, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parse config %s: %w", path, err)
-		}
-	case !os.IsNotExist(err):
-		return fmt.Errorf("read config %s: %w", path, err)
-	}
-
-	perms := map[string]ToolPermission{}
-	if rawPerms, ok := raw["permission"]; ok {
-		if err := json.Unmarshal(rawPerms, &perms); err != nil {
+	return updateRawSection(path, "permission", func(block map[string]json.RawMessage) error {
+		perms, err := decodePermissions(block)
+		if err != nil {
 			return fmt.Errorf("parse permission in %s: %w", path, err)
 		}
-	}
-
-	tp := perms[toolName]
-	if tp.Flat != "" {
-		// A flat decision covered every subject. Preserve that meaning as
-		// an explicit catch-all before appending, rather than throwing it
-		// away and silently widening or narrowing the policy.
-		tp.Rules = []PermissionRule{{Match: "*", Decision: tp.Flat}}
-		tp.Flat = ""
-	}
-	for _, existing := range tp.Rules {
-		if existing.Match == rule.Match && existing.Decision == rule.Decision {
-			return nil // already covered, don't grow the file on every approval
-		}
-	}
-	tp.Rules = append(tp.Rules, rule)
-	perms[toolName] = tp
-
-	encoded, err := json.Marshal(perms)
-	if err != nil {
-		return fmt.Errorf("marshal permission: %w", err)
-	}
-	raw["permission"] = encoded
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	out = append(out, '\n')
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return fmt.Errorf("write config %s: %w", path, err)
-	}
-	return nil
+		addRule(perms, toolName, rule)
+		return encodePermissions(block, perms)
+	})
 }
 
 // RemovePermissionRuleFromFile removes one rule from path's "permission"
@@ -369,97 +380,58 @@ func AddPermissionRuleToFile(path, toolName string, rule PermissionRule) error {
 // Removing the last rule for a tool drops that tool's key entirely rather
 // than leaving an empty array behind.
 func RemovePermissionRuleFromFile(path, toolName string, rule PermissionRule) error {
-	raw := map[string]json.RawMessage{}
-	data, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parse config %s: %w", path, err)
-		}
-	case !os.IsNotExist(err):
-		return fmt.Errorf("read config %s: %w", path, err)
-	default:
+	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil // no file, nothing to remove
 	}
-
-	perms := map[string]ToolPermission{}
-	if rawPerms, ok := raw["permission"]; ok {
-		if err := json.Unmarshal(rawPerms, &perms); err != nil {
+	return updateRawSection(path, "permission", func(block map[string]json.RawMessage) error {
+		perms, err := decodePermissions(block)
+		if err != nil {
 			return fmt.Errorf("parse permission in %s: %w", path, err)
 		}
-	}
-
-	tp, ok := perms[toolName]
-	if !ok {
-		return nil
-	}
-	if tp.Flat != "" {
-		if tp.Flat == rule.Decision && rule.Match == "*" {
-			delete(perms, toolName)
-		}
-	} else {
-		kept := tp.Rules[:0]
-		for _, existing := range tp.Rules {
-			if existing.Match == rule.Match && existing.Decision == rule.Decision {
-				continue
-			}
-			kept = append(kept, existing)
-		}
-		if len(kept) == 0 {
-			delete(perms, toolName)
-		} else {
-			tp.Rules = kept
-			perms[toolName] = tp
-		}
-	}
-
-	encoded, err := json.Marshal(perms)
-	if err != nil {
-		return fmt.Errorf("marshal permission: %w", err)
-	}
-	raw["permission"] = encoded
-
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	out = append(out, '\n')
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return fmt.Errorf("write config %s: %w", path, err)
-	}
-	return nil
+		removeRule(perms, toolName, rule)
+		return encodePermissions(block, perms)
+	})
 }
 
 // SetSkipPermissionsInFile writes the top-level "skip_permissions" key,
 // leaving every other key untouched. See Config.SkipPermissions.
 func SetSkipPermissionsInFile(path string, enabled bool) error {
-	raw := map[string]json.RawMessage{}
-	data, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parse config %s: %w", path, err)
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal skip_permissions: %w", err)
 		}
-	case !os.IsNotExist(err):
-		return fmt.Errorf("read config %s: %w", path, err)
-	}
+		raw["skip_permissions"] = encoded
+		return nil
+	})
+}
 
-	encoded, err := json.Marshal(enabled)
-	if err != nil {
-		return fmt.Errorf("marshal skip_permissions: %w", err)
+// decodePermissions parses a "permission" block's individual per-tool keys
+// out of the surrounding raw JSON object into typed ToolPermission values.
+func decodePermissions(block map[string]json.RawMessage) (map[string]ToolPermission, error) {
+	perms := map[string]ToolPermission{}
+	for tool, raw := range block {
+		var tp ToolPermission
+		if err := json.Unmarshal(raw, &tp); err != nil {
+			return nil, err
+		}
+		perms[tool] = tp
 	}
-	raw["skip_permissions"] = encoded
+	return perms, nil
+}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
+// encodePermissions writes perms back into block, replacing its previous
+// contents entirely (a removed tool must disappear, not just go unwritten).
+func encodePermissions(block map[string]json.RawMessage, perms map[string]ToolPermission) error {
+	for k := range block {
+		delete(block, k)
 	}
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	out = append(out, '\n')
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return fmt.Errorf("write config %s: %w", path, err)
+	for tool, tp := range perms {
+		encoded, err := json.Marshal(tp)
+		if err != nil {
+			return fmt.Errorf("marshal permission for %q: %w", tool, err)
+		}
+		block[tool] = encoded
 	}
 	return nil
 }
@@ -518,45 +490,7 @@ func SetAutoDelegateTargetInFile(path, agent string, match []string) error {
 // in the file untouched — the same surgical approach the permission writers
 // take, so a field a newer version added isn't dropped by an older one.
 func updateAutoDelegateInFile(path string, update func(block map[string]json.RawMessage) error) error {
-	raw := map[string]json.RawMessage{}
-	data, err := os.ReadFile(path)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parse config %s: %w", path, err)
-		}
-	case !os.IsNotExist(err):
-		return fmt.Errorf("read config %s: %w", path, err)
-	}
-
-	block := map[string]json.RawMessage{}
-	if rawBlock, ok := raw["auto_delegate"]; ok {
-		if err := json.Unmarshal(rawBlock, &block); err != nil {
-			return fmt.Errorf("parse auto_delegate in %s: %w", path, err)
-		}
-	}
-	if err := update(block); err != nil {
-		return err
-	}
-
-	encodedBlock, err := json.Marshal(block)
-	if err != nil {
-		return fmt.Errorf("marshal auto_delegate: %w", err)
-	}
-	raw["auto_delegate"] = encodedBlock
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	out = append(out, '\n')
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return fmt.Errorf("write config %s: %w", path, err)
-	}
-	return nil
+	return updateRawSection(path, "auto_delegate", update)
 }
 
 // PermissionRuleFor proposes the rule that "always allow" should write for

@@ -323,8 +323,9 @@ func TestLoadFileReturnsEmptyConfigWhenMissing(t *testing.T) {
 func TestUpdateMCPServersInFileCreatesNewFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.json")
 
-	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) {
+	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) error {
 		servers["github"] = MCPServerConfig{Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-github"}, Env: map[string]string{"GITHUB_TOKEN": "abc"}}
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("UpdateMCPServersInFile: %v", err)
@@ -353,8 +354,9 @@ func TestUpdateMCPServersInFilePreservesUnknownFields(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) {
+	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) error {
 		servers["new"] = MCPServerConfig{Command: "npx"}
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("UpdateMCPServersInFile: %v", err)
@@ -377,8 +379,9 @@ func TestUpdateMCPServersInFileRemovingLastServerDropsKey(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) {
+	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) error {
 		delete(servers, "x")
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("UpdateMCPServersInFile: %v", err)
@@ -401,7 +404,7 @@ func TestUpdateMCPServersInFileRejectsInvalidJSON(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{not json`), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) {})
+	err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) error { return nil })
 	if err == nil {
 		t.Fatal("expected an error for invalid JSON, got nil")
 	}
