@@ -954,3 +954,114 @@ func TestPastedMultilineTextGrowsTheBox(t *testing.T) {
 		}
 	}
 }
+
+// TestMalformedErrorEventStillClearsWaiting is the regression test for a
+// real bug: previously, m.waiting was only cleared inside the
+// `if msg, ok := ev.Data["error"].(string); ok` branch of the TypeError
+// case, so an error event whose payload wasn't a string left the spinner
+// running forever with no way to recover short of restarting the TUI.
+// endTurn() is now called unconditionally before the type assertion.
+func TestMalformedErrorEventStillClearsWaiting(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+	m.runningTool = "bash"
+
+	// Data["error"] is a number, not a string — the malformed case.
+	m.applyEvent(events.Event{Type: events.TypeError, Data: map[string]any{"error": 42}})
+
+	if m.waiting {
+		t.Error("waiting should clear even when the error event's payload is malformed")
+	}
+	if m.runningTool != "" {
+		t.Errorf("runningTool = %q, want cleared", m.runningTool)
+	}
+	if m.errMsg == "" {
+		t.Error("errMsg should still be set to something, so the user sees an error happened")
+	}
+}
+
+// TestEnterWhileWaitingStillQuits confirms exit/:q work even mid-turn —
+// previously only Ctrl+C could quit while a turn was in progress, since
+// isPlainPrompt treats "exit"/":q" as non-plain and the waiting branch
+// used to just silently drop anything that wasn't a plain prompt.
+func TestEnterWhileWaitingStillQuits(t *testing.T) {
+	for _, text := range []string{"exit", "EXIT", ":q"} {
+		m := newTestModel()
+		m.waiting = true
+		_, cmd := pressEnterWith(t, m, text)
+		if !isQuitCmd(t, cmd) {
+			t.Errorf("input %q while waiting: expected a quit command, got %v", text, cmd)
+		}
+	}
+}
+
+// TestEnterWhileWaitingExplainsWhyACommandCantQueue is the other half of
+// the same fix: a command typed mid-turn used to vanish with the input box
+// silently cleared and no feedback at all — indistinguishable from a
+// successfully queued prompt. It must now say why, instead of just being
+// dropped.
+func TestEnterWhileWaitingExplainsWhyACommandCantQueue(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+
+	m, cmd := pressEnterWith(t, m, "/compact")
+
+	if cmd != nil {
+		t.Errorf("a command while waiting should still be a no-op, got %v", cmd)
+	}
+	if len(m.queue) != 0 {
+		t.Errorf("queue = %v, want commands never queued", m.queue)
+	}
+	if !strings.Contains(m.transcript, "/compact") || !strings.Contains(m.transcript, "in progress") {
+		t.Errorf("transcript = %q, want an explanation that the command can't run mid-turn", m.transcript)
+	}
+}
+
+// TestAgentsFetchErrorIsReported and TestCommandsFetchErrorIsReported pin
+// B8: these two message types used to be swallowed silently on error (no
+// errMsg, no transcript line), which left Tab a dead key with zero
+// explanation after a failed GET /api/agents.
+func TestAgentsFetchErrorIsReported(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(agentsMsg{err: fmt.Errorf("connection refused")})
+	m = updated.(Model)
+
+	if m.errMsg == "" {
+		t.Error("errMsg should be set when fetching agents fails, not silently swallowed")
+	}
+}
+
+func TestCommandsFetchErrorIsReported(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(commandsMsg{err: fmt.Errorf("connection refused")})
+	m = updated.(Model)
+
+	if m.errMsg == "" {
+		t.Error("errMsg should be set when fetching custom commands fails, not silently swallowed")
+	}
+}
+
+// TestSlashCommandsAreCaseInsensitive is the regression test for a real
+// bug: "/Agent foo" used to fall through to the model as ordinary chat
+// text, because the old dispatch's exact-match switch lowercased its
+// subject but the separate CutPrefix-based argument checks (for "/agent
+// <name>", "/tasks <id>") didn't.
+func TestSlashCommandsAreCaseInsensitive(t *testing.T) {
+	m := newTestModel()
+	m.agents = []client.AgentInfo{{Name: "build"}, {Name: "plan"}}
+
+	m, cmd := pressEnterWith(t, m, "/Agent")
+	if cmd != nil {
+		t.Errorf("/Agent (list) should not issue a command, got %v", cmd)
+	}
+	if !strings.Contains(m.transcript, "build") {
+		t.Errorf("transcript = %q, want /Agent (mixed case) to list agents same as /agent", m.transcript)
+	}
+
+	m2 := newTestModel()
+	m2.agents = []client.AgentInfo{{Name: "build"}, {Name: "plan"}}
+	_, cmd2 := pressEnterWith(t, m2, "/AGENT build")
+	if cmd2 == nil {
+		t.Error("/AGENT build (mixed case) should still issue a switch-agent command")
+	}
+}
