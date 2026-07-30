@@ -21,18 +21,19 @@ func (m *Model) applyEvent(ev events.Event) {
 	switch ev.Type {
 	case events.TypeUserMessage:
 		if text, ok := ev.Data["text"].(string); ok {
-			m.transcript += userStyle.Render("You: ") + text + "\n\n"
+			m.transcript = append(m.transcript, transcriptEntry{kind: entryUser, text: text})
+			m.streamOpen = false
 		}
 	case events.TypeMessagePartDelta:
 		if text, ok := ev.Data["text"].(string); ok {
-			m.transcript += text
+			m.appendModelDelta(text)
 		}
 	case events.TypeMessagePartEnd:
 		// One model message ended — NOT the turn. A turn with tool calls
 		// streams several of these (text, then the post-tool follow-up),
 		// and treating the first as end-of-turn is what used to make a
 		// prompt typed during tool execution skip the queue and 409.
-		m.transcript += "\n\n"
+		m.endModelStream()
 	case events.TypeTurnDone:
 		// The daemon's real turn boundary, emitted after its busy flag is
 		// cleared — safe to stop waiting and let the queue drain.
@@ -80,11 +81,11 @@ func (m *Model) applyEvent(ev events.Event) {
 		}
 	case events.TypeDelegated:
 		if name, ok := ev.Data["agent"].(string); ok {
-			m.transcript += toolStyle.Render(fmt.Sprintf("[delegated to %s]", name)) + "\n\n"
+			m.appendTool(fmt.Sprintf("[delegated to %s]", name))
 		}
 	case events.TypeTurnCancelled:
 		m.endTurn()
-		m.transcript += toolStyle.Render("[cancelled]") + "\n\n"
+		m.appendTool("[cancelled]")
 	case events.TypeError:
 		m.endTurn()
 		if msg, ok := ev.Data["error"].(string); ok {

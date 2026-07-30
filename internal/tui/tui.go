@@ -46,15 +46,25 @@ type Model struct {
 	termHeight int
 	events     <-chan events.Event
 
-	// transcript is a plain string, deliberately not a strings.Builder:
-	// Model.Update has a value receiver (bubbletea's Program stores/passes
-	// the model by value between calls), and strings.Builder embeds a
-	// self-referential pointer it uses to detect copies — once non-empty,
-	// copying the containing struct and then writing to the copy panics
-	// with "illegal use of non-zero Builder copied by value". That's
-	// exactly what repeatedly pressing Tab (or any rapid sequence of
-	// events) used to trigger. Plain strings have no such restriction.
-	transcript       string
+	// transcript holds every line ever shown, as structured entries rather
+	// than one flat pre-rendered string — styling lives in view.go's
+	// renderTranscript, not baked in at append time, and refreshViewport can
+	// tell whether the viewport was scrolled before re-rendering. A plain
+	// slice, deliberately not built on strings.Builder: Model.Update has a
+	// value receiver (bubbletea's Program stores/passes the model by value
+	// between calls), and strings.Builder embeds a self-referential pointer
+	// it uses to detect copies — once non-empty, copying the containing
+	// struct and then writing to the copy panics with "illegal use of
+	// non-zero Builder copied by value". That's exactly what repeatedly
+	// pressing Tab (or any rapid sequence of events) used to trigger before
+	// this field existed. A slice's backing array has no such restriction.
+	transcript []transcriptEntry
+	// streamOpen is true between the first message.part.delta of a model
+	// message and its message.part.end — while true, the next delta
+	// extends the last transcript entry instead of starting a new one, so a
+	// reply that streams in dozens of small chunks becomes one entry, not
+	// dozens.
+	streamOpen       bool
 	pending          *pendingPermission
 	pendingHintShown bool // has the "resolve the permission above" hint already fired for this pending request
 	waiting          bool

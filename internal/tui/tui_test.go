@@ -24,6 +24,18 @@ func newTestModel() Model {
 	return New(client.New("http://unused.invalid"), "s1", "general-purpose", ch)
 }
 
+// transcriptText joins every transcript entry's raw text, unstyled — what
+// these tests check content against instead of the ANSI renderTranscript
+// produces, which encodes an implementation detail (view.go's current
+// styling) the tests below have no business depending on.
+func (m Model) transcriptText() string {
+	texts := make([]string, len(m.transcript))
+	for i, e := range m.transcript {
+		texts[i] = e.text
+	}
+	return strings.Join(texts, "\n\n")
+}
+
 func TestResizeLayoutGrowsWithContent(t *testing.T) {
 	m := newTestModel()
 
@@ -127,8 +139,8 @@ func TestHelpCommandRendersLocally(t *testing.T) {
 	if cmd != nil {
 		t.Errorf("/help should not issue a command (no server round trip), got %v", cmd)
 	}
-	if !strings.Contains(m.transcript, "Available commands") {
-		t.Errorf("transcript = %q, want it to contain the help text", m.transcript)
+	if !strings.Contains(m.transcriptText(), "Available commands") {
+		t.Errorf("transcript = %q, want it to contain the help text", m.transcriptText())
 	}
 	if m.input.Value() != "" {
 		t.Errorf("input should be cleared after /help, got %q", m.input.Value())
@@ -155,8 +167,8 @@ func TestVersionCommandFetchesFromDaemon(t *testing.T) {
 	updated, _ := m.Update(msg)
 	m = updated.(Model)
 
-	if !strings.Contains(m.transcript, "1.2.3") {
-		t.Errorf("transcript = %q, want it to contain the fetched version", m.transcript)
+	if !strings.Contains(m.transcriptText(), "1.2.3") {
+		t.Errorf("transcript = %q, want it to contain the fetched version", m.transcriptText())
 	}
 }
 
@@ -233,8 +245,8 @@ func TestAgentSwitchedEventUpdatesCurrentAgent(t *testing.T) {
 	// line — View() already renders the current agent in the footer on
 	// every frame, so writing one here as well would leave a permanent
 	// "switched to X" line behind on every single Tab press.
-	if m.transcript != "" {
-		t.Errorf("transcript = %q, want it untouched by an agent.switched event (footer already shows the current agent)", m.transcript)
+	if len(m.transcriptText()) != 0 {
+		t.Errorf("transcript = %v, want it untouched by an agent.switched event (footer already shows the current agent)", m.transcriptText())
 	}
 }
 
@@ -246,8 +258,8 @@ func TestAgentCommandListsLocally(t *testing.T) {
 	if cmd != nil {
 		t.Errorf("/agent (list) should not issue a command, got %v", cmd)
 	}
-	if !strings.Contains(m.transcript, "build") || !strings.Contains(m.transcript, "implements features") {
-		t.Errorf("transcript = %q, want it to list the known agent", m.transcript)
+	if !strings.Contains(m.transcriptText(), "build") || !strings.Contains(m.transcriptText(), "implements features") {
+		t.Errorf("transcript = %q, want it to list the known agent", m.transcriptText())
 	}
 }
 
@@ -425,6 +437,106 @@ func TestLongModelReplyWrapsToViewportWidth(t *testing.T) {
 	}
 }
 
+// TestStreamedDeltasCoalesceIntoOneEntry pins the E5 structured-transcript
+// invariant: consecutive message.part.delta events for the same model
+// message accumulate into a single transcript entry rather than one entry
+// per delta — otherwise a reply that streams in dozens of small chunks
+// would turn into dozens of separate paragraphs once rendered.
+func TestStreamedDeltasCoalesceIntoOneEntry(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "Hello"}})
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": ", "}})
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "world."}})
+
+	if len(m.transcript) != 1 {
+		t.Fatalf("transcript = %v, want exactly one entry for three deltas of the same message", m.transcript)
+	}
+	if got, want := m.transcript[0].text, "Hello, world."; got != want {
+		t.Errorf("entry text = %q, want %q", got, want)
+	}
+
+	// message.part.end closes the entry; the next delta — a different model
+	// message — must start a new one rather than continuing this one.
+	m.applyEvent(events.Event{Type: events.TypeMessagePartEnd})
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "Second message."}})
+
+	if len(m.transcript) != 2 {
+		t.Fatalf("transcript = %v, want a second entry after message.part.end", m.transcript)
+	}
+	if got, want := m.transcript[1].text, "Second message."; got != want {
+		t.Errorf("second entry text = %q, want %q", got, want)
+	}
+}
+
+// TestUserMessageAlwaysStartsAFreshEntry guards the other half of the
+// coalescing logic: a user message (or any non-delta append) must never be
+// merged into an in-progress model entry, even if one happens to be open
+// (which in practice it never is — a user message can't arrive mid-stream —
+// but the entry boundary should not depend on that being true).
+func TestUserMessageAlwaysStartsAFreshEntry(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "partial"}})
+	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "hi"}})
+
+	if len(m.transcript) != 2 {
+		t.Fatalf("transcript = %v, want the user message kept separate from the open model entry", m.transcript)
+	}
+	if m.transcript[0].kind != entryModel || m.transcript[0].text != "partial" {
+		t.Errorf("first entry = %+v, want the untouched model entry", m.transcript[0])
+	}
+	if m.transcript[1].kind != entryUser || m.transcript[1].text != "hi" {
+		t.Errorf("second entry = %+v, want a fresh user entry", m.transcript[1])
+	}
+
+	// And streaming resumes as a new entry, not a continuation of either
+	// entry above.
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "next"}})
+	if len(m.transcript) != 3 || m.transcript[2].text != "next" {
+		t.Errorf("transcript = %v, want a third, fresh model entry", m.transcript)
+	}
+}
+
+// TestRefreshViewportPreservesScrollPosition is a regression guard for the
+// UX bug E5 set out to fix: every transcript update used to call
+// viewport.GotoBottom() unconditionally, so scrolling up mid-stream to
+// reread something was immediately undone by the next delta. Scroll
+// position must now only auto-follow when the viewport was already at the
+// bottom.
+func TestRefreshViewportPreservesScrollPosition(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	m = updated.(Model)
+
+	// Enough content that the viewport can actually be scrolled away from
+	// the bottom.
+	for i := 0; i < 40; i++ {
+		m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": fmt.Sprintf("line %d", i)}})
+	}
+	if !m.viewport.AtBottom() {
+		t.Fatal("setup: expected the viewport to be at the bottom after populating the transcript")
+	}
+
+	m.viewport.GotoTop()
+	if m.viewport.AtBottom() {
+		t.Fatal("setup: expected GotoTop to move the viewport away from the bottom")
+	}
+
+	// A new event refreshes the viewport; since it was scrolled up, it must
+	// stay put instead of snapping back down.
+	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "new message"}})
+	if m.viewport.AtBottom() {
+		t.Error("refreshViewport moved the viewport back to the bottom even though the user had scrolled up")
+	}
+
+	// But once genuinely at the bottom, new content keeps following it —
+	// the common case while actively watching a reply stream in.
+	m.viewport.GotoBottom()
+	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "another message"}})
+	if !m.viewport.AtBottom() {
+		t.Error("refreshViewport should keep following the bottom when the viewport was already there")
+	}
+}
+
 // TestEnterQueuesPlainPromptWhileWaiting is a regression test for a UX gap:
 // pressing Enter while a turn is streaming used to silently drop the typed
 // text (the input was cleared? no — text just sat there and Update did
@@ -445,8 +557,8 @@ func TestEnterQueuesPlainPromptWhileWaiting(t *testing.T) {
 	if m.input.Value() != "" {
 		t.Errorf("input = %q, want it cleared after queueing", m.input.Value())
 	}
-	if !strings.Contains(m.transcript, "second question") {
-		t.Errorf("transcript = %q, want the queued prompt echoed so the user can see it was accepted", m.transcript)
+	if !strings.Contains(m.transcriptText(), "second question") {
+		t.Errorf("transcript = %q, want the queued prompt echoed so the user can see it was accepted", m.transcriptText())
 	}
 	if !m.waiting {
 		t.Error("waiting should remain true — the original turn hasn't finished")
@@ -737,8 +849,8 @@ func TestBusySendRequeuesInsteadOfError(t *testing.T) {
 	if !m.waiting {
 		t.Error("waiting should be true after a busy bounce, so the next turn.done drains the queue")
 	}
-	if !strings.Contains(m.transcript, "[queued] bounced prompt") {
-		t.Errorf("transcript = %q, want a [queued] line so the user sees what happened", m.transcript)
+	if !strings.Contains(m.transcriptText(), "[queued] bounced prompt") {
+		t.Errorf("transcript = %q, want a [queued] line so the user sees what happened", m.transcriptText())
 	}
 }
 
@@ -769,8 +881,8 @@ func TestToolEventsLeaveNoTranscriptLines(t *testing.T) {
 	m.waiting = true
 
 	m.applyEvent(events.Event{Type: events.TypeToolStart, Data: map[string]any{"name": "bash"}})
-	if strings.Contains(m.transcript, "[tool]") {
-		t.Errorf("transcript = %q, want no [tool] line", m.transcript)
+	if strings.Contains(m.transcriptText(), "[tool]") {
+		t.Errorf("transcript = %q, want no [tool] line", m.transcriptText())
 	}
 	if m.runningTool != "bash" {
 		t.Errorf("runningTool = %q, want the indicator to know which tool is running", m.runningTool)
@@ -780,8 +892,8 @@ func TestToolEventsLeaveNoTranscriptLines(t *testing.T) {
 	}
 
 	m.applyEvent(events.Event{Type: events.TypeToolEnd, Data: map[string]any{"is_error": false}})
-	if strings.Contains(m.transcript, "[tool]") {
-		t.Errorf("transcript = %q, want no [tool] line after tool.end either", m.transcript)
+	if strings.Contains(m.transcriptText(), "[tool]") {
+		t.Errorf("transcript = %q, want no [tool] line after tool.end either", m.transcriptText())
 	}
 	if m.runningTool != "" {
 		t.Errorf("runningTool = %q, want it cleared when the tool ends", m.runningTool)
@@ -827,8 +939,8 @@ func TestBackgroundTaskShowsInIndicator(t *testing.T) {
 		"task_id": "t1", "agent": "explore", "prompt": "find TODOs",
 	}})
 
-	if strings.Contains(m.transcript, "[task]") {
-		t.Errorf("transcript = %q, want no [task] line", m.transcript)
+	if strings.Contains(m.transcriptText(), "[task]") {
+		t.Errorf("transcript = %q, want no [task] line", m.transcriptText())
 	}
 	if !m.busy() {
 		t.Error("busy() should be true while a background task runs, so the indicator shows")
@@ -882,8 +994,8 @@ func TestTasksCommandListsAndIsLocal(t *testing.T) {
 		t.Errorf("/tasks should answer locally, got %v", cmd)
 	}
 	for _, want := range []string{"t1", "running", "explore", "find TODOs"} {
-		if !strings.Contains(m.transcript, want) {
-			t.Errorf("transcript = %q, want it to mention %q", m.transcript, want)
+		if !strings.Contains(m.transcriptText(), want) {
+			t.Errorf("transcript = %q, want it to mention %q", m.transcriptText(), want)
 		}
 	}
 }
@@ -1012,8 +1124,8 @@ func TestEnterWhileWaitingExplainsWhyACommandCantQueue(t *testing.T) {
 	if len(m.queue) != 0 {
 		t.Errorf("queue = %v, want commands never queued", m.queue)
 	}
-	if !strings.Contains(m.transcript, "/compact") || !strings.Contains(m.transcript, "in progress") {
-		t.Errorf("transcript = %q, want an explanation that the command can't run mid-turn", m.transcript)
+	if !strings.Contains(m.transcriptText(), "/compact") || !strings.Contains(m.transcriptText(), "in progress") {
+		t.Errorf("transcript = %q, want an explanation that the command can't run mid-turn", m.transcriptText())
 	}
 }
 
@@ -1054,8 +1166,8 @@ func TestSlashCommandsAreCaseInsensitive(t *testing.T) {
 	if cmd != nil {
 		t.Errorf("/Agent (list) should not issue a command, got %v", cmd)
 	}
-	if !strings.Contains(m.transcript, "build") {
-		t.Errorf("transcript = %q, want /Agent (mixed case) to list agents same as /agent", m.transcript)
+	if !strings.Contains(m.transcriptText(), "build") {
+		t.Errorf("transcript = %q, want /Agent (mixed case) to list agents same as /agent", m.transcriptText())
 	}
 
 	m2 := newTestModel()

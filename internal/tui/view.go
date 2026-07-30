@@ -6,6 +6,28 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// renderTranscript styles every entry by kind and joins them with the blank
+// line that has always separated transcript paragraphs — this is the one
+// place transcriptEntry becomes ANSI text, so a style change never means
+// touching the append call sites in transcript.go/events.go.
+func renderTranscript(entries []transcriptEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	parts := make([]string, len(entries))
+	for i, e := range entries {
+		switch e.kind {
+		case entryUser:
+			parts[i] = userStyle.Render("You: ") + e.text
+		case entryTool, entryLocal:
+			parts[i] = toolStyle.Render(e.text)
+		default: // entryModel: streamed as-is, no style
+			parts[i] = e.text
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 // inputBorder draws a horizontal rule spanning the input box's width, used
 // above and below it so its boundary reads clearly against the transcript.
 func (m Model) inputBorder() string {
