@@ -1,15 +1,24 @@
 'use strict';
 
-// Loads the real internal/daemon/static/{index.html,app.js} into the minimal
-// DOM from dom.js and hands the test back the script's internals.
+// Loads the real internal/daemon/static/{index.html,js/*.js} — the daemon's
+// embedded Web UI, native ES modules and no bundler, exactly as a browser
+// gets them — into the minimal DOM from dom.js and hands the test back the
+// module graph's exports.
 //
 // Nothing here is a copy of production code: index.html is scanned for its
-// element ids and app.js is evaluated verbatim in a fresh vm context, so a
-// test failure means the shipped files are wrong, not that a fixture drifted.
+// element ids and every js/*.js file is evaluated verbatim as a real ES
+// module (via node:vm's SourceTextModule, run with a hand-written linker —
+// see linkModuleGraph below), so a test failure means the shipped files are
+// wrong, not that a fixture drifted.
 //
-// The daemon is replaced by a routing table (see DEFAULT_ROUTES) and the SSE
+// The daemon is replaced by a routing table (see defaultRoutes) and the SSE
 // stream by a FakeEventSource a test drives directly with .emit(event) — the
 // same JSON shape internal/events puts on the wire.
+//
+// Running this file requires Node's --experimental-vm-modules flag (see
+// package.json's test-js script / Makefile / webui_test.go — every path that
+// runs this suite passes it). Without the flag, vm.SourceTextModule throws
+// immediately; load() surfaces that as a clear error rather than a cryptic one.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -18,6 +27,16 @@ const vm = require('node:vm');
 const { Document } = require('./dom');
 
 const STATIC_DIR = path.join(__dirname, '..', '..', 'internal', 'daemon', 'static');
+const JS_DIR = path.join(STATIC_DIR, 'js');
+const ENTRY = path.join(JS_DIR, 'main.js');
+
+if (typeof vm.SourceTextModule !== 'function') {
+  throw new Error(
+    'test/webui/harness.js needs node run with --experimental-vm-modules ' +
+    '(it evaluates the real ES modules under internal/daemon/static/js/ directly). ' +
+    'Use `make test-js`, or `go test ./internal/daemon/`.',
+  );
+}
 
 // What a freshly started daemon with one existing session answers. Any test
 // can replace or add to these through load({routes: {...}}).
@@ -102,7 +121,7 @@ class FakeEventSource {
     this.onerror = null;
     harness.sse = this;
     // A real EventSource connects asynchronously; opening here would mean
-    // onopen ran before app.js had a chance to assign it.
+    // onopen ran before app code had a chance to assign it.
     queueMicrotask(() => {
       if (!this.closed && this.onopen) this.onopen();
     });
@@ -135,10 +154,50 @@ class FakeFormData {
 
 // settle lets every already-resolved promise chain run to completion. The
 // harness never uses real timers, so a bounded number of microtask turns is
-// enough for any chain app.js starts; the loop is generous rather than exact
-// because init() awaits six requests in sequence.
+// enough for any chain the app starts; the loop is generous rather than
+// exact because init() awaits six requests in sequence.
 async function settle(turns = 50) {
   for (let i = 0; i < turns; i++) await new Promise((r) => setImmediate(r));
+}
+
+// linkModuleGraph creates one fresh vm.SourceTextModule per source file
+// reachable from entryPath and links their imports together, all inside
+// `context`. Building the graph by hand — instead of Node's own ESM loader —
+// is what gives each load() call full isolation for free: every call gets
+// brand new Module instances with no shared cache, so two tests can never
+// see each other's module-level state, the same guarantee vm.Script gave the
+// single-file harness this replaced. A relative specifier is resolved
+// against the importing module's own file, matching how the browser
+// resolves `import './x.js'` in these files.
+async function linkModuleGraph(entryPath, context) {
+  const cache = new Map(); // absolute path -> vm.SourceTextModule
+
+  function load(filePath) {
+    if (cache.has(filePath)) return cache.get(filePath);
+    const source = fs.readFileSync(filePath, 'utf8');
+    const mod = new vm.SourceTextModule(source, {
+      identifier: filePath,
+      context,
+      importModuleDynamically: async (specifier) => load(resolve(specifier, filePath)),
+    });
+    cache.set(filePath, mod);
+    return mod;
+  }
+
+  function resolve(specifier, fromPath) {
+    if (!specifier.startsWith('.')) {
+      throw new Error(`unsupported bare import specifier "${specifier}" in ${fromPath} — the Web UI only uses relative imports`);
+    }
+    return path.normalize(path.join(path.dirname(fromPath), specifier));
+  }
+
+  const entry = load(entryPath);
+  async function linker(specifier, referencingModule) {
+    return load(resolve(specifier, referencingModule.identifier));
+  }
+  await entry.link(linker);
+  await entry.evaluate();
+  return entry;
 }
 
 /**
@@ -153,7 +212,6 @@ async function settle(turns = 50) {
  */
 async function load(opts = {}) {
   const html = fs.readFileSync(path.join(STATIC_DIR, 'index.html'), 'utf8');
-  const source = fs.readFileSync(path.join(STATIC_DIR, 'app.js'), 'utf8');
 
   const document = new Document(html);
   const routes = { ...defaultRoutes(), ...(opts.routes || {}) };
@@ -201,26 +259,19 @@ async function load(opts = {}) {
     clearTimeout,
     queueMicrotask,
   };
-  vm.createContext(sandbox);
-  // app.js reaches for window.prompt / window.confirm; in a browser window
-  // *is* the global, so wire it up the same way here.
+  const context = vm.createContext(sandbox);
+  // app code reaches for window.prompt / window.confirm; in a browser
+  // window *is* the global, so wire it up the same way here.
   sandbox.window = sandbox;
   sandbox.confirm = () => (opts.confirm === undefined ? true : opts.confirm);
   sandbox.prompt = () => (opts.prompt === undefined ? null : opts.prompt);
 
-  let internals = null;
-  sandbox.__localcodeTestHook = (api) => {
-    internals = api;
-  };
+  const mainModule = await linkModuleGraph(ENTRY, context);
+  const internals = mainModule.namespace;
 
-  vm.runInContext(source, sandbox, { filename: 'app.js' });
-
-  if (!internals) {
-    throw new Error('app.js did not call __localcodeTestHook — is the test seam at the end of the file still there?');
-  }
   if (document.missingIDs.size > 0) {
     throw new Error(
-      `app.js asked for element ids that index.html does not define: ${[...document.missingIDs].join(', ')}`,
+      `js/*.js asked for element ids that index.html does not define: ${[...document.missingIDs].join(', ')}`,
     );
   }
 
@@ -230,11 +281,11 @@ async function load(opts = {}) {
   }
 
   return Object.assign(harness, internals, {
-    // el(id) is the element index.html declares — the same object app.js
-    // holds a reference to.
+    // el(id) is the element index.html declares — the same object the app
+    // code holds a reference to.
     el: (id) => document.getElementById(id),
-    // transcript() is everything appendLine has written, as the HTML string a
-    // browser would parse.
+    // transcript() is everything the transcript module has written, as the
+    // HTML string a browser would parse.
     transcript: () => document.getElementById('transcript').innerHTML,
     // callsTo lists the requests made to one endpoint pattern.
     callsTo: (method, pattern) =>
@@ -256,6 +307,34 @@ async function load(opts = {}) {
       const ev = input.fire('keydown', { key, ...props });
       if (!ev.defaultPrevented) document.fire('keydown', { key, target: input, ...props });
       return ev;
+    },
+    // state bridges the test-facing flat shape (state.sessionID, state.waiting,
+    // ...) onto the module's real session/app-scoped objects (see
+    // internal/daemon/static/js/state.js) — the split exists in the shipped
+    // code, not in what tests have to know about.
+    state: {
+      get sessionID() { return internals.session.sessionID; }, set sessionID(v) { internals.session.sessionID = v; },
+      get waiting() { return internals.session.waiting; }, set waiting(v) { internals.session.waiting = v; },
+      get connected() { return internals.session.connected; },
+      get runningTool() { return internals.session.runningTool; }, set runningTool(v) { internals.session.runningTool = v; },
+      get promptQueue() { return internals.session.promptQueue; }, set promptQueue(v) { internals.session.promptQueue = v; },
+      get history() { return internals.session.history; }, set history(v) { internals.session.history = v; },
+      get historyIdx() { return internals.session.historyIdx; }, set historyIdx(v) { internals.session.historyIdx = v; },
+      get tasks() { return internals.session.tasks; }, set tasks(v) { internals.session.tasks = v; },
+      get agents() { return internals.app.agents; }, set agents(v) { internals.app.agents = v; },
+      get currentAgent() { return internals.session.currentAgent; },
+      get customCommands() { return internals.app.customCommands; }, set customCommands(v) { internals.app.customCommands = v; },
+      get sessions() { return internals.app.sessions; }, set sessions(v) { internals.app.sessions = v; },
+      get mcpServers() { return internals.app.mcpServers; }, set mcpServers(v) { internals.app.mcpServers = v; },
+      get lastUsage() { return internals.session.lastUsage; }, set lastUsage(v) { internals.session.lastUsage = v; },
+      get skipPermissions() { return internals.app.skipPermissions; }, set skipPermissions(v) { internals.app.skipPermissions = v; },
+      get permissionRules() { return internals.app.permissionRules; }, set permissionRules(v) { internals.app.permissionRules = v; },
+      get autoDelegate() { return internals.app.autoDelegate; }, set autoDelegate(v) { internals.app.autoDelegate = v; },
+      get autoDelegateAgent() { return internals.app.autoDelegateAgent; }, set autoDelegateAgent(v) { internals.app.autoDelegateAgent = v; },
+      get autoDelegateMatch() { return internals.app.autoDelegateMatch; }, set autoDelegateMatch(v) { internals.app.autoDelegateMatch = v; },
+      get showTPS() { return internals.app.showTPS; }, set showTPS(v) { internals.app.showTPS = v; },
+      get pendingPermissionID() { return internals.session.pendingPermissionID; }, set pendingPermissionID(v) { internals.session.pendingPermissionID = v; },
+      get workspacePath() { return internals.app.workspacePath; }, set workspacePath(v) { internals.app.workspacePath = v; },
     },
   });
 }

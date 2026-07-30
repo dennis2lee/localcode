@@ -1,8 +1,8 @@
 'use strict';
 
-// Startup: the contract between index.html and app.js, and what the page does
-// when the daemon answers badly. These are the failures that would otherwise
-// only show up as a blank page in front of a user.
+// Startup: the contract between index.html and js/*.js, and what the page
+// does when the daemon answers badly. These are the failures that would
+// otherwise only show up as a blank page in front of a user.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,7 +13,7 @@ const { load } = require('./harness');
 
 const STATIC_DIR = path.join(__dirname, '..', '..', 'internal', 'daemon', 'static');
 
-test('every element id app.js looks up exists in index.html', async () => {
+test('every element id js/*.js looks up exists in index.html', async () => {
   // load() throws when one is missing; this asserts it actually checked
   // something, so the guarantee can't quietly become vacuous.
   const app = await load();
@@ -21,19 +21,31 @@ test('every element id app.js looks up exists in index.html', async () => {
   assert.equal(app.document.missingIDs.size, 0);
 });
 
-test('index.html loads the split-out stylesheet and script', () => {
+test('index.html loads the split-out stylesheet and the ES module entry point', () => {
   const html = fs.readFileSync(path.join(STATIC_DIR, 'index.html'), 'utf8');
   assert.match(html, /<link rel="stylesheet" href="style\.css">/);
-  assert.match(html, /<script src="app\.js"><\/script>/);
+  assert.match(html, /<script type="module" src="js\/main\.js"><\/script>/);
   // The markup and the code stay separate — no inline blocks crept back in.
   assert.ok(!/<style[\s>]/.test(html), 'index.html has an inline <style> block again');
-  assert.ok(!/<script>/.test(html), 'index.html has an inline <script> block again');
+  assert.ok(!/<script(?!\s+type="module")/.test(html), 'index.html has a non-module inline <script> block again');
 });
 
 test('the shipped files contain no stray NUL bytes', () => {
-  for (const name of ['app.js', 'style.css', 'index.html']) {
+  const jsDir = path.join(STATIC_DIR, 'js');
+  const files = ['style.css', 'index.html', ...fs.readdirSync(jsDir).map((f) => path.join('js', f))];
+  for (const name of files) {
     const data = fs.readFileSync(path.join(STATIC_DIR, name));
     assert.equal(data.indexOf(0), -1, `${name} contains a NUL byte`);
+  }
+});
+
+test('every js/*.js file uses only relative imports (no bundler, no bare specifiers)', () => {
+  const jsDir = path.join(STATIC_DIR, 'js');
+  for (const name of fs.readdirSync(jsDir)) {
+    const src = fs.readFileSync(path.join(jsDir, name), 'utf8');
+    for (const m of src.matchAll(/^import\b[^;]*\bfrom\s+['"]([^'"]+)['"]/gm)) {
+      assert.ok(m[1].startsWith('./') || m[1].startsWith('../'), `${name} imports "${m[1]}" — not a relative specifier`);
+    }
   }
 });
 

@@ -23,7 +23,7 @@ func TestWebUI(t *testing.T) {
 	}
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("node is not installed — skipping the Web UI tests (run them with: node --test test/webui/)")
+		t.Skip("node is not installed — skipping the Web UI tests (run them with: make test-js)")
 	}
 
 	dir, err := filepath.Abs(filepath.Join("..", "..", "test", "webui"))
@@ -41,7 +41,13 @@ func TestWebUI(t *testing.T) {
 		t.Fatalf("no *.test.js files in %s — the Web UI suite has gone missing", dir)
 	}
 
-	cmd := exec.Command(node, append([]string{"--test"}, files...)...)
+	// --experimental-vm-modules: harness.js evaluates the real js/*.js files
+	// as native ES modules via node:vm's SourceTextModule, which is gated
+	// behind this flag. See test/webui/harness.js for why (per-test module
+	// graph isolation that Node's own import() cache can't give us without a
+	// cache-busting hack across every relative import, not just the entry).
+	args := append([]string{"--experimental-vm-modules", "--test"}, files...)
+	cmd := exec.Command(node, args...)
 	childproc.Hide(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

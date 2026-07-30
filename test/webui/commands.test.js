@@ -13,10 +13,13 @@ const { load } = require('./harness');
 // showed a literal "&lt;skill name&gt;".
 test('the help text is raw, not pre-escaped', async () => {
   const app = await load();
-  assert.ok(app.HELP_TEXT.includes('/<skill name>'), app.HELP_TEXT);
-  assert.ok(!app.HELP_TEXT.includes('&lt;'), app.HELP_TEXT);
-  assert.ok(!app.HELP_TEXT.includes('&gt;'), app.HELP_TEXT);
-  assert.ok(!app.HELP_TEXT.includes('&amp;'), app.HELP_TEXT);
+  assert.ok(Array.isArray(app.HELP_TEXT), app.HELP_TEXT);
+  assert.ok(app.HELP_TEXT.some((line) => line.includes('/<skill name>')), app.HELP_TEXT);
+  for (const line of app.HELP_TEXT) {
+    assert.ok(!line.includes('&lt;'), line);
+    assert.ok(!line.includes('&gt;'), line);
+    assert.ok(!line.includes('&amp;'), line);
+  }
 });
 
 test('/help renders every angle bracket escaped exactly once', async () => {

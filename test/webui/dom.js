@@ -322,6 +322,10 @@ class Document {
     return new Element(this, tagName);
   }
 
+  createTextNode(text) {
+    return new TextNode(text);
+  }
+
   addEventListener(type, fn) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(fn);

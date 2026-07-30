@@ -27,10 +27,12 @@ dist-mac-gui:
 test:
 	go test ./...
 
-# The Web UI tests on their own — faster to iterate on while editing app.js.
-# Node's built-in runner, no dependencies; see test/webui/README.md.
+# The Web UI tests on their own — faster to iterate on while editing
+# internal/daemon/static/js/*.js. Node's built-in runner, no dependencies;
+# --experimental-vm-modules is needed because the harness evaluates the real
+# ES modules directly (see test/webui/README.md).
 test-js:
-	node --test test/webui/*.test.js
+	node --experimental-vm-modules --test test/webui/*.test.js
 
 clean:
 	rm -rf $(BIN_NAME) $(DIST)

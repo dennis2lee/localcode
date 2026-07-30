@@ -1,0 +1,160 @@
+import {
+  inputEl, sendBtn, agentSelectEl, newSessionBtn, deleteAllSessionsBtn,
+  permissionAllowBtn, permissionAllowSessionBtn, permissionAllowAlwaysBtn, permissionDenyBtn,
+  autoDelegateBtn, delegateCloseBtn, delegateEnabledCheckbox, delegateAgentSelect,
+  delegateMatchAddBtn, delegateMatchInput,
+  permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
+  workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput,
+} from './dom.js';
+import { app, session } from './state.js';
+import { uploadFile, switchAgent } from './api.js';
+import { appendError } from './transcript.js';
+import { renderTasks } from './render.js';
+import {
+  sendMessage, cancelTurn, autoResizeInput, insertAtCursor,
+  atInputStart, atInputEnd, historyPrev, historyNext,
+} from './composer.js';
+import { loadAgents, loadCommands, loadSettings, loadWorkspace, loadMCPServers, cycleAgent } from './loaders.js';
+import { loadSessions, selectSession, createNewSession, deleteAllSessions } from './sessions.js';
+import {
+  resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
+  openPermissionSettings, closePermissionSettings, toggleSkipPermissions, addPermissionRule,
+  openWorkspacePicker, closeWorkspaceModal, saveWorkspace, anyModalOpen,
+} from './modals.js';
+
+agentSelectEl.addEventListener('change', async () => {
+  const name = agentSelectEl.value;
+  if (!session.sessionID || name === session.currentAgent) return;
+  try {
+    await switchAgent(session.sessionID, name);
+    // currentAgent updates from the agent.switched event this call causes
+    // the daemon to broadcast — see events.js — not here, so every client
+    // (including this one) reacts the same way.
+  } catch (err) {
+    agentSelectEl.value = session.currentAgent; // revert the dropdown on failure
+    appendError(`failed to switch agent: ${err}`);
+  }
+});
+
+newSessionBtn.addEventListener('click', createNewSession);
+deleteAllSessionsBtn.addEventListener('click', deleteAllSessions);
+
+inputEl.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  inputEl.classList.add('drag-over');
+});
+inputEl.addEventListener('dragleave', () => inputEl.classList.remove('drag-over'));
+inputEl.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  inputEl.classList.remove('drag-over');
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (!files || files.length === 0 || !session.sessionID) return;
+  for (const file of files) {
+    try {
+      const path = await uploadFile(session.sessionID, file);
+      insertAtCursor(inputEl, `[attached file: ${path}]\n`);
+    } catch (err) {
+      appendError(`upload failed (${file.name}): ${err}`);
+    }
+  }
+  autoResizeInput();
+});
+
+sendBtn.addEventListener('click', sendMessage);
+inputEl.addEventListener('input', autoResizeInput);
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    cancelTurn();
+  } else if (e.key === 'ArrowUp' && atInputStart()) {
+    if (historyPrev()) e.preventDefault();
+  } else if (e.key === 'ArrowDown' && atInputEnd()) {
+    if (historyNext()) e.preventDefault();
+  }
+});
+
+// Esc works even when focus is not in the prompt box, matching the TUI.
+//
+// Tab does too, and for the same reason: in the TUI it cycles the agent,
+// and someone moving between the two shouldn't find that the same key
+// instead walks the focus ring around the page. preventDefault is what
+// takes it back from the browser. Tab still does its normal job inside a
+// modal and in the modals' own fields, where moving between inputs is
+// the only thing it could reasonably mean.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && e.target !== inputEl && !document.getElementById('permission-modal').classList.contains('open')) {
+    cancelTurn();
+    return;
+  }
+  if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !anyModalOpen()) {
+    const inOtherField = e.target !== inputEl
+      && e.target !== document.body
+      && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT');
+    if (inOtherField) return;
+    e.preventDefault();
+    cycleAgent(e.shiftKey ? -1 : 1);
+  }
+});
+
+permissionAllowBtn.addEventListener('click', () => resolvePermission(true, 'once'));
+permissionAllowSessionBtn.addEventListener('click', () => resolvePermission(true, 'session'));
+permissionAllowAlwaysBtn.addEventListener('click', () => resolvePermission(true, 'always'));
+permissionDenyBtn.addEventListener('click', () => resolvePermission(false, 'once'));
+
+autoDelegateBtn.addEventListener('click', openAutoDelegateSettings);
+delegateCloseBtn.addEventListener('click', closeDelegateModal);
+delegateEnabledCheckbox.addEventListener('change', () => {
+  saveAutoDelegate({ enabled: delegateEnabledCheckbox.checked });
+});
+delegateAgentSelect.addEventListener('change', () => {
+  saveAutoDelegate({ agent: delegateAgentSelect.value });
+});
+delegateMatchAddBtn.addEventListener('click', addDelegateMatch);
+delegateMatchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); addDelegateMatch(); }
+});
+permissionStatusBtn.addEventListener('click', openPermissionSettings);
+permissionSettingsCloseBtn.addEventListener('click', closePermissionSettings);
+skipPermissionsCheckbox.addEventListener('change', () => toggleSkipPermissions(skipPermissionsCheckbox.checked));
+ruleAddBtn.addEventListener('click', addPermissionRule);
+
+workspaceBtn.addEventListener('click', openWorkspacePicker);
+workspaceCancelBtn.addEventListener('click', closeWorkspaceModal);
+workspaceSaveBtn.addEventListener('click', saveWorkspace);
+workspaceInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); saveWorkspace(); }
+});
+
+async function init() {
+  renderTasks();
+  await loadAgents();
+  await loadCommands();
+  await loadSettings();
+  await loadWorkspace();
+  await loadMCPServers();
+  await loadSessions();
+
+  if (!app.sessions || app.sessions.length === 0) {
+    await createNewSession();
+  } else {
+    selectSession(app.sessions[0].id, app.sessions[0].agent, app.sessions[0].workspace);
+  }
+}
+
+export const ready = init();
+
+// Re-exports below give test/webui/harness.js one namespace to read instead
+// of importing every module individually. In a browser nothing imports
+// main.js by name (index.html loads it as the page's entry <script type=
+// module>), so this surface exists purely for the test harness.
+export { session, app } from './state.js';
+export { escapeHtml, formatTime, shortenPath } from './format.js';
+export { renderMarkdown, inline } from './markdown.js';
+export { HELP_TEXT, isPlainPrompt, tryLocalCommand } from './commands.js';
+export { applyEvent } from './events.js';
+export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage } from './composer.js';
+export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
+export { renderSessionList, selectSession } from './sessions.js';
