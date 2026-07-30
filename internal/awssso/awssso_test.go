@@ -21,7 +21,7 @@ import (
 // what `aws sso login`/the default credential chain expect.
 func TestCacheFilePathMatchesAWSCLIHash(t *testing.T) {
 	cases := map[string]string{
-		"https://127.0.0.1/start":                            "eb5e43e71ce87dd92ec58903d76debd8ee42aefd",
+		"https://127.0.0.1/start":                              "eb5e43e71ce87dd92ec58903d76debd8ee42aefd",
 		"https://my-sso-config-profile-role.awsapps.com/start": "451f9e12ee256d215dc6127714a901985c2dcf16",
 		"https://d-123456789a.awsapps.com/start":               "2522b24e4bb6b800675965656425e3d136c896ad",
 	}
