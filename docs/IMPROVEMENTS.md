@@ -44,7 +44,7 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 | ~~"Always allow" on permission prompts~~ | Done in v0.20.0. Prompts now offer allow once, allow for session, and always allow, the last of which writes the matching rule into config.json. |
 | `/usage` visualization | Bars for tokens per model, a gauge for context use. |
 | Session search and filter | The session list in the left panel needs title (and workspace) search once it gets long. |
-| Scroll control | Stop auto scrolling when the user scrolls up mid stream, and show a jump to bottom button. |
+| ~~Scroll control~~ | Half done in v0.31.0, on the TUI side: the viewport only auto-follows the bottom when it was already there before an update, instead of forcing it on every event. The Web UI equivalent and a jump-to-bottom button are still open. |
 | ~~Per-session workspace~~ | Done in the Unreleased build. Selecting a session switches the daemon's working directory to the one that session was created in, announced with a `[workspace]` line. Still process-wide underneath: two clients on one daemon share a workspace, so one of them switching sessions moves the other's too. |
 | Dark and light theme toggle | Plus a responsive layout for mobile. |
 | MCP server status | A connected or failed dot next to each MCP server in the right panel, with a reconnect button. |
