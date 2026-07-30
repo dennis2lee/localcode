@@ -21,6 +21,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"localcode/internal/childproc"
 )
 
 // ErrCancelled is returned when the user dismissed the dialog without
@@ -98,6 +100,9 @@ if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Ou
 
 func pickWindows(ctx context.Context, title, startDir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-STA", "-NonInteractive", "-Command", windowsPickerScript)
+	// Hide PowerShell's own console. The folder dialog it opens is a real
+	// GUI window and shows normally.
+	childproc.Hide(cmd)
 	// Passed through the environment rather than interpolated into the
 	// script, so a path containing a quote or a $ cannot become code.
 	cmd.Env = append(cmd.Environ(),

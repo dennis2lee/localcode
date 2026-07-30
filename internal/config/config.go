@@ -67,6 +67,12 @@ type Config struct {
 	// to forbid something would be a different, much worse promise.
 	SkipPermissions *bool `json:"skip_permissions,omitempty"`
 
+	// delegateMu guards AutoDelegate against the daemon's settings endpoint
+	// rewriting the agent or match patterns while a turn on another
+	// goroutine is deciding whether to delegate. Read unlocked at load time,
+	// before the daemon exists to race with — see AutoDelegateSnapshot.
+	delegateMu sync.RWMutex
+
 	// permMu guards SkipPermissions and Permissions against the daemon's
 	// permission-settings endpoints changing them at runtime (a client
 	// toggling skip_permissions, or adding/removing a rule) while a tool
@@ -203,6 +209,38 @@ type AutoDelegateConfig struct {
 // nothing for existing configs.
 func (c *Config) DelegateEnabled() bool {
 	return c.AutoDelegate != nil && c.AutoDelegate.Enabled
+}
+
+// AutoDelegateSnapshot returns a copy of the auto_delegate block, or nil if
+// there is none. A copy rather than the live pointer because the daemon's
+// settings endpoint can rewrite the agent and patterns at runtime while a
+// turn on another goroutine is deciding whether to delegate — the caller
+// gets one coherent view instead of a half-updated one.
+func (c *Config) AutoDelegateSnapshot() *AutoDelegateConfig {
+	c.delegateMu.RLock()
+	defer c.delegateMu.RUnlock()
+	if c.AutoDelegate == nil {
+		return nil
+	}
+	cp := *c.AutoDelegate
+	cp.Match = append([]string(nil), c.AutoDelegate.Match...)
+	return &cp
+}
+
+// SetAutoDelegateRuntime replaces which agent handles delegated prompts and
+// which prompts qualify, taking effect on the very next turn. The in-memory
+// counterpart to SetAutoDelegateTargetInFile, which persists it.
+//
+// It creates the block if there wasn't one, so a config that never mentioned
+// auto_delegate can be configured entirely from a client.
+func (c *Config) SetAutoDelegateRuntime(agent string, match []string) {
+	c.delegateMu.Lock()
+	defer c.delegateMu.Unlock()
+	if c.AutoDelegate == nil {
+		c.AutoDelegate = &AutoDelegateConfig{}
+	}
+	c.AutoDelegate.Agent = agent
+	c.AutoDelegate.Match = append([]string(nil), match...)
 }
 
 // MatchesPrompt reports whether text should be delegated. Matching is

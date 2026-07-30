@@ -16,6 +16,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"localcode/internal/childproc"
 )
 
 const indexFileName = "MEMORY.md"
@@ -41,7 +43,9 @@ func Dir(projectDir, home string) string {
 }
 
 func gitRoot(dir string) string {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
+	childproc.Hide(cmd) // no console window on the Windows desktop build
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

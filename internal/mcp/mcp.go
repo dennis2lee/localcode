@@ -24,6 +24,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"localcode/internal/childproc"
 	"localcode/internal/config"
 	"localcode/internal/tools"
 )
@@ -161,6 +162,9 @@ func transportFor(sc config.MCPServerConfig) (mcpsdk.Transport, string, error) {
 	switch t := sc.Transport(); t {
 	case config.MCPTransportStdio:
 		cmd := exec.Command(sc.Command, sc.Args...)
+		// Several stdio servers at startup means several console windows on
+		// the Windows desktop build without this. See internal/childproc.
+		childproc.Hide(cmd)
 		if len(sc.Env) > 0 {
 			cmd.Env = os.Environ()
 			for k, v := range sc.Env {

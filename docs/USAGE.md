@@ -754,7 +754,7 @@ One line directly below the input box:
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Shown when `show_tps` is on |
 | Activity light | Three states: **gray** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — the model is running your prompt. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. |
-| Auto-delegate pill | `auto-delegate: on` / `off`. Click to toggle — see [Auto delegation](#auto-delegation). |
+| Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
 
 ### Switching agents with Tab
@@ -872,9 +872,9 @@ Start with a narrow list like this one and widen it once you have seen the answe
 
 | Field | Meaning |
 |---|---|
-| `enabled` | The starting value. `/config auto_delegate on\|off`, or the auto-delegate pill under the prompt box, changes it while running. |
-| `agent` | Which entry in `agents` handles delegated prompts. Must exist, or startup fails with an error. |
-| `match` | Globs (`*` for any run of characters, `?` for one) tried case insensitively against the whole trimmed prompt. Any one matching delegates the prompt. |
+| `enabled` | The starting value. `/config auto_delegate on\|off`, or the auto-delegate panel under the prompt box, changes it while running. |
+| `agent` | Which entry in `agents` handles delegated prompts. Must exist, or startup fails with an error. Changeable at runtime from the [auto-delegate panel](#configuring-it-from-the-web-ui-or-gui-window). |
+| `match` | Globs (`*` for any run of characters, `?` for one) tried case insensitively against the whole trimmed prompt. Any one matching delegates the prompt. Editable at runtime from the same panel. |
 
 Behavior:
 
@@ -885,11 +885,21 @@ Behavior:
 * Delegation never recurses. A session that already has a parent (any sub agent session) does not delegate again, and an agent never delegates to itself.
 * Turning it on with no `auto_delegate` block in config.json tells you so rather than silently doing nothing.
 
-#### Toggling it from the Web UI or GUI window
+#### Configuring it from the Web UI or GUI window
 
-The `auto-delegate: on|off` pill under the prompt box toggles the same setting with a click. The change takes effect for the very next prompt — no restart — and is written back to config.json, so it survives one. Only the `enabled` field is rewritten; the `agent` and `match` you configured are left exactly as they were.
+Clicking the `auto-delegate: on|off` pill under the prompt box opens a panel with all three settings:
 
-If config.json has no `auto_delegate` block at all, the pill still toggles but reads `auto-delegate: on (unconfigured)`, because there is no agent to delegate to and no patterns to match — turning it on that way writes `{"enabled": true}` and delegates nothing until you add the rest of the block.
+| Control | Effect |
+|---|---|
+| The checkbox | Turns delegation on or off — the same setting as `/config auto_delegate on|off` |
+| **Answer them with** | Which agent handles delegated prompts, listed with the model each resolves to (e.g. `explore (qwen3-1.7b)`), so the cost trade-off is visible at the point of choosing |
+| **Patterns** | Add or remove match globs one at a time |
+
+Every change **takes effect on the very next prompt** — no restart — and is written back to config.json. Each control rewrites only its own field, so turning delegation off and on again cannot lose the agent and patterns, and editing patterns cannot flip the switch.
+
+You can configure the whole thing from here with no `auto_delegate` block in config.json to begin with; one is created as needed. Until an agent *and* at least one pattern are set, the panel says so explicitly rather than showing an "on" that quietly delegates nothing, and the pill reads `auto-delegate: on (unconfigured)`.
+
+An agent that isn't in the `agents` map is refused with an error, and refused before anything is applied — a typo can't leave the setting half-changed.
 
 #### Choosing what to delegate
 

@@ -28,6 +28,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+
+	"localcode/internal/childproc"
 )
 
 // resolved is the chosen shell: the executable plus the flag(s) that make
@@ -91,7 +93,11 @@ func fileExists(p string) bool {
 // Command builds an exec.Cmd that runs script under the resolved shell.
 func Command(ctx context.Context, script string) *exec.Cmd {
 	sh := current()
-	return exec.CommandContext(ctx, sh.path, append(append([]string{}, sh.args...), script)...)
+	cmd := exec.CommandContext(ctx, sh.path, append(append([]string{}, sh.args...), script)...)
+	// Without this, every bash tool call from the Windows desktop build
+	// pops up its own console window. See internal/childproc.
+	childproc.Hide(cmd)
+	return cmd
 }
 
 // Notice returns a one-line caveat for surfaces the model reads (the bash

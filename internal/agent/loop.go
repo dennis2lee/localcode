@@ -306,7 +306,9 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 // delegated session, or to the agent already running, would recurse
 // forever, so both are refused before the patterns are even consulted.
 func (l *Loop) delegateTarget(sessionID, agentName, text string) (string, bool) {
-	cfg := l.Config.AutoDelegate
+	// Snapshot rather than the live block: a client can change the target
+	// agent and patterns mid-turn, and this needs one coherent view.
+	cfg := l.Config.AutoDelegateSnapshot()
 	if cfg == nil || !l.AutoDelegateEnabled() {
 		return "", false
 	}

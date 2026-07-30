@@ -1280,3 +1280,78 @@ func TestDaemonBrowseWorkspace(t *testing.T) {
 		t.Error("browsing changed the workspace on its own")
 	}
 }
+
+// TestDaemonSetAutoDelegateTarget covers the settings panel's side of the
+// endpoint: choosing which agent answers delegated prompts and which
+// prompts qualify, each independently of the on/off switch.
+func TestDaemonSetAutoDelegateTarget(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	d.Broker.ConfigPath = cfgPath
+
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	post := func(body string) int {
+		t.Helper()
+		resp, err := http.Post(httpSrv.URL+"/api/settings/auto-delegate", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST auto-delegate: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// A config with no auto_delegate block at all can be configured from
+	// scratch — that's the case a fresh install is in.
+	if got := post(`{"agent":"plan","match":["what is *","where is *"]}`); got != http.StatusNoContent {
+		t.Fatalf("configuring the target = %d, want 204", got)
+	}
+	block := d.Loop.Config.AutoDelegateSnapshot()
+	if block == nil || block.Agent != "plan" {
+		t.Fatalf("live block = %+v, want agent plan", block)
+	}
+	if len(block.Match) != 2 {
+		t.Errorf("live match = %v, want 2 patterns", block.Match)
+	}
+	saved, err := config.LoadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if saved.AutoDelegate == nil || saved.AutoDelegate.Agent != "plan" || len(saved.AutoDelegate.Match) != 2 {
+		t.Errorf("config.json auto_delegate = %+v, want the target persisted", saved.AutoDelegate)
+	}
+
+	// An unknown agent is refused, and refused *before* anything is applied
+	// — a typo must not leave the setting half-changed.
+	if got := post(`{"agent":"does-not-exist"}`); got != http.StatusBadRequest {
+		t.Errorf("unknown agent = %d, want 400", got)
+	}
+	if block := d.Loop.Config.AutoDelegateSnapshot(); block.Agent != "plan" {
+		t.Errorf("agent = %q after a rejected change, want it untouched", block.Agent)
+	}
+
+	// Sending only "enabled" must not disturb the target, and vice versa:
+	// the pill and the panel post different subsets of the same endpoint.
+	if got := post(`{"enabled":true}`); got != http.StatusNoContent {
+		t.Fatalf("enabling = %d, want 204", got)
+	}
+	if block := d.Loop.Config.AutoDelegateSnapshot(); block.Agent != "plan" || len(block.Match) != 2 {
+		t.Errorf("target = %+v after an enabled-only patch, want it untouched", block)
+	}
+	if !d.Loop.AutoDelegateEnabled() {
+		t.Error("the loop still reports auto-delegate off after enabling it")
+	}
+	if got := post(`{"match":["only this *"]}`); got != http.StatusNoContent {
+		t.Fatalf("changing match = %d, want 204", got)
+	}
+	if !d.Loop.AutoDelegateEnabled() {
+		t.Error("a match-only patch turned the switch off")
+	}
+	if block := d.Loop.Config.AutoDelegateSnapshot(); len(block.Match) != 1 || block.Agent != "plan" {
+		t.Errorf("block = %+v, want just the new pattern and the same agent", block)
+	}
+}

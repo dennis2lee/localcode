@@ -329,6 +329,53 @@
   #permission-settings-modal .add-rule-row input[name="match"] { flex: 1; }
   #permission-settings-modal .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
   #permission-settings-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
+  #auto-delegate-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  #auto-delegate-modal.open { display: flex; }
+  #auto-delegate-modal .box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    width: 520px;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  #auto-delegate-modal h3 { margin-top: 0; }
+  #auto-delegate-modal .row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  #auto-delegate-modal label.field { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+  #auto-delegate-modal select, #auto-delegate-modal input[type="text"] {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 5px 7px;
+    font-size: 12px;
+  }
+  #auto-delegate-modal #delegate-agent-select { width: 100%; }
+  #auto-delegate-modal .match-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  #auto-delegate-modal .match-row .match-text { flex: 1; overflow-wrap: anywhere; }
+  #auto-delegate-modal .match-row button { padding: 2px 8px; font-size: 11px; background: var(--err); }
+  #auto-delegate-modal .add-match-row { display: flex; gap: 6px; margin-top: 12px; }
+  #auto-delegate-modal .add-match-row input { flex: 1; }
+  #auto-delegate-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
+  #auto-delegate-modal .note.err { color: var(--err); }
+  #auto-delegate-modal .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
   #workspace-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -455,6 +502,28 @@
   </div>
 </div>
 
+<div id="auto-delegate-modal">
+  <div class="box">
+    <h3>Auto-delegation</h3>
+    <div class="row">
+      <input type="checkbox" id="delegate-enabled-checkbox">
+      <label for="delegate-enabled-checkbox">Send matching prompts to a cheaper agent instead of this session's model</label>
+    </div>
+    <div style="margin-bottom:14px">
+      <label class="field" for="delegate-agent-select">Answer them with</label>
+      <select id="delegate-agent-select"></select>
+    </div>
+    <label class="field">Delegate a prompt when it matches any of these patterns</label>
+    <div id="delegate-match-list"></div>
+    <div class="add-match-row">
+      <input type="text" id="delegate-match-input" placeholder="pattern, e.g. what is *">
+      <button id="delegate-match-add">Add</button>
+    </div>
+    <p class="note" id="delegate-note"></p>
+    <div class="close-row"><button id="delegate-close">Close</button></div>
+  </div>
+</div>
+
 <div id="permission-modal">
   <div class="box">
     <h3>Permission request</h3>
@@ -490,6 +559,14 @@
   const statusBarEl = document.getElementById('prompt-status');
   const commDotEl = document.getElementById('comm-dot');
   const autoDelegateBtn = document.getElementById('auto-delegate-btn');
+  const delegateModal = document.getElementById('auto-delegate-modal');
+  const delegateEnabledCheckbox = document.getElementById('delegate-enabled-checkbox');
+  const delegateAgentSelect = document.getElementById('delegate-agent-select');
+  const delegateMatchListEl = document.getElementById('delegate-match-list');
+  const delegateMatchInput = document.getElementById('delegate-match-input');
+  const delegateMatchAddBtn = document.getElementById('delegate-match-add');
+  const delegateNote = document.getElementById('delegate-note');
+  const delegateCloseBtn = document.getElementById('delegate-close');
   const permissionStatusBtn = document.getElementById('permission-status-btn');
   const permissionSettingsModal = document.getElementById('permission-settings-modal');
   const skipPermissionsCheckbox = document.getElementById('skip-permissions-checkbox');
@@ -529,6 +606,7 @@
   let showTPS = true;
   let autoDelegate = false;
   let autoDelegateAgent = ''; // '' when config.json has no auto_delegate block
+  let autoDelegateMatch = []; // glob patterns that qualify a prompt for delegation
   // connected tracks the SSE stream to the daemon, which is this client's
   // only channel to the model: while it's down, nothing typed here can
   // reach one, so it's what the status light reports as "connected".
@@ -766,24 +844,98 @@
     autoDelegateBtn.classList.toggle('on', autoDelegate);
     if (autoDelegate && !autoDelegateAgent) {
       autoDelegateBtn.textContent = 'auto-delegate: on (unconfigured)';
-      autoDelegateBtn.title = 'auto-delegate is on but config.json has no auto_delegate block naming an agent and match patterns, so nothing is delegated — click to turn it off';
+      autoDelegateBtn.title = 'auto-delegate is on but no agent is chosen to answer delegated prompts, so nothing is delegated — click to configure it';
       return;
     }
     autoDelegateBtn.textContent = `auto-delegate: ${autoDelegate ? 'on' : 'off'}`;
     autoDelegateBtn.title = autoDelegateAgent
-      ? `matching prompts ${autoDelegate ? 'go' : 'would go'} to the "${autoDelegateAgent}" agent — click to turn ${autoDelegate ? 'off' : 'on'}`
-      : 'click to toggle auto-delegation (config.json has no auto_delegate block yet, so nothing would be delegated)';
+      ? `matching prompts ${autoDelegate ? 'go' : 'would go'} to the "${autoDelegateAgent}" agent (${autoDelegateMatch.length} pattern${autoDelegateMatch.length === 1 ? '' : 's'}) — click to configure`
+      : 'click to choose which prompts are delegated and which agent answers them';
   }
 
-  async function toggleAutoDelegate() {
-    const next = !autoDelegate;
+  // saveAutoDelegate posts only the fields given, so the panel's three
+  // controls each change one thing without restating the others. Every
+  // change applies to the running loop immediately and is written to
+  // config.json — see POST /api/settings/auto-delegate.
+  async function saveAutoDelegate(patch) {
     try {
-      await api('POST', '/api/settings/auto-delegate', { enabled: next });
-      autoDelegate = next;
-      renderAutoDelegate();
+      await api('POST', '/api/settings/auto-delegate', patch);
     } catch (err) {
-      appendLine(`<div class="msg-error">failed to change auto-delegate: ${escapeHtml(String(err))}</div>`);
+      delegateNote.textContent = String(err);
+      delegateNote.classList.add('err');
+      return false;
     }
+    if (typeof patch.enabled === 'boolean') autoDelegate = patch.enabled;
+    if (typeof patch.agent === 'string') autoDelegateAgent = patch.agent;
+    if (Array.isArray(patch.match)) autoDelegateMatch = patch.match.slice();
+    renderAutoDelegate();
+    renderDelegatePanel();
+    return true;
+  }
+
+  function openAutoDelegateSettings() {
+    delegateNote.classList.remove('err');
+    renderDelegatePanel();
+    delegateModal.classList.add('open');
+  }
+
+  function renderDelegatePanel() {
+    delegateEnabledCheckbox.checked = autoDelegate;
+
+    // Only agents other than the one answering can be delegation targets:
+    // delegating to the running agent would recurse, and the daemon refuses
+    // it at turn time anyway, so it isn't offered here.
+    delegateAgentSelect.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '(no agent chosen — nothing is delegated)';
+    delegateAgentSelect.appendChild(none);
+    for (const a of agents) {
+      const opt = document.createElement('option');
+      opt.value = a.name;
+      opt.textContent = a.model ? `${a.name} (${a.model})` : a.name;
+      delegateAgentSelect.appendChild(opt);
+    }
+    delegateAgentSelect.value = autoDelegateAgent || '';
+
+    delegateMatchListEl.innerHTML = '';
+    if (autoDelegateMatch.length === 0) {
+      delegateMatchListEl.innerHTML = '<div class="note">No patterns yet, so nothing is delegated. Patterns are globs matched case-insensitively against the whole prompt: <code>*</code> is any run of characters, <code>?</code> is one.</div>';
+    }
+    for (const pattern of autoDelegateMatch) {
+      const row = document.createElement('div');
+      row.className = 'match-row';
+      const text = document.createElement('span');
+      text.className = 'match-text';
+      text.textContent = pattern;
+      row.appendChild(text);
+      const removeBtn = document.createElement('button');
+      removeBtn.textContent = 'remove';
+      removeBtn.addEventListener('click', () => {
+        saveAutoDelegate({ match: autoDelegateMatch.filter(p => p !== pattern) });
+      });
+      row.appendChild(removeBtn);
+      delegateMatchListEl.appendChild(row);
+    }
+
+    if (!delegateNote.classList.contains('err')) {
+      if (autoDelegate && !autoDelegateAgent) {
+        delegateNote.textContent = 'On, but no agent is chosen, so nothing is delegated.';
+      } else if (autoDelegate && autoDelegateMatch.length === 0) {
+        delegateNote.textContent = 'On, but no pattern matches anything yet, so nothing is delegated.';
+      } else {
+        delegateNote.textContent = 'Changes apply to the next prompt and are written to config.json.';
+      }
+    }
+  }
+
+  function addDelegateMatch() {
+    const pattern = delegateMatchInput.value.trim();
+    if (!pattern || autoDelegateMatch.includes(pattern)) return;
+    delegateNote.classList.remove('err');
+    saveAutoDelegate({ match: autoDelegateMatch.concat([pattern]) }).then(ok => {
+      if (ok) delegateMatchInput.value = '';
+    });
   }
 
   function renderPermissionRulesList() {
@@ -979,6 +1131,7 @@
         if (typeof ev.data.auto_delegate === 'boolean') {
           autoDelegate = ev.data.auto_delegate;
           renderAutoDelegate();
+          if (delegateModal.classList.contains('open')) renderDelegatePanel();
         }
         renderStatusBar();
         break;
@@ -1054,6 +1207,7 @@
       showTPS = s.show_tps;
       autoDelegate = !!s.auto_delegate;
       autoDelegateAgent = s.auto_delegate_agent || '';
+      autoDelegateMatch = s.auto_delegate_match || [];
       skipPermissions = !!s.skip_permissions;
       permissionRules = s.permission_rules || {};
       canEditPermissions = !!s.can_edit_permissions;
@@ -1506,7 +1660,7 @@
     '  /config auto_compact on|off   toggle auto-compaction above 80% context usage',
     '  /config show_tps on|off       toggle the tokens/sec display under the prompt',
     '  /config auto_delegate on|off  send matching prompts to a cheaper sub-agent',
-    '                        (also the clickable pill under the prompt box)',
+    '                        (the pill under the prompt box also sets the target agent and patterns)',
     '  /compact           summarize and compact the conversation right now',
     '  /compact <instructions>      give instructions for how to compact',
     '  /usage              show cumulative token usage per model',
@@ -1706,6 +1860,7 @@
   function anyModalOpen() {
     return modalEl.classList.contains('open')
       || permissionSettingsModal.classList.contains('open')
+      || delegateModal.classList.contains('open')
       || workspaceModal.classList.contains('open');
   }
 
@@ -1737,7 +1892,20 @@
   permissionAllowAlwaysBtn.addEventListener('click', () => resolvePermission(true, 'always'));
   permissionDenyBtn.addEventListener('click', () => resolvePermission(false, 'once'));
 
-  autoDelegateBtn.addEventListener('click', toggleAutoDelegate);
+  autoDelegateBtn.addEventListener('click', openAutoDelegateSettings);
+  delegateCloseBtn.addEventListener('click', () => delegateModal.classList.remove('open'));
+  delegateEnabledCheckbox.addEventListener('change', () => {
+    delegateNote.classList.remove('err');
+    saveAutoDelegate({ enabled: delegateEnabledCheckbox.checked });
+  });
+  delegateAgentSelect.addEventListener('change', () => {
+    delegateNote.classList.remove('err');
+    saveAutoDelegate({ agent: delegateAgentSelect.value });
+  });
+  delegateMatchAddBtn.addEventListener('click', addDelegateMatch);
+  delegateMatchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addDelegateMatch(); }
+  });
   permissionStatusBtn.addEventListener('click', openPermissionSettings);
   permissionSettingsCloseBtn.addEventListener('click', () => permissionSettingsModal.classList.remove('open'));
   skipPermissionsCheckbox.addEventListener('change', () => toggleSkipPermissions(skipPermissionsCheckbox.checked));

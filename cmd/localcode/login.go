@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"localcode/internal/awssso"
+	"localcode/internal/childproc"
 	"localcode/internal/credentials"
 )
 
@@ -223,6 +224,9 @@ func openBrowser(url string) error {
 		cmd = exec.Command("open", url)
 	case "windows":
 		cmd = exec.Command("cmd", "/c", "start", url)
+		// `cmd /c` is a console program; hide its window so only the browser
+		// it launches appears.
+		childproc.Hide(cmd)
 	default:
 		cmd = exec.Command("xdg-open", url)
 	}

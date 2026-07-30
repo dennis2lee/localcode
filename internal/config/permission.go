@@ -475,6 +475,49 @@ func SetSkipPermissionsInFile(path string, enabled bool) error {
 // which is why callers are expected to tell the user that a block still has
 // to be filled in — writing a guessed agent name here would be worse.
 func SetAutoDelegateEnabledInFile(path string, enabled bool) error {
+	return updateAutoDelegateInFile(path, func(block map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal auto_delegate.enabled: %w", err)
+		}
+		block["enabled"] = encoded
+		return nil
+	})
+}
+
+// SetAutoDelegateTargetInFile writes which agent handles delegated prompts
+// and which prompts qualify, leaving "enabled" — and any key this build
+// doesn't know about — exactly as it was. The counterpart to
+// SetAutoDelegateEnabledInFile, which changes only the switch.
+//
+// An empty match list is written as an empty array rather than omitted: it
+// means "delegate nothing", which is a real choice someone can make from a
+// settings panel, and dropping the key would instead read as "unset".
+func SetAutoDelegateTargetInFile(path, agent string, match []string) error {
+	return updateAutoDelegateInFile(path, func(block map[string]json.RawMessage) error {
+		encodedAgent, err := json.Marshal(agent)
+		if err != nil {
+			return fmt.Errorf("marshal auto_delegate.agent: %w", err)
+		}
+		block["agent"] = encodedAgent
+
+		if match == nil {
+			match = []string{}
+		}
+		encodedMatch, err := json.Marshal(match)
+		if err != nil {
+			return fmt.Errorf("marshal auto_delegate.match: %w", err)
+		}
+		block["match"] = encodedMatch
+		return nil
+	})
+}
+
+// updateAutoDelegateInFile rewrites only the named keys inside the top-level
+// "auto_delegate" object, leaving the rest of that block and every other key
+// in the file untouched — the same surgical approach the permission writers
+// take, so a field a newer version added isn't dropped by an older one.
+func updateAutoDelegateInFile(path string, update func(block map[string]json.RawMessage) error) error {
 	raw := map[string]json.RawMessage{}
 	data, err := os.ReadFile(path)
 	switch {
@@ -492,11 +535,9 @@ func SetAutoDelegateEnabledInFile(path string, enabled bool) error {
 			return fmt.Errorf("parse auto_delegate in %s: %w", path, err)
 		}
 	}
-	encodedEnabled, err := json.Marshal(enabled)
-	if err != nil {
-		return fmt.Errorf("marshal auto_delegate.enabled: %w", err)
+	if err := update(block); err != nil {
+		return err
 	}
-	block["enabled"] = encodedEnabled
 
 	encodedBlock, err := json.Marshal(block)
 	if err != nil {
