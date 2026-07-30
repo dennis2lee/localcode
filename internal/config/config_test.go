@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -204,6 +205,95 @@ func TestLoadMergedNeitherExists(t *testing.T) {
 
 	if _, err := LoadMerged(project); err == nil {
 		t.Error("expected an error when neither global nor project config exists")
+	}
+}
+
+// TestMergeFieldsGuard fails the moment a field is added to Config without
+// a conscious decision about whether merge() handles it. merge() used to be
+// a hand-maintained field list that had already fallen behind the struct —
+// MCPServers, Permissions, AutoDelegate, and SkipPermissions were silently
+// dropped by LoadMerged whenever both a global and a project config
+// existed, which made e.g. `localcode mcp add --scope project` a no-op for
+// anyone who also had a global config (see TestLoadMergedCarriesMCPServersPermissionsAutoDelegateAndSkipPermissions).
+// Listing every field here, rather than trusting a code review to notice a
+// new one, is what prevents that regression from recurring silently.
+func TestMergeFieldsGuard(t *testing.T) {
+	// mergedFields are the fields merge() actually copies from the project
+	// config onto the global one. intentionallyNotMerged are fields with no
+	// merge semantics of their own (a mutex has nothing to merge; add a new
+	// field to one of these two sets, not around this test, when Config
+	// grows).
+	mergedFields := map[string]bool{
+		"Providers":          true,
+		"Profiles":           true,
+		"Agents":             true,
+		"DefaultProfile":     true,
+		"MaxConcurrentTasks": true,
+		"MCPServers":         true,
+		"AutoMemoryEnabled":  true,
+		"Permissions":        true,
+		"AutoCompactEnabled": true,
+		"ShowTPS":            true,
+		"Hooks":              true,
+		"AutoDelegate":       true,
+		"SkipPermissions":    true,
+	}
+	intentionallyNotMerged := map[string]bool{}
+
+	typ := reflect.TypeOf(Config{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue // e.g. delegateMu/permMu — runtime-only, not part of the JSON shape
+		}
+		if !mergedFields[f.Name] && !intentionallyNotMerged[f.Name] {
+			t.Errorf("Config field %q is neither merged by merge() nor listed as intentionally not merged — a project-scoped config.json value for this field will be silently dropped whenever a global config also exists. Add it to merge() and to one of the two sets in this test.", f.Name)
+		}
+	}
+}
+
+// TestLoadMergedCarriesMCPServersPermissionsAutoDelegateAndSkipPermissions
+// pins the exact regression: a project config with only these four fields
+// set must still take effect when a global config (with unrelated fields)
+// also exists — e.g. the `localcode mcp add --scope project` scenario.
+func TestLoadMergedCarriesMCPServersPermissionsAutoDelegateAndSkipPermissions(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("HOME", home)
+
+	global := validConfig()
+	global.Agents["worker"] = AgentConfig{Profile: "balanced"}
+	writeConfig(t, filepath.Join(home, ".localcode", "config.json"), &global)
+
+	skip := true
+	projectCfg := Config{
+		MCPServers: map[string]MCPServerConfig{
+			"github": {Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-github"}},
+		},
+		Permissions: map[string]ToolPermission{
+			"bash": {Rules: []PermissionRule{{Match: "*", Decision: DecisionAsk}}},
+		},
+		AutoDelegate:    &AutoDelegateConfig{Agent: "worker", Match: []string{"what is *"}},
+		SkipPermissions: &skip,
+	}
+	writeConfig(t, filepath.Join(project, ".localcode", "config.json"), &projectCfg)
+
+	merged, err := LoadMerged(project)
+	if err != nil {
+		t.Fatalf("LoadMerged: %v", err)
+	}
+
+	if _, ok := merged.MCPServers["github"]; !ok {
+		t.Errorf("MCPServers = %+v, want the project-scoped \"github\" server to survive the merge", merged.MCPServers)
+	}
+	if _, ok := merged.Permissions["bash"]; !ok {
+		t.Errorf("Permissions = %+v, want the project-scoped \"bash\" rule to survive the merge", merged.Permissions)
+	}
+	if merged.AutoDelegate == nil || merged.AutoDelegate.Agent != "worker" {
+		t.Errorf("AutoDelegate = %+v, want the project-scoped block to survive the merge", merged.AutoDelegate)
+	}
+	if merged.SkipPermissions == nil || !*merged.SkipPermissions {
+		t.Errorf("SkipPermissions = %v, want true to survive the merge", merged.SkipPermissions)
 	}
 }
 

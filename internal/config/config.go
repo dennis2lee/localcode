@@ -513,29 +513,37 @@ func loadOptional(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// mergeMap copies every entry of src into *dst, creating *dst if it was nil.
+// Used by merge for each of Config's map-typed fields so they don't each
+// need their own copy of the same three lines — and so a future map field
+// can't quietly reuse copy-pasted merge logic that's subtly wrong.
+func mergeMap[K comparable, V any](dst *map[K]V, src map[K]V) {
+	if len(src) == 0 {
+		return
+	}
+	if *dst == nil {
+		*dst = map[K]V{}
+	}
+	for k, v := range src {
+		(*dst)[k] = v
+	}
+}
+
 // merge overlays other on top of c, with other's entries taking priority.
+//
+// Every field of Config must be handled here or it is silently dropped when
+// both a global and a project config exist — see TestMergeFieldsGuard,
+// which fails if a new Config field is added without a conscious decision
+// about how (or whether) it merges.
 func (c *Config) merge(other *Config) {
 	if other == nil {
 		return
 	}
-	for k, v := range other.Providers {
-		if c.Providers == nil {
-			c.Providers = map[string]ProviderConfig{}
-		}
-		c.Providers[k] = v
-	}
-	for k, v := range other.Profiles {
-		if c.Profiles == nil {
-			c.Profiles = map[string]Profile{}
-		}
-		c.Profiles[k] = v
-	}
-	for k, v := range other.Agents {
-		if c.Agents == nil {
-			c.Agents = map[string]AgentConfig{}
-		}
-		c.Agents[k] = v
-	}
+	mergeMap(&c.Providers, other.Providers)
+	mergeMap(&c.Profiles, other.Profiles)
+	mergeMap(&c.Agents, other.Agents)
+	mergeMap(&c.MCPServers, other.MCPServers)
+	mergeMap(&c.Permissions, other.Permissions)
 	if other.DefaultProfile != "" {
 		c.DefaultProfile = other.DefaultProfile
 	}
@@ -550,6 +558,12 @@ func (c *Config) merge(other *Config) {
 	}
 	if other.ShowTPS != nil {
 		c.ShowTPS = other.ShowTPS
+	}
+	if other.AutoDelegate != nil {
+		c.AutoDelegate = other.AutoDelegate
+	}
+	if other.SkipPermissions != nil {
+		c.SkipPermissions = other.SkipPermissions
 	}
 	for event, list := range other.Hooks {
 		if c.Hooks == nil {
