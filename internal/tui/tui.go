@@ -112,11 +112,11 @@ type Model struct {
 	pending          *pendingPermission
 	pendingHintShown bool // has the "resolve the permission above" hint already fired for this pending request
 	waiting          bool
-	queue        []string
-	errMsg       string
-	currentAgent string
-	agents       []client.AgentInfo
-	commandsList []client.CommandInfo
+	queue            []string
+	errMsg           string
+	currentAgent     string
+	agents           []client.AgentInfo
+	commandsList     []client.CommandInfo
 
 	// history is every prompt submitted from this client, oldest first,
 	// for Up/Down recall. It's deliberately client-side and in-memory:
