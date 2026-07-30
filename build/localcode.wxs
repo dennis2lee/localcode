@@ -104,8 +104,39 @@
                   Return='ignore'
                   Impersonate='no' />
 
+    <!--
+      "$WebView2BootstrapperFile=3" means "only when that component's action
+      state for this transaction is INSTALLSTATE_LOCAL", i.e. only when the
+      bootstrapper is actually being installed right now.
+
+      Without it, upgrading over an existing install fails with MSI error
+      2753, "The File '...' is not marked for installation". A FileKey
+      custom action resolves through the File table, and Windows refuses it
+      whenever the referenced file's component is not part of the current
+      install — which happens on an upgrade, because the bootstrapper is
+      already on disk from the previous version and file-versioning rules
+      decide it doesn't need replacing. Retrying then appeared to "work"
+      only because the first attempt had already removed the old product,
+      leaving the file genuinely absent and therefore due for install.
+
+      wixl offers no way out of this from the other direction: it hardcodes
+      RemoveExistingProducts to run right after InstallValidate (WiX's
+      MajorUpgrade/@Schedule is not implemented), so the removal always
+      happens before the new files land.
+
+      Skipping is the correct behavior, not a workaround: if the
+      bootstrapper is not being installed, an earlier install already ran
+      it and the runtime is present.
+
+      The "$$" is an escape, not a typo. wixl's preprocessor consumes a
+      lone "$" and silently emits nothing for it, so "$Component" would
+      reach the MSI as "Component" — a reference to an undefined *property*
+      rather than a component action state, making the condition always
+      false and disabling the custom action without a word. package-msi.sh
+      checks the built MSI for the resolved condition to catch that.
+    -->
     <InstallExecuteSequence>
-      <Custom Action='InstallWebView2Runtime' After='InstallFiles'>NOT REMOVE</Custom>
+      <Custom Action='InstallWebView2Runtime' After='InstallFiles'>NOT REMOVE AND $$WebView2BootstrapperFile=3</Custom>
     </InstallExecuteSequence>
 
     <Feature Id='Complete' Level='1'>

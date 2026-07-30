@@ -63,5 +63,45 @@ wixl -a x64 \
 	-o "$MSI" \
 	build/localcode.wxs
 
+# Verify what actually landed in the MSI database rather than trusting that
+# wixl did what the .wxs said. Two things have silently gone wrong here
+# before: a custom action wixl couldn't express at all (it warned but still
+# exited 0, leaving an empty CustomAction table), and a condition mangled by
+# the preprocessor eating a lone "$".
+#
+# Both produce an MSI that installs but misbehaves, on a platform this build
+# machine can't run — so the checks are the only feedback available.
+echo "==> verifying MSI tables"
+verify_msi() {
+	local table="$1" pattern="$2" what="$3" dump
+	dump="$(msiinfo export "$MSI" "$table")"
+	# Matched with a shell case rather than `| grep -q`: this script runs
+	# under `set -o pipefail`, and grep -q exits at the first match, which
+	# SIGPIPEs msiinfo mid-write and makes the pipeline report failure even
+	# when the pattern was found.
+	case "$dump" in
+	*"$pattern"*) ;;
+	*)
+		echo "MSI verification failed: $what" >&2
+		echo "  expected to find in the $table table: $pattern" >&2
+		echo "$dump" >&2
+		exit 1
+		;;
+	esac
+}
+
+# The WebView2 bootstrapper must be present as an installable file...
+verify_msi File 'MicrosoftEdgeWebview2Setup.exe' 'the WebView2 bootstrapper is missing from the File table'
+# ...the custom action that runs it must exist (type 3154 = EXE from the
+# File table, deferred, no-impersonate, continue-on-failure)...
+verify_msi CustomAction 'InstallWebView2Runtime	3154	WebView2BootstrapperEXE' 'the WebView2 custom action is missing or has the wrong type'
+# ...and its condition must have survived the preprocessor with the "$"
+# intact. Without the "$" this reads as an undefined property, is always
+# false, and the runtime is never installed — silently.
+verify_msi InstallExecuteSequence '$WebView2BootstrapperFile=3' 'the WebView2 custom action condition lost its "$" (wixl preprocessor ate it — escape it as "$$" in the .wxs)'
+# Both binaries ship.
+verify_msi File 'localcode.exe' 'localcode.exe is missing from the File table'
+verify_msi File 'localcode-gui.exe' 'localcode-gui.exe is missing from the File table'
+
 echo "==> done: $MSI"
 ls -la "$MSI"
