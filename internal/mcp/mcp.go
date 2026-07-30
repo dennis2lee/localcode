@@ -74,42 +74,64 @@ func Connect(ctx context.Context, servers map[string]config.MCPServerConfig) (*M
 	var out []tools.Tool
 	var warnings []error
 
-	for name, sc := range servers {
-		session, err := connectOne(ctx, sc)
-		if err != nil {
-			warnings = append(warnings, fmt.Errorf("mcp server %q: %w — skipping, its tools won't be available", name, err))
-			continue
-		}
+	// Sorted rather than ranged over directly: map iteration order is
+	// random, which made both the startup warning order and the
+	// registered-tool order vary from run to run — annoying for a stable
+	// log to diff and for a test to assert against, for no benefit.
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 
-		result, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{})
-		if err != nil {
-			warnings = append(warnings, fmt.Errorf("mcp server %q: list tools: %w — skipping", name, err))
-			_ = session.Close()
-			continue
-		}
-
-		m.mu.Lock()
-		m.sessions[name] = session
-		m.configs[name] = sc
-		m.mu.Unlock()
-
-		for _, t := range result.Tools {
-			schema, err := json.Marshal(t.InputSchema)
-			if err != nil {
-				warnings = append(warnings, fmt.Errorf("mcp server %q: marshal schema for tool %q: %w — skipping that tool", name, t.Name, err))
-				continue
-			}
-			out = append(out, mcpTool{
-				manager:     m,
-				server:      name,
-				name:        t.Name,
-				description: t.Description,
-				inputSchema: schema,
-			})
-		}
+	for _, name := range names {
+		toolsFromServer, serverWarnings := m.add(ctx, name, servers[name])
+		out = append(out, toolsFromServer...)
+		warnings = append(warnings, serverWarnings...)
 	}
 
 	return m, out, warnings
+}
+
+// add connects one server, registers its session, and adapts its
+// advertised tools, so Connect reads as a loop over servers rather than
+// one long inline body. A connect/list-tools failure is one warning with
+// no tools; a per-tool schema-marshal failure is its own warning and just
+// that tool is skipped — both match Connect's documented per-server and
+// per-tool tolerance.
+func (m *Manager) add(ctx context.Context, name string, sc config.MCPServerConfig) (out []tools.Tool, warnings []error) {
+	session, err := connectOne(ctx, sc)
+	if err != nil {
+		return nil, []error{fmt.Errorf("mcp server %q: %w — skipping, its tools won't be available", name, err)}
+	}
+
+	result, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{})
+	if err != nil {
+		_ = session.Close()
+		return nil, []error{fmt.Errorf("mcp server %q: list tools: %w — skipping", name, err)}
+	}
+
+	m.mu.Lock()
+	m.sessions[name] = session
+	m.configs[name] = sc
+	m.mu.Unlock()
+
+	out = make([]tools.Tool, 0, len(result.Tools))
+	for _, t := range result.Tools {
+		schema, err := json.Marshal(t.InputSchema)
+		if err != nil {
+			warnings = append(warnings, fmt.Errorf("mcp server %q: marshal schema for tool %q: %w — skipping that tool", name, t.Name, err))
+			continue
+		}
+		out = append(out, mcpTool{
+			manager:     m,
+			server:      name,
+			name:        t.Name,
+			description: t.Description,
+			inputSchema: schema,
+		})
+	}
+	return out, warnings
 }
 
 // Ping starts one configured MCP server, completes the MCP handshake, lists
