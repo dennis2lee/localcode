@@ -1,0 +1,417 @@
+:root {
+  color-scheme: light dark;
+  /* Neutral greys, no blue tint: --bg is the side panels and the
+     header/footer chrome (rgb 24,24,24), --center the transcript column
+     (rgb 32,32,32), so the conversation reads as the lit surface and
+     everything around it recedes. --panel is the raised-surface grey used
+     for inputs, code blocks, and modals; it matches --center so a control
+     sitting on the chrome still stands off it. */
+  --bg: #181818;
+  --center: #202020;
+  --panel: #202020;
+  /* One step up from --center, for things that sit *on* a surface and
+     have to read as raised from it: the prompt box, code blocks, the
+     agent dropdown. --panel alone can't do this job any more now that it
+     matches the transcript it would be drawn on. */
+  --raised: #2a2a2a;
+  --border: #333333;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --warn: #d29922;
+  --err: #f85149;
+  --ok: #3fb950;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+header .right { display: flex; align-items: center; gap: 10px; }
+header .session-id { color: var(--muted); font-size: 12px; font-family: monospace; }
+header .agent-select {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+#transcript {
+  flex: 1;
+  background: var(--center);
+  overflow-y: auto;
+  padding: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+#transcript .msg-user { color: var(--accent); font-weight: 600; }
+#transcript .msg-tool { color: var(--muted); font-style: italic; }
+#transcript .msg-error { color: var(--err); font-weight: 600; }
+#transcript .msg-model { margin-bottom: 4px; }
+#transcript .msg-model > *:first-child { margin-top: 0; }
+#transcript .msg-model > *:last-child { margin-bottom: 0; }
+#transcript .msg-model p { margin: 0 0 10px; }
+#transcript .msg-model h1, #transcript .msg-model h2, #transcript .msg-model h3,
+#transcript .msg-model h4, #transcript .msg-model h5, #transcript .msg-model h6 {
+  margin: 14px 0 8px;
+  line-height: 1.3;
+}
+#transcript .msg-model ul, #transcript .msg-model ol { margin: 0 0 10px; padding-left: 22px; }
+#transcript .msg-model li { margin-bottom: 2px; }
+#transcript .msg-model code {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+#transcript .msg-model pre {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 0 0 10px;
+}
+#transcript .msg-model pre code { background: none; border: none; padding: 0; }
+#transcript .msg-model blockquote {
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+  margin: 0 0 10px;
+  padding: 2px 0 2px 12px;
+}
+#transcript .msg-model a { color: var(--accent); }
+#transcript .msg-model hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+aside {
+  width: 280px;
+  /* Stated rather than inherited from body, so the panel/centre contrast
+     survives anything that later changes the page background. */
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  padding: 12px;
+  overflow-y: auto;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+/* The session list gets its own panel on the left, opposite the tasks /
+   MCP panel, so switching conversations is a first-class move rather
+   than something buried under two other sections. */
+aside.left {
+  width: 260px;
+  border-left: none;
+  border-right: 1px solid var(--border);
+}
+.side-section { margin-bottom: 18px; }
+.side-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 0; }
+.icon-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  line-height: 1.4;
+}
+.task { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; }
+.task .agent { color: var(--muted); }
+.task .status-running { color: var(--warn); }
+.task .status-completed { color: var(--ok); }
+.task .status-failed, .task .status-cancelled { color: var(--err); }
+.session-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+.session-item:hover { border-color: var(--accent); }
+.session-item.active { border-color: var(--accent); background: var(--panel); cursor: default; }
+.session-item .title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 2px;
+}
+/* The workspace is what tells two otherwise identical sessions apart.
+   Long paths are shortened from the front in JS (see shortenPath) rather
+   than by CSS ellipsis, because the tail — the project directory — is
+   the part that identifies the session. */
+.session-item .workspace {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-item .meta { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
+.session-item .actions { display: flex; gap: 4px; }
+.session-item button { padding: 3px 8px; font-size: 11px; }
+.session-item .danger-btn { background: var(--err); color: #fff; }
+.icon-btn.danger-btn { background: var(--err); color: #fff; border-color: var(--err); }
+.mcp-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  font-family: monospace;
+}
+footer {
+  border-top: 1px solid var(--border);
+  padding: 10px 16px;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+#input {
+  flex: 1;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+  resize: none;
+  overflow-y: auto;
+  max-height: 240px;
+  line-height: 1.4;
+}
+#input.drag-over { border-color: var(--accent); border-style: dashed; }
+button {
+  background: var(--accent);
+  color: #05131f;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+#permission-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+#permission-modal.open { display: flex; }
+#permission-modal .box {
+  background: var(--panel);
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  padding: 20px;
+  max-width: 480px;
+}
+#permission-modal h3 { margin-top: 0; color: var(--warn); }
+#permission-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+#permission-modal .deny { background: var(--err); }
+
+#prompt-status {
+  padding: 0 16px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  min-height: 16px;
+}
+#prompt-status.ctx-warn { color: var(--warn); }
+#prompt-status.ctx-crit { color: var(--err); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+/* Three states, and only three: gray = no live connection to the model,
+   solid green = connected and idle, blinking green = a turn is running.
+   Blink is the *same* green rather than a second color, so "is it
+   working?" reads as motion and "is it up?" reads as color. */
+.comm-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  display: inline-block;
+  flex-shrink: 0;
+}
+.comm-dot.connected { background: var(--ok); }
+.comm-dot.connected.active { animation: pulse 1s infinite; }
+#auto-delegate-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-left: auto; /* both pills ride the right edge as one group */
+}
+#auto-delegate-btn.on { color: var(--accent); border-color: var(--accent); }
+#auto-delegate-btn:disabled { cursor: not-allowed; }
+#permission-status-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+#permission-status-btn.skip { color: var(--warn); border-color: var(--warn); }
+#permission-settings-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#permission-settings-modal.open { display: flex; }
+#permission-settings-modal .box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+#permission-settings-modal h3 { margin-top: 0; }
+#permission-settings-modal .skip-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+#permission-settings-modal .rule-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+#permission-settings-modal .rule-row .rule-text { flex: 1; overflow-wrap: anywhere; }
+#permission-settings-modal .rule-row button { padding: 2px 8px; font-size: 11px; background: var(--err); }
+#permission-settings-modal .add-rule-row { display: flex; gap: 6px; margin-top: 12px; }
+#permission-settings-modal .add-rule-row input, #permission-settings-modal .add-rule-row select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+#permission-settings-modal .add-rule-row input[name="tool"] { width: 70px; }
+#permission-settings-modal .add-rule-row input[name="match"] { flex: 1; }
+#permission-settings-modal .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
+#permission-settings-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
+#auto-delegate-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#auto-delegate-modal.open { display: flex; }
+#auto-delegate-modal .box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+#auto-delegate-modal h3 { margin-top: 0; }
+#auto-delegate-modal .row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+#auto-delegate-modal label.field { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+#auto-delegate-modal select, #auto-delegate-modal input[type="text"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 5px 7px;
+  font-size: 12px;
+}
+#auto-delegate-modal #delegate-agent-select { width: 100%; }
+#auto-delegate-modal .match-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+#auto-delegate-modal .match-row .match-text { flex: 1; overflow-wrap: anywhere; }
+#auto-delegate-modal .match-row button { padding: 2px 8px; font-size: 11px; background: var(--err); }
+#auto-delegate-modal .add-match-row { display: flex; gap: 6px; margin-top: 12px; }
+#auto-delegate-modal .add-match-row input { flex: 1; }
+#auto-delegate-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
+#auto-delegate-modal .note.err { color: var(--err); }
+#auto-delegate-modal .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
+#workspace-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#workspace-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#workspace-modal.open { display: flex; }
+#workspace-modal .box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: 480px;
+}
+#workspace-modal h3 { margin-top: 0; }
+#workspace-modal input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-sizing: border-box;
+}
+#workspace-modal .note { color: var(--muted); font-size: 11px; margin-top: 8px; }
+#workspace-modal .note.err { color: var(--err); }
+#workspace-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
