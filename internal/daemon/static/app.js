@@ -1440,5 +1440,91 @@
     }
   }
 
-  init();
+  const ready = init();
+
+  // Test seam. The Web UI is one plain <script> with no module system, so
+  // everything above is closure-private and unreachable from a test. When
+  // the page is loaded by test/webui/harness.js, the harness installs this
+  // hook before evaluating the file and receives the internals through it.
+  // In a browser the hook is always undefined and this block does nothing —
+  // it exports no globals and changes no behaviour.
+  if (typeof globalThis.__localcodeTestHook === 'function') {
+    globalThis.__localcodeTestHook({
+      ready,
+      HELP_TEXT,
+      // Pure functions.
+      escapeHtml,
+      renderMarkdown,
+      inline,
+      shortenPath,
+      isPlainPrompt,
+      formatTime,
+      // Behaviour under test.
+      api,
+      applyEvent,
+      sendMessage,
+      tryLocalCommand,
+      cancelTurn,
+      dequeueNext,
+      setWaiting,
+      setConnected,
+      setCurrentAgent,
+      rememberPrompt,
+      historyPrev,
+      historyNext,
+      renderTasks,
+      renderStatusBar,
+      renderPermissionStatus,
+      renderAutoDelegate,
+      renderSessionList,
+      renderMCPServers,
+      selectSession,
+      // Module-level state, readable and writable so a test can put the page
+      // into a specific condition without driving the whole UI to get there.
+      state: {
+        get sessionID() { return sessionID; },
+        set sessionID(v) { sessionID = v; },
+        get waiting() { return waiting; },
+        set waiting(v) { waiting = v; },
+        get connected() { return connected; },
+        get runningTool() { return runningTool; },
+        set runningTool(v) { runningTool = v; },
+        get promptQueue() { return promptQueue; },
+        set promptQueue(v) { promptQueue = v; },
+        get history() { return history; },
+        set history(v) { history = v; },
+        get historyIdx() { return historyIdx; },
+        set historyIdx(v) { historyIdx = v; },
+        get tasks() { return tasks; },
+        set tasks(v) { tasks = v; },
+        get agents() { return agents; },
+        set agents(v) { agents = v; },
+        get currentAgent() { return currentAgent; },
+        get customCommands() { return customCommands; },
+        set customCommands(v) { customCommands = v; },
+        get sessions() { return sessions; },
+        set sessions(v) { sessions = v; },
+        get mcpServers() { return mcpServers; },
+        set mcpServers(v) { mcpServers = v; },
+        get lastUsage() { return lastUsage; },
+        set lastUsage(v) { lastUsage = v; },
+        get skipPermissions() { return skipPermissions; },
+        set skipPermissions(v) { skipPermissions = v; },
+        get permissionRules() { return permissionRules; },
+        set permissionRules(v) { permissionRules = v; },
+        get autoDelegate() { return autoDelegate; },
+        set autoDelegate(v) { autoDelegate = v; },
+        get autoDelegateAgent() { return autoDelegateAgent; },
+        set autoDelegateAgent(v) { autoDelegateAgent = v; },
+        get autoDelegateMatch() { return autoDelegateMatch; },
+        set autoDelegateMatch(v) { autoDelegateMatch = v; },
+        get showTPS() { return showTPS; },
+        set showTPS(v) { showTPS = v; },
+        get pendingPermissionID() { return pendingPermissionID; },
+        set pendingPermissionID(v) { pendingPermissionID = v; },
+        get workspacePath() { return workspacePath; },
+        set workspacePath(v) { workspacePath = v; },
+      },
+    });
+  }
 })();

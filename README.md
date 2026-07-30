@@ -71,6 +71,16 @@ To run the daemon on a remote machine with `--headless` and attach from your lap
 go test ./...
 ```
 
+That includes the Web UI: `internal/daemon` shells out to the JavaScript suite
+in [test/webui/](test/webui/), which loads the shipped `index.html` and
+`app.js` into a hand-written DOM (Node's built-in test runner, no
+dependencies). It skips itself when `node` isn't installed. To run only that
+part while editing the page:
+
+```bash
+make test-js
+```
+
 ## Not done yet
 
 * macOS code signing and notarization, and Windows MSI code signing. Both install, but neither is signed.

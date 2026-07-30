@@ -4,7 +4,7 @@ VERSION     ?= 0.1.0
 DIST        := dist
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 
-.PHONY: build gui-mac test clean release-check dist dist-mac dist-mac-gui dist-windows dist-msi
+.PHONY: build gui-mac test test-js clean release-check dist dist-mac dist-mac-gui dist-windows dist-msi
 
 build:
 	go build -o $(BIN_NAME) ./cmd/localcode
@@ -22,8 +22,15 @@ gui-mac:
 dist-mac-gui:
 	./build/package-mac-gui.sh "$(VERSION)" "$(DIST)"
 
+# `go test ./...` already covers the Web UI: internal/daemon's TestWebUI shells
+# out to the suite below (and skips when node isn't installed).
 test:
 	go test ./...
+
+# The Web UI tests on their own — faster to iterate on while editing app.js.
+# Node's built-in runner, no dependencies; see test/webui/README.md.
+test-js:
+	node --test test/webui/*.test.js
 
 clean:
 	rm -rf $(BIN_NAME) $(DIST)

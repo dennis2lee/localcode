@@ -787,9 +787,9 @@ cannot type. Replace:
 
 ```js
 // before: return ` ${blocks.length - 1} `;   ...   / (\d+) /g
-return ` ${blocks.length - 1} `;
+return `\u0000${blocks.length - 1}\u0000`;
 // ...
-text = text.replace(/ (\d+) /g, (_, i) => blocks[+i] ?? '');
+text = text.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i] ?? '');
 ```
 
 ### F2. Typed transcript constructors (fixes B5)

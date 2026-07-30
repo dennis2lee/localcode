@@ -13,12 +13,22 @@ def anchors(path):
             out.add(re.sub(r'\s+', '-', re.sub(r'[^\w\s-]', '', t.lower())))
     return out
 
+def prose(path):
+    """File contents with code removed. Fenced blocks and inline code spans
+    are not links even when they look like one — Go generics in particular
+    (`mergeMap[K comparable, V any](dst *map[K]V, ...)`) parse as a markdown
+    link and were reported as broken files."""
+    text = open(path, encoding="utf-8").read()
+    # Fences may be indented, e.g. a code block inside a numbered list.
+    text = re.sub(r'^[ \t]*```.*?^[ \t]*```', '', text, flags=re.S | re.M)
+    return re.sub(r'`[^`\n]*`', '', text)
+
 files = sorted(glob.glob("*.md") + glob.glob("docs/*.md"))
 cache = {f: anchors(f) for f in files}
 bad = []
 for f in files:
     base = os.path.dirname(f)
-    for m in re.finditer(r'\[[^\]]*\]\(([^)]+)\)', open(f, encoding="utf-8").read()):
+    for m in re.finditer(r'\[[^\]]*\]\(([^)]+)\)', prose(f)):
         link = m.group(1)
         if link.startswith(("http://", "https://", "mailto:")):
             continue
