@@ -784,9 +784,7 @@ func TestDaemonDeleteSessionRefusesWhileBusy(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	d.busyMu.Lock()
-	d.busy[sess.ID] = true
-	d.busyMu.Unlock()
+	d.turns.begin(sess.ID, func() {})
 
 	if err := c.DeleteSession(ctx, sess.ID); err == nil {
 		t.Error("expected an error deleting a session with a turn in progress")
@@ -851,9 +849,7 @@ func TestDaemonDeleteAllSessionsRefusesWhileAnyBusy(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	d.busyMu.Lock()
-	d.busy[busySess.ID] = true
-	d.busyMu.Unlock()
+	d.turns.begin(busySess.ID, func() {})
 
 	if err := c.DeleteAllSessions(ctx); err == nil {
 		t.Error("expected an error when any session has a turn in progress")
