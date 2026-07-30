@@ -154,6 +154,17 @@ func TestGlobMatch(t *testing.T) {
 		{"a?c", "abc", true},
 		{"a?c", "ac", false},
 		{"a?c", "abbc", false},
+		{"**", "anything", true},
+		{"**.env", "secrets.env", true},
+		{"a**c", "abbbc", true},
+		{"a*", "a", true},
+		{"a*", "", false},
+		{"a?", "a", false},
+		{"", "", true},
+		{"", "x", false},
+		{"x", "", false},
+		{"*a*b*", "xaxbx", true},
+		{"*a*b*", "xax", false},
 	}
 	for _, tc := range cases {
 		if got := globMatch(tc.pattern, tc.subject); got != tc.want {

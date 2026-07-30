@@ -3,11 +3,7 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -70,73 +66,17 @@ type Config struct {
 	// delegateMu guards AutoDelegate against the daemon's settings endpoint
 	// rewriting the agent or match patterns while a turn on another
 	// goroutine is deciding whether to delegate. Read unlocked at load time,
-	// before the daemon exists to race with — see AutoDelegateSnapshot.
+	// before the daemon exists to race with — see AutoDelegateSnapshot in
+	// runtime.go.
 	delegateMu sync.RWMutex
 
 	// permMu guards SkipPermissions and Permissions against the daemon's
 	// permission-settings endpoints changing them at runtime (a client
 	// toggling skip_permissions, or adding/removing a rule) while a tool
 	// call on another goroutine is resolving a decision. Both are read
-	// unlocked at load time, before the daemon exists to race with.
+	// unlocked at load time, before the daemon exists to race with. See
+	// runtime.go.
 	permMu sync.RWMutex
-}
-
-// PermissionsSkipped reports whether permission prompts are suppressed —
-// false unless skip_permissions is explicitly true.
-func (c *Config) PermissionsSkipped() bool {
-	c.permMu.RLock()
-	defer c.permMu.RUnlock()
-	return c.SkipPermissions != nil && *c.SkipPermissions
-}
-
-// SetSkipPermissionsRuntime changes the live skip_permissions setting —
-// the in-memory counterpart to SetSkipPermissionsInFile, which persists it.
-func (c *Config) SetSkipPermissionsRuntime(v bool) {
-	c.permMu.Lock()
-	defer c.permMu.Unlock()
-	c.SkipPermissions = &v
-}
-
-// AddPermissionRuleRuntime mirrors AddPermissionRuleToFile's rule-append
-// logic against the in-memory config, so a rule just persisted to disk also
-// takes effect immediately rather than only after a restart.
-func (c *Config) AddPermissionRuleRuntime(toolName string, rule PermissionRule) {
-	c.permMu.Lock()
-	defer c.permMu.Unlock()
-	if c.Permissions == nil {
-		c.Permissions = map[string]ToolPermission{}
-	}
-	addRule(c.Permissions, toolName, rule)
-}
-
-// RemovePermissionRuleRuntime mirrors RemovePermissionRuleFromFile against
-// the in-memory config.
-func (c *Config) RemovePermissionRuleRuntime(toolName string, rule PermissionRule) {
-	c.permMu.Lock()
-	defer c.permMu.Unlock()
-	removeRule(c.Permissions, toolName, rule)
-}
-
-// PermissionsSnapshot returns the current skip_permissions state and a copy
-// of every configured rule, tool by tool, for a client to display (e.g. a
-// settings panel). It does not include the built-in defaults (see
-// builtinRules) since those aren't something a user wrote and can't be
-// removed the same way.
-func (c *Config) PermissionsSnapshot() (skip bool, rules map[string][]PermissionRule) {
-	c.permMu.RLock()
-	defer c.permMu.RUnlock()
-	skip = c.SkipPermissions != nil && *c.SkipPermissions
-	rules = map[string][]PermissionRule{}
-	for tool, tp := range c.Permissions {
-		if tp.Flat != "" {
-			rules[tool] = []PermissionRule{{Match: "*", Decision: tp.Flat}}
-			continue
-		}
-		cp := make([]PermissionRule, len(tp.Rules))
-		copy(cp, tp.Rules)
-		rules[tool] = cp
-	}
-	return skip, rules
 }
 
 // AutoDelegateConfig sends small, mechanical prompts to a named agent
@@ -178,38 +118,6 @@ func (c *Config) DelegateEnabled() bool {
 	return c.AutoDelegate != nil && c.AutoDelegate.Enabled
 }
 
-// AutoDelegateSnapshot returns a copy of the auto_delegate block, or nil if
-// there is none. A copy rather than the live pointer because the daemon's
-// settings endpoint can rewrite the agent and patterns at runtime while a
-// turn on another goroutine is deciding whether to delegate — the caller
-// gets one coherent view instead of a half-updated one.
-func (c *Config) AutoDelegateSnapshot() *AutoDelegateConfig {
-	c.delegateMu.RLock()
-	defer c.delegateMu.RUnlock()
-	if c.AutoDelegate == nil {
-		return nil
-	}
-	cp := *c.AutoDelegate
-	cp.Match = append([]string(nil), c.AutoDelegate.Match...)
-	return &cp
-}
-
-// SetAutoDelegateRuntime replaces which agent handles delegated prompts and
-// which prompts qualify, taking effect on the very next turn. The in-memory
-// counterpart to SetAutoDelegateTargetInFile, which persists it.
-//
-// It creates the block if there wasn't one, so a config that never mentioned
-// auto_delegate can be configured entirely from a client.
-func (c *Config) SetAutoDelegateRuntime(agent string, match []string) {
-	c.delegateMu.Lock()
-	defer c.delegateMu.Unlock()
-	if c.AutoDelegate == nil {
-		c.AutoDelegate = &AutoDelegateConfig{}
-	}
-	c.AutoDelegate.Agent = agent
-	c.AutoDelegate.Match = append([]string(nil), match...)
-}
-
 // MatchesPrompt reports whether text should be delegated. Matching is
 // case-insensitive because these are natural-language prompts, not paths.
 func (a *AutoDelegateConfig) MatchesPrompt(text string) bool {
@@ -241,95 +149,6 @@ func (c *Config) CompactEnabled() bool {
 // default when ShowTPS is unset.
 func (c *Config) TPSEnabled() bool {
 	return c.ShowTPS == nil || *c.ShowTPS
-}
-
-// MCP transport names. They match the "type" field Claude Code writes in
-// .mcp.json / ~/.claude.json, so an entry can be copied across verbatim.
-const (
-	MCPTransportStdio = "stdio"
-	MCPTransportHTTP  = "http" // streamable HTTP, the current remote transport
-	MCPTransportSSE   = "sse"  // the older HTTP+SSE transport, still in use
-)
-
-// MCPServerConfig describes one MCP server, in the same shape as Claude
-// Code's `mcpServers` entries so an existing .mcp.json can be copied in
-// directly. Two kinds of server share this struct, distinguished by Type:
-//
-//   - stdio: a local child process (Command/Args/Env)
-//   - http, sse: a remote endpoint (URL/Headers)
-//
-// Type may be omitted, in which case Transport infers it — an entry with a
-// URL is remote, anything else is a local command. That's what makes a
-// hand-written `{"command": "npx", ...}` from before remote support existed
-// keep working untouched.
-type MCPServerConfig struct {
-	// Type is "stdio", "http", or "sse". Empty means "infer" — see
-	// Transport.
-	Type string `json:"type,omitempty"`
-
-	// stdio only.
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-
-	// http/sse only. Headers is where an API token goes, so treat its
-	// values as secrets: nothing in this repo prints them, only their key
-	// names (see the `mcp list` / `mcp get` output).
-	URL     string            `json:"url,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-}
-
-// Transport resolves which transport this entry uses, filling in the
-// default for an entry that doesn't say. An explicit Type always wins, so a
-// server can be pinned to "sse" even though "http" is what a bare URL
-// infers.
-func (c MCPServerConfig) Transport() string {
-	switch c.Type {
-	case MCPTransportStdio, MCPTransportHTTP, MCPTransportSSE:
-		return c.Type
-	}
-	if c.URL != "" {
-		// Streamable HTTP is the current spec's remote transport, so it is
-		// the better guess for an entry that only carries a URL. A server
-		// that still speaks the older protocol needs "type": "sse".
-		return MCPTransportHTTP
-	}
-	return MCPTransportStdio
-}
-
-// IsRemote reports whether this server is reached over the network rather
-// than started as a child process.
-func (c MCPServerConfig) IsRemote() bool {
-	return c.Transport() != MCPTransportStdio
-}
-
-// Validate checks that the entry carries what its transport needs, so a
-// half-written config fails with a clear message instead of at connect time.
-func (c MCPServerConfig) Validate() error {
-	switch t := c.Transport(); t {
-	case MCPTransportStdio:
-		if c.Command == "" {
-			return fmt.Errorf(`stdio server needs a "command"`)
-		}
-		if c.URL != "" {
-			return fmt.Errorf(`stdio server must not set "url" (use "type": "http" or "sse" for a remote server)`)
-		}
-	case MCPTransportHTTP, MCPTransportSSE:
-		if c.URL == "" {
-			return fmt.Errorf(`%s server needs a "url"`, t)
-		}
-		if c.Command != "" {
-			return fmt.Errorf(`%s server must not set "command"`, t)
-		}
-		u, err := url.Parse(c.URL)
-		if err != nil {
-			return fmt.Errorf("invalid url %q: %w", c.URL, err)
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("url %q must be http or https", c.URL)
-		}
-	}
-	return nil
 }
 
 // ProviderConfig describes how to reach a model backend.
@@ -389,188 +208,6 @@ type AgentConfig struct {
 	// can actually call). Empty/absent means no restriction — every
 	// registered tool is available, matching prior behavior.
 	Tools []string `json:"tools,omitempty"`
-}
-
-// DefaultGlobalPath returns ~/.localcode/config.json.
-func DefaultGlobalPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
-	}
-	return filepath.Join(home, ".localcode", "config.json"), nil
-}
-
-// LoadMerged loads the global config, then merges a project-local
-// .localcode/config.json on top (project entries win). Either file may be
-// absent; at least one must exist.
-func LoadMerged(projectDir string) (*Config, error) {
-	globalPath, err := DefaultGlobalPath()
-	if err != nil {
-		return nil, err
-	}
-
-	cfg, err := loadOptional(globalPath)
-	if err != nil {
-		return nil, err
-	}
-
-	projectPath := filepath.Join(projectDir, ".localcode", "config.json")
-	projectCfg, err := loadOptional(projectPath)
-	if err != nil {
-		return nil, err
-	}
-
-	switch {
-	case cfg == nil && projectCfg == nil:
-		return nil, fmt.Errorf("no config found at %s or %s", globalPath, projectPath)
-	case cfg == nil:
-		cfg = projectCfg
-	case projectCfg != nil:
-		cfg.merge(projectCfg)
-	}
-
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid merged config: %w", err)
-	}
-	return cfg, nil
-}
-
-// Load reads and validates a single config file from path.
-func Load(path string) (*Config, error) {
-	cfg, err := loadOptional(path)
-	if err != nil {
-		return nil, err
-	}
-	if cfg == nil {
-		return nil, fmt.Errorf("config file not found: %s", path)
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config %s: %w", path, err)
-	}
-	return cfg, nil
-}
-
-// LoadFile reads a single config file for editing (e.g. by `localcode
-// mcp`). Unlike Load, a missing file is not an error — it returns an
-// empty, unvalidated Config ready to be filled in and saved.
-func LoadFile(path string) (*Config, error) {
-	cfg, err := loadOptional(path)
-	if err != nil {
-		return nil, err
-	}
-	if cfg == nil {
-		return &Config{}, nil
-	}
-	return cfg, nil
-}
-
-// UpdateMCPServersInFile rewrites only the "mcp_servers" key of the JSON
-// config at path, leaving every other top-level key intact — including
-// keys this version of localcode doesn't know about, which a full
-// Config-struct round-trip would silently drop. Used by `localcode mcp
-// add/remove`. A missing file starts from an empty object; update receives
-// the current entries (never nil) and mutates them in place. update may
-// return an error (e.g. "server not found") to abort the whole operation —
-// nothing is written in that case.
-func UpdateMCPServersInFile(path string, update func(servers map[string]MCPServerConfig) error) error {
-	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
-		servers := map[string]MCPServerConfig{}
-		if rawServers, ok := raw["mcp_servers"]; ok {
-			if err := json.Unmarshal(rawServers, &servers); err != nil {
-				return fmt.Errorf("parse mcp_servers in %s: %w", path, err)
-			}
-		}
-
-		if err := update(servers); err != nil {
-			return err
-		}
-
-		if len(servers) == 0 {
-			delete(raw, "mcp_servers")
-			return nil
-		}
-		encoded, err := json.Marshal(servers)
-		if err != nil {
-			return fmt.Errorf("marshal mcp_servers: %w", err)
-		}
-		raw["mcp_servers"] = encoded
-		return nil
-	})
-}
-
-func loadOptional(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read config %s: %w", path, err)
-	}
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
-	}
-	return &cfg, nil
-}
-
-// mergeMap copies every entry of src into *dst, creating *dst if it was nil.
-// Used by merge for each of Config's map-typed fields so they don't each
-// need their own copy of the same three lines — and so a future map field
-// can't quietly reuse copy-pasted merge logic that's subtly wrong.
-func mergeMap[K comparable, V any](dst *map[K]V, src map[K]V) {
-	if len(src) == 0 {
-		return
-	}
-	if *dst == nil {
-		*dst = map[K]V{}
-	}
-	for k, v := range src {
-		(*dst)[k] = v
-	}
-}
-
-// merge overlays other on top of c, with other's entries taking priority.
-//
-// Every field of Config must be handled here or it is silently dropped when
-// both a global and a project config exist — see TestMergeFieldsGuard,
-// which fails if a new Config field is added without a conscious decision
-// about how (or whether) it merges.
-func (c *Config) merge(other *Config) {
-	if other == nil {
-		return
-	}
-	mergeMap(&c.Providers, other.Providers)
-	mergeMap(&c.Profiles, other.Profiles)
-	mergeMap(&c.Agents, other.Agents)
-	mergeMap(&c.MCPServers, other.MCPServers)
-	mergeMap(&c.Permissions, other.Permissions)
-	if other.DefaultProfile != "" {
-		c.DefaultProfile = other.DefaultProfile
-	}
-	if other.MaxConcurrentTasks != 0 {
-		c.MaxConcurrentTasks = other.MaxConcurrentTasks
-	}
-	if other.AutoMemoryEnabled != nil {
-		c.AutoMemoryEnabled = other.AutoMemoryEnabled
-	}
-	if other.AutoCompactEnabled != nil {
-		c.AutoCompactEnabled = other.AutoCompactEnabled
-	}
-	if other.ShowTPS != nil {
-		c.ShowTPS = other.ShowTPS
-	}
-	if other.AutoDelegate != nil {
-		c.AutoDelegate = other.AutoDelegate
-	}
-	if other.SkipPermissions != nil {
-		c.SkipPermissions = other.SkipPermissions
-	}
-	for event, list := range other.Hooks {
-		if c.Hooks == nil {
-			c.Hooks = hooks.Config{}
-		}
-		c.Hooks[event] = list
-	}
 }
 
 // Validate checks that all cross-references (agent -> profile -> provider)
