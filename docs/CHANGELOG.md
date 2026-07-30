@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.30.0
 
 - **Fix: the Windows desktop build sprayed console windows across the screen.** `localcode-gui.exe` is linked as a GUI-subsystem binary, and a process with no console of its own makes Windows allocate a brand new console — with a visible window — for every *console* child it starts. localcode starts them constantly: one per stdio MCP server at launch, one per bash tool call, one per hook, one for the `git rev-parse` that locates the memory directory. Several black boxes appeared right after launch and another on every shell command.
   * New `internal/childproc`: `Hide(cmd)` sets `CREATE_NO_WINDOW` so a child gets a console with no window, and is a no-op everywhere but Windows. Applied at all five spawn sites. Nothing about how children are used changes — their stdio is always wired to pipes and none of them ever wanted a terminal.
