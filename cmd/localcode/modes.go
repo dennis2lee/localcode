@@ -16,10 +16,11 @@ import (
 )
 
 func runDaemon(configPath, listen string) error {
-	d, err := buildDaemon(context.Background(), configPath)
+	d, cleanup, err := buildDaemon(context.Background(), configPath)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	log.Printf("localcode daemon listening on http://%s", listen)
 	return http.ListenAndServe(listen, d.Handler())
 }
@@ -29,10 +30,11 @@ func runDaemon(configPath, listen string) error {
 // owns a private loopback server for its own lifetime. On a build without
 // the "gui" tag, gui.Launch returns an explanatory error instead.
 func runGUI(configPath string) error {
-	d, err := buildDaemon(context.Background(), configPath)
+	d, cleanup, err := buildDaemon(context.Background(), configPath)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	// Only here. The window and the daemon share a machine and a user in
 	// this mode, so a folder picker opens where the person clicking is
 	// sitting. Every other mode leaves d.PickDirectory nil — over --server
@@ -52,10 +54,11 @@ func runGUI(configPath string) error {
 // independently-addressable components, just sharing a process for
 // single-binary convenience.
 func runEmbedded(configPath, listen, agentName string) error {
-	d, err := buildDaemon(context.Background(), configPath)
+	d, cleanup, err := buildDaemon(context.Background(), configPath)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	srv := &http.Server{Addr: listen, Handler: d.Handler()}
 	errCh := make(chan error, 1)

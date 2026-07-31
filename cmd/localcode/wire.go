@@ -21,28 +21,55 @@ import (
 	"localcode/internal/tools"
 )
 
+// env is the ambient machine state every builder below needs, resolved
+// exactly once at startup and passed down. Each of these used to be
+// re-derived — with its own error handling — at three or four separate call
+// sites, which meant a build could half-succeed against two different
+// answers if the process ever changed directory mid-startup.
+type env struct {
+	home string
+	cwd  string
+}
+
+func resolveEnv() (env, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return env{}, fmt.Errorf("resolve home dir: %w", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return env{}, fmt.Errorf("resolve working dir: %w", err)
+	}
+	return env{home: home, cwd: cwd}, nil
+}
+
 // buildDaemon wires config -> providers -> tools -> agent.Loop -> Task
 // Manager -> daemon.Daemon. Shared by both --headless and the default
 // embedded-daemon path.
-func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error) {
-	cfg, err := loadConfig(configPath)
+//
+// The returned cleanup func must be called when the daemon is done with —
+// it shuts down any MCP server subprocesses this build started. It is never
+// nil, so callers can defer it unconditionally.
+func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, func(), error) {
+	e, err := resolveEnv()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	providers, err := buildProviders(ctx, cfg)
+	cfg, err := loadConfig(configPath, e)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	home, err := os.UserHomeDir()
+	providers, err := buildProviders(ctx, cfg, e)
 	if err != nil {
-		return nil, fmt.Errorf("resolve home dir: %w", err)
+		return nil, nil, err
 	}
-	sessionDir := filepath.Join(home, ".localcode", "sessions")
+
+	sessionDir := filepath.Join(e.home, ".localcode", "sessions")
 	store, sessionWarnings, err := session.LoadAllFromDisk(sessionDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, w := range sessionWarnings {
 		log.Printf("session restore: %v", w)
@@ -59,26 +86,22 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 	}
 	registry, err := buildRegistry(cfg, broker)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	cwd, err := os.Getwd()
+	systemPromptExtra, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e)
 	if err != nil {
-		return nil, err
-	}
-	systemPromptExtra, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, home, cwd)
-	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	cleanup := func() {}
 	var mcpManager *mcpclient.Manager
 	if len(cfg.MCPServers) > 0 {
 		// A server that fails to connect or list tools is skipped (logged as
 		// a warning), not fatal: one bad MCP server shouldn't take down the
-		// whole daemon. The Manager is kept (for GET /api/mcp-servers) but
-		// not otherwise tracked for a clean shutdown — this MVP has no
-		// signal handling yet, and the child MCP server processes exit when
-		// this process does.
+		// whole daemon. The Manager is kept both for GET /api/mcp-servers and
+		// for the cleanup func — closing it is what stops the child MCP
+		// server processes, which otherwise linger until this process exits.
 		var mcpTools []tools.Tool
 		var warnings []error
 		mcpManager, mcpTools, warnings = mcpclient.Connect(ctx, cfg.MCPServers)
@@ -88,13 +111,16 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 		for _, t := range mcpTools {
 			registry.Register(t)
 		}
+		if mcpManager != nil {
+			cleanup = mcpManager.Close
+		}
 	}
 
 	loop := agent.New(store, registry, providers, cfg)
 	loop.SystemPrompt += systemPromptExtra
 	loop.Skills = skillList
 	loop.Commands = cmdList
-	loop.ProjectDir = cwd
+	loop.ProjectDir = e.cwd
 	loop.MemoryDir = memDir
 	// Restores conversation history and /usage totals for every session
 	// just loaded from disk — the event log survives a restart on its
@@ -113,7 +139,7 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, error)
 		registry.Register(agent.NewTaskTool(tasks, cfg.Agents))
 	}
 
-	return daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version), nil
+	return daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version), cleanup, nil
 }
 
 // buildRegistry constructs the tool registry and registers every built-in
@@ -138,8 +164,8 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker) (*tools.R
 // auto-memory section, registers the Skill tool if any skills were found,
 // and returns the combined text to append to Loop.SystemPrompt alongside
 // the loaded skills/commands/memory-dir Loop needs directly.
-func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, home, cwd string) (extra string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
-	skillList, err = loadSkills(home)
+func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (extra string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
+	skillList, err = loadSkills(e)
 	if err != nil {
 		return "", nil, nil, "", err
 	}
@@ -148,17 +174,17 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, home, cwd s
 		extra += "\n\n" + skills.SystemPromptSection(skillList)
 	}
 
-	cmdList, err = commands.LoadAll(filepath.Join(cwd, ".localcode", "commands"), filepath.Join(home, ".localcode", "commands"))
+	cmdList, err = commands.LoadAll(filepath.Join(e.cwd, ".localcode", "commands"), filepath.Join(e.home, ".localcode", "commands"))
 	if err != nil {
 		return "", nil, nil, "", err
 	}
 
-	if rulesSection := rules.Load(cwd, home); rulesSection != "" {
+	if rulesSection := rules.Load(e.cwd, e.home); rulesSection != "" {
 		extra += "\n\n" + rulesSection
 	}
 
 	if cfg.MemoryEnabled() {
-		memDir = memory.Dir(cwd, home)
+		memDir = memory.Dir(e.cwd, e.home)
 		if err := os.MkdirAll(memDir, 0o755); err != nil {
 			return "", nil, nil, "", fmt.Errorf("create memory dir: %w", err)
 		}
@@ -168,16 +194,13 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, home, cwd s
 	return extra, skillList, cmdList, memDir, nil
 }
 
-// loadSkills scans the project-local skills dir (if run from within a
-// project) before the global one, so a project can override a same-named
-// global skill.
-func loadSkills(home string) ([]skills.Skill, error) {
-	var dirs []string
-	if cwd, err := os.Getwd(); err == nil {
-		dirs = append(dirs, filepath.Join(cwd, ".localcode", "skills"))
-	}
-	dirs = append(dirs, filepath.Join(home, ".localcode", "skills"))
-	return skills.LoadAll(dirs...)
+// loadSkills scans the project-local skills dir before the global one, so a
+// project can override a same-named global skill.
+func loadSkills(e env) ([]skills.Skill, error) {
+	return skills.LoadAll(
+		filepath.Join(e.cwd, ".localcode", "skills"),
+		filepath.Join(e.home, ".localcode", "skills"),
+	)
 }
 
 // resolvedConfigPath is where an "always allow" permission decision gets
@@ -193,23 +216,14 @@ func resolvedConfigPath(explicitPath string) (string, error) {
 	return config.DefaultGlobalPath()
 }
 
-func loadConfig(explicitPath string) (*config.Config, error) {
+func loadConfig(explicitPath string, e env) (*config.Config, error) {
 	if explicitPath != "" {
 		return config.Load(explicitPath)
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	return config.LoadMerged(cwd)
+	return config.LoadMerged(e.cwd)
 }
 
-func buildProviders(ctx context.Context, cfg *config.Config) (map[string]provider.Provider, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve home dir: %w", err)
-	}
-
+func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]provider.Provider, error) {
 	out := map[string]provider.Provider{}
 	for name, pc := range cfg.Providers {
 		switch pc.Type {
@@ -224,7 +238,7 @@ func buildProviders(ctx context.Context, cfg *config.Config) (map[string]provide
 		case config.ProviderAnthropic:
 			apiKey := pc.APIKey
 			if apiKey == "" {
-				creds, err := credentials.Load(home)
+				creds, err := credentials.Load(e.home)
 				if err != nil {
 					return nil, fmt.Errorf("load credentials for anthropic provider %q: %w", name, err)
 				}
