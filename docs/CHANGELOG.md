@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.31.1
+
+Follow-up to v0.31.0's refactor: the four items its plan (`docs/REFACTORING.md`) called for and the release did not actually carry out. No user-facing behavior changes beyond the MCP shutdown fix.
+
+- **Fix: MCP server subprocesses were never shut down.** `mcp.Manager.Close` existed but nothing called it, so the child processes for every configured stdio MCP server were left to be reaped when localcode itself exited. `buildDaemon` now returns a cleanup func that all three run modes defer.
+- **The TUI no longer re-renders its whole transcript on events that don't change it.** `tool.start`/`tool.end`, task updates, agent switches and usage reports only move the status line, which is drawn fresh every frame anyway — but each one was re-wrapping every transcript entry. On a long session that is pure waste, and during the tool traffic of a normal turn it was a repeated chance to disturb a scroll position. Transcript writes now bump a revision counter and the re-render is conditional on it.
+- **Internal (Web UI): modal open/closed state is a flag, not a DOM query.** Four places asked the element whether it still carried the styling class, which stops answering correctly the moment anything else touches that class. A `Modal` type owns the boolean and the class becomes an output of it; a test fails the build if a DOM-read reappears. The workspace modal and the folder picker also stop duplicating the same set-and-update body.
+- **Internal (Web UI): the page's six startup requests now run concurrently** instead of as six sequential awaits. They are independent GETs against the same daemon.
+- **Internal (CLI): the home and working directories are resolved once at startup** instead of at five separate points, each with its own error handling.
+
 ## v0.31.0
 
 - **A structural refactor across every major package** (config, agent, daemon, cmd/localcode, TUI, Web UI), done phase by phase against the full existing test suite so no behavior changed except the specific bugs below. Every large file was split by concern into focused ones — nothing here is a rename for its own sake; each split paired with either a real bug fix or a genuine simplification. See `docs/REFACTORING.md` for the full plan and phase-by-phase rationale.
