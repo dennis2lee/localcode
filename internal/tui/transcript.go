@@ -23,16 +23,35 @@ type transcriptEntry struct {
 	text string
 }
 
+// appendEntry is the single mutation point for the transcript. Every write
+// goes through here so transcriptRev can't fall behind: applyEvent uses that
+// counter to decide whether an event changed anything visible, and a mutator
+// that bumped the slice without bumping the counter would leave the viewport
+// showing stale text.
+func (m *Model) appendEntry(kind entryKind, text string) {
+	m.transcript = append(m.transcript, transcriptEntry{kind: kind, text: text})
+	m.transcriptRev++
+}
+
+// appendUser records a prompt as it comes back from the daemon's event log
+// (the TUI deliberately doesn't echo locally — the server's message.user
+// event is the single source of truth for what the session actually holds).
+func (m *Model) appendUser(text string) {
+	m.appendEntry(entryUser, text)
+	m.streamOpen = false
+}
+
 // appendLocal writes text straight into the transcript without going
 // through the server — for /help and /version, which are answered purely
 // client-side (well, /version does hit the daemon, but the answer isn't
 // part of the session's event log either way).
 func (m *Model) appendLocal(text string) {
-	m.transcript = append(m.transcript, transcriptEntry{kind: entryLocal, text: text})
+	m.appendEntry(entryLocal, text)
 	// A local reply (most commonly "[queued] ...", fired while a turn is
 	// mid-stream) always starts a fresh paragraph rather than gluing onto
 	// whatever model entry happens to be open — see appendModelDelta.
 	m.streamOpen = false
+	// Called from key handlers, not applyEvent, so it refreshes on its own.
 	m.refreshViewport()
 }
 
@@ -47,8 +66,9 @@ func (m *Model) appendLocal(text string) {
 func (m *Model) appendModelDelta(text string) {
 	if m.streamOpen && len(m.transcript) > 0 {
 		m.transcript[len(m.transcript)-1].text += text
+		m.transcriptRev++
 	} else {
-		m.transcript = append(m.transcript, transcriptEntry{kind: entryModel, text: text})
+		m.appendEntry(entryModel, text)
 		m.streamOpen = true
 	}
 }
@@ -63,7 +83,7 @@ func (m *Model) endModelStream() {
 // [cancelled] — which, like appendLocal, always starts fresh rather than
 // extending an in-progress model entry.
 func (m *Model) appendTool(text string) {
-	m.transcript = append(m.transcript, transcriptEntry{kind: entryTool, text: text})
+	m.appendEntry(entryTool, text)
 	m.streamOpen = false
 }
 

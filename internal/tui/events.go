@@ -18,11 +18,11 @@ func (m *Model) endTurn() {
 }
 
 func (m *Model) applyEvent(ev events.Event) {
+	rev := m.transcriptRev
 	switch ev.Type {
 	case events.TypeUserMessage:
 		if text, ok := ev.Data["text"].(string); ok {
-			m.transcript = append(m.transcript, transcriptEntry{kind: entryUser, text: text})
-			m.streamOpen = false
+			m.appendUser(text)
 		}
 	case events.TypeMessagePartDelta:
 		if text, ok := ev.Data["text"].(string); ok {
@@ -94,5 +94,13 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.errMsg = "the daemon reported an error with a malformed payload"
 		}
 	}
-	m.refreshViewport()
+	// Only re-render when this event actually wrote to the transcript. The
+	// majority of events (tool.start/end, task.*, agent.switched, usage,
+	// permission.request) only move the status line or the modal, and
+	// re-wrapping every entry for each of those is pure waste on a long
+	// session — the footer and the modal are rendered fresh by View() every
+	// frame regardless.
+	if m.transcriptRev != rev {
+		m.refreshViewport()
+	}
 }

@@ -537,6 +537,50 @@ func TestRefreshViewportPreservesScrollPosition(t *testing.T) {
 	}
 }
 
+// Events that only move the status line must not re-render the transcript.
+// Beyond the wasted work on a long session, an unconditional refresh is a
+// standing chance to disturb a scroll position: tool.start/tool.end fire
+// repeatedly throughout a turn, so someone scrolled up to reread something
+// while tools run should not have the view touched at all.
+func TestStatusOnlyEventsDoNotTouchTheViewport(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	m = updated.(Model)
+
+	for i := 0; i < 40; i++ {
+		m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": fmt.Sprintf("line %d", i)}})
+	}
+	m.viewport.GotoTop()
+	before := m.viewport.YOffset()
+
+	for _, ev := range []events.Event{
+		{Type: events.TypeToolStart, Data: map[string]any{"name": "bash"}},
+		{Type: events.TypeToolEnd, Data: map[string]any{"name": "bash"}},
+		{Type: events.TypeAgentSwitched, Data: map[string]any{"agent": "plan"}},
+		{Type: events.TypeTaskSpawned, Data: map[string]any{"task_id": "t1", "agent": "plan"}},
+		{Type: events.TypeTaskStatus, Data: map[string]any{"task_id": "t1", "status": "done"}},
+		{Type: events.TypeTurnDone},
+	} {
+		m.applyEvent(ev)
+		if got := m.viewport.YOffset(); got != before {
+			t.Errorf("%s moved the viewport from %d to %d", ev.Type, before, got)
+		}
+	}
+
+	// The state those events carry still landed, of course — skipping the
+	// re-render must not mean skipping the update.
+	if m.runningTool != "" || m.currentAgent != "plan" || m.tasks["t1"].status != "done" {
+		t.Errorf("status-only events were skipped entirely: tool=%q agent=%q tasks=%v", m.runningTool, m.currentAgent, m.tasks)
+	}
+
+	// And an event that does write to the transcript still re-renders.
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "a reply"}})
+	m.viewport.GotoBottom() // the new text is at the end; the view is still at the top
+	if !strings.Contains(m.viewport.View(), "a reply") {
+		t.Error("a transcript-writing event did not refresh the viewport")
+	}
+}
+
 // TestEnterQueuesPlainPromptWhileWaiting is a regression test for a UX gap:
 // pressing Enter while a turn is streaming used to silently drop the typed
 // text (the input was cleared? no — text just sat there and Update did

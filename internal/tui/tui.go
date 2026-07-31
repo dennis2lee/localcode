@@ -64,7 +64,14 @@ type Model struct {
 	// extends the last transcript entry instead of starting a new one, so a
 	// reply that streams in dozens of small chunks becomes one entry, not
 	// dozens.
-	streamOpen       bool
+	streamOpen bool
+	// transcriptRev counts writes to transcript. applyEvent compares it
+	// across an event to decide whether to re-render: most events
+	// (tool.start, task.status, agent.switched, usage) only move the status
+	// line, and re-wrapping the whole transcript for each of those is both
+	// wasted work on a long session and a needless chance to disturb the
+	// scroll position.
+	transcriptRev    uint64
 	pending          *pendingPermission
 	pendingHintShown bool // has the "resolve the permission above" hint already fired for this pending request
 	waiting          bool
