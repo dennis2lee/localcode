@@ -959,3 +959,34 @@ optional.
 After the final step: update `docs/CHANGELOG.md` (an "Internal" section —
 user-visible fixes B1–B9 get their own lines), and run
 `scripts/release-preflight.sh` before any release build, as always.
+
+---
+
+## Completion status
+
+All thirteen steps are done, and B1–B9 are all fixed with a regression test
+each. Shipped in v0.31.0 (steps 1–13) and the follow-up commits after it
+(the D5 and F5 leftovers listed below).
+
+Two items were deliberately **not** carried out as written:
+
+- **E5's `entryError` kind.** The enum in the plan lists five kinds, but the
+  TUI has never put errors in the transcript — an error sets `errMsg`, which
+  `View` renders in the footer and clears at the next turn. Adding the kind
+  would have meant either an unused constant or moving errors into the
+  transcript, and the latter is a behavior change ground rule 1 doesn't
+  allow. The transcript has four kinds.
+- **F5's one-module-per-modal split.** The four modals share ~180 lines of
+  state and helpers and would have become four files of 40 lines each with
+  cross-imports between them. The substantive half of the item — replacing
+  the `classList.contains('open')` DOM-as-state reads with an explicit
+  `isOpen` flag — is done, in `js/modal.js`, and `test/webui/modals.test.js`
+  has a guard test that fails if a `contains('open')` check reappears
+  anywhere under `static/js/`. The renderers likewise stayed in one
+  `js/render.js` rather than one module per pane.
+
+The mandatory manual walks in §F and §E5 were partly replaced by automated
+coverage that did not exist when this plan was written: F0–F2 got the full
+browser walk as specified, and F3–F5 and E5 are covered by the 90-test JS
+suite (`make test-js`) and by Go tests driving the real `viewport.Model`
+scroll API. Anything touching visual layout still wants an eye on it.

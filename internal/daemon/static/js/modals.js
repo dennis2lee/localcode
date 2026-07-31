@@ -5,14 +5,23 @@ import {
   permissionSettingsModal, skipPermissionsCheckbox, permissionRulesListEl,
   ruleToolInput, ruleMatchInput, ruleDecisionSelect,
   permissionSettingsNote,
-  workspaceModal, workspaceInput, workspaceNote, workspaceBtn,
+  workspaceModal, workspaceInput, workspaceNote,
 } from './dom.js';
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool } from './transcript.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace } from './render.js';
+import { Modal } from './modal.js';
 
 const workspaceNoteDefault = 'Changing this restarts relative-path resolution for every tool from the new directory. Refused while a turn is in progress.';
+
+// The four modals, each owning its own open/closed flag. Exported because
+// events.js drives the permission one from the SSE stream and main.js needs
+// to know whether Escape should close something.
+export const permissionRequest = new Modal(modalEl);
+export const permissionSettings = new Modal(permissionSettingsModal);
+export const delegate = new Modal(delegateModal);
+export const workspace = new Modal(workspaceModal);
 
 // ---- Auto-delegation modal ----
 
@@ -39,7 +48,7 @@ export async function saveAutoDelegate(patch) {
 export function openAutoDelegateSettings() {
   delegateNote.classList.remove('err');
   renderDelegatePanel();
-  delegateModal.classList.add('open');
+  delegate.open();
 }
 
 export function renderDelegatePanel() {
@@ -96,7 +105,7 @@ export function renderDelegatePanel() {
 // event moves auto_delegate out from under a modal the user has open —
 // another client's toggle, or the /config command run from either client.
 export function refreshDelegatePanelIfOpen() {
-  if (delegateModal.classList.contains('open')) renderDelegatePanel();
+  if (delegate.isOpen) renderDelegatePanel();
 }
 
 export function addDelegateMatch() {
@@ -109,7 +118,7 @@ export function addDelegateMatch() {
 }
 
 export function closeDelegateModal() {
-  delegateModal.classList.remove('open');
+  delegate.close();
 }
 
 // ---- Permission settings modal ----
@@ -148,11 +157,11 @@ export function openPermissionSettings() {
     ? 'Changes apply immediately and are written to config.json.'
     : 'No config.json path is available in this run, so settings are read-only.';
   renderPermissionRulesList();
-  permissionSettingsModal.classList.add('open');
+  permissionSettings.open();
 }
 
 export function closePermissionSettings() {
-  permissionSettingsModal.classList.remove('open');
+  permissionSettings.close();
 }
 
 export async function toggleSkipPermissions(enabled) {
@@ -206,7 +215,7 @@ export async function resolvePermission(allow, scope) {
   if (!session.pendingPermissionID) return;
   const id = session.pendingPermissionID;
   session.pendingPermissionID = null;
-  modalEl.classList.remove('open');
+  permissionRequest.close();
   try {
     await apiClient.resolvePermissionRequest(session.sessionID, id, allow, scope);
   } catch (err) {
@@ -242,58 +251,66 @@ export async function browseWorkspace() {
   await applyWorkspace(picked.path);
 }
 
-// applyWorkspace switches the daemon's working directory and reports the
-// outcome in the transcript, since this changes where every later tool call
-// and bash command resolves from — too consequential to happen silently.
-// Returns whether it took effect.
-export async function applyWorkspace(path) {
-  if (path === app.workspacePath) return true;
+// switchWorkspace is the one place that moves the daemon's working
+// directory. Both entry points — the OS folder picker and the typed-path
+// modal — go through it, so the local state update can't drift between
+// them; they differ only in how a failure is reported, which is why the
+// error comes back rather than being handled here.
+async function switchWorkspace(path) {
   try {
     const w = await apiClient.setWorkspace(path);
     app.workspacePath = w.path;
     renderWorkspace();
-    appendTool(`[workspace] ${w.path}`);
-    return true;
+    return { path: w.path };
   } catch (err) {
-    appendError(`could not switch the workspace to ${path}: ${err}`);
+    return { err };
+  }
+}
+
+// applyWorkspace switches the workspace and reports the outcome in the
+// transcript, since this changes where every later tool call and bash
+// command resolves from — too consequential to happen silently. Returns
+// whether it took effect.
+export async function applyWorkspace(path) {
+  if (path === app.workspacePath) return true;
+  const res = await switchWorkspace(path);
+  if (res.err) {
+    appendError(`could not switch the workspace to ${path}: ${res.err}`);
     return false;
   }
+  appendTool(`[workspace] ${res.path}`);
+  return true;
 }
 
 export function openWorkspaceModal() {
   workspaceInput.value = app.workspacePath;
   workspaceNote.textContent = workspaceNoteDefault;
   workspaceNote.classList.remove('err');
-  workspaceModal.classList.add('open');
+  workspace.open();
   workspaceInput.focus();
 }
 
 export function closeWorkspaceModal() {
-  workspaceModal.classList.remove('open');
+  workspace.close();
 }
 
 export async function saveWorkspace() {
   const path = workspaceInput.value.trim();
   if (!path || path === app.workspacePath) {
-    workspaceModal.classList.remove('open');
+    workspace.close();
     return;
   }
-  try {
-    const w = await apiClient.setWorkspace(path);
-    app.workspacePath = w.path;
-    renderWorkspace();
-    workspaceModal.classList.remove('open');
-  } catch (err) {
+  const res = await switchWorkspace(path);
+  if (res.err) {
     // Stays open with the error inline, so a typo can be corrected without
     // retyping the whole path.
-    workspaceNote.textContent = String(err);
+    workspaceNote.textContent = String(res.err);
     workspaceNote.classList.add('err');
+    return;
   }
+  workspace.close();
 }
 
 export function anyModalOpen() {
-  return modalEl.classList.contains('open')
-    || permissionSettingsModal.classList.contains('open')
-    || delegateModal.classList.contains('open')
-    || workspaceModal.classList.contains('open');
+  return permissionRequest.isOpen || permissionSettings.isOpen || delegate.isOpen || workspace.isOpen;
 }

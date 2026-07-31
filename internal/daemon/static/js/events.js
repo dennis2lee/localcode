@@ -1,9 +1,9 @@
-import { modalEl, permissionTextEl, permissionAllowAlwaysBtn } from './dom.js';
+import { permissionTextEl, permissionAllowAlwaysBtn } from './dom.js';
 import { app, session } from './state.js';
 import { appendUser, appendTool, appendError, appendModelText, endModelText } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate } from './render.js';
 import { setWaiting, setConnected, setInputLocked } from './composer.js';
-import { refreshDelegatePanelIfOpen } from './modals.js';
+import { refreshDelegatePanelIfOpen, permissionRequest } from './modals.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
 // only ever called from inside a function body, never read at module-
@@ -53,11 +53,11 @@ const handlers = {
     if (session.pendingPermissionCanAlways) {
       permissionAllowAlwaysBtn.title = `don't ask again — writes "${d.rule}" to config.json`;
     }
-    modalEl.classList.add('open');
+    permissionRequest.open();
     setInputLocked(true, 'Resolve the permission request above to continue.');
   },
   'permission.resolved': () => {
-    modalEl.classList.remove('open');
+    permissionRequest.close();
     setInputLocked(false);
   },
   // Sidebar + status bar carry task activity; no transcript line.

@@ -9,7 +9,7 @@ import {
 import { app, session } from './state.js';
 import { uploadFile, switchAgent } from './api.js';
 import { appendError } from './transcript.js';
-import { renderTasks } from './render.js';
+import { renderTasks, renderStatusBar } from './render.js';
 import {
   sendMessage, cancelTurn, autoResizeInput, insertAtCursor,
   atInputStart, atInputEnd, historyPrev, historyNext,
@@ -19,7 +19,7 @@ import { loadSessions, selectSession, createNewSession, deleteAllSessions } from
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
   openPermissionSettings, closePermissionSettings, toggleSkipPermissions, addPermissionRule,
-  openWorkspacePicker, closeWorkspaceModal, saveWorkspace, anyModalOpen,
+  openWorkspacePicker, closeWorkspaceModal, saveWorkspace, anyModalOpen, permissionRequest,
 } from './modals.js';
 
 agentSelectEl.addEventListener('change', async () => {
@@ -85,7 +85,7 @@ inputEl.addEventListener('keydown', (e) => {
 // modal and in the modals' own fields, where moving between inputs is
 // the only thing it could reasonably mean.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && e.target !== inputEl && !document.getElementById('permission-modal').classList.contains('open')) {
+  if (e.key === 'Escape' && e.target !== inputEl && !permissionRequest.isOpen) {
     cancelTurn();
     return;
   }
@@ -130,12 +130,22 @@ workspaceInput.addEventListener('keydown', (e) => {
 
 async function init() {
   renderTasks();
-  await loadAgents();
-  await loadCommands();
-  await loadSettings();
-  await loadWorkspace();
-  await loadMCPServers();
-  await loadSessions();
+  // Six independent GETs against the same daemon — each one writes its own
+  // slice of app state and renders its own pane, so there is no ordering
+  // between them and no reason to pay six sequential round-trips before the
+  // page is usable.
+  await Promise.all([
+    loadAgents(),
+    loadCommands(),
+    loadSettings(),
+    loadWorkspace(),
+    loadMCPServers(),
+    loadSessions(),
+  ]);
+  // One deterministic status-bar render after the race settles: the bar
+  // reads both the settings and the agent list, and whichever of those two
+  // landed second would otherwise decide what it shows.
+  renderStatusBar();
 
   if (!app.sessions || app.sessions.length === 0) {
     await createNewSession();
@@ -157,4 +167,5 @@ export { HELP_TEXT, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
 export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
+export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
 export { renderSessionList, selectSession } from './sessions.js';
