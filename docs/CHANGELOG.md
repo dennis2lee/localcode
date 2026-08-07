@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.32.10
+
+- **Fix: a long turn could stop showing anything, and then stop could not stop it.** The event stream had no heartbeat, so during a long turn — thinking, or a slow tool — nothing at all crossed the connection. Anything in the middle (a proxy, a corporate network appliance, an OS idle timeout) is free to drop an idle connection, and the browser is not always told: the page goes on believing it is connected, no reconnect is attempted, and every event after that is lost. What that looks like is a light blinking forever, no output, and a stop button that appears to do nothing — because the daemon *does* cancel, and it is the reply that never arrives. The stream now writes a comment line every 20 seconds, which is what gives both ends something to notice a dead connection by, and lets the browser's automatic reconnect do its job.
+- **Stop now acts on the daemon's answer rather than waiting for an echo.** When the daemon confirms it cancelled the turn, this client stops waiting immediately. The `turn.cancelled` event still writes the transcript line and still tells every other attached client — but pressing stop no longer depends on an event coming back over a stream that may be the thing that is broken.
+
 ## v0.32.9
 
 - **A stop button, next to the prompt box, whenever a turn is running.** Esc has always cancelled, but only if the key reaches the page — and when it does not, a long turn has no visible way out at all: a blinking light, no text, and nothing to click. A button cannot be swallowed by a keyboard handler that never runs. The status line also names the tool being waited on (`bash…`) so a slow turn reads as work rather than a hang.

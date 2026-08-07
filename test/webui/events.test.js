@@ -243,8 +243,15 @@ test('a prompt after that stale-spinner Esc is sent, not queued', async () => {
   assert.equal(app.callsTo('POST', '/api/sessions/sess-1/messages').length, 1);
 });
 
-// A real cancellation still comes from the event, so every client sees it.
-test('a turn that really was running is still reported as cancelled', async () => {
+// A cancel the daemon confirms stops this client waiting straight away,
+// without needing the event back.
+//
+// Waiting for the echo is what made "stop" look broken: the daemon does
+// cancel, but if this client's event stream has quietly died the
+// turn.cancelled never lands, and the spinner sits over a turn that
+// ended. The event is still what reports it in the transcript, and what
+// tells any *other* attached client.
+test('a confirmed cancel stops this client waiting without the event', async () => {
   const app = await load({
     routes: { 'POST /api/sessions/*/cancel': { cancelled: true } },
   });
@@ -252,10 +259,13 @@ test('a turn that really was running is still reported as cancelled', async () =
   app.press('Escape');
   await app.settle();
 
-  // Still waiting: the daemon owns the transition, and turn.cancelled is
-  // what tells every attached client at once.
-  assert.equal(app.state.waiting, true);
+  assert.equal(app.callsTo('POST', '/api/sessions/sess-1/cancel').length, 1);
+  assert.equal(app.state.waiting, false);
+  assert.equal(app.el('stop-btn').hidden, true);
+
+  // The event still arrives and still writes the transcript line.
   app.sse.emit({ type: 'turn.cancelled', data: {} });
+  assert.ok(app.transcript().includes('[cancelled]'), app.transcript());
   assert.equal(app.state.waiting, false);
 });
 

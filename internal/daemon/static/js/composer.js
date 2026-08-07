@@ -94,34 +94,33 @@ export function historyNext() {
   return true;
 }
 
-// cancelTurn stops the running turn. The transcript line and the cleared
-// spinner come from the turn.cancelled event the daemon broadcasts, so a
-// cancel from any client updates every client the same way.
+// cancelTurn stops the running turn. The "[cancelled]" transcript line
+// comes from the turn.cancelled event the daemon broadcasts, so a cancel
+// from any client is reported in every client the same way — but this
+// client stops waiting on the strength of the reply, not the event.
 export async function cancelTurn() {
   if (!session.waiting || !session.sessionID) return;
   // Drop the queue here rather than waiting for the event, so a second Esc
   // press cannot race an already queued prompt out the door.
   session.promptQueue = [];
   try {
-    const res = await apiClient.cancelSessionTurn(session.sessionID);
-    // "cancelled: false" means the daemon had nothing running — so this
-    // client's spinner is stale, and no turn.cancelled event is coming to
-    // clear it. Clear it here.
+    await apiClient.cancelSessionTurn(session.sessionID);
+    // Either answer clears this client's spinner, for different reasons.
     //
-    // Without this, Esc is a dead key in exactly the situation someone
-    // reaches for it: the reply has finished and arrived, but the status
-    // bar still says "working… esc to cancel", the light still blinks,
-    // and every prompt typed afterwards is queued behind a turn that
-    // ended long ago. There is no other way out but reloading the window.
+    // "cancelled: false" means the daemon had nothing running, so the
+    // spinner is stale and no event is coming to clear it. Without this,
+    // Esc is a dead key in exactly the situation someone reaches for it.
     //
-    // Whatever loses a turn.done — a dropped event stream, a reconnect
-    // that missed it — this makes Esc mean "if nothing is running, stop
-    // telling me something is", which is what a user pressing it wants
-    // either way.
-    if (res && res.cancelled === false) {
-      session.runningTool = '';
-      setWaiting(false);
-    }
+    // "cancelled: true" means the daemon did stop the turn, and a
+    // turn.cancelled event follows for every attached client. But if this
+    // client's event stream has quietly died — see the heartbeat in
+    // sse.go for how that happens — the event never lands, and the
+    // spinner stays up over a turn that is already over. Pressing stop
+    // and watching nothing happen is the worst possible answer to a
+    // request the daemon honoured, so this client acts on the reply it
+    // holds in its hand. The event still does the job for everyone else.
+    session.runningTool = '';
+    setWaiting(false);
   } catch (err) {
     appendError(err);
   }
