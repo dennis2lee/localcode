@@ -37,8 +37,38 @@ func Launch(title string, handler http.Handler) error {
 	w := webview.New(false)
 	defer w.Destroy()
 	w.SetTitle(title)
-	w.SetSize(1100, 800, webview.HintNone)
 	w.Navigate("http://" + ln.Addr().String())
+
+	// The window size is applied from inside the message loop, not before
+	// Run(), and that ordering is the fix for a Windows startup bug: the
+	// window opened with everything drawn far too large, and stayed that
+	// way until the user resized it by hand, at which point it snapped to
+	// the right size.
+	//
+	// The cause is that WebView2 latches a rasterization scale when its
+	// controller is created — which webview_go does inside New(), while the
+	// window is still at its built-in 640x480 default — and the library
+	// never calls put_RasterizationScale or enables monitor-scale
+	// detection. On a laptop running at 150% or 200% display scaling the
+	// latched scale is wrong, and the only thing that makes WebView2
+	// recompute it is a WM_SIZE reaching the widget. Calling SetSize before
+	// Run() does resize the window, but it happens before the loop is
+	// pumping, so the resulting re-layout uses the stale scale; the first
+	// manual drag is what finally corrects it.
+	//
+	// Dispatch runs this on the UI thread once the loop is live, so the
+	// 640x480 -> 1100x800 change is a real resize that WebView2 sees and
+	// responds to. Not a no-op guard: the size genuinely differs from the
+	// default, which is why it must NOT also be set before Run() — with
+	// both, the dispatched call would be a same-size SetWindowPos and
+	// might not produce a WM_SIZE at all.
+	//
+	// macOS is unaffected (WKWebView takes its backing scale from the
+	// screen), and the dispatched resize is harmless there.
+	w.Dispatch(func() {
+		w.SetSize(1100, 800, webview.HintNone)
+	})
+
 	w.Run() // blocks until the window is closed
 	return nil
 }
