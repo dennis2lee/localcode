@@ -91,7 +91,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	}})
 	l.clearUsage(sessionID)
 	// "summary" (not just its length) and the compaction call's own usage
-	// are what rehydrateHistory/rehydrateSession need to reconstruct this
+	// are what rehydrateHistory/RehydrateSession need to reconstruct this
 	// exact post-compaction state after a restart — see loop_rehydrate.go.
 	compactedData := map[string]any{"summary_length": len(summary), "manual": manual, "summary": summary}
 	if usage.hasUsage {

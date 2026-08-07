@@ -58,6 +58,12 @@ export function renderSessionList() {
     const actions = document.createElement('div');
     actions.className = 'actions';
 
+    const forkBtn = document.createElement('button');
+    forkBtn.textContent = 'fork';
+    forkBtn.title = 'start a new session carrying a copy of this conversation';
+    forkBtn.addEventListener('click', (e) => { e.stopPropagation(); forkSession(s); });
+    actions.appendChild(forkBtn);
+
     const renameBtn = document.createElement('button');
     renameBtn.textContent = 'rename';
     renameBtn.addEventListener('click', (e) => { e.stopPropagation(); renameSessionPrompt(s); });
@@ -71,6 +77,21 @@ export function renderSessionList() {
 
     div.appendChild(actions);
     sessionListEl.appendChild(div);
+  }
+}
+
+// forkSession copies a conversation into a new session and switches to
+// it. Switching is the point: forking to keep looking at the original
+// would leave you to find the copy in the list yourself, and the reason
+// to fork is to take this thread somewhere else *now*. The original is
+// untouched and one click away in the panel.
+export async function forkSession(s) {
+  try {
+    const forked = await apiClient.forkSession(s.id);
+    await loadSessions();
+    selectSession(forked.id, forked.agent, forked.workspace);
+  } catch (err) {
+    appendError(`failed to fork session: ${err}`);
   }
 }
 

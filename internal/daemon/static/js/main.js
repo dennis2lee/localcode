@@ -170,5 +170,6 @@ export { applyEvent } from './events.js';
 export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
+export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';
 export { renderSessionList, selectSession } from './sessions.js';

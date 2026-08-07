@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"localcode/internal/events"
 	"localcode/internal/hooks"
+	"localcode/internal/session"
 )
 
 func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +46,93 @@ func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, sess)
+}
+
+// handleForkSession starts a new session carrying a copy of another
+// session's conversation, so a promising thread can be taken in two
+// directions without either branch disturbing the other.
+//
+// The copy is the event log, verbatim: it is the single source of both
+// what a client replays into the transcript and what RehydrateSession
+// rebuilds the model's history from, so copying it gets both at once and
+// keeps them consistent by construction.
+//
+// Refused while the source has a turn in flight. That is not politeness:
+// a log caught mid-turn can end after a tool call was requested but
+// before its result was recorded, and a history with a dangling tool call
+// is one the provider rejects outright on the fork's very first message.
+func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	src, err := d.Loop.Store.Get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if d.turns.busy(id) {
+		http.Error(w, "a turn is in progress; cancel or wait for it before forking", http.StatusConflict)
+		return
+	}
+
+	evs, err := d.Loop.Store.Events(id, 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// ParentID is deliberately left empty rather than pointing at the
+	// source. It marks a background task's session, and anything with one
+	// is filtered out of ListVisible — a fork is a top-level conversation
+	// and has to appear in the list.
+	newID := fmt.Sprintf("s-%d", time.Now().UnixNano())
+	sess, err := d.Loop.Store.CreateSessionIn(newID, "", src.Agent, src.Workspace, true)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	for _, ev := range evs {
+		// session.renamed describes the *source's* title, which the fork
+		// does not share — copying it would put a claim in the fork's log
+		// that it had been renamed to the original's name, and make every
+		// client reload the session list on replay for nothing. It is
+		// metadata about a session, not part of the conversation.
+		if ev.Type == events.TypeSessionRenamed {
+			continue
+		}
+		// Seq is reassigned by Append; the fork's log is its own sequence
+		// starting at 1, which is what its clients' resume logic expects.
+		if _, err := d.Loop.Store.Append(newID, ev.Type, ev.Data); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("copy event log: %w", err))
+			return
+		}
+	}
+
+	if title := forkTitle(src); title != "" {
+		if updated, err := d.Loop.Store.SetTitle(newID, title); err == nil {
+			sess = updated
+		}
+	}
+
+	// Without this the fork would show the whole conversation in its
+	// transcript while the model had never heard any of it — the exact
+	// split-brain a restart used to cause before rehydration existed.
+	d.Loop.RehydrateSession(newID)
+
+	writeJSON(w, http.StatusCreated, sess)
+}
+
+// forkTitle names the copy after its source without stacking a prefix per
+// fork, so forking a fork stays readable instead of growing
+// "fork of fork of fork of ...".
+func forkTitle(src *session.Session) string {
+	base := src.Title
+	if base == "" {
+		base = src.ID
+	}
+	if strings.HasPrefix(base, "fork of ") {
+		return base
+	}
+	return "fork of " + base
 }
 
 // handleListSessions returns every top-level (visible) session, newest

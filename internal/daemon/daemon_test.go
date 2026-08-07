@@ -1549,3 +1549,195 @@ func TestDaemonMCPStatusReachesClientsWithoutTouchingTheLog(t *testing.T) {
 		}
 	}
 }
+
+// A fork has to carry both halves of a conversation: the event log a
+// client replays into the transcript, and the model history the next turn
+// is built from. Copying the log gets both, since the log is what
+// rehydration reads — a fork that showed the conversation while the model
+// had never heard it would be the exact split-brain a restart used to
+// cause.
+func TestDaemonForkCopiesTheConversation(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	workspace := t.TempDir()
+	d.Loop.SetProjectDir(workspace)
+
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	src, err := c.CreateSession(ctx, "plan")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := c.RenameSession(ctx, src.ID, "the original"); err != nil {
+		t.Fatalf("RenameSession: %v", err)
+	}
+
+	// A minimal but complete exchange, written straight to the log.
+	d.Loop.Store.Append(src.ID, events.TypeUserMessage, map[string]any{"text": "what is 2+2?"})
+	d.Loop.Store.Append(src.ID, events.TypeMessagePartEnd, map[string]any{"text": "4"})
+
+	resp, err := http.Post(httpSrv.URL+"/api/sessions/"+src.ID+"/fork", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST fork: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	var forked session.Session
+	if err := json.NewDecoder(resp.Body).Decode(&forked); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if forked.ID == src.ID {
+		t.Fatal("fork reused the source session's id")
+	}
+	if forked.Agent != "plan" {
+		t.Errorf("fork agent = %q, want the source's %q", forked.Agent, "plan")
+	}
+	if forked.Workspace != workspace {
+		t.Errorf("fork workspace = %q, want the source's %q", forked.Workspace, workspace)
+	}
+	if forked.Title != "fork of the original" {
+		t.Errorf("fork title = %q, want it named after the source", forked.Title)
+	}
+
+	// The transcript half.
+	evs, err := d.Loop.Store.Events(forked.ID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("fork log has %d events, want just the 2 conversation ones (the source's rename is not part of the conversation): %+v", len(evs), evs)
+	}
+	if evs[0].Seq != 1 {
+		t.Errorf("fork log starts at seq %d, want its own sequence from 1", evs[0].Seq)
+	}
+
+	// Both sessions are top-level and listed; the source is untouched.
+	listed, err := c.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("listed %d sessions, want the original and the fork: %+v", len(listed), listed)
+	}
+	srcEvents, _ := d.Loop.Store.Events(src.ID, 0)
+	if len(srcEvents) != 3 {
+		t.Errorf("source log has %d events after the fork, want it untouched at 3 (rename + the 2 conversation events)", len(srcEvents))
+	}
+}
+
+// Forking mid-turn could copy a log that ends after a tool call was
+// requested but before its result was recorded, and a history with a
+// dangling tool call is rejected by the provider on the fork's very first
+// message. Refusing is the cheap way to make that unreachable.
+func TestDaemonForkRefusedWhileTheSourceIsBusy(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	src, err := c.CreateSession(context.Background(), "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !d.turns.begin(src.ID, cancel) {
+		t.Fatal("could not mark the session busy")
+	}
+
+	resp, err := http.Post(httpSrv.URL+"/api/sessions/"+src.ID+"/fork", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST fork: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409 while a turn is running", resp.StatusCode)
+	}
+}
+
+// The half a log copy alone would miss: the model's own memory. Asserted
+// through what the fork actually sends the provider on its next message,
+// rather than by reaching into Loop's internals — the request is the
+// thing that matters, and it stays true however history is stored.
+func TestDaemonForkCarriesHistoryIntoTheNextRequest(t *testing.T) {
+	var mu sync.Mutex
+	var lastMessages []map[string]any
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []map[string]any `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		lastMessages = body.Messages
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	src, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	d.Loop.Store.Append(src.ID, events.TypeUserMessage, map[string]any{"text": "remember the number 41"})
+	d.Loop.Store.Append(src.ID, events.TypeMessagePartEnd, map[string]any{"text": "noted: 41"})
+
+	resp, err := http.Post(httpSrv.URL+"/api/sessions/"+src.ID+"/fork", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST fork: %v", err)
+	}
+	var forked session.Session
+	_ = json.NewDecoder(resp.Body).Decode(&forked)
+	resp.Body.Close()
+
+	if err := c.SendMessage(ctx, forked.ID, "what number?"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	// The turn runs on its own goroutine, so wait for the request rather
+	// than reading whatever happens to be there.
+	var seen string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		msgs := lastMessages
+		mu.Unlock()
+		if len(msgs) > 0 {
+			// Marshalled whole rather than picking at "content": the
+			// provider sends structured blocks, not a plain string, and
+			// this assertion is about what reached the wire.
+			raw, _ := json.Marshal(msgs)
+			seen = string(raw)
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if !strings.Contains(seen, "remember the number 41") {
+		t.Errorf("the fork's first request does not carry the copied conversation:\n%s", seen)
+	}
+	if !strings.Contains(seen, "noted: 41") {
+		t.Errorf("the fork's first request is missing the model's own reply:\n%s", seen)
+	}
+}

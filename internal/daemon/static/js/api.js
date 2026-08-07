@@ -61,6 +61,7 @@ export const getMCPServers = () => api('GET', '/api/mcp-servers');
 export const getSessions = () => api('GET', '/api/sessions');
 export const createSession = (agent) => api('POST', '/api/sessions', { agent });
 export const renameSession = (id, title) => api('POST', `/api/sessions/${id}/rename`, { title });
+export const forkSession = (id) => api('POST', `/api/sessions/${id}/fork`);
 export const deleteSession = (id) => api('DELETE', `/api/sessions/${id}`);
 export const deleteAllSessions = () => api('DELETE', '/api/sessions');
 

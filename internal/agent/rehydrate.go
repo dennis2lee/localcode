@@ -16,16 +16,20 @@ import (
 // after sessions have been loaded via session.LoadAllFromDisk.
 func (l *Loop) RehydrateAll() {
 	for _, s := range l.Store.AllSessions() {
-		l.rehydrateSession(s.ID)
+		l.RehydrateSession(s.ID)
 	}
 }
 
-// rehydrateSession restores one session's history/usage. Best-effort: a
-// session with no events, or one whose log can't be read, is simply left
-// with empty state (same as a brand-new session) rather than erroring —
-// a stale/corrupt log for one session shouldn't block the daemon from
-// starting.
-func (l *Loop) rehydrateSession(sessionID string) {
+// RehydrateSession restores one session's model history and usage totals
+// from its event log. Used at startup by RehydrateAll, and by a fork,
+// which writes a copy of another session's log and then needs the model
+// to actually remember it.
+//
+// Best-effort: a session with no events, or one whose log can't be read,
+// is simply left with empty state (same as a brand-new session) rather
+// than erroring — a stale or corrupt log for one session shouldn't block
+// the daemon from starting.
+func (l *Loop) RehydrateSession(sessionID string) {
 	evs, err := l.Store.Events(sessionID, 0)
 	if err != nil || len(evs) == 0 {
 		return

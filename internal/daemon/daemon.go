@@ -107,6 +107,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("DELETE /api/sessions", d.handleDeleteAllSessions)
 	d.mux.HandleFunc("POST /api/sessions/{id}/agent", d.handleSwitchAgent)
 	d.mux.HandleFunc("POST /api/sessions/{id}/rename", d.handleRenameSession)
+	d.mux.HandleFunc("POST /api/sessions/{id}/fork", d.handleForkSession)
 	d.mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleSendMessage)
 	d.mux.HandleFunc("POST /api/sessions/{id}/uploads", d.handleUploadFile)
 	d.mux.HandleFunc("GET /api/sessions/{id}/events", d.handleEvents)
