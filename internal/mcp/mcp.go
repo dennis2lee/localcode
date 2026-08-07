@@ -29,35 +29,237 @@ import (
 	"localcode/internal/tools"
 )
 
+// Status is what a client's indicator shows for one server.
+type Status string
+
+const (
+	// StatusConnected: the last thing we did with this server worked.
+	StatusConnected Status = "connected"
+	// StatusDegraded: it is configured and we have a session, but
+	// something recently failed — a call errored, or a health check
+	// didn't come back. Distinct from disconnected because the session
+	// may well recover on the next call, and a client showing this as
+	// "down" would be crying wolf.
+	StatusDegraded Status = "degraded"
+	// StatusDisconnected: no usable session. Either it never came up at
+	// startup or it died and the reconnect failed.
+	StatusDisconnected Status = "disconnected"
+)
+
+// ServerState is one server's entry in a status listing.
+type ServerState struct {
+	Name   string `json:"name"`
+	Status Status `json:"status"`
+	// Detail is the last error, when there is one — what a tooltip shows
+	// so "disconnected" isn't the end of the story for someone trying to
+	// fix it.
+	Detail string `json:"detail,omitempty"`
+}
+
+type serverEntry struct {
+	config  config.MCPServerConfig
+	session *mcpsdk.ClientSession // nil once disconnected
+	status  Status
+	detail  string
+}
+
 // Manager owns the live connections to configured MCP servers, keyed by
 // server name, so a dead one can be re-dialed without disturbing the
 // others. A server that fails to connect (or list tools) at startup is
 // skipped rather than aborting the whole daemon — see Connect's returned
-// warnings.
+// warnings — but it stays in the map as a known, disconnected server so
+// its state is still reportable.
 type Manager struct {
-	mu       sync.Mutex
-	sessions map[string]*mcpsdk.ClientSession
-	configs  map[string]config.MCPServerConfig
+	mu      sync.Mutex
+	servers map[string]*serverEntry
+
+	// onChange is called (outside the lock) whenever a server's status
+	// changes, and only then — the daemon turns it into an event for
+	// connected clients, and a callback firing on every health check
+	// instead of on every real change would be a needless wakeup every
+	// interval for every client.
+	onChange func([]ServerState)
+
+	// stopHealth closes to stop the background health checker. nil when
+	// none is running.
+	stopHealth chan struct{}
 }
 
 func newManager() *Manager {
-	return &Manager{
-		sessions: map[string]*mcpsdk.ClientSession{},
-		configs:  map[string]config.MCPServerConfig{},
+	return &Manager{servers: map[string]*serverEntry{}}
+}
+
+// OnStatusChange registers the callback fired when any server's status
+// changes. Safe to call before or after Connect; only one is kept.
+func (m *Manager) OnStatusChange(fn func([]ServerState)) {
+	m.mu.Lock()
+	m.onChange = fn
+	m.mu.Unlock()
+}
+
+// setStatus records a server's status and reports whether it changed, so
+// only real transitions reach onChange. The caller must hold mu; the
+// notification itself happens outside it (see notify).
+func (m *Manager) setStatus(name string, status Status, detail string) bool {
+	e, ok := m.servers[name]
+	if !ok {
+		return false
+	}
+	if e.status == status && e.detail == detail {
+		return false
+	}
+	e.status, e.detail = status, detail
+	return true
+}
+
+// notify calls onChange with a fresh snapshot, from outside the lock — a
+// callback that reached back into the Manager (the daemon's does not, but
+// nothing stops a future one) would otherwise deadlock.
+func (m *Manager) notify() {
+	m.mu.Lock()
+	fn := m.onChange
+	m.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	fn(m.States())
+}
+
+// States lists every configured server and its status, sorted by name.
+// Unlike Servers() this includes servers that never came up — a server
+// that is configured and dead is exactly what an indicator needs to show,
+// and omitting it made a broken server look like one nobody had set up.
+func (m *Manager) States() []ServerState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make([]string, 0, len(m.servers))
+	for name := range m.servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]ServerState, 0, len(names))
+	for _, name := range names {
+		e := m.servers[name]
+		out = append(out, ServerState{Name: name, Status: e.status, Detail: e.detail})
+	}
+	return out
+}
+
+// HealthInterval is how often StartHealthChecks re-probes every server.
+// Long enough that a handful of stdio servers cost nothing measurable,
+// short enough that an indicator isn't lying for minutes.
+const HealthInterval = 30 * time.Second
+
+// healthTimeout bounds one probe. A server that cannot answer ListTools
+// in this long is not usable for a tool call either, which is the thing
+// the indicator is really reporting.
+const healthTimeout = 5 * time.Second
+
+// StartHealthChecks polls every configured server until ctx is done or
+// Close is called, so a server that dies quietly is noticed.
+//
+// A poll is needed in addition to the failures tool calls already report:
+// tool calls only happen when the model reaches for a server, so an idle
+// session could sit for an hour in front of an indicator claiming a
+// long-dead server was fine. Conversely the polls alone would be too
+// slow to react during a turn, which is why both feed the same status.
+func (m *Manager) StartHealthChecks(ctx context.Context) {
+	m.mu.Lock()
+	if m.stopHealth != nil {
+		m.mu.Unlock()
+		return // already running
+	}
+	stop := make(chan struct{})
+	m.stopHealth = stop
+	m.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(HealthInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				m.CheckHealth(ctx)
+			}
+		}
+	}()
+}
+
+// CheckHealth probes every server once and notifies if anything changed.
+// Exported so a test can drive it without waiting out the interval.
+func (m *Manager) CheckHealth(ctx context.Context) {
+	m.mu.Lock()
+	names := make([]string, 0, len(m.servers))
+	for name := range m.servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	m.mu.Unlock()
+
+	changed := false
+	for _, name := range names {
+		if m.probe(ctx, name) {
+			changed = true
+		}
+	}
+	// One notification for the whole sweep, not one per server: clients
+	// re-render the entire list from a snapshot anyway.
+	if changed {
+		m.notify()
 	}
 }
 
-// Servers returns the names of every MCP server currently connected
-// (i.e. it came up successfully at startup — see Connect's warnings for
-// ones that didn't). A session that's since died is still listed here
-// until the next tool call against it triggers a reconnect attempt; this
-// package has no background health check.
+// probe checks one server and reports whether its status changed.
+func (m *Manager) probe(ctx context.Context, name string) bool {
+	session := m.session(name)
+	if session == nil {
+		// Already known to be down. Deliberately not re-dialed here: a
+		// server that is down because its command is missing would have
+		// this loop starting a doomed process every interval, forever.
+		// Reconnecting is what a tool call does, on demand.
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.setStatus(name, StatusDisconnected, m.servers[name].detail)
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, healthTimeout)
+	defer cancel()
+	_, err := session.ListTools(probeCtx, &mcpsdk.ListToolsParams{})
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil {
+		return m.setStatus(name, StatusConnected, "")
+	}
+	// A closed connection is genuinely down; anything else (a timeout, a
+	// protocol error) is degraded — the session may still answer the next
+	// real call, and swinging the light to dead on one slow probe would
+	// make it flicker for no reason.
+	if errors.Is(err, mcpsdk.ErrConnectionClosed) {
+		if e := m.servers[name]; e != nil {
+			e.session = nil
+		}
+		return m.setStatus(name, StatusDisconnected, err.Error())
+	}
+	return m.setStatus(name, StatusDegraded, err.Error())
+}
+
+// Servers returns the names of every MCP server that currently has a
+// usable session. Callers wanting the configured-but-down ones too — an
+// indicator has to show those, or a broken server looks like one nobody
+// set up — want States instead.
 func (m *Manager) Servers() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	names := make([]string, 0, len(m.sessions))
-	for name := range m.sessions {
-		names = append(names, name)
+	names := make([]string, 0, len(m.servers))
+	for name, e := range m.servers {
+		if e.session != nil {
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	return names
@@ -100,20 +302,34 @@ func Connect(ctx context.Context, servers map[string]config.MCPServerConfig) (*M
 // that tool is skipped — both match Connect's documented per-server and
 // per-tool tolerance.
 func (m *Manager) add(ctx context.Context, name string, sc config.MCPServerConfig) (out []tools.Tool, warnings []error) {
+	// The entry is recorded before the dial, not after it, so a server
+	// that never comes up is still *known* — that is what lets States
+	// report it as disconnected instead of omitting it entirely.
+	m.mu.Lock()
+	m.servers[name] = &serverEntry{config: sc, status: StatusDisconnected}
+	m.mu.Unlock()
+
 	session, err := connectOne(ctx, sc)
 	if err != nil {
+		m.mu.Lock()
+		m.setStatus(name, StatusDisconnected, err.Error())
+		m.mu.Unlock()
 		return nil, []error{fmt.Errorf("mcp server %q: %w — skipping, its tools won't be available", name, err)}
 	}
 
 	result, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{})
 	if err != nil {
 		_ = session.Close()
+		m.mu.Lock()
+		m.setStatus(name, StatusDisconnected, err.Error())
+		m.mu.Unlock()
 		return nil, []error{fmt.Errorf("mcp server %q: list tools: %w — skipping", name, err)}
 	}
 
 	m.mu.Lock()
-	m.sessions[name] = session
-	m.configs[name] = sc
+	e := m.servers[name]
+	e.session = session
+	e.status, e.detail = StatusConnected, ""
 	m.mu.Unlock()
 
 	out = make([]tools.Tool, 0, len(result.Tools))
@@ -267,7 +483,23 @@ func (t headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 func (m *Manager) session(server string) *mcpsdk.ClientSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.sessions[server]
+	if e, ok := m.servers[server]; ok {
+		return e.session
+	}
+	return nil
+}
+
+// markDegraded records that something went wrong with server without
+// concluding it is down — a single failed call usually isn't. Reported
+// separately from disconnected so a client can show "having trouble"
+// rather than swinging the indicator to dead and back.
+func (m *Manager) markDegraded(server string, err error) {
+	m.mu.Lock()
+	changed := m.setStatus(server, StatusDegraded, err.Error())
+	m.mu.Unlock()
+	if changed {
+		m.notify()
+	}
 }
 
 // reconnect re-dials server using its original config, replacing whatever
@@ -275,8 +507,12 @@ func (m *Manager) session(server string) *mcpsdk.ClientSession {
 // fails with ErrConnectionClosed.
 func (m *Manager) reconnect(ctx context.Context, server string) (*mcpsdk.ClientSession, error) {
 	m.mu.Lock()
-	sc, ok := m.configs[server]
-	old := m.sessions[server]
+	e, ok := m.servers[server]
+	var sc config.MCPServerConfig
+	var old *mcpsdk.ClientSession
+	if ok {
+		sc, old = e.config, e.session
+	}
 	m.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("no config on file for mcp server %q", server)
@@ -287,22 +523,41 @@ func (m *Manager) reconnect(ctx context.Context, server string) (*mcpsdk.ClientS
 
 	session, err := connectOne(ctx, sc)
 	if err != nil {
+		m.mu.Lock()
+		e.session = nil
+		changed := m.setStatus(server, StatusDisconnected, err.Error())
+		m.mu.Unlock()
+		if changed {
+			m.notify()
+		}
 		return nil, err
 	}
 
 	m.mu.Lock()
-	m.sessions[server] = session
+	e.session = session
+	changed := m.setStatus(server, StatusConnected, "")
 	m.mu.Unlock()
+	if changed {
+		m.notify()
+	}
 	return session, nil
 }
 
-// Close shuts down every connected MCP server session.
+// Close shuts down every connected MCP server session and stops the
+// health checker.
 func (m *Manager) Close() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, s := range m.sessions {
-		_ = s.Close()
+	if m.stopHealth != nil {
+		close(m.stopHealth)
+		m.stopHealth = nil
 	}
+	for _, e := range m.servers {
+		if e.session != nil {
+			_ = e.session.Close()
+			e.session = nil
+		}
+	}
+	m.mu.Unlock()
 }
 
 // mcpTool adapts one remote MCP tool into tools.Tool. Its name is
@@ -345,7 +600,9 @@ func (t mcpTool) Execute(ctx context.Context, input json.RawMessage) tools.Resul
 	result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: t.name, Arguments: args})
 	if err != nil && errors.Is(err, mcpsdk.ErrConnectionClosed) {
 		// The server process likely died or closed the pipe; try once to
-		// bring it back up before giving up on this call.
+		// bring it back up before giving up on this call. reconnect moves
+		// the status either way, so an indicator reacts at the moment the
+		// break is discovered rather than at the next health check.
 		newSession, rerr := t.manager.reconnect(ctx, t.server)
 		if rerr != nil {
 			return tools.Result{Content: fmt.Sprintf("mcp server %q disconnected and reconnect failed: %v", t.server, rerr), IsError: true}
@@ -353,6 +610,10 @@ func (t mcpTool) Execute(ctx context.Context, input json.RawMessage) tools.Resul
 		result, err = newSession.CallTool(ctx, &mcpsdk.CallToolParams{Name: t.name, Arguments: args})
 	}
 	if err != nil {
+		// Not disconnected — the session answered, the call just failed —
+		// so this is the degraded case, and the next successful call or
+		// health check clears it.
+		t.manager.markDegraded(t.server, err)
 		return tools.Result{Content: fmt.Sprintf("mcp call failed: %v", err), IsError: true}
 	}
 

@@ -1479,3 +1479,73 @@ func TestDaemonSetAutoDelegateTarget(t *testing.T) {
 		t.Errorf("block = %+v, want just the new pattern and the same agent", block)
 	}
 }
+
+// MCP status rides the session event stream but is not part of the
+// session's log: it describes the present moment, so replaying an
+// hour-old sequence of light changes to a reconnecting client would be
+// worse than useless. This checks it reaches a live client and, crucially,
+// that it never lands in the persisted log.
+func TestDaemonMCPStatusReachesClientsWithoutTouchingTheLog(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	evCtx, cancelEvents := context.WithCancel(ctx)
+	defer cancelEvents()
+	evCh, err := c.SubscribeEvents(evCtx, sess.ID, 0)
+	if err != nil {
+		t.Fatalf("SubscribeEvents: %v", err)
+	}
+
+	got := make(chan events.Event, 1)
+	go func() {
+		for ev := range evCh {
+			if ev.Type == events.TypeMCPStatus {
+				select {
+				case got <- ev:
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	// A moment for the subscription to be registered before broadcasting;
+	// this stream has no backlog to fall back on, by design.
+	time.Sleep(50 * time.Millisecond)
+	d.daemonEvents.send(events.Event{
+		Type: events.TypeMCPStatus,
+		Data: map[string]any{"servers": []map[string]any{{"name": "filesystem", "status": "degraded"}}},
+	})
+
+	select {
+	case ev := <-got:
+		servers, _ := ev.Data["servers"].([]any)
+		if len(servers) != 1 {
+			t.Fatalf("servers = %+v, want one entry", ev.Data["servers"])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the mcp.status event")
+	}
+
+	// The session's own log must be untouched by it.
+	logged, err := d.Loop.Store.Events(sess.ID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	for _, ev := range logged {
+		if ev.Type == events.TypeMCPStatus {
+			t.Errorf("mcp.status was written to the session log: %+v", ev)
+		}
+	}
+}

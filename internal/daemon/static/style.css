@@ -452,3 +452,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #workspace-modal .note { color: var(--muted); font-size: 11px; margin-top: 8px; }
 #workspace-modal .note.err { color: var(--err); }
 #workspace-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+
+/* MCP server status light. Green when the server answered, grey when it
+   is down, and green-but-blinking while degraded — something failed, but
+   the session may still recover on the next call, so a steady dead light
+   would be crying wolf and a steady live one would be lying. */
+.mcp-item { display: flex; align-items: center; gap: 7px; }
+.led {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.led-connected { background: var(--ok); }
+.led-degraded {
+  background: var(--ok);
+  animation: led-blink 1s steps(1, end) infinite;
+}
+.led-disconnected { background: var(--muted); }
+@keyframes led-blink {
+  50% { opacity: 0.15; }
+}
+/* Someone who has asked for less motion should not get a light pulsing at
+   them in the corner all session; the colour still distinguishes it from
+   disconnected. */
+@media (prefers-reduced-motion: reduce) {
+  .led-degraded { animation: none; opacity: 0.55; }
+}

@@ -117,12 +117,45 @@ test('auto-delegate on with no target agent says it is doing nothing', async () 
   assert.match(app.el('auto-delegate-btn').title, /"plan" agent \(1 pattern\)/);
 });
 
-test('MCP server names render as text', async () => {
+test('MCP server names and error details render as text', async () => {
   const app = await load();
-  app.state.mcpServers = [XSS, 'filesystem'];
+  app.state.mcpServers = [
+    { name: XSS, status: 'disconnected', detail: XSS },
+    { name: 'filesystem', status: 'connected' },
+  ];
   app.renderMCPServers();
   const html = app.el('mcp-servers').innerHTML;
   assert.ok(!html.includes('<img'), html);
+  assert.ok(html.includes('filesystem'), html);
+});
+
+// The light is the whole point of the row: green when the server answered,
+// blinking green while degraded, grey once it is down. A configured server
+// that never came up has to appear too — omitting it made a broken server
+// look like one nobody had set up.
+test('each server gets a light matching its status', async () => {
+  const app = await load();
+  app.state.mcpServers = [
+    { name: 'alive', status: 'connected' },
+    { name: 'flaky', status: 'degraded', detail: 'call failed' },
+    { name: 'dead', status: 'disconnected', detail: 'connection refused' },
+  ];
+  app.renderMCPServers();
+  const html = app.el('mcp-servers').innerHTML;
+  assert.match(html, /led led-connected/);
+  assert.match(html, /led led-degraded/);
+  assert.match(html, /led led-disconnected/);
+  assert.ok(html.includes('dead'), html);
+});
+
+test('a status event replaces the whole list and re-renders', async () => {
+  const app = await load();
+  app.applyEvent({
+    type: 'mcp.status',
+    data: { servers: [{ name: 'filesystem', status: 'degraded', detail: 'timed out' }] },
+  });
+  const html = app.el('mcp-servers').innerHTML;
+  assert.match(html, /led-degraded/);
   assert.ok(html.includes('filesystem'), html);
 });
 

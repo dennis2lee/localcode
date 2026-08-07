@@ -136,7 +136,7 @@ test('the page still comes up when the metadata endpoints fail', async () => {
   assert.equal(app.state.sessionID, 'sess-1');
   assert.deepEqual(Array.from(app.state.agents), []);
   assert.equal(app.el('workspace-btn').textContent, '(unknown workspace)');
-  assert.match(app.el('mcp-servers').innerHTML, /no connected servers/);
+  assert.match(app.el('mcp-servers').innerHTML, /no configured servers/);
 });
 
 test('a session list that cannot be fetched leaves the page usable', async () => {

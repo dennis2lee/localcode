@@ -36,16 +36,35 @@ export function renderTasks() {
   }
 }
 
+// Each row gets a light: green for connected, blinking green while
+// degraded (something failed but the session may still recover, so
+// showing it as dead would be crying wolf), grey once disconnected. The
+// daemon reports every *configured* server, including ones that never
+// came up — a broken server has to be visible, or it looks like one
+// nobody set up.
 export function renderMCPServers() {
   mcpServersEl.innerHTML = '';
-  if (!app.mcpServers || app.mcpServers.length === 0) {
-    mcpServersEl.innerHTML = '<div style="color:var(--muted)">no connected servers</div>';
+  const servers = app.mcpServers || [];
+  if (servers.length === 0) {
+    mcpServersEl.innerHTML = '<div style="color:var(--muted)">no configured servers</div>';
     return;
   }
-  for (const name of app.mcpServers) {
+  for (const s of servers) {
     const div = document.createElement('div');
     div.className = 'mcp-item';
-    div.textContent = name;
+
+    const led = document.createElement('span');
+    led.className = `led led-${s.status || 'disconnected'}`;
+    div.appendChild(led);
+
+    const name = document.createElement('span');
+    name.textContent = s.name;
+    div.appendChild(name);
+
+    // The detail is the last error. It goes in the title rather than the
+    // row because it can be a paragraph of stderr, but without it
+    // "disconnected" is a dead end for someone trying to fix it.
+    div.title = s.detail ? `${s.name}: ${s.status}\n${s.detail}` : `${s.name}: ${s.status}`;
     mcpServersEl.appendChild(div);
   }
 }

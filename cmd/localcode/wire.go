@@ -112,6 +112,12 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, func()
 			registry.Register(t)
 		}
 		if mcpManager != nil {
+			// A server can die at any point in a long session, and a tool
+			// call is the only other thing that would notice — which only
+			// happens when the model reaches for it. Without this poll an
+			// idle client's indicator would keep claiming a long-dead
+			// server was fine.
+			mcpManager.StartHealthChecks(ctx)
 			cleanup = mcpManager.Close
 		}
 	}

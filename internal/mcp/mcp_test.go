@@ -3,8 +3,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"localcode/internal/config"
@@ -179,5 +181,78 @@ func TestReconnectOnClosedConnection(t *testing.T) {
 	// The manager should now be holding a different (new) session.
 	if m.session("echo") == dead {
 		t.Error("expected Manager to have replaced the dead session with a reconnected one")
+	}
+}
+
+// A server that never comes up must still be reported — as disconnected,
+// with the reason. Leaving it out of the listing made a broken server
+// indistinguishable from one nobody had configured, which is the opposite
+// of what a status indicator is for.
+func TestStatesIncludeServersThatNeverConnected(t *testing.T) {
+	m, tools, warnings := Connect(context.Background(), map[string]config.MCPServerConfig{
+		"broken": {Command: "definitely-not-a-real-command-localcode-test"},
+	})
+	defer m.Close()
+
+	if len(tools) != 0 {
+		t.Errorf("expected no tools from a server that failed to start, got %d", len(tools))
+	}
+	if len(warnings) == 0 {
+		t.Error("expected a warning for the failed server")
+	}
+
+	states := m.States()
+	if len(states) != 1 {
+		t.Fatalf("States() = %+v, want one entry for the configured-but-dead server", states)
+	}
+	if states[0].Name != "broken" || states[0].Status != StatusDisconnected {
+		t.Errorf("States()[0] = %+v, want broken/disconnected", states[0])
+	}
+	if states[0].Detail == "" {
+		t.Error("expected a detail explaining why it is down")
+	}
+	// Servers() is the has-a-session list and must NOT include it.
+	if got := m.Servers(); len(got) != 0 {
+		t.Errorf("Servers() = %v, want empty — it never connected", got)
+	}
+}
+
+// The callback is the daemon's hook for turning a change into an event.
+// It must fire on a real transition and stay quiet otherwise, or every
+// health check would wake every connected client for nothing.
+func TestStatusChangeCallbackFiresOnlyOnRealChanges(t *testing.T) {
+	m, _, _ := Connect(context.Background(), map[string]config.MCPServerConfig{
+		"broken": {Command: "definitely-not-a-real-command-localcode-test"},
+	})
+	defer m.Close()
+
+	var mu sync.Mutex
+	var calls [][]ServerState
+	m.OnStatusChange(func(states []ServerState) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, states)
+	})
+
+	// Already disconnected, and a probe of a session-less server does not
+	// re-dial (that would restart a doomed process every interval), so
+	// nothing changes and nothing fires.
+	m.CheckHealth(context.Background())
+	mu.Lock()
+	n := len(calls)
+	mu.Unlock()
+	if n != 0 {
+		t.Errorf("callback fired %d times with no status change, want 0", n)
+	}
+
+	// A real transition does fire, with the whole list.
+	m.markDegraded("broken", errors.New("something went wrong"))
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("callback fired %d times after a real change, want 1", len(calls))
+	}
+	if len(calls[0]) != 1 || calls[0][0].Status != StatusDegraded {
+		t.Errorf("callback got %+v, want one degraded entry", calls[0])
 	}
 }

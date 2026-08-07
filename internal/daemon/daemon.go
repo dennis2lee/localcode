@@ -15,6 +15,7 @@ import (
 	"net/http"
 
 	"localcode/internal/agent"
+	"localcode/internal/events"
 	"localcode/internal/mcp"
 )
 
@@ -45,6 +46,11 @@ type Daemon struct {
 	// turns tracks which sessions currently have a turn in flight and how
 	// to cancel each one — see turns.go.
 	turns turnTracker
+
+	// daemonEvents fans out events that belong to the daemon rather than
+	// to a conversation (MCP status), which is why they bypass the
+	// session event log entirely — see broadcast.go.
+	daemonEvents *broadcaster
 }
 
 // New builds the daemon's HTTP handler. webFS, if non-nil, is served at "/"
@@ -55,15 +61,27 @@ type Daemon struct {
 // (no MCP servers configured).
 func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskManager, mcpManager *mcp.Manager, webFS fs.FS, version string) *Daemon {
 	d := &Daemon{
-		Loop:    loop,
-		Broker:  broker,
-		Tasks:   tasks,
-		MCP:     mcpManager,
-		Version: version,
-		mux:     http.NewServeMux(),
-		turns:   newTurnTracker(),
+		Loop:         loop,
+		Broker:       broker,
+		Tasks:        tasks,
+		MCP:          mcpManager,
+		Version:      version,
+		mux:          http.NewServeMux(),
+		turns:        newTurnTracker(),
+		daemonEvents: newBroadcaster(),
 	}
 	d.routes(webFS)
+	// Every status change becomes one live event carrying the whole list.
+	// Registered here rather than by the caller so no wiring path can
+	// forget it and leave clients with an indicator that never moves.
+	if mcpManager != nil {
+		mcpManager.OnStatusChange(func(states []mcp.ServerState) {
+			d.daemonEvents.send(events.Event{
+				Type: events.TypeMCPStatus,
+				Data: map[string]any{"servers": states},
+			})
+		})
+	}
 	return d
 }
 
@@ -118,14 +136,20 @@ func (d *Daemon) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"version": d.Version})
 }
 
-// handleListMCPServers reports which MCP servers are currently connected
-// (an empty list if none are configured, or MCP itself is nil).
+// handleListMCPServers reports every configured MCP server and its
+// current state (an empty list if none are configured, or MCP itself is
+// nil). Servers that failed to come up are included, as disconnected —
+// leaving them out made a broken server indistinguishable from one nobody
+// had configured, which is the opposite of what an indicator is for.
+//
+// This is the load-time read; changes after that arrive as
+// events.TypeMCPStatus on the session event stream.
 func (d *Daemon) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
-	names := []string{}
+	states := []mcp.ServerState{}
 	if d.MCP != nil {
-		names = append(names, d.MCP.Servers()...)
+		states = d.MCP.States()
 	}
-	writeJSON(w, http.StatusOK, names)
+	writeJSON(w, http.StatusOK, states)
 }
 
 //go:embed all:static

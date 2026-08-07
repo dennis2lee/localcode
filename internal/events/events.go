@@ -28,6 +28,17 @@ const (
 	TypeAgentSwitched      Type = "agent.switched"
 	TypeError              Type = "error"
 
+	// TypeMCPStatus reports the state of every configured MCP server:
+	// {"servers":[{"name","status","detail"}]}, status being one of
+	// connected/degraded/disconnected. Unlike every other type here it is
+	// daemon-wide rather than per-conversation, and is never written to a
+	// session's event log — it describes the present moment, so replaying
+	// an hour-old sequence of it to a reconnecting client would be worse
+	// than useless. It is fanned out live (see daemon.broadcaster) and
+	// carries the complete list every time, so a client that missed one
+	// is corrected by the next.
+	TypeMCPStatus Type = "mcp.status"
+
 	// TypeUsage reports the latest known token usage/context-window fill
 	// for a turn: {"input_tokens","output_tokens","max_context","percent",
 	// "tps","show_tps","model"}.

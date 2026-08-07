@@ -47,6 +47,13 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unsub()
 
+	// Daemon-wide events (MCP status) ride the same connection so a client
+	// needs only one stream, but they are a separate source: they carry no
+	// seq, are never persisted, and so are never part of the backlog. See
+	// broadcast.go.
+	daemonLive, unsubDaemon := d.daemonEvents.subscribe()
+	defer unsubDaemon()
+
 	backlog, err := d.Loop.Store.Events(id, since)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
@@ -84,6 +91,20 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeSSE(ev)
+		case ev, ok := <-daemonLive:
+			if !ok {
+				return
+			}
+			// No `id:` line and no lastSeq bookkeeping: these events have
+			// no sequence of their own, and emitting one would corrupt the
+			// Last-Event-ID the browser sends back to resume the session
+			// log after a dropped connection.
+			payload, err := json.Marshal(ev)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", payload)
+			flusher.Flush()
 		case <-r.Context().Done():
 			return
 		}

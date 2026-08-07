@@ -1,7 +1,7 @@
 import { permissionTextEl, permissionAllowAlwaysBtn } from './dom.js';
 import { app, session } from './state.js';
 import { appendUser, appendTool, appendError, appendModelText, endModelText } from './transcript.js';
-import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate } from './render.js';
+import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers } from './render.js';
 import { setWaiting, setConnected, setInputLocked } from './composer.js';
 import { refreshDelegatePanelIfOpen, permissionRequest } from './modals.js';
 // events.js and sessions.js import each other (session.renamed reloads the
@@ -100,6 +100,13 @@ const handlers = {
   },
   'session.renamed': () => {
     loadSessions();
+  },
+  // Daemon-wide, not part of this conversation: it arrives on the same
+  // stream but carries the whole server list every time, so the handler
+  // replaces rather than merges.
+  'mcp.status': (d) => {
+    app.mcpServers = d.servers || [];
+    renderMCPServers();
   },
   delegated: (d) => {
     appendTool(`[delegated to ${d.agent || ''}]`);
