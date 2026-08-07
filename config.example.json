@@ -82,5 +82,6 @@
       "grep *"
     ]
   },
-  "skip_permissions": false
+  "skip_permissions": false,
+  "dictation_model_dir": ""
 }

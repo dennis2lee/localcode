@@ -120,6 +120,7 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
 | `max_concurrent_tasks` | Caps how many background tasks run at once |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
+| `dictation_model_dir` | Path to an unpacked sherpa-onnx streaming speech model. Empty (the default) leaves voice dictation off. See [Dictating a prompt](#dictating-a-prompt-desktop-window). |
 
 #### Provider fields
 
@@ -994,11 +995,34 @@ sensible one to guess and guessing would mean a silent several-hundred-
 megabyte download the first time anyone clicked the button.
 
 Download a sherpa-onnx streaming model, unpack it, and name the
-directory in `config.json`:
+directory in `config.json` (`~/.localcode/config.json`, or
+`C:\Users\<you>\.localcode\config.json`). The key goes at the top level,
+alongside `providers` and `agents`:
+
+macOS and Linux:
 
 ```json
 {
   "dictation_model_dir": "/Users/you/.localcode/models/sherpa-onnx-streaming-zipformer-korean-2024-06-16"
+}
+```
+
+Windows — **every backslash has to be doubled**, because a single one
+starts a JSON escape. `"C:\Users\..."` is not a valid string at all: the
+config fails to parse with
+
+```
+invalid character 'U' in string escape code
+```
+
+and localcode refuses to start, which reads as a broken install rather
+than as a mistyped path (in the desktop window that message is what the
+startup screen shows). Forward slashes work on Windows too and avoid the
+whole problem.
+
+```json
+{
+  "dictation_model_dir": "C:\\Users\\you\\.localcode\\models\\sherpa-onnx-streaming-zipformer-korean-2024-06-16"
 }
 ```
 
