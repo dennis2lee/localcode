@@ -136,6 +136,9 @@ verify_msi CustomAction 'InstallDictationModel	3186	DICTATIONEXE' 'the dictation
 verify_msi CustomAction 'RemoveDictationModel	3186	DICTATIONEXE' 'the dictation model removal action is missing or has the wrong type'
 # Skippable, and skipped only when asked: DICTATION defaults to 1.
 verify_msi Property 'DICTATION	1' 'the DICTATION property is missing, so the model install cannot be turned off with DICTATION=0'
+# An upgrade must not delete the model and download it again. See the
+# comment on this condition in localcode.wxs.
+verify_msi InstallExecuteSequence 'RemoveDictationModel	REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE' 'the model removal is not guarded against upgrades, so every upgrade would re-download 400MB'
 # The desktop shortcut, and that it resolves to DesktopFolder rather than
 # some directory wixl invented. A shortcut silently landing nowhere is
 # exactly the kind of breakage this file exists to catch — it cannot be

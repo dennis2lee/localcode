@@ -337,8 +337,21 @@
         Before RemoveFiles, which is what deletes the localcode.exe this
         needs to run. REMOVE="ALL" rather than plain REMOVE so that
         removing a single feature does not take the model with it.
+
+        "NOT UPGRADINGPRODUCTCODE" is what keeps an upgrade from throwing
+        the model away and downloading it again.
+
+        A major upgrade uninstalls the old product first — wixl hardcodes
+        RemoveExistingProducts right after InstallValidate — and that
+        uninstall runs the old package's own sequence, this action
+        included. So without the guard the order is: delete the 400MB
+        model, install the new files, notice no model is present,
+        download it again. Every upgrade, for a file that had not
+        changed. Windows Installer sets UPGRADINGPRODUCTCODE only in that
+        case, which is exactly the removal that should leave the model
+        alone.
       -->
-      <Custom Action='RemoveDictationModel' Before='RemoveFiles'>REMOVE="ALL"</Custom>
+      <Custom Action='RemoveDictationModel' Before='RemoveFiles'>REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
     </InstallExecuteSequence>
 
     <Feature Id='Complete' Level='1'>
