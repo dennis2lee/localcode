@@ -53,6 +53,10 @@ A `-tags gui` build defaults `--gui` to on, so no flag is needed — running the
 
 It starts the daemon in-process on a private loopback port and shows the same Web UI in an OS native window (WKWebView on macOS, WebView2 on Windows). Nothing is exposed off the machine and there is no fixed port to collide with.
 
+**Startup screen.** The window opens immediately, before the daemon exists, showing the app icon and a status line naming the step in progress — reading config, opening providers, loading sessions, connecting to each MCP server by name, restoring history. Starting up takes a few seconds with several MCP servers configured, and one that is slow or dead holds up everything behind it, so the line names the server being waited on rather than a generic "loading". The screen is replaced by the app as soon as it is ready.
+
+If startup fails, the reason is shown on that screen and the window stays open. `localcode-gui.exe` has no console (see below), so this is the only place a startup error can be read.
+
 The window links a native webview through CGo, which cannot be cross compiled the way the pure Go daemon and TUI are, so it's built per OS:
 
 * macOS: `make dist-mac-gui` produces a double-clickable `LocalCode.app` (universal, arm64 + amd64). `make gui-mac` builds just the bare `localcode-gui` binary. macOS always has WKWebView.

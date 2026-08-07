@@ -71,7 +71,7 @@ func TestConnectStreamableHTTP(t *testing.T) {
 	servers := map[string]config.MCPServerConfig{
 		"remote": {Type: config.MCPTransportHTTP, URL: url},
 	}
-	m, toolList, warnings := Connect(ctx, servers)
+	m, toolList, warnings := Connect(ctx, servers, nil)
 	defer m.Close()
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
@@ -102,7 +102,7 @@ func TestConnectSSE(t *testing.T) {
 	servers := map[string]config.MCPServerConfig{
 		"remote": {Type: config.MCPTransportSSE, URL: url},
 	}
-	m, toolList, warnings := Connect(ctx, servers)
+	m, toolList, warnings := Connect(ctx, servers, nil)
 	defer m.Close()
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)

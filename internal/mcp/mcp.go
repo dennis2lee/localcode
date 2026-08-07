@@ -271,7 +271,12 @@ func (m *Manager) Servers() []string {
 // ListTools error) are collected as warnings and that server is skipped —
 // they never prevent the daemon from starting with whatever servers *did*
 // come up.
-func Connect(ctx context.Context, servers map[string]config.MCPServerConfig) (*Manager, []tools.Tool, []error) {
+// progress, when non-nil, is called with each server's name just before
+// it is connected. Connecting is the slowest part of startup and the
+// part most likely to stall — a server that never answers holds up
+// everything behind it — so a caller showing a startup screen wants to
+// name the one it is waiting on rather than a generic "loading".
+func Connect(ctx context.Context, servers map[string]config.MCPServerConfig, progress func(name string)) (*Manager, []tools.Tool, []error) {
 	m := newManager()
 	var out []tools.Tool
 	var warnings []error
@@ -287,6 +292,9 @@ func Connect(ctx context.Context, servers map[string]config.MCPServerConfig) (*M
 	sort.Strings(names)
 
 	for _, name := range names {
+		if progress != nil {
+			progress(name)
+		}
 		toolsFromServer, serverWarnings := m.add(ctx, name, servers[name])
 		out = append(out, toolsFromServer...)
 		warnings = append(warnings, serverWarnings...)

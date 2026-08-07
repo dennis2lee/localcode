@@ -16,7 +16,7 @@ import (
 )
 
 func runDaemon(configPath, listen string) error {
-	d, cleanup, err := buildDaemon(context.Background(), configPath)
+	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
 	if err != nil {
 		return err
 	}
@@ -25,27 +25,43 @@ func runDaemon(configPath, listen string) error {
 	return http.ListenAndServe(listen, d.Handler())
 }
 
-// runGUI builds the daemon in-process and hands its HTTP handler to a
-// native window (see internal/gui). No fixed port, no browser: the window
-// owns a private loopback server for its own lifetime. On a build without
-// the "gui" tag, gui.Launch returns an explanatory error instead.
+// runGUI opens a native window (see internal/gui) and builds the daemon
+// behind its startup screen, handing over the HTTP handler when it is
+// ready. No fixed port, no browser: the window owns a private loopback
+// server for its own lifetime. On a build without the "gui" tag,
+// gui.Launch returns an explanatory error instead.
+//
+// The window is created before any of this work rather than after, so
+// clicking the icon produces something to look at immediately — see
+// gui.Launch. That is also why cleanup is registered from inside the
+// callback: there is nothing to clean up until the build succeeds, and
+// by then runGUI is already blocked in Launch.
 func runGUI(configPath string) error {
-	d, cleanup, err := buildDaemon(context.Background(), configPath)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	// Only here. The window and the daemon share a machine and a user in
-	// this mode, so a folder picker opens where the person clicking is
-	// sitting. Every other mode leaves d.PickDirectory nil — over --server
-	// (or a browser on another box) the dialog would open on the daemon's
-	// machine, in front of nobody.
-	if dialog.Available() {
-		d.PickDirectory = func(ctx context.Context, startDir string) (string, error) {
-			return dialog.PickDirectory(ctx, "Choose a workspace folder", startDir)
+	var cleanup func()
+	defer func() {
+		if cleanup != nil {
+			cleanup()
 		}
-	}
-	return gui.Launch("localcode", d.Handler())
+	}()
+
+	return gui.Launch("localcode", version, func(progress func(string)) (http.Handler, error) {
+		d, done, err := buildDaemon(context.Background(), configPath, progress)
+		if err != nil {
+			return nil, err
+		}
+		cleanup = done
+		// Only here. The window and the daemon share a machine and a user
+		// in this mode, so a folder picker opens where the person clicking
+		// is sitting. Every other mode leaves d.PickDirectory nil — over
+		// --server (or a browser on another box) the dialog would open on
+		// the daemon's machine, in front of nobody.
+		if dialog.Available() {
+			d.PickDirectory = func(ctx context.Context, startDir string) (string, error) {
+				return dialog.PickDirectory(ctx, "Choose a workspace folder", startDir)
+			}
+		}
+		return d.Handler(), nil
+	})
 }
 
 // runEmbedded starts a daemon in-process (so a browser can also point at
@@ -54,7 +70,7 @@ func runGUI(configPath string) error {
 // independently-addressable components, just sharing a process for
 // single-binary convenience.
 func runEmbedded(configPath, listen, agentName string) error {
-	d, cleanup, err := buildDaemon(context.Background(), configPath)
+	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
 	if err != nil {
 		return err
 	}

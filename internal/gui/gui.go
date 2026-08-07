@@ -22,24 +22,62 @@ import (
 	webview "github.com/webview/webview_go"
 )
 
-// Launch serves handler on a fresh loopback port and opens a native window
-// pointed at it, blocking until the window closes. The daemon is the same
-// one the TUI and browser talk to; this is just another local client, in a
-// window we own.
-func Launch(title string, handler http.Handler) error {
-	// Port 0 lets the OS pick a free port — no fixed 4096 to collide with a
-	// separately running daemon, and loopback-only so nothing is exposed off
-	// the machine.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("bind loopback port: %w", err)
-	}
-	go func() { _ = http.Serve(ln, handler) }()
-
+// Launch opens the window first and does the slow work behind it.
+//
+// start is called on its own goroutine once the window is up. It reports
+// what it is doing through the progress func it is given — each call
+// replaces the splash screen's status line — and returns the handler to
+// show when it is finished. Only then is a loopback server bound and the
+// window pointed at it.
+//
+// The order is the point. Building a daemon means reading config,
+// opening providers, loading every session from disk and handshaking
+// with each configured MCP server, which together can run to several
+// seconds. Doing that before creating the window meant several seconds
+// in which the app had produced nothing at all — no window, no error,
+// nothing to distinguish "working" from "failed to start". The obvious
+// response is to launch it again, and then two are starting.
+//
+// Blocks until the window is closed. If start fails, the error is shown
+// in the window (this binary has no console to print it to) and returned
+// once the user closes it.
+func Launch(title, version string, start func(progress func(string)) (http.Handler, error)) error {
 	w := webview.New(false)
 	defer w.Destroy()
 	w.SetTitle(title)
-	w.Navigate("http://" + ln.Addr().String())
+	w.Navigate(dataURL(splashHTML(version)))
+
+	// Written by the start goroutine, read after Run returns — the window
+	// closing is what synchronizes them, since Run does not return until
+	// the message loop is finished with the goroutine's last Dispatch.
+	var startErr error
+
+	go func() {
+		progress := func(msg string) {
+			w.Dispatch(func() { w.Eval(jsCall("lcStatus", msg)) })
+		}
+		handler, err := start(progress)
+		if err != nil {
+			startErr = err
+			// Left on screen rather than exiting: a window that appears
+			// and vanishes is indistinguishable from a crash, and the
+			// message is the only copy of the reason this build produces.
+			w.Dispatch(func() { w.Eval(jsCall("lcFailed", err.Error())) })
+			return
+		}
+
+		// Port 0 lets the OS pick a free port — no fixed 4096 to collide
+		// with a separately running daemon, and loopback-only so nothing
+		// is exposed off the machine.
+		ln, lerr := net.Listen("tcp", "127.0.0.1:0")
+		if lerr != nil {
+			startErr = fmt.Errorf("bind loopback port: %w", lerr)
+			w.Dispatch(func() { w.Eval(jsCall("lcFailed", startErr.Error())) })
+			return
+		}
+		go func() { _ = http.Serve(ln, handler) }()
+		w.Dispatch(func() { w.Navigate("http://" + ln.Addr().String()) })
+	}()
 
 	// The window size is applied from inside the message loop, not before
 	// Run(), and that ordering is the fix for a Windows startup bug: the
@@ -73,7 +111,7 @@ func Launch(title string, handler http.Handler) error {
 	nudgeScale(w)
 
 	w.Run() // blocks until the window is closed
-	return nil
+	return startErr
 }
 
 const (

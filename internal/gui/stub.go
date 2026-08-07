@@ -12,7 +12,7 @@ import (
 // default pure-Go, cross-compiled release builds omit — so this returns a
 // clear error telling you how to get a GUI build rather than failing to
 // compile the whole binary.
-func Launch(title string, handler http.Handler) error {
+func Launch(title, version string, start func(progress func(string)) (http.Handler, error)) error {
 	return errors.New("this build has no GUI support; build with -tags gui on macOS or Windows (needs CGo and a native webview)")
 }
 

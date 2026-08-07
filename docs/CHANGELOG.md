@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.32.3
+
+- **The desktop window now appears immediately, with a startup screen.** Starting up means reading config, opening providers, loading every session from disk and handshaking with each configured MCP server, which together can run to several seconds — and all of it used to happen *before* the window was created. From outside the app there was nothing at all in that time: no window, no error, nothing to tell "working" from "failed to start". The reasonable response is to click the icon again, and then two are starting. The window is created first now and shows the app icon, the version, and a status line naming the step in progress — including which MCP server it is currently waiting on, since one slow server is what the rest of startup queues behind.
+- **A startup failure is shown in the window instead of vanishing.** `localcode-gui.exe` is linked `-H windowsgui` and has no console, so an error printed to stderr went nowhere: the window simply never appeared. The startup screen shows the message and stays open.
+- **Fix: dictation reported the wrong reason for being unavailable.** The desktop build was saying it had no speech recognizer, when it does. The daemon only created its dictation manager once `dictation_model_dir` was set, and the no-manager path answers with one fixed string about the build — so an unconfigured desktop build blamed the one thing the reader cannot change instead of the config key they can. It now says "no dictation model directory configured".
+
 ## v0.32.2
 
 - **Dictation is now a labelled control under the prompt box, and it is always there.** It used to be a bare microphone glyph beside Send that vanished whenever dictation could not start — which also hid the fact that the feature exists, since the usual reason it cannot start is a config key nobody knew to set. It is a pill in the status row now, alongside auto-delegate and permissions: `dictation: off` to start, red and blinking while it listens, and `dictation: unavailable` (disabled, with the daemon's own explanation in the tooltip) when it cannot run.

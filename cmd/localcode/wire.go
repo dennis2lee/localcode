@@ -51,22 +51,35 @@ func resolveEnv() (env, error) {
 // The returned cleanup func must be called when the daemon is done with —
 // it shuts down any MCP server subprocesses this build started. It is never
 // nil, so callers can defer it unconditionally.
-func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, func(), error) {
+//
+// progress, when non-nil, is called as each step starts. This takes long
+// enough to be worth narrating — several seconds is normal with a few
+// MCP servers configured — and the GUI shows it on a startup screen so
+// the wait reads as work rather than as a hang. nil is the right value
+// for every mode that has a terminal to log to instead.
+func buildDaemon(ctx context.Context, configPath string, progress func(string)) (*daemon.Daemon, func(), error) {
+	if progress == nil {
+		progress = func(string) {}
+	}
+
 	e, err := resolveEnv()
 	if err != nil {
 		return nil, nil, err
 	}
 
+	progress("reading configuration")
 	cfg, err := loadConfig(configPath, e)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	progress("opening model providers")
 	providers, err := buildProviders(ctx, cfg, e)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	progress("loading sessions")
 	sessionDir := filepath.Join(e.home, ".localcode", "sessions")
 	store, sessionWarnings, err := session.LoadAllFromDisk(sessionDir)
 	if err != nil {
@@ -90,6 +103,7 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, func()
 		return nil, nil, err
 	}
 
+	progress("loading skills and commands")
 	systemPromptExtra, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e)
 	if err != nil {
 		return nil, nil, err
@@ -105,7 +119,14 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, func()
 		// server processes, which otherwise linger until this process exits.
 		var mcpTools []tools.Tool
 		var warnings []error
-		mcpManager, mcpTools, warnings = mcpclient.Connect(ctx, cfg.MCPServers)
+		// Named one at a time rather than as a count: connecting means
+		// spawning a subprocess and waiting for a handshake, so a server
+		// that is slow or dead is what the whole startup is stuck behind,
+		// and its name is the useful thing to be showing while that
+		// happens.
+		mcpManager, mcpTools, warnings = mcpclient.Connect(ctx, cfg.MCPServers, func(name string) {
+			progress("connecting to MCP server " + name)
+		})
 		for _, w := range warnings {
 			log.Printf("mcp: %v", w)
 		}
@@ -134,6 +155,7 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, func()
 	// own, but Loop's in-memory history/usage maps don't, so without this
 	// a resumed session would replay its old transcript on screen while
 	// the model itself had no memory of any of it.
+	progress("restoring conversation history")
 	loop.RehydrateAll()
 	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
 
