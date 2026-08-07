@@ -198,7 +198,12 @@ func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	for _, name := range names {
 		agentCfg := d.Loop.Config.Agents[name]
 		info := AgentInfo{Name: name, Description: agentCfg.Description}
-		if profile, ok := d.Loop.Config.Profiles[agentCfg.Profile]; ok {
+		// ResolveProfile, not a direct Profiles lookup: it is what the turn
+		// itself calls, so it also applies the default_profile fallback for
+		// an agent whose profile key is missing or unknown. Looking the map
+		// up directly reported no model at all for those agents, while the
+		// turn went ahead and answered with the default profile's.
+		if profile, err := d.Loop.Config.ResolveProfile(name); err == nil {
 			info.Model = profile.Model
 		}
 		out = append(out, info)

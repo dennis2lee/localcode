@@ -384,6 +384,39 @@ func TestDaemonListAgents(t *testing.T) {
 	}
 }
 
+// An agent whose profile key is missing or unknown still answers — the
+// turn falls back to default_profile — so the listing has to report that
+// same model rather than nothing. Reporting nothing is worse than it
+// sounds: the Web UI status bar then falls back to whatever model last
+// reported usage, which after a Tab switch is the *previous* agent's.
+func TestDaemonListAgentsFallsBackToTheDefaultProfile(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	d.Loop.Config.Agents["explore"] = config.AgentConfig{Profile: "no-such-profile"}
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	agents, err := client.New(httpSrv.URL).ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	var found bool
+	for _, a := range agents {
+		if a.Name != "explore" {
+			continue
+		}
+		found = true
+		if a.Model != "test-model" {
+			t.Errorf("explore Model = %q, want %q (the default profile's, which is what the turn would use)", a.Model, "test-model")
+		}
+	}
+	if !found {
+		t.Fatalf("explore missing from the listing: %+v", agents)
+	}
+}
+
 // TestDaemonListCommands confirms GET /api/commands reports the custom
 // commands loaded on the daemon's Loop, sorted by name.
 func TestDaemonListCommands(t *testing.T) {

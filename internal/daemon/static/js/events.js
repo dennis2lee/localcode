@@ -76,6 +76,12 @@ const handlers = {
   // header dropdown and the status line.
   'agent.switched': (d) => {
     setCurrentAgent(d.agent);
+    // The last usage report came from the agent that just stopped being
+    // current, so its model is now stale — the status bar names what will
+    // answer the *next* message. Only the model is dropped: the token
+    // counts and context percentage belong to the conversation, which the
+    // switch doesn't reset. The next turn's usage event refills it.
+    if (session.lastUsage) session.lastUsage = { ...session.lastUsage, model: '' };
   },
   usage: (d) => {
     session.lastUsage = d;

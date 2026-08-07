@@ -144,3 +144,16 @@ test('shortenPath keeps the tail and cuts at a separator', async () => {
   assert.ok(short.startsWith('…'), short);
   assert.ok(long.endsWith(short.slice(1)), short);
 });
+
+// Regression: switching agents mid-session left the previous agent's model
+// on the status line. The usage event's model is preferred over the
+// configured one — correct while one agent is answering, wrong the moment
+// the agent changes, because no new usage arrives until the next turn ends.
+test('switching agents updates the model even before the new one has answered', async () => {
+  const app = await load();
+  app.applyEvent({ type: 'usage', data: { percent: 10, model: 'test-model-1' } });
+  app.applyEvent({ type: 'agent.switched', data: { agent: 'plan' } });
+  const text = app.el('status-text').textContent;
+  assert.match(text, /agent: plan/);
+  assert.match(text, /model: test-model-2/, text);
+});
