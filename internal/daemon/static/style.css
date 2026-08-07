@@ -38,7 +38,17 @@ header {
   align-items: center;
   justify-content: space-between;
 }
+header .brand { display: flex; align-items: baseline; gap: 7px; }
 header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+/* Baseline-aligned and muted: the version is reference material you go
+   looking for when filing a bug, not something to read every time. It
+   is the daemon's version, which is the one that matters when a client
+   is attached to a core running elsewhere. */
+header .version {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
 header .right { display: flex; align-items: center; gap: 10px; }
 header .session-id { color: var(--muted); font-size: 12px; font-family: monospace; }
 header .agent-select {

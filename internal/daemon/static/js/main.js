@@ -14,7 +14,7 @@ import {
   sendMessage, cancelTurn, autoResizeInput, insertAtCursor,
   atInputStart, atInputEnd, historyPrev, historyNext,
 } from './composer.js';
-import { loadAgents, loadCommands, loadSettings, loadWorkspace, loadMCPServers, cycleAgent } from './loaders.js';
+import { loadAgents, loadCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
 import { loadSessions, selectSession, createNewSession, deleteAllSessions } from './sessions.js';
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
@@ -142,6 +142,7 @@ async function init() {
     loadSettings(),
     loadWorkspace(),
     loadMCPServers(),
+    loadVersion(),
     loadSessions(),
   ]);
   // One deterministic status-bar render after the race settles: the bar

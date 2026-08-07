@@ -1,4 +1,4 @@
-import { agentSelectEl } from './dom.js';
+import { agentSelectEl, appVersionEl } from './dom.js';
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
 import { appendError } from './transcript.js';
@@ -38,6 +38,19 @@ export async function cycleAgent(step) {
     await apiClient.switchAgent(session.sessionID, next.name);
   } catch (err) {
     appendError(`failed to switch agent: ${err}`);
+  }
+}
+
+// The daemon's version, shown next to the name in the header. Failure is
+// silent: a missing version number is not worth an error line in the
+// transcript, and every other part of the page works without it.
+export async function loadVersion() {
+  try {
+    const v = await apiClient.getVersion();
+    appVersionEl.textContent = v.version ? `v${v.version}` : '';
+    appVersionEl.title = `daemon version ${v.version || '(unknown)'}`;
+  } catch (err) {
+    appVersionEl.textContent = '';
   }
 }
 

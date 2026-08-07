@@ -177,3 +177,17 @@ test('pre-wrap is scoped to the plain-text messages, not the rendered ones', () 
   );
   assert.match(css, /#transcript \.msg-user[^{]*\{[^}]*white-space:\s*pre-wrap/);
 });
+
+// The header names the *daemon's* version, which is the one that matters
+// when a client is attached to a core running somewhere else.
+test('the header shows the daemon version next to the name', async () => {
+  const app = await load({ routes: { 'GET /api/version': { version: '0.31.1' } } });
+  assert.equal(app.el('app-version').textContent, 'v0.31.1');
+});
+
+test('a version the daemon will not report leaves the header clean', async () => {
+  const app = await load({ routes: { 'GET /api/version': { status: 500 } } });
+  assert.equal(app.el('app-version').textContent, '');
+  // and the rest of the page still came up
+  assert.equal(app.state.sessionID, 'sess-1');
+});
