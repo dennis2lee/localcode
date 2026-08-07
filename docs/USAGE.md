@@ -1008,8 +1008,19 @@ not the archive, and not a directory containing them. If it doesn't, the
 daemon says which files it couldn't find rather than just refusing.
 
 Korean models are at
-<https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models>; the
-streaming Zipformer one above is about 60MB and trained on KsponSpeech.
+<https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models>. The
+streaming Zipformer one above is trained on KsponSpeech and downloads as
+a 398MB archive:
+
+```
+https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-korean-2024-06-16.tar.bz2
+```
+
+Most of that is weights localcode does not load. The archive ships each
+model twice, float32 and int8 quantised, and the int8 copies are
+preferred here — so the three `*-epoch-99-avg-1.onnx` files (about
+300MB) can be deleted after unpacking, leaving roughly 130MB of int8
+weights plus `tokens.txt`.
 Any sherpa-onnx **streaming transducer** model works — a non-streaming
 one (Whisper, Paraformer) will not load, because showing text while you
 are still talking is the whole point and those process a finished
