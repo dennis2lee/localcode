@@ -59,8 +59,20 @@ main {
   background: var(--center);
   overflow-y: auto;
   padding: 16px;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+/* pre-wrap belongs only to the messages whose text goes in via
+   textContent — for those the newlines ARE the formatting, and without it
+   a multi-line user prompt collapses onto one line.
+
+   It must NOT reach .msg-model. That one is rendered HTML, where the
+   markup already carries the structure and the newlines between block
+   elements are just source formatting. Inheriting pre-wrap there made
+   every one of those newlines render as a literal blank line on top of
+   the margins below, which is why an ordinary reply came out with a
+   gaping hole between every paragraph, list, and code block. */
+#transcript .msg-user, #transcript .msg-tool, #transcript .msg-error {
+  white-space: pre-wrap;
 }
 #transcript .msg-user { color: var(--accent); font-weight: 600; }
 #transcript .msg-tool { color: var(--muted); font-style: italic; }

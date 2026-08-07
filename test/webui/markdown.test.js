@@ -111,3 +111,28 @@ test('streaming a reply one delta at a time ends up identical to rendering it wh
   app.applyEvent({ type: 'message.part.end' });
   assert.ok(streamed.includes(app.renderMarkdown(full)), streamed);
 });
+
+// Regression: the renderer emitted one <p> per source line and an empty
+// entry per blank line, and #transcript's white-space: pre-wrap was
+// inherited by .msg-model — so every newline in the generated HTML also
+// rendered literally, on top of the block margins. An ordinary reply came
+// out with a gaping hole between every paragraph, list and code block.
+test('a paragraph spread over several lines is one <p>, not one per line', () => {
+  const out = app.renderMarkdown('the parser drops\nthe trailing token\nin some cases');
+  assert.equal(out, '<p>the parser drops the trailing token in some cases</p>');
+});
+
+test('blank lines separate blocks without leaving empty output entries', () => {
+  const out = app.renderMarkdown('first\n\n\n\nsecond');
+  assert.equal(out, '<p>first</p>\n<p>second</p>');
+});
+
+test('a blank line ends a list, and the next prose is its own paragraph', () => {
+  const out = app.renderMarkdown('- a\n- b\n\ntail');
+  assert.equal(out, '<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n<p>tail</p>');
+});
+
+test('prose wrapped around a code block keeps its blocks adjacent', () => {
+  const out = app.renderMarkdown('before\n\n```\nx\n```\n\nafter');
+  assert.equal(out, '<p>before</p>\n<pre><code>x</code></pre>\n<p>after</p>');
+});

@@ -1221,3 +1221,47 @@ func TestSlashCommandsAreCaseInsensitive(t *testing.T) {
 		t.Error("/AGENT build (mixed case) should still issue a switch-agent command")
 	}
 }
+
+// Regression: a model reply almost always ends with a newline of its own,
+// which stacked on top of the "\n\n" separator between entries and left
+// two blank lines where one was meant. The separator owns the spacing, so
+// each entry's surrounding newlines are trimmed before joining.
+func TestEntriesAreSeparatedByExactlyOneBlankLine(t *testing.T) {
+	got := renderTranscript([]transcriptEntry{
+		{kind: entryModel, text: "Here is the answer.\n"},
+		{kind: entryModel, text: "\nAnd the follow-up.\n\n"},
+	})
+	if strings.Contains(got, "\n\n\n") {
+		t.Errorf("more than one blank line between entries: %q", got)
+	}
+	if !strings.Contains(got, "Here is the answer.\n\nAnd the follow-up.") {
+		t.Errorf("entries not separated by exactly one blank line: %q", got)
+	}
+	if strings.HasSuffix(got, "\n") {
+		t.Errorf("trailing newline left on the transcript: %q", got)
+	}
+}
+
+// Trimming is newlines only: the leading spaces of a code line the model
+// emitted are content, not spacing.
+func TestRenderingKeepsIndentationInsideAnEntry(t *testing.T) {
+	got := renderTranscript([]transcriptEntry{
+		{kind: entryModel, text: "\nfunc main() {\n    println(\"hi\")\n}\n"},
+	})
+	if !strings.Contains(got, "    println") {
+		t.Errorf("indentation was stripped: %q", got)
+	}
+}
+
+// An entry that is nothing but newlines contributes no separator of its
+// own — otherwise it would show up as a stray gap with no content.
+func TestBlankEntriesDoNotProduceGaps(t *testing.T) {
+	got := renderTranscript([]transcriptEntry{
+		{kind: entryModel, text: "first"},
+		{kind: entryModel, text: "\n\n"},
+		{kind: entryModel, text: "second"},
+	})
+	if got != "first\n\nsecond" {
+		t.Errorf("blank entry left a gap: %q", got)
+	}
+}

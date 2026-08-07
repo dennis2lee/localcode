@@ -14,15 +14,25 @@ func renderTranscript(entries []transcriptEntry) string {
 	if len(entries) == 0 {
 		return ""
 	}
-	parts := make([]string, len(entries))
-	for i, e := range entries {
+	parts := make([]string, 0, len(entries))
+	for _, e := range entries {
+		// The separator below owns the spacing between entries, so an
+		// entry's own leading/trailing newlines are stripped first. Model
+		// replies almost always end with one, which stacked on top of the
+		// separator and left two blank lines between paragraphs instead of
+		// one. Only newlines are trimmed, never other whitespace — the
+		// indentation of a code line the model emitted is content.
+		text := strings.Trim(e.text, "\n")
+		if text == "" {
+			continue
+		}
 		switch e.kind {
 		case entryUser:
-			parts[i] = userStyle.Render("You: ") + e.text
+			parts = append(parts, userStyle.Render("You: ")+text)
 		case entryTool, entryLocal:
-			parts[i] = toolStyle.Render(e.text)
+			parts = append(parts, toolStyle.Render(text))
 		default: // entryModel: streamed as-is, no style
-			parts[i] = e.text
+			parts = append(parts, text)
 		}
 	}
 	return strings.Join(parts, "\n\n")

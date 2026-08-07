@@ -41,6 +41,18 @@ export function renderMarkdown(src) {
   const out = [];
   let listTag = null; // 'ul' | 'ol' | null — the list currently open
   const closeList = () => { if (listTag) { out.push(`</${listTag}>`); listTag = null; } };
+  // para collects the consecutive plain lines of one paragraph. Markdown
+  // ends a paragraph at a blank line or a block construct, not at every
+  // newline — a model that hard-wraps its prose at 80 columns writes one
+  // paragraph across six lines, and emitting a <p> per line turned that
+  // into six paragraphs with a margin between each.
+  let para = [];
+  const closePara = () => {
+    if (para.length === 0) return;
+    out.push(`<p>${inline(para.join(' '))}</p>`);
+    para = [];
+  };
+  const endBlock = () => { closePara(); closeList(); };
   for (const line of lines) {
     const h = line.match(/^(#{1,6})\s+(.*)$/);
     const bullet = line.match(/^[-*]\s+(.*)$/);
@@ -50,32 +62,35 @@ export function renderMarkdown(src) {
     if (isPlaceholder) {
       // A spliced-in code block: pass the line through untouched rather
       // than wrapping it in <p>, which would nest <pre> inside <p>.
-      closeList();
+      endBlock();
       out.push(line);
     } else if (h) {
-      closeList();
+      endBlock();
       out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
     } else if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
-      closeList();
+      endBlock();
       out.push('<hr>');
     } else if (bullet) {
+      closePara();
       if (listTag !== 'ul') { closeList(); out.push('<ul>'); listTag = 'ul'; }
       out.push(`<li>${inline(bullet[1])}</li>`);
     } else if (numbered) {
+      closePara();
       if (listTag !== 'ol') { closeList(); out.push('<ol>'); listTag = 'ol'; }
       out.push(`<li>${inline(numbered[1])}</li>`);
     } else if (quote) {
-      closeList();
+      endBlock();
       out.push(`<blockquote>${inline(quote[1])}</blockquote>`);
     } else if (line.trim() === '') {
-      closeList();
-      out.push('');
+      // A blank line ends whatever was open. Nothing is emitted for it:
+      // the gap between blocks is the margin the stylesheet gives them.
+      endBlock();
     } else {
       closeList();
-      out.push(`<p>${inline(line)}</p>`);
+      para.push(line);
     }
   }
-  closeList();
+  endBlock();
   text = out.join('\n');
 
   // 5. Splice the fenced code blocks back in.

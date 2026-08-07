@@ -157,3 +157,23 @@ test('a failing session create is reported instead of leaving a dead page', asyn
   assert.equal(app.el('session-id').textContent, 'error');
   assert.match(app.transcript(), /failed to create session/);
 });
+
+// The other half of the blank-line bug lived in the stylesheet, and no
+// amount of renderer testing catches it: white-space: pre-wrap on
+// #transcript is inherited by .msg-model, where the content is rendered
+// HTML whose newlines are source formatting, not content. It belongs only
+// on the messages built with textContent, where the newlines are the
+// formatting. This pins the scoping so it cannot drift back.
+test('pre-wrap is scoped to the plain-text messages, not the rendered ones', () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'internal', 'daemon', 'static', 'style.css'),
+    'utf8',
+  );
+  const transcriptBlock = css.match(/#transcript\s*\{([^}]*)\}/);
+  assert.ok(transcriptBlock, 'no #transcript rule found');
+  assert.ok(
+    !/white-space/.test(transcriptBlock[1]),
+    'white-space on #transcript is inherited by .msg-model and doubles every gap in a rendered reply',
+  );
+  assert.match(css, /#transcript \.msg-user[^{]*\{[^}]*white-space:\s*pre-wrap/);
+});
