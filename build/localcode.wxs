@@ -79,6 +79,21 @@
         </Directory>
       </Directory>
 
+      <!--
+        The three shortcut components below key off a registry value in
+        HKLM, not HKCU.
+
+        This install is perMachine (ALLUSERS=1), so its shortcuts go to
+        the all-users Start Menu and desktop and belong to the machine,
+        not to whoever ran the installer. A keypath in HKCU records them
+        in the installing account's hive instead — and on a machine where
+        the MSI is elevated with a separate admin account, that is not
+        even the account that will use them. The practical symptom is a
+        shortcut that never comes back: delete it, reinstall or repair,
+        and Windows Installer finds the keypath still present in some
+        user's hive, concludes the component is already installed, and
+        skips creating it.
+      -->
       <Directory Id='ProgramMenuFolder'>
         <Directory Id='AppMenuFolder' Name='LocalCode'>
           <Component Id='StartMenuShortcut' Guid='*'>
@@ -89,7 +104,7 @@
                       Icon='LocalCodeIcon'
                       WorkingDirectory='INSTALLDIR' />
             <RemoveFolder Id='RemoveAppMenuFolder' On='uninstall' />
-            <RegistryValue Root='HKCU'
+            <RegistryValue Root='HKLM'
                             Key='Software\LocalCode'
                             Name='installed'
                             Type='integer'
@@ -104,7 +119,7 @@
                       Arguments='--gui'
                       Icon='LocalCodeIcon'
                       WorkingDirectory='INSTALLDIR' />
-            <RegistryValue Root='HKCU'
+            <RegistryValue Root='HKLM'
                             Key='Software\LocalCode'
                             Name='gui_installed'
                             Type='integer'
@@ -128,7 +143,7 @@
                     Target='[INSTALLDIR]localcode-gui.exe'
                     Icon='LocalCodeIcon'
                     WorkingDirectory='INSTALLDIR' />
-          <RegistryValue Root='HKCU'
+          <RegistryValue Root='HKLM'
                           Key='Software\LocalCode'
                           Name='desktop_shortcut'
                           Type='integer'
