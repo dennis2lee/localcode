@@ -88,6 +88,28 @@
           </Component>
         </Directory>
       </Directory>
+
+      <!--
+        The desktop shortcut points at localcode-gui.exe, not the console
+        binary: a desktop icon is double-clicked from Explorer, and the
+        console build launched that way opens a terminal window rather
+        than the app. The Start-menu entries keep offering both.
+      -->
+      <Directory Id='DesktopFolder' Name='Desktop'>
+        <Component Id='DesktopShortcut' Guid='*'>
+          <Shortcut Id='LocalCodeDesktopShortcut'
+                    Name='LocalCode'
+                    Description='LocalCode in a native desktop window'
+                    Target='[INSTALLDIR]localcode-gui.exe'
+                    WorkingDirectory='INSTALLDIR' />
+          <RegistryValue Root='HKCU'
+                          Key='Software\LocalCode'
+                          Name='desktop_shortcut'
+                          Type='integer'
+                          Value='1'
+                          KeyPath='yes' />
+        </Component>
+      </Directory>
     </Directory>
 
     <!--
@@ -144,6 +166,7 @@
       <ComponentRef Id='StartMenuShortcut' />
       <ComponentRef Id='GuiExecutable' />
       <ComponentRef Id='GuiStartMenuShortcut' />
+      <ComponentRef Id='DesktopShortcut' />
       <ComponentRef Id='WebView2BootstrapperFile' />
     </Feature>
   </Product>

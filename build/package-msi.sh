@@ -102,6 +102,11 @@ verify_msi InstallExecuteSequence '$WebView2BootstrapperFile=3' 'the WebView2 cu
 # Both binaries ship.
 verify_msi File 'localcode.exe' 'localcode.exe is missing from the File table'
 verify_msi File 'localcode-gui.exe' 'localcode-gui.exe is missing from the File table'
+# The desktop shortcut, and that it resolves to DesktopFolder rather than
+# some directory wixl invented. A shortcut silently landing nowhere is
+# exactly the kind of breakage this file exists to catch — it cannot be
+# noticed from a build machine that isn't Windows.
+verify_msi Shortcut 'LocalCodeDesktopShortcut	DesktopFolder' 'the desktop shortcut is missing or not pointing at DesktopFolder'
 
 echo "==> done: $MSI"
 ls -la "$MSI"
