@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.32.7
+
+- **Fix: sending a dictated prompt ended in a red error, and lost the end of the sentence.** Enter stops the microphone before it sends, and the stop request was allowed to overtake audio that was still uploading — so the last chunks were dropped on the floor, and one already in flight arrived at a session the daemon had just closed and came back as `no dictation session "d-1"`. Measured against a real recognizer: of five chunks recorded just before the stop, **one was uploaded and four were thrown away**. Stopping now finishes uploading what was recorded before it closes the session, and a request that fails only because the session ended is no longer reported as a failure.
+
 ## v0.32.6
 
 - **Fix: dictation could never start.** Clicking the microphone produced `no dictation session "[object Object]"` immediately. The daemon answers "start" with `{"id": "..."}` and the client used that whole object as the id, so every request after it went to `/api/dictation/[object Object]/...`, which the daemon quite correctly did not recognise. This had been broken in every build that shipped the feature; the tests only checked whether the button was *shown*, never what pressing it did. The start-to-audio-to-stop path is covered now.

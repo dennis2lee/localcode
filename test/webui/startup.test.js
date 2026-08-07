@@ -274,3 +274,66 @@ test('stopping dictation stops the same session', async () => {
   // the person said and meant.
   assert.equal(app.el('input').value, 'the whole sentence');
 });
+
+// Regression: sending a dictated prompt always ended in a red error.
+//
+// Enter stops the microphone before it sends (see main.js), and the stop
+// request would overtake a chunk of audio that was still uploading. That
+// chunk then arrived at a session the daemon had just closed, came back
+// as "no dictation session d-1", and was reported as a failure — for
+// what is simply the end of a dictation.
+//
+// It cost the audio too: nulling the session first dropped whatever was
+// still queued, so the last word or two never reached the recognizer.
+test('stopping waits for the audio already recorded, then closes the session', async () => {
+  const order = [];
+  const app = await load({
+    routes: {
+      'GET /api/dictation': { ready: true },
+      'POST /api/dictation': { status: 201, body: { id: 'd-1' } },
+      'POST /api/dictation/d-1/audio': async () => {
+        // A round trip that outlasts the click on Send.
+        await new Promise((r) => setTimeout(r, 5));
+        order.push('audio');
+        return { provisional: 'half a sen' };
+      },
+      'POST /api/dictation/d-1/stop': () => { order.push('stop'); return { final: 'half a sentence' }; },
+    },
+  });
+
+  app.el('mic').click();
+  await app.settle();
+  app.micChunk();
+
+  // No await between the chunk and the stop: this is Enter, which stops
+  // the microphone and sends in the same breath.
+  await app.stopDictation();
+  await app.settle();
+
+  // The invariant. Closing the session before its last audio arrives is
+  // what produced "no dictation session d-1" on every dictated prompt,
+  // and it threw away the final word or two on the way.
+  assert.deepEqual(order, ['audio', 'stop']);
+  assert.ok(!app.transcript().includes('Error'), app.transcript());
+  assert.equal(app.el('input').value, 'half a sentence');
+  assert.equal(app.isDictating(), false);
+});
+
+// A failure while still recording is a real one and must still be shown.
+test('an audio failure during recording is still reported', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/dictation': { ready: true },
+      'POST /api/dictation': { status: 201, body: { id: 'd-1' } },
+      'POST /api/dictation/d-1/audio': { status: 500, body: { error: 'recognizer died' } },
+    },
+  });
+
+  app.el('mic').click();
+  await app.settle();
+  app.micChunk();
+  await app.settle();
+
+  assert.match(app.transcript(), /dictation stopped/);
+  assert.equal(app.isDictating(), false);
+});

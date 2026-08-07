@@ -162,40 +162,73 @@ function setMicState(recording) {
 function enqueue(buffer) {
   if (!live) return;
   live.queue.push(buffer);
-  drain();
+  // The promise is kept so stopDictation can wait for the tail to finish
+  // uploading instead of racing it.
+  if (!live.sending) live.draining = drain();
 }
 
 async function drain() {
   if (!live || live.sending) return;
-  live.sending = true;
+  // Pinned rather than re-read through `live` on every line: this loop
+  // awaits, and by the time an await returns the session may have been
+  // stopped and a new one started. Comparing the pinned session against
+  // `live` is how each step knows whether it is still the current one.
+  const session = live;
+  session.sending = true;
   try {
-    while (live && live.queue.length > 0) {
-      const chunk = live.queue.shift();
+    while (live === session && session.queue.length > 0) {
+      const chunk = session.queue.shift();
       let res;
       try {
-        res = await apiClient.sendDictationAudio(live.id, chunk);
+        res = await apiClient.sendDictationAudio(session.id, chunk);
       } catch (err) {
+        // A chunk still in flight when the session was stopped fails
+        // because the session is gone — which is what stopping means.
+        // Reporting it was the "no dictation session" error that
+        // appeared every time a dictated prompt was sent: pressing Enter
+        // stops the microphone, and the last chunk lost the race.
+        if (live !== session) return;
         appendError(`dictation stopped: ${err}`);
+        // Cleared before stopping: stopDictation waits on this promise to
+        // let the tail of the audio finish, and this *is* that promise —
+        // leaving it set would have it wait for the loop that is calling
+        // it, which never returns.
+        session.draining = null;
         await stopDictation();
         return;
       }
-      if (!live) return; // stopped while the request was in flight
+      if (live !== session) return; // stopped while the request was in flight
       if (res.final) commitFinal(res.final);
-      live.provisional = res.provisional || '';
+      session.provisional = res.provisional || '';
       render();
     }
   } finally {
-    if (live) live.sending = false;
+    session.sending = false;
   }
 }
 
 export async function stopDictation() {
   if (!live) return;
   const session = live;
-  live = null; // stop the drain loop and any late callbacks first
 
+  // Capture stops first, so no new audio joins the queue while the tail
+  // of it is flushed.
   if (session.node) session.node.port.onmessage = null;
   if (session.stream) session.stream.getTracks().forEach((t) => t.stop());
+
+  // Then let the audio already recorded finish uploading, before the
+  // session is closed out from under it. Nulling `live` first — which is
+  // what this used to do — dropped whatever was still queued and left an
+  // in-flight chunk to arrive at a session that no longer existed. That
+  // cost the last word or two of every dictated sentence, and announced
+  // it as an error.
+  try {
+    await session.draining;
+  } catch (err) {
+    // drain reports its own failures; there is nothing to add here.
+  }
+
+  live = null; // now nothing else will touch this session
   if (session.ctx) await session.ctx.close().catch(() => {});
 
   setMicState(false);
