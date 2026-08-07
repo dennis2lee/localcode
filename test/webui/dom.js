@@ -112,6 +112,7 @@ class Element {
     this.style = {};
     this.dataset = {};
     this.listeners = new Map();
+    this.attributes = new Map();
 
     // Form/element properties app.js reads or writes directly.
     this.id = '';
@@ -124,6 +125,20 @@ class Element {
     this.selectionEnd = 0;
     this.scrollTop = 0;
     this.scrollHeight = 0;
+  }
+
+  // Only the generic attribute bag. The handful of attributes the code
+  // reaches for as properties (id, value, title, …) stay properties above
+  // rather than being routed through here, because that is how the code
+  // under test uses them and a second source of truth would only drift.
+  setAttribute(name, value) {
+    this.attributes.set(String(name), String(value));
+  }
+  getAttribute(name) {
+    return this.attributes.has(String(name)) ? this.attributes.get(String(name)) : null;
+  }
+  removeAttribute(name) {
+    this.attributes.delete(String(name));
   }
 
   get className() {

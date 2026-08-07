@@ -135,6 +135,17 @@
         console build launched that way opens a terminal window rather
         than the app. The Start-menu entries keep offering both.
       -->
+      <!--
+        DesktopFolder is redirected to the installing user's own Desktop
+        by SetPersonalDesktop below. Left alone it resolves, in a
+        perMachine install, to C:\Users\Public\Desktop — which is
+        technically "on everyone's desktop" and in practice is a place
+        icons routinely fail to show up: Explorer merges the public
+        desktop into each user's view, and a machine where that merge is
+        turned off by policy (or where the shell simply has not been
+        refreshed) shows nothing. An icon in the user's own Desktop
+        directory needs no merge to be visible.
+      -->
       <Directory Id='DesktopFolder' Name='Desktop'>
         <Component Id='DesktopShortcut' Guid='*'>
           <Shortcut Id='LocalCodeDesktopShortcut'
@@ -198,7 +209,34 @@
       false and disabling the custom action without a word. package-msi.sh
       checks the built MSI for the resolved condition to catch that.
     -->
+    <!--
+      Point the desktop shortcut at the installing user's own Desktop
+      instead of the all-users one (see the DesktopFolder comment above).
+
+      This is a plain property assignment, so it runs immediate, and it has
+      to be sequenced before CostFinalize — that is the action that resolves
+      every directory in the tree to a path. After it, writing DesktopFolder
+      changes nothing.
+
+      %USERPROFILE is the right source even though the install is elevated:
+      the immediate sequence runs in the invoking user's context, so this is
+      the person who double-clicked the MSI, not the elevated service
+      account that lays the files down. The deferred half of the install
+      then uses the already-resolved path and never re-reads the
+      environment.
+    -->
+    <CustomAction Id='SetPersonalDesktop'
+                  Property='DesktopFolder'
+                  Value='[%USERPROFILE]\Desktop'
+                  Execute='immediate' />
+
     <InstallExecuteSequence>
+      <!--
+        Unconditional on purpose. Uninstall has to resolve DesktopFolder
+        to the same place the install did, or it would go looking for the
+        shortcut on the public desktop and leave the real one behind.
+      -->
+      <Custom Action='SetPersonalDesktop' Before='CostFinalize' />
       <Custom Action='InstallWebView2Runtime' After='InstallFiles'>NOT REMOVE AND $$WebView2BootstrapperFile=3</Custom>
     </InstallExecuteSequence>
 

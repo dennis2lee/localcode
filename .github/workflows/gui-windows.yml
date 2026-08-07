@@ -22,12 +22,45 @@ on:
       - 'go.sum'
       - '.github/workflows/gui-windows.yml'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to stamp into the binary (e.g. 0.32.2). Leave blank to derive it from the nearest tag.'
+        required: false
+        type: string
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so `git describe` can see the tags — a shallow
+          # clone has none, and the version below would fall all the way
+          # back to a bare commit hash.
+          fetch-depth: 0
+
+      # Without this the GUI build was the one artifact in the release that
+      # carried no version at all: every other binary is built by the
+      # Makefile/package scripts, which pass -X main.version, but this one
+      # is built here and used to link the compiled-in default, "dev". The
+      # visible symptom was the GUI header reading "vdev" — and `localcode
+      # version` on the desktop build reporting "dev" — while the console
+      # binary beside it from the same MSI reported the real number.
+      #
+      # The release flow packages the MSI *before* the tag exists (see
+      # RELEASING.md), so an automatic version would be one commit past
+      # the previous tag rather than the number on the box. Hence the
+      # dispatch input: a release run is told its version explicitly.
+      # Everything else falls back to git describe, which on a tagged
+      # commit is that tag and otherwise is the last tag plus the
+      # distance past it — the honest answer for a build off main.
+      - name: Resolve version
+        shell: bash
+        run: |
+          v='${{ inputs.version }}'
+          [ -n "$v" ] || v="$(git describe --tags --always | sed 's/^v//')"
+          echo "resolved version: $v"
+          echo "LC_VERSION=$v" >> "$GITHUB_ENV"
 
       - uses: actions/setup-go@v5
         with:
@@ -97,7 +130,7 @@ jobs:
           # sherpa module's own -L points at a directory holding only
           # DLLs, so ld falls through to this one for the archives.
           CGO_LDFLAGS: -L${{ github.workspace }}/implib
-        run: go build -tags gui -ldflags "-s -w -H windowsgui" -o localcode-gui.exe ./cmd/localcode
+        run: go build -tags gui -ldflags "-s -w -H windowsgui -X main.version=$env:LC_VERSION" -o localcode-gui.exe ./cmd/localcode
 
       # The DLLs have to sit beside the exe for it to start at all, which
       # makes the smoke check below a real test of them too: a missing or
@@ -114,8 +147,14 @@ jobs:
       # config, so this stays headless.
       - name: Smoke check
         run: |
-          $p = Start-Process -FilePath ./localcode-gui.exe -ArgumentList 'version' -Wait -PassThru -NoNewWindow
+          $p = Start-Process -FilePath ./localcode-gui.exe -ArgumentList 'version' -Wait -PassThru -NoNewWindow -RedirectStandardOutput ver.txt
           if ($p.ExitCode -ne 0) { throw "localcode-gui.exe version exited $($p.ExitCode)" }
+          # Also the guard against shipping an unstamped binary again: an
+          # exe that reports "dev" builds and runs perfectly and is wrong
+          # in the only way a user ever sees, in the GUI header.
+          $v = (Get-Content ver.txt -Raw).Trim()
+          Write-Host "reported version: $v"
+          if ($v -eq 'dev' -or $v -eq '') { throw "localcode-gui.exe was not version-stamped (reported '$v')" }
 
       - uses: actions/upload-artifact@v4
         with:

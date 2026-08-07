@@ -40,8 +40,15 @@ script cannot judge, so they are on you.
 The Windows MSI bundles `localcode-gui.exe`, which is CGo and cannot be
 cross-compiled from macOS. Get a build from CI before packaging:
 
+Dispatch it with the version you are releasing rather than reusing the last
+push build. That binary is stamped with `-X main.version`, and it is the one
+the GUI header and `localcode-gui.exe version` report; a run off `main` only
+knows the *previous* tag, so it would ship a release whose desktop build
+names the version before it.
+
 ```bash
-gh run list --workflow=gui-windows.yml --limit 1 --json databaseId,conclusion
+gh workflow run gui-windows.yml --ref main -f version=x.y.z
+gh run list --workflow=gui-windows.yml --limit 1 --json databaseId,status,conclusion
 gh run download <run-id> -n localcode-gui-windows-amd64 -D /tmp/gui-exe
 ```
 

@@ -8,14 +8,18 @@
 </head>
 <body>
 <header>
-  <div class="brand">
-    <h1>LocalCode</h1>
-    <span class="version" id="app-version"></span>
+  <div class="left-group">
+    <button class="panel-toggle" id="toggle-left" title="show/hide the session panel">&#9776;</button>
+    <div class="brand">
+      <h1>LocalCode</h1>
+      <span class="version" id="app-version"></span>
+    </div>
   </div>
   <button id="workspace-btn" title="click to change the workspace directory"></button>
   <div class="right">
     <select class="agent-select" id="agent-select" title="switch agent"></select>
     <span class="session-id" id="session-id">connecting…</span>
+    <button class="panel-toggle" id="toggle-right" title="show/hide the tasks and MCP panel">&#9776;</button>
   </div>
 </header>
 

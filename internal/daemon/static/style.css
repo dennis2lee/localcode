@@ -39,6 +39,22 @@ header {
   justify-content: space-between;
 }
 header .brand { display: flex; align-items: baseline; gap: 7px; }
+header .left-group, header .right { display: flex; align-items: center; gap: 10px; }
+/* Show/hide for a side panel. Dragging a panel narrow is for tuning how
+   much room it gets; this is for wanting it gone, which a drag can never
+   quite achieve — the minimum width exists so a panel that is on screen
+   is still readable. */
+.panel-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.panel-toggle:hover { color: var(--text); border-color: var(--accent); }
 header h1 { font-size: 15px; margin: 0; font-weight: 600; }
 /* Baseline-aligned and muted: the version is reference material you go
    looking for when filing a bug, not something to read every time. It
@@ -131,9 +147,21 @@ aside {
   border-left: 1px solid var(--border);
   padding: 12px;
   overflow-y: auto;
+  /* Dragged narrow, the widest thing inside a panel — the row of
+     rename/fork/delete buttons — used to keep its full width and spill
+     out over the transcript, because a flex item defaults to
+     min-width:auto (never shrink below your content) and nothing here
+     clipped the overflow. Both halves are needed: min-width lets the
+     panel actually reach the width the drag asked for, overflow-x keeps
+     anything still too wide inside it. */
+  min-width: 0;
+  overflow-x: hidden;
   font-size: 12px;
   flex-shrink: 0;
 }
+/* A collapsed panel takes its resizer with it — a drag handle for
+   something that is not on screen is just a dead 4px strip. */
+aside.collapsed, .resizer.collapsed { display: none; }
 /* The drag handle between a side panel and the transcript. It is only
    4px wide, so it gets a wider invisible grab area via a ::before that
    overhangs both sides — a 4px target is accurate enough to point at but
@@ -190,6 +218,7 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
   padding: 8px 10px;
   margin-bottom: 6px;
   cursor: pointer;
+  overflow: hidden;
 }
 .session-item:hover { border-color: var(--accent); }
 .session-item.active { border-color: var(--accent); background: var(--panel); cursor: default; }
@@ -213,7 +242,10 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
   white-space: nowrap;
 }
 .session-item .meta { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
-.session-item .actions { display: flex; gap: 4px; }
+/* Wraps rather than overflowing: in a narrow panel the buttons stack
+   onto a second line, which is cramped but still usable — the previous
+   behaviour was for them to run out past the panel edge. */
+.session-item .actions { display: flex; gap: 4px; flex-wrap: wrap; }
 .session-item button { padding: 3px 8px; font-size: 11px; }
 .session-item .danger-btn { background: var(--err); color: #fff; }
 .icon-btn.danger-btn { background: var(--err); color: #fff; border-color: var(--err); }

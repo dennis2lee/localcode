@@ -9,7 +9,7 @@
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [AGENTS.md](#agentsmd-project-rules), [Auto memory](#auto-memory) |
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
-| [6. Web UI](#part-6-web-ui) | [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown) |
+| [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown) |
 | [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
@@ -712,6 +712,18 @@ At startup, `session.LoadAllFromDisk` reads every pair to restore the list, and 
 If one session fails to restore, for example a corrupt `.meta.json`, the rest still restore and the daemon logs a warning.
 
 ## Part 6. Web UI
+
+### Resizing and hiding the side panels
+
+| Action | How |
+|---|---|
+| Resize a panel | Drag the hairline between it and the transcript |
+| Back to the default width | Double-click that same handle |
+| Hide or show a panel | The toggle button in the header, at the far left for the session panel and the far right for the tasks/MCP panel |
+
+Both the widths and the hidden/shown state are remembered in the browser (or the desktop window) and restored next time.
+
+A drag stops at 160px, because a panel narrower than the session titles and server names it exists to show is worse than no panel at all. The toggle is what removes one entirely.
 
 ### Left panel: sessions
 

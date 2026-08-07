@@ -75,3 +75,37 @@ test('a page whose storage throws still starts and still resizes', async () => {
   drag(app, 'resize-left', 260, 300);
   assert.equal(app.el('left-panel').style.width, '300px');
 });
+
+// Dragging can only ever make a panel small, never absent — MIN exists
+// because a panel narrower than its own content is worse than no panel.
+// The toggle is the way to actually get rid of one.
+test('the toggle hides a panel and its handle, and puts them back', async () => {
+  const app = await load();
+  assert.ok(!app.el('left-panel').classList.contains('collapsed'));
+
+  app.el('toggle-left').click();
+  assert.ok(app.el('left-panel').classList.contains('collapsed'));
+  // The handle goes too: a drag grip for something off screen is a dead
+  // 4px strip the pointer still snags on.
+  assert.ok(app.el('resize-left').classList.contains('collapsed'));
+
+  app.el('toggle-left').click();
+  assert.ok(!app.el('left-panel').classList.contains('collapsed'));
+  assert.ok(!app.el('resize-left').classList.contains('collapsed'));
+});
+
+test('the two toggles are independent and both survive a reload', async () => {
+  const app = await load();
+  app.el('toggle-right').click();
+  assert.ok(app.el('right-panel').classList.contains('collapsed'));
+  assert.ok(!app.el('left-panel').classList.contains('collapsed'));
+
+  const saved = JSON.parse(app.storage.get('localcode.panelWidths'));
+  assert.equal(saved.rightCollapsed, true);
+
+  const reopened = await load({
+    localStorage: { 'localcode.panelWidths': JSON.stringify({ rightCollapsed: true }) },
+  });
+  assert.ok(reopened.el('right-panel').classList.contains('collapsed'));
+  assert.ok(!reopened.el('left-panel').classList.contains('collapsed'));
+});

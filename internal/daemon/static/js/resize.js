@@ -1,4 +1,7 @@
-import { leftPanel, rightPanel, resizeLeftHandle, resizeRightHandle } from './dom.js';
+import {
+  leftPanel, rightPanel, resizeLeftHandle, resizeRightHandle,
+  toggleLeftBtn, toggleRightBtn,
+} from './dom.js';
 
 // Both panels are flex items with a fixed width, so resizing is just
 // writing a new width — no layout recalculation of our own, and the
@@ -93,10 +96,35 @@ function attach(handle, panel, side, key) {
   });
 }
 
+// Collapsing hides the panel and its handle together — see the CSS. It is
+// a separate control from the drag because they answer different
+// questions: a drag tunes how much room a visible panel gets, and cannot
+// go below MIN, because a panel narrower than its own content is worse
+// than no panel at all. This is how you get to "no panel at all".
+export function setCollapsed(panel, handle, collapsed) {
+  if (!panel) return;
+  panel.classList.toggle('collapsed', collapsed);
+  if (handle) handle.classList.toggle('collapsed', collapsed);
+}
+
+function attachToggle(btn, panel, handle, key) {
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const collapsed = !panel.classList.contains('collapsed');
+    setCollapsed(panel, handle, collapsed);
+    store({ [key]: collapsed });
+    btn.setAttribute('aria-expanded', String(!collapsed));
+  });
+}
+
 export function initResizers() {
   const saved = readStored();
   if (typeof saved.left === 'number') setPanelWidth(leftPanel, saved.left);
   if (typeof saved.right === 'number') setPanelWidth(rightPanel, saved.right);
+  setCollapsed(leftPanel, resizeLeftHandle, saved.leftCollapsed === true);
+  setCollapsed(rightPanel, resizeRightHandle, saved.rightCollapsed === true);
   attach(resizeLeftHandle, leftPanel, 'left', 'left');
   attach(resizeRightHandle, rightPanel, 'right', 'right');
+  attachToggle(toggleLeftBtn, leftPanel, resizeLeftHandle, 'leftCollapsed');
+  attachToggle(toggleRightBtn, rightPanel, resizeRightHandle, 'rightCollapsed');
 }

@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime"
+	"time"
 
 	webview "github.com/webview/webview_go"
 )
@@ -66,11 +68,58 @@ func Launch(title string, handler http.Handler) error {
 	// macOS is unaffected (WKWebView takes its backing scale from the
 	// screen), and the dispatched resize is harmless there.
 	w.Dispatch(func() {
-		w.SetSize(1100, 800, webview.HintNone)
+		w.SetSize(winW, winH, webview.HintNone)
 	})
+	nudgeScale(w)
 
 	w.Run() // blocks until the window is closed
 	return nil
+}
+
+const (
+	winW = 1100
+	winH = 800
+)
+
+// nudgeScale re-sends WM_SIZE to the window a couple of times after the
+// message loop has started.
+//
+// The dispatched SetSize above was supposed to be enough, and on some
+// machines it is, but it is a race we do not control: the callback runs on
+// the first turn of the loop, which can still be ahead of WebView2
+// finishing its own asynchronous controller setup. Lose that race and the
+// resize lands on a widget that is not yet listening, the stale scale
+// survives, and the window opens with everything drawn far too large —
+// exactly the bug the dispatch was added to fix, just less often. The user
+// then drags the window border, WebView2 finally sees a WM_SIZE, and the
+// text snaps to the right size.
+//
+// So instead of assuming a single well-timed resize, send more of them,
+// spread out past any plausible initialization. Each one is a real size
+// change (one pixel taller, then back) because a same-size SetWindowPos
+// can be optimized into producing no WM_SIZE at all, which is the failure
+// mode this is working around in the first place. The one-pixel bounce is
+// not visible; a window that renders at 150% scale is.
+//
+// A cleaner fix is to call put_RasterizationScale on the WebView2
+// controller, but webview_go does not expose the controller, so it is not
+// reachable from here without forking the binding.
+//
+// Windows only: WKWebView takes its backing scale from the screen and has
+// never shown this, and there is no reason to make a mac window twitch.
+func nudgeScale(w webview.WebView) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	go func() {
+		for _, d := range []time.Duration{300 * time.Millisecond, 1500 * time.Millisecond} {
+			time.Sleep(d)
+			w.Dispatch(func() {
+				w.SetSize(winW, winH+1, webview.HintNone)
+				w.SetSize(winW, winH, webview.HintNone)
+			})
+		}
+	}()
 }
 
 // Available reports whether this build can open a window.
