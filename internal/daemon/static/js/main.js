@@ -4,7 +4,7 @@ import {
   autoDelegateBtn, delegateCloseBtn, delegateEnabledCheckbox, delegateAgentSelect,
   delegateMatchAddBtn, delegateMatchInput,
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
-  workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, micBtn,
+  workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, micBtn, stopBtn,
 } from './dom.js';
 import { app, session } from './state.js';
 import { uploadFile, switchAgent } from './api.js';
@@ -63,6 +63,7 @@ inputEl.addEventListener('drop', async (e) => {
 });
 
 micBtn.addEventListener('click', toggleDictation);
+stopBtn.addEventListener('click', cancelTurn);
 
 sendBtn.addEventListener('click', sendMessage);
 inputEl.addEventListener('input', autoResizeInput);

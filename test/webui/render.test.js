@@ -87,7 +87,10 @@ test('a running tool and a queue are both reported while waiting', async () => {
   app.state.runningTool = 'bash';
   app.state.waiting = true;
   app.renderStatusBar();
-  assert.match(app.el('status-text').textContent, /bash… esc to cancel \(1 queued\)/);
+  // "esc to cancel" moved out of the text and became a button, which is
+  // the half a host webview cannot swallow.
+  assert.match(app.el('status-text').textContent, /bash… \(1 queued\)/);
+  assert.equal(app.el('stop-btn').hidden, false);
 });
 
 test('the permission pill counts rules, and shouts when prompts are skipped', async () => {

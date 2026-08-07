@@ -371,7 +371,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .pill:disabled { cursor: not-allowed; opacity: 0.6; }
 /* On the first pill only, so the whole group rides the right edge. */
-#mic { margin-left: auto; }
+/* Whichever of these is first rides the right edge with the rest of the
+   group behind it. The stop button only exists while a turn is running,
+   so both need the rule. */
+#stop-btn, #mic { margin-left: auto; }
+#stop-btn ~ #mic { margin-left: 0; }
+#stop-btn { color: var(--err); border-color: var(--err); }
+#stop-btn:hover { background: color-mix(in srgb, var(--err) 18%, transparent); }
 #auto-delegate-btn.on { color: var(--accent); border-color: var(--accent); }
 #permission-status-btn.skip { color: var(--warn); border-color: var(--warn); }
 #permission-settings-modal {

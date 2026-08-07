@@ -352,3 +352,37 @@ test('switching session clears the transcript, queue and history', async () => {
   assert.deepEqual(Array.from(app.state.history), []);
   assert.equal(app.sse.url, '/api/sessions/sess-2/events');
 });
+
+// Esc is the fast way to stop a turn, but it only works if the key
+// reaches the page — which a host webview does not guarantee, and when it
+// does not, a long turn has no visible way out at all. A button cannot be
+// swallowed by a keyboard handler that never runs.
+test('a stop button appears while a turn runs and cancels it', async () => {
+  const app = await load({
+    routes: { 'POST /api/sessions/*/cancel': { cancelled: true } },
+  });
+  assert.equal(app.el('stop-btn').hidden, true);
+
+  app.setWaiting(true);
+  assert.equal(app.el('stop-btn').hidden, false);
+
+  app.el('stop-btn').click();
+  await app.settle();
+  assert.equal(app.callsTo('POST', '/api/sessions/sess-1/cancel').length, 1);
+
+  app.sse.emit({ type: 'turn.cancelled', data: {} });
+  assert.equal(app.state.waiting, false);
+  assert.equal(app.el('stop-btn').hidden, true);
+});
+
+// The tool being waited on is named, so a long turn reads as work rather
+// than a hang.
+test('the status line names the running tool', async () => {
+  const app = await load();
+  app.setWaiting(true);
+  app.applyEvent({ type: 'tool.start', data: { name: 'bash' } });
+  assert.match(app.el('status-text').textContent, /bash…/);
+
+  app.applyEvent({ type: 'tool.end', data: {} });
+  assert.match(app.el('status-text').textContent, /working…/);
+});

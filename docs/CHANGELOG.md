@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.32.9
+
+- **A stop button, next to the prompt box, whenever a turn is running.** Esc has always cancelled, but only if the key reaches the page — and when it does not, a long turn has no visible way out at all: a blinking light, no text, and nothing to click. A button cannot be swallowed by a keyboard handler that never runs. The status line also names the tool being waited on (`bash…`) so a slow turn reads as work rather than a hang.
+
 ## v0.32.8
 
 - **Fix: `skip_permissions` stopped almost nothing.** Turning "skip all permission prompts" on kept prompting, because a bash command containing a redirect or a substitution was forced back to "ask" without the setting being consulted at all. Every segment of the line resolved to allow, and then one check overrode the lot. `>` matches anywhere in the string and substitutions are in a large share of what an agent writes, so the prompts kept coming for someone who had explicitly asked for none. The checkbox's own promise — "every tool call runs without asking; explicit deny rules still deny" — now holds: deny still denies, and nothing else prompts.

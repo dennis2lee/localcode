@@ -1,6 +1,6 @@
 import {
   tasksEl, mcpServersEl, statusTextEl, statusBarEl, agentSelectEl,
-  permissionStatusBtn, autoDelegateBtn, workspaceBtn,
+  permissionStatusBtn, autoDelegateBtn, workspaceBtn, stopBtn,
 } from './dom.js';
 import { app, session } from './state.js';
 
@@ -94,8 +94,14 @@ export function renderStatusBar() {
   if (app.showTPS && session.lastUsage && session.lastUsage.tps) {
     parts.push(`${session.lastUsage.tps.toFixed(1)} tok/s`);
   }
+  // The stop button is the visible half of "esc to cancel". Esc is still
+  // the fast way, but it depends on the key reaching the page — which is
+  // not something a host webview guarantees, and when it does not the
+  // only apparent way out of a long turn is to kill the window. A button
+  // cannot be swallowed.
+  stopBtn.hidden = !session.waiting;
   if (session.waiting) {
-    let busyText = session.runningTool ? `${session.runningTool}… esc to cancel` : 'working… esc to cancel';
+    let busyText = session.runningTool ? `${session.runningTool}…` : 'working…';
     if (session.promptQueue.length > 0) busyText += ` (${session.promptQueue.length} queued)`;
     parts.push(busyText);
   }

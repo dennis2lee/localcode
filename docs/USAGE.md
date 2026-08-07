@@ -771,6 +771,7 @@ One line directly below the input box:
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Shown when `show_tps` is on |
 | Activity light | Three states: **gray** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — the model is running your prompt. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. |
+| Stop button | Appears while a turn is running. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
 | Dictation pill | `dictation: off`. Click to talk your prompt instead of typing it; the pill turns red and blinks while it listens. Reads `dictation: unavailable`, disabled with the reason in its tooltip, when no speech model is configured or the build has no recognizer. See [Dictating a prompt](#dictating-a-prompt-desktop-window). |
 | Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
