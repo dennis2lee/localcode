@@ -4,6 +4,7 @@ package dictation
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
@@ -51,6 +52,15 @@ func Open(cfg Config) (Recognizer, error) {
 	c.ModelConfig.Tokens = files.tokens
 	c.ModelConfig.NumThreads = threads
 	c.ModelConfig.Provider = "cpu"
+	// LC_SHERPA_DEBUG=1 makes sherpa print what it loaded and how it
+	// understood the model — vocabulary size, encoder shape, and the
+	// modeling unit it settled on. That is the only way to tell a model
+	// that failed to load from one that loaded and decodes to nothing,
+	// and this is a build that only exists on machines the author may
+	// not have. Off by default: it is pages of output on stderr.
+	if os.Getenv("LC_SHERPA_DEBUG") != "" {
+		c.ModelConfig.Debug = 1
+	}
 	c.DecodingMethod = "greedy_search"
 
 	// Endpointing is what turns a stream of words into utterances, and
