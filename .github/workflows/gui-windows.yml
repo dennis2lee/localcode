@@ -67,8 +67,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          lib="$(go env GOMODCACHE)/github.com/k2-fsa/sherpa-onnx-go-windows@v1.13.4/lib/x86_64-pc-windows-gnu"
-          test -d "$lib" || { echo "sherpa-onnx windows lib dir not found: $lib" >&2; exit 1; }
+          # Downloaded explicitly: this step runs before `go build`, so
+          # nothing has fetched the module yet and its directory does not
+          # exist.
+          go mod download github.com/k2-fsa/sherpa-onnx-go-windows
+          # `go list -m` rather than a hand-built path under GOMODCACHE, so
+          # the version tracks go.mod instead of being pinned here twice.
+          # It prints a native Windows path (backslashes), which bash reads
+          # as escapes — cygpath converts it.
+          lib="$(cygpath -u "$(go list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-windows)")/lib/x86_64-pc-windows-gnu"
+          if [ ! -d "$lib" ]; then
+            echo "sherpa-onnx windows lib dir not found: $lib" >&2
+            exit 1
+          fi
           mkdir -p implib
           cd implib
           for dll in sherpa-onnx-c-api onnxruntime sherpa-onnx-cxx-api; do
