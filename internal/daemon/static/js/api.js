@@ -59,7 +59,12 @@ export const browseWorkspace = (start) => api('POST', '/api/workspace/browse', {
 export const getMCPServers = () => api('GET', '/api/mcp-servers');
 
 export const getDictationStatus = () => api('GET', '/api/dictation');
-export const startDictation = () => api('POST', '/api/dictation');
+// Returns the id itself, not the {id} envelope the daemon sends. The
+// caller only ever puts this straight back into a URL, and handing it an
+// object meant every later request went to /api/dictation/[object
+// Object]/... — which the daemon answered with "no dictation session",
+// so dictation never started once.
+export const startDictation = async () => (await api('POST', '/api/dictation')).id;
 export const stopDictation = (id) => api('POST', `/api/dictation/${id}/stop`);
 // Raw PCM, not JSON: base64 would cost a third more bytes per chunk on a
 // request that happens four times a second, for nothing.

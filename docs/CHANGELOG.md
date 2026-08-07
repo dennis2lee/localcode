@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.32.6
+
+- **Fix: dictation could never start.** Clicking the microphone produced `no dictation session "[object Object]"` immediately. The daemon answers "start" with `{"id": "..."}` and the client used that whole object as the id, so every request after it went to `/api/dictation/[object Object]/...`, which the daemon quite correctly did not recognise. This had been broken in every build that shipped the feature; the tests only checked whether the button was *shown*, never what pressing it did. The start-to-audio-to-stop path is covered now.
+
 ## v0.32.5
 
 - **Fix: upgrading would delete the speech model and download it again.** A repeat install already skipped the download — `dictation install` returns immediately when a usable model is there — but an upgrade never got that far. A major upgrade uninstalls the old product first, and that uninstall runs the old package's own removal action, so the order was: delete 400MB, install the new files, find no model, download the same 400MB again. Every upgrade, for a file that had not changed. The removal is now skipped when the uninstall is part of an upgrade rather than a real one.

@@ -274,6 +274,42 @@ async function load(opts = {}) {
     removeItem: (k) => stored.delete(k),
   };
   harness.storage = stored;
+  // The Web Audio side of dictation, stubbed just enough that the real
+  // capture path runs: get a microphone, load a worklet, and hand PCM
+  // chunks to the callback. Nothing here models audio — the test drives
+  // the chunks itself through harness.micChunk(). It exists because the
+  // dictation start path had no coverage at all, and the bug that hid
+  // there (the session id posted as "[object Object]") was one no
+  // button-visibility test could ever have seen.
+  sandbox.navigator = {
+    mediaDevices: {
+      getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }),
+    },
+  };
+  sandbox.URL = { createObjectURL: () => 'blob:worklet', revokeObjectURL() {} };
+  sandbox.Blob = class Blob {
+    constructor(parts) { this.parts = parts; }
+  };
+  sandbox.AudioWorkletNode = class AudioWorkletNode {
+    constructor() {
+      this.port = { onmessage: null };
+      harness.micNode = this;
+    }
+  };
+  sandbox.AudioContext = class AudioContext {
+    constructor() {
+      this.audioWorklet = { addModule: async () => {} };
+    }
+    createMediaStreamSource() { return { connect() {} }; }
+    async close() {}
+  };
+  // micChunk pushes one buffer of "audio" the way the worklet would.
+  harness.micChunk = (bytes = new Uint8Array(8).buffer) => {
+    if (harness.micNode && harness.micNode.port.onmessage) {
+      harness.micNode.port.onmessage({ data: bytes });
+    }
+  };
+
   sandbox.confirm = () => (opts.confirm === undefined ? true : opts.confirm);
   sandbox.prompt = () => (opts.prompt === undefined ? null : opts.prompt);
 

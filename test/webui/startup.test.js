@@ -216,3 +216,61 @@ test('a daemon too old to know about dictation leaves the pill disabled', async 
   assert.equal(app.el('mic').disabled, true);
   assert.equal(app.state.sessionID, 'sess-1'); // and the page still came up
 });
+
+// Regression: dictation could never start, in any build, ever.
+//
+// The daemon answers POST /api/dictation with {"id": "..."}, and the
+// client used that whole object as the id. Every request after it went
+// to /api/dictation/[object Object]/... — which the daemon, quite
+// correctly, answered with "no dictation session". The visible result
+// was an error line the moment the microphone was clicked.
+//
+// The tests that existed only checked whether the button was *shown*.
+// Nothing exercised what pressing it did, which is why an unusable
+// feature shipped looking finished.
+test('starting dictation posts audio to the session the daemon named', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/dictation': { ready: true },
+      'POST /api/dictation': { status: 201, body: { id: 'dict-7' } },
+      'POST /api/dictation/dict-7/audio': { provisional: 'hello' },
+    },
+  });
+
+  app.el('mic').click();
+  await app.settle();
+
+  assert.equal(app.callsTo('POST', '/api/dictation').length, 1);
+  assert.equal(app.isDictating(), true);
+
+  app.micChunk();
+  await app.settle();
+
+  // The whole point: a real id in the path, not a stringified object.
+  assert.equal(app.callsTo('POST', '/api/dictation/dict-7/audio').length, 1);
+  assert.equal(app.callsTo('POST', /\[object/).length, 0);
+
+  // And the recognised text reaches the prompt box.
+  assert.equal(app.el('input').value, 'hello');
+});
+
+test('stopping dictation stops the same session', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/dictation': { ready: true },
+      'POST /api/dictation': { status: 201, body: { id: 'dict-7' } },
+      'POST /api/dictation/dict-7/stop': { final: 'the whole sentence' },
+    },
+  });
+
+  app.el('mic').click();
+  await app.settle();
+  app.el('mic').click();
+  await app.settle();
+
+  assert.equal(app.callsTo('POST', '/api/dictation/dict-7/stop').length, 1);
+  assert.equal(app.isDictating(), false);
+  // Whatever was mid-sentence when the button was clicked is still text
+  // the person said and meant.
+  assert.equal(app.el('input').value, 'the whole sentence');
+});
