@@ -766,6 +766,7 @@ One line directly below the input box:
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Shown when `show_tps` is on |
 | Activity light | Three states: **gray** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — the model is running your prompt. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. |
+| Dictation pill | `dictation: off`. Click to talk your prompt instead of typing it; the pill turns red and blinks while it listens. Reads `dictation: unavailable`, disabled with the reason in its tooltip, when no speech model is configured or the build has no recognizer. See [Dictating a prompt](#dictating-a-prompt-desktop-window). |
 | Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
 
@@ -976,11 +977,13 @@ See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for mor
 
 ### Dictating a prompt (desktop window)
 
-The desktop window can take a prompt by voice. Click the microphone
-button next to Send and talk; the text appears in the prompt box as you
-speak — grey while a sentence is still being spoken, ordinary text once
-you pause. Everything runs on your machine: no audio leaves it, and it
-works with no network at all.
+The desktop window can take a prompt by voice. Click the
+`dictation: off` pill in the status row under the prompt box and talk;
+the text appears in the prompt box as you speak — grey while a sentence
+is still being spoken, ordinary text once you pause. The pill reads
+`dictation: on` with a blinking red dot while it is listening. Click it
+again to stop. Everything runs on your machine: no audio leaves it, and
+it works with no network at all.
 
 It is off until you point it at a speech model, because there is no
 sensible one to guess and guessing would mean a silent several-hundred-
@@ -1018,9 +1021,11 @@ Two things worth knowing before you rely on it:
   poorly, so "useState 훅을 async 함수로 바꿔줘" is where you will see
   its limits. Try it with the way you actually dictate before deciding.
 
-The microphone button is hidden entirely when dictation cannot run — a
-build without the recognizer, or no model configured. A button that can
-only fail is worse than no button.
+When dictation cannot run — a build without the recognizer, or no model
+configured — the pill reads `dictation: unavailable` and is disabled,
+with the daemon's own explanation in its tooltip. It stays on screen
+rather than disappearing: the usual reason is the missing
+`dictation_model_dir` above, which is worth knowing about.
 
 On Windows the speech runtime is three DLLs that the MSI installs beside
 `localcode-gui.exe`. They are not optional extras: Windows resolves a

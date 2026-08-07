@@ -143,8 +143,16 @@ export async function startDictation() {
     return;
   }
 
-  micBtn.classList.add('recording');
-  micBtn.title = 'stop dictation';
+  setMicState(true);
+}
+
+// The pill names its own state rather than relying on the recording dot
+// alone: "is it listening?" is the one question a microphone control has
+// to answer without being hovered.
+function setMicState(recording) {
+  micBtn.classList.toggle('recording', recording);
+  micBtn.textContent = recording ? '\u{1F3A4} dictation: on' : '\u{1F3A4} dictation: off';
+  micBtn.title = recording ? 'click to stop dictating' : 'click to dictate a prompt';
 }
 
 // enqueue serializes the uploads. Chunks arrive on a fixed clock while a
@@ -190,8 +198,7 @@ export async function stopDictation() {
   if (session.stream) session.stream.getTracks().forEach((t) => t.stop());
   if (session.ctx) await session.ctx.close().catch(() => {});
 
-  micBtn.classList.remove('recording');
-  micBtn.title = 'dictate a prompt';
+  setMicState(false);
 
   try {
     const res = await apiClient.stopDictation(session.id);

@@ -54,18 +54,37 @@ export async function loadVersion() {
   }
 }
 
-// The microphone button is hidden unless a dictation could actually
-// start — no recognizer in this build, or no model configured, means a
-// button that can only fail, which is worse than no button. The reason
-// goes in the tooltip of nothing, so it is logged instead of shown.
+// The microphone pill sits in the status row under the prompt box and is
+// always there. It used to be hidden whenever a dictation could not
+// start, on the reasoning that a button which can only fail is worse
+// than no button — but the reason it cannot start is almost always "no
+// model directory is configured", which is a thing you would fix if you
+// knew about it. Hiding the control hid the feature: there was nothing
+// on screen to suggest dictation existed, let alone how to turn it on.
+//
+// So it stays visible and says which of the two it is. Unavailable means
+// disabled, with the daemon's own explanation in the tooltip.
 export async function loadDictation() {
+  let detail = 'the daemon did not answer';
   try {
     const s = await apiClient.getDictationStatus();
-    micBtn.hidden = !s.ready;
-    if (!s.ready && s.detail) console.log('dictation unavailable:', s.detail);
+    if (s.ready) {
+      setDictationAvailable(true);
+      return;
+    }
+    detail = s.detail || 'no reason given';
   } catch (err) {
-    micBtn.hidden = true;
+    // A daemon too old to know the endpoint 404s, which lands here.
   }
+  setDictationAvailable(false, detail);
+}
+
+function setDictationAvailable(ready, detail) {
+  micBtn.disabled = !ready;
+  micBtn.textContent = ready ? '\u{1F3A4} dictation: off' : '\u{1F3A4} dictation: unavailable';
+  micBtn.title = ready
+    ? 'click to dictate a prompt'
+    : `dictation is not available: ${detail}`;
 }
 
 export async function loadCommands() {

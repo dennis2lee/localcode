@@ -192,21 +192,27 @@ test('a version the daemon will not report leaves the header clean', async () =>
   assert.equal(app.state.sessionID, 'sess-1');
 });
 
-// The microphone button is offered only when a dictation could actually
-// start. A build with no recognizer, or one with no model configured,
-// gets no button — one that can only fail is worse than none.
-test('the microphone button is hidden unless dictation is ready', async () => {
+// The dictation pill is always on screen. It used to be hidden whenever
+// dictation could not start, which also hid the fact that the feature
+// exists — and the usual reason it cannot start is a missing config key,
+// which is exactly the kind of thing you would go fix if you knew.
+test('the dictation pill says it is unavailable rather than disappearing', async () => {
   const off = await load({
     routes: { 'GET /api/dictation': { ready: false, detail: 'no speech recognizer in this build' } },
   });
-  assert.equal(off.el('mic').hidden, true);
+  assert.equal(off.el('mic').disabled, true);
+  assert.match(off.el('mic').textContent, /unavailable/);
+  // The daemon's own explanation is what reaches the user, not a
+  // generic "not available" that leaves them nowhere to go.
+  assert.match(off.el('mic').title, /no speech recognizer in this build/);
 
   const on = await load({ routes: { 'GET /api/dictation': { ready: true } } });
-  assert.equal(on.el('mic').hidden, false);
+  assert.equal(on.el('mic').disabled, false);
+  assert.match(on.el('mic').textContent, /dictation: off/);
 });
 
-test('a daemon too old to know about dictation just gets no button', async () => {
+test('a daemon too old to know about dictation leaves the pill disabled', async () => {
   const app = await load({ routes: { 'GET /api/dictation': { status: 404 } } });
-  assert.equal(app.el('mic').hidden, true);
+  assert.equal(app.el('mic').disabled, true);
   assert.equal(app.state.sessionID, 'sess-1'); // and the page still came up
 });
