@@ -1,0 +1,24 @@
+<!--
+  The 16px and 32px variant. Same idea, far less of it: four traces and
+  four nodes at this size are a grey smear, so it keeps one trace, one
+  node, and thicker strokes. Icon sets have always done this — the small
+  sizes are a redraw, not a downscale.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <g fill="#58a6ff">
+    <rect x="52"  y="30" width="46" height="38" rx="11"/>
+    <rect x="105" y="30" width="46" height="38" rx="11"/>
+    <rect x="158" y="30" width="46" height="38" rx="11"/>
+  </g>
+
+  <rect x="30" y="58" width="196" height="152" rx="22" fill="#1f6feb"/>
+
+  <g stroke="#0d1117" stroke-width="20" fill="none" stroke-linecap="round">
+    <path d="M72 168 L72 122 L140 122 L140 96"/>
+  </g>
+
+  <g fill="#7ee787">
+    <circle cx="140" cy="96" r="19"/>
+    <circle cx="72"  cy="168" r="19"/>
+  </g>
+</svg>

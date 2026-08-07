@@ -60,6 +60,7 @@ wixl -a x64 \
 	-D "ExePath=$WORK/${BIN_NAME}.exe" \
 	-D "GuiExePath=$GUI_EXE_PATH" \
 	-D "WebView2BootstrapperPath=$WORK/MicrosoftEdgeWebview2Setup.exe" \
+	-D "IconPath=$ROOT/build/icon/localcode.ico" \
 	-o "$MSI" \
 	build/localcode.wxs
 
@@ -107,6 +108,11 @@ verify_msi File 'localcode-gui.exe' 'localcode-gui.exe is missing from the File 
 # exactly the kind of breakage this file exists to catch — it cannot be
 # noticed from a build machine that isn't Windows.
 verify_msi Shortcut 'LocalCodeDesktopShortcut	DesktopFolder' 'the desktop shortcut is missing or not pointing at DesktopFolder'
+# The icon has to be embedded and referenced, or every shortcut falls back
+# to the exe's default (which, for a Go binary with no resource section,
+# is the blank Windows one).
+verify_msi Icon 'LocalCodeIcon' 'the application icon is missing from the Icon table'
+verify_msi Property 'ARPPRODUCTICON	LocalCodeIcon' 'Add/Remove Programs is not pointed at the application icon'
 
 echo "==> done: $MSI"
 ls -la "$MSI"

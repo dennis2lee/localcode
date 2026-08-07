@@ -32,6 +32,16 @@
 
     <Media Id='1' Cabinet='localcode.cab' EmbedCab='yes' />
 
+    <!--
+      The application icon, a multi-resolution .ico built from SVG by
+      build/icon/make-ico.py. The .ico is committed rather than generated
+      here on purpose: the release machine has no rasterizer, and an
+      installer build must not depend on one being installed.
+    -->
+    <Icon Id='LocalCodeIcon' SourceFile='$(var.IconPath)' />
+    <!-- Add/Remove Programs shows it too, rather than a generic box. -->
+    <Property Id='ARPPRODUCTICON' Value='LocalCodeIcon' />
+
     <Directory Id='TARGETDIR' Name='SourceDir'>
       <Directory Id='ProgramFiles64Folder'>
         <Directory Id='INSTALLDIR' Name='LocalCode'>
@@ -63,6 +73,7 @@
                       Name='LocalCode'
                       Description='Bedrock + local-LLM TUI coding agent'
                       Target='[INSTALLDIR]localcode.exe'
+                      Icon='LocalCodeIcon'
                       WorkingDirectory='INSTALLDIR' />
             <RemoveFolder Id='RemoveAppMenuFolder' On='uninstall' />
             <RegistryValue Root='HKCU'
@@ -78,6 +89,7 @@
                       Description='LocalCode in a native desktop window'
                       Target='[INSTALLDIR]localcode-gui.exe'
                       Arguments='--gui'
+                      Icon='LocalCodeIcon'
                       WorkingDirectory='INSTALLDIR' />
             <RegistryValue Root='HKCU'
                             Key='Software\LocalCode'
@@ -101,6 +113,7 @@
                     Name='LocalCode'
                     Description='LocalCode in a native desktop window'
                     Target='[INSTALLDIR]localcode-gui.exe'
+                    Icon='LocalCodeIcon'
                     WorkingDirectory='INSTALLDIR' />
           <RegistryValue Root='HKCU'
                           Key='Software\LocalCode'

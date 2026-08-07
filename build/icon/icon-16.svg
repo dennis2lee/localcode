@@ -1,0 +1,23 @@
+<!--
+  The 16px drawing. At this size a circuit trace is one or two pixels
+  wide and simply disappears, so there isn't one: what has to survive is
+  the silhouette (a brick with studs) and a single bright node saying
+  "there is something electronic in here".
+
+  The studs are proportionally larger than in the other two drawings.
+  Scaled faithfully they merge into one bar at 16px and the brick stops
+  reading as a brick, which is the one thing this size has to get right.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <g fill="#58a6ff">
+    <rect x="40"  y="20" width="56" height="48" rx="12"/>
+    <rect x="104" y="20" width="56" height="48" rx="12"/>
+    <rect x="168" y="20" width="56" height="48" rx="12"/>
+  </g>
+
+  <rect x="22" y="60" width="212" height="164" rx="26" fill="#1f6feb"/>
+
+  <!-- One node, large and centred. Anything smaller is a stray pixel. -->
+  <circle cx="128" cy="142" r="46" fill="#0d1117"/>
+  <circle cx="128" cy="142" r="30" fill="#7ee787"/>
+</svg>
