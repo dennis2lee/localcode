@@ -54,6 +54,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		systemPrompt = systemPrompt + "\n\n" + agentCfg.Prompt
 	}
 
+	// Tokens-per-second describes the turn about to run, not the one
+	// before it, so the accumulator starts empty here.
+	l.startTurnRate(sessionID)
+
 	l.maybeAutoCompact(ctx, sessionID, p, profile, systemPrompt)
 
 	// modelText differs from displayText for /skill <name>, custom
@@ -119,6 +123,14 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 
 // streamUsage carries the token usage seen while draining one stream, plus
 // enough timing information to compute tokens-per-second.
+//
+// elapsed is generation time, not wall-clock time for the request: it runs
+// from the first piece of output to the last. Everything before the first
+// token — prefill of a long prompt, and on a local server the wait behind
+// whatever else is queued — is real waiting, but it is not generation, and
+// dividing the output tokens by it reported a rate several times below
+// what the model was actually doing. That gap is widest on exactly the
+// long-context turns where someone looks at the number.
 type streamUsage struct {
 	hasUsage     bool
 	inputTokens  int
@@ -126,37 +138,66 @@ type streamUsage struct {
 	elapsed      time.Duration
 }
 
+// tpsTickInterval is how often a live tokens-per-second estimate goes out
+// while a model is still generating. A var so a test can shorten it.
+var tpsTickInterval = time.Second
+
 // consumeStream drains one model response, mirroring each piece into the
 // session's event log, and returns the assistant's content blocks, any
 // tool_use blocks it requested, and whatever token usage the provider
 // reported (see provider.EventUsage — not every provider/request reports
 // it, hence streamUsage.hasUsage).
 func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEvent) (blocks []provider.Block, toolUses []provider.Block, stopReason string, usage streamUsage, err error) {
-	start := time.Now()
 	var text strings.Builder
 	toolNames := map[string]string{}
 	toolInputs := map[string]*strings.Builder{}
-	var toolOrder []string
+
+	// Generation timing, and the live rate estimate built on top of it.
+	// deltas counts stream deltas, not tokens — the authoritative token
+	// count only arrives with the provider's usage report at the end of
+	// the stream, and the whole point of a live figure is to exist before
+	// then. For the local servers this is aimed at (llama.cpp, Ollama,
+	// vLLM) a delta is one token, so the estimate is close; for providers
+	// that batch several tokens per delta it reads low. It is shown with
+	// a "~" for that reason, and is replaced by the real number the
+	// moment the stream ends.
+	var genStart, lastTick time.Time
+	deltas := 0
+	generated := func() {
+		if genStart.IsZero() {
+			genStart = time.Now()
+			lastTick = genStart
+		}
+		deltas++
+		if time.Since(lastTick) < tpsTickInterval {
+			return
+		}
+		lastTick = time.Now()
+		if secs := time.Since(genStart).Seconds(); secs > 0 {
+			l.Store.Broadcast(sessionID, events.TypeUsage, map[string]any{
+				"tps":       float64(deltas) / secs,
+				"estimated": true,
+				"show_tps":  l.ShowTPS(),
+			})
+		}
+	}
 
 	for ev := range stream {
 		switch ev.Type {
 		case provider.EventTextDelta:
 			text.WriteString(ev.TextDelta)
 			l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": ev.TextDelta})
+			generated()
 
 		case provider.EventToolUseStart:
 			toolNames[ev.ToolUseID] = ev.ToolName
 			toolInputs[ev.ToolUseID] = &strings.Builder{}
-			toolOrder = append(toolOrder, ev.ToolUseID)
-			l.Store.Append(sessionID, events.TypeToolStart, map[string]any{
-				"tool_use_id": ev.ToolUseID,
-				"name":        ev.ToolName,
-			})
 
 		case provider.EventToolUseInputDelta:
 			if b, ok := toolInputs[ev.ToolUseID]; ok {
 				b.WriteString(ev.InputDelta)
 			}
+			generated()
 
 		case provider.EventToolUseEnd:
 			input := ev.ToolInput
@@ -167,6 +208,17 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 					input = json.RawMessage("{}")
 				}
 			}
+			// tool.start is emitted here rather than at ToolUseStart so it
+			// can carry the arguments: they stream in one fragment at a
+			// time and are only complete now. This still lands before
+			// message.part.end, which is what rehydrateHistory pairs it
+			// against, and it is closer to when the tool actually runs —
+			// nothing executes until the whole stream has been drained.
+			l.Store.Append(sessionID, events.TypeToolStart, map[string]any{
+				"tool_use_id": ev.ToolUseID,
+				"name":        toolNames[ev.ToolUseID],
+				"input":       string(input),
+			})
 			toolUses = append(toolUses, provider.Block{
 				Type:      provider.BlockToolUse,
 				ToolUseID: ev.ToolUseID,
@@ -187,7 +239,15 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			return nil, nil, "", usage, fmt.Errorf("provider stream error: %w", ev.Err)
 		}
 	}
-	usage.elapsed = time.Since(start)
+	// A rate needs a span to measure across, and one delta is a point.
+	// Providers that deliver a short reply in a single chunk would
+	// otherwise divide the whole output by the microseconds between
+	// receiving it and the stream closing, and report six-figure
+	// tokens-per-second. Leaving elapsed at zero says "not measurable
+	// here", and recordUsage keeps the last figure it did measure.
+	if deltas >= 2 {
+		usage.elapsed = time.Since(genStart)
+	}
 
 	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String()})
 

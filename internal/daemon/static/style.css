@@ -103,6 +103,54 @@ main {
 #transcript .msg-user { color: var(--accent); font-weight: 600; }
 #transcript .msg-tool { color: var(--muted); font-style: italic; }
 #transcript .msg-error { color: var(--err); font-weight: 600; }
+
+/* A tool call: one quiet line, deliberately quieter than the conversation
+   around it. It is there so a long turn is legible while it runs, not to
+   compete with what the model actually said. */
+#transcript .msg-toolcall { margin-bottom: 4px; }
+#transcript .msg-toolcall .head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.92em;
+}
+#transcript .msg-toolcall .head:hover { color: var(--fg); }
+#transcript .msg-toolcall .marker { flex: none; width: 1em; }
+#transcript .msg-toolcall .name {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+}
+/* The argument gets whatever room is left and is cut off rather than
+   wrapped: a long shell command must not turn one line into five. */
+#transcript .msg-toolcall .arg {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: 0.85;
+}
+#transcript .msg-toolcall .state { flex: none; opacity: 0.7; }
+#transcript .msg-toolcall.running .marker { animation: toolpulse 1s ease-in-out infinite; }
+#transcript .msg-toolcall.failed .marker, #transcript .msg-toolcall.failed .state { color: var(--err); }
+#transcript .msg-toolcall .detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 4px 0 6px;
+  max-height: 340px;
+  overflow: auto;
+  font-size: 0.88em;
+}
+@keyframes toolpulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.25 } }
+
 #transcript .msg-model { margin-bottom: 4px; }
 #transcript .msg-model > *:first-child { margin-top: 0; }
 #transcript .msg-model > *:last-child { margin-bottom: 0; }

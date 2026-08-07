@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"time"
+
 	"localcode/internal/events"
 	"localcode/internal/modelinfo"
 )
@@ -26,6 +28,24 @@ type modelTotals struct {
 	Calls        int
 }
 
+// turnRate accumulates output tokens and generation time across every
+// model call made within one turn, so tokens-per-second can be reported
+// over the turn rather than over whichever call happened to finish last.
+// Reset at the start of each turn — see startTurnRate.
+type turnRate struct {
+	tokens int
+	dur    time.Duration
+}
+
+// startTurnRate clears the per-turn rate accumulator. Called once when a
+// turn begins, so the figure describes the turn in progress rather than
+// averaging in every turn before it.
+func (l *Loop) startTurnRate(sessionID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.turnRate, sessionID)
+}
+
 // recordUsage stores usage as sessionID's latest known token usage (each
 // call overwrites, since a provider's input_tokens already reflects the
 // full history sent so far — not something to accumulate across calls)
@@ -33,9 +53,31 @@ type modelTotals struct {
 // update its context-window/TPS display.
 func (l *Loop) recordUsage(sessionID, model string, usage streamUsage) {
 	maxContext := modelinfo.MaxContextTokens(model)
-	tps := 0.0
+
+	// Rate over the whole turn so far, not over this one model call.
+	//
+	// A turn that uses tools is several calls, and the last one is
+	// routinely a five-token "done." that took a moment: reporting each
+	// call on its own made the number leap between 40 and 3 for no reason
+	// the person watching could see. Totals divided by total generation
+	// time is both steadier and the figure actually being asked for —
+	// how fast is this model producing text for me.
+	// A call whose generation time could not be measured (see
+	// consumeStream) contributes neither tokens nor time: folding in
+	// tokens that took "no time" would spike the average rather than
+	// leave it alone.
+	l.mu.Lock()
+	r := l.turnRate[sessionID]
 	if usage.elapsed > 0 {
-		tps = float64(usage.outputTokens) / usage.elapsed.Seconds()
+		r.tokens += usage.outputTokens
+		r.dur += usage.elapsed
+		l.turnRate[sessionID] = r
+	}
+	l.mu.Unlock()
+
+	tps := 0.0
+	if r.dur > 0 {
+		tps = float64(r.tokens) / r.dur.Seconds()
 	}
 
 	u := sessionUsage{
@@ -67,7 +109,11 @@ func (l *Loop) recordUsage(sessionID, model string, usage streamUsage) {
 		"max_context":   u.MaxContext,
 		"percent":       percent,
 		"tps":           tps,
-		"show_tps":      l.ShowTPS(),
+		// Explicitly false so it clears the flag set by the live estimates
+		// broadcast during the stream — a client merges usage events, and
+		// a missing key would leave the "~" on an exact figure.
+		"estimated": false,
+		"show_tps":  l.ShowTPS(),
 		"model":         model,
 	})
 }

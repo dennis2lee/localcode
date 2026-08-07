@@ -353,6 +353,47 @@ func (s *Store) Append(sessionID string, typ events.Type, data map[string]any) (
 	return ev, nil
 }
 
+// Broadcast fans an event out to a session's live subscribers without
+// recording it: no seq, no place in the log, nothing written to disk.
+//
+// For things that are only true right now — the live tokens-per-second
+// readout is the case this exists for. Such an event fires once a second
+// during a long generation, and appending it would grow the log (and the
+// file behind it) by hundreds of entries that say nothing about what was
+// said, and would replay as a burst of stale numbers on reconnect.
+//
+// Seq stays 0, which is how the SSE layer knows not to give it an `id:`
+// line: a transient event must never become the Last-Event-ID a browser
+// resumes the real log from.
+func (s *Store) Broadcast(sessionID string, typ events.Type, data map[string]any) {
+	s.mu.Lock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+	subs := make([]*subscriber, 0, len(st.subs))
+	for _, sub := range st.subs {
+		subs = append(subs, sub)
+	}
+	s.mu.Unlock()
+
+	ev := events.Event{
+		Session:   sessionID,
+		Type:      typ,
+		Timestamp: time.Now().UTC(),
+		Data:      data,
+	}
+	for _, sub := range subs {
+		select {
+		case sub.ch <- ev:
+		default:
+			// Dropping a transient event costs nothing: another one is
+			// along in a second, and it carried no history.
+		}
+	}
+}
+
 // Events returns all events with seq > since, for catch-up on
 // (re)connection.
 func (s *Store) Events(sessionID string, since uint64) ([]events.Event, error) {

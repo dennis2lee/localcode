@@ -1,6 +1,46 @@
 package tui
 
-import "charm.land/lipgloss/v2"
+import (
+	"encoding/json"
+	"strings"
+
+	"charm.land/lipgloss/v2"
+)
+
+// argKeys are the tool arguments worth putting beside a tool's name — the
+// command for bash, the path for a file read. Order matters: the first one
+// present wins.
+var argKeys = []string{"command", "path", "file_path", "pattern", "query", "url", "name", "prompt", "description"}
+
+// summarizeToolInput reduces a tool call's arguments to the single value
+// that identifies it, on one line and short enough to sit in a transcript
+// row. An unknown tool (an MCP server's, say) falls back to the first
+// string in the object, so it still says something rather than nothing.
+func summarizeToolInput(inputJSON string) string {
+	var obj map[string]any
+	if json.Unmarshal([]byte(inputJSON), &obj) != nil {
+		return ""
+	}
+	for _, k := range argKeys {
+		if s, ok := obj[k].(string); ok && s != "" {
+			return oneLine(s)
+		}
+	}
+	for _, v := range obj {
+		if s, ok := v.(string); ok && s != "" {
+			return oneLine(s)
+		}
+	}
+	return ""
+}
+
+func oneLine(s string) string {
+	flat := strings.Join(strings.Fields(s), " ")
+	if len(flat) > 140 {
+		return flat[:139] + "…"
+	}
+	return flat
+}
 
 // entryKind distinguishes the handful of things that ever land in the
 // transcript, so view.go can style each one appropriately without the

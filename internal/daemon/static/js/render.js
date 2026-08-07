@@ -91,8 +91,14 @@ export function renderStatusBar() {
   if (session.lastUsage && typeof session.lastUsage.percent === 'number') {
     parts.push(`context: ${session.lastUsage.percent.toFixed(1)}%`);
   }
+  // "~" marks a live estimate made while the model is still generating,
+  // counted from stream deltas because the real token count only arrives
+  // when the stream ends. It is replaced by the exact figure at that
+  // point; the tilde is there so a number that can be off is never shown
+  // as though it were measured.
   if (app.showTPS && session.lastUsage && session.lastUsage.tps) {
-    parts.push(`${session.lastUsage.tps.toFixed(1)} tok/s`);
+    const tick = session.lastUsage.estimated ? '~' : '';
+    parts.push(`${tick}${session.lastUsage.tps.toFixed(1)} tok/s`);
   }
   // The stop button is the visible half of "esc to cancel". Esc is still
   // the fast way, but it depends on the key reaching the page — which is

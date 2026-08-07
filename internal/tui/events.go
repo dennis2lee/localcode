@@ -39,10 +39,19 @@ func (m *Model) applyEvent(ev events.Event) {
 		// cleared — safe to stop waiting and let the queue drain.
 		m.endTurn()
 	case events.TypeToolStart:
-		// No transcript line — tool activity lives in the busy indicator
-		// below the prompt box, which names the running tool and vanishes
-		// when the turn ends.
+		// A line per call, as well as the busy indicator below the prompt
+		// box. The indicator alone says only what is running right now and
+		// clears when it stops, so a turn that spends minutes in tools
+		// left nothing on screen either while it worked or afterwards.
 		m.runningTool, _ = ev.Data["name"].(string)
+		name, _ := ev.Data["name"].(string)
+		input, _ := ev.Data["input"].(string)
+		m.endModelStream()
+		if arg := summarizeToolInput(input); arg != "" {
+			m.appendEntry(entryTool, "▸ "+name+"  "+arg)
+		} else {
+			m.appendEntry(entryTool, "▸ "+name)
+		}
 	case events.TypeToolEnd:
 		m.runningTool = ""
 	case events.TypePermissionRequest:

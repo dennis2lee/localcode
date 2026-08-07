@@ -37,6 +37,116 @@ export function appendToolLines(lines) {
   return div;
 }
 
+// Tool calls in the transcript.
+//
+// These used to show only as a name in the status bar, which vanished the
+// moment the tool finished. A turn that spends minutes in tools therefore
+// produced a transcript that said nothing at all while it ran and nothing
+// afterwards about what it had done — the report was a blinking light and
+// no output. One line per call, written when the call starts and completed
+// when it ends, is the missing half of "show me what is happening".
+//
+// One line, not the output: a file read is thousands of lines and would
+// bury the conversation. The full arguments and result are one click away
+// on the row itself.
+const ARG_KEYS = ['command', 'path', 'file_path', 'pattern', 'query', 'url', 'name', 'prompt', 'description'];
+
+// summarizeInput picks the one value worth showing beside a tool's name —
+// the command for bash, the path for a file read. Falls back to the first
+// string in the object, then to the raw JSON, so an unknown tool (an MCP
+// server's, say) still says something rather than nothing.
+export function summarizeInput(inputJSON) {
+  let obj;
+  try { obj = JSON.parse(inputJSON || '{}'); } catch { return oneLine(inputJSON || ''); }
+  if (!obj || typeof obj !== 'object') return oneLine(String(obj ?? ''));
+  for (const k of ARG_KEYS) {
+    if (typeof obj[k] === 'string' && obj[k]) return oneLine(obj[k]);
+  }
+  for (const v of Object.values(obj)) {
+    if (typeof v === 'string' && v) return oneLine(v);
+  }
+  const keys = Object.keys(obj);
+  return keys.length ? oneLine(JSON.stringify(obj)) : '';
+}
+
+function oneLine(s) {
+  const flat = s.replace(/\s+/g, ' ').trim();
+  return flat.length > 140 ? flat.slice(0, 139) + '…' : flat;
+}
+
+export function appendToolCall(toolUseID, name, inputJSON) {
+  const row = document.createElement('div');
+  row.className = 'msg-toolcall running';
+
+  const head = document.createElement('div');
+  head.className = 'head';
+
+  const marker = document.createElement('span');
+  marker.className = 'marker';
+  marker.textContent = '▸';
+  head.appendChild(marker);
+
+  const nameEl = document.createElement('span');
+  nameEl.className = 'name';
+  nameEl.textContent = name || 'tool';
+  head.appendChild(nameEl);
+
+  const argEl = document.createElement('span');
+  argEl.className = 'arg';
+  argEl.textContent = summarizeInput(inputJSON);
+  head.appendChild(argEl);
+
+  const stateEl = document.createElement('span');
+  stateEl.className = 'state';
+  stateEl.textContent = 'running…';
+  head.appendChild(stateEl);
+
+  // The full arguments are available from the start; the result is added
+  // to the same block when the call ends.
+  const detail = document.createElement('pre');
+  detail.className = 'detail';
+  detail.hidden = true;
+  detail.textContent = prettyJSON(inputJSON);
+
+  head.title = 'click to show the full arguments and result';
+  head.addEventListener('click', () => { detail.hidden = !detail.hidden; });
+
+  row.appendChild(head);
+  row.appendChild(detail);
+  transcriptEl.appendChild(row);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  session.toolRows.set(toolUseID, { row, stateEl, marker, detail });
+  return row;
+}
+
+export function finishToolCall(toolUseID, content, isError) {
+  const entry = session.toolRows.get(toolUseID);
+  if (!entry) return;
+  session.toolRows.delete(toolUseID);
+  const { row, stateEl, marker, detail } = entry;
+  row.classList.remove('running');
+  row.classList.toggle('failed', !!isError);
+  marker.textContent = isError ? '✗' : '✓';
+  const text = String(content ?? '');
+  stateEl.textContent = isError ? 'failed' : resultSize(text);
+  detail.textContent = `${detail.textContent}\n\n${text}`;
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+// resultSize describes a tool result without showing it: a short one is
+// worth reading inline, a long one is better summed up by its size than
+// by its first line taken out of context.
+function resultSize(text) {
+  if (!text) return 'done';
+  const lines = text.split('\n');
+  if (lines.length === 1 && text.length <= 60) return text;
+  return `${lines.length} line${lines.length === 1 ? '' : 's'}`;
+}
+
+function prettyJSON(s) {
+  try { return JSON.stringify(JSON.parse(s || '{}'), null, 2); } catch { return String(s || ''); }
+}
+
 export function appendModelText(text) {
   if (!session.currentModelEl) {
     session.currentModelEl = document.createElement('div');
@@ -58,4 +168,7 @@ export function clearTranscript() {
   transcriptEl.innerHTML = '';
   session.currentModelEl = null;
   session.currentModelBuffer = '';
+  // The rows these pointed at are gone with the innerHTML above; holding
+  // them would leave finishToolCall writing into detached nodes.
+  session.toolRows.clear();
 }

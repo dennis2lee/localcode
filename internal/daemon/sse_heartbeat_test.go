@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localcode/internal/events"
 )
 
 // A turn can run for minutes without producing an event, and in that gap
@@ -106,4 +108,72 @@ func TestHeartbeatCarriesNoEventID(t *testing.T) {
 		}
 	}
 	t.Fatal("stream closed without a heartbeat")
+}
+
+// A transient event (Store.Broadcast) is true only at the moment it is
+// sent — the live tokens-per-second readout is what this exists for. It
+// must reach an attached client, and it must not claim a place in the log:
+// an `id:` line on one would become the Last-Event-ID a browser resumes
+// from, and the daemon would then replay the real session log from the
+// wrong point, silently dropping everything the person had not seen yet.
+func TestTransientEventsCarryNoEventID(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	sess, err := d.Loop.Store.CreateSession("s-transient-"+t.Name(), "", "general-purpose", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/sessions/"+sess.ID+"/events", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Broadcast until one lands: the subscription is established inside the
+	// handler, so the first attempt can beat it there.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			d.Loop.Store.Broadcast(sess.ID, events.TypeUsage, map[string]any{"tps": 12.5, "estimated": true})
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	defer func() { cancel(); <-done }()
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "id:") {
+			t.Fatalf("a transient event was given a sequence id: %q", line)
+		}
+		if strings.HasPrefix(line, "data:") && strings.Contains(line, `"tps":12.5`) {
+			break // arrived, with no id: line before it
+		}
+	}
+
+	// And it left nothing behind in the log.
+	logged, err := d.Loop.Store.Events(sess.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range logged {
+		if ev.Type == events.TypeUsage {
+			t.Fatalf("a transient event was recorded in the session log: %+v", ev)
+		}
+	}
 }

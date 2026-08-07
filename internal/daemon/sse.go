@@ -75,6 +75,17 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	lastSeq := since
 	writeSSE := func(ev events.Event) {
+		if ev.Seq == 0 {
+			// A transient event (Store.Broadcast): true only right now,
+			// never part of the log. It gets no `id:` and does not move
+			// lastSeq — either would corrupt the resume point the browser
+			// sends back after a dropped connection.
+			if payload, err := json.Marshal(ev); err == nil {
+				fmt.Fprintf(w, "data: %s\n\n", payload)
+				flusher.Flush()
+			}
+			return
+		}
 		if ev.Seq <= lastSeq {
 			return // already sent via backlog or an earlier live event
 		}

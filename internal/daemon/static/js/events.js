@@ -1,6 +1,9 @@
 import { permissionTextEl, permissionAllowAlwaysBtn } from './dom.js';
 import { app, session } from './state.js';
-import { appendUser, appendTool, appendError, appendModelText, endModelText } from './transcript.js';
+import {
+  appendUser, appendTool, appendError, appendModelText, endModelText,
+  appendToolCall, finishToolCall,
+} from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers } from './render.js';
 import { setWaiting, setConnected, setInputLocked } from './composer.js';
 import { refreshDelegatePanelIfOpen, permissionRequest } from './modals.js';
@@ -37,13 +40,17 @@ const handlers = {
     session.runningTool = '';
     setWaiting(false);
   },
-  // No transcript line for tool activity — it shows in the status bar under
-  // the prompt while it runs, and vanishes with the turn.
+  // Tool activity gets a transcript line of its own, not just the status
+  // bar: the status bar only says what is running now and clears when it
+  // stops, so a long turn spent in tools left no trace of itself either
+  // during or after. See appendToolCall.
   'tool.start': (d) => {
     session.runningTool = d.name || '';
+    appendToolCall(d.tool_use_id, d.name || '', d.input || '');
   },
-  'tool.end': () => {
+  'tool.end': (d) => {
     session.runningTool = '';
+    finishToolCall(d.tool_use_id, d.content, d.is_error);
   },
   'permission.request': (d) => {
     session.pendingPermissionID = d.id;
@@ -83,8 +90,12 @@ const handlers = {
     // switch doesn't reset. The next turn's usage event refills it.
     if (session.lastUsage) session.lastUsage = { ...session.lastUsage, model: '' };
   },
+  // Merged, not replaced: the live tokens-per-second estimate broadcast
+  // during a generation carries only the rate, and overwriting would blank
+  // the context percentage and model name every second while a model is
+  // talking.
   usage: (d) => {
-    session.lastUsage = d;
+    session.lastUsage = { ...(session.lastUsage || {}), ...d };
   },
   compacted: (d) => {
     appendTool(`[system] conversation compacted to save context (summary: ${d.summary_length || 0} chars).`);

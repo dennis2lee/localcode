@@ -50,17 +50,51 @@ test('message.part.end does not end the turn, turn.done does', async () => {
   assert.equal(app.state.waiting, false);
 });
 
-test('tool.start and tool.end move the running-tool indicator only', async () => {
+test('a tool call gets a transcript line that is completed when it ends', async () => {
   const app = await load();
   app.setWaiting(true);
-  app.applyEvent({ type: 'tool.start', data: { name: 'bash' } });
+  app.applyEvent({
+    type: 'tool.start',
+    data: { tool_use_id: 'call_1', name: 'bash', input: JSON.stringify({ command: 'sleep 300' }) },
+  });
   assert.equal(app.state.runningTool, 'bash');
   assert.match(app.el('status-text').textContent, /bash…/);
-  // No transcript line: tool activity lives in the status bar and vanishes
-  // with the turn.
-  assert.equal(app.transcript(), '');
-  app.applyEvent({ type: 'tool.end', data: { name: 'bash' } });
+  // The line exists while the tool is still running — that is the whole
+  // point of it. A long turn used to leave the transcript empty.
+  let html = app.transcript();
+  assert.ok(html.includes('sleep 300'), html);
+  assert.ok(html.includes('running…'), html);
+
+  app.applyEvent({
+    type: 'tool.end',
+    data: { tool_use_id: 'call_1', content: 'a\nb\nc', is_error: false },
+  });
   assert.equal(app.state.runningTool, '');
+  html = app.transcript();
+  assert.ok(!html.includes('running…'), html);
+  assert.ok(html.includes('3 lines'), html);
+});
+
+test('a tool line reports failure, and its output is escaped', async () => {
+  const app = await load();
+  app.applyEvent({
+    type: 'tool.start',
+    data: { tool_use_id: 'call_1', name: 'bash', input: JSON.stringify({ command: 'boom <script>' }) },
+  });
+  app.applyEvent({
+    type: 'tool.end',
+    data: { tool_use_id: 'call_1', content: 'no <b>such</b> file', is_error: true },
+  });
+  const html = app.transcript();
+  assert.ok(html.includes('failed'), html);
+  assert.ok(html.includes('boom &lt;script&gt;'), html);
+  assert.ok(html.includes('no &lt;b&gt;such&lt;/b&gt; file'), html);
+});
+
+test('a tool.end for an unknown call is ignored rather than throwing', async () => {
+  const app = await load();
+  app.applyEvent({ type: 'tool.end', data: { tool_use_id: 'never-started', content: 'x' } });
+  assert.equal(app.transcript(), '');
 });
 
 test('an error event ends the turn and shows the message escaped', async () => {

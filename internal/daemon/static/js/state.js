@@ -39,6 +39,9 @@ export function freshSessionState(id) {
     tasks: new Map(), // task_id -> {agent, status}
     lastUsage: null,   // {input_tokens, output_tokens, max_context, percent, tps, show_tps, model}
     runningTool: '',   // tool currently executing, shown in the status bar
+    // tool_use_id -> the transcript row for that call, so tool.end can find
+    // the row tool.start created and fill in its result.
+    toolRows: new Map(),
     promptQueue: [],   // plain prompts submitted while a turn is in flight
     // Up/Down prompt recall, mirroring the TUI. Client-side and in-memory:
     // a typing convenience, not session state that outlives the tab.

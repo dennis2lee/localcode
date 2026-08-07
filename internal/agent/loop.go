@@ -111,6 +111,7 @@ type Loop struct {
 	messages        map[string][]provider.Message     // sessionID -> history
 	usage           map[string]sessionUsage           // sessionID -> latest known usage
 	cumulativeUsage map[string]map[string]modelTotals // sessionID -> model -> running totals, see /usage
+	turnRate        map[string]turnRate               // sessionID -> this turn's tokens/generation time
 
 	settings liveSettings
 }
@@ -130,6 +131,7 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 		messages:        map[string][]provider.Message{},
 		usage:           map[string]sessionUsage{},
 		cumulativeUsage: map[string]map[string]modelTotals{},
+		turnRate:        map[string]turnRate{},
 	}
 }
 
@@ -142,6 +144,7 @@ func (l *Loop) ClearSessionState(sessionID string) {
 	delete(l.messages, sessionID)
 	delete(l.usage, sessionID)
 	delete(l.cumulativeUsage, sessionID)
+	delete(l.turnRate, sessionID)
 }
 
 // AutoCompactEnabled reports whether auto-compaction is currently on —

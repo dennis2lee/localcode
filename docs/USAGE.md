@@ -9,7 +9,7 @@
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [AGENTS.md](#agentsmd-project-rules), [Auto memory](#auto-memory) |
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
-| [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown) |
+| [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn) |
 | [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
@@ -769,7 +769,7 @@ One line directly below the input box:
 |---|---|
 | Agent and model | Which agent answers the next message, and the model its profile resolves to. The model shows from the moment a session opens, taken from the agent's profile, and switches to whatever the provider actually reports once the first reply arrives. |
 | Context use | Yellow past 70%, red past 90% |
-| TPS | Shown when `show_tps` is on |
+| TPS | Shown when `show_tps` is on. It is a **generation** rate: the clock runs from the first token to the last, so the wait before a model starts answering (prefill, and on a shared local server the queue in front of you) is not divided into the output. It covers the whole turn, not the last model call — a turn that uses tools is several calls, and the last is often a handful of tokens. A `~` prefix marks a live estimate made while the model is still talking, counted from stream chunks because the real token count only arrives when the stream ends; it is replaced by the exact figure at that point. A reply that arrives in a single chunk shows nothing at all: there is no interval to measure across. |
 | Activity light | Three states: **gray** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — the model is running your prompt. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. |
 | Stop button | Appears while a turn is running. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
 | Dictation pill | `dictation: off`. Click to talk your prompt instead of typing it; the pill turns red and blinks while it listens. Reads `dictation: unavailable`, disabled with the reason in its tooltip, when no speech model is configured or the build has no recognizer. See [Dictating a prompt](#dictating-a-prompt-desktop-window). |
@@ -785,6 +785,21 @@ The header dropdown does the same thing and lists each agent with the model it r
 ### Model output renders as markdown
 
 Headers, bold/italic, inline code, fenced code blocks, lists, blockquotes, links, and horizontal rules render as formatted HTML instead of raw text, in both the Web UI and the native GUI window. It's a small built-in renderer with no external dependency, since this stays a fully offline app; anything it doesn't recognize as markdown (including any raw HTML the model writes) shows as plain escaped text rather than being interpreted, so nothing the model outputs can inject markup.
+
+### Watching a long turn
+
+Each tool the model runs gets its own line in the transcript, written the moment the call starts and completed when it ends:
+
+```
+▸ bash  go test ./...                                    running…
+✓ bash  go test ./...                                    14 lines
+```
+
+The marker pulses while the call is running, and turns into `✓` or a red `✗`. Only the tool's name and its main argument are shown, so a file read does not bury the conversation — **click the line** to expand the full arguments and the full result, and click again to collapse it.
+
+This matters most on the turns where the model spends minutes in tools and says nothing: without those lines, the screen shows a blinking light and no other sign that anything is happening. The status bar still names the tool currently running; the transcript is what remains afterwards.
+
+The TUI writes the same one-line entries, without the expandable detail.
 
 ## Part 7. Agents and automation
 
