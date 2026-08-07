@@ -962,7 +962,7 @@ localcode --agent quick-search
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
-### Dictating a prompt (macOS desktop window)
+### Dictating a prompt (desktop window)
 
 The desktop window can take a prompt by voice. Click the microphone
 button next to Send and talk; the text appears in the prompt box as you
@@ -1010,14 +1010,10 @@ The microphone button is hidden entirely when dictation cannot run — a
 build without the recognizer, or no model configured. A button that can
 only fail is worse than no button.
 
-**Windows is not supported yet.** The upstream Go binding ships only
-DLLs for Windows, with none of the import libraries MinGW needs to link
-against them, so a Windows desktop build with the recognizer compiled in
-fails at link time. Enabling it means generating those import libraries
-during the Windows build and shipping the three DLLs (about 22MB)
-alongside the executable — worth doing, but not worth shipping untested.
-Until then the Windows desktop build reports dictation as unavailable
-and hides the button, exactly as a build without a model does.
+On Windows the speech runtime is three DLLs that the MSI installs beside
+`localcode-gui.exe`. They are not optional extras: Windows resolves a
+program's imports before any of its own code runs, so a copy of
+`localcode-gui.exe` moved elsewhere on its own will not start at all.
 
 ## Known limitations
 

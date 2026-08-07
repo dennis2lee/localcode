@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.32.1
+
+- **Speech dictation now works on the Windows desktop window too.** v0.32.0 shipped it as macOS-only because the Windows build failed to link. The cause was narrower than it first looked: `webview_go` adds `-static` to the Windows link, and the linker in static mode refuses to follow a DLL at all — the speech library's DLLs had been in the search path the whole time. The Windows build now generates an import library for each one (an archive, which `-static` accepts) and installs the three DLLs beside `localcode-gui.exe`. They are part of the executable's contract rather than optional extras: Windows resolves imports before any of our code runs, so the MSI build refuses to produce an installer without them.
+
 ## v0.32.0
 
 - **MCP servers now have a live status light.** The right panel listed the servers that came up at startup and nothing more, so one that died mid-session still looked fine and one that never started looked like a server nobody had configured. Every *configured* server is listed now with a light: green for connected, blinking green while degraded, grey once disconnected, and the last error in the row's tooltip. Degraded is its own state on purpose — one failed call usually isn't death, and swinging the light to dead and back would be crying wolf. Status moves from two sources because it needs both: a failing tool call updates it at once (so it reacts during a turn), and a 30-second check catches a server that died quietly while nothing was using it.
