@@ -60,3 +60,49 @@ test('a refused fork is reported and leaves the session alone', async () => {
   assert.equal(app.state.sessionID, 'sess-1');
   assert.match(app.transcript(), /failed to fork session/);
 });
+
+// Regression: the header showed the raw session id and nothing ever
+// changed it, so renaming a session in the left panel updated the panel
+// and left the header naming a timestamp.
+test('renaming a session updates the header, not just the panel', async () => {
+  let title = 'original';
+  const app = await load({
+    routes: {
+      'GET /api/sessions': () => [{ id: 'sess-1', title, agent: 'general-purpose' }],
+      'POST /api/sessions/*/rename': (body) => { title = body.title; return { id: 'sess-1', title }; },
+    },
+    prompt: 'renamed by hand',
+  });
+  assert.equal(app.el('session-id').textContent, 'original');
+
+  buttonLabelled(app.el('session-list'), 'rename').click();
+  await app.settle();
+
+  assert.equal(app.el('session-id').textContent, 'renamed by hand');
+  assert.match(app.el('session-list').innerHTML, /renamed by hand/);
+  // The id is still reachable — a bug report needs it.
+  assert.equal(app.el('session-id').title, 'sess-1');
+});
+
+// A rename from another client arrives as an event, which reloads the
+// listing; the header has to follow from that same data rather than
+// depending on whoever renamed it to also update the header.
+test('a rename from elsewhere updates the header too', async () => {
+  let title = 'original';
+  const app = await load({
+    routes: { 'GET /api/sessions': () => [{ id: 'sess-1', title, agent: 'general-purpose' }] },
+  });
+  title = 'renamed elsewhere';
+  app.applyEvent({ type: 'session.renamed', data: { title } });
+  await app.settle();
+  assert.equal(app.el('session-id').textContent, 'renamed elsewhere');
+});
+
+// A session with no title falls back to the id rather than showing an
+// empty header.
+test('an unnamed session still shows something in the header', async () => {
+  const app = await load({
+    routes: { 'GET /api/sessions': [{ id: 'sess-1', agent: 'general-purpose' }] },
+  });
+  assert.equal(app.el('session-id').textContent, 'sess-1');
+});

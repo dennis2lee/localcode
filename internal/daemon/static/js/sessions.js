@@ -15,6 +15,22 @@ export async function loadSessions() {
     app.sessions = [];
   }
   renderSessionList();
+  // The header names the current session too, and its name lives in the
+  // listing that was just refetched — so it is re-rendered from the same
+  // data, in the same place, rather than left to whoever caused the
+  // change to remember to update it.
+  renderSessionHeader();
+}
+
+// renderSessionHeader labels the current session in the header. It shows
+// the title, not the id: the id is a timestamp nobody reads, and after
+// naming a session the name is what you look for to confirm you are in
+// it. The id stays in the tooltip, where a bug report can still find it.
+export function renderSessionHeader() {
+  if (!session.sessionID) return;
+  const current = (app.sessions || []).find(x => x.id === session.sessionID);
+  sessionIdEl.textContent = (current && current.title) || session.sessionID;
+  sessionIdEl.title = session.sessionID;
 }
 
 export function renderSessionList() {
@@ -135,7 +151,7 @@ export async function deleteSessionConfirm(s) {
 // workspace alone rather than guessing.
 export function selectSession(id, agent, workspace) {
   resetSession(id);
-  sessionIdEl.textContent = session.sessionID;
+  renderSessionHeader();
   clearTranscript();
   renderTasks();
   setWaiting(false);
