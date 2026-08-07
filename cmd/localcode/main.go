@@ -20,9 +20,10 @@ var version = "dev"
 // "git <subcommand>" or "go <subcommand>" works — each owns its own
 // argument syntax rather than sharing run()'s flag.FlagSet.
 var subcommands = map[string]func(args []string) error{
-	"login":   runLogin,
-	"mcp":     runMCP,
-	"version": runVersionCommand,
+	"dictation": runDictation,
+	"login":     runLogin,
+	"mcp":       runMCP,
+	"version":   runVersionCommand,
 }
 
 func runVersionCommand(args []string) error {

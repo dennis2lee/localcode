@@ -119,6 +119,23 @@ verify_msi InstallExecuteSequence '$WebView2BootstrapperFile=3' 'the WebView2 cu
 # Both binaries ship.
 verify_msi File 'localcode.exe' 'localcode.exe is missing from the File table'
 verify_msi File 'localcode-gui.exe' 'localcode-gui.exe is missing from the File table'
+
+# The dictation model actions. These are checked because wixl drops a
+# custom action it does not understand *without failing*: an earlier
+# version of these used Directory=, which wixl has no property for, and
+# it emitted the sequence rows while writing no CustomAction rows at all.
+# The MSI built, installed, and did nothing.
+#
+# Type 3186 = EXE named by a property, deferred, no-impersonate,
+# continue-on-failure. Property-sourced rather than FileKey-sourced on
+# purpose: a FileKey action fails with error 2753 when the file's
+# component is not part of the transaction, which on uninstall it never
+# is.
+verify_msi CustomAction 'SetDictationExe	51	DICTATIONEXE	[INSTALLDIR]localcode.exe' 'the property that points the dictation actions at localcode.exe is missing'
+verify_msi CustomAction 'InstallDictationModel	3186	DICTATIONEXE' 'the dictation model install action is missing or has the wrong type'
+verify_msi CustomAction 'RemoveDictationModel	3186	DICTATIONEXE' 'the dictation model removal action is missing or has the wrong type'
+# Skippable, and skipped only when asked: DICTATION defaults to 1.
+verify_msi Property 'DICTATION	1' 'the DICTATION property is missing, so the model install cannot be turned off with DICTATION=0'
 # The desktop shortcut, and that it resolves to DesktopFolder rather than
 # some directory wixl invented. A shortcut silently landing nowhere is
 # exactly the kind of breakage this file exists to catch — it cannot be

@@ -179,6 +179,98 @@
                   Impersonate='no' />
 
     <!--
+      Fetch the speech model dictation needs, unless DICTATION=0 was
+      passed. Without a model on disk the microphone control is inert, and
+      the alternative to this is a five-step manual routine (find the
+      release, download 400MB, unpack a .tar.bz2 on a machine with no bzip2
+      in Explorer, put the path in config.json with every backslash
+      doubled) that most people will simply not do.
+
+      It is localcode.exe doing the work rather than a script: the download,
+      checksum check and extraction are Go code with tests, and the same
+      command is what a user runs by hand if this step is skipped or fails.
+      Into [INSTALLDIR]models because that is where localcode looks when
+      dictation_model_dir is unset — so nothing has to edit a config file
+      afterwards — and because a per-machine location means one download
+      serves every account rather than one per user.
+
+      Two consequences worth knowing, both accepted rather than overlooked:
+
+      * The install takes as long as a 400MB download. MSI waits for a
+        deferred action even with Return='ignore', and there is no progress
+        text. DICTATION=0 skips it:
+            msiexec /i localcode-x.y.z-windows-amd64.msi DICTATION=0
+      * Return='ignore' means a machine with no internet, a proxy in the
+        way, or a full disk still gets a working install — just without
+        dictation, which it would not have had anyway. The failure is not
+        silent to the user: the microphone pill says dictation is
+        unavailable and names the reason.
+
+      Re-running is cheap. `dictation install` returns immediately if a
+      usable model is already in place, which is what makes this safe to
+      leave unconditional across upgrades.
+    -->
+    <!--
+      Both dictation actions run localcode.exe named by a property rather
+      than by a File table key.
+
+      A FileKey action (what InstallWebView2Runtime uses) fails with MSI
+      error 2753 whenever the referenced file's component is not part of
+      the current transaction — and on uninstall it never is, since the
+      whole point is that the file is going away. A property-sourced EXE
+      action has no such tie. DICTATIONEXE is filled in below, after
+      CostFinalize has resolved INSTALLDIR to a real path and before
+      either action is scheduled.
+    -->
+    <CustomAction Id='SetDictationExe'
+                  Property='DICTATIONEXE'
+                  Value='[INSTALLDIR]localcode.exe'
+                  Execute='immediate' />
+
+    <CustomAction Id='InstallDictationModel'
+                  Property='DICTATIONEXE'
+                  ExeCommand='dictation install --dir "[INSTALLDIR]models"'
+                  Execute='deferred'
+                  Return='ignore'
+                  Impersonate='no' />
+
+    <!--
+      The model is downloaded, not installed as a component, so Windows
+      Installer does not know about the files and will not remove them.
+      Without this, uninstalling leaves ~130MB behind forever.
+
+      Sequenced before RemoveFiles, since it is localcode.exe that does the
+      deleting and RemoveFiles is what takes localcode.exe away.
+    -->
+    <CustomAction Id='RemoveDictationModel'
+                  Property='DICTATIONEXE'
+                  ExeCommand='dictation remove --dir "[INSTALLDIR]models"'
+                  Execute='deferred'
+                  Return='ignore'
+                  Impersonate='no' />
+
+    <!--
+      Point the desktop shortcut at the installing user's own Desktop
+      instead of the all-users one (see the DesktopFolder comment above).
+
+      This is a plain property assignment, so it runs immediate, and it has
+      to be sequenced before CostFinalize — that is the action that resolves
+      every directory in the tree to a path. After it, writing DesktopFolder
+      changes nothing.
+
+      %USERPROFILE is the right source even though the install is elevated:
+      the immediate sequence runs in the invoking user's context, so this is
+      the person who double-clicked the MSI, not the elevated service
+      account that lays the files down. The deferred half of the install
+      then uses the already-resolved path and never re-reads the
+      environment.
+    -->
+    <CustomAction Id='SetPersonalDesktop'
+                  Property='DesktopFolder'
+                  Value='[%USERPROFILE]\Desktop'
+                  Execute='immediate' />
+
+    <!--
       "$WebView2BootstrapperFile=3" means "only when that component's action
       state for this transaction is INSTALLSTATE_LOCAL", i.e. only when the
       bootstrapper is actually being installed right now.
@@ -210,25 +302,15 @@
       checks the built MSI for the resolved condition to catch that.
     -->
     <!--
-      Point the desktop shortcut at the installing user's own Desktop
-      instead of the all-users one (see the DesktopFolder comment above).
+      Whether to fetch the speech model during install. Overridable on the
+      command line for an offline or bandwidth-constrained machine:
 
-      This is a plain property assignment, so it runs immediate, and it has
-      to be sequenced before CostFinalize — that is the action that resolves
-      every directory in the tree to a path. After it, writing DesktopFolder
-      changes nothing.
+          msiexec /i localcode-x.y.z-windows-amd64.msi DICTATION=0
 
-      %USERPROFILE is the right source even though the install is elevated:
-      the immediate sequence runs in the invoking user's context, so this is
-      the person who double-clicked the MSI, not the elevated service
-      account that lays the files down. The deferred half of the install
-      then uses the already-resolved path and never re-reads the
-      environment.
+      Public (all upper case) so it survives being passed to the elevated
+      half of the install, which a lower-case property would not.
     -->
-    <CustomAction Id='SetPersonalDesktop'
-                  Property='DesktopFolder'
-                  Value='[%USERPROFILE]\Desktop'
-                  Execute='immediate' />
+    <Property Id='DICTATION' Value='1' />
 
     <InstallExecuteSequence>
       <!--
@@ -237,7 +319,26 @@
         shortcut on the public desktop and leave the real one behind.
       -->
       <Custom Action='SetPersonalDesktop' Before='CostFinalize' />
+      <!--
+        After CostFinalize, which is what turns INSTALLDIR into a path,
+        and before both actions that read it — including the uninstall
+        one, which runs far earlier than the install one.
+      -->
+      <Custom Action='SetDictationExe' After='CostFinalize' />
       <Custom Action='InstallWebView2Runtime' After='InstallFiles'>NOT REMOVE AND $$WebView2BootstrapperFile=3</Custom>
+      <!--
+        After InstallFiles, because it runs localcode.exe and that is the
+        action that puts localcode.exe on disk. DICTATION is declared with
+        a default of 1 below, so the only way to land here with anything
+        else is to have asked for it on the command line.
+      -->
+      <Custom Action='InstallDictationModel' After='InstallFiles'>NOT REMOVE AND DICTATION="1"</Custom>
+      <!--
+        Before RemoveFiles, which is what deletes the localcode.exe this
+        needs to run. REMOVE="ALL" rather than plain REMOVE so that
+        removing a single feature does not take the model with it.
+      -->
+      <Custom Action='RemoveDictationModel' Before='RemoveFiles'>REMOVE="ALL"</Custom>
     </InstallExecuteSequence>
 
     <Feature Id='Complete' Level='1'>

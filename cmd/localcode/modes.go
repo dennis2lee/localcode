@@ -44,7 +44,11 @@ func runGUI(configPath string) error {
 		}
 	}()
 
-	return gui.Launch("localcode", version, func(progress func(string)) (http.Handler, error) {
+	// "LocalCode", not "localcode": this string is the window title and
+	// the taskbar label, where it is the product's name rather than the
+	// command you type. The binary, the package and the CLI stay
+	// lower-case.
+	return gui.Launch("LocalCode", version, func(progress func(string)) (http.Handler, error) {
 		d, done, err := buildDaemon(context.Background(), configPath, progress)
 		if err != nil {
 			return nil, err

@@ -136,3 +136,88 @@ test('prose wrapped around a code block keeps its blocks adjacent', () => {
   const out = app.renderMarkdown('before\n\n```\nx\n```\n\nafter');
   assert.equal(out, '<p>before</p>\n<pre><code>x</code></pre>\n<p>after</p>');
 });
+
+// Models produce tables constantly — comparisons, option lists, API
+// summaries. The renderer had no table support at all, so one arrived as
+// a paragraph of literal pipes and dashes.
+test('a table renders as a table', () => {
+  const html = app.renderMarkdown([
+    '| Field | Meaning |',
+    '|---|---|',
+    '| `providers` | Model backends |',
+    '| agents | Maps a name to a profile |',
+  ].join('\n'));
+
+  assert.match(html, /<table>/);
+  assert.match(html, /<th[^>]*>Field<\/th>/);
+  assert.match(html, /<th[^>]*>Meaning<\/th>/);
+  assert.match(html, /<td[^>]*><code>providers<\/code><\/td>/);
+  assert.match(html, /<td[^>]*>Maps a name to a profile<\/td>/);
+  // Nothing is left over as literal markdown.
+  assert.ok(!html.includes('|---|'), html);
+  assert.ok(!/<p>[^<]*\|/.test(html), html);
+});
+
+test('column alignment from the delimiter row reaches the cells', () => {
+  const html = app.renderMarkdown([
+    '| l | c | r | n |',
+    '|:---|:---:|---:|---|',
+    '| a | b | c | d |',
+  ].join('\n'));
+  assert.match(html, /<th style="text-align:left">l<\/th>/);
+  assert.match(html, /<th style="text-align:center">c<\/th>/);
+  assert.match(html, /<th style="text-align:right">r<\/th>/);
+  assert.match(html, /<th>n<\/th>/);
+});
+
+// A pipe inside a code span is not a cell boundary. Splitting there
+// would cut the <code> tag in half across two cells.
+test('a pipe inside inline code does not split a cell', () => {
+  const html = app.renderMarkdown([
+    '| expr | note |',
+    '|---|---|',
+    '| `a|b` | alternation |',
+  ].join('\n'));
+  assert.match(html, /<td[^>]*><code>a\|b<\/code><\/td>/);
+});
+
+test('an escaped pipe is a literal pipe, not a boundary', () => {
+  const html = app.renderMarkdown('| a | b |\n|---|---|\n| x \\| y | z |');
+  assert.match(html, /<td[^>]*>x \| y<\/td>/);
+  assert.match(html, /<td[^>]*>z<\/td>/);
+});
+
+// The renderer re-runs on the whole buffer for every streamed delta, so
+// it constantly sees a table that is not finished being written.
+test('a half-written table does not break the render', () => {
+  const header = app.renderMarkdown('| a | b |');
+  // No delimiter row yet, so this is not a table — but it must not throw
+  // and must not silently vanish.
+  assert.match(header, /a/);
+
+  const noRows = app.renderMarkdown('| a | b |\n|---|---|');
+  assert.match(noRows, /<table>/);
+  assert.match(noRows, /<th[^>]*>a<\/th>/);
+  assert.ok(!noRows.includes('<tbody>'), noRows);
+
+  const midRow = app.renderMarkdown('| a | b |\n|---|---|\n| one |');
+  assert.match(midRow, /<td[^>]*>one<\/td>/);
+});
+
+test('text after a table is not swallowed by it', () => {
+  const html = app.renderMarkdown('| a |\n|---|\n| 1 |\n\nAfter the table.');
+  assert.match(html, /<table>/);
+  assert.match(html, /<p>After the table\.<\/p>/);
+});
+
+// A row of dashes is a horizontal rule; a row of dashes and pipes is a
+// table delimiter. Confusing the two would turn every table into an <hr>.
+test('a horizontal rule still renders as one', () => {
+  assert.match(app.renderMarkdown('above\n\n---\n\nbelow'), /<hr>/);
+});
+
+test('cell contents are escaped, not interpreted as HTML', () => {
+  const html = app.renderMarkdown('| x |\n|---|\n| <img src=q onerror=alert(1)> |');
+  assert.ok(!html.includes('<img'), html);
+  assert.match(html, /&lt;img/);
+});

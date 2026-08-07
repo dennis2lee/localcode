@@ -46,6 +46,7 @@ func Launch(title, version string, start func(progress func(string)) (http.Handl
 	defer w.Destroy()
 	w.SetTitle(title)
 	w.Navigate(dataURL(splashHTML(version)))
+	setWindowIcon(uintptr(w.Window()))
 
 	// Written by the start goroutine, read after Run returns — the window
 	// closing is what synchronizes them, since Run does not return until

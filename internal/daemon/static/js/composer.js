@@ -103,7 +103,25 @@ export async function cancelTurn() {
   // press cannot race an already queued prompt out the door.
   session.promptQueue = [];
   try {
-    await apiClient.cancelSessionTurn(session.sessionID);
+    const res = await apiClient.cancelSessionTurn(session.sessionID);
+    // "cancelled: false" means the daemon had nothing running — so this
+    // client's spinner is stale, and no turn.cancelled event is coming to
+    // clear it. Clear it here.
+    //
+    // Without this, Esc is a dead key in exactly the situation someone
+    // reaches for it: the reply has finished and arrived, but the status
+    // bar still says "working… esc to cancel", the light still blinks,
+    // and every prompt typed afterwards is queued behind a turn that
+    // ended long ago. There is no other way out but reloading the window.
+    //
+    // Whatever loses a turn.done — a dropped event stream, a reconnect
+    // that missed it — this makes Esc mean "if nothing is running, stop
+    // telling me something is", which is what a user pressing it wants
+    // either way.
+    if (res && res.cancelled === false) {
+      session.runningTool = '';
+      setWaiting(false);
+    }
   } catch (err) {
     appendError(err);
   }

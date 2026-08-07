@@ -32,8 +32,17 @@ export function renderMarkdown(src) {
   // introduced, so nothing the model wrote can inject an element.
   text = escapeHtml(text);
 
-  // 3. Inline code spans.
-  text = text.replace(/`([^`\n]+)`/g, (_, code) => `<code>${code}</code>`);
+  // 3. Inline code spans. Held aside behind their own placeholder rather
+  // than emitted as <code> here, for the same reason as the fences: what
+  // is inside one is not markdown. A pipe in `a|b` would otherwise be
+  // read as a table cell boundary further down and split the <code> tag
+  // across two cells.
+  const spans = [];
+  const spanToken = (i) => `${i}`;
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+    spans.push(`<code>${code}</code>`);
+    return spanToken(spans.length - 1);
+  });
 
   // 4. Block-level constructs, line by line: headers, quotes, rules,
   // and list runs (consecutive - / * / N. lines become one <ul>/<ol>).
@@ -53,7 +62,14 @@ export function renderMarkdown(src) {
     para = [];
   };
   const endBlock = () => { closePara(); closeList(); };
-  for (const line of lines) {
+  for (let ln = 0; ln < lines.length; ln++) {
+    const line = lines[ln];
+    // A table is the one construct here that cannot be recognised from
+    // its own line: "| a | b |" is only a header if the line after it is
+    // a delimiter row. So it is checked first, with a look-ahead, and it
+    // consumes as many rows as follow.
+    const consumed = tableAt(lines, ln, out, endBlock);
+    if (consumed > 0) { ln += consumed - 1; continue; }
     const h = line.match(/^(#{1,6})\s+(.*)$/);
     const bullet = line.match(/^[-*]\s+(.*)$/);
     const numbered = line.match(/^\d+\.\s+(.*)$/);
@@ -93,9 +109,97 @@ export function renderMarkdown(src) {
   endBlock();
   text = out.join('\n');
 
-  // 5. Splice the fenced code blocks back in.
+  // 5. Splice the code back in, inline spans and fenced blocks alike.
+  text = text.replace(/\u0001(\d+)\u0001/g, (_, i) => spans[+i]);
   text = text.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i]);
   return text;
+}
+
+// splitCells breaks one table row into its cells.
+//
+// Written out rather than done with a split(): a cell may contain an
+// escaped pipe ("\\|"), and the regex that expresses that needs a
+// lookbehind, which Safari only learned in 16.4 — this has to run in
+// whatever WKWebView the machine came with.
+function splitCells(row) {
+  const cells = [];
+  let cur = '';
+  for (let i = 0; i < row.length; i++) {
+    if (row[i] === '\\' && row[i + 1] === '|') { cur += '|'; i++; continue; }
+    if (row[i] === '|') { cells.push(cur); cur = ''; continue; }
+    cur += row[i];
+  }
+  cells.push(cur);
+  // The leading and trailing pipes are conventional, not structural, so
+  // the empty cells they produce are dropped — "| a | b |" is two cells,
+  // not four.
+  if (cells.length && cells[0].trim() === '') cells.shift();
+  if (cells.length && cells[cells.length - 1].trim() === '') cells.pop();
+  return cells.map((c) => c.trim());
+}
+
+// alignments reads a delimiter row, returning one alignment per column,
+// or null if the row is not a delimiter row at all. That second job is
+// what decides whether the line above it was a table header.
+function alignments(row) {
+  if (row.indexOf('|') === -1 && row.indexOf('-') === -1) return null;
+  const cells = splitCells(row);
+  if (cells.length === 0) return null;
+  const out = [];
+  for (const cell of cells) {
+    if (!/^:?-+:?$/.test(cell)) return null;
+    const left = cell.startsWith(':');
+    const right = cell.endsWith(':') && cell.length > 1;
+    out.push(left && right ? 'center' : right ? 'right' : left ? 'left' : '');
+  }
+  return out;
+}
+
+// tableAt renders a GFM table starting at lines[i], returning how many
+// lines it consumed (0 if there is no table here).
+//
+// Models produce tables constantly — comparisons, option lists, API
+// summaries — and without this they arrived as a wall of pipes and
+// dashes, which is both unreadable and a visible sign the renderer does
+// not understand its own input.
+function tableAt(lines, i, out, endBlock) {
+  const header = lines[i];
+  if (i + 1 >= lines.length || header.indexOf('|') === -1) return 0;
+  const align = alignments(lines[i + 1]);
+  if (!align) return 0;
+
+  const head = splitCells(header);
+  if (head.length === 0) return 0;
+
+  endBlock();
+  const cell = (tag, text, col) => {
+    const a = align[col] || '';
+    return `<${tag}${a ? ` style="text-align:${a}"` : ''}>${inline(text)}</${tag}>`;
+  };
+
+  const rows = [];
+  rows.push(`<thead><tr>${head.map((c, n) => cell('th', c, n)).join('')}</tr></thead>`);
+
+  let n = i + 2;
+  const body = [];
+  for (; n < lines.length; n++) {
+    const row = lines[n];
+    // A blank line, or a line with no pipe in it, ends the table. Both
+    // are how a model actually stops writing one.
+    if (row.trim() === '' || row.indexOf('|') === -1) break;
+    const cells = splitCells(row);
+    // Ragged rows are padded or truncated to the header's width rather
+    // than rejected: a model miscounting one row should cost that row's
+    // shape, not the whole table's rendering.
+    const padded = head.map((_, c) => cells[c] === undefined ? '' : cells[c]);
+    body.push(`<tr>${padded.map((c, col) => cell('td', c, col)).join('')}</tr>`);
+  }
+  if (body.length) rows.push(`<tbody>${body.join('')}</tbody>`);
+
+  // Wrapped so a wide table scrolls inside the transcript instead of
+  // stretching it — the transcript is a fixed column between two panels.
+  out.push(`<div class="table-wrap"><table>${rows.join('')}</table></div>`);
+  return n - i;
 }
 
 // inline applies span-level markdown (bold, italic, links) to text that

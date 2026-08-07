@@ -994,8 +994,24 @@ It is off until you point it at a speech model, because there is no
 sensible one to guess and guessing would mean a silent several-hundred-
 megabyte download the first time anyone clicked the button.
 
-Download a sherpa-onnx streaming model, unpack it, and name the
-directory in `config.json` (`~/.localcode/config.json`, or
+The quickest way is to let localcode fetch it. On Windows the installer
+already ran this for you unless you passed `DICTATION=0`:
+
+```bash
+localcode dictation install
+```
+
+It downloads the Korean streaming model, checks it against a pinned
+checksum, unpacks it into a `models` directory beside the binary, and
+throws away the float32 weights it does not use (400MB down, ~130MB
+kept). No config change is needed: that directory is where localcode
+looks when `dictation_model_dir` is unset. `localcode dictation status`
+reports whether it worked, and `localcode dictation remove` deletes it
+again.
+
+To use a different model, or to put one somewhere else, download a
+sherpa-onnx streaming model, unpack it, and name the directory in
+`config.json` (`~/.localcode/config.json`, or
 `C:\Users\<you>\.localcode\config.json`). The key goes at the top level,
 alongside `providers` and `agents`:
 

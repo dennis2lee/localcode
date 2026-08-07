@@ -137,6 +137,29 @@ main {
   margin: 0 0 10px;
   padding: 2px 0 2px 12px;
 }
+/* The transcript is a fixed column between two panels, so a table wider
+   than it scrolls inside its own wrapper rather than stretching the
+   layout and pushing the panels off screen. */
+#transcript .msg-model .table-wrap { overflow-x: auto; margin: 0 0 10px; }
+#transcript .msg-model table {
+  border-collapse: collapse;
+  font-size: 13px;
+  /* Not width:100% — a two-column table stretched across the whole
+     transcript puts a hand-span of empty space between its columns. */
+  min-width: min(100%, 320px);
+}
+#transcript .msg-model th, #transcript .msg-model td {
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+#transcript .msg-model th { background: var(--raised); font-weight: 600; }
+/* Cells hold short values far more often than prose, and a wrapped cell
+   in a dense table is harder to scan than a scroll. Long prose cells
+   still wrap, because nowrap plus the scrolling wrapper above would let
+   one sentence make the whole table scroll sideways. */
+#transcript .msg-model td code { white-space: nowrap; }
 #transcript .msg-model a { color: var(--accent); }
 #transcript .msg-model hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 aside {

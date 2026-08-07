@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.32.4
+
+- **The Windows installer now fetches the speech model, so dictation works out of the box.** It was off until you found a release page, downloaded 400MB, unpacked a `.tar.bz2` on a machine whose Explorer cannot open one, and added a path to `config.json` with every backslash doubled. The installer runs `localcode dictation install` instead, into a `models` directory beside the program — which is where localcode now looks when `dictation_model_dir` is unset, so nothing has to edit a config file afterwards. Uninstalling removes it again.
+  * The same command is available by hand, on every platform: `localcode dictation install`. `localcode dictation status` says whether it worked.
+  * It adds a 400MB download to the install, with no progress shown. Skip it with `msiexec /i localcode-x.y.z-windows-amd64.msi DICTATION=0`, or if it fails (no network, a proxy in the way) the install still succeeds and dictation simply stays unavailable.
+  * The archive is checksum-pinned, entries that would escape the destination are refused, and the float32 weights are dropped after unpacking — 400MB downloaded, ~130MB kept.
+- **Fix: markdown tables rendered as raw pipes and dashes.** The renderer had no table support at all, so every comparison table a model wrote arrived as a wall of `|---|---|`. Tables now render as tables, including per-column alignment from the delimiter row, escaped pipes, and pipes inside inline code.
+- **Fix: the status bar could stay stuck on "working… esc to cancel" after a reply had finished** — light blinking, every new prompt queued behind a turn that was already over, and Esc doing nothing at all, because the only thing that cleared it was an event the daemon had no reason to send again. Esc now asks the daemon, and clears the spinner itself when the answer is that nothing is running.
+- **The desktop window is titled "LocalCode"** rather than "localcode", and carries the application icon in its title bar, taskbar and Alt-Tab instead of the generic default.
+
 ## v0.32.3
 
 - **The desktop window now appears immediately, with a startup screen.** Starting up means reading config, opening providers, loading every session from disk and handshaking with each configured MCP server, which together can run to several seconds — and all of it used to happen *before* the window was created. From outside the app there was nothing at all in that time: no window, no error, nothing to tell "working" from "failed to start". The reasonable response is to click the icon again, and then two are starting. The window is created first now and shows the app icon, the version, and a status line naming the step in progress — including which MCP server it is currently waiting on, since one slow server is what the rest of startup queues behind.

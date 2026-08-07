@@ -185,13 +185,28 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// The recognizer itself only exists in the desktop build (CGo); in
 	// every other build dictation.Open returns ErrUnavailable and the
 	// Manager reports that as the reason it is not ready.
-	dm := dictation.NewManager(dictation.Config{ModelDir: cfg.DictationModelDir})
+	dm := dictation.NewManager(dictation.Config{ModelDir: resolveDictationModelDir(cfg.DictationModelDir)})
 	dm.StartReaper()
 	d.Dictation = dm
 	prevCleanup := cleanup
 	cleanup = func() { dm.Close(); prevCleanup() }
 
 	return d, cleanup, nil
+}
+
+// resolveDictationModelDir lets an explicit dictation_model_dir win, and
+// otherwise looks where `localcode dictation install` puts a model.
+//
+// The fallback is what makes installing a model the entire setup. Without
+// it the Windows installer would have to edit a config file it does not
+// own — or, worse, print instructions telling each user to add a JSON
+// path by hand, on the one platform where writing that path correctly
+// means knowing to double every backslash.
+func resolveDictationModelDir(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	return dictation.DefaultModelDir()
 }
 
 // buildRegistry constructs the tool registry and registers every built-in

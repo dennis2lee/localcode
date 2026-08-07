@@ -37,3 +37,23 @@ func TestLogoMatchesTheInstallerIcon(t *testing.T) {
 			"\tcp %s internal/gui/logo.svg", source, source)
 	}
 }
+
+// The same drift problem as logo.svg, for the icon the window wears on
+// Windows. This one matters more if it goes stale: an installer whose
+// shortcuts carry one icon and whose window carries another looks like
+// two different programs.
+func TestIconMatchesTheInstallerIcon(t *testing.T) {
+	const source = "../../build/icon/localcode.ico"
+
+	want, err := os.ReadFile(filepath.FromSlash(source))
+	if err != nil {
+		t.Fatalf("read %s: %v", source, err)
+	}
+	got, err := os.ReadFile("logo.ico")
+	if err != nil {
+		t.Fatalf("read logo.ico: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("internal/gui/logo.ico has drifted from %s:\n\tcp %s internal/gui/logo.ico", source, source)
+	}
+}

@@ -202,6 +202,63 @@ test('Esc cancels the running turn and drops the queue immediately', async () =>
   assert.ok(app.transcript().includes('[cancelled]'), app.transcript());
 });
 
+// Regression: the reply arrived, the turn was over, and the status bar
+// still said "working… esc to cancel" with the light blinking — and Esc
+// did nothing at all, because the only thing that cleared the spinner was
+// an event the daemon had no reason to send again. Every prompt typed
+// afterwards queued behind a turn that had already finished.
+//
+// The daemon answers "cancelled: false" when it has nothing running.
+// That answer is the client's proof its own spinner is stale.
+test('Esc clears a spinner the daemon says is not running', async () => {
+  const app = await load({
+    routes: { 'POST /api/sessions/*/cancel': { cancelled: false } },
+  });
+  app.setWaiting(true);
+  assert.equal(app.state.waiting, true);
+
+  app.press('Escape');
+  await app.settle();
+
+  assert.equal(app.state.waiting, false);
+  // No "[cancelled]" line: nothing was cancelled, the display was just
+  // wrong. Saying otherwise would be inventing an event.
+  assert.ok(!app.transcript().includes('[cancelled]'), app.transcript());
+});
+
+// ...and once it is cleared, typing goes straight out instead of queuing.
+test('a prompt after that stale-spinner Esc is sent, not queued', async () => {
+  const app = await load({
+    routes: { 'POST /api/sessions/*/cancel': { cancelled: false } },
+  });
+  app.setWaiting(true);
+  app.press('Escape');
+  await app.settle();
+
+  app.type('hello');
+  app.press('Enter');
+  await app.settle();
+
+  assert.deepEqual(Array.from(app.state.promptQueue), []);
+  assert.equal(app.callsTo('POST', '/api/sessions/sess-1/messages').length, 1);
+});
+
+// A real cancellation still comes from the event, so every client sees it.
+test('a turn that really was running is still reported as cancelled', async () => {
+  const app = await load({
+    routes: { 'POST /api/sessions/*/cancel': { cancelled: true } },
+  });
+  app.setWaiting(true);
+  app.press('Escape');
+  await app.settle();
+
+  // Still waiting: the daemon owns the transition, and turn.cancelled is
+  // what tells every attached client at once.
+  assert.equal(app.state.waiting, true);
+  app.sse.emit({ type: 'turn.cancelled', data: {} });
+  assert.equal(app.state.waiting, false);
+});
+
 test('Esc while idle does not call the daemon', async () => {
   const app = await load();
   app.press('Escape');
