@@ -52,6 +52,13 @@ type Config struct {
 	// via "/config auto_delegate on|off".
 	AutoDelegate *AutoDelegateConfig `json:"auto_delegate,omitempty"`
 
+	// DictationModelDir points at an unpacked sherpa-onnx streaming
+	// speech model, enabling the desktop window's microphone button.
+	// Empty disables dictation, which is the default: there is no
+	// sensible model to guess, and guessing one would mean a silent
+	// several-hundred-megabyte download the first time someone clicked.
+	DictationModelDir string `json:"dictation_model_dir,omitempty"`
+
 	// SkipPermissions turns every "ask" decision into "allow" — the
 	// equivalent of Claude Code's --dangerously-skip-permissions. A nil
 	// pointer means unset, which defaults to OFF: it has to be opted into

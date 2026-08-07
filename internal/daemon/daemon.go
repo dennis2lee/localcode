@@ -15,6 +15,7 @@ import (
 	"net/http"
 
 	"localcode/internal/agent"
+	"localcode/internal/dictation"
 	"localcode/internal/events"
 	"localcode/internal/mcp"
 )
@@ -29,6 +30,12 @@ type Daemon struct {
 	// reports an empty list in that case rather than requiring callers to
 	// special-case it.
 	MCP *mcp.Manager
+
+	// Dictation turns microphone audio into text for the prompt box. Nil
+	// when this build has no speech recognizer (every build but the
+	// desktop one) or none was configured — the handlers answer with an
+	// explanation rather than requiring callers to special-case it.
+	Dictation *dictation.Manager
 
 	// PickDirectory opens a native folder picker on the machine the daemon
 	// runs on, and is nil unless that machine is also the one looking at
@@ -98,6 +105,10 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/workspace", d.handleSetWorkspace)
 	d.mux.HandleFunc("POST /api/workspace/browse", d.handleBrowseWorkspace)
 	d.mux.HandleFunc("GET /api/mcp-servers", d.handleListMCPServers)
+	d.mux.HandleFunc("GET /api/dictation", d.handleDictationStatus)
+	d.mux.HandleFunc("POST /api/dictation", d.handleDictationStart)
+	d.mux.HandleFunc("POST /api/dictation/{id}/audio", d.handleDictationAudio)
+	d.mux.HandleFunc("POST /api/dictation/{id}/stop", d.handleDictationStop)
 	d.mux.HandleFunc("GET /api/agents", d.handleListAgents)
 	d.mux.HandleFunc("GET /api/commands", d.handleListCommands)
 	d.mux.HandleFunc("POST /api/sessions", d.handleCreateSession)

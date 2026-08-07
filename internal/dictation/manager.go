@@ -1,0 +1,149 @@
+package dictation
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// idleTimeout is how long a dictation session may go without audio
+// before it is reaped. A browser tab closed with the microphone on never
+// sends a stop, and each live session holds a recognizer — and its
+// model — open. Comfortably longer than any pause in speech, short
+// enough that an abandoned session doesn't outlive the person's memory
+// of opening it.
+const idleTimeout = 2 * time.Minute
+
+// Manager owns the live dictation sessions and the model configuration
+// they are opened with.
+//
+// It deliberately does not hold a single shared recognizer: a streaming
+// recognizer carries the state of one utterance in progress, so two
+// clients dictating at once through one instance would interleave their
+// words. One per session, opened on demand.
+type Manager struct {
+	cfg Config
+
+	mu       sync.Mutex
+	sessions map[string]*Session
+	nextID   int
+	stop     chan struct{}
+}
+
+func NewManager(cfg Config) *Manager {
+	return &Manager{cfg: cfg, sessions: map[string]*Session{}}
+}
+
+// Ready reports whether a dictation could actually start right now, and
+// why not when it couldn't. Clients use it to decide between offering a
+// microphone button, hiding it, and explaining — a button that can only
+// fail is worse than no button.
+func (m *Manager) Ready() (bool, string) {
+	if !Available() {
+		return false, ErrUnavailable.Error()
+	}
+	if _, err := resolveModel(m.cfg.ModelDir); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
+}
+
+// Start opens a recognizer and returns the id audio should be posted to.
+func (m *Manager) Start() (string, error) {
+	rec, err := Open(m.cfg)
+	if err != nil {
+		return "", err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	id := fmt.Sprintf("d-%d", m.nextID)
+	m.sessions[id] = NewSession(rec)
+	return id, nil
+}
+
+// Get returns a live session by id.
+func (m *Manager) Get(id string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return nil, fmt.Errorf("no dictation session %q (it may have been idle too long and been closed)", id)
+	}
+	return s, nil
+}
+
+// Stop ends a session and returns whatever was still in progress.
+func (m *Manager) Stop(id string) (Result, error) {
+	m.mu.Lock()
+	s, ok := m.sessions[id]
+	delete(m.sessions, id)
+	m.mu.Unlock()
+	if !ok {
+		return Result{}, fmt.Errorf("no dictation session %q", id)
+	}
+	return s.Stop(), nil
+}
+
+// StartReaper closes sessions that stopped receiving audio. Runs until
+// Close.
+func (m *Manager) StartReaper() {
+	m.mu.Lock()
+	if m.stop != nil {
+		m.mu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	m.stop = stop
+	m.mu.Unlock()
+
+	go func() {
+		t := time.NewTicker(idleTimeout / 2)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				m.reap()
+			}
+		}
+	}()
+}
+
+func (m *Manager) reap() {
+	m.mu.Lock()
+	var dead []*Session
+	for id, s := range m.sessions {
+		if s.Idle() > idleTimeout {
+			dead = append(dead, s)
+			delete(m.sessions, id)
+		}
+	}
+	m.mu.Unlock()
+	// Stopped outside the lock: Stop closes a recognizer, which for the
+	// real one is a CGo call into model teardown, and holding the manager
+	// lock through that would block every other client's audio.
+	for _, s := range dead {
+		s.Stop()
+	}
+}
+
+// Close stops the reaper and every live session.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	if m.stop != nil {
+		close(m.stop)
+		m.stop = nil
+	}
+	var all []*Session
+	for id, s := range m.sessions {
+		all = append(all, s)
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
+	for _, s := range all {
+		s.Stop()
+	}
+}

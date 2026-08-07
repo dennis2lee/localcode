@@ -4,7 +4,7 @@ import {
   autoDelegateBtn, delegateCloseBtn, delegateEnabledCheckbox, delegateAgentSelect,
   delegateMatchAddBtn, delegateMatchInput,
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
-  workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput,
+  workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, micBtn,
 } from './dom.js';
 import { app, session } from './state.js';
 import { uploadFile, switchAgent } from './api.js';
@@ -14,7 +14,8 @@ import {
   sendMessage, cancelTurn, autoResizeInput, insertAtCursor,
   atInputStart, atInputEnd, historyPrev, historyNext,
 } from './composer.js';
-import { loadAgents, loadCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
+import { loadAgents, loadCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, loadDictation, cycleAgent } from './loaders.js';
+import { toggleDictation, stopDictation, isDictating } from './dictation.js';
 import { loadSessions, selectSession, createNewSession, deleteAllSessions } from './sessions.js';
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
@@ -61,12 +62,18 @@ inputEl.addEventListener('drop', async (e) => {
   autoResizeInput();
 });
 
+micBtn.addEventListener('click', toggleDictation);
+
 sendBtn.addEventListener('click', sendMessage);
 inputEl.addEventListener('input', autoResizeInput);
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    sendMessage();
+    // Sending finishes the sentence by definition, so the microphone
+    // goes off with it rather than leaving grey text arriving into an
+    // already-sent prompt.
+    if (isDictating()) stopDictation().then(sendMessage);
+    else sendMessage();
   } else if (e.key === 'Escape') {
     e.preventDefault();
     cancelTurn();
@@ -143,6 +150,7 @@ async function init() {
     loadWorkspace(),
     loadMCPServers(),
     loadVersion(),
+    loadDictation(),
     loadSessions(),
   ]);
   // One deterministic status-bar render after the race settles: the bar
@@ -172,5 +180,6 @@ export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, can
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
 export { forkSession } from './sessions.js';
+export { toggleDictation, stopDictation, isDictating } from './dictation.js';
 export { setPanelWidth } from './resize.js';
 export { renderSessionList, selectSession } from './sessions.js';

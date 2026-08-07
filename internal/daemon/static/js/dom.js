@@ -52,3 +52,4 @@ export const rightPanel = document.getElementById('right-panel');
 export const resizeLeftHandle = document.getElementById('resize-left');
 export const resizeRightHandle = document.getElementById('resize-right');
 export const appVersionEl = document.getElementById('app-version');
+export const micBtn = document.getElementById('mic');

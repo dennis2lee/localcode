@@ -1,4 +1,4 @@
-import { agentSelectEl, appVersionEl } from './dom.js';
+import { agentSelectEl, appVersionEl, micBtn } from './dom.js';
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
 import { appendError } from './transcript.js';
@@ -51,6 +51,20 @@ export async function loadVersion() {
     appVersionEl.title = `daemon version ${v.version || '(unknown)'}`;
   } catch (err) {
     appVersionEl.textContent = '';
+  }
+}
+
+// The microphone button is hidden unless a dictation could actually
+// start — no recognizer in this build, or no model configured, means a
+// button that can only fail, which is worse than no button. The reason
+// goes in the tooltip of nothing, so it is logged instead of shown.
+export async function loadDictation() {
+  try {
+    const s = await apiClient.getDictationStatus();
+    micBtn.hidden = !s.ready;
+    if (!s.ready && s.detail) console.log('dictation unavailable:', s.detail);
+  } catch (err) {
+    micBtn.hidden = true;
   }
 }
 

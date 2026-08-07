@@ -12,6 +12,7 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/credentials"
 	"localcode/internal/daemon"
+	"localcode/internal/dictation"
 	mcpclient "localcode/internal/mcp"
 	"localcode/internal/memory"
 	"localcode/internal/provider"
@@ -145,7 +146,23 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, func()
 		registry.Register(agent.NewTaskTool(tasks, cfg.Agents))
 	}
 
-	return daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version), cleanup, nil
+	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
+
+	// Dictation is opt-in via a configured model directory. Without one
+	// the Manager is left nil and the endpoints explain why rather than
+	// failing obscurely — and the microphone button is never offered.
+	// The recognizer itself only exists in the desktop build (CGo); in
+	// every other build dictation.Open returns ErrUnavailable and the
+	// Manager reports that as the reason it is not ready.
+	if cfg.DictationModelDir != "" {
+		dm := dictation.NewManager(dictation.Config{ModelDir: cfg.DictationModelDir})
+		dm.StartReaper()
+		d.Dictation = dm
+		prev := cleanup
+		cleanup = func() { dm.Close(); prev() }
+	}
+
+	return d, cleanup, nil
 }
 
 // buildRegistry constructs the tool registry and registers every built-in

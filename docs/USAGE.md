@@ -962,6 +962,54 @@ localcode --agent quick-search
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
+### Dictating a prompt (desktop window only)
+
+The desktop window can take a prompt by voice. Click the microphone
+button next to Send and talk; the text appears in the prompt box as you
+speak — grey while a sentence is still being spoken, ordinary text once
+you pause. Everything runs on your machine: no audio leaves it, and it
+works with no network at all.
+
+It is off until you point it at a speech model, because there is no
+sensible one to guess and guessing would mean a silent several-hundred-
+megabyte download the first time anyone clicked the button.
+
+Download a sherpa-onnx streaming model, unpack it, and name the
+directory in `config.json`:
+
+```json
+{
+  "dictation_model_dir": "/Users/you/.localcode/models/sherpa-onnx-streaming-zipformer-korean-2024-06-16"
+}
+```
+
+The directory has to hold the unpacked contents of the archive — the
+`encoder-*.onnx`, `decoder-*.onnx`, `joiner-*.onnx` and `tokens.txt` —
+not the archive, and not a directory containing them. If it doesn't, the
+daemon says which files it couldn't find rather than just refusing.
+
+Korean models are at
+<https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models>; the
+streaming Zipformer one above is about 60MB and trained on KsponSpeech.
+Any sherpa-onnx **streaming transducer** model works — a non-streaming
+one (Whisper, Paraformer) will not load, because showing text while you
+are still talking is the whole point and those process a finished
+recording.
+
+Two things worth knowing before you rely on it:
+
+- **Text you have already seen can change.** A streaming recognizer
+  revises earlier words as later ones give it context. That is what the
+  grey means: it is not settled yet. It stops changing when you pause.
+- **Mixed Korean and English is the hard case.** A Korean-trained model
+  transcribes Korean conversation well and English technical terms
+  poorly, so "useState 훅을 async 함수로 바꿔줘" is where you will see
+  its limits. Try it with the way you actually dictate before deciding.
+
+The microphone button is hidden entirely when dictation cannot run — a
+build without the recognizer (anything but the desktop window), or no
+model configured. A button that can only fail is worse than no button.
+
 ## Known limitations
 
 * If an MCP server dies and the reconnect also fails, for example because the executable is gone, its tools return an error on every later call until the daemon restarts.

@@ -58,6 +58,22 @@ export const setWorkspace = (path, sessionID) => api('POST', '/api/workspace', {
 export const browseWorkspace = (start) => api('POST', '/api/workspace/browse', { start });
 export const getMCPServers = () => api('GET', '/api/mcp-servers');
 
+export const getDictationStatus = () => api('GET', '/api/dictation');
+export const startDictation = () => api('POST', '/api/dictation');
+export const stopDictation = (id) => api('POST', `/api/dictation/${id}/stop`);
+// Raw PCM, not JSON: base64 would cost a third more bytes per chunk on a
+// request that happens four times a second, for nothing.
+export async function sendDictationAudio(id, buffer) {
+  const resp = await fetch(`/api/dictation/${id}/audio`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: buffer,
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new ApiError(resp.status, data.error || `POST /api/dictation/${id}/audio: ${resp.status}`);
+  return data;
+}
+
 export const getSessions = () => api('GET', '/api/sessions');
 export const createSession = (agent) => api('POST', '/api/sessions', { agent });
 export const renameSession = (id, title) => api('POST', `/api/sessions/${id}/rename`, { title });

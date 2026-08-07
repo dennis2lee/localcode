@@ -59,6 +59,7 @@ function defaultRoutes() {
     },
     'GET /api/workspace': { path: '/tmp/workspace', can_browse: false },
     'GET /api/mcp-servers': [],
+    'GET /api/dictation': { ready: false, detail: 'no speech recognizer in this build' },
     'GET /api/sessions': [
       {
         id: 'sess-1',
