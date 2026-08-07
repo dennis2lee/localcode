@@ -148,19 +148,26 @@ func buildDaemon(ctx context.Context, configPath string) (*daemon.Daemon, func()
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
 
-	// Dictation is opt-in via a configured model directory. Without one
-	// the Manager is left nil and the endpoints explain why rather than
-	// failing obscurely — and the microphone button is never offered.
+	// The Manager is always built, including with no model directory
+	// configured — that is the case it exists to explain.
+	//
+	// It used to be created only when DictationModelDir was set, which
+	// meant an unconfigured desktop build left d.Dictation nil, and the
+	// status endpoint's nil branch answers with one fixed string: "this
+	// build has no speech recognizer". On a desktop build that is simply
+	// false, and it points whoever reads it at the one thing they cannot
+	// fix instead of the config key they can. Manager.Ready checks
+	// Available() before it looks at the model, so it distinguishes the
+	// two correctly; letting it answer is the whole fix.
+	//
 	// The recognizer itself only exists in the desktop build (CGo); in
 	// every other build dictation.Open returns ErrUnavailable and the
 	// Manager reports that as the reason it is not ready.
-	if cfg.DictationModelDir != "" {
-		dm := dictation.NewManager(dictation.Config{ModelDir: cfg.DictationModelDir})
-		dm.StartReaper()
-		d.Dictation = dm
-		prev := cleanup
-		cleanup = func() { dm.Close(); prev() }
-	}
+	dm := dictation.NewManager(dictation.Config{ModelDir: cfg.DictationModelDir})
+	dm.StartReaper()
+	d.Dictation = dm
+	prevCleanup := cleanup
+	cleanup = func() { dm.Close(); prevCleanup() }
 
 	return d, cleanup, nil
 }

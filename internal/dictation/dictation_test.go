@@ -141,3 +141,34 @@ func TestResolveModelNamesWhatIsMissing(t *testing.T) {
 		t.Error("expected an error when no model directory is configured")
 	}
 }
+
+// Regression: an unconfigured desktop build blamed the wrong thing.
+//
+// The daemon only built a Manager when a model directory was set, so
+// leaving that key out produced a nil Manager and the status endpoint's
+// fixed fallback string, "this build has no speech recognizer". On a
+// desktop build that is false, and it sends the reader after the one
+// thing they cannot change instead of the config key they can. Ready()
+// has always been able to tell the two apart; it just was not asked.
+func TestReadyBlamesTheConfigWhenTheBuildHasARecognizer(t *testing.T) {
+	ready, why := NewManager(Config{}).Ready()
+	if ready {
+		t.Fatal("ready = true with no model directory configured")
+	}
+	if Available() {
+		// A desktop build: the missing model directory is the fixable
+		// thing, so that is what the reason has to name.
+		if !strings.Contains(why, "model directory") {
+			t.Errorf("reason does not point at the model directory: %q", why)
+		}
+		if strings.Contains(why, "no speech recognizer") {
+			t.Errorf("reason blames the build, which does have a recognizer: %q", why)
+		}
+		return
+	}
+	// Any other build genuinely has no recognizer, and no amount of
+	// configuration would change that — say so instead.
+	if why != ErrUnavailable.Error() {
+		t.Errorf("reason = %q, want %q", why, ErrUnavailable.Error())
+	}
+}

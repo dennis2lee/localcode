@@ -44,6 +44,42 @@ func TestDictationStatusWithoutAManager(t *testing.T) {
 	}
 }
 
+// With a Manager present and no model configured — which is now every
+// daemon that has not been pointed at a model — the status has to carry
+// the Manager's own reason rather than a fixed string about the build.
+func TestDictationStatusAsksTheManagerForTheReason(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	d.Dictation = dictation.NewManager(dictation.Config{})
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/dictation")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	var got struct {
+		Ready  bool   `json:"ready"`
+		Detail string `json:"detail"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Ready {
+		t.Error("ready = true with no model configured")
+	}
+	wantReady, want := d.Dictation.Ready()
+	if wantReady {
+		t.Fatal("test premise broken: the manager considers itself ready")
+	}
+	if got.Detail != want {
+		t.Errorf("detail = %q, want the manager's own reason %q", got.Detail, want)
+	}
+}
+
 // Starting a dictation with no model must be a 503 with the reason, not
 // a 500: the daemon is fine, the model is absent, and the difference is
 // what the person reading the message needs.
