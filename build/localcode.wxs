@@ -53,6 +53,19 @@
             <File Id='LocalCodeGuiEXE' Name='localcode-gui.exe' Source='$(var.GuiExePath)' KeyPath='yes' />
           </Component>
           <!--
+            Speech dictation links sherpa-onnx, which on Windows is three
+            DLLs loaded at run time. localcode-gui.exe will not start at
+            all without them — Windows resolves imports before any of our
+            code runs — so they are not optional extras but part of the
+            executable's contract. They come from the same CI artifact as
+            the exe, built against the same version.
+          -->
+          <Component Id='SherpaRuntime' Guid='*'>
+            <File Id='SherpaCAPIDLL' Name='sherpa-onnx-c-api.dll' Source='$(var.SherpaDir)/sherpa-onnx-c-api.dll' KeyPath='yes' />
+            <File Id='SherpaCXXAPIDLL' Name='sherpa-onnx-cxx-api.dll' Source='$(var.SherpaDir)/sherpa-onnx-cxx-api.dll' />
+            <File Id='OnnxRuntimeDLL' Name='onnxruntime.dll' Source='$(var.SherpaDir)/onnxruntime.dll' />
+          </Component>
+          <!--
             The GUI window needs the WebView2 runtime. Windows 11 and
             recent Windows 10 ship it already; older systems do not.
             Install Microsoft's official Evergreen Bootstrapper (a ~2MB
@@ -178,6 +191,7 @@
       <ComponentRef Id='MainExecutable' />
       <ComponentRef Id='StartMenuShortcut' />
       <ComponentRef Id='GuiExecutable' />
+      <ComponentRef Id='SherpaRuntime' />
       <ComponentRef Id='GuiStartMenuShortcut' />
       <ComponentRef Id='DesktopShortcut' />
       <ComponentRef Id='WebView2BootstrapperFile' />

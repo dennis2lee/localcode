@@ -29,6 +29,21 @@ WEBVIEW2_BOOTSTRAPPER_URL="https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# The sherpa-onnx DLLs the GUI needs at run time ship in the same CI
+# artifact as localcode-gui.exe, so they are looked for beside it. Missing
+# them is fatal rather than a warning: the MSI would install a GUI that
+# cannot start, and the failure would surface as a bare Windows error box
+# on a user's machine instead of here.
+SHERPA_DIR="$(cd "$(dirname "$GUI_EXE_PATH")" && pwd)"
+for dll in sherpa-onnx-c-api.dll sherpa-onnx-cxx-api.dll onnxruntime.dll; do
+	if [ ! -f "$SHERPA_DIR/$dll" ]; then
+		echo "error: $dll not found beside $GUI_EXE_PATH" >&2
+		echo "       localcode-gui.exe cannot start without it. Download the whole" >&2
+		echo "       gui-windows CI artifact, not just the .exe." >&2
+		exit 1
+	fi
+done
+
 if ! command -v wixl >/dev/null 2>&1; then
 	echo "error: wixl not found. Install with: brew install msitools" >&2
 	exit 1
@@ -61,6 +76,7 @@ wixl -a x64 \
 	-D "GuiExePath=$GUI_EXE_PATH" \
 	-D "WebView2BootstrapperPath=$WORK/MicrosoftEdgeWebview2Setup.exe" \
 	-D "IconPath=$ROOT/build/icon/localcode.ico" \
+	-D "SherpaDir=$SHERPA_DIR" \
 	-o "$MSI" \
 	build/localcode.wxs
 
@@ -111,6 +127,8 @@ verify_msi Shortcut 'LocalCodeDesktopShortcut	DesktopFolder' 'the desktop shortc
 # The icon has to be embedded and referenced, or every shortcut falls back
 # to the exe's default (which, for a Go binary with no resource section,
 # is the blank Windows one).
+verify_msi File 'sherpa-onnx-c-api.dll' 'the sherpa-onnx runtime is missing — localcode-gui.exe will not start'
+verify_msi File 'onnxruntime.dll' 'onnxruntime.dll is missing — localcode-gui.exe will not start'
 verify_msi Icon 'LocalCodeIcon' 'the application icon is missing from the Icon table'
 verify_msi Property 'ARPPRODUCTICON	LocalCodeIcon' 'Add/Remove Programs is not pointed at the application icon'
 

@@ -1,4 +1,4 @@
-//go:build gui && !windows
+//go:build gui
 
 package dictation
 

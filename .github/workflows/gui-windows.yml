@@ -48,10 +48,52 @@ jobs:
       # own, so console-only subcommands (`version`, `mcp`, `login`) print
       # nowhere useful from this binary — those belong to the regular
       # console-subsystem localcode.exe, which ships in the same MSI.
+
+      # Speech dictation links sherpa-onnx, and that module ships only
+      # DLLs for Windows — no .a import libraries. webview_go, meanwhile,
+      # adds "-static" to the Windows link, and ld in static mode refuses
+      # to follow a DLL at all ("have you installed the static version of
+      # the sherpa-onnx-c-api library?"). macOS never hits this because
+      # that module ships .dylib files.
+      #
+      # An import library is itself an archive, so generating one from
+      # each DLL satisfies -static while still loading the DLL at run
+      # time. gendef reads the DLL's export table into a .def; dlltool
+      # turns that into the archive ld wants. Both ship with MinGW-w64.
+      #
+      # The DLLs still have to sit beside the exe at run time — they are
+      # uploaded with it below and installed by the MSI.
+      - name: Build sherpa-onnx import libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="$(go env GOMODCACHE)/github.com/k2-fsa/sherpa-onnx-go-windows@v1.13.4/lib/x86_64-pc-windows-gnu"
+          test -d "$lib" || { echo "sherpa-onnx windows lib dir not found: $lib" >&2; exit 1; }
+          mkdir -p implib
+          cd implib
+          for dll in sherpa-onnx-c-api onnxruntime sherpa-onnx-cxx-api; do
+            cp "$lib/$dll.dll" .
+            gendef "$dll.dll"
+            dlltool -d "$dll.def" -D "$dll.dll" -l "lib$dll.a"
+            test -s "lib$dll.a" || { echo "no import library produced for $dll" >&2; exit 1; }
+          done
+          ls -la
+
       - name: Build GUI (-tags gui, CGo)
         env:
           CGO_ENABLED: '1'
+          # Puts the generated import libraries on the link path. The
+          # sherpa module's own -L points at a directory holding only
+          # DLLs, so ld falls through to this one for the archives.
+          CGO_LDFLAGS: -L${{ github.workspace }}/implib
         run: go build -tags gui -ldflags "-s -w -H windowsgui" -o localcode-gui.exe ./cmd/localcode
+
+      # The DLLs have to sit beside the exe for it to start at all, which
+      # makes the smoke check below a real test of them too: a missing or
+      # mismatched DLL shows up as the process failing to start.
+      - name: Stage runtime DLLs beside the exe
+        shell: bash
+        run: cp implib/*.dll .
 
       # Proves the CGo binary actually links and runs on Windows. Because
       # the binary is GUI-subsystem, PowerShell does not wait for it and its
@@ -67,5 +109,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: localcode-gui-windows-amd64
-          path: localcode-gui.exe
+          path: |
+            localcode-gui.exe
+            sherpa-onnx-c-api.dll
+            sherpa-onnx-cxx-api.dll
+            onnxruntime.dll
           if-no-files-found: error
