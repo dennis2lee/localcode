@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.32.5
+
+- **Fix: upgrading would delete the speech model and download it again.** A repeat install already skipped the download — `dictation install` returns immediately when a usable model is there — but an upgrade never got that far. A major upgrade uninstalls the old product first, and that uninstall runs the old package's own removal action, so the order was: delete 400MB, install the new files, find no model, download the same 400MB again. Every upgrade, for a file that had not changed. The removal is now skipped when the uninstall is part of an upgrade rather than a real one.
+  * This cannot help the upgrade *out of* v0.32.4: it is that already-published package's own removal action that runs, and it has no guard. Expect one re-download going to v0.32.5, then nothing after. To avoid even that, install v0.32.5 with `DICTATION=0` and run `localcode dictation install` afterwards.
+
 ## v0.32.4
 
 - **The Windows installer now fetches the speech model, so dictation works out of the box.** It was off until you found a release page, downloaded 400MB, unpacked a `.tar.bz2` on a machine whose Explorer cannot open one, and added a path to `config.json` with every backslash doubled. The installer runs `localcode dictation install` instead, into a `models` directory beside the program — which is where localcode now looks when `dictation_model_dir` is unset, so nothing has to edit a config file afterwards. Uninstalling removes it again.
