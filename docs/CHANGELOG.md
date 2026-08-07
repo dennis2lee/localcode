@@ -2,6 +2,7 @@
 
 ## v0.32.8
 
+- **Fix: `skip_permissions` stopped almost nothing.** Turning "skip all permission prompts" on kept prompting, because a bash command containing a redirect or a substitution was forced back to "ask" without the setting being consulted at all. Every segment of the line resolved to allow, and then one check overrode the lot. `>` matches anywhere in the string and substitutions are in a large share of what an agent writes, so the prompts kept coming for someone who had explicitly asked for none. The checkbox's own promise — "every tool call runs without asking; explicit deny rules still deny" — now holds: deny still denies, and nothing else prompts.
 - **Fix: clicking the workspace button twice opened two folder dialogs.** The OS picker is modal to the daemon, not to the window — the request that opens it does not answer until someone picks or cancels, and the page keeps handling clicks meanwhile. A stray second click put a second "Browse for Folder" on top of the first, both had to be answered, and whichever was answered last silently overwrote the other's choice. The button now stays disabled while a dialog is open, and further clicks are dropped.
 
 ## v0.32.7

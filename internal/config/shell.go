@@ -31,6 +31,23 @@ func (c *Config) resolveShellCommand(command string, staticRequiresPermission bo
 		}
 	}
 	if worst == DecisionAllow && hasUnsafeShellConstruct(command) {
+		// skip_permissions reaches this ask too.
+		//
+		// It did not, and the result was that turning "skip all
+		// permission prompts" on stopped almost nothing: every segment
+		// resolves to allow (resolveOne applies the downgrade), and then
+		// this line forced the whole line back to ask. A redirect or a
+		// substitution is in a large share of the commands an agent
+		// writes, and `>` matches anywhere in the string — so the prompt
+		// kept coming for a setting whose own checkbox reads "every tool
+		// call runs without asking; explicit deny rules still deny".
+		//
+		// Deny is unaffected: it returns above, before this is reached.
+		// That is the whole of what skip is promised not to override,
+		// and it is still true.
+		if c.PermissionsSkipped() {
+			return DecisionAllow
+		}
 		return DecisionAsk
 	}
 	return worst

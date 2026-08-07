@@ -131,3 +131,56 @@ func TestSkipPermissionsStillHonorsDeny(t *testing.T) {
 		t.Errorf("chained denied command = %q, want deny", got)
 	}
 }
+
+// Regression: turning skip_permissions on stopped almost nothing.
+//
+// resolveShellCommand resolves each segment of a command line — and those
+// do honour the skip — but then forced the whole line back to "ask"
+// whenever it contained a redirect or a substitution, without consulting
+// the setting. A `>` matches anywhere in the string, and substitutions
+// and redirects are in a large share of what an agent writes, so the
+// prompts kept coming for someone who had explicitly asked for none.
+func TestSkipPermissionsCoversRedirectsAndSubstitutions(t *testing.T) {
+	on := true
+	cfg := &Config{SkipPermissions: &on}
+
+	for _, command := range []string{
+		"ls > out.txt",
+		"echo hi >> log",
+		"cat $(which go)",
+		"diff <(sort a) <(sort b)",
+		"grep -c . file 2>/dev/null",
+	} {
+		if got := cfg.ResolvePermission(BashToolName, command, true); got != DecisionAllow {
+			t.Errorf("ResolvePermission(%q) = %v, want allow with skip_permissions on", command, got)
+		}
+	}
+}
+
+// The safety line is unchanged: an explicit deny still denies, even for a
+// command the skip would otherwise wave through.
+func TestSkipPermissionsStillDeniesARedirectingCommandThatIsDenied(t *testing.T) {
+	on := true
+	cfg := &Config{
+		SkipPermissions: &on,
+		Permissions: map[string]ToolPermission{
+			BashToolName: {Rules: []PermissionRule{{Match: "rm *", Decision: DecisionDeny}}},
+		},
+	}
+	if got := cfg.ResolvePermission(BashToolName, "rm -rf tmp > log", true); got != DecisionDeny {
+		t.Errorf("a denied command with a redirect resolved to %v, want deny", got)
+	}
+}
+
+// With the setting off, the construct still forces a prompt — that is the
+// behaviour this is protecting, not removing.
+func TestUnsafeConstructsStillAskWhenSkipIsOff(t *testing.T) {
+	cfg := &Config{
+		Permissions: map[string]ToolPermission{
+			BashToolName: {Rules: []PermissionRule{{Match: "ls *", Decision: DecisionAllow}}},
+		},
+	}
+	if got := cfg.ResolvePermission(BashToolName, "ls > out.txt", true); got != DecisionAsk {
+		t.Errorf("ResolvePermission with skip off = %v, want ask", got)
+	}
+}
