@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.32.8
+
+- **Fix: clicking the workspace button twice opened two folder dialogs.** The OS picker is modal to the daemon, not to the window — the request that opens it does not answer until someone picks or cancels, and the page keeps handling clicks meanwhile. A stray second click put a second "Browse for Folder" on top of the first, both had to be answered, and whichever was answered last silently overwrote the other's choice. The button now stays disabled while a dialog is open, and further clicks are dropped.
+
 ## v0.32.7
 
 - **Fix: sending a dictated prompt ended in a red error, and lost the end of the sentence.** Enter stops the microphone before it sends, and the stop request was allowed to overtake audio that was still uploading — so the last chunks were dropped on the floor, and one already in flight arrived at a session the daemon had just closed and came back as `no dictation session "d-1"`. Measured against a real recognizer: of five chunks recorded just before the stop, **one was uploaded and four were thrown away**. Stopping now finishes uploading what was recorded before it closes the session, and a request that fails only because the session ended is no longer reported as a failure.

@@ -466,6 +466,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #auto-delegate-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
 #auto-delegate-modal .note.err { color: var(--err); }
 #auto-delegate-modal .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
+/* While the OS folder dialog is open, waiting for an answer. Clicking
+   again would put a second dialog on top of the first. */
+#workspace-btn:disabled { cursor: progress; opacity: 0.6; }
 #workspace-btn {
   background: transparent;
   border: 1px solid var(--border);

@@ -5,7 +5,7 @@ import {
   permissionSettingsModal, skipPermissionsCheckbox, permissionRulesListEl,
   ruleToolInput, ruleMatchInput, ruleDecisionSelect,
   permissionSettingsNote,
-  workspaceModal, workspaceInput, workspaceNote,
+  workspaceModal, workspaceInput, workspaceNote, workspaceBtn,
 } from './dom.js';
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
@@ -241,19 +241,42 @@ export function openWorkspacePicker() {
   else openWorkspaceModal();
 }
 
+// browsing guards against opening a second folder dialog on top of the
+// first.
+//
+// The OS dialog is modal to the *daemon*, not to this page — the request
+// that opens it simply does not answer until someone picks or cancels,
+// and the page carries on handling clicks the whole time. So a stray
+// second click on the workspace button put up a second "Browse for
+// Folder" with the first still waiting behind it, and the person had to
+// answer both. Worse, both then resolve: whichever is answered last wins
+// and silently overwrites the first choice.
+//
+// The button is disabled as well as the call being dropped, so the state
+// is visible rather than a click that does nothing for no stated reason.
+let browsing = false;
+
 export async function browseWorkspace() {
-  let picked;
+  if (browsing) return;
+  browsing = true;
+  workspaceBtn.disabled = true;
   try {
-    picked = await apiClient.browseWorkspace(app.workspacePath);
-  } catch (err) {
-    // The picker itself failed (not a cancel) — fall back to typing, rather
-    // than leaving the click doing nothing at all.
-    appendError(`could not open the folder picker: ${err}`);
-    openWorkspaceModal();
-    return;
+    let picked;
+    try {
+      picked = await apiClient.browseWorkspace(app.workspacePath);
+    } catch (err) {
+      // The picker itself failed (not a cancel) — fall back to typing,
+      // rather than leaving the click doing nothing at all.
+      appendError(`could not open the folder picker: ${err}`);
+      openWorkspaceModal();
+      return;
+    }
+    if (!picked || !picked.path) return; // 204: dialog dismissed, nothing to do
+    await applyWorkspace(picked.path);
+  } finally {
+    browsing = false;
+    workspaceBtn.disabled = false;
   }
-  if (!picked || !picked.path) return; // 204: dialog dismissed, nothing to do
-  await applyWorkspace(picked.path);
 }
 
 // switchWorkspace is the one place that moves the daemon's working
