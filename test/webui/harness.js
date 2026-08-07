@@ -263,6 +263,16 @@ async function load(opts = {}) {
   // app code reaches for window.prompt / window.confirm; in a browser
   // window *is* the global, so wire it up the same way here.
   sandbox.window = sandbox;
+  // A minimal localStorage: the resize handles persist panel widths
+  // through it, and the app treats a throwing/absent store as "no saved
+  // width" rather than an error, so the stub only has to be honest.
+  const stored = new Map(Object.entries(opts.localStorage || {}));
+  sandbox.localStorage = {
+    getItem: (k) => (stored.has(k) ? stored.get(k) : null),
+    setItem: (k, v) => stored.set(k, String(v)),
+    removeItem: (k) => stored.delete(k),
+  };
+  harness.storage = stored;
   sandbox.confirm = () => (opts.confirm === undefined ? true : opts.confirm);
   sandbox.prompt = () => (opts.prompt === undefined ? null : opts.prompt);
 
@@ -281,6 +291,10 @@ async function load(opts = {}) {
   }
 
   return Object.assign(harness, internals, {
+    // doc is the document itself, for the handful of listeners the app
+    // attaches there rather than to an element (global keys, and the
+    // pointermove/pointerup of a panel drag).
+    doc: document,
     // el(id) is the element index.html declares — the same object the app
     // code holds a reference to.
     el: (id) => document.getElementById(id),

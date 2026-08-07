@@ -21,6 +21,7 @@ import {
   openPermissionSettings, closePermissionSettings, toggleSkipPermissions, addPermissionRule,
   openWorkspacePicker, closeWorkspaceModal, saveWorkspace, anyModalOpen, permissionRequest,
 } from './modals.js';
+import { initResizers } from './resize.js';
 
 agentSelectEl.addEventListener('change', async () => {
   const name = agentSelectEl.value;
@@ -129,6 +130,7 @@ workspaceInput.addEventListener('keydown', (e) => {
 });
 
 async function init() {
+  initResizers();
   renderTasks();
   // Six independent GETs against the same daemon — each one writes its own
   // slice of app state and renders its own pane, so there is no ordering
@@ -168,4 +170,5 @@ export { applyEvent } from './events.js';
 export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
+export { setPanelWidth } from './resize.js';
 export { renderSessionList, selectSession } from './sessions.js';

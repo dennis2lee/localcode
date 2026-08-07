@@ -112,6 +112,31 @@ aside {
   font-size: 12px;
   flex-shrink: 0;
 }
+/* The drag handle between a side panel and the transcript. It is only
+   4px wide, so it gets a wider invisible grab area via a ::before that
+   overhangs both sides — a 4px target is accurate enough to point at but
+   not to grab, and widening the visible line instead would put a thick
+   band down a layout whose whole point is a single hairline rule. */
+.resizer {
+  flex: 0 0 4px;
+  position: relative;
+  cursor: col-resize;
+  background: transparent;
+}
+.resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+.resizer:hover, .resizer.dragging { background: var(--accent); }
+/* While dragging, the pointer regularly leaves the 4px handle and travels
+   over the transcript. Without this the browser starts selecting the text
+   it crosses, and the drag ends with half the reply highlighted. */
+body.resizing { cursor: col-resize; user-select: none; }
+
 /* The session list gets its own panel on the left, opposite the tasks /
    MCP panel, so switching conversations is a first-class move rather
    than something buried under two other sections. */

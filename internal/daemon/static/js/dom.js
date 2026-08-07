@@ -47,3 +47,7 @@ export const workspaceInput = document.getElementById('workspace-input');
 export const workspaceNote = document.getElementById('workspace-note');
 export const workspaceSaveBtn = document.getElementById('workspace-save');
 export const workspaceCancelBtn = document.getElementById('workspace-cancel');
+export const leftPanel = document.getElementById('left-panel');
+export const rightPanel = document.getElementById('right-panel');
+export const resizeLeftHandle = document.getElementById('resize-left');
+export const resizeRightHandle = document.getElementById('resize-right');

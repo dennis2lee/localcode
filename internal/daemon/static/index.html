@@ -28,7 +28,7 @@
   </div>
 </div>
 <main>
-  <aside class="left">
+  <aside class="left" id="left-panel">
     <div class="side-section">
       <div class="side-header">
         <h2>Sessions</h2>
@@ -38,8 +38,10 @@
       <button class="icon-btn danger-btn" id="delete-all-sessions-btn" title="delete all sessions" style="width:100%">delete all sessions</button>
     </div>
   </aside>
+  <div class="resizer" id="resize-left" title="drag to resize"></div>
   <div id="transcript"></div>
-  <aside>
+  <div class="resizer" id="resize-right" title="drag to resize"></div>
+  <aside id="right-panel">
     <div class="side-section">
       <h2>Background tasks</h2>
       <div id="tasks"></div>

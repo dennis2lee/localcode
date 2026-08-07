@@ -210,6 +210,13 @@ class Element {
     return `${open}${this.innerHTML}</${tag}>`;
   }
 
+  // Layout is not simulated, so offsetWidth reports whatever width was
+  // last written inline. That is exactly what the resize handles read back
+  // between drags, and nothing else in the app asks.
+  get offsetWidth() {
+    return parseInt(this.style.width, 10) || 0;
+  }
+
   addEventListener(type, fn) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(fn);
@@ -331,8 +338,16 @@ class Document {
     this.listeners.get(type).push(fn);
   }
 
-  // fire dispatches a document-level event (app.js binds keydown here for
-  // Esc/Tab, which work with focus anywhere on the page).
+  removeEventListener(type, fn) {
+    const list = this.listeners.get(type);
+    if (!list) return;
+    const i = list.indexOf(fn);
+    if (i >= 0) list.splice(i, 1);
+  }
+
+  // fire dispatches a document-level event (the app binds keydown here for
+  // Esc/Tab, which work with focus anywhere on the page, and the
+  // pointermove/pointerup of a panel drag).
   fire(type, props = {}) {
     const ev = {
       type,
