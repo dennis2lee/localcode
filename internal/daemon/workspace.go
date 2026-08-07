@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -68,6 +69,13 @@ func (d *Daemon) handleBrowseWorkspace(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path string `json:"path"`
+		// SessionID is the session the workspace is being changed for. It
+		// is optional (a client that doesn't track sessions can omit it),
+		// but without it the move is invisible to the session list, and
+		// re-selecting the session later would put the workspace back
+		// where the session was created — which is what made a switch
+		// look like it had not taken.
+		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
 		http.Error(w, "path is required", http.StatusBadRequest)
@@ -98,5 +106,17 @@ func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Loop.SetProjectDir(abs)
+
+	// Record the move on the session that asked for it. Non-fatal on
+	// failure: the workspace has already changed and reporting that
+	// truthfully matters more than the bookkeeping — an unknown session id
+	// (a client that made one up, or a session deleted mid-request) must
+	// not turn a successful switch into an error.
+	if req.SessionID != "" {
+		if _, err := d.Loop.Store.SetWorkspace(req.SessionID, abs); err != nil {
+			log.Printf("workspace: could not record %s on session %s: %v", abs, req.SessionID, err)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"path": abs})
 }

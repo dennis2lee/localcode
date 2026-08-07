@@ -1209,8 +1209,11 @@ func TestDaemonCreatedSessionRecordsWorkspace(t *testing.T) {
 		t.Errorf("new session workspace = %q, want %q", sess.Workspace, workspace)
 	}
 
-	// Switching the workspace afterwards must not rewrite sessions that
-	// already exist — the field records where a conversation started.
+	// Moving the daemon's directory on its own touches no session: the
+	// field follows a session only when a client switches the workspace
+	// *for* that session, naming it in the request (see the test below).
+	// Anything else — another client's switch, a direct SetProjectDir —
+	// leaves this session's record where it was.
 	elsewhere := t.TempDir()
 	d.Loop.SetProjectDir(elsewhere)
 	listed, err := c.ListSessions(ctx)
@@ -1222,6 +1225,98 @@ func TestDaemonCreatedSessionRecordsWorkspace(t *testing.T) {
 	}
 	if listed[0].Workspace != workspace {
 		t.Errorf("workspace = %q after switching the daemon workspace, want the original %q", listed[0].Workspace, workspace)
+	}
+}
+
+// Regression: switching the workspace changed the daemon's directory but
+// left the session's record pointing at wherever it was created. The
+// session panel went on naming the old directory, and re-selecting the
+// session put the workspace back — which made a switch the user had
+// actually made look like it had never taken.
+func TestDaemonSetWorkspaceRecordsItOnTheNamedSession(t *testing.T) {
+	// handleSetWorkspace calls os.Chdir, which is process-wide: without
+	// restoring it, every later test in this package that resolves a
+	// relative path (webui_test.go finds test/webui that way) would look
+	// for it under this test's temp dir.
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	start := t.TempDir()
+	d.Loop.SetProjectDir(start)
+
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	moved := t.TempDir()
+	body := fmt.Sprintf(`{"path":%q,"session_id":%q}`, moved, sess.ID)
+	resp, err := http.Post(httpSrv.URL+"/api/workspace", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/workspace: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	listed, err := c.ListSessions(ctx)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("listed %d sessions, want 1", len(listed))
+	}
+	if listed[0].Workspace != moved {
+		t.Errorf("session workspace = %q after the switch, want %q", listed[0].Workspace, moved)
+	}
+}
+
+// An unknown session id must not fail the switch: the directory has
+// already moved by then, and reporting that truthfully matters more than
+// the bookkeeping.
+func TestDaemonSetWorkspaceSucceedsWithAnUnknownSession(t *testing.T) {
+	// handleSetWorkspace calls os.Chdir, which is process-wide: without
+	// restoring it, every later test in this package that resolves a
+	// relative path (webui_test.go finds test/webui that way) would look
+	// for it under this test's temp dir.
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	moved := t.TempDir()
+	body := fmt.Sprintf(`{"path":%q,"session_id":"no-such-session"}`, moved)
+	resp, err := http.Post(httpSrv.URL+"/api/workspace", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/workspace: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — the switch itself succeeded", resp.StatusCode)
+	}
+	if got := d.Loop.GetProjectDir(); got != moved {
+		t.Errorf("project dir = %q, want %q", got, moved)
 	}
 }
 

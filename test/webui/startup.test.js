@@ -101,7 +101,7 @@ test('selecting a session switches the daemon to that session\'s workspace', asy
   });
   const calls = app.callsTo('POST', '/api/workspace');
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].body, { path: '/srv/project' });
+  assert.deepEqual(calls[0].body, { path: '/srv/project', session_id: 'sess-1' });
   assert.equal(app.el('workspace-btn').textContent, '/srv/project');
   assert.match(app.transcript(), /\[workspace\] \/srv\/project/);
 });

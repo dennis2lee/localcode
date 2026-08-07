@@ -12,6 +12,11 @@ import * as apiClient from './api.js';
 import { appendError, appendTool } from './transcript.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace } from './render.js';
 import { Modal } from './modal.js';
+// Circular with sessions.js, which imports applyWorkspace from here — safe
+// for the same reason as the events.js/modals.js pair: both references are
+// only ever called from a function body at runtime, never while the module
+// is being evaluated.
+import { renderSessionList } from './sessions.js';
 
 const workspaceNoteDefault = 'Changing this restarts relative-path resolution for every tool from the new directory. Refused while a turn is in progress.';
 
@@ -258,9 +263,18 @@ export async function browseWorkspace() {
 // error comes back rather than being handled here.
 async function switchWorkspace(path) {
   try {
-    const w = await apiClient.setWorkspace(path);
+    const w = await apiClient.setWorkspace(path, session.sessionID);
     app.workspacePath = w.path;
     renderWorkspace();
+    // The daemon has just recorded the move on this session; mirror it in
+    // the cached listing the left panel renders from, which is otherwise
+    // only refreshed on a rename or a session switch — so the panel went
+    // on naming the directory the session was created in.
+    const current = (app.sessions || []).find(s => s.id === session.sessionID);
+    if (current) {
+      current.workspace = w.path;
+      renderSessionList();
+    }
     return { path: w.path };
   } catch (err) {
     return { err };

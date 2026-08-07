@@ -24,12 +24,15 @@ type Session struct {
 	Visible  bool   `json:"visible"`
 	Agent    string `json:"agent,omitempty"`
 	Title    string `json:"title,omitempty"`
-	// Workspace is the directory the session was created in. The daemon has
+	// Workspace is the directory this session is working in. The daemon has
 	// one live workspace at a time (see daemon.handleSetWorkspace), so this
-	// is a record of where a conversation started, not a per-session
-	// setting: it's what lets a session list distinguish two sessions that
-	// otherwise look identical because they were opened in different
-	// projects. Empty for sessions created before this field existed.
+	// is not an independent per-session setting — it's this session's
+	// record of where it currently is, which is what lets a session list
+	// distinguish two sessions that otherwise look identical because they
+	// are in different projects, and what selecting a session restores the
+	// workspace to. It is set at creation and moved by SetWorkspace
+	// whenever the workspace changes while this session is the open one.
+	// Empty for sessions created before this field existed.
 	Workspace string    `json:"workspace,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -177,6 +180,28 @@ func (s *Store) SetTitle(sessionID, title string) (*Session, error) {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
 	st.meta.Title = title
+	metaCopy := st.meta
+	if s.dir != "" {
+		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
+			return nil, err
+		}
+	}
+	return &metaCopy, nil
+}
+
+// SetWorkspace records dir as the session's current workspace. The daemon
+// calls this when the workspace changes while this session is the open
+// one, so the session list keeps naming where the conversation actually
+// is, and so selecting the session later restores that directory instead
+// of the one it happened to be created in.
+func (s *Store) SetWorkspace(sessionID, dir string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	st.meta.Workspace = dir
 	metaCopy := st.meta
 	if s.dir != "" {
 		if err := writeSessionMeta(s.dir, metaCopy); err != nil {

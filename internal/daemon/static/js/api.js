@@ -51,7 +51,10 @@ export const getCommands = () => api('GET', '/api/commands');
 export const getSettings = () => api('GET', '/api/settings');
 export const getVersion = () => api('GET', '/api/version');
 export const getWorkspace = () => api('GET', '/api/workspace');
-export const setWorkspace = (path) => api('POST', '/api/workspace', { path });
+// sessionID is what lets the daemon record the move on the session, so the
+// session list keeps naming where the conversation is and re-selecting it
+// later doesn't put the workspace back where the session was created.
+export const setWorkspace = (path, sessionID) => api('POST', '/api/workspace', { path, session_id: sessionID });
 export const browseWorkspace = (start) => api('POST', '/api/workspace/browse', { start });
 export const getMCPServers = () => api('GET', '/api/mcp-servers');
 
