@@ -91,6 +91,17 @@ type Loop struct {
 	// "!`shell`" and "@file" expansions against.
 	ProjectDir string
 
+	// PendingInput, if set, is asked at every tool boundary inside a turn
+	// whether the user has typed anything since the turn began, and
+	// returns one such message at a time until it reports false.
+	//
+	// This is what lets someone redirect a long job without stopping it —
+	// "actually, skip the tests" lands at the model's next step instead of
+	// waiting for the whole turn to finish. The daemon owns the queue
+	// itself (see turnTracker), because only it knows whether a turn is
+	// still registered as running.
+	PendingInput func(sessionID string) (string, bool)
+
 	// Tasks runs sub-agents in their own sessions. Set by NewTaskManager,
 	// so a Loop built without one (a bare Loop in a test) simply has no
 	// delegation rather than a nil dereference.

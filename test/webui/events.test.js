@@ -155,7 +155,12 @@ test('agent.switched updates the dropdown and the status line', async () => {
   assert.match(app.el('status-text').textContent, /model: test-model-2/);
 });
 
-test('a plain prompt typed mid-turn is queued and sent when the turn finishes', async () => {
+// A prompt typed during a turn goes to the daemon straight away. The
+// daemon hands it to the running turn, which picks it up at its next tool
+// call — so a correction reaches the model while it is still working
+// instead of after it has finished the wrong thing. Holding it in the
+// client until turn.done was the old behaviour.
+test('a plain prompt typed mid-turn is sent immediately, not held back', async () => {
   const app = await load();
   app.setWaiting(true);
 
@@ -163,19 +168,14 @@ test('a plain prompt typed mid-turn is queued and sent when the turn finishes', 
   await app.el('send').click();
   await app.settle();
 
-  assert.deepEqual(Array.from(app.state.promptQueue), ['second question']);
-  assert.ok(app.transcript().includes('[queued] second question'), app.transcript());
-  assert.equal(app.el('input').value, '');
-  assert.equal(app.callsTo('POST', '/api/sessions/sess-1/messages').length, 0);
-
-  app.sse.emit({ type: 'turn.done', data: {} });
-  await app.settle();
-
   const sent = app.callsTo('POST', '/api/sessions/sess-1/messages');
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0].body, { text: 'second question' });
   assert.deepEqual(Array.from(app.state.promptQueue), []);
-  assert.equal(app.state.waiting, true); // the dequeued prompt started a turn
+  assert.equal(app.el('input').value, '');
+  assert.ok(app.transcript().includes('second question'), app.transcript());
+  // The original turn is still the one running.
+  assert.equal(app.state.waiting, true);
 });
 
 // Queueing a command would mean replaying it later as literal chat text to
@@ -429,4 +429,27 @@ test('the status line names the running tool', async () => {
 
   app.applyEvent({ type: 'tool.end', data: {} });
   assert.match(app.el('status-text').textContent, /working…/);
+});
+
+// The acknowledgement shown when a prompt is sent mid-turn stands in for
+// the real transcript line until the model is actually handed the text —
+// that wait can be minutes. When the real line arrives the placeholder
+// goes, so the transcript holds one entry per message and matches what a
+// reload would show.
+test('the mid-turn acknowledgement is replaced by the real line, not left above it', async () => {
+  const app = await load();
+  app.setWaiting(true);
+
+  app.type('actually, skip the tests');
+  await app.el('send').click();
+  await app.settle();
+  assert.ok(app.transcript().includes('will pick this up'), app.transcript());
+
+  app.applyEvent({ type: 'message.user', data: { text: 'actually, skip the tests', injected: true } });
+
+  const html = app.transcript();
+  assert.ok(!html.includes('will pick this up'), html);
+  assert.ok(html.includes('You: actually, skip the tests'), html);
+  // Exactly one occurrence of the text, not two.
+  assert.equal(html.split('actually, skip the tests').length - 1, 1, html);
 });

@@ -81,6 +81,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 	toolInputs := map[string]string{}          // tool_use_id -> raw JSON input, filled at tool.end
 	toolResults := map[string]provider.Block{} // tool_use_id -> tool_result block, filled at tool.end
 	var toolsDone []string                     // tool_use_ids whose tool.end has arrived this iteration, in order
+	var pendingInjected []string               // messages typed mid-turn, riding out with this iteration's tool results
 
 	flush := func() {
 		if !textSet && len(toolsDone) == 0 {
@@ -107,18 +108,27 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 		if len(content) > 0 {
 			out = append(out, provider.Message{Role: provider.RoleAssistant, Content: content})
 		}
+		// Anything the user typed mid-turn went to the model as trailing
+		// text in this same tool_result message (see takeInjected), so it
+		// has to be put back there — not as a user message of its own,
+		// which would leave two user messages in a row.
+		for _, text := range pendingInjected {
+			resultBlocks = append(resultBlocks, provider.TextBlock(injectedPreface+text))
+		}
 		if len(resultBlocks) > 0 {
 			out = append(out, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
 		}
 		pendingText, textSet = "", false
 		pendingToolOrder = nil
 		toolsDone = nil
+		pendingInjected = nil
 	}
 
 	resetPending := func() {
 		pendingText, textSet = "", false
 		pendingToolOrder = nil
 		toolsDone = nil
+		pendingInjected = nil
 	}
 
 	// A "local" user message (/usage, /compact, /config, /memory, a
@@ -141,6 +151,26 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			}
 
 		case events.TypeUserMessage:
+			// An injected message is not a turn boundary: it went to the
+			// model as trailing text inside the tool_result message of
+			// the iteration it landed in, so flushing here would put it
+			// in a message of its own and leave two user messages in a
+			// row — a shape Bedrock rejects outright.
+			//
+			// It is recorded when the model is handed it, which is just
+			// after the last tool.end of that iteration — so by now the
+			// message it belongs to has usually already been emitted, and
+			// the text goes onto the end of it. pendingInjected is the
+			// fallback for the other order.
+			if isTrue(ev.Data["injected"]) {
+				text := injectedPreface + dataString(ev.Data, "text")
+				if n := len(out); n > 0 && out[n-1].Role == provider.RoleUser && len(toolsDone) == 0 {
+					out[n-1].Content = append(out[n-1].Content, provider.TextBlock(text))
+				} else {
+					pendingInjected = append(pendingInjected, dataString(ev.Data, "text"))
+				}
+				continue
+			}
 			flush()
 			if isTrue(ev.Data["local"]) {
 				skipNextReply = true

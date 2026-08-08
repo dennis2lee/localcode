@@ -114,7 +114,7 @@ func (l *Loop) recordUsage(sessionID, model string, usage streamUsage) {
 		// a missing key would leave the "~" on an exact figure.
 		"estimated": false,
 		"show_tps":  l.ShowTPS(),
-		"model":         model,
+		"model":     model,
 	})
 }
 

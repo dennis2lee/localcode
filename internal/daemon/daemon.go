@@ -77,6 +77,12 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 		turns:        newTurnTracker(),
 		daemonEvents: newBroadcaster(),
 	}
+	// The agent loop asks for mid-turn input at every tool call; the queue
+	// itself lives here, because only the daemon knows whether a turn is
+	// still registered as running. Wired at construction so no path can
+	// build a daemon whose loop silently ignores what someone typed.
+	loop.PendingInput = d.turns.takeOne
+
 	d.routes(webFS)
 	// Every status change becomes one live event carrying the whole list.
 	// Registered here rather than by the caller so no wiring path can

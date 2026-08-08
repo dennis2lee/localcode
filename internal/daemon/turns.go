@@ -21,10 +21,19 @@ import (
 type turnTracker struct {
 	mu      sync.Mutex
 	cancels map[string]context.CancelFunc
+	// pending holds messages typed while a turn was running, in the order
+	// they were sent. Under the same lock as cancels on purpose: "is a
+	// turn running" and "can this text still be handed to it" have to be
+	// answered together, or a message accepted a moment after the turn
+	// decided to finish would sit in the queue forever.
+	pending map[string][]string
 }
 
 func newTurnTracker() turnTracker {
-	return turnTracker{cancels: map[string]context.CancelFunc{}}
+	return turnTracker{
+		cancels: map[string]context.CancelFunc{},
+		pending: map[string][]string{},
+	}
 }
 
 // begin registers a turn for id and reports true, or reports false (and
@@ -40,11 +49,70 @@ func (t *turnTracker) begin(id string, cancel context.CancelFunc) bool {
 	return true
 }
 
-// end clears id's registration once its turn is over.
+// end clears id's registration once its turn is over, dropping anything
+// still queued for it — used on the paths that abandon the turn
+// (cancellation, a failed request), where nothing is left to deliver the
+// queue to. The ordinary end of a turn goes through finishOrTake instead,
+// which does not throw the queue away.
 func (t *turnTracker) end(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.cancels, id)
+	delete(t.pending, id)
+}
+
+// inject hands text to the turn currently running for id, to be picked up
+// at its next tool call. Reports false when no turn is running, which
+// means the caller should just start one.
+func (t *turnTracker) inject(id, text string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, running := t.cancels[id]; !running {
+		return false
+	}
+	t.pending[id] = append(t.pending[id], text)
+	return true
+}
+
+// takeOne pops the next queued message for id, if any. This is what the
+// agent loop calls between tool calls.
+func (t *turnTracker) takeOne(id string) (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	q := t.pending[id]
+	if len(q) == 0 {
+		return "", false
+	}
+	text := q[0]
+	if len(q) == 1 {
+		delete(t.pending, id)
+	} else {
+		t.pending[id] = q[1:]
+	}
+	return text, true
+}
+
+// finishOrTake ends a turn, atomically: either there is still something
+// queued — return it, and stay registered as running so a further message
+// keeps queueing rather than racing a second turn into existence — or
+// there is not, and the registration is cleared here, under the same lock
+// inject checks. That is what closes the window where a message accepted
+// microseconds before a turn ended would never be answered by anyone.
+func (t *turnTracker) finishOrTake(id string) (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if q := t.pending[id]; len(q) > 0 {
+		text := q[0]
+		if len(q) == 1 {
+			delete(t.pending, id)
+		} else {
+			t.pending[id] = q[1:]
+		}
+		return text, true
+	}
+	delete(t.cancels, id)
+	delete(t.pending, id)
+	return "", false
 }
 
 // cancel stops id's turn if one is running, and reports whether it was —
@@ -54,6 +122,10 @@ func (t *turnTracker) end(id string) {
 func (t *turnTracker) cancel(id string) bool {
 	t.mu.Lock()
 	c, running := t.cancels[id]
+	// Stopping the turn drops what was queued for it. Someone who hits
+	// stop wants the work to end, not for the messages they typed while
+	// waiting to be picked up and acted on afterwards.
+	delete(t.pending, id)
 	t.mu.Unlock()
 	if running {
 		c()
@@ -121,44 +193,75 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	if !d.turns.begin(id, cancel) {
 		cancel()
+		// A turn is already running. Rather than refusing, hand the text
+		// to that turn: the agent loop asks for queued input at every
+		// tool call, so it lands at the model's next step instead of
+		// waiting for the whole job to finish. That is the difference
+		// between redirecting a long task and watching it finish the
+		// wrong thing.
+		if d.turns.inject(id, req.Text) {
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "injected"})
+			return
+		}
+		// The turn ended in the gap between begin and inject. Nothing is
+		// running now, so the client can simply send it again.
 		writeError(w, http.StatusConflict, fmt.Errorf("session %s is already processing a message", id))
 		return
 	}
 
 	go func() {
-		err := d.Loop.SendMessage(turnCtx, id, sess.Agent, req.Text)
+		text := req.Text
+		for {
+			err := d.Loop.SendMessage(turnCtx, id, sess.Agent, text)
 
-		// Read the cancellation state BEFORE calling cancel() below —
-		// cancel() makes turnCtx.Err() non-nil unconditionally, so
-		// checking it afterwards would classify every successful turn as
-		// user-cancelled.
-		wasCancelled := turnCtx.Err() != nil
+			// Read the cancellation state BEFORE calling cancel() below —
+			// cancel() makes turnCtx.Err() non-nil unconditionally, so
+			// checking it afterwards would classify every successful turn
+			// as user-cancelled.
+			wasCancelled := turnCtx.Err() != nil
 
-		// Clear the registration BEFORE appending the terminal event.
-		// Clients send their next (possibly queued) message the moment
-		// they see it, so the other order is a race: event observed,
-		// still registered as busy, 409.
-		cancel()
-		d.turns.end(id)
+			// A cancelled turn is a user action, not a failure: record it
+			// as its own event so clients can drop the spinner without
+			// showing an error. Checking the context rather than the
+			// error keeps this correct no matter which layer noticed the
+			// cancellation first.
+			if wasCancelled {
+				cancel()
+				d.turns.end(id)
+				d.Loop.Store.Append(id, events.TypeTurnCancelled, map[string]any{})
+				return
+			}
+			if err != nil {
+				log.Printf("session %s: SendMessage: %v", id, err)
+				cancel()
+				d.turns.end(id)
+				d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
+				return
+			}
 
-		// A cancelled turn is a user action, not a failure: record it as
-		// its own event so clients can drop the spinner without showing an
-		// error. Checking the context rather than the error keeps this
-		// correct no matter which layer noticed the cancellation first.
-		if wasCancelled {
-			d.Loop.Store.Append(id, events.TypeTurnCancelled, map[string]any{})
-			return
+			// A message can arrive after the model's last tool call — while
+			// it was writing its closing reply, or in the instant before
+			// this line. The loop consumed everything queued up to its
+			// final step; whatever came after is still owed an answer, and
+			// gets one as a turn of its own rather than being dropped.
+			//
+			// finishOrTake also clears the registration when there is
+			// nothing left, and does it under the same lock inject checks:
+			// that is what makes "nothing queued" and "no longer running"
+			// a single decision, with no window in between for a message
+			// to fall into.
+			next, more := d.turns.finishOrTake(id)
+			if !more {
+				cancel()
+				// The turn boundary clients act on, appended after the
+				// registration is cleared. Clients send their next message
+				// the moment they see it, so the other order is a race:
+				// event observed, still registered as busy, 409.
+				d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
+				return
+			}
+			text = next
 		}
-		if err != nil {
-			log.Printf("session %s: SendMessage: %v", id, err)
-		}
-		// The turn boundary clients act on. message.part.end is NOT that
-		// boundary — it fires per model message, and a turn with tool
-		// calls has several, which is exactly what used to make clients
-		// think the turn was over mid-tool and 409 on their next send.
-		// Emitted on the error path too (the error event itself already
-		// told the user what went wrong; this just marks the turn over).
-		d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})

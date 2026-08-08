@@ -16,6 +16,32 @@ function appendDiv(cls, text) {
 }
 
 export function appendUser(text) { return appendDiv('msg-user', 'You: ' + text); }
+
+// A prompt sent mid-turn shows a placeholder straight away — the wait
+// until the model is handed it can be minutes, and silence in between
+// reads as the message having gone nowhere. When the real line arrives
+// (the message.user event the daemon writes at that moment) the
+// placeholder is removed, so the transcript ends up with one entry per
+// message rather than two, and matches what a reload would show.
+const sentPlaceholders = new Map(); // text -> [element]
+
+export function appendPendingUser(text) {
+  const div = appendDiv('msg-tool', `[sent — the model will pick this up at its next step] ${text}`);
+  const list = sentPlaceholders.get(text) || [];
+  list.push(div);
+  sentPlaceholders.set(text, list);
+  return div;
+}
+
+export function resolvePendingUser(text) {
+  const list = sentPlaceholders.get(text);
+  if (!list || list.length === 0) return;
+  // Oldest first: the same text can be sent twice, and each send owns one
+  // placeholder.
+  const div = list.shift();
+  if (list.length === 0) sentPlaceholders.delete(text);
+  div.remove();
+}
 export function appendTool(text) { return appendDiv('msg-tool', text); }
 export function appendError(err) { return appendDiv('msg-error', 'Error: ' + String(err)); }
 
@@ -169,6 +195,8 @@ export function clearTranscript() {
   session.currentModelEl = null;
   session.currentModelBuffer = '';
   // The rows these pointed at are gone with the innerHTML above; holding
-  // them would leave finishToolCall writing into detached nodes.
+  // them would leave finishToolCall or resolvePendingUser writing into
+  // detached nodes.
   session.toolRows.clear();
+  sentPlaceholders.clear();
 }

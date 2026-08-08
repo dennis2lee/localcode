@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -581,47 +580,55 @@ func TestStatusOnlyEventsDoNotTouchTheViewport(t *testing.T) {
 	}
 }
 
-// TestEnterQueuesPlainPromptWhileWaiting is a regression test for a UX gap:
-// pressing Enter while a turn is streaming used to silently drop the typed
-// text (the input was cleared? no — text just sat there and Update did
-// nothing), forcing the user to notice and retype it once the reply
-// finished. A plain prompt typed mid-turn should queue instead.
-func TestEnterQueuesPlainPromptWhileWaiting(t *testing.T) {
+// TestEnterSendsPlainPromptWhileWaiting: a prompt typed during a turn
+// goes out immediately. The daemon hands it to the running turn, which
+// picks it up at its next tool call — so a correction reaches the model
+// while it is still working, rather than after it has finished the wrong
+// thing. Holding it here until the turn ended was the old behaviour.
+func TestEnterSendsPlainPromptWhileWaiting(t *testing.T) {
 	m := newTestModel()
 	m.waiting = true
 
 	m, cmd := pressEnterWith(t, m, "second question")
 
-	if cmd != nil {
-		t.Errorf("queueing a prompt should not issue a send command yet, got %v", cmd)
+	if cmd == nil {
+		t.Error("a prompt typed mid-turn was not sent; it has nowhere else to go")
 	}
-	if len(m.queue) != 1 || m.queue[0] != "second question" {
-		t.Errorf("queue = %v, want [\"second question\"]", m.queue)
+	if len(m.queue) != 0 {
+		t.Errorf("queue = %v, want it sent rather than held", m.queue)
 	}
 	if m.input.Value() != "" {
-		t.Errorf("input = %q, want it cleared after queueing", m.input.Value())
+		t.Errorf("input = %q, want it cleared after sending", m.input.Value())
 	}
 	if !strings.Contains(m.transcriptText(), "second question") {
-		t.Errorf("transcript = %q, want the queued prompt echoed so the user can see it was accepted", m.transcriptText())
+		t.Errorf("transcript = %q, want the prompt echoed so the user can see it was accepted", m.transcriptText())
 	}
 	if !m.waiting {
 		t.Error("waiting should remain true — the original turn hasn't finished")
 	}
 }
 
-// TestEnterQueuesMultiplePrompts confirms the queue holds more than one
-// message, per the requirement that several prompts can stack up while a
-// single long turn is in progress.
-func TestEnterQueuesMultiplePrompts(t *testing.T) {
+// TestEnterSendsSeveralPromptsWhileWaiting: several corrections can stack
+// up during one long turn, and each is delivered in the order it was
+// typed rather than the later ones replacing the earlier.
+func TestEnterSendsSeveralPromptsWhileWaiting(t *testing.T) {
 	m := newTestModel()
 	m.waiting = true
 
-	m, _ = pressEnterWith(t, m, "first")
-	m, _ = pressEnterWith(t, m, "second")
-	m, _ = pressEnterWith(t, m, "third")
-
-	if got, want := m.queue, []string{"first", "second", "third"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("queue = %v, want %v", got, want)
+	for _, text := range []string{"first", "second", "third"} {
+		var cmd tea.Cmd
+		m, cmd = pressEnterWith(t, m, text)
+		if cmd == nil {
+			t.Errorf("%q was not sent", text)
+		}
+	}
+	if len(m.queue) != 0 {
+		t.Errorf("queue = %v, want nothing held back", m.queue)
+	}
+	for _, text := range []string{"first", "second", "third"} {
+		if !strings.Contains(m.transcriptText(), text) {
+			t.Errorf("transcript = %q, want %q acknowledged", m.transcriptText(), text)
+		}
 	}
 }
 
@@ -658,10 +665,11 @@ func TestQueuedPromptAutoSendsWhenTurnFinishes(t *testing.T) {
 
 	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
 	m.waiting = true
-	m, _ = pressEnterWith(t, m, "queued prompt")
-	if len(m.queue) != 1 {
-		t.Fatalf("queue = %v, want 1 queued prompt before the turn finishes", m.queue)
-	}
+	// Seeded directly: a prompt typed mid-turn now goes straight to the
+	// daemon, so the only thing that still lands in this queue is a send
+	// the daemon refused as busy — see TestBusySendRequeuesInsteadOfError,
+	// which covers how it gets here. This test is about it being drained.
+	m.queue = []string{"queued prompt"}
 
 	// applyEvent is exactly what Update's eventMsg case calls before
 	// checking whether to dequeue — drive it directly rather than through
@@ -855,13 +863,13 @@ func TestMidTurnPartEndKeepsWaiting(t *testing.T) {
 		t.Fatal("waiting cleared on a mid-turn message.part.end — this is exactly what made prompts typed during tool execution 409")
 	}
 
-	// A prompt typed right now must queue, not send.
+	// A prompt typed right now goes out to the running turn.
 	m, cmd := pressEnterWith(t, m, "typed during the tool")
-	if cmd != nil {
-		t.Error("a prompt typed mid-turn issued a send command, want it queued")
+	if cmd == nil {
+		t.Error("a prompt typed mid-turn was not sent")
 	}
-	if len(m.queue) != 1 || m.queue[0] != "typed during the tool" {
-		t.Errorf("queue = %v, want the mid-turn prompt queued", m.queue)
+	if len(m.queue) != 0 {
+		t.Errorf("queue = %v, want the mid-turn prompt sent rather than held", m.queue)
 	}
 
 	// The real turn boundary arrives; now the wait ends.

@@ -52,12 +52,11 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// A turn is already streaming: queue a plain prompt so it sends
-	// automatically the moment the current one finishes, instead of
-	// silently dropping it and making the user remember to retype it.
-	// Only a foreground turn blocks: background tasks run in their own
-	// child sessions, so the daemon's per-session busy flag is clear and a
-	// new prompt can go out immediately.
+	// A turn is already running: send the prompt anyway. The daemon hands
+	// it to the running turn, which picks it up at its next tool call, so
+	// a correction reaches the model while it is still working instead of
+	// after it has finished the wrong thing. Only a foreground turn is
+	// affected: background tasks run in their own child sessions.
 	if m.waiting {
 		m.rememberPrompt(text)
 		m.input.Reset()
@@ -69,8 +68,12 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if isPlainPrompt(text) {
-			m.queue = append(m.queue, text)
-			m.appendLocal(fmt.Sprintf("[queued] %s", text))
+			// The transcript line for the message itself comes from the
+			// message.user event the daemon writes once the model is
+			// actually given it; until then this says it was accepted,
+			// since that wait can be minutes.
+			m.appendLocal(fmt.Sprintf("[sent — the model will pick this up at its next step] %s", text))
+			return m, m.sendMessage(text)
 		} else {
 			// Commands can't be queued (replaying one later via
 			// sendMessage would send it as literal chat text instead of

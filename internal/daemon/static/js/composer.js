@@ -1,7 +1,7 @@
 import { inputEl, sendBtn, commDotEl } from './dom.js';
 import { session } from './state.js';
 import * as apiClient from './api.js';
-import { appendTool, appendError } from './transcript.js';
+import { appendTool, appendError, appendPendingUser } from './transcript.js';
 import { renderStatusBar } from './render.js';
 import { isPlainPrompt, tryLocalCommand } from './commands.js';
 
@@ -163,20 +163,33 @@ export async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text) return;
 
-  // A turn is already streaming: queue a plain prompt so it sends
-  // automatically the moment the current one finishes, instead of
-  // silently doing nothing and making the user remember to retype it.
-  // Commands still wait for the turn to finish first — they don't go
-  // through the /messages endpoint, so queueing them would mean
-  // replaying them as literal chat text later.
+  // A turn is already running: send the prompt anyway. The daemon hands
+  // it to the running turn, which picks it up at its next tool call — so
+  // "actually, skip the tests" reaches the model while it is still
+  // working, instead of waiting for it to finish the wrong thing first.
+  //
+  // Commands still wait for the turn to end — they don't go through the
+  // /messages endpoint, so there is nothing to hand over.
   if (session.waiting) {
     if (isPlainPrompt(text)) {
-      session.promptQueue.push(text);
-      appendTool(`[queued] ${text}`);
-      renderStatusBar();
       rememberPrompt(text);
       inputEl.value = '';
       autoResizeInput();
+      // The real transcript line comes from the message.user event the
+      // daemon writes when the model is actually given the text. Until
+      // then this stands in for it, since the wait can be minutes; it is
+      // removed when that event lands.
+      appendPendingUser(text);
+      apiClient.sendChatMessage(session.sessionID, text).catch((err) => {
+        if (apiClient.isBusy(err)) {
+          // The turn ended in the gap. Queue it for dequeueNext, which
+          // fires on the turn.done that is already on its way.
+          session.promptQueue.push(text);
+          renderStatusBar();
+          return;
+        }
+        appendError(err);
+      });
     }
     return;
   }

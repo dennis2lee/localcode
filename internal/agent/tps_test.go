@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"localcode/internal/events"
+	"localcode/internal/provider"
 	"localcode/internal/session"
 )
 
@@ -245,5 +248,130 @@ func TestSingleChunkRepliesReportNoRate(t *testing.T) {
 
 	if tps := usageTPS(t, store, "s1"); tps != 0 {
 		t.Errorf("tps %.1f from a single chunk: there was no interval to measure across", tps)
+	}
+}
+
+// TestInjectedMessageReachesTheModelMidTurn: what someone types during a
+// long turn is handed to the model at its next step, not after the whole
+// job finishes. It rides out with the tool results rather than as a user
+// message of its own — two user messages back to back is a shape Bedrock
+// rejects outright.
+func TestInjectedMessageReachesTheModelMidTurn(t *testing.T) {
+	call := 0
+	var secondBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		if call == 2 {
+			body, _ := io.ReadAll(r.Body)
+			secondBody = string(body)
+			r.Body = io.NopCloser(strings.NewReader(secondBody))
+		}
+		if call == 1 {
+			paced{deltas: 1, usageTokens: 5, toolCall: "true"}.writeTo(w)
+			return
+		}
+		paced{deltas: 1, usageTokens: 5}.writeTo(w)
+	}))
+	defer srv.Close()
+
+	loop, store := newUsageTestLoop(t, srv.URL)
+	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	pending := []string{"actually, skip the tests"}
+	loop.PendingInput = func(string) (string, bool) {
+		if len(pending) == 0 {
+			return "", false
+		}
+		text := pending[0]
+		pending = pending[1:]
+		return text, true
+	}
+
+	if err := loop.SendMessage(context.Background(), "s1", "general-purpose", "hi"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	if !strings.Contains(secondBody, "actually, skip the tests") {
+		t.Errorf("the model's next request did not carry what the user typed mid-turn:\n%s", secondBody)
+	}
+
+	// And it is in the transcript, marked, so a restart can put it back in
+	// the same place rather than as a turn of its own.
+	all, err := store.Events("s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, ev := range all {
+		if ev.Type == events.TypeUserMessage && ev.Data["text"] == "actually, skip the tests" {
+			found = true
+			if ev.Data["injected"] != true {
+				t.Error("the mid-turn message is not marked as injected; rehydration would replay it as its own turn")
+			}
+		}
+	}
+	if !found {
+		t.Error("the mid-turn message never reached the transcript")
+	}
+}
+
+// TestRehydrationPutsAnInjectedMessageBackWhereTheModelSawIt: after a
+// daemon restart the reconstructed history has to match what was actually
+// sent. An injected message belongs at the end of the tool_result message
+// it travelled with; replaying it as a separate user message would leave
+// two user messages in a row.
+func TestRehydrationPutsAnInjectedMessageBackWhereTheModelSawIt(t *testing.T) {
+	call := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call++
+		if call == 1 {
+			paced{deltas: 1, usageTokens: 5, toolCall: "true"}.writeTo(w)
+			return
+		}
+		paced{deltas: 1, usageTokens: 5}.writeTo(w)
+	}))
+	defer srv.Close()
+
+	loop, store := newUsageTestLoop(t, srv.URL)
+	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	sent := false
+	loop.PendingInput = func(string) (string, bool) {
+		if sent {
+			return "", false
+		}
+		sent = true
+		return "one more thing", true
+	}
+	if err := loop.SendMessage(context.Background(), "s1", "general-purpose", "hi"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	live := loop.history("s1")
+	all, err := store.Events("s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := rehydrateHistory(all)
+
+	if len(rebuilt) != len(live) {
+		t.Fatalf("rebuilt history has %d messages, the live one had %d:\nrebuilt %+v\nlive    %+v", len(rebuilt), len(live), rebuilt, live)
+	}
+	for i := range live {
+		if rebuilt[i].Role != live[i].Role {
+			t.Errorf("message %d: rebuilt role %q, live %q", i, rebuilt[i].Role, live[i].Role)
+		}
+		if len(rebuilt[i].Content) != len(live[i].Content) {
+			t.Errorf("message %d: rebuilt %d blocks, live %d", i, len(rebuilt[i].Content), len(live[i].Content))
+		}
+	}
+	// No two user messages in a row, which is the shape Bedrock refuses.
+	for i := 1; i < len(rebuilt); i++ {
+		if rebuilt[i].Role == provider.RoleUser && rebuilt[i-1].Role == provider.RoleUser {
+			t.Fatalf("messages %d and %d are both from the user; Bedrock rejects that outright", i-1, i)
+		}
 	}
 }

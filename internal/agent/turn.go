@@ -117,7 +117,43 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		}
 
 		resultBlocks := l.runTools(ctx, sessionID, toolUses, agentCfg.Tools)
+		resultBlocks = append(resultBlocks, l.takeInjected(sessionID)...)
 		l.appendHistory(sessionID, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
+	}
+}
+
+// injectedPreface tells the model where the text that follows came from.
+// Without it the message arrives in the same user turn as the tool results
+// and reads like part of a tool's output.
+const injectedPreface = "[The user sent this while you were working — take it into account from here on]\n\n"
+
+// takeInjected collects anything the user typed since this turn started
+// and returns it as blocks to travel with the tool results.
+//
+// Travelling with them, rather than forming a message of its own, because
+// the tool results are themselves a user message, and two user messages
+// back to back is not a shape every provider accepts — Bedrock's Converse
+// API rejects it outright.
+//
+// Nothing happens here unless PendingInput is wired up (the daemon does
+// it); a Loop built without one simply has no mid-turn input.
+func (l *Loop) takeInjected(sessionID string) []provider.Block {
+	if l.PendingInput == nil {
+		return nil
+	}
+	var out []provider.Block
+	for {
+		text, ok := l.PendingInput(sessionID)
+		if !ok {
+			return out
+		}
+		// Recorded only now, when it actually reaches the model. Writing
+		// it at the moment it was typed would put a line in the transcript
+		// that the model had not yet been told about — and if the turn
+		// ended before the next tool call, it would be answered as an
+		// ordinary next message and recorded a second time.
+		l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "injected": true})
+		out = append(out, provider.TextBlock(injectedPreface+text))
 	}
 }
 

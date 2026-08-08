@@ -2,7 +2,7 @@ import { permissionTextEl, permissionAllowAlwaysBtn } from './dom.js';
 import { app, session } from './state.js';
 import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
-  appendToolCall, finishToolCall,
+  appendToolCall, finishToolCall, resolvePendingUser,
 } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers } from './render.js';
 import { setWaiting, setConnected, setInputLocked } from './composer.js';
@@ -22,7 +22,12 @@ let eventSource = null;
 // unguarded and a malformed frame from the daemon could abort the handler.
 const handlers = {
   'message.user': (d) => {
-    if (typeof d.text === 'string') appendUser(d.text);
+    if (typeof d.text !== 'string') return;
+    // A message sent mid-turn already has a placeholder saying it was
+    // accepted; this is the same message finally reaching the model, so
+    // the placeholder goes rather than sitting above a duplicate.
+    if (d.injected) resolvePendingUser(d.text);
+    appendUser(d.text);
   },
   'message.part.delta': (d) => {
     if (typeof d.text === 'string') appendModelText(d.text);
