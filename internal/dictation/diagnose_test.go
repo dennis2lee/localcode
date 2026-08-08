@@ -3,6 +3,7 @@ package dictation
 import (
 	"bytes"
 	"encoding/binary"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,5 +90,53 @@ func TestDiagnosisTellsTheTwoFaultsApart(t *testing.T) {
 	empty := Diagnosis{}
 	if got := empty.String(); !strings.Contains(got, "nothing at all") {
 		t.Errorf("an empty result was not identified:\n%s", got)
+	}
+}
+
+// recordingRecognizer is a fake with tokens, so the debug path can be
+// exercised without a real engine.
+type recordingRecognizer struct {
+	text   string
+	tokens []string
+}
+
+func (r *recordingRecognizer) Accept([]float32) {}
+func (r *recordingRecognizer) Partial() string  { return r.text }
+func (r *recordingRecognizer) Tokens() []string { return r.tokens }
+func (r *recordingRecognizer) Endpoint() bool   { return false }
+func (r *recordingRecognizer) Reset()           {}
+func (r *recordingRecognizer) Close()           {}
+
+// Asking someone to produce a 16 kHz mono WAV before their problem can be
+// looked at is a good way never to see the problem. With the switch on,
+// ordinary microphone use reports the same thing the file command does.
+func TestLiveDictationCanReportItsTokens(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	rec := &recordingRecognizer{text: "그는괜찮은", tokens: []string{"▁그", "는", "▁괜찮", "은"}}
+
+	// Off by default: this prints what the person just said out loud.
+	s := NewSession(rec)
+	s.Stop()
+	if buf.Len() != 0 {
+		t.Errorf("logged without the switch set: %q", buf.String())
+	}
+
+	t.Setenv("LC_DICTATION_DEBUG", "1")
+	buf.Reset()
+	NewSession(rec).Stop()
+
+	got := buf.String()
+	if !strings.Contains(got, "그는괜찮은") {
+		t.Errorf("did not report the text: %q", got)
+	}
+	if !strings.Contains(got, "▁괜찮") {
+		t.Errorf("did not report the tokens, which is the whole point: %q", got)
+	}
+	if !strings.Contains(got, "2 start a word") {
+		t.Errorf("did not count the word marks: %q", got)
 	}
 }

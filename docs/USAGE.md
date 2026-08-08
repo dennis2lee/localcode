@@ -1138,6 +1138,16 @@ decoded to nothing mean pieces are being lost between the model and the
 text. Tokens that do not match what you said is the model, and no
 decoding change will help.
 
+Without producing a WAV at all, start the desktop window with
+`LC_DICTATION_DEBUG=1` and dictate as usual. Every finished sentence is
+logged with the same token detail. On Windows:
+
+```bash
+cmd /c "set LC_DICTATION_DEBUG=1 && localcode-gui.exe > dictation.log 2>&1"
+```
+
+Off by default, because each line contains what was just said out loud.
+
 #### Word boundaries
 
 If your model's archive contains a `bpe.model`, localcode decodes it as

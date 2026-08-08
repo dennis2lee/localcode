@@ -138,6 +138,12 @@ func (s *sherpaRecognizer) Partial() string {
 	return s.rec.GetResult(s.stream).Text
 }
 
+// Tokens returns the pieces behind the current text. See Diagnosis for
+// why the text alone cannot tell a misheard word from a mangled one.
+func (s *sherpaRecognizer) Tokens() []string {
+	return s.rec.GetResult(s.stream).Tokens
+}
+
 func (s *sherpaRecognizer) Endpoint() bool {
 	return s.rec.IsEndpoint(s.stream)
 }

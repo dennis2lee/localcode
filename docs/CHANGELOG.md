@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.32.12
+
+- **Fix: a reply could stop halfway and leave the turn running forever.** Every token of model output is one event, and delivery to a client was best effort with a 64-slot buffer: a client that fell behind for a moment had events dropped and was never told. So it lost the middle of the reply, and then lost the `turn.done` that clears the spinner, with no way to know either had happened. Sixty-four events is well under a second of a local model talking. Dropping cannot simply be removed, since a stalled window must not hold up the model, so a client that misses an event is now told: the stream ends, and the client reconnects and replays what it missed from the log. The buffer is also much larger, so this stays rare rather than routine. Esc kept working throughout, which is what identified it: stop acts on its own HTTP reply, so HTTP was fine and only the event stream was not.
+- **The TUI reconnects its event stream.** It had no reconnect at all, so it would have sat on a dead stream. It now resumes from the last event it saw, with no gap and no duplicate.
+- **New: `localcode dictation test <recording.wav>`.** A wrong transcript is two faults that need opposite fixes and look identical in the finished sentence: the model mishearing, or the model hearing correctly and the text being assembled wrongly. Only the tokens behind the text separate them. This prints the text, the raw tokens, how many mark the start of a word, how many decoded to nothing, and a reading of what that combination means. `LC_DICTATION_DEBUG=1` reports the same thing for ordinary microphone use, so no recording has to be produced by hand. Desktop build only.
+
 ## v0.32.11
 
 - **A transcript line for every tool call, so a long turn shows its work.** Tool activity only ever appeared in the status bar, which names what is running now and clears when it stops, so a turn that spent minutes in tools left nothing on screen either during or after. Each call now gets its own line, written when it starts and completed with a result size or a red failure marker. Click the line for the full arguments and the full output. The TUI writes the same one line entries without the expandable detail.

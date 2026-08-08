@@ -14,6 +14,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"sync"
 	"time"
 )
@@ -103,6 +105,7 @@ func (s *Session) Write(pcm []byte) (Result, error) {
 	// being reported as both final and provisional in the same reply.
 	if s.rec.Endpoint() {
 		res.Final = s.rec.Partial()
+		s.logUtterance(res.Final)
 		s.rec.Reset()
 	}
 	res.Provisional = s.rec.Partial()
@@ -120,6 +123,7 @@ func (s *Session) Stop() Result {
 	}
 	s.done = true
 	res := Result{Final: s.rec.Partial()}
+	s.logUtterance(res.Final)
 	s.rec.Close()
 	return res
 }
@@ -143,4 +147,29 @@ func decodePCM16(pcm []byte) []float32 {
 		out[i] = float32(v) / 32768
 	}
 	return out
+}
+
+// tokenReporter is a recognizer that can show the pieces behind its text.
+// Optional: a recognizer without it simply reports no tokens.
+type tokenReporter interface{ Tokens() []string }
+
+// logUtterance prints a finished utterance and the tokens behind it when
+// LC_DICTATION_DEBUG is set.
+//
+// The same information `localcode dictation test` gives for a recorded
+// file, but from the microphone in ordinary use — because asking someone
+// to produce a 16 kHz mono WAV before their problem can be looked at is a
+// good way never to see the problem. It stays off by default: this is one
+// line per sentence on stderr, and the text of it is what the person just
+// said out loud.
+func (s *Session) logUtterance(text string) {
+	if text == "" || os.Getenv("LC_DICTATION_DEBUG") == "" {
+		return
+	}
+	var tokens []string
+	if tr, ok := s.rec.(tokenReporter); ok {
+		tokens = tr.Tokens()
+	}
+	marks, empty := summarize(tokens)
+	log.Printf("dictation: text=%q tokens=%q (%d start a word, %d decoded to nothing)", text, tokens, marks, empty)
 }
