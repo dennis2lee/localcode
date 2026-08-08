@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.32.13
+
+- **Fix: dictated Korean still had no spaces, and this is the actual cause.** v0.32.11 claimed this fixed and it was not. The tokens the model produces carry the spacing; the string sherpa assembles from them does not. Measured on Windows: tokens `["는" " 구" "체" "적인" " 돈을" " 남" "겼" "어" "."]`, text `는구체적인돈을남겼어.`. The model had the sentence and its spacing right, and only the joining step lost it. Text is now rebuilt from the tokens whenever they mark boundaries and the string has none, honouring both the sentencepiece `▁` prefix and a plain leading space. Nothing about the model or its configuration changes. A recognizer that spaced its own text is left alone, and a vocabulary with no boundary marks does not gain a space between every character.
+- **Fix: `dictation test` misread its own evidence.** It counted only `▁` as a word boundary, so a model whose tokens plainly carried spaces was reported as "0 start a word", and the reading printed underneath then blamed the vocabulary for a fault that was in the joining. Plain spaces now count. When the text has been rebuilt the report says so and shows what the recognizer returned, so a rebuild can be seen rather than taken on faith.
+
 ## v0.32.12
 
 - **Fix: a reply could stop halfway and leave the turn running forever.** Every token of model output is one event, and delivery to a client was best effort with a 64-slot buffer: a client that fell behind for a moment had events dropped and was never told. So it lost the middle of the reply, and then lost the `turn.done` that clears the spinner, with no way to know either had happened. Sixty-four events is well under a second of a local model talking. Dropping cannot simply be removed, since a stalled window must not hold up the model, so a client that misses an event is now told: the stream ends, and the client reconnects and replays what it missed from the log. The buffer is also much larger, so this stays rare rather than routine. Esc kept working throughout, which is what identified it: stop acts on its own HTTP reply, so HTTP was fine and only the event stream was not.

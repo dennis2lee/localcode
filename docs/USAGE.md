@@ -1130,7 +1130,9 @@ localcode dictation test recording.wav
 Record a 16 kHz mono 16-bit WAV of a sentence you know, and run it. The
 command prints the text, the raw token list, how many tokens mark the
 start of a word, how many decoded to nothing, and a one-paragraph reading
-of what that combination means. Desktop build only; on Windows that is
+of what that combination means. When the text had to be rebuilt from the
+tokens to recover its spacing, it says so and shows what the recognizer
+itself returned. Desktop build only; on Windows that is
 `localcode-gui.exe dictation test`.
 
 Correct tokens with no spaces in the text is a joining fault. Tokens that
@@ -1150,23 +1152,34 @@ Off by default, because each line contains what was just said out loud.
 
 #### Word boundaries
 
-If your model's archive contains a `bpe.model`, localcode decodes it as
-sentencepiece BPE and honours the `▁` marker that starts a word.
+Spacing is taken from the tokens, not from the recognizer's finished
+string. Where the tokens mark word boundaries and the string does not,
+localcode reassembles the text from the tokens.
 
-This is worth knowing about because getting it wrong is not subtle.
-sherpa's modelling unit defaults to `cjkchar`, which joins every token
-with nothing between them — so a BPE model decoded that way produces a
-whole sentence with **no spaces at all**. The Korean model above is
-exactly that case (5000 tokens, 2352 of them carrying `▁`, and a
-`bpe.model` in the archive), and this is what made its transcripts come
-out unspaced.
+That indirection is there because the two disagree. Measured on Windows
+with the Korean model above:
 
-A model with no `bpe.model` keeps sherpa's default, unchanged. To force
-either behaviour — including restoring the old one — set
-`LC_SHERPA_MODELING_UNIT` to one of sherpa's own values (`cjkchar`,
-`bpe`, `cjkchar+bpe`) before starting localcode. `LC_SHERPA_DEBUG=1`
-makes sherpa print what it loaded and which unit it settled on, on
-stderr.
+| | |
+|---|---|
+| tokens | `["는" " 구" "체" "적인" " 돈을" " 남" "겼" "어" "."]` |
+| recognizer text | `는구체적인돈을남겼어.` |
+| what localcode types | `는 구체적인 돈을 남겼어.` |
+
+The model had the spacing right. Only the joining step lost it, so the
+tokens are the better source. Both spellings of a boundary are honoured:
+the sentencepiece `▁` prefix, and a plain leading space.
+
+A rebuild only happens when the tokens carry boundaries and the text has
+none, which is the exact shape of that fault. A recognizer that spaced
+its own text is left alone, and a vocabulary with no boundary marks at
+all does not gain spaces between every character.
+
+Two related settings, both about how the model is loaded rather than how
+its output is joined. A model whose archive contains a `bpe.model` is
+decoded as sentencepiece BPE; one without keeps sherpa's default.
+`LC_SHERPA_MODELING_UNIT` forces either way, taking one of sherpa's own
+values (`cjkchar`, `bpe`, `cjkchar+bpe`). `LC_SHERPA_DEBUG=1` makes
+sherpa print what it loaded and which unit it settled on, on stderr.
 
 On Windows the speech runtime is three DLLs that the MSI installs beside
 `localcode-gui.exe`. They are not optional extras: Windows resolves a

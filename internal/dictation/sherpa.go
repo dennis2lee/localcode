@@ -135,7 +135,11 @@ func (s *sherpaRecognizer) Accept(samples []float32) {
 }
 
 func (s *sherpaRecognizer) Partial() string {
-	return s.rec.GetResult(s.stream).Text
+	res := s.rec.GetResult(s.stream)
+	// Spacing comes from the tokens, not from sherpa's finished string:
+	// see joinTokens for the measurement that made that necessary.
+	text, _ := joinTokens(res.Text, res.Tokens)
+	return text
 }
 
 // Tokens returns the pieces behind the current text. See Diagnosis for
@@ -200,8 +204,11 @@ func Diagnose(cfg Config, samples []float32) (Diagnosis, error) {
 
 	res := s.rec.GetResult(s.stream)
 	marks, empty := summarize(res.Tokens)
+	text, rebuilt := joinTokens(res.Text, res.Tokens)
 	return Diagnosis{
-		Text:         res.Text,
+		Text:         text,
+		RawText:      res.Text,
+		Rebuilt:      rebuilt,
 		Tokens:       res.Tokens,
 		WordMarks:    marks,
 		Empty:        empty,

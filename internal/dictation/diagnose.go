@@ -28,11 +28,18 @@ import (
 type Diagnosis struct {
 	// Text is what dictation would have typed into the prompt box.
 	Text string
+	// RawText is what the recognizer's own joining produced, kept so a
+	// rebuild can be seen for what it is rather than taken on faith.
+	RawText string
+	// Rebuilt reports that Text was reassembled from the tokens because
+	// RawText had lost the spacing. See joinTokens.
+	Rebuilt bool
 	// Tokens is what the model actually produced, before joining.
 	Tokens []string
-	// WordMarks counts tokens carrying the sentencepiece "▁" prefix. A
-	// count well above zero alongside a Text with no spaces in it is the
-	// signature of a joining fault.
+	// WordMarks counts tokens that mark the start of a word — either the
+	// sentencepiece "▁" prefix or a plain leading space, since models
+	// reach us both ways. A count well above zero alongside a text with
+	// no spaces in it is the signature of a joining fault.
 	WordMarks int
 	// Empty counts tokens that decoded to nothing. Any at all means
 	// pieces of the transcript are being dropped between the model and
@@ -49,6 +56,9 @@ func (d Diagnosis) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "audio:  %.2fs\n", d.AudioSeconds)
 	fmt.Fprintf(&b, "text:   %q\n", d.Text)
+	if d.Rebuilt {
+		fmt.Fprintf(&b, "  (rebuilt from tokens; the recognizer returned %q)\n", d.RawText)
+	}
 	fmt.Fprintf(&b, "tokens: %d (%d start a word, %d decoded to nothing)\n", len(d.Tokens), d.WordMarks, d.Empty)
 	fmt.Fprintf(&b, "        %q\n", d.Tokens)
 	fmt.Fprintf(&b, "valid utf-8: %v\n\n", utf8.ValidString(d.Text))
@@ -64,6 +74,11 @@ func (d Diagnosis) String() string {
 			"being lost between the model and the text. This is a decoding fault, not\n" +
 			"the model mishearing. It is what happens when a vocabulary splits a\n" +
 			"character across several tokens and the pieces are not reassembled.\n")
+	case d.Rebuilt:
+		b.WriteString("Reading: the tokens mark where words begin and the recognizer's own\n" +
+			"text had lost those marks, so the spacing above was rebuilt from the\n" +
+			"tokens. That part is working as intended. Accuracy is a separate\n" +
+			"question: compare the tokens above against what you actually said.\n")
 	case d.WordMarks > 0 && !strings.Contains(strings.TrimSpace(d.Text), " "):
 		b.WriteString("Reading: the tokens mark where words begin, but the text has no spaces\n" +
 			"in it — so the marks are not being turned into spaces. A decoding fault,\n" +
@@ -145,7 +160,11 @@ func summarize(tokens []string) (wordMarks, empty int) {
 			empty++
 			continue
 		}
-		if strings.HasPrefix(t, "▁") {
+		// Both spellings of "a word starts here". Counting only "▁"
+		// reported zero marks for a Korean model whose tokens plainly
+		// carried spaces, and the reading below then blamed the
+		// vocabulary for a fault that was in the joining.
+		if strings.HasPrefix(t, wordMark) || strings.HasPrefix(t, " ") {
 			wordMarks++
 		}
 	}
