@@ -55,7 +55,7 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 |---|---|
 | Markdown and code block rendering | A renderer such as glamour would make replies far easier to read. |
 | Session picker inside the TUI | Today you type a number at a plain terminal prompt before the TUI starts. A Bubble Tea list with arrow key selection would feel native. |
-| ~~Tool progress display~~ | Done in v0.25.0. An animated line below the prompt box names the running tool, the queue depth, and the background-task count, and clears at the turn boundary. Elapsed time is still not shown. |
+| ~~Tool progress display~~ | Done in v0.25.0, extended in v0.32.11. An animated line below the prompt box names the running tool, the queue depth, and the background-task count, and clears at the turn boundary; each tool call also gets a transcript line that survives the turn. Elapsed time is still not shown. |
 | Context gauge | Turn the percentage in the status line into a colored bar, yellow at 70%, red at 85%. |
 | History scroll and search | Search earlier output in long sessions with the `/` key. |
 
