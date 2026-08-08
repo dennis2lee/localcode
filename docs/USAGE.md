@@ -1113,6 +1113,31 @@ with the daemon's own explanation in its tooltip. It stays on screen
 rather than disappearing: the usual reason is the missing
 `dictation_model_dir` above, which is worth knowing about.
 
+#### When a transcript comes out wrong
+
+"The transcript is wrong" is two different faults that need opposite
+fixes, and in the finished sentence they look identical:
+
+* The model misheard.
+* The model heard correctly and the text was assembled wrongly.
+
+Only the tokens behind the text tell them apart:
+
+```bash
+localcode dictation test recording.wav
+```
+
+Record a 16 kHz mono 16-bit WAV of a sentence you know, and run it. The
+command prints the text, the raw token list, how many tokens mark the
+start of a word, how many decoded to nothing, and a one-paragraph reading
+of what that combination means. Desktop build only; on Windows that is
+`localcode-gui.exe dictation test`.
+
+Correct tokens with no spaces in the text is a joining fault. Tokens that
+decoded to nothing mean pieces are being lost between the model and the
+text. Tokens that do not match what you said is the model, and no
+decoding change will help.
+
 #### Word boundaries
 
 If your model's archive contains a `bpe.model`, localcode decodes it as

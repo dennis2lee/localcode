@@ -16,3 +16,8 @@ func Open(Config) (Recognizer, error) { return nil, ErrUnavailable }
 // client can hide the microphone button instead of offering one that
 // can only fail.
 func Available() bool { return false }
+
+// Diagnose reports that this build cannot do speech recognition. The
+// real one is CGo (see sherpa.go); on Windows that is
+// localcode-gui.exe, not localcode.exe.
+func Diagnose(Config, []float32) (Diagnosis, error) { return Diagnosis{}, ErrUnavailable }

@@ -32,6 +32,13 @@ const dictationUsage = `usage: localcode dictation <subcommand>
   localcode dictation remove [--dir <path>]
                        delete an installed model. Used by the Windows uninstaller,
                        which would otherwise leave ~130MB behind.
+  localcode dictation test <recording.wav>
+                       transcribe a 16 kHz mono WAV with the configured model and
+                       print the tokens behind the text as well as the text. Use
+                       this when a transcript comes out wrong: it separates the
+                       model mishearing from the text being assembled wrongly,
+                       which look identical in the finished sentence. Desktop
+                       build only (on Windows, localcode-gui.exe).
 
 Dictation itself only works in the desktop window (see docs/USAGE.md).`
 
@@ -47,6 +54,8 @@ func runDictation(args []string) error {
 		return runDictationStatus()
 	case "remove":
 		return runDictationRemove(args[1:])
+	case "test":
+		return runDictationTest(args[1:])
 	default:
 		fmt.Println(dictationUsage)
 		return fmt.Errorf("unknown subcommand %q", args[0])
@@ -143,5 +152,39 @@ func runDictationStatus() error {
 		return nil
 	}
 	fmt.Println("dictation is not available:", why)
+	return nil
+}
+
+// runDictationTest transcribes one recording and prints what the model
+// produced, tokens included.
+//
+// "The transcript is wrong" covers two faults that need opposite fixes
+// and are indistinguishable in the finished text: the model mishearing,
+// and correct tokens being joined wrongly. Only the token list tells
+// them apart — see dictation.Diagnosis.
+func runDictationTest(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: localcode dictation test <recording.wav> (16 kHz mono, 16-bit)")
+	}
+	if !dictation.Available() {
+		return fmt.Errorf("this build has no speech recognizer; on Windows run localcode-gui.exe dictation test")
+	}
+
+	samples, _, err := dictation.ReadWAV(args[0])
+	if err != nil {
+		return err
+	}
+
+	dir := dictation.DefaultModelDir()
+	if dir == "" {
+		return fmt.Errorf("no speech model found — run `localcode dictation install`, or set dictation_model_dir in config.json")
+	}
+	fmt.Printf("model:  %s\n", dir)
+
+	d, err := dictation.Diagnose(dictation.Config{ModelDir: dir}, samples)
+	if err != nil {
+		return err
+	}
+	fmt.Print(d)
 	return nil
 }

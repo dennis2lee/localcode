@@ -159,3 +159,46 @@ func (s *sherpaRecognizer) Close() {
 		s.rec = nil
 	}
 }
+
+// Diagnose transcribes one recording and reports the tokens behind the
+// text as well as the text itself — see Diagnosis for why both are
+// needed to tell a decoding fault from a model that is mishearing.
+//
+// It runs the same recognizer dictation uses, configured the same way, so
+// what it reports is what the microphone would have produced. The audio
+// is fed in one go and flushed with InputFinished, which is what releases
+// the last words of an utterance; a live session gets that from the
+// endpoint detector instead.
+func Diagnose(cfg Config, samples []float32) (Diagnosis, error) {
+	rec, err := Open(cfg)
+	if err != nil {
+		return Diagnosis{}, err
+	}
+	defer rec.Close()
+
+	s, ok := rec.(*sherpaRecognizer)
+	if !ok {
+		return Diagnosis{}, ErrUnavailable
+	}
+
+	s.Accept(samples)
+	// Half a second of silence, then end of input. A streaming model
+	// holds back its last few tokens waiting for more audio; without
+	// this the tail of every recording is missing, which would look
+	// exactly like the model mishearing the end of the sentence.
+	s.Accept(make([]float32, SampleRate/2))
+	s.stream.InputFinished()
+	for s.rec.IsReady(s.stream) {
+		s.rec.Decode(s.stream)
+	}
+
+	res := s.rec.GetResult(s.stream)
+	marks, empty := summarize(res.Tokens)
+	return Diagnosis{
+		Text:         res.Text,
+		Tokens:       res.Tokens,
+		WordMarks:    marks,
+		Empty:        empty,
+		AudioSeconds: float64(len(samples)) / float64(SampleRate),
+	}, nil
+}
