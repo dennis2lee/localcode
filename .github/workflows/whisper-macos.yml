@@ -37,10 +37,18 @@ jobs:
       # Two single-architecture builds joined with lipo, because CMake
       # builds one architecture at a time here: Metal shader compilation
       # and the CPU feature detection ggml does are both per-target.
+      #
+      # GGML_NATIVE=OFF in both. ggml otherwise tunes for the machine it
+      # is compiling on, which is wrong twice over for a binary being
+      # shipped: on the arm64 runner it passes -mcpu=apple-m1 to the
+      # x86_64 compiler, which simply fails, and left to succeed it would
+      # produce a binary that crashes with an illegal instruction on any
+      # processor older than the runner's.
       - name: Build arm64
         run: |
           cmake -B build-arm64 -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DGGML_NATIVE=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DWHISPER_BUILD_TESTS=OFF
           cmake --build build-arm64 --config Release -j3 --target whisper-server
@@ -49,6 +57,7 @@ jobs:
         run: |
           cmake -B build-x64 -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DGGML_NATIVE=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DWHISPER_BUILD_TESTS=OFF
           cmake --build build-x64 --config Release -j3 --target whisper-server
