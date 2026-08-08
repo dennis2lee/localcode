@@ -104,7 +104,7 @@ func (s *Session) Write(pcm []byte) (Result, error) {
 	// this before reading Partial is what keeps a finished sentence from
 	// being reported as both final and provisional in the same reply.
 	if s.rec.Endpoint() {
-		res.Final = s.rec.Partial()
+		res.Final = s.settled()
 		s.logUtterance(res.Final)
 		s.rec.Reset()
 	}
@@ -122,7 +122,7 @@ func (s *Session) Stop() Result {
 		return Result{}
 	}
 	s.done = true
-	res := Result{Final: s.rec.Partial()}
+	res := Result{Final: s.settled()}
 	s.logUtterance(res.Final)
 	s.rec.Close()
 	return res
@@ -152,6 +152,25 @@ func decodePCM16(pcm []byte) []float32 {
 // tokenReporter is a recognizer that can show the pieces behind its text.
 // Optional: a recognizer without it simply reports no tokens.
 type tokenReporter interface{ Tokens() []string }
+
+// finalizer is a recognizer whose committed text is worth more work than
+// its running text. Optional: a recognizer without it commits whatever
+// Partial says.
+//
+// A streaming transducer has nothing to add here, since its partial
+// already reflects every sample it has been given. A window-at-a-time
+// model does: its partials are periodic snapshots, so the audio since
+// the last one is missing from the text, and that audio is the end of
+// the sentence. Final re-reads the whole utterance.
+type finalizer interface{ Final() string }
+
+// settled returns the text to commit for the utterance just ended.
+func (s *Session) settled() string {
+	if f, ok := s.rec.(finalizer); ok {
+		return f.Final()
+	}
+	return s.rec.Partial()
+}
 
 // logUtterance prints a finished utterance and the tokens behind it when
 // LC_DICTATION_DEBUG is set.

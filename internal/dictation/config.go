@@ -10,8 +10,22 @@ import (
 // not usable: there is no sensible default model to fall back on, and
 // guessing one would mean a silent download at first use.
 type Config struct {
+	// Engine picks a backend. Empty means "whatever is installed",
+	// preferring whisper. See Engine for why they are not equals.
+	Engine Engine
+	// WhisperBin and WhisperModel override where the whisper engine and
+	// its model are found. Empty means look beside this binary, which is
+	// where the installer puts them.
+	WhisperBin   string
+	WhisperModel string
+	// Language is the spoken language as an ISO 639-1 code ("ko", "en").
+	// Empty means auto-detect, which is right for mixed speech and a
+	// little slower and less certain for speech that is only ever one
+	// language.
+	Language string
+
 	// ModelDir holds an unpacked sherpa-onnx streaming transducer model:
-	// encoder/decoder/joiner .onnx plus tokens.txt.
+	// encoder/decoder/joiner .onnx plus tokens.txt. Sherpa only.
 	ModelDir string
 	// Threads is how many CPU threads the recognizer may use. 0 picks a
 	// modest default — this runs alongside a model doing real work, and

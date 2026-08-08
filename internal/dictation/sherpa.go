@@ -22,8 +22,8 @@ type sherpaRecognizer struct {
 	stream *sherpa.OnlineStream
 }
 
-// Open loads the model and returns a recognizer ready for audio.
-func Open(cfg Config) (Recognizer, error) {
+// openSherpa loads the model and returns a recognizer ready for audio.
+func openSherpa(cfg Config) (Recognizer, error) {
 	files, err := resolveModel(cfg.ModelDir)
 	if err != nil {
 		return nil, err
@@ -118,9 +118,9 @@ func Open(cfg Config) (Recognizer, error) {
 	return &sherpaRecognizer{rec: rec, stream: stream}, nil
 }
 
-// Available reports that this build can do speech recognition. Whether a
-// *model* is present is a separate question, answered by Open.
-func Available() bool { return true }
+// sherpaAvailable reports that this build has sherpa compiled in.
+// Whether a *model* is present is a separate question.
+func sherpaAvailable() bool { return true }
 
 func (s *sherpaRecognizer) Accept(samples []float32) {
 	if len(samples) == 0 {
@@ -180,7 +180,7 @@ func (s *sherpaRecognizer) Close() {
 // the last words of an utterance; a live session gets that from the
 // endpoint detector instead.
 func Diagnose(cfg Config, samples []float32) (Diagnosis, error) {
-	rec, err := Open(cfg)
+	rec, err := openSherpa(cfg)
 	if err != nil {
 		return Diagnosis{}, err
 	}

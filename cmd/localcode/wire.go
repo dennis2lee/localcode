@@ -182,16 +182,32 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// Available() before it looks at the model, so it distinguishes the
 	// two correctly; letting it answer is the whole fix.
 	//
-	// The recognizer itself only exists in the desktop build (CGo); in
-	// every other build dictation.Open returns ErrUnavailable and the
-	// Manager reports that as the reason it is not ready.
-	dm := dictation.NewManager(dictation.Config{ModelDir: resolveDictationModelDir(cfg.DictationModelDir)})
+	// Which engine that turns out to be is decided at run time, not
+	// build time: the whisper engine is a file beside the binary, so
+	// every build can dictate if one is installed. Sherpa remains
+	// desktop-only, being linked in rather than run.
+	dm := dictation.NewManager(dictationConfig(cfg))
 	dm.StartReaper()
 	d.Dictation = dm
 	prevCleanup := cleanup
 	cleanup = func() { dm.Close(); prevCleanup() }
 
 	return d, cleanup, nil
+}
+
+// dictationConfig turns the file's settings into the package's, keeping
+// the two vocabularies apart: config.json is a user-facing document and
+// dictation.Config is an argument.
+func dictationConfig(cfg *config.Config) dictation.Config {
+	out := dictation.Config{ModelDir: resolveDictationModelDir(cfg.DictationModelDir)}
+	if d := cfg.Dictation; d != nil {
+		out.Engine = dictation.Engine(d.Engine)
+		out.WhisperBin = d.WhisperBin
+		out.WhisperModel = d.WhisperModel
+		out.Language = d.Language
+		out.Threads = d.Threads
+	}
+	return out
 }
 
 // resolveDictationModelDir lets an explicit dictation_model_dir win, and

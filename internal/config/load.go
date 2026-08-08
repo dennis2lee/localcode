@@ -152,6 +152,9 @@ func (c *Config) merge(other *Config) {
 	if other.DictationModelDir != "" {
 		c.DictationModelDir = other.DictationModelDir
 	}
+	if other.Dictation != nil {
+		c.Dictation = other.Dictation
+	}
 	if other.SkipPermissions != nil {
 		c.SkipPermissions = other.SkipPermissions
 	}

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func writeWAV(t *testing.T, dir string, channels, rate, bits int, samples int) string {
+func writeTestWAV(t *testing.T, dir string, channels, rate, bits int, samples int) string {
 	t.Helper()
 	data := make([]byte, samples*2)
 	var b bytes.Buffer
@@ -41,17 +41,17 @@ func writeWAV(t *testing.T, dir string, channels, rate, bits int, samples int) s
 func TestReadWAVRejectsAudioTheModelCannotUse(t *testing.T) {
 	dir := t.TempDir()
 
-	if _, _, err := ReadWAV(writeWAV(t, dir, 2, SampleRate, 16, 100)); err == nil || !strings.Contains(err.Error(), "mono") {
+	if _, _, err := ReadWAV(writeTestWAV(t, dir, 2, SampleRate, 16, 100)); err == nil || !strings.Contains(err.Error(), "mono") {
 		t.Errorf("stereo: err = %v, want it to name the channel count", err)
 	}
-	if _, _, err := ReadWAV(writeWAV(t, dir, 1, 44100, 16, 100)); err == nil || !strings.Contains(err.Error(), "Hz") {
+	if _, _, err := ReadWAV(writeTestWAV(t, dir, 1, 44100, 16, 100)); err == nil || !strings.Contains(err.Error(), "Hz") {
 		t.Errorf("44.1 kHz: err = %v, want it to name the sample rate", err)
 	}
-	if _, _, err := ReadWAV(writeWAV(t, dir, 1, SampleRate, 8, 100)); err == nil || !strings.Contains(err.Error(), "8-bit") {
+	if _, _, err := ReadWAV(writeTestWAV(t, dir, 1, SampleRate, 8, 100)); err == nil || !strings.Contains(err.Error(), "8-bit") {
 		t.Errorf("8-bit: err = %v, want it to name the bit depth", err)
 	}
 
-	samples, rate, err := ReadWAV(writeWAV(t, dir, 1, SampleRate, 16, 8000))
+	samples, rate, err := ReadWAV(writeTestWAV(t, dir, 1, SampleRate, 16, 8000))
 	if err != nil {
 		t.Fatalf("16 kHz mono 16-bit should be accepted: %v", err)
 	}

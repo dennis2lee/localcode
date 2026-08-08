@@ -225,6 +225,7 @@ func TestMergeFieldsGuard(t *testing.T) {
 	// grows).
 	mergedFields := map[string]bool{
 		"DictationModelDir":  true,
+		"Dictation":          true,
 		"Providers":          true,
 		"Profiles":           true,
 		"Agents":             true,

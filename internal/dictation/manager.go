@@ -39,10 +39,7 @@ func NewManager(cfg Config) *Manager {
 // microphone button, hiding it, and explaining — a button that can only
 // fail is worse than no button.
 func (m *Manager) Ready() (bool, string) {
-	if !Available() {
-		return false, ErrUnavailable.Error()
-	}
-	if _, err := resolveModel(m.cfg.ModelDir); err != nil {
+	if _, err := m.cfg.resolveEngine(); err != nil {
 		return false, err.Error()
 	}
 	return true, ""

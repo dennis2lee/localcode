@@ -152,26 +152,53 @@ func TestResolveModelNamesWhatIsMissing(t *testing.T) {
 // desktop build that is false, and it sends the reader after the one
 // thing they cannot change instead of the config key they can. Ready()
 // has always been able to tell the two apart; it just was not asked.
-func TestReadyBlamesTheConfigWhenTheBuildHasARecognizer(t *testing.T) {
+// An unconfigured manager names something the reader can go and do.
+//
+// This used to say "this build has no speech recognizer" in every build
+// but the desktop one, which was true and useless: the reader could not
+// act on it without recompiling. Since the whisper engine is a file
+// beside the binary rather than something linked into it, every build
+// now has an installable path to dictation, and the reason has to point
+// at that instead.
+func TestReadyPointsAtSomethingFixable(t *testing.T) {
 	ready, why := NewManager(Config{}).Ready()
 	if ready {
-		t.Fatal("ready = true with no model directory configured")
+		t.Fatal("ready = true with nothing configured or installed")
 	}
-	if Available() {
-		// A desktop build: the missing model directory is the fixable
-		// thing, so that is what the reason has to name.
-		if !strings.Contains(why, "model directory") {
-			t.Errorf("reason does not point at the model directory: %q", why)
-		}
-		if strings.Contains(why, "no speech recognizer") {
-			t.Errorf("reason blames the build, which does have a recognizer: %q", why)
-		}
-		return
+	if why == "" {
+		t.Fatal("not ready, but no reason given")
 	}
-	// Any other build genuinely has no recognizer, and no amount of
-	// configuration would change that — say so instead.
-	if why != ErrUnavailable.Error() {
+	if why == ErrUnavailable.Error() {
+		t.Errorf("reason blames the build, which the whisper engine no longer depends on: %q", why)
+	}
+	if !strings.Contains(why, "install") && !strings.Contains(why, "model directory") {
+		t.Errorf("reason names no remedy: %q", why)
+	}
+}
+
+// Asking for an engine by name reports that engine's problem, so a
+// misconfigured whisper setup is never quietly answered with sherpa's
+// complaint about .onnx files, or the reverse.
+func TestExplicitEngineReportsItsOwnProblem(t *testing.T) {
+	_, why := NewManager(Config{Engine: EngineWhisper, WhisperBin: "/nope/whisper-server"}).Ready()
+	if !strings.Contains(why, "/nope/whisper-server") {
+		t.Errorf("whisper reason does not name the missing engine: %q", why)
+	}
+
+	_, why = NewManager(Config{Engine: EngineSherpa, ModelDir: t.TempDir()}).Ready()
+	if sherpaAvailable() {
+		if !strings.Contains(why, "missing") {
+			t.Errorf("sherpa reason does not name the missing model files: %q", why)
+		}
+	} else if why != ErrUnavailable.Error() {
 		t.Errorf("reason = %q, want %q", why, ErrUnavailable.Error())
+	}
+}
+
+func TestUnknownEngineIsRejected(t *testing.T) {
+	_, why := NewManager(Config{Engine: "parakeet"}).Ready()
+	if !strings.Contains(why, "parakeet") {
+		t.Errorf("reason does not name the unknown engine: %q", why)
 	}
 }
 
