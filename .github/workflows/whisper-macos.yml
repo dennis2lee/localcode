@@ -1,0 +1,83 @@
+# Builds whisper.cpp's server for macOS, which upstream does not publish.
+#
+# Windows needs nothing from here: whisper.cpp's own releases ship
+# whisper-server.exe and its DLLs, and `localcode dictation install`
+# downloads that archive directly. macOS gets only an xcframework, which
+# is a library for embedding rather than a program to run, so the one
+# platform localcode cannot fetch a ready-made engine for is this one.
+#
+# Universal, so a single artifact serves Apple Silicon and Intel the same
+# way the release binaries do. Built from a pinned upstream tag rather
+# than a branch: this is a binary localcode will execute, and it should
+# change when someone changes it here.
+name: whisper-macos
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'whisper.cpp tag to build (e.g. v1.9.2).'
+        required: false
+        default: 'v1.9.2'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Check out whisper.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: ${{ inputs.ref || 'v1.9.2' }}
+
+      # Two single-architecture builds joined with lipo, because CMake
+      # builds one architecture at a time here: Metal shader compilation
+      # and the CPU feature detection ggml does are both per-target.
+      - name: Build arm64
+        run: |
+          cmake -B build-arm64 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF
+          cmake --build build-arm64 --config Release -j3 --target whisper-server
+
+      - name: Build x86_64
+        run: |
+          cmake -B build-x64 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF
+          cmake --build build-x64 --config Release -j3 --target whisper-server
+
+      # Statically linked (BUILD_SHARED_LIBS=OFF) so the artifact is one
+      # file. The Windows archive ships a dozen DLLs beside its exe
+      # because that is how upstream builds it; there is no reason to
+      # reproduce that here, and a single binary is far easier to place,
+      # sign and remove.
+      - name: Make it universal
+        run: |
+          mkdir -p out
+          lipo -create -output out/whisper-server \
+            build-arm64/bin/whisper-server \
+            build-x64/bin/whisper-server
+          chmod +x out/whisper-server
+          lipo -info out/whisper-server
+          otool -L out/whisper-server
+
+      # A binary that cannot start is worth catching here rather than on
+      # someone's laptop. --help exits non-zero on some builds, so this
+      # asserts on the output instead.
+      - name: Smoke test
+        run: |
+          ./out/whisper-server --help 2>&1 | tee help.txt || true
+          grep -q -- '--model' help.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whisper-server-darwin-universal
+          path: out/whisper-server
+          if-no-files-found: error

@@ -83,5 +83,14 @@
     ]
   },
   "skip_permissions": false,
-  "dictation_model_dir": ""
+  "dictation_model_dir": "",
+
+  "//dictation": "Speech engine settings. All optional: `localcode dictation install` puts an engine and model where localcode already looks, so this block is only for overriding that. engine is whisper (default, works in every build) or sherpa (desktop build only). language is an ISO 639-1 code; empty auto-detects, which is what mixed speech wants.",
+  "dictation": {
+    "engine": "",
+    "language": "",
+    "whisper_bin": "",
+    "whisper_model": "",
+    "threads": 0
+  }
 }

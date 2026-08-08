@@ -120,7 +120,8 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
 | `max_concurrent_tasks` | Caps how many background tasks run at once |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
-| `dictation_model_dir` | Path to an unpacked sherpa-onnx streaming speech model. Empty (the default) leaves voice dictation off. See [Dictating a prompt](#dictating-a-prompt-desktop-window). |
+| `dictation` | Speech engine settings. Every field optional; with none set, an installed engine beside the binary is found and used. See [Dictating a prompt](#dictating-a-prompt). |
+| `dictation_model_dir` | Path to an unpacked sherpa-onnx model, for the older sherpa engine only. See [Engines](#engines). |
 
 #### Provider fields
 
@@ -772,7 +773,7 @@ One line directly below the input box:
 | TPS | Shown when `show_tps` is on. It is a **generation** rate: the clock runs from the first token to the last, so the wait before a model starts answering (prefill, and on a shared local server the queue in front of you) is not divided into the output. It covers the whole turn, not the last model call — a turn that uses tools is several calls, and the last is often a handful of tokens. A `~` prefix marks a live estimate made while the model is still talking, counted from stream chunks because the real token count only arrives when the stream ends; it is replaced by the exact figure at that point. A reply that arrives in a single chunk shows nothing at all: there is no interval to measure across. |
 | Activity light | Three states: **gray** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — the model is running your prompt. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. |
 | Stop button | Appears while a turn is running. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
-| Dictation pill | `dictation: off`. Click to talk your prompt instead of typing it; the pill turns red and blinks while it listens. Reads `dictation: unavailable`, disabled with the reason in its tooltip, when no speech model is configured or the build has no recognizer. See [Dictating a prompt](#dictating-a-prompt-desktop-window). |
+| Dictation pill | `dictation: off`. Click to talk your prompt instead of typing it; the pill turns red and blinks while it listens. Reads `dictation: unavailable`, disabled with the reason in its tooltip, when no speech model is configured or the build has no recognizer. See [Dictating a prompt](#dictating-a-prompt). |
 | Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
 
@@ -1011,107 +1012,142 @@ localcode --agent quick-search
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
-### Dictating a prompt (desktop window)
+### Dictating a prompt
 
-The desktop window can take a prompt by voice. Click the
-`dictation: off` pill in the status row under the prompt box and talk;
-the text appears in the prompt box as you speak — grey while a sentence
-is still being spoken, ordinary text once you pause. The pill reads
-`dictation: on` with a blinking red dot while it is listening. Click it
-again to stop. Everything runs on your machine: no audio leaves it, and
-it works with no network at all.
+localcode can take a prompt by voice, in the desktop window and in the
+Web UI. Click the `dictation: off` pill in the status row under the
+prompt box and talk; the text appears as you speak, grey while a
+sentence is still in progress and ordinary text once you pause. Click
+the pill again to stop. Everything runs on your machine: no audio leaves
+it, and it works with no network at all.
 
-It is off until you point it at a speech model, because there is no
+It is off until an engine and a model are on disk, because there is no
 sensible one to guess and guessing would mean a silent several-hundred-
 megabyte download the first time anyone clicked the button.
-
-The quickest way is to let localcode fetch it. On Windows the installer
-already ran this for you unless you passed `DICTATION=0`:
 
 ```bash
 localcode dictation install
 ```
 
-It downloads the Korean streaming model, checks it against a pinned
-checksum, unpacks it into a `models` directory beside the binary, and
-throws away the float32 weights it does not use (400MB down, ~130MB
-kept). No config change is needed: that directory is where localcode
-looks when `dictation_model_dir` is unset. `localcode dictation status`
-reports whether it worked, and `localcode dictation remove` deletes it
-again.
+On Windows the installer already ran this unless you passed
+`DICTATION=0`. It downloads the engine and a Whisper model, checks both
+against pinned checksums, and puts them in a `models` directory beside
+the binary. About 200MB. No config change is needed: that directory is
+where localcode looks when nothing is configured. `localcode dictation
+status` reports whether it worked, and `localcode dictation remove`
+deletes it again.
 
-To use a different model, or to put one somewhere else, download a
-sherpa-onnx streaming model, unpack it, and name the directory in
-`config.json` (`~/.localcode/config.json`, or
-`C:\Users\<you>\.localcode\config.json`). The key goes at the top level,
-alongside `providers` and `agents`:
+#### Engines
 
-macOS and Linux:
+| | whisper | sherpa |
+|---|---|---|
+| Runs as | a child process | linked into localcode |
+| Available in | every build | the desktop build only |
+| Korean accuracy | good, correctly spaced | poor, and see the note below |
+| Text while you speak | re-read about once a second | word by word |
+| Download | ~200MB | ~400MB, ~130MB kept |
+
+**whisper is the default and the one to use.** It is
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) running as a
+separate program that localcode feeds audio to, which is what makes it
+work everywhere: the recognizer is a file beside the binary rather than
+something compiled in, so the TUI and the headless daemon can dictate
+too.
+
+sherpa is the original engine, kept because it still works where it is
+already installed. It is not being developed further. On the Korean
+model it ships with, transcripts came out unspaced and inaccurate; the
+spacing is fixed as of v0.32.13, the accuracy is not. Install it with
+`localcode dictation install --engine sherpa`.
+
+#### Configuration
+
+None of this is required. Set it only to override what `dictation
+install` arranged:
 
 ```json
 {
-  "dictation_model_dir": "/Users/you/.localcode/models/sherpa-onnx-streaming-zipformer-korean-2024-06-16"
+  "dictation": {
+    "engine": "whisper",
+    "language": "ko",
+    "whisper_model": "/Users/you/.localcode/models/ggml-medium-q5_0.bin"
+  }
 }
 ```
 
-Windows — **every backslash has to be doubled**, because a single one
-starts a JSON escape. `"C:\Users\..."` is not a valid string at all: the
-config fails to parse with
+| Key | Meaning |
+|---|---|
+| `engine` | `whisper` or `sherpa`. Empty prefers whisper. |
+| `language` | ISO 639-1 code, `ko` or `en`. Empty auto-detects, which is what mixed speech wants and slightly slower for speech that is only ever one language. |
+| `whisper_bin` | Path to the engine executable. |
+| `whisper_model` | Path to a `ggml-*.bin`, or a directory holding one. When several are installed the largest is used. |
+| `threads` | CPU cap. 0 picks a modest default, since this runs beside a language model doing the actual work. |
+
+`dictation_model_dir` still points sherpa at its model directory, which
+has to hold the unpacked archive contents — `encoder-*.onnx`,
+`decoder-*.onnx`, `joiner-*.onnx`, `tokens.txt` — not the archive.
+
+On Windows **every backslash in a JSON path has to be doubled**, because
+a single one starts an escape. `"C:\Users\..."` is not a valid string
+at all: the config fails to parse with
 
 ```
 invalid character 'U' in string escape code
 ```
 
 and localcode refuses to start, which reads as a broken install rather
-than as a mistyped path (in the desktop window that message is what the
-startup screen shows). Forward slashes work on Windows too and avoid the
+than a mistyped path. Forward slashes work on Windows too and avoid the
 whole problem.
 
-```json
-{
-  "dictation_model_dir": "C:\\Users\\you\\.localcode\\models\\sherpa-onnx-streaming-zipformer-korean-2024-06-16"
-}
+#### Choosing a Whisper model
+
+`dictation install` fetches `ggml-small-q5_1.bin` (190MB). Quantised, so
+it holds a correspondingly smaller amount of memory while resident. On
+the Korean reference set it transcribed every sentence with correct
+spacing, and one 6.6s recording took about 290ms on Apple Silicon.
+
+To use a different one, download it from
+<https://huggingface.co/ggerganov/whisper.cpp> into the same `models`
+directory. The largest installed file wins, so no config change is
+needed. `medium` is more accurate on unclear or noisy speech at roughly
+twice the compute; `large-v3-turbo` is a similar size to medium but
+optimised for inference and worth benchmarking if small ever struggles.
+For a real-time feature, latency is felt far more than the last two
+points of accuracy, which is why the default is the small one.
+
+#### macOS and Linux
+
+Upstream publishes a ready-made engine for Windows only, so `dictation
+install` can fetch it there and not elsewhere. On macOS and Linux it
+says so, and you build the engine yourself:
+
+```bash
+git clone --depth 1 https://github.com/ggml-org/whisper.cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release whisper.cpp
+cmake --build build --config Release --target whisper-server
 ```
 
-The directory has to hold the unpacked contents of the archive — the
-`encoder-*.onnx`, `decoder-*.onnx`, `joiner-*.onnx` and `tokens.txt` —
-not the archive, and not a directory containing them. If it doesn't, the
-daemon says which files it couldn't find rather than just refusing.
+Put the resulting `whisper-server` in the `models` directory beside the
+localcode binary, or name it with `whisper_bin`. The model still
+downloads normally.
 
-Korean models are at
-<https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models>. The
-streaming Zipformer one above is trained on KsponSpeech and downloads as
-a 398MB archive:
+#### Two things worth knowing
 
-```
-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-korean-2024-06-16.tar.bz2
-```
+- **Text you have already seen can change.** Whisper reads a window of
+  audio as a unit and re-reads the whole utterance about once a second,
+  so a word can be revised as later words give it context. That is what
+  the grey means: it is not settled yet. It stops changing when you
+  pause.
+- **Mixed Korean and English is the hard case.** Whisper is multilingual
+  and handles it far better than a Korean-only model, but
+  "useState 훅을 async 함수로 바꿔줘" is still where you will see the
+  limits. Leave `language` unset for mixed speech; set it when you only
+  ever dictate one language.
 
-Most of that is weights localcode does not load. The archive ships each
-model twice, float32 and int8 quantised, and the int8 copies are
-preferred here — so the three `*-epoch-99-avg-1.onnx` files (about
-300MB) can be deleted after unpacking, leaving roughly 130MB of int8
-weights plus `tokens.txt`.
-Any sherpa-onnx **streaming transducer** model works — a non-streaming
-one (Whisper, Paraformer) will not load, because showing text while you
-are still talking is the whole point and those process a finished
-recording.
-
-Two things worth knowing before you rely on it:
-
-- **Text you have already seen can change.** A streaming recognizer
-  revises earlier words as later ones give it context. That is what the
-  grey means: it is not settled yet. It stops changing when you pause.
-- **Mixed Korean and English is the hard case.** A Korean-trained model
-  transcribes Korean conversation well and English technical terms
-  poorly, so "useState 훅을 async 함수로 바꿔줘" is where you will see
-  its limits. Try it with the way you actually dictate before deciding.
-
-When dictation cannot run — a build without the recognizer, or no model
-configured — the pill reads `dictation: unavailable` and is disabled,
-with the daemon's own explanation in its tooltip. It stays on screen
-rather than disappearing: the usual reason is the missing
-`dictation_model_dir` above, which is worth knowing about.
+When dictation cannot run, the pill reads `dictation: unavailable` and
+is disabled, with the daemon's own explanation in its tooltip. It stays
+on screen rather than disappearing: the usual reason is that nothing has
+been installed yet, which is worth knowing about.
 
 #### When a transcript comes out wrong
 

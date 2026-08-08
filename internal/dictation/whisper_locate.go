@@ -19,10 +19,9 @@ func whisperBinName() string {
 }
 
 // findWhisperBin locates the engine executable, preferring an explicit
-// path and otherwise looking beside this binary.
+// path and otherwise looking where an install would have put it.
 //
-// Beside the binary is where the installer puts it, and it is the copy
-// that matches this version. There is deliberately no PATH lookup: a
+// There is deliberately no PATH lookup: a
 // whisper-server someone installed for unrelated reasons is not
 // necessarily the build this was tested against, and silently using it
 // turns a version mismatch into a mystery.
@@ -41,13 +40,23 @@ func findWhisperBin(explicit string) string {
 		exe = resolved
 	}
 	dir := filepath.Dir(exe)
-	for _, cand := range []string{
+	cands := []string{
+		// Beside the binary, for a locally built engine dropped in by
+		// hand.
 		filepath.Join(dir, whisperBinName()),
 		// Inside the macOS bundle the executable lives in
 		// Contents/MacOS, and engines ship beside it in Contents/
 		// Resources.
 		filepath.Join(dir, "..", "Resources", whisperBinName()),
-	} {
+	}
+	// Where `dictation install` puts it: under models/, with everything
+	// else that was downloaded rather than shipped.
+	for _, parent := range []func() (string, error){BundledModelParent, HomeModelParent} {
+		if p, err := parent(); err == nil {
+			cands = append(cands, filepath.Join(p, whisperBinName()))
+		}
+	}
+	for _, cand := range cands {
 		if fileExists(cand) {
 			return cand
 		}
@@ -125,7 +134,7 @@ func (c Config) whisperPaths() (bin, model string, err error) {
 		if c.WhisperBin != "" {
 			return "", "", fmt.Errorf("no whisper engine at %s", c.WhisperBin)
 		}
-		return "", "", fmt.Errorf("no speech engine installed (%s is not beside this binary) — run `localcode dictation install`", whisperBinName())
+		return "", "", fmt.Errorf("no speech engine installed (found no %s) — run `localcode dictation install`", whisperBinName())
 	}
 	model = findWhisperModel(c.WhisperModel)
 	if model == "" {

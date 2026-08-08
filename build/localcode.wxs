@@ -179,24 +179,30 @@
                   Impersonate='no' />
 
     <!--
-      Fetch the speech model dictation needs, unless DICTATION=0 was
-      passed. Without a model on disk the microphone control is inert, and
-      the alternative to this is a five-step manual routine (find the
-      release, download 400MB, unpack a .tar.bz2 on a machine with no bzip2
-      in Explorer, put the path in config.json with every backslash
-      doubled) that most people will simply not do.
+      Fetch the speech engine and model dictation needs, unless
+      DICTATION=0 was passed. Without them the microphone control is
+      inert, and the alternative is a manual routine (find the release,
+      download two archives, unpack them into the right directory, put
+      the paths in config.json with every backslash doubled) that most
+      people will simply not do.
 
-      It is localcode.exe doing the work rather than a script: the download,
-      checksum check and extraction are Go code with tests, and the same
-      command is what a user runs by hand if this step is skipped or fails.
-      Into [INSTALLDIR]models because that is where localcode looks when
-      dictation_model_dir is unset — so nothing has to edit a config file
-      afterwards — and because a per-machine location means one download
-      serves every account rather than one per user.
+      It is localcode.exe doing the work rather than a script: the
+      download, checksum check and extraction are Go code with tests, and
+      the same command is what a user runs by hand if this step is
+      skipped or fails. Into [INSTALLDIR]models because that is where
+      localcode looks when nothing is configured — so nothing has to edit
+      a config file afterwards — and because a per-machine location means
+      one download serves every account rather than one per user.
+
+      The engine lands in that same directory rather than beside
+      localcode.exe. Windows resolves a program's imports from its own
+      directory, and the program doing the loading here is
+      whisper-server.exe, so engine and DLLs travel together and
+      everything downloaded stays under models\.
 
       Two consequences worth knowing, both accepted rather than overlooked:
 
-      * The install takes as long as a 400MB download. MSI waits for a
+      * The install takes as long as a ~200MB download. MSI waits for a
         deferred action even with Return='ignore', and there is no progress
         text. DICTATION=0 skips it:
             msiexec /i localcode-x.y.z-windows-amd64.msi DICTATION=0
@@ -207,8 +213,8 @@
         unavailable and names the reason.
 
       Re-running is cheap. `dictation install` returns immediately if a
-      usable model is already in place, which is what makes this safe to
-      leave unconditional across upgrades.
+      usable engine and model are already in place, which is what makes
+      this safe to leave unconditional across upgrades.
     -->
     <!--
       Both dictation actions run localcode.exe named by a property rather
@@ -235,9 +241,10 @@
                   Impersonate='no' />
 
     <!--
-      The model is downloaded, not installed as a component, so Windows
-      Installer does not know about the files and will not remove them.
-      Without this, uninstalling leaves ~130MB behind forever.
+      The engine and model are downloaded, not installed as components,
+      so Windows Installer does not know about the files and will not
+      remove them. Without this, uninstalling leaves ~200MB behind
+      forever.
 
       Sequenced before RemoveFiles, since it is localcode.exe that does the
       deleting and RemoveFiles is what takes localcode.exe away.

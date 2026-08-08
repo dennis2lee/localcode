@@ -21,17 +21,18 @@ import (
 
 const dictationUsage = `usage: localcode dictation <subcommand>
 
-  localcode dictation install [--dir <path>]
-                       download the speech model and unpack it, then print the
-                       directory. Does nothing if a usable model is already there.
-                       --dir defaults to the models directory beside this binary,
-                       which is where localcode looks when dictation_model_dir is
-                       not set. About 400MB to download, ~130MB kept.
+  localcode dictation install [--dir <path>] [--engine whisper|sherpa]
+                       download the speech engine and its model, then report where
+                       they went. Does nothing if they are already there. Defaults
+                       to whisper, which works in every build; sherpa is the older
+                       engine and needs a desktop build. --dir defaults to beside
+                       this binary, which is where localcode looks by default.
+                       Whisper is ~200MB to download; sherpa about 400MB.
   localcode dictation status
                        report whether dictation can run right now, and why not.
-  localcode dictation remove [--dir <path>]
-                       delete an installed model. Used by the Windows uninstaller,
-                       which would otherwise leave ~130MB behind.
+  localcode dictation remove [--dir <path>] [--engine whisper|sherpa]
+                       delete an installed engine and model. Used by the Windows
+                       uninstaller, which would otherwise leave the download behind.
   localcode dictation test <recording.wav>
                        transcribe a 16 kHz mono WAV with the configured model and
                        print the tokens behind the text as well as the text. Use
@@ -40,7 +41,7 @@ const dictationUsage = `usage: localcode dictation <subcommand>
                        which look identical in the finished sentence. Desktop
                        build only (on Windows, localcode-gui.exe).
 
-Dictation itself only works in the desktop window (see docs/USAGE.md).`
+Dictation runs in the desktop window and the Web UI (see docs/USAGE.md).`
 
 func runDictation(args []string) error {
 	if len(args) == 0 {
@@ -62,49 +63,75 @@ func runDictation(args []string) error {
 	}
 }
 
-// modelParentFlag parses the shared "--dir <path>" argument, defaulting
-// to the models directory beside this binary — the one the daemon looks
-// in when dictation_model_dir is unset, so an install with no arguments
-// is a complete setup.
-func modelParentFlag(args []string) (string, error) {
-	dir := ""
+// installFlags parses "--dir <path>" and "--engine <name>".
+//
+// --dir defaults to the models directory beside this binary — the one
+// the daemon looks in when nothing is configured, so an install with no
+// arguments is a complete setup.
+//
+// The engine defaults to whisper: it is the one that works in every
+// build, and someone running install with no arguments wants the setup
+// that will work, not the historical one.
+func installFlags(args []string) (dir string, engine dictation.Engine, err error) {
+	engine = dictation.EngineWhisper
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--dir", "-d":
 			if i+1 >= len(args) {
-				return "", fmt.Errorf("--dir needs a path")
+				return "", "", fmt.Errorf("--dir needs a path")
 			}
 			dir = args[i+1]
 			i++
+		case "--engine", "-e":
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("--engine needs a name")
+			}
+			switch args[i+1] {
+			case string(dictation.EngineWhisper), string(dictation.EngineSherpa):
+				engine = dictation.Engine(args[i+1])
+			default:
+				return "", "", fmt.Errorf("unknown engine %q (want %q or %q)", args[i+1], dictation.EngineWhisper, dictation.EngineSherpa)
+			}
+			i++
 		default:
-			return "", fmt.Errorf("unexpected argument %q", args[i])
+			return "", "", fmt.Errorf("unexpected argument %q", args[i])
 		}
 	}
 	if dir == "" {
-		var err error
 		if dir, err = dictation.BundledModelParent(); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return filepath.Abs(dir)
+	dir, err = filepath.Abs(dir)
+	return dir, engine, err
 }
 
 func runDictationRemove(args []string) error {
-	abs, err := modelParentFlag(args)
+	abs, engine, err := installFlags(args)
 	if err != nil {
 		return err
 	}
-	if err := dictation.Remove(abs); err != nil {
+	if engine == dictation.EngineSherpa {
+		if err := dictation.Remove(abs); err != nil {
+			return err
+		}
+		fmt.Printf("removed any sherpa model under %s\n", abs)
+		return nil
+	}
+	if err := dictation.RemoveWhisper(abs); err != nil {
 		return err
 	}
-	fmt.Printf("removed any model under %s\n", abs)
+	fmt.Printf("removed any whisper engine and model in %s\n", abs)
 	return nil
 }
 
 func runDictationInstall(args []string) error {
-	abs, err := modelParentFlag(args)
+	abs, engine, err := installFlags(args)
 	if err != nil {
 		return err
+	}
+	if engine == dictation.EngineWhisper {
+		return installWhisper(abs)
 	}
 
 	if existing := dictation.Installed(abs); existing != "" {
@@ -130,6 +157,37 @@ func runDictationInstall(args []string) error {
 	return nil
 }
 
+// installWhisper fetches the engine and its model into dir.
+//
+// Engine and DLLs land in the same directory, which is what Windows
+// requires: a program's imports are resolved from its own directory
+// before any of its code runs. That directory does not have to be the
+// one holding localcode.exe, since it is whisper-server.exe doing the
+// loading — so the whole engine stays under models/ with everything
+// else that was downloaded rather than fetched.
+func installWhisper(dir string) error {
+	if dictation.WhisperInstalled(dir) {
+		fmt.Printf("already installed: %s\n", dir)
+		return nil
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	fmt.Printf("installing the whisper speech engine into %s\n", dir)
+	err := dictation.InstallWhisper(ctx, dir, func(stage string, done, total int64) {
+		if total <= 0 {
+			return
+		}
+		fmt.Printf("\r  %s: %d/%d MB (%d%%)   ", stage, done>>20, total>>20, done*100/total)
+	})
+	fmt.Println()
+	if err != nil {
+		return err
+	}
+	fmt.Println("dictation is ready — no config change needed, since this is where localcode looks by default.")
+	return nil
+}
+
 func runDictationStatus() error {
 	// A missing or unfinished config is not an error here. Whether
 	// dictation can run has nothing to do with which model providers are
@@ -142,10 +200,18 @@ func runDictationStatus() error {
 			configured = cfg.DictationModelDir
 		}
 	}
-	dir := resolveDictationModelDir(configured)
-	ready, why := dictation.NewManager(dictation.Config{ModelDir: dir}).Ready()
-	if dir != "" {
-		fmt.Println("model directory:", dir)
+	// The full config, not just the model directory: with two engines
+	// to choose between, an answer derived from half the settings is an
+	// answer about a setup nobody is running.
+	cfg := dictation.Config{ModelDir: resolveDictationModelDir(configured)}
+	if e, err := resolveEnv(); err == nil {
+		if full, err := loadConfig("", e); err == nil {
+			cfg = dictationConfig(full)
+		}
+	}
+	ready, why := dictation.NewManager(cfg).Ready()
+	if cfg.ModelDir != "" {
+		fmt.Println("sherpa model directory:", cfg.ModelDir)
 	}
 	if ready {
 		fmt.Println("dictation is ready")
