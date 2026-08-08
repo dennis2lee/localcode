@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.33.1
+
+Five bugs in the speech engine v0.33.0 shipped. Each was found by review and confirmed with a test written to fail first.
+
+- **Fix: the sentence you just finished could reappear under the one you are saying.** A partial transcription still in flight when the speaker paused landed in the *next* utterance, as grey text. The sequence that triggers it is ordinary — speak, pause, keep speaking. Utterances are now numbered and a late reply that does not match its own is dropped.
+- **Fix: an utterance could grow without limit.** Ending one needs silence, and some rooms never provide any: a fan, a conversation at the next desk, a microphone left open. Nothing would ever commit, the buffer grew for as long as the session lived, and every partial re-sent an ever-larger recording, so the work per second rose with the time already spent. Capped at 30 seconds, the window Whisper reads as a unit.
+- **Fix: the engine kept running after localcode exited.** It deliberately outlives the last dictation session so that dictating again does not reload the model, but nothing ever shut it down — leaving a few hundred megabytes running that nobody started and would have to find and kill by hand.
+- **Fix: a crashed engine looked healthy.** Liveness was read from a field the Go runtime only fills in for a process that has been waited on, which a long-running server never is. A dead engine was handed to the next session and failed every request, and a failure at startup waited the full 60 second timeout instead of reporting what the engine printed on its way out.
+- **Fix: dictation deleted words you actually said.** Removing Whisper's non-speech annotations by stripping everything in brackets also stripped real speech: "이 함수(비동기)를 async로 바꿔줘" came out as "이 함수를 async로 바꿔줘", with nothing on screen to show a word had gone. Only known annotations are removed now, plus a reply that is nothing but one bracketed group. A stray annotation is a visible mistake that can be deleted; missing words are not.
+- **Fix: the child-process guard test failed for anyone with a git worktree open.** It walked into `.claude/worktrees`, scanned a second copy of the repository, and reported the copy's paths as unchecked.
+
 ## v0.33.0
 
 - **Dictation works in every build, not just the desktop one.** The recognizer was linked in through CGo, and the release pipeline cross-compiles every platform from one machine, so the TUI, the headless daemon and the macOS release build had no speech at all. Speech now runs as a child process — [whisper.cpp](https://github.com/ggml-org/whisper.cpp)'s own server binary — which leaves the Go side ordinary Go that compiles everywhere. Dictation stops being a property of how the binary was built and becomes a property of what is installed beside it. Verified end-to-end through the daemon's HTTP API in a pure-Go headless build.

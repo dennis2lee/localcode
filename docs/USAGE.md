@@ -1157,6 +1157,11 @@ localcode binary, or name it with `whisper_bin`.
   "useState 훅을 async 함수로 바꿔줘" is still where you will see the
   limits. Leave `language` unset for mixed speech; set it when you only
   ever dictate one language.
+- **An utterance commits itself after 30 seconds.** Normally a pause of
+  about a second ends one. In a room with no quiet in it — a fan, a
+  conversation nearby — that pause never arrives, so a 30 second cap
+  ends the utterance anyway rather than letting it grow for as long as
+  the session lives.
 
 When dictation cannot run, the pill reads `dictation: unavailable` and
 is disabled, with the daemon's own explanation in its tooltip. It stays
