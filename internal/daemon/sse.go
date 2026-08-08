@@ -47,7 +47,7 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	live, unsub, err := d.Loop.Store.Subscribe(id)
+	live, lost, unsub, err := d.Loop.Store.Subscribe(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -132,6 +132,17 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
+		case <-lost:
+			// This stream fell behind and an event was dropped. It cannot
+			// be recovered from here — the event is not coming again — so
+			// the honest move is to end the response. EventSource
+			// reconnects on its own and sends back the last id it saw,
+			// and the backlog above replays everything in between.
+			//
+			// Left unhandled, this is what a message that stops halfway
+			// looks like: the middle of a reply is gone, and so is the
+			// turn.done that would have cleared the spinner.
+			return
 		case ev, ok := <-live:
 			if !ok {
 				return

@@ -103,10 +103,10 @@ func runTUIClient(serverURL, agentName string) error {
 		return fmt.Errorf("create session on %s: %w", serverURL, err)
 	}
 
-	eventCh, err := c.SubscribeEvents(ctx, sess.ID, 0)
-	if err != nil {
-		return fmt.Errorf("subscribe to events: %w", err)
-	}
+	// StreamEvents, not SubscribeEvents: the daemon ends a stream that has
+	// fallen behind rather than skipping events on it, so a client that
+	// does not reconnect and resume would sit on a half-finished reply.
+	eventCh := c.StreamEvents(ctx, sess.ID, 0)
 
 	model := tui.New(c, sess.ID, sess.Agent, eventCh)
 	p := tea.NewProgram(model)

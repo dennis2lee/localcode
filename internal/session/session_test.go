@@ -329,7 +329,7 @@ func TestSubscribeReceivesLiveEventsAndClosesOnUnsubscribe(t *testing.T) {
 	s, _ := NewStore("")
 	s.CreateSession("s1", "", "a", true)
 
-	ch, unsub, err := s.Subscribe("s1")
+	ch, _, unsub, err := s.Subscribe("s1")
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestSubscribeReceivesLiveEventsAndClosesOnUnsubscribe(t *testing.T) {
 
 func TestSubscribeUnknownSession(t *testing.T) {
 	s, _ := NewStore("")
-	if _, _, err := s.Subscribe("nope"); err == nil {
+	if _, _, _, err := s.Subscribe("nope"); err == nil {
 		t.Error("expected an error subscribing to an unknown session")
 	}
 }

@@ -103,7 +103,7 @@ func TestLoopEndToEnd(t *testing.T) {
 
 	loop := New(store, registry, providers, cfg)
 
-	eventCh, unsubscribe, err := store.Subscribe(sessionID)
+	eventCh, _, unsubscribe, err := store.Subscribe(sessionID)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}

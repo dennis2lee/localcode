@@ -15,6 +15,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"time"
 
 	"localcode/internal/agent"
 	"localcode/internal/events"
@@ -301,11 +302,55 @@ func (c *Client) CancelTask(ctx context.Context, taskID string) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/tasks/"+taskID+"/cancel", map[string]string{}, nil)
 }
 
-// SubscribeEvents opens an SSE connection to the session's event stream
+// StreamEvents follows a session's event stream for as long as ctx lives,
+// reconnecting whenever the connection ends and resuming from the last
+// seq it saw, so no event is missed and none is delivered twice.
+//
+// Reconnecting is not a nicety. The daemon deliberately ends a stream
+// that has fallen behind — see session.Store.Subscribe — because the
+// alternative is silently skipping events, and every event is a piece of
+// the model's reply. A client that treats the end of the stream as the
+// end of the conversation shows a reply that stops halfway and a turn
+// that never finishes.
+func (c *Client) StreamEvents(ctx context.Context, sessionID string, since uint64) <-chan events.Event {
+	out := make(chan events.Event, 256)
+	go func() {
+		defer close(out)
+		last := since
+		for {
+			ch, err := c.SubscribeEvents(ctx, sessionID, last)
+			if err == nil {
+				for ev := range ch {
+					if ev.Seq > 0 {
+						last = ev.Seq
+					}
+					select {
+					case out <- ev:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+			// Either the connection failed to open or it ended. Both are
+			// retried: a daemon that is briefly down comes back, and a
+			// stream the daemon dropped is exactly the case this exists
+			// for. The pause keeps a hard-down daemon from becoming a
+			// spin loop.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+	return out
+}
+
+// SubscribeEvents opens one SSE connection to the session's event stream
 // starting after `since`, and returns a channel of decoded events. The
-// channel closes when the context is cancelled or the connection ends;
-// there is no automatic reconnect (a caller wanting resume-on-drop should
-// track the last seq it saw and call SubscribeEvents again with it).
+// channel closes when the context is cancelled or the connection ends.
+// Prefer StreamEvents, which reconnects and resumes; this is the single
+// attempt underneath it.
 func (c *Client) SubscribeEvents(ctx context.Context, sessionID string, since uint64) (<-chan events.Event, error) {
 	url := fmt.Sprintf("%s/api/sessions/%s/events?since=%d", c.BaseURL, sessionID, since)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

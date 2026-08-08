@@ -39,6 +39,27 @@ type Session struct {
 
 type subscriber struct {
 	ch chan events.Event
+	// lost is closed the first time an event cannot be handed to this
+	// subscriber because its buffer is full.
+	//
+	// A dropped event used to be the end of the story: the writer moved
+	// on, and the reader was never told. Every event is one token of
+	// model output, so a client that falls behind for a moment loses the
+	// middle of a reply — and then loses turn.done as well, which is what
+	// clears the spinner. What that looks like is a message that stops
+	// halfway and a turn that never ends.
+	//
+	// Closing this is how the reader finds out. It ends the stream, and
+	// the client reconnects with Last-Event-ID and replays what it missed
+	// from the log, which is a machinery that already exists.
+	lost     chan struct{}
+	lostOnce sync.Once
+}
+
+// markLost reports that this subscriber missed an event. Safe to call
+// from any number of writers; only the first does anything.
+func (s *subscriber) markLost() {
+	s.lostOnce.Do(func() { close(s.lost) })
 }
 
 type sessionState struct {
@@ -327,9 +348,23 @@ func (s *Store) Append(sessionID string, typ events.Type, data map[string]any) (
 	}
 	st.log = append(st.log, ev)
 
-	subs := make([]*subscriber, 0, len(st.subs))
+	// Delivered while still holding the lock. The sends are
+	// non-blocking, so this cannot stall behind a slow reader, and it
+	// removes the window in which unsubscribe could close a channel
+	// between the snapshot and the send — a send on a closed channel is a
+	// panic, and this one would take the daemon down.
 	for _, sub := range st.subs {
-		subs = append(subs, sub)
+		select {
+		case sub.ch <- ev:
+		default:
+			// The reader is behind. Still do not block the writer — a
+			// stalled browser tab must not hold up the model — but do not
+			// pretend nothing happened either: this event is gone for
+			// this subscriber, and every event carries meaning it cannot
+			// reconstruct. Telling it costs one reconnect and a replay
+			// from the log; not telling it costs the rest of the turn.
+			sub.markLost()
+		}
 	}
 	file := st.file
 	s.mu.Unlock()
@@ -338,15 +373,6 @@ func (s *Store) Append(sessionID string, typ events.Type, data map[string]any) (
 		line, err := json.Marshal(ev)
 		if err == nil {
 			_, _ = file.Write(append(line, '\n'))
-		}
-	}
-
-	for _, sub := range subs {
-		select {
-		case sub.ch <- ev:
-		default:
-			// Slow consumer: drop rather than block the writer. Consumers
-			// that need a gapless log should replay via Events(since=...).
 		}
 	}
 
@@ -372,26 +398,23 @@ func (s *Store) Broadcast(sessionID string, typ events.Type, data map[string]any
 		s.mu.Unlock()
 		return
 	}
-	subs := make([]*subscriber, 0, len(st.subs))
-	for _, sub := range st.subs {
-		subs = append(subs, sub)
-	}
-	s.mu.Unlock()
-
 	ev := events.Event{
 		Session:   sessionID,
 		Type:      typ,
 		Timestamp: time.Now().UTC(),
 		Data:      data,
 	}
-	for _, sub := range subs {
+	for _, sub := range st.subs {
 		select {
 		case sub.ch <- ev:
 		default:
-			// Dropping a transient event costs nothing: another one is
-			// along in a second, and it carried no history.
+			// Dropping a transient event costs nothing and must NOT count
+			// as falling behind: another one is along in a second, it
+			// carries no history, and tearing down a working stream over
+			// a missed tokens-per-second reading would be absurd.
 		}
 	}
+	s.mu.Unlock()
 }
 
 // Events returns all events with seq > since, for catch-up on
@@ -412,22 +435,35 @@ func (s *Store) Events(sessionID string, since uint64) ([]events.Event, error) {
 	return out, nil
 }
 
-// Subscribe returns a channel of live events plus an unsubscribe func.
+// Subscribe returns a channel of live events, a channel closed if this
+// subscriber ever misses one, and an unsubscribe func.
+//
 // Callers should first call Events(since) to catch up, then Subscribe to
-// avoid missing events in the gap (a small race remains for MVP; the
-// channel buffer + since-based catch-up on reconnect covers reconnect
-// scenarios in practice).
-func (s *Store) Subscribe(sessionID string) (<-chan events.Event, func(), error) {
+// avoid missing events in the gap.
+//
+// The middle return value is the part that has to be honoured. Delivery
+// is best effort — a reader that stops reading must never stall the
+// model — so an event can be dropped, and a dropped event is not
+// recoverable from the stream itself. When that channel closes, the only
+// correct response is to stop trusting this stream: drop it, and catch
+// up with Events(since) on a fresh one. Ignoring it means showing a
+// conversation with a hole in it, and quite possibly missing the event
+// that says the turn ended.
+func (s *Store) Subscribe(sessionID string) (<-chan events.Event, <-chan struct{}, func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, ok := s.sessions[sessionID]
 	if !ok {
-		return nil, nil, fmt.Errorf("session %s not found", sessionID)
+		return nil, nil, nil, fmt.Errorf("session %s not found", sessionID)
 	}
 
 	id := st.nextSubID
 	st.nextSubID++
-	sub := &subscriber{ch: make(chan events.Event, 64)}
+	// A generous buffer, because every token of model output is one event
+	// and 64 of them is well under a second of a local model talking. The
+	// lost signal below is the correctness guarantee; this is what keeps
+	// it from firing during ordinary use.
+	sub := &subscriber{ch: make(chan events.Event, 4096), lost: make(chan struct{})}
 	st.subs[id] = sub
 
 	unsub := func() {
@@ -436,7 +472,7 @@ func (s *Store) Subscribe(sessionID string) (<-chan events.Event, func(), error)
 		delete(st.subs, id)
 		close(sub.ch)
 	}
-	return sub.ch, unsub, nil
+	return sub.ch, sub.lost, unsub, nil
 }
 
 // LoadAllFromDisk restores every session found in dir (one <id>.meta.json +
