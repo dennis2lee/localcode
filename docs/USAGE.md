@@ -1119,17 +1119,31 @@ points of accuracy, which is why the default is the small one.
 
 Upstream publishes a ready-made engine for Windows only, so `dictation
 install` can fetch it there and not elsewhere. On macOS and Linux it
-says so, and you build the engine yourself:
+says so, and the engine has to be put in place by hand. The model still
+downloads normally either way.
+
+For macOS, the `whisper-macos` workflow builds a universal
+`whisper-server` and uploads it as an artifact:
+
+```bash
+gh workflow run whisper-macos.yml --ref main
+gh run download <run-id> -n whisper-server-darwin-universal -D models
+```
+
+To build it yourself, on either platform:
 
 ```bash
 git clone --depth 1 https://github.com/ggml-org/whisper.cpp
-cmake -B build -DCMAKE_BUILD_TYPE=Release whisper.cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF whisper.cpp
 cmake --build build --config Release --target whisper-server
 ```
 
+`GGML_NATIVE=OFF` matters if the binary will run anywhere but the
+machine that built it: ggml otherwise tunes for the local processor and
+the result dies with an illegal instruction on an older one.
+
 Put the resulting `whisper-server` in the `models` directory beside the
-localcode binary, or name it with `whisper_bin`. The model still
-downloads normally.
+localcode binary, or name it with `whisper_bin`.
 
 #### Two things worth knowing
 

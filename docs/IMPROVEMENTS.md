@@ -30,7 +30,9 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 7. **Compaction can fail when history already exceeds the context.** If the history is right at the model limit, the summarization request itself can fail. A truncation fallback that drops the oldest turns would make auto compaction more robust.
 8. **Config key order is not preserved.** When `localcode mcp` rewrites the file, top level keys come back alphabetically sorted. No data is lost, but diffs get noisy. Minor.
 9. **`/usage` has no cross session or daily totals.** It reports one session. Daily or weekly reporting across sessions needs separate aggregation.
-10. **Compaction summaries sit in the event log as plain text.** v0.12.0 started storing the full summary in the `compacted` event so restarts can restore it. If a session contained sensitive material, the summary of it now lives in the log file too. Worth reviewing log file permissions and retention against that.
+10. **Dictation has no engine-side VAD.** Endpointing is energy over a 30ms frame: loud enough for long enough is speech, and about a second of quiet ends the utterance. That is enough to decide when grey text settles, and the cost of being wrong is a sentence committed a beat early rather than a wrong transcript. A model like Silero would be a better detector, at the price of another model to ship and load. Worth doing only once this one is observed failing.
+11. **Whisper partials re-read the whole utterance.** The model takes a window at a time, so provisional text is a fresh transcription about once a second rather than words arriving one by one, and more of it can be revised before it settles. A long utterance also means a longer window each pass. Capping the window, or keeping already-settled text and only re-reading the tail, would bound both.
+12. **Compaction summaries sit in the event log as plain text.** v0.12.0 started storing the full summary in the `compacted` event so restarts can restore it. If a session contained sensitive material, the summary of it now lives in the log file too. Worth reviewing log file permissions and retention against that.
 
 ## UI ideas
 
