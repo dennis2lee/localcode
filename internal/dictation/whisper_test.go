@@ -5,7 +5,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -16,13 +15,22 @@ func TestCleanTranscript(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{" 그는 괜찮은 척 하려고 애쓰는 것 같았다\n", "그는 괜찮은 척 하려고 애쓰는 것 같았다"},
 		{"[BLANK_AUDIO]", ""},
+		{"[ blank audio ]", ""},
 		{" [Music] hello there\n", "hello there"},
 		{"（음악）안녕하세요", "안녕하세요"},
 		{"  spaced   out  \n\n", "spaced out"},
 		{"", ""},
-		// A bracket run longer than any real annotation is left alone,
-		// so dictating an actual parenthetical does not lose it.
-		{"(" + strings.Repeat("x", 60) + ")", "(" + strings.Repeat("x", 60) + ")"},
+
+		// Speech that happens to contain brackets is kept. Stripping
+		// every bracketed group is the obvious rule and it deletes what
+		// people actually said, with nothing on screen to show it went.
+		{"이 함수(비동기)를 async로 바꿔줘", "이 함수(비동기)를 async로 바꿔줘"},
+		{"retry(3회)로 설정해줘", "retry(3회)로 설정해줘"},
+		{"the parser (recursive descent) needs a fix", "the parser (recursive descent) needs a fix"},
+
+		// A reply that is only a bracketed group was an annotation under
+		// a name this does not know: nobody dictates a lone parenthesis.
+		{"(something odd)", ""},
 	}
 	for _, tc := range tests {
 		if got := cleanTranscript(tc.in); got != tc.want {

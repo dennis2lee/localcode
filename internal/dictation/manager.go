@@ -143,4 +143,7 @@ func (m *Manager) Close() {
 	for _, s := range all {
 		s.Stop()
 	}
+	// And the engine, which outlives individual sessions on purpose but
+	// must not outlive the program. See Shutdown.
+	Shutdown()
 }

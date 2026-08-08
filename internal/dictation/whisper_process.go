@@ -45,8 +45,29 @@ type whisperProcess struct {
 	port int
 	log  *bytes.Buffer
 
+	// exited is closed when the process ends.
+	//
+	// A channel rather than cmd.ProcessState, which exec only fills in
+	// when Wait or Run is called — and neither is called on a server
+	// meant to keep running, so reading it reports "not exited" forever.
+	// A crashed engine would then be handed to the next session, failing
+	// every request with a connection error, and startup would wait the
+	// whole timeout instead of reporting what the engine printed on its
+	// way out.
+	exited chan struct{}
+
 	mu   sync.Mutex
 	refs int
+}
+
+// watch reaps the process and records that it ended. Calling Wait is
+// also what keeps a finished child from lingering as a zombie.
+func (p *whisperProcess) watch() {
+	p.exited = make(chan struct{})
+	go func() {
+		p.cmd.Wait()
+		close(p.exited)
+	}()
 }
 
 var (
@@ -140,6 +161,7 @@ func startWhisper(bin, model string, threads int) (*whisperProcess, error) {
 	}
 
 	p := &whisperProcess{cmd: cmd, port: port, log: logBuf}
+	p.watch()
 	if err := p.waitReady(); err != nil {
 		p.kill()
 		return nil, err
@@ -152,7 +174,7 @@ func startWhisper(bin, model string, threads int) (*whisperProcess, error) {
 func (p *whisperProcess) waitReady() error {
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		if p.cmd.ProcessState != nil && p.cmd.ProcessState.Exited() {
+		if !p.alive() {
 			return fmt.Errorf("whisper engine exited at startup: %s", p.tail())
 		}
 		conn, err := net.DialTimeout("tcp", p.addr(), 300*time.Millisecond)
@@ -168,7 +190,15 @@ func (p *whisperProcess) waitReady() error {
 func (p *whisperProcess) addr() string { return "127.0.0.1:" + strconv.Itoa(p.port) }
 
 func (p *whisperProcess) alive() bool {
-	return p.cmd != nil && p.cmd.Process != nil && (p.cmd.ProcessState == nil || !p.cmd.ProcessState.Exited())
+	if p.cmd == nil || p.cmd.Process == nil || p.exited == nil {
+		return false
+	}
+	select {
+	case <-p.exited:
+		return false
+	default:
+		return true
+	}
 }
 
 // tail returns the last of the engine's output, for error messages.
@@ -184,9 +214,35 @@ func (p *whisperProcess) tail() string {
 }
 
 func (p *whisperProcess) kill() {
-	if p.cmd != nil && p.cmd.Process != nil {
-		p.cmd.Process.Kill()
-		p.cmd.Wait()
+	if p.cmd == nil || p.cmd.Process == nil {
+		return
+	}
+	p.cmd.Process.Kill()
+	// Waited for by watch, so this waits on that rather than calling
+	// Wait a second time — two Waits on one Cmd is an error, and the
+	// second one would return it instead of blocking.
+	if p.exited != nil {
+		select {
+		case <-p.exited:
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+// Shutdown stops the shared engine.
+//
+// The engine deliberately outlives the last dictation session, so that
+// dictating again does not pay to reload the model. It must not outlive
+// the program: a server holding a few hundred megabytes, still running
+// after localcode exits, is a process the user never started and would
+// have to find and kill by hand. Manager.Close calls this.
+func Shutdown() {
+	sharedMu.Lock()
+	p := sharedWhisper
+	sharedWhisper, sharedKey = nil, ""
+	sharedMu.Unlock()
+	if p != nil {
+		p.kill()
 	}
 }
 

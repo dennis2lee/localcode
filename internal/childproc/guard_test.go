@@ -49,7 +49,12 @@ func TestEverySpawnSiteHidesItsWindow(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "dist", "testdata", "node_modules":
+			// .claude holds git worktrees, which are whole second copies
+			// of the repository. Walking into one scans every file twice
+			// and reports the copy's paths as unexempted — so this test
+			// failed for anyone who happened to have a worktree open,
+			// naming files that are exempt in the tree being tested.
+			case ".git", ".claude", "dist", "testdata", "node_modules":
 				return filepath.SkipDir
 			}
 			return nil
