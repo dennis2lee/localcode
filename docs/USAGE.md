@@ -1113,6 +1113,26 @@ with the daemon's own explanation in its tooltip. It stays on screen
 rather than disappearing: the usual reason is the missing
 `dictation_model_dir` above, which is worth knowing about.
 
+#### Word boundaries
+
+If your model's archive contains a `bpe.model`, localcode decodes it as
+sentencepiece BPE and honours the `▁` marker that starts a word.
+
+This is worth knowing about because getting it wrong is not subtle.
+sherpa's modelling unit defaults to `cjkchar`, which joins every token
+with nothing between them — so a BPE model decoded that way produces a
+whole sentence with **no spaces at all**. The Korean model above is
+exactly that case (5000 tokens, 2352 of them carrying `▁`, and a
+`bpe.model` in the archive), and this is what made its transcripts come
+out unspaced.
+
+A model with no `bpe.model` keeps sherpa's default, unchanged. To force
+either behaviour — including restoring the old one — set
+`LC_SHERPA_MODELING_UNIT` to one of sherpa's own values (`cjkchar`,
+`bpe`, `cjkchar+bpe`) before starting localcode. `LC_SHERPA_DEBUG=1`
+makes sherpa print what it loaded and which unit it settled on, on
+stderr.
+
 On Windows the speech runtime is three DLLs that the MSI installs beside
 `localcode-gui.exe`. They are not optional extras: Windows resolves a
 program's imports before any of its own code runs, so a copy of

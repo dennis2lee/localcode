@@ -20,13 +20,17 @@ type Config struct {
 	Threads int
 }
 
-// modelFiles are the four files a streaming transducer model is made of,
-// as named in every sherpa-onnx release archive.
+// modelFiles are the files a streaming transducer model is made of, as
+// named in every sherpa-onnx release archive.
 type modelFiles struct {
 	encoder string
 	decoder string
 	joiner  string
 	tokens  string
+	// bpeVocab is the sentencepiece model, present only in archives whose
+	// vocabulary is BPE. "" for a model that has none, which is not an
+	// error — see Open for what its presence changes.
+	bpeVocab string
 }
 
 // resolveModel finds the model files in dir and explains precisely what
@@ -63,6 +67,9 @@ func resolveModel(dir string) (modelFiles, error) {
 		decoder: pick("decoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.onnx"),
 		joiner:  pick("joiner-epoch-99-avg-1.int8.onnx", "joiner-epoch-99-avg-1.onnx"),
 		tokens:  pick("tokens.txt"),
+		// Optional, and deliberately not in the missing-files check below:
+		// plenty of models have no sentencepiece vocabulary at all.
+		bpeVocab: pick("bpe.model"),
 	}
 
 	var missing []string

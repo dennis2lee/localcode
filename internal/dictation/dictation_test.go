@@ -2,6 +2,8 @@ package dictation
 
 import (
 	"encoding/binary"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -170,5 +172,49 @@ func TestReadyBlamesTheConfigWhenTheBuildHasARecognizer(t *testing.T) {
 	// configuration would change that — say so instead.
 	if why != ErrUnavailable.Error() {
 		t.Errorf("reason = %q, want %q", why, ErrUnavailable.Error())
+	}
+}
+
+// A sentencepiece vocabulary is picked up when the archive ships one, and
+// its absence is not an error.
+//
+// This is what decides whether transcripts have spaces in them. sherpa's
+// modelling unit defaults to "cjkchar", which joins every token with
+// nothing between; a BPE model marks the start of a word with "▁" and
+// needs that acted on. Getting it wrong produces Korean with no spaces at
+// all, which is what the shipped model did.
+func TestResolveModelFindsTheSentencepieceVocabulary(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{
+		"encoder-epoch-99-avg-1.int8.onnx",
+		"decoder-epoch-99-avg-1.int8.onnx",
+		"joiner-epoch-99-avg-1.int8.onnx",
+		"tokens.txt",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// No bpe.model: resolves fine, and reports none.
+	m, err := resolveModel(dir)
+	if err != nil {
+		t.Fatalf("a model with no sentencepiece vocabulary should still resolve: %v", err)
+	}
+	if m.bpeVocab != "" {
+		t.Errorf("bpeVocab = %q with no bpe.model on disk", m.bpeVocab)
+	}
+
+	// With one: found, so Open can switch the modelling unit to bpe.
+	want := filepath.Join(dir, "bpe.model")
+	if err := os.WriteFile(want, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, err = resolveModel(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.bpeVocab != want {
+		t.Errorf("bpeVocab = %q, want %q — without it the recognizer decodes as cjkchar and drops every space", m.bpeVocab, want)
 	}
 }

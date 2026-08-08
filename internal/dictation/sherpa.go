@@ -52,6 +52,39 @@ func Open(cfg Config) (Recognizer, error) {
 	c.ModelConfig.Tokens = files.tokens
 	c.ModelConfig.NumThreads = threads
 	c.ModelConfig.Provider = "cpu"
+
+	// Word boundaries.
+	//
+	// sherpa's modelling unit defaults to "cjkchar", which treats every
+	// token as a character and joins them with nothing between. For a
+	// model whose vocabulary is actually sentencepiece BPE that is wrong
+	// in a specific, visible way: the "▁" prefix that marks the start of
+	// a word is never acted on, so a sentence comes out as one unbroken
+	// run of characters with no spaces at all.
+	//
+	// The Korean model this ships with is exactly that case — 5000
+	// tokens, 2352 of them carrying "▁", and a bpe.model in the archive.
+	// Its own reference transcripts have spaces; ours did not.
+	//
+	// Keyed off the file rather than the model's name: a sentencepiece
+	// vocabulary is what makes a model BPE, and an archive that has one
+	// wants to be decoded as BPE whoever produced it. Models without one
+	// keep sherpa's default, unchanged.
+	if files.bpeVocab != "" {
+		c.ModelConfig.ModelingUnit = "bpe"
+		c.ModelConfig.BpeVocab = files.bpeVocab
+	}
+	// An escape hatch, because the above is a judgement about someone
+	// else's model file and this is not a setting anyone should have to
+	// discover to get working speech. LC_SHERPA_MODELING_UNIT accepts
+	// sherpa's own values — cjkchar, bpe, cjkchar+bpe — and "cjkchar"
+	// restores the previous behaviour exactly.
+	if unit := os.Getenv("LC_SHERPA_MODELING_UNIT"); unit != "" {
+		c.ModelConfig.ModelingUnit = unit
+		if unit == "cjkchar" {
+			c.ModelConfig.BpeVocab = ""
+		}
+	}
 	// LC_SHERPA_DEBUG=1 makes sherpa print what it loaded and how it
 	// understood the model — vocabulary size, encoder shape, and the
 	// modeling unit it settled on. That is the only way to tell a model
