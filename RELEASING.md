@@ -37,8 +37,19 @@ script cannot judge, so they are on you.
 
 ## Then
 
+**Commit and push the release first.** CI builds from `main`, so a run
+dispatched before the push compiles the *previous* release's code and stamps
+it with the new version. Nothing catches that: the workflow succeeds, the exe
+reports the right version, and the fix you are shipping is simply absent from
+the desktop build. Check the run's `headSha` against your commit.
+
+```bash
+git add -A && git commit   # code + docs together, never docs "later"
+git push origin main
+```
+
 The Windows MSI bundles `localcode-gui.exe`, which is CGo and cannot be
-cross-compiled from macOS. Get a build from CI before packaging:
+cross-compiled from macOS. Get a build from CI once main has the commit:
 
 Dispatch it with the version you are releasing rather than reusing the last
 push build. That binary is stamped with `-X main.version`, and it is the one
@@ -48,14 +59,12 @@ names the version before it.
 
 ```bash
 gh workflow run gui-windows.yml --ref main -f version=x.y.z
-gh run list --workflow=gui-windows.yml --limit 1 --json databaseId,status,conclusion
+gh run list --workflow=gui-windows.yml --limit 1 --json databaseId,status,conclusion,headSha
 gh run download <run-id> -n localcode-gui-windows-amd64 -D /tmp/gui-exe
 ```
 
 ```bash
 make dist VERSION=x.y.z GUI_EXE=/tmp/gui-exe/localcode-gui.exe  # runs the preflight first; refuses if docs are stale
-git add -A && git commit                                        # code + docs together, never docs "later"
-git push origin main
 gh release create vx.y.z \
   dist/windows/localcode-x.y.z-windows-amd64.msi \
   dist/windows/localcode-x.y.z-windows-amd64.zip \
