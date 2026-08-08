@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.33.0
 
 - **Dictation works in every build, not just the desktop one.** The recognizer was linked in through CGo, and the release pipeline cross-compiles every platform from one machine, so the TUI, the headless daemon and the macOS release build had no speech at all. Speech now runs as a child process — [whisper.cpp](https://github.com/ggml-org/whisper.cpp)'s own server binary — which leaves the Go side ordinary Go that compiles everywhere. Dictation stops being a property of how the binary was built and becomes a property of what is installed beside it. Verified end-to-end through the daemon's HTTP API in a pure-Go headless build.
 - **Korean transcripts are accurate.** Measured on the same reference audio the old engine was failing: `부모가 저지르는 큰 실수 중 하나는 자기 아이를 다른 집 아이와 비교하는 것이다.` — correct, and correctly spaced. All four reference sentences transcribe. One 6.6s recording takes about 290ms on Apple Silicon. The empty-token fault seen from Whisper earlier was sherpa's text assembly, not Whisper: a different implementation of the same model does not have it.
