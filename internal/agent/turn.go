@@ -82,7 +82,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		req := provider.ChatRequest{
 			Model:       profile.Model,
 			System:      systemPrompt,
-			Messages:    history,
+			Messages:    sendableHistory(history),
 			Tools:       l.Tools.SpecsFor(agentCfg.Tools),
 			MaxTokens:   maxTokens,
 			Temperature: profile.Temperature,
@@ -102,7 +102,18 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			l.recordUsage(sessionID, profile.Model, usage)
 		}
 
-		l.appendHistory(sessionID, provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})
+		// Nothing is appended for a reply that produced nothing. A turn
+		// cancelled before the first token gets here with no blocks —
+		// the provider's stream goroutine returns on ctx.Done and closes
+		// the channel without a terminal event, which reads as a clean
+		// finish — and an assistant message with empty content is
+		// rejected by name on the next request, for the rest of the
+		// session's life. sendableHistory would drop it anyway; not
+		// recording it keeps the in-memory history honest, and matches
+		// what rehydrateHistory already reconstructs from the log.
+		if len(assistantBlocks) > 0 {
+			l.appendHistory(sessionID, provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})
+		}
 
 		if stopReason != "tool_use" || len(toolUses) == 0 {
 			if len(l.Config.Hooks) > 0 {

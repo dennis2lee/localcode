@@ -217,14 +217,35 @@ func TestAutoCompactTriggersAboveThresholdAndResetsHistory(t *testing.T) {
 	}
 	realTurnBody := mustUnmarshal(t, srv.body(2))
 	msgs, _ := realTurnBody["messages"].([]any)
-	// system prompt + summary-as-user + the new turn = 3, not the original
-	// history's system + first-message + assistant-reply + new turn.
-	if len(msgs) != 3 {
-		t.Fatalf("expected the post-compaction turn to send exactly 3 messages (system + summary + new turn), got %d: %+v", len(msgs), msgs)
+	// system prompt + one user message carrying the summary and the new
+	// turn together = 2, not the original history's system +
+	// first-message + assistant-reply + new turn.
+	//
+	// Two, not three, and that is the fix rather than a regression. The
+	// summary is a user-role message and the new prompt is appended
+	// straight after it, so this used to send two user messages in a row
+	// — a shape Bedrock's Converse API rejects outright. Every successful
+	// compaction was therefore followed by a failed turn, and since the
+	// error path left history ending in a user message too, the session
+	// never recovered. sendableHistory merges them, so both texts still
+	// reach the model, in order, in one message.
+	if len(msgs) != 2 {
+		t.Fatalf("expected the post-compaction turn to send 2 messages (system + merged summary/new turn), got %d: %+v", len(msgs), msgs)
 	}
-	summaryMsg, _ := msgs[1].(map[string]any)
-	if !strings.Contains(summaryMsg["content"].(string), "SUMMARY_TEXT") {
-		t.Errorf("expected the second message post-compaction to contain the summary, got %+v", summaryMsg)
+	for i := 1; i < len(msgs); i++ {
+		prev, _ := msgs[i-1].(map[string]any)
+		cur, _ := msgs[i].(map[string]any)
+		if prev["role"] == cur["role"] {
+			t.Errorf("two %v messages in a row at position %d — the shape Bedrock rejects", cur["role"], i)
+		}
+	}
+	userMsg, _ := msgs[1].(map[string]any)
+	content := fmt.Sprintf("%v", userMsg["content"])
+	if !strings.Contains(content, "SUMMARY_TEXT") {
+		t.Errorf("the summary did not reach the model: %+v", userMsg)
+	}
+	if !strings.Contains(content, "second message") {
+		t.Errorf("the new prompt did not reach the model: %+v", userMsg)
 	}
 	if strings.Contains(fmt.Sprintf("%v", realTurnBody["messages"]), "first message") {
 		t.Errorf("expected the original pre-compaction message to be gone from history, got %+v", realTurnBody["messages"])

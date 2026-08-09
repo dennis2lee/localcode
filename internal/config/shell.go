@@ -71,8 +71,26 @@ func hasUnsafeShellConstruct(command string) bool {
 // separate commands together ("&&", "||", ";", "|", and newlines), while
 // respecting single and double quotes so a separator inside an argument
 // (a commit message like -m "fix: a; b") doesn't split the command it
-// belongs to. Escaping is honored inside double quotes only, matching the
-// shell.
+// belongs to.
+//
+// Backslash escaping is modelled the way bash does it, and getting that
+// wrong was a permission bypass rather than a cosmetic difference. This
+// used to honour "\" only inside double quotes; outside them a "\"" was
+// written through and the quote that followed it opened a quoted region
+// that swallowed the rest of the line. So:
+//
+//	git status \" && rm -rf ~
+//
+// split into ONE segment, which the built-in "git *" rule matched, and
+// the whole line was auto-allowed with no prompt — while bash, for which
+// \" is a literal quote character and && a live operator, duly ran the
+// rm. Any allowed prefix was a launch point for anything appended to it,
+// which is the exact attack this function exists to stop.
+//
+// The rules, matching bash: outside quotes a backslash makes the next
+// character literal (so it can neither open a quote nor act as a
+// separator); inside double quotes it likewise escapes the next
+// character; inside single quotes there is no escaping at all.
 func splitShellSegments(command string) []string {
 	var segments []string
 	var cur strings.Builder
@@ -102,6 +120,16 @@ func splitShellSegments(command string) []string {
 		}
 
 		switch r {
+		case '\\':
+			// The next character is literal, whatever it is. Both are
+			// kept in the segment text so it still reads as the user
+			// wrote it for glob matching; what matters is that neither
+			// is interpreted here.
+			cur.WriteRune(r)
+			if i+1 < len(runes) {
+				i++
+				cur.WriteRune(runes[i])
+			}
 		case '\'', '"':
 			quote = r
 			cur.WriteRune(r)

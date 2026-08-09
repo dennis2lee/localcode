@@ -63,10 +63,15 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		Content: []provider.Block{provider.TextBlock(instructions)},
 	})
 
+	// Normalized like any other request: history routinely ends with a
+	// user-role message (tool results are one), and appending the
+	// instructions after it made two in a row — so on Bedrock the
+	// compaction call itself failed, which is the one call that must not,
+	// since it is what rescues a session that has run out of context.
 	stream, err := p.Chat(ctx, provider.ChatRequest{
 		Model:     profile.Model,
 		System:    systemPrompt,
-		Messages:  summaryMessages,
+		Messages:  sendableHistory(summaryMessages),
 		MaxTokens: defaultMaxTokens, // a long session's summary can easily overflow a smaller cap
 	})
 	if err != nil {
