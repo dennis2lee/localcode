@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.33.2
+
+**Security fix. Upgrade.**
+
+- **Fix: an allowed command could carry an arbitrary second command past the permission check.** The bash line is split into segments so that each one has to earn "allow" on its own — but the splitter treated a backslash-escaped quote as opening a quoted region, and bash does not. So `git status \" && rm -rf ~` came out as a single segment, matched the built-in `git *` allow rule, and ran with no prompt, while bash executed the `rm`. Any allowed prefix was a launch point for anything appended to it: the exact attack segment splitting exists to stop, and reachable by the model or by a prompt-injection payload in a file it reads. Backslash escaping now follows bash — outside quotes a `\` makes the next character literal, so it can neither open a quote nor act as a separator.
+- **Fix: a session could break permanently and stay broken.** Bedrock's Converse API rejects both an empty message and two messages of the same role in a row, and conversation history persists — so one request in a bad shape meant every retry after it failed the same way, and restarting did not help. Three paths produced it: a provider error returning before the model's reply was recorded, cancelling a turn before the first token, and compaction (whose summary is a user-role message that the next prompt landed straight after, so *every* successful compaction was followed by a broken turn). Outgoing requests are now normalized — empty messages dropped, consecutive same-role messages merged so both texts still reach the model in order — and the sources are fixed too.
+- **Fix: on Bedrock, compaction itself failed.** History routinely ends with a user-role message, since tool results are one, and the compaction instructions were appended straight after it. That is the one call that must not fail, being what rescues a session that has run out of context.
+
 ## v0.33.1
 
 Five bugs in the speech engine v0.33.0 shipped. Each was found by review and confirmed with a test written to fail first.
