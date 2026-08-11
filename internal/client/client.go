@@ -373,21 +373,40 @@ func (c *Client) SubscribeEvents(ctx context.Context, sessionID string, since ui
 		defer close(out)
 		defer resp.Body.Close()
 
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
+		// A Reader, not a Scanner, because one event has no length limit
+		// worth choosing.
+		//
+		// This was a Scanner capped at 1MB, and nothing truncates tool
+		// output anywhere in internal/tools — so a single `cat` of a
+		// large file put a longer-than-1MB line on the wire. Scan then
+		// stopped and returned false, which is indistinguishable from a
+		// clean EOF without checking Err(), which nothing did. The stream
+		// closed, StreamEvents reconnected a second later from the seq
+		// *before* the oversized event, the daemon replayed that same
+		// event, and it failed again — once a second, forever. The TUI
+		// stopped updating at that point and a restart did not clear it,
+		// since resume starts at seq 0 and meets the same event on the
+		// way back. The browser was unaffected, EventSource having no
+		// such cap, so it presented as "the TUI hangs on big output".
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, err := reader.ReadString('\n')
+			// ReadString returns what it has along with the error, so a
+			// final line with no trailing newline is still processed.
+			if line != "" {
+				line = strings.TrimRight(line, "\r\n")
+				if data, ok := strings.CutPrefix(line, "data: "); ok {
+					var ev events.Event
+					if jsonErr := json.Unmarshal([]byte(data), &ev); jsonErr == nil {
+						select {
+						case out <- ev:
+						case <-ctx.Done():
+							return
+						}
+					}
+				}
 			}
-			var ev events.Event
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &ev); err != nil {
-				continue
-			}
-			select {
-			case out <- ev:
-			case <-ctx.Done():
+			if err != nil {
 				return
 			}
 		}

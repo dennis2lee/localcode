@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,5 +78,45 @@ func TestStreamEventsResumesWhereItLeftOff(t *testing.T) {
 	}
 	if atomic.LoadInt32(&connections) < 2 {
 		t.Error("never reconnected")
+	}
+}
+
+// A single event bigger than a megabyte must not end the stream.
+//
+// Nothing in internal/tools truncates tool output, so one `cat` of a large
+// file puts a multi-megabyte line on the wire. This used to be read by a
+// bufio.Scanner capped at 1MB whose Err() nobody checked, so the scan
+// stopped exactly as it does at a clean EOF: the stream closed, the client
+// reconnected from the seq before the big event, the daemon replayed it,
+// and it failed again — once a second, for good. A restart did not help,
+// since resume starts at seq 0 and meets the same event on the way back.
+func TestSubscribeEventsHandlesAnEventLargerThanAMegabyte(t *testing.T) {
+	const huge = 3 << 20 // comfortably past the old 1MB cap
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, "id: 1\ndata: {\"seq\":1,\"type\":\"tool.end\",\"data\":{\"output\":%q}}\n\n", strings.Repeat("x", huge))
+		// A second, ordinary event: the point is not just that the big one
+		// arrives, but that the stream keeps working afterwards.
+		fmt.Fprint(w, "id: 2\ndata: {\"seq\":2,\"type\":\"turn.done\"}\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	ch, err := New(srv.URL).SubscribeEvents(ctx, "s1", 0)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	var got []uint64
+	for ev := range ch {
+		got = append(got, ev.Seq)
+	}
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("got seqs %v, want [1 2] — the oversized event ended the stream", got)
 	}
 }

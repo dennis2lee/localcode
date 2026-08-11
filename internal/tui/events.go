@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	"localcode/internal/events"
 )
@@ -65,6 +66,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		}
 		m.pending = &pendingPermission{id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways}
 		m.pendingHintShown = false
+		m.pendingSince = time.Now()
 	case events.TypeTaskSpawned:
 		// No transcript line — background tasks surface in the busy
 		// indicator below the prompt box, and /tasks inspects them.

@@ -5,6 +5,8 @@
 package tui
 
 import (
+	"time"
+
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
@@ -73,7 +75,8 @@ type Model struct {
 	// scroll position.
 	transcriptRev    uint64
 	pending          *pendingPermission
-	pendingHintShown bool // has the "resolve the permission above" hint already fired for this pending request
+	pendingHintShown bool      // has the "resolve the permission above" hint already fired for this pending request
+	pendingSince     time.Time // when the current request appeared; see canAnswerPermission
 	waiting          bool
 	queue            []string
 	errMsg           string

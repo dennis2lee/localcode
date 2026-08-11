@@ -26,7 +26,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 
 	case "y", "n", "s", "a":
-		if m.pending != nil {
+		if m.pending != nil && m.canAnswerPermission() {
 			id := m.pending.id
 			canAlways := m.pending.canAlways
 			m.pending = nil
@@ -45,7 +45,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 				return m, m.resolvePermission(id, true, ""), true
 			}
 		}
-		return m, nil, false // no pending request: let the letter reach the textarea
+		// Either there is no pending request, or answering is not armed
+		// yet / the prompt box has text in it. Let the letter reach the
+		// textarea, which is what someone typing wanted from it.
+		return m, nil, false
 
 	case "up":
 		// Recall only when the cursor can't move any further up inside the

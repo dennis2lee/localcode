@@ -66,7 +66,7 @@ func (m Model) View() tea.View {
 	// the busy indicator (own turn and/or background tasks), or the last
 	// error — one at a time, gone when there is nothing to say.
 	if m.pending != nil {
-		lines = append(lines, modalStyle.Render(m.pending.prompt()))
+		lines = append(lines, modalStyle.Render(m.pending.prompt(strings.TrimSpace(m.input.Value()) != "")))
 	} else if m.busy() {
 		lines = append(lines, statusStyle.Render(m.busyLine()))
 	} else if m.errMsg != "" {

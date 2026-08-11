@@ -1,6 +1,10 @@
 package tui
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 type pendingPermission struct {
 	id, tool, description string
@@ -18,10 +22,51 @@ type pendingPermission struct {
 // prompt renders the permission modal's single line, listing exactly the
 // answers this request will accept — "a" only appears when the daemon
 // actually has somewhere to persist it.
-func (p pendingPermission) prompt() string {
+func (p pendingPermission) prompt(typing bool) string {
 	keys := "y: allow once  n: deny  s: allow for session"
 	if p.canAlways {
 		keys += fmt.Sprintf("  a: always allow %q", p.rule)
 	}
+	// Said plainly, because otherwise the keys look broken: pressing y
+	// with a half-written message in the box types a y, and the reason
+	// is not visible anywhere on screen.
+	if typing {
+		keys += "\n(clear the prompt box to answer — those are ordinary letters while you are writing)"
+	}
 	return fmt.Sprintf("Permission request [%s]: %s\n%s", p.tool, p.description, keys)
+}
+
+// permissionArmDelay is how long after a request appears before a single
+// letter can answer it.
+//
+// It exists for the keystroke already travelling when the modal arrives:
+// nothing interrupts the user, the textarea keeps focus, and the request
+// simply appears below the prompt box. Without a pause, the very next
+// character typed is read as an answer to a question that was not on
+// screen when the finger started moving.
+const permissionArmDelay = 750 * time.Millisecond
+
+// canAnswerPermission reports whether a bare "y"/"n"/"s"/"a" should be
+// taken as an answer rather than as a character to type.
+//
+// Two conditions, and both exist because the alternative was silently
+// approving a command the user never read. "y" is an ordinary letter:
+// typing "yes, use the second approach" while a turn runs used to have
+// its first "y" intercepted and sent as allow — and "s" granted the tool
+// for the whole session, "a" wrote a permanent rule into config.json,
+// with no confirmation and nothing to undo it with.
+//
+//   - The prompt box must be empty. Text in it means the user is writing
+//     a message, so the letter belongs to that message.
+//   - The request must have been on screen for permissionArmDelay, so a
+//     keypress already in flight cannot land on a modal that appeared
+//     between the keydown and its delivery.
+//
+// Neither costs anything in the ordinary case, which is a user waiting on
+// the model with an empty box.
+func (m Model) canAnswerPermission() bool {
+	if strings.TrimSpace(m.input.Value()) != "" {
+		return false
+	}
+	return time.Since(m.pendingSince) >= permissionArmDelay
 }

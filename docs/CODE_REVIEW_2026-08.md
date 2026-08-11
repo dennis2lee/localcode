@@ -6,8 +6,8 @@ findings below are consolidated and de-duplicated. Several defects were
 found independently by more than one reviewer — those cross-confirmations
 are marked, and carry the most weight.
 
-**Status:** C1 and C2–C4 are **fixed** (see the FIXED markers below).
-Everything else stands as reported.
+**Status:** every critical is **fixed** — C1–C4, then C5–C7 (see the FIXED
+markers). Everything else stands as reported.
 
 ## Coverage
 
@@ -142,7 +142,7 @@ bug as expected behavior. It now asserts 2 messages, that no two adjacent
 messages share a role, and that both the summary and the new prompt reach the
 model.
 
-### C5. One tool output over 1 MB wedges the TUI permanently
+### ~~C5~~ FIXED. One tool output over 1 MB wedges the TUI permanently
 `internal/client/client.go:376-377` — *verified directly by the author.*
 
 `SubscribeEvents` caps its `bufio.Scanner` at 1 MB and never checks
@@ -163,7 +163,14 @@ The Web UI is unaffected (`EventSource` has no line cap), which is why this
 would present as "the TUI hangs on big tool output" rather than as a
 protocol bug.
 
-### C6. A keystroke can be consumed as a permission approval the user never saw
+**Fixed.** The stream is read with a `bufio.Reader` and `ReadString('\n')`,
+which has no line limit to choose wrongly — matching what `EventSource`
+already did. Covered by
+`TestSubscribeEventsHandlesAnEventLargerThanAMegabyte`, which sends a 3 MB
+event followed by an ordinary one and asserts both arrive; **confirmed to fail
+with the fix reverted** (`got seqs []`).
+
+### ~~C6~~ FIXED. A keystroke can be consumed as a permission approval the user never saw
 `internal/tui/keys.go:28-48` — *verified directly by the author.*
 
 `y`/`n`/`s`/`a` are intercepted whenever `m.pending != nil`, and the handler
@@ -177,7 +184,25 @@ approved without the user having read, or even seen, the request. `s` grants
 it for the whole session; `a` writes a permanent rule into `config.json`.
 There is no confirmation step and nothing to undo it with.
 
-### C7. A GitHub Actions input is interpolated straight into a shell script
+**Fixed.** A bare `y`/`n`/`s`/`a` answers only when both hold:
+
+* **the prompt box is empty** — text in it means the user is writing a
+  message, so the letter belongs to that message (whitespace does not count);
+* **the request has been on screen for 750 ms** — so a keypress already in
+  flight cannot land on a modal that appeared between the keydown and its
+  delivery.
+
+Neither costs anything in the ordinary case, which is a user waiting on the
+model with an empty box. When the box has text the modal says why the keys are
+inert, since otherwise they just look broken. Covered by
+`TestTypingLettersDoNotAnswerAPermission` (all four keys),
+`TestAFreshRequestIsNotAnsweredImmediately`,
+`TestAnEmptyPromptBoxStillAnswersNormally`,
+`TestWhitespaceInThePromptBoxDoesNotBlockAnAnswer` and
+`TestTheModalExplainsItselfWhileTyping`; **confirmed to fail with the fix
+reverted**.
+
+### ~~C7~~ FIXED. A GitHub Actions input is interpolated straight into a shell script
 `.github/workflows/gui-windows.yml:60` — *verified directly by the author.*
 
 ```yaml
@@ -196,7 +221,10 @@ Compounding it, `gui-windows.yml` declares no `permissions:` block at all, so
 the job inherits the default token scope (write-all on repos that never
 changed it). `whisper-macos.yml` correctly declares `contents: read`.
 
-Fix is mechanical: pass through `env:` and read `"$LC_INPUT_VERSION"`.
+**Fixed.** The input arrives through `env: LC_INPUT_VERSION` and is read as
+`"$LC_INPUT_VERSION"`, which removes the substitution step entirely, and
+`gui-windows.yml` now declares `permissions: contents: read`. A scan of both
+workflows confirms no `${{ }}` remains inside any `run:` block.
 
 ---
 
@@ -725,9 +753,7 @@ re-investigated:
    deny to an `ask`; **with `skip_permissions` on it becomes an `allow`**, so
    an explicitly denied command runs unprompted. Needs unquoting/normalization
    before matching, which C1's parse fix does not provide.
-3. **C5** (a >1MB tool output wedges the TUI permanently, and a restart does
-   not clear it), **C6** (a keystroke consumed as a permission approval), and
-   **C7** (Actions script injection + missing `permissions:`).
+3. ~~**C5 / C6 / C7**~~ — done.
 4. **M1** (dictation lock-up) and **M5** (MCP token leak).
 5. **M18 / M19 / M20** — the Web UI ones a user meets in ordinary use: a
    duplicated row every time you type during a final answer, a transcript that
@@ -749,5 +775,4 @@ this pass were self-corrected by their reviewer for the same reason (the
 markdown placeholder tokens, whose control characters are invisible in a plain
 file read).
 
-Totals: 3 critical open (C5, C6, C7 — C1 through C4 are fixed), 25 major, 29
-minor.
+Totals: **0 critical open** (C1–C7 all fixed), 25 major, 29 minor.
