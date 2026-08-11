@@ -10,6 +10,7 @@ import {
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool } from './transcript.js';
+import { setInputLocked } from './composer.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace } from './render.js';
 import { Modal } from './modal.js';
 import { settings } from './settings.js';
@@ -222,6 +223,15 @@ export async function resolvePermission(allow, scope) {
   const id = session.pendingPermissionID;
   session.pendingPermissionID = null;
   permissionRequest.close();
+  // Unlocked here, on the answer in hand, rather than waiting for the
+  // permission.resolved event to come back. The lock exists to stop a
+  // message being typed into an unanswered question; the question has
+  // just been answered. If the event stream has quietly died — which the
+  // heartbeat makes rare but does not rule out — waiting for it left the
+  // composer disabled under "Resolve the permission request above" with
+  // no request on screen and nothing to click, while the turn carried on
+  // server-side. cancelTurn already works this way.
+  setInputLocked(false);
   try {
     await apiClient.resolvePermissionRequest(session.sessionID, id, allow, scope);
   } catch (err) {

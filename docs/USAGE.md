@@ -612,8 +612,11 @@ Background tasks produce no transcript lines. Inspect them here instead.
 |---|---|
 | `/tasks` | Lists every background task in this session with its status, agent, and prompt. Answered from client state, no model call. |
 | `/tasks <id>` | Shows everything that task has produced so far. Works while it is still running, so it doubles as a progress view. |
+| `/tasks cancel <id>` | Stops a running task. The status line turns to `cancelled` once the stop reaches the task's next step. |
 
 A running task also appears in the indicator below the prompt box, and in the Web UI's right panel.
+
+**A permission request raised inside a task is asked in this session.** Nothing streams a task's own log, so a request written only there could never be answered, and the task waited on it forever while holding one of the concurrency slots. The request now appears here, prefixed with the task it came from, and answering it releases the task.
 
 **A background task does not block the prompt.** Tasks run in their own child sessions, so the session you are typing in stays free: a new prompt goes out immediately rather than queuing. Only a turn in *this* session queues what you type.
 

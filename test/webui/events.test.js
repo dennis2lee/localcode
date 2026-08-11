@@ -456,3 +456,24 @@ test('the mid-turn acknowledgement is replaced by the real line, not left above 
   // Exactly one occurrence of the text, not two.
   assert.equal(html.split('actually, skip the tests').length - 1, 1, html);
 });
+
+// The unlock used to live only in the permission.resolved handler, so if
+// the event stream had quietly died the click did everything except let
+// the user type: modal gone, turn proceeding server-side, composer stuck
+// disabled under "Resolve the permission request above" with no request
+// on screen to resolve.
+test('answering a permission unlocks the composer without waiting for the event', async () => {
+  const app = await load();
+  app.applyEvent({
+    type: 'permission.request',
+    data: { id: 'perm-1', tool: 'bash', description: 'rm -rf /', can_always: false },
+  });
+  assert.equal(app.el('input').disabled, true);
+
+  app.el('permission-allow').click();
+  await app.settle();
+
+  // No permission.resolved applied — that is the whole point.
+  assert.equal(app.el('input').disabled, false, 'composer stayed locked with nothing on screen to unlock it');
+  assert.equal(app.el('send').disabled, false);
+});

@@ -39,6 +39,11 @@ type taskOutputMsg struct {
 	err    error
 }
 
+type taskCancelledMsg struct {
+	taskID string
+	err    error
+}
+
 type commandsMsg struct {
 	commands []client.CommandInfo
 	err      error

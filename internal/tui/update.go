@@ -44,6 +44,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskOutputMsg:
 		return m.handleTaskOutputMsg(msg)
 
+	case taskCancelledMsg:
+		if msg.err != nil {
+			m.appendLocal(fmt.Sprintf("could not cancel %s: %v", msg.taskID, msg.err))
+		} else {
+			// The task.status event that follows says "cancelled"; this
+			// only confirms the request was accepted, since the stop can
+			// take a moment to reach a tool call.
+			m.appendLocal(fmt.Sprintf("cancelling %s", msg.taskID))
+		}
+		return m, nil
+
 	case versionMsg:
 		if msg.err != nil {
 			m.appendLocal("failed to fetch version: " + msg.err.Error())

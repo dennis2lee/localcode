@@ -94,6 +94,15 @@ func (m Model) fetchTaskOutput(taskID string) tea.Cmd {
 	}, func(out string, err error) tea.Msg { return taskOutputMsg{taskID: taskID, output: out, err: err} })
 }
 
+// cancelTask stops a background task. The endpoint and the client method
+// both already existed; nothing in either client called them, so a task
+// that would not finish had no exit short of restarting the daemon.
+func (m Model) cancelTask(taskID string) tea.Cmd {
+	return callErr(func(ctx context.Context) error {
+		return m.client.CancelTask(ctx, taskID)
+	}, func(err error) tea.Msg { return taskCancelledMsg{taskID: taskID, err: err} })
+}
+
 func (m Model) fetchCommands() tea.Cmd {
 	return call(m.client.ListCommands, func(c []client.CommandInfo, err error) tea.Msg { return commandsMsg{commands: c, err: err} })
 }

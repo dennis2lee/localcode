@@ -230,7 +230,10 @@ workflows confirms no `${{ }}` remains inside any `run:` block.
 
 ## Major
 
-### M1. One slow transcription freezes the entire dictation API for up to a minute
+### M1. ~~One slow transcription freezes the entire dictation API for up to a minute~~ FIXED (v0.33.4)
+
+*Confirmed before fixing, with one correction: partial transcriptions run in their own goroutine, so only committing an utterance blocks. The lock chain was exactly as described.* `Session.lastActivity` is atomic, so `Idle` no longer needs the lock a commit holds, and the reaper cannot stall the manager.
+
 `internal/dictation/manager.go:112-121` + `dictation.go:88-113`.
 
 `Session.Write`/`Stop` hold the per-session lock across `Final()` →
@@ -287,7 +290,10 @@ answering `307 Location: https://evil/…` gets the bearer token attached to the
 request to `evil`. Fix: a `CheckRedirect` that drops the injected headers on
 host change.
 
-### M6. Deny rules are defeated by trivial shell quoting (the milder sibling of C1)
+### M6. ~~Deny rules are defeated by trivial shell quoting (the milder sibling of C1)~~ FIXED (v0.33.4)
+
+*Reproduced exactly: with `skip_permissions` on, `"curl" http://x` resolved to `allow` against a `curl *` deny.* Each segment is now matched both as written and unquoted, stricter answer wins.
+
 `internal/config/shell.go:20-124`.
 
 A deny rule `curl *` is not matched by `c\url …`, `"curl" …`, or `cu''rl …`,
@@ -347,7 +353,10 @@ an unknown or already-resolved id returns `200 {"status":"resolved"}` even
 though `Resolve` was a no-op, so a client answering a stale prompt is told it
 worked.
 
-### M12. A resolved permission replays as a live modal that blocks the TUI
+### M12. ~~A resolved permission replays as a live modal that blocks the TUI~~ FIXED (v0.33.4)
+
+*Reproduced with a test before fixing.* `applyEvent` handles `permission.resolved`, matched on id.
+
 `internal/tui/events.go:57` — *verified directly by the author.*
 
 `applyEvent` handles `events.TypePermissionRequest` but has no case for
@@ -361,7 +370,10 @@ ago. The user has to press y/n — firing a no-op `Resolve` — before the TUI i
 usable at all. The same gap means a session with two permission requests only
 ever shows the last one.
 
-### M13. A background task that needs a permission hangs forever
+### M13. ~~A background task that needs a permission hangs forever~~ FIXED (v0.33.4)
+
+**One claim here was wrong and worth recording.** "There is no cancel-task command, so the only way out is restarting the daemon" is false: `POST /api/tasks/{taskId}/cancel`, `TaskManager.Cancel` and `client.CancelTask` all existed. What was missing was any UI calling them, and the broker already had a `ctx.Done()` branch, so cancelling did release the call. The hang itself was real. Fixed by mirroring the request into the nearest visible ancestor session (the ids are process-global, so it is answerable from there with no routing) and by wiring `/tasks cancel <id>`.
+
 `internal/agent/taskmanager.go:107` + `internal/agent/permission.go:103-116`.
 
 `TaskManager.run` calls `SendMessage` with the *task's* session id, so the
@@ -374,7 +386,10 @@ forever. The TUI shows "1 background task" indefinitely, and the task holds
 one of the `TaskManager.sem` slots, throttling every later spawn. There is no
 cancel-task command, so the only way out is restarting the daemon.
 
-### M14. "Nothing is running, resend" is treated as "busy, wait", and the queued prompt is never sent
+### M14. ~~"Nothing is running, resend" is treated as "busy, wait", and the queued prompt is never sent~~ FIXED (v0.33.4)
+
+The handler retries instead of returning that 409. The race window itself is not reproduced in a test; the invariant the retry rests on (inject reporting false means begin will succeed) is.
+
 `internal/tui/update.go:110-119` + `internal/daemon/turns.go:208`.
 
 `turns.go` returns 409 for two different situations, and its own comment says
@@ -446,7 +461,8 @@ transcript is left permanently asserting *"sent — the model will pick this up
 at its next step"* about a message that was deleted and will never be seen.
 Reproducible every time.
 
-### M20. Switching sessions with a permission modal open permanently breaks Escape and Tab
+### M20. ~~Switching sessions with a permission modal open permanently breaks Escape and Tab~~ FIXED (v0.33.3)
+
 `internal/daemon/static/js/sessions.js:158` — *verified directly by the author.*
 
 `modal.js` documents that the `open` class is an *output* of the object and
@@ -461,7 +477,8 @@ forever so **Tab/Shift-Tab stop cycling agents**. Nothing resets it — only
 `permission.resolved` or `resolvePermission` call `.close()`, and neither
 fires for a request in the session you just left.
 
-### M21. Answering a permission never unlocks the composer locally
+### M21. ~~Answering a permission never unlocks the composer locally~~ FIXED (v0.33.4)
+
 `internal/daemon/static/js/modals.js:219-229` + `events.js:69-74`.
 
 `setInputLocked(true)` happens on `permission.request`; the unlock lives only
@@ -775,4 +792,15 @@ this pass were self-corrected by their reviewer for the same reason (the
 markdown placeholder tokens, whose control characters are invisible in a plain
 file read).
 
-Totals: **0 critical open** (C1–C7 all fixed), 25 major, 29 minor.
+Totals: **0 critical open** (C1–C7 all fixed), **18 major open** (M1, M6, M12, M13, M14, M20 and M21 fixed), 29 minor.
+
+## What verification changed
+
+Six major items were re-checked against the code before any of them was
+fixed, because this document's own note says a headline claim did not
+survive that check in the first pass. One of the six was wrong in the
+same way (M13's "no cancel command"), and one was overstated (M1 blocks
+only on committing an utterance, not on every partial). The remaining
+eighteen have not had that treatment. Treat each as a lead until a test
+fails on it: the cost is near zero, since a fix needs a test anyway, and
+a test that passes on the first run means the item was not a bug.

@@ -23,7 +23,7 @@ func (c *Config) resolveShellCommand(command string, staticRequiresPermission bo
 		if segment == "" {
 			continue
 		}
-		switch c.resolveOne(BashToolName, segment, staticRequiresPermission) {
+		switch c.resolveSegment(segment, staticRequiresPermission) {
 		case DecisionDeny:
 			return DecisionDeny
 		case DecisionAsk:
@@ -57,6 +57,88 @@ func (c *Config) resolveShellCommand(command string, staticRequiresPermission bo
 // command that segment splitting never sees, and redirections turn a
 // read-only-looking command into a file write.
 var unsafeShellConstructs = []string{"$(", "`", "<(", ">(", ">"}
+
+// resolveSegment decides one command, matching it both as written and
+// with its shell quoting removed.
+//
+// A rule is a glob against text, and the text still carries its quotes —
+// but the shell strips them before deciding what to run. So `curl x`,
+// `"curl" x`, `cu''rl x` and `c\url x` are one command wearing four
+// spellings, and a rule `curl *` only recognised the first. Normally that
+// only weakened a deny to a prompt; with skip_permissions on, the prompt
+// resolves to allow, so an explicitly denied command ran unprompted. That
+// is not a bypass a user can be expected to anticipate: nothing on screen
+// distinguishes the spellings.
+//
+// Both readings are consulted and the stricter answer wins, which is what
+// keeps this from cutting the other way. Deny needs only one of them, so
+// no spelling escapes a prohibition; allow needs both, so unquoting can
+// never widen a permission — a rule the user did not write to cover the
+// literal text cannot start matching it now.
+func (c *Config) resolveSegment(segment string, staticRequiresPermission bool) Decision {
+	raw := c.resolveOne(BashToolName, segment, staticRequiresPermission)
+	unquoted := unquoteShellText(segment)
+	if unquoted == segment {
+		return raw
+	}
+	norm := c.resolveOne(BashToolName, unquoted, staticRequiresPermission)
+	if raw == DecisionDeny || norm == DecisionDeny {
+		return DecisionDeny
+	}
+	if raw == DecisionAllow && norm == DecisionAllow {
+		return DecisionAllow
+	}
+	return DecisionAsk
+}
+
+// unquoteShellText removes one level of shell quoting, the way the shell
+// does before a command is run: outside quotes a backslash makes the next
+// character literal, single quotes are literal throughout with no
+// escaping at all inside them, and double quotes allow backslash escapes.
+//
+// This is for matching only. It is not a general shell parser and does no
+// expansion — a variable or a substitution is left exactly as written,
+// since resolving what those stand for is not something a permission
+// check can do, and hasUnsafeShellConstruct already refuses to auto-allow
+// them.
+func unquoteShellText(segment string) string {
+	var b strings.Builder
+	b.Grow(len(segment))
+	runes := []rune(segment)
+	var quote rune
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		switch {
+		case quote == '\'':
+			if r == '\'' {
+				quote = 0
+				continue
+			}
+			b.WriteRune(r)
+		case quote == '"':
+			if r == '\\' && i+1 < len(runes) {
+				i++
+				b.WriteRune(runes[i])
+				continue
+			}
+			if r == '"' {
+				quote = 0
+				continue
+			}
+			b.WriteRune(r)
+		case r == '\\':
+			if i+1 < len(runes) {
+				i++
+				b.WriteRune(runes[i])
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 func hasUnsafeShellConstruct(command string) bool {
 	for _, c := range unsafeShellConstructs {

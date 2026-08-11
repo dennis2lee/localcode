@@ -6,6 +6,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"localcode/internal/events"
 )
 
 func armedPending(m Model, canAlways bool) Model {
@@ -110,5 +112,58 @@ func TestTheModalExplainsItselfWhileTyping(t *testing.T) {
 	}
 	if got := p.prompt(true); !strings.Contains(got, "clear the prompt box") {
 		t.Errorf("no explanation while typing: %q", got)
+	}
+}
+
+// Reopening a session replays its whole log, and both halves of a
+// permission live in that log. Before this was handled, every request
+// ever answered came back as a live modal and the TUI refused to send
+// anything until it was answered a second time.
+func TestResolvedPermissionDoesNotReplayAsAModal(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypePermissionRequest, Data: map[string]any{
+		"id": "p1", "tool": "bash", "description": "rm -rf build/", "rule": "rm *",
+	}})
+	if m.pending == nil {
+		t.Fatal("the request itself should still raise a modal")
+	}
+	m.applyEvent(events.Event{Type: events.TypePermissionResolved, Data: map[string]any{
+		"id": "p1", "allow": true, "scope": "once",
+	}})
+	if m.pending != nil {
+		t.Fatalf("answered request still pending after replay: %+v", m.pending)
+	}
+
+	// And the composer is usable again, which is the part the user meets:
+	// handleEnter refuses every message while a request is pending.
+	m.input.SetValue("hello")
+	if _, cmd := handleEnter(m); cmd == nil {
+		t.Fatal("Enter did nothing with no pending request; the session is still wedged")
+	}
+}
+
+// The ids are a process-global counter, so a resolution belonging to some
+// other session must not dismiss the request on screen — that would hide
+// a real question and leave the turn behind it waiting forever.
+func TestResolvedPermissionForAnotherIDIsIgnored(t *testing.T) {
+	m := armedPending(newTestModel(), false)
+	m.applyEvent(events.Event{Type: events.TypePermissionResolved, Data: map[string]any{
+		"id": "p7", "allow": true, "scope": "once",
+	}})
+	if m.pending == nil {
+		t.Fatal("an unrelated resolution dismissed the pending request")
+	}
+}
+
+// A second client answering the request clears it here too, live. Before,
+// the modal sat on screen until the user pressed a key that no longer
+// meant anything.
+func TestPermissionAnsweredElsewhereClearsTheModal(t *testing.T) {
+	m := armedPending(newTestModel(), false)
+	m.applyEvent(events.Event{Type: events.TypePermissionResolved, Data: map[string]any{
+		"id": "p1", "allow": false, "scope": "once",
+	}})
+	if m.pending != nil {
+		t.Fatal("modal survived the answer given in another client")
 	}
 }

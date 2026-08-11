@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -72,12 +73,26 @@ type Session struct {
 	// went away mid-utterance — a browser tab closed with the microphone
 	// on would otherwise hold a recognizer (and, for a real engine, its
 	// model) open forever.
-	lastActivity time.Time
+	//
+	// Atomic rather than under mu, and that is not a micro-optimisation:
+	// committing an utterance calls into the engine and waits up to a
+	// minute for the answer, all while holding mu. The reaper reads Idle
+	// for every session while holding the *manager* lock, so if Idle
+	// needed mu, one wedged engine would stop the reaper, and a stopped
+	// reaper holding the manager lock blocks Start, Get and Stop — that
+	// is, every other client's audio, every new dictation, and every
+	// attempt to switch the microphone off. One slow transcription froze
+	// dictation for everyone.
+	lastActivity atomic.Int64 // unix nanos
 }
 
 func NewSession(rec Recognizer) *Session {
-	return &Session{rec: rec, lastActivity: time.Now()}
+	s := &Session{rec: rec}
+	s.touch()
+	return s
 }
+
+func (s *Session) touch() { s.lastActivity.Store(time.Now().UnixNano()) }
 
 // Write feeds one chunk of 16-bit little-endian PCM and returns what the
 // recognizer makes of the audio so far.
@@ -94,7 +109,7 @@ func (s *Session) Write(pcm []byte) (Result, error) {
 	if len(pcm)%2 != 0 {
 		return Result{}, fmt.Errorf("pcm length %d is not a whole number of 16-bit samples", len(pcm))
 	}
-	s.lastActivity = time.Now()
+	s.touch()
 
 	s.rec.Accept(decodePCM16(pcm))
 
@@ -130,9 +145,7 @@ func (s *Session) Stop() Result {
 
 // Idle reports how long since this session last received audio.
 func (s *Session) Idle() time.Duration {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return time.Since(s.lastActivity)
+	return time.Since(time.Unix(0, s.lastActivity.Load()))
 }
 
 // decodePCM16 converts 16-bit little-endian PCM to the float32 samples

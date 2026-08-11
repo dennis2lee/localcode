@@ -207,6 +207,12 @@ func (t *turnTracker) running() []string {
 	return ids
 }
 
+// sendRetries bounds how many times one request will re-attempt to start
+// a turn after losing the begin/inject race. Each loss means a turn ended
+// in a window of a few instructions, so more than a couple of rounds is a
+// pathology rather than contention.
+const sendRetries = 3
+
 func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sess, err := d.Loop.Store.Get(id)
@@ -233,20 +239,40 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// handleCancelTurn.
 	turnCtx, cancel := context.WithCancel(context.Background())
 
-	if !d.turns.begin(id, cancel) {
-		cancel()
-		// A turn is already running. Rather than refusing, hand the text
-		// to that turn: the agent loop asks for queued input at every
-		// tool call, so it lands at the model's next step instead of
-		// waiting for the whole job to finish. That is the difference
-		// between redirecting a long task and watching it finish the
-		// wrong thing.
+	// Two outcomes are ordinary here — starting a turn, and handing the
+	// text to one already running — and one is a race that used to be
+	// reported as if it were the second.
+	//
+	// A turn already running is not refused: the text goes to that turn,
+	// which the agent loop picks up at its next tool call, so a
+	// correction lands mid job rather than after it. But the turn can
+	// also end in the gap between begin and inject, and then neither
+	// applied and the answer was a 409 reading "already processing a
+	// message" — about a session that had just gone idle. The client
+	// cannot tell that apart from the ordinary busy 409, so the TUI
+	// queued the prompt and waited for a turn.done that had already been
+	// appended: the message sat there, unsent, with the spinner running,
+	// until the user typed something else.
+	//
+	// Retrying is the whole fix. Nothing is running at that point, so the
+	// next begin is the one that should have happened.
+	started := false
+	for range sendRetries {
+		if d.turns.begin(id, cancel) {
+			started = true
+			break
+		}
 		if d.turns.inject(id, req.Text) {
+			cancel()
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "injected"})
 			return
 		}
-		// The turn ended in the gap between begin and inject. Nothing is
-		// running now, so the client can simply send it again.
+	}
+	if !started {
+		cancel()
+		// Losing the race this many times in a row means turns are
+		// starting and ending faster than this handler can observe, which
+		// is not something to keep retrying inside a request.
 		writeError(w, http.StatusConflict, fmt.Errorf("session %s is already processing a message", id))
 		return
 	}

@@ -90,11 +90,22 @@ func localCommands() []localCommand {
 		{
 			name:     "/tasks",
 			takesArg: true,
-			help:     "list background tasks, or show one's output with /tasks <id>",
+			help:     "list background tasks, show one's output with /tasks <id>, or stop one with /tasks cancel <id>",
 			run: func(m *Model, arg string) tea.Cmd {
 				if arg == "" {
 					m.appendLocal(m.tasksSummary())
 					return nil
+				}
+				// "cancel <id>" rather than a command of its own: a task
+				// id is only ever read off this listing, so the way to
+				// stop one belongs next to the way to look at one.
+				if id, ok := strings.CutPrefix(arg, "cancel"); ok {
+					id = strings.TrimSpace(id)
+					if id == "" {
+						m.appendLocal("usage: /tasks cancel <id>")
+						return nil
+					}
+					return m.cancelTask(id)
 				}
 				return m.fetchTaskOutput(arg)
 			},

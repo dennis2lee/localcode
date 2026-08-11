@@ -67,6 +67,22 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.pending = &pendingPermission{id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways}
 		m.pendingHintShown = false
 		m.pendingSince = time.Now()
+	case events.TypePermissionResolved:
+		// Both halves of a permission are in the log, and resume replays
+		// the log from the start — so without this, every request ever
+		// answered in this session came back as a live modal on reopening
+		// it. handleEnter then refused every message ("Resolve the
+		// permission request above"), and the only way to type anything
+		// was to answer a question from days ago, firing a Resolve the
+		// broker no longer has a channel for.
+		//
+		// Matched on id rather than cleared outright: the broker's ids
+		// are process-global, so a stale event from an earlier session
+		// must not dismiss the request currently on screen.
+		if id, _ := ev.Data["id"].(string); m.pending != nil && m.pending.id == id {
+			m.pending = nil
+			m.pendingHintShown = false
+		}
 	case events.TypeTaskSpawned:
 		// No transcript line — background tasks surface in the busy
 		// indicator below the prompt box, and /tasks inspects them.

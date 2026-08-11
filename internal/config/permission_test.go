@@ -351,3 +351,78 @@ func TestUserConfigOverridesGitDefault(t *testing.T) {
 		t.Errorf("ResolvePermission(bash, \"git status\") = %q, want allow — the default still covers unmatched git commands", got)
 	}
 }
+
+// A rule is a glob against text that still carries its quotes; the shell
+// strips them before running anything. Every spelling below runs curl.
+func TestBashDenySurvivesQuoting(t *testing.T) {
+	deny := func() *Config {
+		return &Config{Permissions: map[string]ToolPermission{
+			"bash": {Rules: []PermissionRule{{Match: "curl *", Decision: DecisionDeny}}},
+		}}
+	}
+	spellings := []string{
+		`curl http://x`,
+		`"curl" http://x`,
+		`'curl' http://x`,
+		`cu''rl http://x`,
+		`c\url http://x`,
+		`"cur"l http://x`,
+	}
+	for _, command := range spellings {
+		if got := deny().ResolvePermission("bash", command, true); got != DecisionDeny {
+			t.Errorf("ResolvePermission(bash, %q) = %q, want deny", command, got)
+		}
+	}
+
+	// The case that made this urgent rather than untidy: skip_permissions
+	// promises that explicit denials still deny, and a quoted spelling
+	// turned the denial into an unprompted allow.
+	skip := true
+	for _, command := range spellings {
+		cfg := deny()
+		cfg.SkipPermissions = &skip
+		if got := cfg.ResolvePermission("bash", command, true); got != DecisionDeny {
+			t.Errorf("with skip_permissions: ResolvePermission(bash, %q) = %q, want deny", command, got)
+		}
+	}
+}
+
+// Unquoting must only ever tighten. A quoted command that the user's
+// rules do not cover as written must not become allowed just because its
+// unquoted form matches something.
+func TestUnquotingNeverWidensAnAllow(t *testing.T) {
+	cfg := &Config{Permissions: map[string]ToolPermission{
+		"bash": {Rules: []PermissionRule{{Match: "npm test", Decision: DecisionAllow}}},
+	}}
+	if got := cfg.ResolvePermission("bash", `"npm" test`, true); got != DecisionAsk {
+		t.Errorf(`ResolvePermission(bash, "\"npm\" test") = %q, want ask`, got)
+	}
+	// And an ordinary allowed command is untouched by any of this.
+	if got := cfg.ResolvePermission("bash", "npm test", true); got != DecisionAllow {
+		t.Errorf("ResolvePermission(bash, %q) = %q, want allow", "npm test", got)
+	}
+}
+
+func TestUnquoteShellText(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`curl x`, `curl x`},
+		{`"curl" x`, `curl x`},
+		{`'curl' x`, `curl x`},
+		{`cu''rl x`, `curl x`},
+		{`c\url x`, `curl x`},
+		{`git commit -m "fix: a; b"`, `git commit -m fix: a; b`},
+		// No expansion: what a variable stands for is not knowable here,
+		// and pretending otherwise would be worse than leaving it alone.
+		{`echo "$HOME"`, `echo $HOME`},
+		// Single quotes do not escape, so the backslash is literal text.
+		{`echo 'a\b'`, `echo a\b`},
+		// A trailing quote or backslash is malformed input, not a panic.
+		{`echo "abc`, `echo abc`},
+		{`echo abc\`, `echo abc`},
+	}
+	for _, c := range cases {
+		if got := unquoteShellText(c.in); got != c.want {
+			t.Errorf("unquoteShellText(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

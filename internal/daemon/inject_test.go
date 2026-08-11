@@ -133,3 +133,38 @@ func TestCancellingATurnDropsWhatWasQueuedForIt(t *testing.T) {
 		t.Errorf("takeOne = %q after a cancel; a stopped turn must not go on to act on it", text)
 	}
 }
+
+// The premise the send handler's retry rests on.
+//
+// Two ordinary outcomes share one code path: a turn is running, so the
+// text is injected into it; or no turn is running, so a new one starts.
+// Between those two checks the running turn can end, and then neither
+// applied — which used to be answered with a 409 saying the session was
+// "already processing a message" about a session that had just gone idle.
+// The TUI cannot tell that from the ordinary busy 409, so it queued the
+// prompt and waited for a turn.done already appended: the message sat
+// unsent with the spinner running until the user typed something else.
+//
+// inject reporting false means the registration is gone, and begin takes
+// the same lock, so the next begin must succeed. That is what makes
+// retrying the right answer rather than a hopeful one.
+func TestBeginSucceedsOnceInjectHasReportedNoTurn(t *testing.T) {
+	tr := newTurnTracker()
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if !tr.begin("s1", cancel) {
+		t.Fatal("begin")
+	}
+	// The turn ends the ordinary way, with nothing queued.
+	if _, more := tr.finishOrTake("s1"); more {
+		t.Fatal("nothing was queued")
+	}
+
+	if tr.inject("s1", "hello") {
+		t.Fatal("inject accepted a message with no turn running")
+	}
+	if !tr.begin("s1", cancel) {
+		t.Error("begin refused after inject reported no turn; the retry would 409 with nothing running")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -255,5 +256,112 @@ func TestScopeAlwaysWithoutConfigPathStillGrantsSession(t *testing.T) {
 	}
 	if !allowed {
 		t.Error("the session-level grant should still apply even when persisting to config.json is unavailable")
+	}
+}
+
+// A background task is a session nobody streams: the parent's log gets
+// task.spawned and task.status and nothing else. A permission request
+// raised inside one was written where it could not be seen or answered,
+// and the tool call blocked on it indefinitely — holding a concurrency
+// slot, with "1 background task" as the only symptom.
+func TestTaskPermissionIsAskedInTheParentSession(t *testing.T) {
+	broker, store, _ := newPermissionTestBroker(t)
+	if _, err := store.CreateSession("t1", "s1", "general-purpose", false); err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+
+	ctx := WithSessionID(context.Background(), "t1")
+	resultCh := make(chan bool, 1)
+	go func() {
+		allowed, _ := broker.Func()(ctx, "bash", "rm -rf build/", "clean the tree")
+		resultCh <- allowed
+	}()
+
+	// The question has to reach the conversation the user is looking at.
+	id := waitForPermissionID(t, store, "s1", 0)
+
+	evs, err := store.Events("s1", 0)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	var desc string
+	for _, ev := range evs {
+		if ev.Type == events.TypePermissionRequest {
+			desc, _ = ev.Data["description"].(string)
+		}
+	}
+	if !strings.Contains(desc, "t1") {
+		t.Errorf("mirrored request does not say which task it came from: %q", desc)
+	}
+
+	// And answering it there releases the task, with no routing: the ids
+	// are process-global and Resolve looks them up in one table.
+	broker.Resolve(id, true, ScopeOnce)
+	select {
+	case allowed := <-resultCh:
+		if !allowed {
+			t.Error("answering in the parent session denied the call")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the task is still blocked after its request was answered")
+	}
+}
+
+// Cancelling a stuck task must also take its question off the parent's
+// screen — a modal for a task that no longer exists refuses every message
+// the user tries to send.
+func TestCancelledTaskPermissionClearsTheParentModal(t *testing.T) {
+	broker, store, _ := newPermissionTestBroker(t)
+	if _, err := store.CreateSession("t1", "s1", "general-purpose", false); err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(WithSessionID(context.Background(), "t1"))
+	done := make(chan struct{})
+	go func() {
+		broker.Func()(ctx, "bash", "rm -rf build/", "clean the tree")
+		close(done)
+	}()
+	waitForPermissionID(t, store, "s1", 0)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancel did not release the tool call")
+	}
+
+	evs, err := store.Events("s1", 0)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	var resolved bool
+	for _, ev := range evs {
+		if ev.Type == events.TypePermissionResolved {
+			resolved = true
+		}
+	}
+	if !resolved {
+		t.Error("the parent was left with a live modal for a cancelled task")
+	}
+}
+
+// An ordinary session must not have its own requests written twice.
+func TestOrdinarySessionPermissionIsNotDuplicated(t *testing.T) {
+	broker, store, _ := newPermissionTestBroker(t)
+	if !callAndResolve(t, broker, "s1", "bash", "ls", true, ScopeOnce) {
+		t.Fatal("allow was not honoured")
+	}
+	evs, err := store.Events("s1", 0)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	var requests int
+	for _, ev := range evs {
+		if ev.Type == events.TypePermissionRequest {
+			requests++
+		}
+	}
+	if requests != 1 {
+		t.Errorf("got %d permission.request events, want 1", requests)
 	}
 }
