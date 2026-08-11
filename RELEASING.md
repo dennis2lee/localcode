@@ -29,6 +29,23 @@ script cannot judge, so they are on you.
 7. **config.example.json** — if a new config key shipped, show it here (off or
    with a safe default).
 
+## A check that can be skipped will be skipped
+
+`package-msi.sh` verifies the WebView2 bootstrapper's signature only when
+`osslsigncode` is installed, and otherwise prints a warning and carries
+on. v0.36.0 shipped that way: the tool was missing on the release
+machine, the warning scrolled past in a long build log, and the changelog
+claimed the signature was verified. The check itself was also wrong, and
+nothing had ever run it.
+
+So: **if a release note says something was verified, the release build has
+to have done the verifying.** Before `make dist`, confirm the tools the
+build's own checks need are present:
+
+```bash
+command -v osslsigncode wixl msiinfo msibuild node
+```
+
 ## Style rules for all docs
 
 * English only.
