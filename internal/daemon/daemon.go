@@ -11,6 +11,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 
@@ -197,4 +198,24 @@ func WebFS() fs.FS {
 		panic(err) // programmer error: static/ must exist at build time
 	}
 	return sub
+}
+
+// maxJSONBody caps a JSON request body.
+//
+// A prompt is the largest thing that legitimately arrives here, and a
+// megabyte of it is far beyond any conversation — the file-attach path
+// has its own, larger limit and does not come through these handlers.
+//
+// The cap matters because `--listen` can bind something other than
+// loopback: without it, `POST /api/sessions/{id}/messages` with a
+// multi-gigabyte "text" is allocated in full before the empty check, and
+// on success it is written into the session log. dictation.go and
+// uploads.go already capped theirs, so this was an inconsistency rather
+// than a decision.
+const maxJSONBody = 1 << 20
+
+// jsonBody wraps a request body in that cap. Reading past it fails the
+// decode, which every caller already handles as a bad request.
+func jsonBody(w http.ResponseWriter, r *http.Request) io.Reader {
+	return http.MaxBytesReader(w, r.Body, maxJSONBody)
 }

@@ -53,7 +53,7 @@ func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
 		Agent   *string   `json:"agent"`
 		Match   *[]string `json:"match"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -115,7 +115,7 @@ func (d *Daemon) handleSetSkipPermissions(w http.ResponseWriter, r *http.Request
 	var req struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -139,7 +139,7 @@ type permissionRuleRequest struct {
 
 func (d *Daemon) handleAddPermissionRule(w http.ResponseWriter, r *http.Request) {
 	var req permissionRuleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Tool == "" || req.Match == "" || req.Decision == "" {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil || req.Tool == "" || req.Match == "" || req.Decision == "" {
 		http.Error(w, "tool, match, and decision are all required", http.StatusBadRequest)
 		return
 	}
@@ -156,7 +156,7 @@ func (d *Daemon) handleAddPermissionRule(w http.ResponseWriter, r *http.Request)
 
 func (d *Daemon) handleRemovePermissionRule(w http.ResponseWriter, r *http.Request) {
 	var req permissionRuleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Tool == "" || req.Match == "" || req.Decision == "" {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil || req.Tool == "" || req.Match == "" || req.Decision == "" {
 		http.Error(w, "tool, match, and decision are all required", http.StatusBadRequest)
 		return
 	}

@@ -257,7 +257,10 @@ degrades to stale partials with no error. Compounding it: the key embeds raw
 `Threads:0` and `Threads:4` (when the default is 4) start identical servers
 under different keys and kill-restart each other for no semantic difference.
 
-### M3. Interrupted event log lines are silently truncated, then seq numbers get reused
+### M3. ~~Interrupted event log lines are silently truncated, then seq numbers get reused~~ FIXED (v0.34.0)
+
+*Reproduced, and worse than reported: restore returned no error at all, recovered 1 of 4 events, and the next append handed out seq 2 — already in the file.* Read with a `bufio.Reader` now; a torn final line is still skipped, everything before it is not.
+
 `internal/session/session.go:539-551` (`restoreOne`).
 
 `restoreOne` uses a 1MB-capped `bufio.Scanner` and never checks `scanner.Err()`.
@@ -268,7 +271,12 @@ max — so post-restart appends reuse seq numbers already in the file. That
 breaks `Events(since)` / Last-Event-ID replay and silently drops the tail of
 the rehydrated conversation.
 
-### M4. Concurrent appends to one session persist out of order and can race `Delete`'s file close
+### M4. ~~Concurrent appends to one session persist out of order and can race `Delete`'s file close~~ FIXED (v0.34.0)
+
+*The ordering half reproduced immediately: ~55 inverted lines per 200 concurrent appends.* The write moved inside the lock that hands out the seq, which also closes the Delete window.
+
+**The fd-reuse claim is wrong.** "With fd reuse the stray write can land in a *different* session's log" does not happen: Go's `os.File` refcounts the descriptor, so a `Write` racing `Close` keeps the fd alive until it finishes and the real close is deferred. Measured directly — 200 rounds of a write racing `Close` against a second file opened straight after, 0 strays. What a racing write could actually lose was one line of a log being deleted anyway.
+
 `internal/session/session.go:369-377`.
 
 The JSONL write happens **outside** the store lock. A background `TaskManager`
@@ -279,7 +287,10 @@ TaskManager tasks, so `DeleteAll` can `Close` a running task's log file
 mid-write; with fd reuse the stray write can land in a *different* session's
 log.
 
-### M5. MCP auth token leaks across a cross-host redirect
+### M5. ~~MCP auth token leaks across a cross-host redirect~~ FIXED (v0.34.0)
+
+*Reproduced against two real servers, next to a plain client for comparison: the plain one sent no `Authorization` to the other host, ours sent the token.* A `CheckRedirect` marks a request that has left the configured host and the transport withholds the configured headers on it; a same-host redirect still carries them, which is pinned by its own test.
+
 `internal/mcp/mcp.go:479-488` (`headerTransport.RoundTrip`).
 
 Headers (e.g. `Authorization: Bearer …`) are injected at the RoundTripper
@@ -400,7 +411,10 @@ and starts waiting for a `turn.done` that has already been appended. The
 prompt sits in the queue and the spinner runs until the user types something
 else. No test covers a 409 with no turn running.
 
-### M15. No request-body size limit on any JSON handler
+### M15. ~~No request-body size limit on any JSON handler~~ FIXED (v0.34.0)
+
+One megabyte, via `http.MaxBytesReader`, on all fourteen.
+
 `internal/daemon/turns.go:179`, `sessions.go:20,219,250`, `settings.go:56,118,142,159`, `tasks.go:20,34`, `workspace.go:42`.
 
 Every one decodes `r.Body` with no `http.MaxBytesReader`. `dictation.go` and
@@ -792,7 +806,7 @@ this pass were self-corrected by their reviewer for the same reason (the
 markdown placeholder tokens, whose control characters are invisible in a plain
 file read).
 
-Totals: **0 critical open** (C1–C7 all fixed), **18 major open** (M1, M6, M12, M13, M14, M20 and M21 fixed), 29 minor.
+Totals: **0 critical open** (C1–C7 all fixed), **14 major open** (M1, M3, M4, M5, M6, M12, M13, M14, M15, M20 and M21 fixed), 29 minor.
 
 ## What verification changed
 
@@ -800,7 +814,9 @@ Six major items were re-checked against the code before any of them was
 fixed, because this document's own note says a headline claim did not
 survive that check in the first pass. One of the six was wrong in the
 same way (M13's "no cancel command"), and one was overstated (M1 blocks
-only on committing an utterance, not on every partial). The remaining
-eighteen have not had that treatment. Treat each as a lead until a test
+only on committing an utterance, not on every partial). A second round of
+four found one more wrong claim (M4's fd reuse, disproved by measurement)
+and one understated (M3 was worse than described). The remaining fourteen
+have not had that treatment. Treat each as a lead until a test
 fails on it: the cost is near zero, since a fix needs a test anyway, and
 a test that passes on the first run means the item was not a bug.

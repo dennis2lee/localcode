@@ -17,7 +17,7 @@ func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Agent string `json:"agent"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -237,7 +237,7 @@ func (d *Daemon) handleSwitchAgent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Agent string `json:"agent"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -268,7 +268,7 @@ func (d *Daemon) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Title string `json:"title"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

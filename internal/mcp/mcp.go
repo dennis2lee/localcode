@@ -461,8 +461,38 @@ func httpClientFor(headers map[string]string) *http.Client {
 	for k, v := range headers {
 		cp[k] = v
 	}
-	return &http.Client{Transport: headerTransport{headers: cp, base: base}}
+	return &http.Client{
+		Transport: headerTransport{headers: cp, base: base},
+		// Go already drops Authorization and friends when a redirect
+		// crosses to another host — but only for headers set on the
+		// request it was given. These are added by the RoundTripper on
+		// every hop, after that decision has been made, so they were put
+		// back on the request to the new host. A server answering
+		// `307 Location: https://elsewhere/` (or anyone able to inject
+		// one) collected the bearer token.
+		//
+		// Verified against a plain client for comparison: it sends no
+		// Authorization to the other host, and this one sent the token.
+		//
+		// So the redirect is followed, with the credentials removed. The
+		// header map is not cleared — RoundTrip re-adds from it — so the
+		// removal is marked on the request itself and honoured there.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if req.URL.Host != via[0].URL.Host {
+				req.Header.Set(dropInjectedHeaders, "1")
+			}
+			return nil
+		},
+	}
 }
+
+// dropInjectedHeaders marks a request that has left the host the server
+// was configured as, so headerTransport withholds the credentials rather
+// than handing them to whoever the redirect named.
+const dropInjectedHeaders = "X-Localcode-Drop-Injected-Headers"
 
 // headerTransport adds the configured headers to every request — how an API
 // token reaches a remote MCP server, since the SDK's transports expose no
@@ -479,6 +509,15 @@ type headerTransport struct {
 func (t headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// RoundTrippers must not modify the request they're given.
 	clone := req.Clone(req.Context())
+	if clone.Header.Get(dropInjectedHeaders) != "" {
+		// A redirect took this off the configured host. The marker itself
+		// must not travel either.
+		clone.Header.Del(dropInjectedHeaders)
+		for k := range t.headers {
+			clone.Header.Del(k)
+		}
+		return t.base.RoundTrip(clone)
+	}
 	for k, v := range t.headers {
 		if clone.Header.Get(k) == "" {
 			clone.Header.Set(k, v)

@@ -17,7 +17,7 @@ func (d *Daemon) handleResolvePermission(w http.ResponseWriter, r *http.Request)
 		// agent.PermissionBroker.Resolve.
 		Scope string `json:"scope"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -31,7 +31,7 @@ func (d *Daemon) handleSpawnTask(w http.ResponseWriter, r *http.Request) {
 		Agent  string `json:"agent"`
 		Prompt string `json:"prompt"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

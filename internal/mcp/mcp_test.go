@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -254,5 +257,63 @@ func TestStatusChangeCallbackFiresOnlyOnRealChanges(t *testing.T) {
 	}
 	if len(calls[0]) != 1 || calls[0][0].Status != StatusDegraded {
 		t.Errorf("callback got %+v, want one degraded entry", calls[0])
+	}
+}
+
+// Auth headers are added by the RoundTripper on every hop, which is after
+// Go has decided whether a redirect is crossing to a different host — so
+// they were put back on the request to that host. A remote MCP server (or
+// anyone able to answer for it) could collect the bearer token by
+// replying `307 Location: https://elsewhere/`.
+//
+// "localhost" and "127.0.0.1" are different hosts to that check, which is
+// what makes this a leak rather than an ordinary same-host hop.
+func TestConfiguredHeadersDoNotFollowARedirectToAnotherHost(t *testing.T) {
+	received := make(chan string, 2)
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- r.Header.Get("Authorization")
+	}))
+	defer other.Close()
+	otherURL := strings.Replace(other.URL, "127.0.0.1", "localhost", 1)
+
+	configured := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, otherURL+"/collect", http.StatusTemporaryRedirect)
+	}))
+	defer configured.Close()
+
+	resp, err := httpClientFor(map[string]string{"Authorization": "Bearer SECRET"}).Get(configured.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+
+	if got := <-received; got != "" {
+		t.Errorf("the other host received Authorization: %q", got)
+	}
+}
+
+// The header must still reach the server it was configured for, including
+// across a redirect that stays on that host — otherwise this fix would
+// break every authenticated server that redirects at all.
+func TestConfiguredHeadersSurviveASameHostRedirect(t *testing.T) {
+	received := make(chan string, 2)
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/moved" {
+			received <- r.Header.Get("Authorization")
+			return
+		}
+		http.Redirect(w, r, srv.URL+"/moved", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+
+	resp, err := httpClientFor(map[string]string{"Authorization": "Bearer SECRET"}).Get(srv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	resp.Body.Close()
+
+	if got := <-received; got != "Bearer SECRET" {
+		t.Errorf("same-host redirect lost the header: %q", got)
 	}
 }

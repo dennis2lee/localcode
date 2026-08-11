@@ -366,15 +366,30 @@ func (s *Store) Append(sessionID string, typ events.Type, data map[string]any) (
 			sub.markLost()
 		}
 	}
-	file := st.file
-	s.mu.Unlock()
-
-	if file != nil {
-		line, err := json.Marshal(ev)
-		if err == nil {
-			_, _ = file.Write(append(line, '\n'))
+	// Written under the same lock that handed out the seq, which is what
+	// makes the file's order the log's order.
+	//
+	// Outside it, two appends could take seq N and N+1 and then reach the
+	// file in the opposite order — routine rather than exotic: a
+	// background task writes task.status to its parent while that parent's
+	// turn is streaming deltas. Measured at ~55 inverted lines per 200
+	// concurrent appends. Restoring reads the file in file order, so the
+	// in-memory log came back out of sequence and every seq-based lookup
+	// after it — `since=`, Last-Event-ID resume, the tail cut — was
+	// working against an unsorted list.
+	//
+	// It also closes the window where Delete could close the file between
+	// the unlock and the write, since Delete takes this same lock.
+	//
+	// The cost is a small buffered write inside the lock. The fanout to
+	// subscribers above already runs here, and nothing in this function
+	// waits on anything but memory and one Write syscall.
+	if st.file != nil {
+		if line, err := json.Marshal(ev); err == nil {
+			_, _ = st.file.Write(append(line, '\n'))
 		}
 	}
+	s.mu.Unlock()
 
 	return ev, nil
 }
@@ -537,16 +552,37 @@ func (s *Store) restoreOne(dir, id string) error {
 	}
 
 	if logData, err := os.ReadFile(filepath.Join(dir, id+".jsonl")); err == nil {
-		scanner := bufio.NewScanner(bytes.NewReader(logData))
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			var ev events.Event
-			if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
-				continue
+		// Read with a Reader, not a Scanner. A Scanner has a maximum line
+		// length and nothing here truncates tool output, so one `cat` of a
+		// large file writes a line past any cap that could be chosen — and
+		// a Scanner reports that by stopping, which is indistinguishable
+		// from reaching the end of the file.
+		//
+		// The consequence was not a truncated transcript but a corrupted
+		// log. Every later event was dropped, nextSeq was restored below
+		// the highest seq actually in the file, and appends after the
+		// restart handed out numbers the file already contained. Two
+		// events with one seq breaks `since=` replay and Last-Event-ID
+		// resume for that session permanently, and nothing reported a
+		// problem: restore returned no error at all.
+		r := bufio.NewReader(bytes.NewReader(logData))
+		for {
+			line, err := r.ReadBytes('\n')
+			if len(line) > 0 {
+				var ev events.Event
+				// A line that does not parse is skipped, not fatal: the
+				// last line of a log whose write was interrupted is a
+				// partial one, and losing it is right — losing everything
+				// after it is not.
+				if json.Unmarshal(bytes.TrimSpace(line), &ev) == nil {
+					st.log = append(st.log, ev)
+					if ev.Seq > st.nextSeq {
+						st.nextSeq = ev.Seq
+					}
+				}
 			}
-			st.log = append(st.log, ev)
-			if ev.Seq > st.nextSeq {
-				st.nextSeq = ev.Seq
+			if err != nil {
+				break // io.EOF, or a final line with no newline
 			}
 		}
 	} else if !os.IsNotExist(err) {

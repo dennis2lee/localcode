@@ -40,7 +40,7 @@ func (d *Daemon) handleBrowseWorkspace(w http.ResponseWriter, r *http.Request) {
 		Start string `json:"start"`
 	}
 	// A missing or unreadable body just means "no starting directory".
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	_ = json.NewDecoder(jsonBody(w, r)).Decode(&req)
 
 	// Tied to the request context so closing the tab or window takes the
 	// dialog down with it, rather than leaving an orphaned helper process
@@ -78,7 +78,7 @@ func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 		// look like it had not taken.
 		SessionID string `json:"session_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil || req.Path == "" {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}

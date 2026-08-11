@@ -224,7 +224,7 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Text string `json:"text"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
