@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.33.4
+
+Six findings from the code review, each re-checked against the code before it was fixed. One of the six turned out not to be what the review said; see the note at the end.
+
+- **Fix: a session that had ever approved a command could not be typed in after reopening it in the TUI.** Both halves of a permission are in the session log and the TUI replays that log from the start, but it had no handler for the resolution — so every request ever answered came back as a live modal, and a pending request refuses every message. The only way to type was to answer a question from days ago. It is also cleared now when another client answers, which previously left the box on screen until a key was pressed.
+- **Fix: a deny rule was defeated by quoting the command.** Matching is a glob against text that still carries its quotes, while the shell strips them before deciding what to run — so `curl x`, `"curl" x`, `cu''rl x` and `c\url x` are one command in four spellings and a rule `curl *` recognised one. Usually that weakened a deny to a prompt; **with `skip_permissions` on it became an unprompted allow**, against the setting's own promise that explicit denials still deny. Each command is now matched as written and unquoted, and the stricter answer wins: a deny needs either reading, an allow needs both, so this can only tighten what was permitted.
+- **Fix: a background task that needed permission waited forever.** Nothing streams a task's own log, so the request was written where it could not be seen or answered, and the task held one of the concurrency slots indefinitely with "1 background task" as the only symptom. The request now also appears in the conversation that spawned the task, marked with which task it came from, and answering it there releases the task.
+- **New: `/tasks cancel <id>`.** Stops a background task. The endpoint existed; nothing in either client called it.
+- **Fix: one stuck speech engine froze dictation for every client.** Committing an utterance waits on the engine for up to a minute while holding the session lock, and the reaper checked every session's idle time while holding the manager lock — so one wedged engine blocked new dictations, audio from every other client, and even switching the microphone off. Idle time is read without that lock now.
+- **Fix: answering a permission in the Web UI could leave the prompt box disabled.** The unlock waited for the resolution to come back over the event stream; if that stream had quietly died, the click closed the modal, the turn proceeded, and the box stayed disabled reading "Resolve the permission request above" with nothing on screen to resolve.
+- **Fix: a message sent at the moment a turn ended could sit unsent.** That case was answered with the same "already processing a message" the ordinary busy path uses, so the TUI queued the message and waited for a turn end that had already happened. It now retries, which is what the situation actually calls for: nothing is running.
+
+**On the review itself.** One claim did not survive checking: a background task's permission hang was reported as having no escape short of restarting the daemon, but the cancel route, the manager method and the client method all existed, and cancelling did release the call. What was missing was any UI calling it. A second was overstated (only committing an utterance blocks, not every partial transcription). The remaining findings in that document have not had the same treatment and are leads, not confirmed defects.
+
 ## v0.33.3
 
 **Contains a security fix and two fixes for faults that a restart did not clear. Upgrade.**
