@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.35.0
+
+The last of the major review findings. Fourteen items, each checked against the code first; two came back different from the report.
+
+- **Fix: `DICTATION=0` was ignored when the Windows installer asked for admin rights**, so the ~200MB speech model was downloaded anyway, with no progress shown because that step runs elevated. Windows Installer drops a command-line setting before the elevated half of an install unless it is explicitly listed as safe to pass through, and it was not. The build now checks for this specifically; written the obvious way, the check would have passed while the switch stayed broken.
+- **Fix: switching workspace could let a turn write into the old directory.** The check that no turn was running and the directory change itself were two separate moments, and a turn starting in between ran its first relative-path write against the new directory — a file written into the wrong repository, reported nowhere. Forking and deleting a session had the same shape. Each now completes with turns held off.
+- **Fix: two clicks on the microphone opened two microphones.** The guard against a second start ran before the value it checks was set, so the second click orphaned the first recording: the browser's recording indicator stayed lit after dictation was switched off, and the microphone was held until the tab closed.
+- **Fix: text typed just after stopping dictation was discarded.** The final transcription arrives after the prompt box is yours again, and it was writing back the box as it stood when dictation started.
+- **Fix: a second dictation configuration killed the engine the first was using**, aborting a transcription in progress with nothing on screen to say so. Asking for the default number of threads and asking for that same number explicitly also counted as different configurations, so those two took turns restarting each other.
+- **Fix: a prompt sent at the moment a turn ended could sit unsent in the Web UI** — the same fault fixed in the TUI in v0.33.4, and the same one-retry answer.
+- **Fix: `localcode mcp get` printed environment variable values**, so a server added with an API token in its environment leaked it into the terminal and into any pasted bug report. Names only now, matching how headers were already handled.
+- **Fix: token counts were lost with some local model servers.** vLLM and several OpenAI-compatible proxies report usage alongside the last piece of the reply rather than on their own; only the latter was read, so the context meter never moved.
+- **Fix: dictation sessions had no limit.** Capped at sixteen.
+- **Fix: a failed delegation left the conversation in a different shape after a restart** than it had while running. The failure is recorded as the reply now.
+- **Fix: answering a permission request that nothing was waiting on reported success.** It returns "not pending" instead, so a client cannot go on believing it unblocked a turn it did not.
+
+**Two review claims changed on inspection.** One finding was no longer a bug — an earlier fix had already covered it. And the fix the report proposed for the installer setting cannot be applied as described: it makes the installer build fail, so the value is edited into the package after the build instead. One finding is deliberately not fixed: permission requests are answerable from any session, which is a boundary the daemon does not draw anywhere, having no authentication at all.
+
 ## v0.34.0
 
 Four findings about stored data and one about a credential. Each was reproduced before it was fixed, and two came back different from the review.
