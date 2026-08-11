@@ -200,10 +200,22 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 
 // ListMCPServers returns the names of every MCP server currently
 // connected to the daemon (empty if none are configured).
+//
+// The endpoint returns a state object per server, not a bare name, so
+// decoding straight into []string could never succeed — nothing called
+// this, which is the only reason it went unnoticed.
 func (c *Client) ListMCPServers(ctx context.Context) ([]string, error) {
-	var out []string
-	err := c.doJSON(ctx, http.MethodGet, "/api/mcp-servers", nil, &out)
-	return out, err
+	var states []struct {
+		Name string `json:"name"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/api/mcp-servers", nil, &states); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(states))
+	for _, s := range states {
+		names = append(names, s.Name)
+	}
+	return names, nil
 }
 
 // UploadFile uploads a file's contents to sessionID (drag-and-drop

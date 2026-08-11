@@ -55,8 +55,15 @@ func (tm *TaskManager) nextTaskID() string {
 // new session's id; progress is reported via task.status events appended to
 // the parent session.
 func (tm *TaskManager) Spawn(parentSessionID, agentName, prompt string) (string, error) {
-	taskID := tm.nextTaskID()
+	// Checked before anything is created. The child session used to be
+	// created first, so spawning against a parent that does not exist
+	// failed at the append and left the child behind — invisible (tasks
+	// are not listed) and permanent, once per attempt.
+	if _, err := tm.loop.Store.Get(parentSessionID); err != nil {
+		return "", fmt.Errorf("spawn task: %w", err)
+	}
 
+	taskID := tm.nextTaskID()
 	if _, err := tm.loop.Store.CreateSession(taskID, parentSessionID, agentName, false); err != nil {
 		return "", fmt.Errorf("create task session: %w", err)
 	}
@@ -66,6 +73,8 @@ func (tm *TaskManager) Spawn(parentSessionID, agentName, prompt string) (string,
 		"agent":   agentName,
 		"prompt":  prompt,
 	}); err != nil {
+		// Nothing is watching this child and nothing ever will be.
+		tm.loop.Store.Delete(taskID)
 		return "", fmt.Errorf("append task.spawned: %w", err)
 	}
 
@@ -82,8 +91,15 @@ func (tm *TaskManager) Spawn(parentSessionID, agentName, prompt string) (string,
 func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentName, prompt string) {
 	defer func() {
 		tm.mu.Lock()
+		cancel := tm.cancels[taskID]
 		delete(tm.cancels, taskID)
 		tm.mu.Unlock()
+		// Called, not merely dropped: a context with a live cancel func
+		// stays attached to its parent, so a long-running daemon
+		// accumulated one per task it had ever run.
+		if cancel != nil {
+			cancel()
+		}
 	}()
 
 	select {
@@ -104,9 +120,14 @@ func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentNa
 
 	err := tm.loop.SendMessage(ctx, taskID, agentName, prompt)
 
-	status := "completed"
-	data := map[string]any{"task_id": taskID, "status": status}
-	if err != nil {
+	data := map[string]any{"task_id": taskID, "status": "completed"}
+	switch {
+	case ctx.Err() != nil:
+		// Stopped on purpose. Reporting that as "failed" with a
+		// context-cancelled error underneath made a deliberate stop look
+		// like something had gone wrong.
+		data["status"] = "cancelled"
+	case err != nil:
 		data["status"] = "failed"
 		data["error"] = err.Error()
 	}

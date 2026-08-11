@@ -23,6 +23,11 @@ var knownFamilies = []entry{
 	// Claude (Bedrock model IDs carry a region prefix like "us."/"global."
 	// and an "anthropic." vendor prefix; direct Anthropic API IDs don't —
 	// matching on the family substring handles both).
+	// Claude 3.x put the generation before the family
+	// ("claude-3-5-sonnet-...", "claude-3-opus-..."), so none of the
+	// family substrings below reach them and they fell back to the
+	// default — a meter reading about 1.6x the real context use.
+	{"claude-3", 200000},
 	{"claude-opus", 200000},
 	{"claude-sonnet", 200000},
 	{"claude-haiku", 200000},

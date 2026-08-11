@@ -28,11 +28,33 @@ jobs:
   build:
     runs-on: macos-14
     steps:
+      # The ref is checked against the shape of an upstream release tag
+      # before it is used. This artifact is downloaded and executed by
+      # `localcode dictation`, so a dispatch that could name any branch or
+      # commit would put an arbitrary build behind a trusted name — which
+      # is what this file's "pinned upstream tag" comment already claimed
+      # was not possible.
+      - name: Check the requested ref is a release tag
+        shell: bash
+        env:
+          LC_REF: ${{ inputs.ref }}
+        run: |
+          ref="${LC_REF:-v1.9.2}"
+          case "$ref" in
+          v[0-9]*.[0-9]*.[0-9]*) ;;
+          *)
+            echo "refusing to build from '$ref': only upstream release tags (vX.Y.Z) are allowed" >&2
+            exit 1
+            ;;
+          esac
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+        id: pin
+
       - name: Check out whisper.cpp
         uses: actions/checkout@v4
         with:
           repository: ggml-org/whisper.cpp
-          ref: ${{ inputs.ref || 'v1.9.2' }}
+          ref: ${{ steps.pin.outputs.ref }}
 
       # Two single-architecture builds joined with lipo, because CMake
       # builds one architecture at a time here: Metal shader compilation

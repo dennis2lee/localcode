@@ -50,7 +50,7 @@ type whisperProcess struct {
 	// that is 127.0.0.1 and a port picked at startup; for a remote one it
 	// is whatever the user configured.
 	host string
-	log  *bytes.Buffer
+	log  *syncBuffer
 
 	// exited is closed when the process ends.
 	//
@@ -99,7 +99,7 @@ func acquireWhisper(cfg Config) (*whisperProcess, error) {
 	// thing to keep warm, so a plain value per recognizer avoids the
 	// refcount and the kill-on-key-change question entirely.
 	if remote := cfg.RemoteHost(); remote != "" {
-		p := &whisperProcess{host: remote, log: &bytes.Buffer{}}
+		p := &whisperProcess{host: remote, log: &syncBuffer{}}
 		if err := p.reachable(); err != nil {
 			return nil, err
 		}
@@ -176,6 +176,30 @@ func normalizeThreads(threads int) int {
 	return threads
 }
 
+// syncBuffer collects the engine's output for error reporting.
+//
+// Synchronised because two goroutines touch it: os/exec's copier, which
+// writes whatever the child prints, and whoever is waiting for the server
+// to come up, which reads it to explain a timeout. A plain bytes.Buffer
+// there is a data race, and it only shows up when startup is slow —
+// which is exactly when the read happens.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func startWhisper(bin, model string, threads int) (*whisperProcess, error) {
 	port, err := freePort()
 	if err != nil {
@@ -201,7 +225,7 @@ func startWhisper(bin, model string, threads int) (*whisperProcess, error) {
 	// box on screen for as long as dictation is available — which is the
 	// whole session.
 	childproc.Hide(cmd)
-	logBuf := &bytes.Buffer{}
+	logBuf := &syncBuffer{}
 	// Kept rather than discarded: when the server refuses to start, its
 	// reason is on stderr, and "whisper did not become ready" on its own
 	// sends people looking in the wrong place.
@@ -231,6 +255,14 @@ func (p *whisperProcess) waitReady() error {
 		conn, err := net.DialTimeout("tcp", p.addr(), 300*time.Millisecond)
 		if err == nil {
 			conn.Close()
+			// Something answered — but the port was picked by opening a
+			// listener and closing it again, so between that and the
+			// child's bind anything could have taken it. If our process
+			// has died, whatever just answered is not ours, and treating
+			// it as the engine would send audio to a stranger.
+			if !p.alive() {
+				return fmt.Errorf("whisper engine exited at startup: %s", p.tail())
+			}
 			return nil
 		}
 		time.Sleep(150 * time.Millisecond)

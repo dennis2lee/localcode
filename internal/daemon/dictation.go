@@ -146,7 +146,12 @@ func (d *Daemon) handleDictationAudio(w http.ResponseWriter, r *http.Request) {
 
 	res, err := sess.Write(pcm)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		// 404 rather than 400, because the only way to get here is a
+		// session that has stopped — usually reaped while the browser
+		// was still uploading. The client already knows how to start a
+		// new one when a session is gone; a 400 told it the audio was
+		// malformed, which it was not, and it gave up instead.
+		writeError(w, http.StatusNotFound, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

@@ -68,6 +68,14 @@ func (d *Daemon) handleListTasks(w http.ResponseWriter, r *http.Request) {
 // rather than only a post-mortem.
 func (d *Daemon) handleTaskOutput(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("taskId")
+	// It has to actually be a task. The id went straight to the event
+	// log, so this returned any conversation in the daemon while calling
+	// it a task — a background task is a child session, and a session
+	// with no parent is somebody's conversation.
+	if sess, err := d.Loop.Store.Get(taskID); err != nil || sess.ParentID == "" {
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown task %s", taskID))
+		return
+	}
 	evs, err := d.Loop.Store.Events(taskID, 0)
 	if err != nil {
 		writeError(w, http.StatusNotFound, fmt.Errorf("unknown task %s", taskID))

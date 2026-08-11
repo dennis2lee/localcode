@@ -19,11 +19,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		// whole point of cancelling is to stop, so letting the queue
 		// immediately fire the next message would be the opposite of what
 		// was asked for.
-		if m.waiting {
-			m.queue = nil
-			return m, m.cancelTurn(), true
-		}
-		return m, nil, true
+		// Sent whether or not this client thinks a turn is running.
+		// It often is when m.waiting is false: attaching to a session
+		// mid-turn never sets it, and another client's turn.done clears
+		// it. Esc then did nothing at all while output streamed in, with
+		// the "esc to cancel" hint hidden too. The daemon answers
+		// "nothing was running" harmlessly when there is nothing to stop.
+		m.queue = nil
+		return m, m.cancelTurn(), true
 
 	case "y", "n", "s", "a":
 		if m.pending != nil && m.canAnswerPermission() {

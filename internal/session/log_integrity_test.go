@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"testing"
 
 	"localcode/internal/events"
@@ -138,5 +139,30 @@ func TestConcurrentAppendsReachTheFileInSeqOrder(t *testing.T) {
 			t.Fatalf("line %d has seq %d after seq %d; the file is out of order", n, ev.Seq, prev)
 		}
 		prev = ev.Seq
+	}
+}
+
+// Deleting a session left everyone reading it on a stream that would
+// never produce another event and never end — they sat there until the
+// HTTP client itself gave up.
+func TestDeleteEndsLiveSubscriptions(t *testing.T) {
+	store, err := NewStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSession("s1", "", "a", true); err != nil {
+		t.Fatal(err)
+	}
+	_, lost, _, err := store.Subscribe("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete("s1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-lost:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a reader of the deleted session was never told")
 	}
 }

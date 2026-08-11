@@ -336,14 +336,16 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			if wasCancelled {
 				cancel()
 				d.turns.end(id)
-				d.Loop.Store.Append(id, events.TypeTurnCancelled, map[string]any{})
+				_, err := d.Loop.Store.Append(id, events.TypeTurnCancelled, map[string]any{})
+				logAppend(id, events.TypeTurnCancelled, err)
 				return
 			}
 			if err != nil {
 				log.Printf("session %s: SendMessage: %v", id, err)
 				cancel()
 				d.turns.end(id)
-				d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
+				_, err := d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
+				logAppend(id, events.TypeTurnDone, err)
 				return
 			}
 
@@ -365,7 +367,8 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 				// registration is cleared. Clients send their next message
 				// the moment they see it, so the other order is a race:
 				// event observed, still registered as busy, 409.
-				d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
+				_, err := d.Loop.Store.Append(id, events.TypeTurnDone, map[string]any{})
+				logAppend(id, events.TypeTurnDone, err)
 				return
 			}
 			text = next

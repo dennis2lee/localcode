@@ -29,6 +29,18 @@ WEBVIEW2_BOOTSTRAPPER_URL="https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+if ! command -v wixl >/dev/null 2>&1; then
+	echo "error: wixl not found. Install with: brew install msitools" >&2
+	exit 1
+fi
+
+if [ -z "$GUI_EXE_PATH" ] || [ ! -f "$GUI_EXE_PATH" ]; then
+	echo "error: need a path to a built localcode-gui.exe as \$3" >&2
+	echo "  it is CGo and cannot be cross-compiled here; build it on Windows or" >&2
+	echo "  download it: gh run download <run-id> -n localcode-gui-windows-amd64" >&2
+	exit 1
+fi
+
 # The sherpa-onnx DLLs the GUI needs at run time ship in the same CI
 # artifact as localcode-gui.exe, so they are looked for beside it. Missing
 # them is fatal rather than a warning: the MSI would install a GUI that
@@ -44,17 +56,6 @@ for dll in sherpa-onnx-c-api.dll sherpa-onnx-cxx-api.dll onnxruntime.dll; do
 	fi
 done
 
-if ! command -v wixl >/dev/null 2>&1; then
-	echo "error: wixl not found. Install with: brew install msitools" >&2
-	exit 1
-fi
-
-if [ -z "$GUI_EXE_PATH" ] || [ ! -f "$GUI_EXE_PATH" ]; then
-	echo "error: need a path to a built localcode-gui.exe as \$3" >&2
-	echo "  it is CGo and cannot be cross-compiled here; build it on Windows or" >&2
-	echo "  download it: gh run download <run-id> -n localcode-gui-windows-amd64" >&2
-	exit 1
-fi
 
 OUT="$DIST/windows"
 mkdir -p "$OUT"
@@ -67,6 +68,23 @@ GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o "$WORK/${BIN_NAME}.exe
 
 echo "==> fetching WebView2 Evergreen Bootstrapper"
 curl -fsSL -o "$WORK/MicrosoftEdgeWebview2Setup.exe" "$WEBVIEW2_BOOTSTRAPPER_URL"
+# Every other downloaded artifact in this project is checksum-pinned, and
+# this is the one that gets embedded in a per-machine installer and run
+# elevated on someone else's computer. Microsoft serves this URL as a
+# rolling "evergreen" bootstrapper, so it is signature-checked rather than
+# hash-pinned: a pin would break on every upstream refresh, and the
+# publisher is what matters here anyway.
+if command -v osslsigncode >/dev/null 2>&1; then
+	if ! osslsigncode verify -in "$WORK/MicrosoftEdgeWebview2Setup.exe" >/dev/null 2>&1; then
+		echo "error: the WebView2 bootstrapper failed signature verification" >&2
+		echo "       it is embedded in the MSI and run elevated; refusing to ship it" >&2
+		exit 1
+	fi
+	echo "    signature OK"
+else
+	echo "    warning: osslsigncode not installed, so the bootstrapper's signature was NOT checked" >&2
+	echo "             install it with: brew install osslsigncode" >&2
+fi
 
 MSI="$OUT/${BIN_NAME}-${VERSION}-windows-amd64.msi"
 echo "==> wixl -> $MSI"

@@ -104,7 +104,16 @@ func login(ctx context.Context, client oidcClient, startURL string, onAuth func(
 		return Token{}, err
 	}
 
-	regExpiresAt := time.Unix(reg.ClientIdIssuedAt, 0).Add(90 * 24 * time.Hour) // AWS issues public clients with a 90-day registration lifetime
+	// What AWS actually returned, not an assumption about it. 90 days is
+	// the usual lifetime, but a shorter one written down as 90 days means
+	// the cache claims a registration is valid after it has expired, and
+	// the refresh then fails with something opaque instead of prompting a
+	// fresh login. Falls back to the assumption only if the field is
+	// absent.
+	regExpiresAt := time.Unix(reg.ClientSecretExpiresAt, 0)
+	if reg.ClientSecretExpiresAt == 0 {
+		regExpiresAt = time.Unix(reg.ClientIdIssuedAt, 0).Add(90 * 24 * time.Hour)
+	}
 	return Token{
 		AccessToken:           aws.ToString(tok.AccessToken),
 		RefreshToken:          aws.ToString(tok.RefreshToken),

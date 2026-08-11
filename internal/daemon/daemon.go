@@ -14,6 +14,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 
 	"localcode/internal/agent"
@@ -238,4 +239,18 @@ func writeHTTPError(w http.ResponseWriter, err error) {
 		return
 	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+// logAppend reports an event that could not be recorded.
+//
+// These appends shape what clients show — the TUI takes the current agent
+// only from the event, not from the HTTP reply — so one that silently
+// fails leaves the footer naming an agent the daemon is no longer using,
+// with nothing anywhere to say so. Not fatal: the change itself has
+// already happened, and refusing the request afterwards would be a
+// second, invented failure. But it must not be invisible.
+func logAppend(sessionID string, typ events.Type, err error) {
+	if err != nil {
+		log.Printf("session %s: could not record %s: %v", sessionID, typ, err)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"localcode/internal/shell"
 	"path/filepath"
@@ -182,13 +183,27 @@ func substituteArgs(s, args string, fields []string) string {
 	return s
 }
 
+// embeddedShellTimeout bounds a `!...` expansion inside a slash command.
+//
+// It had none, while the bash tool has two minutes and hooks have thirty
+// seconds — so one command that never returns held the turn open with no
+// way to stop it. Generous, because these are ordinarily `git status` and
+// the like, and the cost of being wrong is a command reported as timed
+// out rather than one that hangs forever.
+const embeddedShellTimeout = 30 * time.Second
+
 func runShell(cmdStr, cwd string) (string, error) {
-	c := shell.Command(context.Background(), cmdStr)
+	ctx, cancel := context.WithTimeout(context.Background(), embeddedShellTimeout)
+	defer cancel()
+	c := shell.Command(ctx, cmdStr)
 	c.Dir = cwd
 	var buf bytes.Buffer
 	c.Stdout = &buf
 	c.Stderr = &buf
 	if err := c.Run(); err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("shell command %q did not finish within %s", cmdStr, embeddedShellTimeout)
+		}
 		return "", fmt.Errorf("shell command %q: %w", cmdStr, err)
 	}
 	return strings.TrimRight(buf.String(), "\n"), nil

@@ -365,3 +365,21 @@ func TestOrdinarySessionPermissionIsNotDuplicated(t *testing.T) {
 		t.Errorf("got %d permission.request events, want 1", requests)
 	}
 }
+
+// Spawning against a parent that does not exist used to create the child
+// session first and fail at the append, leaving an invisible session
+// behind — once per attempt, forever.
+func TestSpawnLeavesNoOrphanWhenTheParentIsMissing(t *testing.T) {
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm := NewTaskManager(context.Background(), &Loop{Store: store}, 1)
+	before := len(store.AllSessions())
+	if _, err := tm.Spawn("s-does-not-exist", "general-purpose", "hi"); err == nil {
+		t.Fatal("spawned a task against a session that does not exist")
+	}
+	if after := len(store.AllSessions()); after != before {
+		t.Errorf("%d session(s) left behind by a failed spawn", after-before)
+	}
+}

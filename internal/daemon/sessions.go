@@ -264,7 +264,8 @@ func (d *Daemon) handleSwitchAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	d.Loop.Store.Append(id, events.TypeAgentSwitched, map[string]any{"agent": req.Agent})
+	_, appendErr := d.Loop.Store.Append(id, events.TypeAgentSwitched, map[string]any{"agent": req.Agent})
+	logAppend(id, events.TypeAgentSwitched, appendErr)
 
 	writeJSON(w, http.StatusOK, sess)
 }
@@ -291,7 +292,8 @@ func (d *Daemon) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	d.Loop.Store.Append(id, events.TypeSessionRenamed, map[string]any{"title": req.Title})
+	_, appendErr := d.Loop.Store.Append(id, events.TypeSessionRenamed, map[string]any{"title": req.Title})
+	logAppend(id, events.TypeSessionRenamed, appendErr)
 
 	writeJSON(w, http.StatusOK, sess)
 }

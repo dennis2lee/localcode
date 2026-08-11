@@ -559,6 +559,10 @@ func (m *Manager) reconnect(ctx context.Context, server string) (*mcpsdk.ClientS
 	var old *mcpsdk.ClientSession
 	if ok {
 		sc, old = e.config, e.session
+		// Cleared here, under the same lock: the entry must not still
+		// name a session that is about to be closed, or a second caller
+		// arriving mid-redial would take the dead one for a live one.
+		e.session = nil
 	}
 	m.mu.Unlock()
 	if !ok {
@@ -581,6 +585,15 @@ func (m *Manager) reconnect(ctx context.Context, server string) (*mcpsdk.ClientS
 	}
 
 	m.mu.Lock()
+	if e.session != nil {
+		// Another caller redialled while this one was connecting. Theirs
+		// is already in place and in use; this one would be dropped on
+		// the floor with its pipes and its child process still open.
+		winner := e.session
+		m.mu.Unlock()
+		_ = session.Close()
+		return winner, nil
+	}
 	e.session = session
 	changed := m.setStatus(server, StatusConnected, "")
 	m.mu.Unlock()

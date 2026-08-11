@@ -28,6 +28,11 @@ type Manager struct {
 	sessions map[string]*Session
 	nextID   int
 	stop     chan struct{}
+	// closed is set by Close. Without it, a Start already past its
+	// readiness check could insert a session — and start an engine —
+	// after Shutdown had torn one down, leaving exactly the orphaned
+	// whisper-server that Shutdown exists to prevent.
+	closed bool
 }
 
 func NewManager(cfg Config) *Manager {
@@ -79,6 +84,10 @@ func (m *Manager) Start() (string, error) {
 	// Checked before opening anything, since opening is the expensive
 	// part this is here to bound.
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return "", fmt.Errorf("dictation is shutting down")
+	}
 	if len(m.sessions) >= maxSessions {
 		m.mu.Unlock()
 		return "", fmt.Errorf("too many dictation sessions open (%d); stop one before starting another", maxSessions)
@@ -93,7 +102,12 @@ func (m *Manager) Start() (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Re-checked under the lock: the open above is slow enough for a
-	// burst of requests to pass the first check together.
+	// burst of requests to pass the first check together, and for Close
+	// to have happened in the meantime.
+	if m.closed {
+		rec.Close()
+		return "", fmt.Errorf("dictation is shutting down")
+	}
 	if len(m.sessions) >= maxSessions {
 		rec.Close()
 		return "", fmt.Errorf("too many dictation sessions open (%d); stop one before starting another", maxSessions)
@@ -174,6 +188,7 @@ func (m *Manager) reap() {
 // Close stops the reaper and every live session.
 func (m *Manager) Close() {
 	m.mu.Lock()
+	m.closed = true
 	if m.stop != nil {
 		close(m.stop)
 		m.stop = nil

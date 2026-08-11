@@ -2,7 +2,7 @@ import { permissionTextEl, permissionAllowAlwaysBtn } from './dom.js';
 import { app, session } from './state.js';
 import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
-  appendToolCall, finishToolCall, resolvePendingUser,
+  appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
 } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers } from './render.js';
 import { setWaiting, setConnected, setInputLocked } from './composer.js';
@@ -140,6 +140,7 @@ const handlers = {
     session.promptQueue = [];
     session.runningTool = '';
     setWaiting(false);
+    abandonRunningToolCalls('stopped');
     appendTool('[cancelled]');
   },
   error: (d) => {

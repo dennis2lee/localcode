@@ -159,6 +159,22 @@ export function finishToolCall(toolUseID, content, isError) {
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
 
+// abandonRunningToolCalls closes out every row still spinning.
+//
+// Cancelling a turn stops the tool call where it is, and the daemon emits
+// no tool.end for it — nothing ran to completion, so there is no result
+// to report. The rows were left spinning under the "[cancelled]" line
+// forever, and their entries leaked until the session was switched.
+export function abandonRunningToolCalls(why) {
+  for (const [id, entry] of session.toolRows) {
+    const { row, stateEl, marker } = entry;
+    row.classList.remove('running');
+    marker.textContent = '–';
+    stateEl.textContent = why;
+    session.toolRows.delete(id);
+  }
+}
+
 // resultSize describes a tool result without showing it: a short one is
 // worth reading inline, a long one is better summed up by its size than
 // by its first line taken out of context.

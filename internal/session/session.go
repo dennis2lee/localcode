@@ -248,6 +248,14 @@ func (s *Store) Delete(sessionID string) error {
 	if st.file != nil {
 		_ = st.file.Close()
 	}
+	// Everyone still reading this session is told, the same way a
+	// subscriber that falls behind is told. Otherwise they sat on a
+	// stream that would never produce another event and never end,
+	// holding the connection until the client itself gave up.
+	for _, sub := range st.subs {
+		sub.markLost()
+	}
+	st.subs = map[int]*subscriber{}
 	s.mu.Unlock()
 
 	if dir != "" {

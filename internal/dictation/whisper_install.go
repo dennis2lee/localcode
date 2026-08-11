@@ -116,6 +116,10 @@ func InstallWhisper(ctx context.Context, parent string, progress func(stage stri
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", parent, err)
 	}
+	// Anything a killed run left behind. These are 190-400MB each, they
+	// sit beside the binary where nobody looks, and nothing else ever
+	// removes them: a few interrupted installs quietly cost gigabytes.
+	sweepPartials(parent)
 
 	if !fileExists(filepath.Join(parent, whisperBinName())) {
 		url, sum, err := whisperEngineAsset()
@@ -127,11 +131,24 @@ func InstallWhisper(ctx context.Context, parent string, progress func(stage stri
 			return err
 		}
 		defer os.Remove(archive)
-		if err := extractZip(archive, parent, whisperEngineFiles); err != nil {
+		// Unpacked next door and moved into place, rather than written
+		// directly into parent. Ctrl-C mid-extract otherwise left a
+		// half-written engine that satisfied "installed" for good — and
+		// re-running install, seeing the binary already there, did
+		// nothing. The only way out was deleting files by hand.
+		stage, err := os.MkdirTemp(parent, ".unpack-*")
+		if err != nil {
+			return fmt.Errorf("create staging directory: %w", err)
+		}
+		defer os.RemoveAll(stage)
+		if err := extractZip(archive, stage, whisperEngineFiles); err != nil {
 			return err
 		}
-		if !fileExists(filepath.Join(parent, whisperBinName())) {
+		if !fileExists(filepath.Join(stage, whisperBinName())) {
 			return fmt.Errorf("the downloaded engine archive contained no %s", whisperBinName())
+		}
+		if err := moveAll(stage, parent); err != nil {
+			return err
 		}
 	}
 
@@ -228,4 +245,53 @@ func extractZipFile(f *zip.File, target string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// moveAll moves everything directly inside src into dst.
+//
+// The engine binary is moved last, because it is what WhisperInstalled
+// looks for: if this is interrupted, the install has to still look
+// unfinished rather than complete-but-missing-a-DLL.
+func moveAll(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	bin := whisperBinName()
+	move := func(name string) error {
+		if err := os.Rename(filepath.Join(src, name), filepath.Join(dst, name)); err != nil {
+			return fmt.Errorf("install %s: %w", name, err)
+		}
+		return nil
+	}
+	for _, e := range entries {
+		if e.Name() == bin {
+			continue
+		}
+		if err := move(e.Name()); err != nil {
+			return err
+		}
+	}
+	for _, e := range entries {
+		if e.Name() == bin {
+			return move(bin)
+		}
+	}
+	return nil
+}
+
+// sweepPartials removes the staging files and directories a killed or
+// power-cut run leaves behind. Best effort: a failure here is not a
+// reason to refuse to install.
+func sweepPartials(parent string) {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".download-") || strings.HasPrefix(name, ".unpack-") {
+			_ = os.RemoveAll(filepath.Join(parent, name))
+		}
+	}
 }

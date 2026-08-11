@@ -58,5 +58,10 @@ release-check:
 	@./scripts/release-preflight.sh "$(VERSION)"
 
 # GUI_EXE (required, see dist-msi above) makes this: make dist VERSION=x.y.z GUI_EXE=...
+# The order matters and parallel make must not reorder it: dist-windows
+# writes the zips into the same directory dist-msi puts the installer in,
+# and it clears the zips it is about to replace. Sequenced explicitly so
+# `make -j dist` cannot interleave them.
+.NOTPARALLEL: dist
 dist: release-check dist-mac dist-windows dist-msi
 	@echo "Packages written to $(DIST)/"

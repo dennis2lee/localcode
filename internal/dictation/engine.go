@@ -116,4 +116,18 @@ func Describe(cfg Config) string {
 // configuration one: a build with no sherpa compiled in and no whisper
 // binary installed can never dictate, and a client should hide the
 // microphone rather than offer a button that can only fail.
-func Available() bool { return sherpaAvailable() || findWhisperBin("") != "" }
+func Available() bool { return AvailableFor(Config{}) }
+
+// AvailableFor is Available for a specific configuration, so a
+// configured whisper_bin counts. Available() answers for the default
+// locations only, which reported "no recognizer" on a machine where
+// dictation would in fact have started.
+func AvailableFor(cfg Config) bool {
+	if sherpaAvailable() {
+		return true
+	}
+	if cfg.RemoteHost() != "" {
+		return true
+	}
+	return findWhisperBin(cfg.WhisperBin) != ""
+}

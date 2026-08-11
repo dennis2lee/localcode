@@ -15,8 +15,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 OUT="$DIST/windows"
-rm -rf "$OUT"
+# The zips only, not the whole directory. dist-msi writes its installer
+# here too, so wiping the directory deleted a just-built MSI — silently,
+# and depending on target order.
 mkdir -p "$OUT"
+rm -f "$OUT"/*.zip
 
 for ARCH in amd64 arm64; do
 	echo "==> building windows/${ARCH}"

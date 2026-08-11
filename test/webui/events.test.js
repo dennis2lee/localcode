@@ -477,3 +477,16 @@ test('answering a permission unlocks the composer without waiting for the event'
   assert.equal(app.el('input').disabled, false, 'composer stayed locked with nothing on screen to unlock it');
   assert.equal(app.el('send').disabled, false);
 });
+
+// Cancelling stops a tool call where it is, and the daemon emits no
+// tool.end for it — there is no result to report. The row was left
+// spinning under the "[cancelled]" line for the life of the page.
+test('cancelling a turn closes out the tool row that was still running', async () => {
+  const app = await load();
+  app.applyEvent({ type: 'tool.start', data: { tool_use_id: 't1', name: 'bash', input: '{"command":"sleep 100"}' } });
+  assert.ok(app.el('transcript').innerHTML.includes('running'), app.el('transcript').innerHTML);
+
+  app.applyEvent({ type: 'turn.cancelled', data: {} });
+  assert.ok(!app.el('transcript').innerHTML.includes('running'), 'the row is still spinning after a cancel');
+  assert.ok(app.el('transcript').innerHTML.includes('stopped'), app.el('transcript').innerHTML);
+});

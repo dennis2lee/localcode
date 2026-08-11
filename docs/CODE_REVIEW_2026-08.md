@@ -595,128 +595,48 @@ explicitly told to skip, with no progress UI since the action is deferred.
 
 ## Minor
 
-- **`internal/dictation/manager.go:49-61,131-149`** — no `closed` state: `Start`
-  racing `Close` can spawn a fresh engine *after* `Shutdown`, orphaning a
-  whisper-server the exact way the recent fix was meant to prevent. Needs a
-  `closed` flag checked under `m.mu`, re-checked at insert.
-- **`internal/dictation/whisper_install.go:120-136`** — zip extraction is
-  non-atomic and readiness is a bare existence check, so a Ctrl-C mid-extract
-  leaves a truncated engine that permanently satisfies "installed" and can
-  never self-repair (re-running install is a no-op). The sherpa path got
-  stage-and-rename for this reason; the whisper path didn't.
-- **`internal/dictation/whisper_process.go:153-188`** — data race on the shared
-  `bytes.Buffer`: the exec output-copier goroutine writes while `waitReady`'s
-  timeout path calls `tail()` → `log.String()`. `go test -race` on a slow
-  startup flags it. (The `alive()==false` branch is safe; the timeout branch is
-  not.)
-- **`internal/dictation/whisper_process.go:347-354`** — `freePort` TOCTOU:
-  the probe port can be taken between listener-close and the child's bind, and
-  `waitReady`'s bare TCP dial can bless a *different* process's server. Re-check
-  `alive()` after a successful dial.
-- **`internal/agent/taskmanager.go:72-87`** — `Spawn` leaks one
-  `context.WithCancel` per task (deleted from the map but never called on normal
-  completion); grows unbounded over a long daemon run.
-- **`internal/agent/taskmanager.go:105-113`** — a task cancelled mid-run is
-  reported `status:"failed"` with a context-cancelled error rather than
-  `"cancelled"`, so a deliberate stop shows a scary failure.
-- **`internal/agent/permission.go:133-137`** — a cancelled turn removes the
-  pending permission but never writes a `permission.resolved` event, so a client
-  replaying the log renders a prompt that can never be answered.
-- **`internal/session/session.go:239-262`** — `Delete` never notifies or closes
-  the deleted session's live SSE subscribers; they block until the HTTP client
-  itself disconnects. Also `Append`'s marshal error is swallowed (in memory but
-  never on disk → replay divergence).
-- **`internal/hooks/hooks.go:103-131`** — a `pre_tool_use` hook that hangs is
-  killed at 30s and the tool then **proceeds** (fail-open). Documented as
-  intentional, but a hook whose job is to *block* should be able to fail closed;
-  worth a config knob.
-- **`internal/commands/commands.go:185-195`** — slash-command `!…` shell
-  expansion runs with `context.Background()` and no timeout, unlike the bash
-  tool (2m) and hooks (30s). A blocking embedded command hangs the turn.
-- **`internal/tools/{write,edit,read}.go`** — file tools follow symlinks and the
-  permission subject is the literal, un-normalized path. An in-workspace allow
-  glob is satisfied by a path that is a symlink out of the workspace, or by one
-  with `../` components matched verbatim. There is no workspace-root confinement
-  at the tool layer — only whatever the permission glob expresses.
-- **`internal/mcp/mcp.go:516-552`** — `reconnect` runs `connectOne` outside the
-  lock; two concurrent `Execute` calls to the same server can both redial and
-  both store into `e.session`, leaking the loser's session (fd/pipe/process).
-- **`internal/awssso/awssso.go:107`** — registration expiry hardcoded to
-  issued-at + 90d instead of AWS's returned `ClientSecretExpiresAt`; a shorter
-  real expiry gets written too-late into the shared cache, so refresh fails
-  opaquely instead of prompting re-login.
-- **`internal/gui/gui.go:52-81`** — data race on `startErr`/`cleanup` if the
-  window closes before `start` finishes; minor (process exits immediately).
-- **`internal/modelinfo/modelinfo.go:23-31`** — Claude 3.x IDs
-  (`claude-3-5-sonnet-…`, `claude-3-opus-…`) don't match the 4.x substring
-  checks, so they fall back to 128k instead of 200k and the context meter
-  over-reports ~1.6x. UI-only.
-- **`internal/provider/openai.go:297-304`** — `ToolUseEnd` events are emitted by
-  ranging a map, so multiple tool calls surface (and execute) in random order
-  rather than the order the model issued them.
-- **`internal/dictation/download.go:98-160`** — SIGKILL/power-loss strands
-  `.download-*` / `.unpack-*` temp files (190–400MB) that no later run sweeps;
-  they accumulate invisibly beside the binary. A cheap sweep at the top of
-  `install` fixes it.
-- **`internal/dictation/engine.go:93-98`** — `Available()` ignores a config
-  `whisper_bin` (reports "no recognizer" when `Ready()`/`Open()` would succeed),
-  and it gates the sherpa-only `dictation test`, so on a non-gui build with
-  whisper installed the friendly guard is bypassed and `Diagnose` returns raw
-  `ErrUnavailable`.
-- **`internal/daemon/dictation.go:63-79`** — an audio POST racing the reaper
-  gets a 400 ("session already stopped") instead of the 404 the client's
-  session-expiry handling keys off; wrong signal, harmless server-side.
+All 29 checked. **24 fixed in v0.36.0**, 2 already fixed by earlier work, 3
+deliberately left, each with a reason.
 
-- **`internal/daemon/turns.go:253-261`** — `turn.done` is appended *after* the
-  registration is cleared (deliberately, to avoid a 409 for a client reacting
-  to it), which opens the mirror-image race: a new turn can start in between,
-  and then turn A's `turn.done` clears every client's spinner and dequeues the
-  next prompt into a session that already has turn B running.
-- **`internal/daemon/tasks.go:43-47`** — a failed spawn leaves an orphan child
-  session on disk. `Spawn` creates the child before appending `task.spawned`
-  to the parent, and `handleSpawnTask` never validates that the parent exists,
-  so `POST /api/sessions/nope/tasks` 500s and leaves a permanent, invisible
-  session behind. Repeats accumulate.
-- **`internal/daemon/tasks.go:60-66`** — `/api/tasks/{taskId}/output` passes
-  the id straight to `Store.Events` with no check that it names a task, so it
-  returns the full output of any session by id.
-- **`internal/client/client.go:203-207`** — `ListMCPServers` decodes an array
-  of objects into `[]string` and can never succeed. Dead code today; it fails
-  the moment someone wires it into the status bar.
-- **`internal/daemon/sessions.go:233,260`, `turns.go:231,238,260`** —
-  `Store.Append` errors are discarded on paths that shape client state. The
-  TUI updates its agent footer *only* from the event, so a dropped append
-  leaves the footer showing the old agent while the daemon uses the new one,
-  silently.
-- **`internal/tui/keys.go:22-26`** — `Esc` is a no-op whenever `m.waiting` is
-  false, including when the daemon does have a turn running (resume never sets
-  `waiting`, and another client's turn can clear it). Output streams in and
-  Esc does nothing; the "esc to cancel" hint is hidden too.
+### Fixed (v0.36.0)
 
-- **`internal/daemon/static/js/events.js:130-135`** — tool rows are orphaned in
-  the `running` state on cancel: the daemon never emits `tool.end` for the
-  in-flight call, so the row keeps its spinner and the literal `running…` text
-  forever, directly under a `[cancelled]` line, and the `toolRows` entry leaks
-  until the session is switched.
-- **`build/package-msi.sh:68-69`** — the WebView2 bootstrapper is downloaded
-  with no integrity check and embedded into a per-machine installer that runs
-  it elevated. Every other downloaded artifact in the project is SHA-256
-  pinned (`internal/dictation/download.go`); this is the exception, and it is
-  the one that runs elevated on end-user machines.
-- **`build/package-msi.sh:37`** — `SHERPA_DIR` is computed from `$3` before
-  `$3` is validated, so the helpful "need a path to a built localcode-gui.exe"
-  error at line 52 is unreachable. `make dist-msi` without `GUI_EXE=` dies
-  with a misleading "sherpa-onnx-c-api.dll not found" instead.
-- **`Makefile:61` + `build/package-windows.sh:18`** — `dist-windows` does
-  `rm -rf "$OUT"` on the same directory `dist-msi` writes into, so `make -j
-  dist` can delete a just-built MSI, and re-running `dist-windows` after
-  `dist-msi` silently removes the installer.
-- **`.github/workflows/whisper-macos.yml:35`** — the `ref` input is
-  unvalidated, contradicting the file's own "pinned upstream tag" comment: a
-  dispatch can build from any branch or commit and upload it under the trusted
-  artifact name that `localcode dictation` later executes.
+| Area | What it did |
+|---|---|
+| `modelinfo` | Claude 3.x IDs missed every family match, so the context meter read ~1.6x the real use — and auto-compaction fires off that number. |
+| `provider/openai` | Tool calls were emitted by ranging a map, so a multi-call turn ran its tools in a different order each time. |
+| `provider/openai` | Usage on a chunk that also carries a choice (vLLM and friends) was dropped. Fixed in v0.35.0. |
+| `daemon/tasks` | `/api/tasks/{id}/output` served any session by id while calling it a task. |
+| `agent/taskmanager` | A spawn against a missing parent left an invisible child session behind, once per attempt. |
+| `agent/taskmanager` | Every task leaked its `context.CancelFunc`; a cancelled task reported `failed` with a context error rather than `cancelled`. |
+| `session` | `Delete` never told live readers, who sat on a stream that would never end. |
+| `dictation/manager` | `Start` racing `Close` could spawn an engine after shutdown — the orphan the shutdown exists to prevent. |
+| `dictation/whisper_process` | Data race on the engine log buffer; `waitReady` could bless another process that had taken the port. |
+| `dictation/whisper_install` | Interrupted extraction left a truncated engine that satisfied "installed" forever and could not self-repair. Staged and moved now, with the binary last. |
+| `dictation/download` | Killed runs stranded 190–400MB temp files that nothing ever swept. |
+| `dictation/engine` | `Available()` ignored a configured `whisper_bin`, reporting "no recognizer" where dictation would have worked. |
+| `daemon/dictation` | An audio POST that lost to the reaper got a 400 instead of the 404 the client's expiry handling keys off. |
+| `commands` | `!...` inside a slash command had no timeout at all, so one that never returned held the turn open. |
+| `mcp` | Two concurrent redials both stored a session, leaking the loser's process and pipes. |
+| `client` | `ListMCPServers` decoded objects into `[]string` and could never have succeeded. |
+| `awssso` | Registration expiry was assumed to be 90 days instead of read from what AWS returned. |
+| `tui/keys` | Esc did nothing whenever this client did not think a turn was running — including while output was streaming in. |
+| `daemon` | `Append` errors were discarded on paths that shape client state; they are logged now. |
+| Web UI | Tool rows kept spinning forever under a `[cancelled]` line. |
+| `build/package-msi.sh` | The WebView2 bootstrapper — embedded in a per-machine installer and run elevated — was the one download with no integrity check. Signature-verified when `osslsigncode` is present, and loudly not verified when it is not. |
+| `build/package-msi.sh` | `SHERPA_DIR` was computed before `$3` was validated, so the helpful error was unreachable and a missing `GUI_EXE=` died with a misleading one. |
+| `build/package-windows.sh` + `Makefile` | `dist-windows` wiped the directory `dist-msi` writes into, so a just-built MSI could vanish. |
+| `.github/workflows/whisper-macos.yml` | The `ref` input was unvalidated, contradicting the file's own "pinned upstream tag" comment: a dispatch could put any commit behind a trusted artifact name that `localcode dictation` executes. |
 
----
+### Already fixed by earlier work
+
+* `agent/permission` — a cancelled turn now writes `permission.resolved`; done with M13 in v0.33.4.
+* `session` — `Append`'s marshal error and the write ordering; done with M3/M4 in v0.34.0.
+
+### Deliberately not fixed
+
+* **`hooks` fail-open on timeout.** A `pre_tool_use` hook that hangs is killed at 30s and the tool proceeds. Making it fail closed is a real option but it is a behaviour change that needs a config knob and a decision about the default, not a bug fix. Worth doing deliberately.
+* **File tools follow symlinks, and the permission subject is the literal path.** An in-workspace allow glob can be satisfied by a symlink pointing out of the workspace, or by a path with `../` in it matched verbatim. This is the largest item left in the document and it is a design change — workspace-root confinement at the tool layer — not a patch. Recorded in IMPROVEMENTS.
+* **`turn.done` is appended after the registration is cleared.** Deliberate, and the alternative has its own race. Left as is.
 
 ## Checked and cleared
 
@@ -844,7 +764,7 @@ this pass were self-corrected by their reviewer for the same reason (the
 markdown placeholder tokens, whose control characters are invisible in a plain
 file read).
 
-Totals: **0 critical open**, **1 major open** — M11's session-scoping, declined with a reason above. M8 was not a bug. Everything else is fixed. 29 minor remain unreviewed.
+Totals: **0 critical open**, **1 major open** (M11's session-scoping, declined with a reason), **3 minor open** — all three declined with reasons above, one of which (symlink confinement) is the largest remaining piece of work in this document. Every finding has now been checked against the code.
 
 ## What verification changed
 

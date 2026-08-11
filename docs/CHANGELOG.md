@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.36.0
+
+The 29 minor review findings, all checked. 24 fixed, 2 already covered by earlier releases, 3 left alone on purpose.
+
+- **Fix: the context meter over-reported by about 60% on Claude 3.x models**, and automatic compaction fires off that number, so conversations were being summarized far earlier than they needed to be. Those model IDs put the generation before the family name, which no lookup matched.
+- **Fix: when the model asked for several tools at once, they ran in a random order.** Often the order is the point: read a file, then edit what was read.
+- **Fix: a background task's output could be fetched for any session by id**, and was labelled a task either way.
+- **Fix: a background task started against a session that does not exist left an invisible session behind**, once per attempt.
+- **Fix: stopping a background task reported it as failed**, with an internal error attached, rather than as cancelled. Each task also leaked a small amount of memory for the life of the daemon.
+- **Fix: deleting a session left anyone reading it waiting on a stream that would never end.**
+- **Fix: an interrupted `dictation install` left an engine that was permanently half-installed** — it satisfied every "is it there?" check, so re-running install did nothing and the only way out was deleting files by hand. Interrupted runs also stranded 190-400MB of temp files that nothing ever cleaned up.
+- **Fix: dictation could report "no speech recognizer" on a machine where it would have worked**, when the engine path came from config rather than the default location.
+- **Fix: `!` commands inside a custom slash command had no time limit**, so one that never returned held the turn open with no way to stop it.
+- **Fix: Esc did nothing in the TUI whenever it had lost track of the turn** — after reattaching to a session mid-reply, or when another client was driving it. Output streamed past and the key was inert.
+- **Fix: tool rows in the Web UI kept spinning forever after a turn was cancelled.**
+- **Fix: `localcode mcp` could leak a server process** when two tool calls reconnected to it at the same time.
+- **Fix: an AWS SSO registration's expiry was assumed rather than read**, so a shorter one failed opaquely at refresh instead of prompting a fresh login.
+- **Fix: the WebView2 installer bundled into the Windows MSI had no integrity check**, alone among everything this project downloads, and it is the one that runs elevated on someone else's machine. Its signature is verified at build time now, and the build says so loudly when it cannot check.
+- **Fix: building the Windows packages could delete the MSI just built.**
+- **Fix: the whisper build workflow accepted any git ref**, despite its own comment saying it built a pinned upstream tag — a dispatch could put an arbitrary build behind the trusted name that `localcode dictation` later runs.
+- Plus: a data race in the speech engine's log, a port check that could bless someone else's server, a wrong status code on an expired dictation session, an API client method that could never have worked, and event-recording failures that were silently discarded.
+
+**Three findings were left alone on purpose**, each recorded with its reason. The largest is that file tools follow symlinks and match permission rules against the path as written, so an allow rule meant to cover the workspace can be satisfied by a path leading out of it. Confining the tools to the workspace root is a behaviour change rather than a fix — some setups read outside it deliberately — so it belongs in [IMPROVEMENTS.md](IMPROVEMENTS.md) as a decision to make, not a patch to slip into a release.
+
 ## v0.35.0
 
 The last of the major review findings. Fourteen items, each checked against the code first; two came back different from the report.

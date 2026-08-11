@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -301,7 +302,19 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			}
 
 			if choice.FinishReason != "" {
-				for _, p := range calls {
+				// In the index order the model issued them, not map
+				// order. Tool calls are executed in the order these
+				// arrive, so ranging the map made a multi-call turn run
+				// its tools in a different order each time — and the
+				// model's own ordering is often the point (read a file,
+				// then edit what was read).
+				indexes := make([]int, 0, len(calls))
+				for i := range calls {
+					indexes = append(indexes, i)
+				}
+				sort.Ints(indexes)
+				for _, i := range indexes {
+					p := calls[i]
 					select {
 					case out <- StreamEvent{Type: EventToolUseEnd, ToolUseID: p.id, ToolInput: json.RawMessage(p.args.String())}:
 					case <-ctx.Done():
