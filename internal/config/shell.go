@@ -63,8 +63,9 @@ var unsafeShellConstructs = []string{"$(", "`", "<(", ">(", ">"}
 //
 // A rule is a glob against text, and the text still carries its quotes —
 // but the shell strips them before deciding what to run. So `curl x`,
-// `"curl" x`, `cu''rl x` and `c\url x` are one command wearing four
-// spellings, and a rule `curl *` only recognised the first. Normally that
+// `"curl" x`, a `curl` with an empty quote pair inside it, and `c\url x`
+// are one command wearing four spellings, and a rule `curl *` only
+// recognised the first. Normally that
 // only weakened a deny to a prompt; with skip_permissions on, the prompt
 // resolves to allow, so an explicitly denied command ran unprompted. That
 // is not a bypass a user can be expected to anticipate: nothing on screen

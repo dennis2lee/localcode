@@ -60,9 +60,15 @@ func (l *Loop) delegatePrompt(ctx context.Context, sessionID, targetAgent, text 
 
 	answer, err := l.Tasks.SpawnSync(ctx, sessionID, targetAgent, text)
 	if err != nil {
-		l.Store.Append(sessionID, events.TypeError, map[string]any{
-			"error": fmt.Sprintf("delegation to %q failed: %v", targetAgent, err),
-		})
+		failure := fmt.Sprintf("delegation to %q failed: %v", targetAgent, err)
+		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": failure})
+		// The prompt is already in the log, so a restart replays it — and
+		// without this it replays with nothing after it, leaving the model
+		// a question it never answered and the restored history a shape
+		// the live one never had. Recording the failure as the reply keeps
+		// the two the same and tells the model what happened, which is
+		// better than silence either way.
+		l.appendDelegatedTurn(sessionID, text, failure)
 		return nil
 	}
 

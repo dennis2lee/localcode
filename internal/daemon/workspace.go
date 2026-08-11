@@ -88,31 +88,46 @@ func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 	// a session the user is not looking at. A turn stuck on an unanswered
 	// permission request blocks every workspace change until it is
 	// answered, and "a turn is in progress" gave no way to find it.
-	if busy := d.turns.running(); len(busy) > 0 {
+	// The whole check-and-move runs with turns held off, not just the
+	// check. A turn that began in the gap ran its first relative-path
+	// write against the new directory — a file written into the wrong
+	// repository, with nothing reported anywhere.
+	var abs string
+	busy, err := d.turns.whileIdle(func() error {
+		var err error
+		abs, err = filepath.Abs(req.Path)
+		if err != nil {
+			return &httpError{http.StatusBadRequest, fmt.Sprintf("resolve path: %v", err)}
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return &httpError{http.StatusBadRequest, fmt.Sprintf("stat %s: %v", abs, err)}
+		}
+		if !info.IsDir() {
+			return &httpError{http.StatusBadRequest, fmt.Sprintf("%s is not a directory", abs)}
+		}
+		if err := os.Chdir(abs); err != nil {
+			return &httpError{http.StatusInternalServerError, fmt.Sprintf("chdir %s: %v", abs, err)}
+		}
+		return nil
+	})
+	if len(busy) > 0 {
+		// Named, because the working directory is one process-wide thing
+		// and this guard is therefore daemon-wide: the blocking turn is
+		// often in a session the user is not looking at. A turn stuck on
+		// an unanswered permission request blocks every workspace change
+		// until it is answered, and "a turn is in progress" gave no way
+		// to find it.
 		http.Error(w, fmt.Sprintf(
 			"a turn is in progress in %s; cancel or wait for it before switching workspace (a session waiting on a permission request stays busy until you answer it)",
 			strings.Join(busy, ", ")), http.StatusConflict)
 		return
 	}
+	if err != nil {
+		writeHTTPError(w, err)
+		return
+	}
 
-	abs, err := filepath.Abs(req.Path)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("resolve path: %v", err), http.StatusBadRequest)
-		return
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("stat %s: %v", abs, err), http.StatusBadRequest)
-		return
-	}
-	if !info.IsDir() {
-		http.Error(w, fmt.Sprintf("%s is not a directory", abs), http.StatusBadRequest)
-		return
-	}
-	if err := os.Chdir(abs); err != nil {
-		http.Error(w, fmt.Sprintf("chdir %s: %v", abs, err), http.StatusInternalServerError)
-		return
-	}
 	d.Loop.SetProjectDir(abs)
 
 	// Record the move on the session that asked for it. Non-fatal on

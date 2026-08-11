@@ -110,7 +110,12 @@ func acquireWhisper(cfg Config) (*whisperProcess, error) {
 	if err != nil {
 		return nil, err
 	}
-	key := bin + "\x00" + model + "\x00" + strconv.Itoa(cfg.Threads)
+	// The key uses the thread count the process will actually be started
+	// with, not the one asked for. startWhisper turns anything <= 0 into
+	// defaultThreads(), so Threads:0 and Threads:4 on a four-thread
+	// machine describe the same server — keyed on the raw value they
+	// looked like different ones and took turns killing each other.
+	key := bin + "\x00" + model + "\x00" + strconv.Itoa(normalizeThreads(cfg.Threads))
 
 	sharedMu.Lock()
 	defer sharedMu.Unlock()
@@ -121,7 +126,22 @@ func acquireWhisper(cfg Config) (*whisperProcess, error) {
 		return sharedWhisper, nil
 	}
 	if sharedWhisper != nil {
-		sharedWhisper.kill()
+		// Only if nobody is using it. Killing a process with live users
+		// aborts whatever request is in flight: the session that owned it
+		// sees its transcription fail, silently keeps showing stale grey
+		// text, and there is nothing on screen to say a different
+		// configuration took its engine away.
+		//
+		// A still-referenced engine is left alone and this recognizer gets
+		// its own process. Two servers is the honest cost of two
+		// configurations; it stops being shared, which is all the sharing
+		// was ever promising.
+		sharedWhisper.mu.Lock()
+		inUse := sharedWhisper.refs > 0 && sharedWhisper.alive()
+		sharedWhisper.mu.Unlock()
+		if !inUse {
+			sharedWhisper.kill()
+		}
 		sharedWhisper = nil
 	}
 
@@ -146,14 +166,22 @@ func (p *whisperProcess) release() {
 	}
 }
 
+// normalizeThreads resolves the thread count a server will really run
+// with, so the value that starts a process and the value that identifies
+// it cannot disagree.
+func normalizeThreads(threads int) int {
+	if threads <= 0 {
+		return defaultThreads()
+	}
+	return threads
+}
+
 func startWhisper(bin, model string, threads int) (*whisperProcess, error) {
 	port, err := freePort()
 	if err != nil {
 		return nil, err
 	}
-	if threads <= 0 {
-		threads = defaultThreads()
-	}
+	threads = normalizeThreads(threads)
 
 	args := []string{
 		"--model", model,

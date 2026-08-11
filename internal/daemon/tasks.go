@@ -21,7 +21,16 @@ func (d *Daemon) handleResolvePermission(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	d.Broker.Resolve(permID, req.Allow, req.Scope)
+	if !d.Broker.Resolve(permID, req.Allow, req.Scope) {
+		// Nothing was waiting on this id. Said plainly rather than
+		// answered with "resolved": the usual cause is a request that was
+		// already answered — from another client, or from a replay of the
+		// session log — and a client told it succeeded will go on
+		// believing the turn it is watching has been unblocked.
+		writeError(w, http.StatusNotFound, fmt.Errorf(
+			"permission request %s is not pending (already answered, or from a turn that has since ended)", permID))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
 }
 

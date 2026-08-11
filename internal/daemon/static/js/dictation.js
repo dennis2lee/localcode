@@ -73,6 +73,43 @@ registerProcessor('capture', Capture);
 // even if it was interrupted halfway through starting.
 let live = null;
 
+// starting is true between asking the daemon for a session and having
+// one. It exists so a second click cannot slip through the `live` check
+// while the first is still waiting for an answer.
+let starting = false;
+
+// joinText is how dictated text is added to what precedes it, in one
+// place so the box and the session's own record cannot drift apart.
+function joinText(before, text) {
+  if (!text) return before;
+  return before + (before && !before.endsWith(' ') ? ' ' : '') + text;
+}
+
+// finishInput replaces the span of the prompt box that dictation owned
+// with the settled text, leaving anything typed after it alone.
+//
+// The stop round trip lands after the microphone is off and the box is
+// the user's again. Writing the session's own snapshot back — which is
+// what this used to do — discarded everything typed in between and put
+// the caret at the end. Appending blindly is not right either: the box
+// already shows the provisional text, so the final transcription of the
+// same words would appear twice.
+//
+// So: take what dictation put there, put the settled version in its
+// place, keep the rest. If the box no longer starts with what dictation
+// wrote, it has been edited in a way this cannot reason about, and the
+// text belongs to the user — it is left as it is.
+function finishInput(session, final) {
+  const owned = joinText(session.committed, session.provisional);
+  const settled = joinText(session.committed, final);
+  const current = inputEl.value;
+  if (current.startsWith(owned)) {
+    inputEl.value = settled + current.slice(owned.length);
+  } else if (current === '') {
+    inputEl.value = settled;
+  }
+}
+
 export function isDictating() {
   return live !== null;
 }
@@ -100,12 +137,28 @@ function render() {
 }
 
 export async function startDictation() {
-  if (live) return;
+  // Claimed before the first await, not after it. `live` used to be
+  // assigned only once the daemon answered, so two clicks — or one click
+  // on a slow connection — both passed the guard, both opened a
+  // microphone, and the second assignment orphaned the first stream and
+  // its AudioContext. stopDictation could then never reach them: the
+  // browser's recording indicator stayed lit with dictation off, and the
+  // microphone was held until the tab closed.
+  if (starting || live) return;
+  starting = true;
   let id;
   try {
     id = await apiClient.startDictation();
   } catch (err) {
     appendError(`could not start dictation: ${err}`);
+    return;
+  } finally {
+    starting = false;
+  }
+  if (live) {
+    // A second call got there first while this one was waiting. Close
+    // the session this one opened rather than leaking it daemon-side.
+    apiClient.stopDictation(id).catch(() => {});
     return;
   }
 
@@ -245,14 +298,15 @@ export async function stopDictation() {
     // Whatever was mid-sentence when the button was clicked is text the
     // person said and meant; dropping it because they stopped talking
     // half a second early would be its own small bug.
-    if (res.final) {
-      const before = session.committed;
-      inputEl.value = before + (before && !before.endsWith(' ') ? ' ' : '') + res.final;
-    } else {
-      inputEl.value = session.committed;
-    }
+    //
+    // Appended to what is in the box now, though, not to the snapshot
+    // taken when dictation started. This round trip lands after the user
+    // is free to type again, and writing the old snapshot back threw
+    // away everything typed in between and moved the caret to the end.
+    finishInput(session, res.final || '');
   } catch (err) {
-    inputEl.value = session.committed;
+    // Nothing to add to the box, and nothing to take out of it either:
+    // whatever is there now is the user's.
   }
   inputEl.classList.remove('has-provisional');
   inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);

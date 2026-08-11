@@ -244,14 +244,20 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				continue // ignore malformed keep-alive/comment lines
 			}
-			if len(chunk.Choices) == 0 {
-				if chunk.Usage != nil {
-					select {
-					case out <- StreamEvent{Type: EventUsage, InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens}:
-					case <-ctx.Done():
-						return
-					}
+			// Usage first, and outside the no-choices branch: the OpenAI
+			// API sends it on a final chunk of its own, but vLLM and
+			// several compatible proxies attach it to a chunk that still
+			// carries a choice. Reading it only when there were no
+			// choices dropped their token counts silently, which shows up
+			// as a context meter that never moves.
+			if chunk.Usage != nil {
+				select {
+				case out <- StreamEvent{Type: EventUsage, InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens}:
+				case <-ctx.Done():
+					return
 				}
+			}
+			if len(chunk.Choices) == 0 {
 				continue
 			}
 			choice := chunk.Choices[0]

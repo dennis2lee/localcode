@@ -286,11 +286,18 @@ async function load(opts = {}) {
   // overridable so the "labels are hidden until access is granted" case
   // can be exercised.
   harness.mediaConstraints = [];
+  // Tracks how many microphones are open right now, so a test can catch
+  // one that was opened and then lost track of — the browser keeps
+  // recording, and its indicator stays lit, with nothing left holding a
+  // reference to stop it.
+  let openMics = 0;
+  harness.openMicrophones = () => openMics;
   sandbox.navigator = {
     mediaDevices: {
       getUserMedia: async (constraints) => {
         harness.mediaConstraints.push(constraints);
-        return { getTracks: () => [{ stop() {} }] };
+        openMics++;
+        return { getTracks: () => [{ stop() { openMics--; } }] };
       },
       enumerateDevices: async () => opts.devices || [],
     },

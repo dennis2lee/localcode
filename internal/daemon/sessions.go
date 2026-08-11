@@ -68,12 +68,20 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	if d.turns.busy(id) {
+	// The log is read with turns held off, not merely after a check that
+	// none was running: a turn starting in that gap appends a tool call
+	// whose result is not there yet, and a history with a dangling tool
+	// call is exactly what this guard exists to keep out of the fork.
+	var evs []events.Event
+	busy, err := d.turns.whileSessionIdle(id, func() error {
+		var err error
+		evs, err = d.Loop.Store.Events(id, 0)
+		return err
+	})
+	if busy {
 		http.Error(w, "a turn is in progress; cancel or wait for it before forking", http.StatusConflict)
 		return
 	}
-
-	evs, err := d.Loop.Store.Events(id, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -180,12 +188,17 @@ func (d *Daemon) handleGetSession(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	if d.turns.busy(id) {
+	// Deleting under the lock, rather than after a check: a turn that
+	// began in between would be writing to a session whose file has just
+	// been closed and removed.
+	busy, err := d.turns.whileSessionIdle(id, func() error {
+		return d.Loop.Store.Delete(id)
+	})
+	if busy {
 		writeError(w, http.StatusConflict, fmt.Errorf("session %s has a turn in progress", id))
 		return
 	}
-
-	if err := d.Loop.Store.Delete(id); err != nil {
+	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}

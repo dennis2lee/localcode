@@ -314,8 +314,20 @@
 
           msiexec /i localcode-x.y.z-windows-amd64.msi DICTATION=0
 
-      Public (all upper case) so it survives being passed to the elevated
-      half of the install, which a lower-case property would not.
+      Public (all upper case) so it CAN be passed to the elevated half of
+      the install — necessary but not sufficient. Windows Installer only
+      forwards a public property from the command line to the server side
+      if it is listed in SecureCustomProperties, and this one was not. The
+      condition on InstallDictationModel is evaluated in
+      InstallExecuteSequence, which is the server side: a standard user
+      running with DICTATION=0 and consenting to UAC therefore got the
+      default of 1, and the install performed the download it had been
+      told to skip, with no progress UI since the action is deferred.
+
+      The row cannot be declared here: wixl generates SecureCustomProperties
+      itself from MajorUpgrade, and a second Property element with the same
+      id makes it fail outright. package-msi.sh appends DICTATION to the
+      generated row after the build, and verifies the result.
     -->
     <Property Id='DICTATION' Value='1' />
 

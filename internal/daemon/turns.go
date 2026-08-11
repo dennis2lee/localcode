@@ -207,6 +207,46 @@ func (t *turnTracker) running() []string {
 	return ids
 }
 
+// whileIdle runs fn with the guarantee that no turn is running anywhere
+// and none can start until it returns, or reports which sessions are busy
+// without running it at all.
+//
+// Checking and then acting are two different moments, and the guards that
+// used to do exactly that were protecting operations where the gap
+// matters. The working directory is one process-wide thing: a turn that
+// begins between "nothing is running" and the chdir runs its first
+// relative-path write against the new directory — a file written into the
+// wrong repository, reported nowhere. Forking has the same shape, and
+// copying a log mid-turn produces the dangling tool call that the guard's
+// own comment says it exists to prevent.
+//
+// fn runs under the tracker's lock, so it must not block: a stat and a
+// chdir, not a network call.
+func (t *turnTracker) whileIdle(fn func() error) ([]string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.cancels) > 0 {
+		ids := make([]string, 0, len(t.cancels))
+		for id := range t.cancels {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		return ids, nil
+	}
+	return nil, fn()
+}
+
+// whileSessionIdle is whileIdle for one session: the operations that only
+// need that session to be quiet, rather than the whole daemon.
+func (t *turnTracker) whileSessionIdle(id string, fn func() error) (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, running := t.cancels[id]; running {
+		return true, nil
+	}
+	return false, fn()
+}
+
 // sendRetries bounds how many times one request will re-attempt to start
 // a turn after losing the begin/inject race. Each loss means a turn ended
 // in a window of a few instructions, so more than a couple of rounds is a

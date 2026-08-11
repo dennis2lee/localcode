@@ -337,3 +337,66 @@ test('an audio failure during recording is still reported', async () => {
   assert.match(app.transcript(), /dictation stopped/);
   assert.equal(app.isDictating(), false);
 });
+
+// The guard on `live` used to sit before the first await, but `live` was
+// only assigned after the daemon answered — so two clicks both passed it,
+// both opened a microphone, and the second assignment orphaned the first
+// stream. stopDictation could never reach it: the browser's recording
+// indicator stayed lit with dictation off.
+test('a second mic click while the first is still starting opens one session', async () => {
+  let started = 0;
+  const app = await load({
+    routes: {
+      'GET /api/dictation': { ready: true },
+      'POST /api/dictation': async () => {
+        started++;
+        await new Promise((r) => setTimeout(r, 5));
+        return { id: `d-${started}` };
+      },
+      'POST /api/dictation/d-1/stop': { final: '' },
+      'POST /api/dictation/d-2/stop': { final: '' },
+    },
+  });
+
+  app.el('mic').click();
+  app.el('mic').click();
+  // Long enough for the deliberately slow POST above to come back, which
+  // is the window the two clicks are racing inside.
+  await new Promise((r) => setTimeout(r, 20));
+  await app.settle();
+
+  assert.equal(started, 1, `the daemon was asked for ${started} sessions`);
+  assert.equal(app.openMicrophones(), 1, 'a microphone was opened and then orphaned');
+  await app.stopDictation();
+  await app.settle();
+  assert.equal(app.openMicrophones(), 0, 'the microphone is still held after stopping');
+});
+
+// The stop round trip lands after the box is the user's again. Writing
+// the session's snapshot back discarded whatever had been typed since.
+test('text typed after stopping survives the final transcription', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/dictation': { ready: true },
+      'POST /api/dictation': { status: 201, body: { id: 'd-1' } },
+      'POST /api/dictation/d-1/audio': { provisional: 'half a sen' },
+      'POST /api/dictation/d-1/stop': async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        return { final: 'half a sentence' };
+      },
+    },
+  });
+
+  app.el('mic').click();
+  await app.settle();
+  app.micChunk();
+  await app.settle();
+
+  const stopping = app.stopDictation();
+  // The user carries on typing while that request is in flight.
+  app.el('input').value = app.el('input').value + ' and then some';
+  await stopping;
+  await app.settle();
+
+  assert.equal(app.el('input').value, 'half a sentence and then some');
+});

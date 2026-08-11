@@ -11,6 +11,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -218,4 +219,23 @@ const maxJSONBody = 1 << 20
 // decode, which every caller already handles as a bad request.
 func jsonBody(w http.ResponseWriter, r *http.Request) io.Reader {
 	return http.MaxBytesReader(w, r.Body, maxJSONBody)
+}
+
+// httpError carries a status alongside a message, so work done inside a
+// closure (see turnTracker.whileIdle) can still choose the response it
+// would have written itself.
+type httpError struct {
+	status  int
+	message string
+}
+
+func (e *httpError) Error() string { return e.message }
+
+func writeHTTPError(w http.ResponseWriter, err error) {
+	var he *httpError
+	if errors.As(err, &he) {
+		http.Error(w, he.message, he.status)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
 }

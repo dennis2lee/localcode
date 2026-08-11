@@ -65,8 +65,26 @@ func (m *Manager) Ready() (bool, string) {
 	return true, ""
 }
 
+// maxSessions caps how many dictations can be open at once.
+//
+// Each one holds a recognizer, and the daemon has no authentication, so
+// a loop of POST /api/dictation opened them faster than the reaper (every
+// 60s, and only for sessions already idle for 120s) could take them away.
+// Well above any real use: a dictation is one person talking into one
+// microphone, and even a shared daemon has a handful of clients.
+const maxSessions = 16
+
 // Start opens a recognizer and returns the id audio should be posted to.
 func (m *Manager) Start() (string, error) {
+	// Checked before opening anything, since opening is the expensive
+	// part this is here to bound.
+	m.mu.Lock()
+	if len(m.sessions) >= maxSessions {
+		m.mu.Unlock()
+		return "", fmt.Errorf("too many dictation sessions open (%d); stop one before starting another", maxSessions)
+	}
+	m.mu.Unlock()
+
 	rec, err := Open(m.Config())
 	if err != nil {
 		return "", err
@@ -74,6 +92,12 @@ func (m *Manager) Start() (string, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Re-checked under the lock: the open above is slow enough for a
+	// burst of requests to pass the first check together.
+	if len(m.sessions) >= maxSessions {
+		rec.Close()
+		return "", fmt.Errorf("too many dictation sessions open (%d); stop one before starting another", maxSessions)
+	}
 	m.nextID++
 	id := fmt.Sprintf("d-%d", m.nextID)
 	m.sessions[id] = NewSession(rec)

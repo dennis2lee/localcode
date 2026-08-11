@@ -264,7 +264,13 @@ func (b *PermissionBroker) ForgetSession(sessionID string) {
 // unknown (already resolved or timed out). scope is one of ScopeOnce,
 // ScopeSession, or ScopeAlways; anything else is treated as ScopeOnce, so
 // an older client that only sends {"allow":true} keeps working unchanged.
-func (b *PermissionBroker) Resolve(id string, allow bool, scope string) {
+// Resolve answers a pending request and reports whether there was one.
+//
+// The answer matters to the caller: an id that is unknown or already
+// answered used to be reported as a success, so a client resolving a
+// stale prompt — a replayed one, or a second client a moment late — was
+// told it worked while nothing happened.
+func (b *PermissionBroker) Resolve(id string, allow bool, scope string) bool {
 	switch scope {
 	case ScopeSession, ScopeAlways:
 	default:
@@ -280,4 +286,5 @@ func (b *PermissionBroker) Resolve(id string, allow bool, scope string) {
 	if ok {
 		ch <- resolution{allow: allow, scope: scope}
 	}
+	return ok
 }

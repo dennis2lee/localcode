@@ -245,7 +245,10 @@ dictations, and mic-off clicks hang. `Idle` should not need the session lock
 (snapshot `lastActivity` atomically), and `Final` should not be called under a
 lock the reaper can wait on.
 
-### M2. `acquireWhisper` kills an engine other sessions are actively using
+### M2. ~~`acquireWhisper` kills an engine other sessions are actively using~~ FIXED (v0.35.0)
+
+Both halves confirmed. A referenced engine is left alone and the new configuration gets its own process; the key now uses the thread count the process is actually started with.
+
 `internal/dictation/whisper_process.go:100-103`.
 
 On a key mismatch the shared process is killed **without consulting its
@@ -314,7 +317,10 @@ that `ask` downgrades to `allow`, so an explicitly denied command runs with no
 prompt. Same root cause as C1 (string-glob matching of shell syntax); worth
 fixing together.
 
-### M7. Delegation failure records the prompt in the log but not in history → rehydration divergence
+### M7. ~~Delegation failure records the prompt in the log but not in history → rehydration divergence~~ FIXED (v0.35.0)
+
+The failure is recorded as the reply, so live and restored history agree. Note the consecutive-user-message consequence was already defused by C2/C4.
+
 `internal/agent/delegate.go:58-67`.
 
 `delegatePrompt` writes the `message.user` event before `SpawnSync`; on failure
@@ -324,13 +330,19 @@ after it — a dangling user turn, which on the next real turn produces
 consecutive user messages (→ Bedrock rejects) and on all providers shows the
 model a prompt it never answered.
 
-### M8. Empty-content assistant message rejected on cancel — provider contract
+### M8. ~~Empty-content assistant message rejected on cancel — provider contract~~ NOT A BUG (as of v0.33.2)
+
+Re-checked: C2/C4 normalize outgoing history, so an empty assistant message from a cancel is dropped before it reaches any adapter. What remains is a preference about where the fix lives, not a defect.
+
 `internal/provider/{bedrock,anthropic,openai}.go` `send` — see C2. Listed
 again here because the fix belongs partly in the adapters: on `ctx.Done` they
 should emit a terminal event so `consumeStream` can distinguish "cancelled,
 nothing produced" from "clean finish", rather than the consumer guessing.
 
-### M9. `mcp get` prints stdio env values in plaintext
+### M9. ~~`mcp get` prints stdio env values in plaintext~~ FIXED (v0.35.0)
+
+Names only, matching the header block above it.
+
 `cmd/localcode/mcp_list.go:154-156`.
 
 `printMCPServerDetail` does `env: KEY=VALUE`, while the same file's
@@ -338,7 +350,8 @@ nothing produced" from "clean finish", rather than the consumer guessing.
 server added with `-e GITHUB_TOKEN=ghp_…` leaks the token into scrollback or a
 pasted bug report. Header values are correctly hidden; env values are not.
 
-### M10. OpenAI-compat usage dropped when the backend attaches it to a content chunk
+### M10. ~~OpenAI-compat usage dropped when the backend attaches it to a content chunk~~ FIXED (v0.35.0)
+
 `internal/provider/openai.go:247-256`.
 
 The `chunk.Usage != nil` read is nested inside `if len(chunk.Choices) == 0`.
@@ -346,7 +359,14 @@ vLLM and several OpenAI-compat proxies put `usage` on a chunk that still
 carries a choice, so their token accounting is silently lost and the
 context-window meter reads nothing.
 
-### M11. Permission resolution ignores which session raised the request
+### M11. Partly fixed (v0.35.0), partly declined
+
+The false success is fixed: an unknown or already-answered id returns 404 instead of `{"status":"resolved"}`.
+
+The session-scoping is **declined on purpose.** The daemon has no authentication at all (documented under Known limitations), so checking the path segment draws no boundary that is not already open — it would only make a legitimate second client fail while changing nothing for anyone else. Worth revisiting if the daemon ever gains auth.
+
+Original finding:
+
 `internal/daemon/tasks.go:12-26` + `internal/agent/permission.go:98` — *verified directly by the author.*
 
 `handleResolvePermission` never reads `r.PathValue("id")` and never checks
@@ -424,7 +444,10 @@ allocates the whole string before the empty check, and on success writes it
 into the session log. Matters because `--listen` can bind a non-loopback
 address.
 
-### M16. Workspace switch is a check-then-act race against a starting turn
+### M16. ~~Workspace switch is a check-then-act race against a starting turn~~ FIXED (v0.35.0)
+
+The workspace switch, the fork and the delete each run their whole operation with turns held off rather than merely checking first.
+
 `internal/daemon/workspace.go:85-104`.
 
 `anyRunning()` exists precisely so "a tool call mid-execution against the old
@@ -436,7 +459,10 @@ write into the wrong repository, with no error anywhere.
 racing a starting turn copies a log with a dangling tool call, which is the
 provider rejection the guard's comment says it prevents.
 
-### M17. Unbounded dictation sessions, each holding a model open
+### M17. ~~Unbounded dictation sessions, each holding a model open~~ FIXED (v0.35.0)
+
+Capped at 16, checked again after the open since that is the slow part.
+
 `internal/daemon/dictation.go:36-49` + `internal/dictation/manager.go:49`.
 
 `Manager.Start` opens a recognizer per request with no cap and no per-client
@@ -506,7 +532,10 @@ permission request above to continue" over a modal that is no longer there.
 No way out but switching sessions. `cancelTurn` already applies the right rule
 ("act on the reply it holds in its hand"); this path does not.
 
-### M22. Double-clicking the mic leaks a live microphone stream
+### M22. ~~Double-clicking the mic leaks a live microphone stream~~ FIXED (v0.35.0)
+
+The harness now counts open microphones, so the leak is visible to a test rather than only to the person whose recording light stays on.
+
 `internal/daemon/static/js/dictation.js:101-147`.
 
 The `if (live) return` guard is on the wrong side of the first `await`:
@@ -517,7 +546,10 @@ call `getUserMedia`. The second assignment orphans the first `MediaStream`,
 browser's recording indicator stays lit after dictation is off and the mic is
 held until the tab closes, plus a dangling daemon-side session.
 
-### M23. `stopDictation`'s tail clobbers the prompt box after new input has begun
+### M23. ~~`stopDictation`'s tail clobbers the prompt box after new input has begun~~ FIXED (v0.35.0)
+
+The span dictation owned is replaced, so text typed after stopping survives. A plain append was tried first and duplicated the provisional text — caught by an existing test.
+
 `internal/daemon/static/js/dictation.js:210-252`.
 
 `live = null` at line 231, but the function keeps awaiting and then
@@ -527,7 +559,10 @@ again): the late round-trip overwrites the box with the text as it stood at
 the previous stop, discarding everything since, and moves the caret to the
 end.
 
-### M24. Web UI 409 handling parks a prompt indefinitely
+### M24. ~~Web UI 409 handling parks a prompt indefinitely~~ FIXED (v0.35.0)
+
+One retry, never a loop: a second refusal means a turn really is running and its turn.done drains the queue.
+
 `internal/daemon/static/js/composer.js:139-145,210-219`.
 
 Same root cause as M14 on the TUI side, and the same server contract ignored:
@@ -537,7 +572,10 @@ it again". Both client handlers instead push the text back onto
 already fired. The comm dot blinks forever, the status bar reads
 `working… (1 queued)`, and everything typed afterwards queues behind it.
 
-### M25. `DICTATION=0` can be silently ignored on an elevated install
+### M25. ~~`DICTATION=0` can be silently ignored on an elevated install~~ FIXED (v0.35.0)
+
+Correct as reported, and the fix is not where it looks: wixl writes SecureCustomProperties itself from MajorUpgrade, so a second Property element fails the build. package-msi.sh appends DICTATION to the generated row and checks that row specifically — a substring check over the table would have matched the DICTATION property itself and passed while the switch stayed broken.
+
 `build/localcode.wxs:320` + `build/package-msi.sh:138` — *verified directly by the author.*
 
 The comment claims upper-case makes the property "survive being passed to the
@@ -806,7 +844,7 @@ this pass were self-corrected by their reviewer for the same reason (the
 markdown placeholder tokens, whose control characters are invisible in a plain
 file read).
 
-Totals: **0 critical open** (C1–C7 all fixed), **14 major open** (M1, M3, M4, M5, M6, M12, M13, M14, M15, M20 and M21 fixed), 29 minor.
+Totals: **0 critical open**, **1 major open** — M11's session-scoping, declined with a reason above. M8 was not a bug. Everything else is fixed. 29 minor remain unreviewed.
 
 ## What verification changed
 
@@ -816,7 +854,9 @@ survive that check in the first pass. One of the six was wrong in the
 same way (M13's "no cancel command"), and one was overstated (M1 blocks
 only on committing an utterance, not on every partial). A second round of
 four found one more wrong claim (M4's fd reuse, disproved by measurement)
-and one understated (M3 was worse than described). The remaining fourteen
-have not had that treatment. Treat each as a lead until a test
+and one understated (M3 was worse than described). A third round of fourteen found one
+item that was no longer a bug at all (M8, closed by the C2 fix) and one
+whose stated fix does not work as written (M25 — wixl rejects it). Every
+major finding has now been checked against the code. Treat each as a lead until a test
 fails on it: the cost is near zero, since a fix needs a test anyway, and
 a test that passes on the first run means the item was not a bug.

@@ -151,7 +151,11 @@ func printMCPServerDetail(name, scope, path string, sc config.MCPServerConfig) {
 	if len(sc.Args) > 0 {
 		fmt.Printf("  args:      %s\n", strings.Join(sc.Args, " "))
 	}
-	for _, k := range sortedKeys(sc.Env) {
-		fmt.Printf("  env:       %s=%s\n", k, sc.Env[k])
+	// Names only, like the header block above. A server added with
+	// `-e GITHUB_TOKEN=ghp_...` otherwise printed the token into
+	// scrollback, and this output is exactly what gets pasted into a bug
+	// report.
+	if keys := sortedKeys(sc.Env); len(keys) > 0 {
+		fmt.Printf("  env:       %s (values hidden)\n", strings.Join(keys, ", "))
 	}
 }

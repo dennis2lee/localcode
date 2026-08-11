@@ -61,3 +61,26 @@ func TestJSONHandlersStillAcceptAnOrdinaryBody(t *testing.T) {
 		t.Fatalf("creating a session returned %d", resp.StatusCode)
 	}
 }
+
+// Answering a permission id nobody is waiting on used to return 200
+// {"status":"resolved"}. A client resolving a stale prompt — replayed
+// from the log, or answered a moment earlier by a second client — was
+// told it worked, and went on believing the turn it was watching had been
+// unblocked.
+func TestResolvingAnUnknownPermissionIsNotReportedAsSuccess(t *testing.T) {
+	model := mockModelServer(t, t.TempDir()+"/out.txt")
+	defer model.Close()
+	d := newTestDaemon(t, model.URL)
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/sessions/s-nope/permissions/p999",
+		"application/json", strings.NewReader(`{"allow":true,"scope":"once"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 400 {
+		t.Errorf("resolving an unknown permission returned %d", resp.StatusCode)
+	}
+}

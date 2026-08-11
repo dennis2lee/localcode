@@ -196,3 +196,45 @@ func TestOpenAICompatChatRequestsAndEmitsUsage(t *testing.T) {
 		t.Errorf("usage event = %+v, want InputTokens=123 OutputTokens=45", usageEvents[0])
 	}
 }
+
+// The OpenAI API sends usage on a final chunk with no choices, but vLLM
+// and several compatible proxies attach it to a chunk that still carries
+// one. Reading it only in the no-choices case dropped their token counts
+// silently, and the context meter never moved.
+func TestOpenAIUsageOnAChunkThatAlsoHasAChoice(t *testing.T) {
+	body := `data: {"choices":[{"delta":{"content":"hi"}}],"usage":{"prompt_tokens":11,"completion_tokens":7}}
+
+data: [DONE]
+
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompat(srv.URL, "")
+	ch, err := p.Chat(context.Background(), ChatRequest{
+		Model:    "m",
+		Messages: []Message{{Role: "user", Content: []Block{{Type: BlockText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	var in, out int
+	var text string
+	for ev := range ch {
+		switch ev.Type {
+		case EventUsage:
+			in, out = ev.InputTokens, ev.OutputTokens
+		case EventTextDelta:
+			text += ev.TextDelta
+		}
+	}
+	if in != 11 || out != 7 {
+		t.Errorf("usage = %d in / %d out, want 11/7", in, out)
+	}
+	if text != "hi" {
+		t.Errorf("text = %q; the choice on the usage chunk was dropped", text)
+	}
+}

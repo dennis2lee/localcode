@@ -130,7 +130,7 @@ export async function cancelTurn() {
 // actually finished (setWaiting(false) was just called) — the common case
 // for someone who kept typing while the model was still streaming a reply.
 // No-op if nothing is queued.
-export function dequeueNext() {
+export function dequeueNext(isRetry = false) {
   if (session.promptQueue.length === 0) return;
   const next = session.promptQueue.shift();
   setWaiting(true);
@@ -138,11 +138,38 @@ export function dequeueNext() {
     if (apiClient.isBusy(err)) {
       // Still busy — put it back and wait for the next turn.done.
       session.promptQueue.unshift(next);
+      // Unless nothing is running, in which case that turn.done has
+      // already fired and waiting for another is waiting forever. The
+      // daemon returns this same 409 for "a turn ended between the two
+      // checks, send it again", and the two are indistinguishable from
+      // here, so the safe reading is the one that retries — once.
+      if (!isRetry) retryQueueSoon();
       return;
     }
     setWaiting(false);
     appendError(err);
   });
+}
+
+// retryQueueSoon re-attempts the queue shortly after a 409.
+//
+// A 409 means one of two things and the reply does not say which: a turn
+// really is running, in which case its turn.done will drain the queue and
+// this retry finds nothing to do — or the turn ended in the gap between
+// the daemon's two checks, in which case the turn.done has already fired
+// and nothing else will ever come. Without this, the second case parked
+// the message: the activity dot blinked forever, the status bar read
+// "working... (1 queued)", and everything typed afterwards queued behind
+// it.
+// One retry, never a loop: if the second attempt is refused too, a turn
+// really is running and its turn.done is what drains the queue.
+let retryTimer = null;
+function retryQueueSoon() {
+  if (retryTimer) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (session.promptQueue.length > 0) dequeueNext(true);
+  }, 300);
 }
 
 export function autoResizeInput() {
@@ -215,6 +242,7 @@ export async function sendMessage() {
       session.promptQueue.unshift(text);
       appendTool(`[queued] ${text}`);
       renderStatusBar();
+      retryQueueSoon();
       return;
     }
     setWaiting(false);
