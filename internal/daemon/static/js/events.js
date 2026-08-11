@@ -156,10 +156,22 @@ export function applyEvent(ev) {
   renderStatusBar(); // one place, instead of a hand-picked call site per case
 }
 
+// How much of a long conversation to load when opening it. Enough that
+// the visible end of a transcript is there with room to scroll back a
+// little, and small enough that the cost of a session switch does not
+// depend on how long the session is. Measured before choosing: 7,680
+// events left the daemon in 47ms but cost the client 751ms to render in
+// a headless DOM, and more in a real one.
+const TRANSCRIPT_TAIL = 400;
+
 export function connectEvents() {
   if (eventSource) eventSource.close();
   setConnected(false);
-  eventSource = new EventSource(`/api/sessions/${session.sessionID}/events`);
+  // ?tail= so opening a long conversation shows its end straight away
+  // rather than rebuilding the whole thing first. The daemon moves the
+  // cut back to a turn boundary, and a reconnect ignores it in favour of
+  // Last-Event-ID, so nothing is skipped after the first load.
+  eventSource = new EventSource(`/api/sessions/${session.sessionID}/events?tail=${TRANSCRIPT_TAIL}`);
   eventSource.onopen = () => setConnected(true);
   eventSource.onmessage = (e) => {
     // An event arriving is itself proof the stream is up, which matters

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"fmt"
+
 	"localcode/internal/events"
 )
 
@@ -176,4 +178,85 @@ func TestTransientEventsCarryNoEventID(t *testing.T) {
 			t.Fatalf("a transient event was recorded in the session log: %+v", ev)
 		}
 	}
+}
+
+// A reconnect must resume, even though the URL it reconnects to still
+// carries the ?tail= that opened the stream.
+//
+// EventSource reconnects to the same URL, so both are present on every
+// reconnect after the first load. Preferring tail there would re-cut to
+// the end of the log each time and silently drop everything the client
+// missed while it was away — exactly what the resume machinery exists to
+// prevent, and it would show up only as occasional missing output on a
+// flaky connection.
+func TestLastEventIDBeatsTailOnReconnect(t *testing.T) {
+	body := replayWith(t, "?tail=5", "3")
+	if !strings.Contains(body, `"m4"`) {
+		t.Errorf("the event right after the resume point was skipped:\n%s", body)
+	}
+	if strings.Contains(body, `"m2"`) {
+		t.Error("an event the client already had was re-sent")
+	}
+	if got := strings.Count(body, "id: "); got < 30 {
+		t.Errorf("only %d events replayed; tail won over Last-Event-ID and the gap was dropped", got)
+	}
+}
+
+// Without a resume point, tail is honoured: that is the case it exists for.
+func TestTailIsHonouredOnAFreshConnection(t *testing.T) {
+	body := replayWith(t, "?tail=5", "")
+	if strings.Contains(body, `"m0"`) {
+		t.Error("tail was ignored: the whole log was replayed")
+	}
+	if !strings.Contains(body, `"m39"`) {
+		t.Error("the end of the conversation is missing from the tail")
+	}
+}
+
+// replayWith opens the event stream for a session of 40 messages and
+// returns whatever the daemon replayed before the connection is dropped.
+func replayWith(t *testing.T, query, lastEventID string) string {
+	t.Helper()
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	sess, err := d.Loop.Store.CreateSession("s-tail-"+t.Name(), "", "general-purpose", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 40; i++ {
+		d.Loop.Store.Append(sess.ID, events.TypeUserMessage, map[string]any{"text": fmt.Sprintf("m%d", i)})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/sessions/"+sess.ID+"/events"+query, nil)
+	if lastEventID != "" {
+		req.Header.Set("Last-Event-ID", lastEventID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	// The backlog is written before anything blocks, so reading until the
+	// stream goes quiet is enough to have all of it.
+	var out strings.Builder
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		out.WriteString(line)
+		if err != nil {
+			break
+		}
+		if strings.Contains(out.String(), `"m39"`) && strings.HasSuffix(out.String(), "\n\n") {
+			break
+		}
+	}
+	return out.String()
 }

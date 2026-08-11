@@ -1313,6 +1313,8 @@ program's imports before any of its own code runs, so a copy of
 
 ## Known limitations
 
+* Opening a session shows the end of it, not all of it. A long conversation loads its last few hundred events rather than replaying the whole log, so switching sessions costs the same whatever their length; there is no "load earlier" control yet, so the beginning of a very long conversation is only in its `.jsonl`.
+
 * If an MCP server dies and the reconnect also fails, for example because the executable is gone, its tools return an error on every later call until the daemon restarts.
 * There is no auth token. Anyone who can reach the `--listen` address gets the entire API, shell execution included. Expose it only over loopback plus an SSH tunnel.
 * On Windows, shell execution resolves to `sh` on PATH, then Git for Windows' `bash.exe` at its usual install paths, then `cmd /c`. Under the `cmd` fallback, bash-only syntax does not work; the bash tool tells the model so in its description. Installing Git for Windows gives the full POSIX behavior.

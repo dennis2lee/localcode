@@ -559,3 +559,59 @@ func (s *Store) restoreOne(dir, id string) error {
 	s.mu.Unlock()
 	return nil
 }
+
+// TailSince returns the seq to replay from so a client sees roughly the
+// last n events, starting at a turn boundary.
+//
+// Opening a long conversation used to replay every event in it. The
+// daemon is not what makes that slow — 7,680 events left it in 47ms —
+// but the client then has to build the whole transcript, which measured
+// at 751ms in a headless DOM and is worse in a real one, where every
+// growing markdown re-render costs a reparse and a relayout. Since none
+// of that history is on screen when the panel opens, the cheapest way to
+// show the end of a conversation is not to send the beginning.
+//
+// The boundary matters as much as the count. Cutting at an arbitrary
+// event can land between a tool call and its result, or part-way through
+// a reply, and the transcript then opens on a fragment with a spinner
+// that never resolves. So the cut is moved back to the most recent user
+// message at or before it: the tail begins where someone asked
+// something, which is where a conversation reads from.
+//
+// Bounded at 2n, because one turn can be longer than the whole window
+// and "start at a turn boundary" must not become "send everything".
+//
+// Returns 0 when the log is shorter than n — there is nothing to trim,
+// and 0 is what "from the beginning" already means everywhere else.
+func (s *Store) TailSince(sessionID string, n int) (uint64, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return 0, fmt.Errorf("session %s not found", sessionID)
+	}
+	if len(st.log) <= n {
+		return 0, nil
+	}
+
+	start := len(st.log) - n
+	limit := len(st.log) - 2*n
+	if limit < 0 {
+		limit = 0
+	}
+	for i := start; i >= limit; i-- {
+		if st.log[i].Type == events.TypeUserMessage {
+			start = i
+			break
+		}
+	}
+	if start == 0 {
+		return 0, nil
+	}
+	// The seq *before* the first event to send: Events(since) is
+	// exclusive, and this is fed straight to it.
+	return st.log[start-1].Seq, nil
+}

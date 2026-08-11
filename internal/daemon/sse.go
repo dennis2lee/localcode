@@ -23,22 +23,53 @@ var heartbeatInterval = 20 * time.Second
 
 func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// Where to start replaying from, in precedence order: an explicit
+	// ?since=, then the Last-Event-ID a reconnecting EventSource sends
+	// back, then ?tail=.
+	//
+	// Last-Event-ID has to beat ?tail= rather than the other way round,
+	// and the ordering is the whole correctness argument: EventSource
+	// reconnects to the *same URL*, so the ?tail= that opened the stream
+	// is still on it. Preferring tail there would re-cut to the end of
+	// the log on every dropped connection and silently drop everything
+	// the client missed while it was away — which is precisely the
+	// failure the resume machinery exists to prevent.
 	since := uint64(0)
-	if s := r.URL.Query().Get("since"); s != "" {
-		v, err := strconv.ParseUint(s, 10, 64)
+	switch {
+	case r.URL.Query().Get("since") != "":
+		v, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid since: %w", err))
 			return
 		}
 		since = v
-	} else if lastEventID := r.Header.Get("Last-Event-ID"); lastEventID != "" {
-		// Browsers' EventSource auto-reconnects on a dropped connection and
-		// resends whatever `id:` value the server last sent as this
-		// header, so a client that never set ?since= explicitly still
-		// resumes without re-fetching events it already has.
-		if v, err := strconv.ParseUint(lastEventID, 10, 64); err == nil {
+
+	case r.Header.Get("Last-Event-ID") != "":
+		// Browsers' EventSource auto-reconnects on a dropped connection
+		// and resends whatever `id:` value the server last sent, so a
+		// client that never set ?since= explicitly still resumes without
+		// re-fetching what it already has.
+		if v, err := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64); err == nil {
 			since = v
 		}
+
+	case r.URL.Query().Get("tail") != "":
+		// ?tail=N opens a long conversation at its end rather than its
+		// beginning: the client asks for roughly the last N events and
+		// the daemon moves that cut back to a turn boundary. See
+		// Store.TailSince for why the boundary matters as much as the
+		// count.
+		n, err := strconv.Atoi(r.URL.Query().Get("tail"))
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid tail: %q", r.URL.Query().Get("tail")))
+			return
+		}
+		v, err := d.Loop.Store.TailSince(id, n)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		since = v
 	}
 
 	flusher, ok := w.(http.Flusher)

@@ -563,3 +563,89 @@ func TestWorkspaceSurvivesRestart(t *testing.T) {
 		t.Errorf("workspace = %q after a rename, want it preserved", after.Workspace)
 	}
 }
+
+// Opening a long conversation should not mean rebuilding all of it. The
+// daemon is not the slow part — 7,680 events left it in 47ms — but the
+// client then has to render every one, which measured at 751ms in a
+// headless DOM and is worse in a real one. None of that history is on
+// screen when the panel opens, so the cheapest fix is not to send it.
+func TestTailSince(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ten turns, each a user message followed by four events.
+	for turn := 0; turn < 10; turn++ {
+		store.Append("s1", events.TypeUserMessage, map[string]any{"text": "q"})
+		for i := 0; i < 3; i++ {
+			store.Append("s1", events.TypeMessagePartDelta, map[string]any{"text": "a"})
+		}
+		store.Append("s1", events.TypeTurnDone, map[string]any{})
+	}
+
+	// A window shorter than the log starts at a user message, not
+	// part-way through a reply — a transcript that opens on a fragment,
+	// or on a tool call with no result, reads as broken.
+	since, err := store.TailSince("s1", 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail, err := store.Events("s1", since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) == 0 {
+		t.Fatal("the tail is empty")
+	}
+	if tail[0].Type != events.TypeUserMessage {
+		t.Errorf("the tail starts at %v, not at a user message", tail[0].Type)
+	}
+	if len(tail) > 24 {
+		t.Errorf("the tail is %d events, past the 2n bound", len(tail))
+	}
+	// And it really is the end of the conversation.
+	if last := tail[len(tail)-1]; last.Seq != 50 {
+		t.Errorf("the tail ends at seq %d, not at the end of the log", last.Seq)
+	}
+}
+
+// A log shorter than the window has nothing to trim, and "from the
+// beginning" is already what 0 means everywhere else.
+func TestTailSinceOnAShortLog(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	store.CreateSession("s1", "", "general-purpose", true)
+	for i := 0; i < 5; i++ {
+		store.Append("s1", events.TypeUserMessage, map[string]any{"text": "q"})
+	}
+
+	for _, n := range []int{5, 50, 0, -1} {
+		since, err := store.TailSince("s1", n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if since != 0 {
+			t.Errorf("TailSince(n=%d) = %d, want 0", n, since)
+		}
+	}
+}
+
+// One turn can be longer than the window, and "start at a turn boundary"
+// must not quietly become "send the whole log".
+func TestTailSinceIsBoundedByAVeryLongTurn(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	store.CreateSession("s1", "", "general-purpose", true)
+	store.Append("s1", events.TypeUserMessage, map[string]any{"text": "q"})
+	for i := 0; i < 500; i++ {
+		store.Append("s1", events.TypeMessagePartDelta, map[string]any{"text": "a"})
+	}
+
+	since, _ := store.TailSince("s1", 10)
+	tail, _ := store.Events("s1", since)
+	if len(tail) > 20 {
+		t.Errorf("one long turn produced a %d-event tail, past the 2n bound", len(tail))
+	}
+}

@@ -10,7 +10,10 @@ const { load } = require('./harness');
 
 test('the page connects its event stream to the selected session', async () => {
   const app = await load();
-  assert.equal(app.sse.url, '/api/sessions/sess-1/events');
+  // ?tail= so a long conversation opens at its end rather than being
+  // rebuilt from the beginning. A reconnect ignores it in favour of
+  // Last-Event-ID, so nothing is skipped after the first load.
+  assert.match(app.sse.url, /^\/api\/sessions\/sess-1\/events\?tail=\d+$/);
   assert.equal(app.state.connected, true);
   assert.ok(app.el('comm-dot').classList.contains('connected'));
 });
@@ -394,7 +397,7 @@ test('switching session clears the transcript, queue and history', async () => {
   assert.equal(app.transcript(), '');
   assert.deepEqual(Array.from(app.state.promptQueue), []);
   assert.deepEqual(Array.from(app.state.history), []);
-  assert.equal(app.sse.url, '/api/sessions/sess-2/events');
+  assert.match(app.sse.url, /^\/api\/sessions\/sess-2\/events\?tail=\d+$/);
 });
 
 // Esc is the fast way to stop a turn, but it only works if the key
