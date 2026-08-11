@@ -71,18 +71,49 @@ curl -fsSL -o "$WORK/MicrosoftEdgeWebview2Setup.exe" "$WEBVIEW2_BOOTSTRAPPER_URL
 # Every other downloaded artifact in this project is checksum-pinned, and
 # this is the one that gets embedded in a per-machine installer and run
 # elevated on someone else's computer. Microsoft serves this URL as a
-# rolling "evergreen" bootstrapper, so it is signature-checked rather than
-# hash-pinned: a pin would break on every upstream refresh, and the
-# publisher is what matters here anyway.
+# rolling "evergreen" bootstrapper, so a hash pin would break on every
+# upstream refresh; the signature is the stable thing about it.
+#
+# What is checked, and what is not, because a blanket `osslsigncode
+# verify` fails on this exact file for two reasons that are not the file's
+# fault:
+#
+#   * It carries TWO signatures. The primary one is Microsoft Corporation,
+#     issued by Microsoft Code Signing PCA 2024 and timestamped. The
+#     second is a self-signed internal "EdgeBuild" certificate, which no
+#     chain check can ever accept.
+#   * Chain validation needs Microsoft's code-signing roots, which a Mac
+#     does not have in /etc/ssl/cert.pem.
+#
+# So the check asserts the two things that ARE verifiable here: the bytes
+# match the digest inside the signature, and a signer is Microsoft
+# Corporation. That is not a full trust-chain validation and is not
+# claimed to be — it is HTTPS from go.microsoft.com plus proof the file
+# was not altered after Microsoft signed it.
+echo "==> checking the WebView2 bootstrapper's signature"
 if command -v osslsigncode >/dev/null 2>&1; then
-	if ! osslsigncode verify -in "$WORK/MicrosoftEdgeWebview2Setup.exe" >/dev/null 2>&1; then
-		echo "error: the WebView2 bootstrapper failed signature verification" >&2
+	sig="$(osslsigncode verify -in "$WORK/MicrosoftEdgeWebview2Setup.exe" 2>&1 || true)"
+	if ! printf '%s' "$sig" | grep -q 'Subject: CN=Microsoft Corporation,'; then
+		echo "error: the WebView2 bootstrapper is not signed by Microsoft Corporation" >&2
 		echo "       it is embedded in the MSI and run elevated; refusing to ship it" >&2
+		printf '%s\n' "$sig" >&2
 		exit 1
 	fi
-	echo "    signature OK"
+	# Every reported digest pair has to agree. A mismatch means the file
+	# was changed after it was signed.
+	if printf '%s' "$sig" | awk '
+		/Current message digest/    { cur = $NF }
+		/Calculated message digest/ { if ($NF != cur) bad = 1 }
+		END { exit bad ? 0 : 1 }
+	'; then
+		echo "error: the WebView2 bootstrapper does not match its own signature" >&2
+		echo "       it is embedded in the MSI and run elevated; refusing to ship it" >&2
+		printf '%s\n' "$sig" >&2
+		exit 1
+	fi
+	echo "    signed by Microsoft Corporation, contents match the signature"
 else
-	echo "    warning: osslsigncode not installed, so the bootstrapper's signature was NOT checked" >&2
+	echo "    warning: osslsigncode not installed, so the bootstrapper was NOT checked" >&2
 	echo "             install it with: brew install osslsigncode" >&2
 fi
 

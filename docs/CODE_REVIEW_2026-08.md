@@ -622,7 +622,7 @@ deliberately left, each with a reason.
 | `tui/keys` | Esc did nothing whenever this client did not think a turn was running — including while output was streaming in. |
 | `daemon` | `Append` errors were discarded on paths that shape client state; they are logged now. |
 | Web UI | Tool rows kept spinning forever under a `[cancelled]` line. |
-| `build/package-msi.sh` | The WebView2 bootstrapper — embedded in a per-machine installer and run elevated — was the one download with no integrity check. Signature-verified when `osslsigncode` is present, and loudly not verified when it is not. |
+| `build/package-msi.sh` | The WebView2 bootstrapper — embedded in a per-machine installer and run elevated — was the one download with no integrity check. The first attempt (v0.36.0) was written as a blanket `osslsigncode verify` and rejected the genuine file: it carries a second, self-signed internal certificate, and chain validation needs Microsoft roots a Mac does not have. v0.36.1 checks the two things that are verifiable without them — the bytes match the digest in the signature, and a signer is Microsoft Corporation — and both directions are exercised. |
 | `build/package-msi.sh` | `SHERPA_DIR` was computed before `$3` was validated, so the helpful error was unreachable and a missing `GUI_EXE=` died with a misleading one. |
 | `build/package-windows.sh` + `Makefile` | `dist-windows` wiped the directory `dist-msi` writes into, so a just-built MSI could vanish. |
 | `.github/workflows/whisper-macos.yml` | The `ref` input was unvalidated, contradicting the file's own "pinned upstream tag" comment: a dispatch could put any commit behind a trusted artifact name that `localcode dictation` executes. |

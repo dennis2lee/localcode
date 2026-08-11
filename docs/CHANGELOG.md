@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.36.1
+
+**Correcting a claim v0.36.0 made about itself.**
+
+- **The WebView2 signature check shipped in v0.36.0 did not work, and would have stopped the Windows installer from being built at all** on any machine that had the checking tool installed. The bootstrapper Microsoft serves carries two signatures — the real one, and a self-signed internal certificate Microsoft leaves attached — and validating the chain also needs Microsoft's code-signing roots, which a Mac does not have. A blanket check therefore rejects a perfectly good file. It was written that way, and it was never exercised, because the tool was not installed on the machine that cut the release: the build printed its "not checked" warning and carried on. So v0.36.0's note that the signature is verified was not true of the release itself.
+- **What is checked now, and what is not.** The bootstrapper's bytes are confirmed to match the digest inside its own signature, and a signer is confirmed to be Microsoft Corporation. Verified both ways: it passes on the real file, and altering a single byte is caught. That is not full trust-chain validation and is no longer described as though it were — it is HTTPS from Microsoft plus proof the file has not been altered since Microsoft signed it.
+
 ## v0.36.0
 
 The 29 minor review findings, all checked. 24 fixed, 2 already covered by earlier releases, 3 left alone on purpose.
@@ -17,7 +24,7 @@ The 29 minor review findings, all checked. 24 fixed, 2 already covered by earlie
 - **Fix: tool rows in the Web UI kept spinning forever after a turn was cancelled.**
 - **Fix: `localcode mcp` could leak a server process** when two tool calls reconnected to it at the same time.
 - **Fix: an AWS SSO registration's expiry was assumed rather than read**, so a shorter one failed opaquely at refresh instead of prompting a fresh login.
-- **Fix: the WebView2 installer bundled into the Windows MSI had no integrity check**, alone among everything this project downloads, and it is the one that runs elevated on someone else's machine. Its signature is verified at build time now, and the build says so loudly when it cannot check.
+- **Fix: the WebView2 installer bundled into the Windows MSI had no integrity check**, alone among everything this project downloads, and it is the one that runs elevated on someone else's machine. A signature check was added at build time — see v0.36.1, where it turned out not to work and was corrected.
 - **Fix: building the Windows packages could delete the MSI just built.**
 - **Fix: the whisper build workflow accepted any git ref**, despite its own comment saying it built a pinned upstream tag — a dispatch could put an arbitrary build behind the trusted name that `localcode dictation` later runs.
 - Plus: a data race in the speech engine's log, a port check that could bless someone else's server, a wrong status code on an expired dictation session, an API client method that could never have worked, and event-recording failures that were silently discarded.
