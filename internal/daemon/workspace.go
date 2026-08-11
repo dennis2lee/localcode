@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"localcode/internal/dialog"
 )
@@ -82,8 +83,15 @@ func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if d.turns.anyRunning() {
-		http.Error(w, "a turn is in progress; cancel or wait for it before switching workspace", http.StatusConflict)
+	// Named, because the working directory is one process-wide thing and
+	// this guard is therefore daemon-wide: the blocking turn is often in
+	// a session the user is not looking at. A turn stuck on an unanswered
+	// permission request blocks every workspace change until it is
+	// answered, and "a turn is in progress" gave no way to find it.
+	if busy := d.turns.running(); len(busy) > 0 {
+		http.Error(w, fmt.Sprintf(
+			"a turn is in progress in %s; cancel or wait for it before switching workspace (a session waiting on a permission request stays busy until you answer it)",
+			strings.Join(busy, ", ")), http.StatusConflict)
 		return
 	}
 

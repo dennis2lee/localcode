@@ -623,3 +623,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   #mic.recording::after { animation: none; }
 }
+
+/* The per-session activity dot in the left panel. Same idea as the
+   status-bar light, one per conversation: the status line under the
+   prompt only ever spoke for the session on screen, so a turn still
+   running in another one — including one stuck on an unanswered
+   permission request — had nothing to show for it anywhere. */
+.session-led {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  animation: session-led-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes session-led-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+/* Someone who has asked for less motion gets a steady dot rather than
+   none: the information is the point, the blinking is decoration. */
+@media (prefers-reduced-motion: reduce) {
+  .session-led { animation: none; }
+}

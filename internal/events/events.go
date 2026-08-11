@@ -39,6 +39,14 @@ const (
 	// is corrected by the next.
 	TypeMCPStatus Type = "mcp.status"
 
+	// TypeSessionActivity reports that one session started or stopped
+	// working. Daemon-wide, not part of any session's log: it is a fact
+	// about right now, and replaying an hour of light changes to a
+	// reconnecting client would be worse than useless. Clients showing a
+	// per-session indicator read the current state from the session list
+	// on load and keep it current from these.
+	TypeSessionActivity Type = "session.activity"
+
 	// TypeUsage reports the latest known token usage/context-window fill
 	// for a turn: {"input_tokens","output_tokens","max_context","percent",
 	// "tps","show_tps","model"}.

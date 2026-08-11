@@ -1,4 +1,4 @@
-import { sessionListEl, sessionIdEl, modalEl } from './dom.js';
+import { sessionListEl, sessionIdEl } from './dom.js';
 import { app, session, resetSession } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, clearTranscript } from './transcript.js';
@@ -6,7 +6,7 @@ import { formatTime, shortenPath } from './format.js';
 import { renderTasks, renderStatusBar, setCurrentAgent } from './render.js';
 import { setWaiting, setInputLocked } from './composer.js';
 import { connectEvents } from './events.js';
-import { applyWorkspace } from './modals.js';
+import { applyWorkspace, permissionRequest } from './modals.js';
 
 export async function loadSessions() {
   try {
@@ -53,7 +53,18 @@ export function renderSessionList() {
 
     const title = document.createElement('div');
     title.className = 'title';
-    title.textContent = s.title ? s.title : s.id;
+    // A dot on every working session, not just the one on screen. The
+    // status line under the prompt only ever spoke for the current
+    // conversation, so a turn left running in another one was invisible
+    // — including a turn stuck waiting on a permission request, which
+    // blocks workspace switching for every session until it is answered.
+    if (s.busy) {
+      const led = document.createElement('span');
+      led.className = 'session-led';
+      led.title = 'a turn is running in this session';
+      title.appendChild(led);
+    }
+    title.appendChild(document.createTextNode(s.title ? s.title : s.id));
     div.appendChild(title);
 
     // Which project a conversation belongs to is the thing that
@@ -155,7 +166,19 @@ export function selectSession(id, agent, workspace) {
   clearTranscript();
   renderTasks();
   setWaiting(false);
-  modalEl.classList.remove('open');
+  // Through the Modal object, not by reaching past it to the class list.
+  // The class is an output of that object and never an input, so hiding
+  // the element directly left isOpen stuck true for the life of the page
+  // — and two keyboard handlers read it. Escape silently stopped
+  // cancelling turns and Tab stopped cycling agents, permanently, with
+  // nothing on screen to explain it.
+  //
+  // The request itself is not lost by closing it here: it stays
+  // unanswered in that session's log, so coming back to the session
+  // replays it and the modal reappears. Until then that session's turn is
+  // blocked on it, which is why the session list marks it (see
+  // renderSessionList) and why the workspace error names it.
+  permissionRequest.close();
   setInputLocked(false);
   setCurrentAgent(agent);
   renderStatusBar(); // the new session's agent/model, before any event arrives

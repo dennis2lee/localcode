@@ -87,6 +87,15 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	// Every status change becomes one live event carrying the whole list.
 	// Registered here rather than by the caller so no wiring path can
 	// forget it and leave clients with an indicator that never moves.
+	// One event per session whose turn starts or ends, so the session
+	// list can show which conversations are working without polling —
+	// and, more to the point, which one is holding up a workspace change.
+	d.turns.onChange = func(sessionID string, busy bool) {
+		d.daemonEvents.send(events.Event{
+			Type: events.TypeSessionActivity,
+			Data: map[string]any{"session": sessionID, "busy": busy},
+		})
+	}
 	if mcpManager != nil {
 		mcpManager.OnStatusChange(func(states []mcp.ServerState) {
 			d.daemonEvents.send(events.Event{

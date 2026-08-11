@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 
 	"localcode/internal/events"
@@ -27,6 +28,12 @@ type turnTracker struct {
 	// answered together, or a message accepted a moment after the turn
 	// decided to finish would sit in the queue forever.
 	pending map[string][]string
+
+	// onChange is called when a session starts or stops being busy, so
+	// clients can show which conversations are working without polling.
+	// Set once at construction; nil in tests that only exercise the
+	// bookkeeping.
+	onChange func(sessionID string, busy bool)
 }
 
 func newTurnTracker() turnTracker {
@@ -41,12 +48,25 @@ func newTurnTracker() turnTracker {
 // into a 409.
 func (t *turnTracker) begin(id string, cancel context.CancelFunc) bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if _, running := t.cancels[id]; running {
+		t.mu.Unlock()
 		return false
 	}
 	t.cancels[id] = cancel
+	t.mu.Unlock()
+	t.changed(id, true)
 	return true
+}
+
+// changed announces that a session started or stopped being busy.
+//
+// Called outside the lock: the notifier fans out to every connected
+// client, and holding the tracker's mutex across that would let one slow
+// socket block every other session's turn from starting.
+func (t *turnTracker) changed(id string, busy bool) {
+	if t.onChange != nil {
+		t.onChange(id, busy)
+	}
 }
 
 // end clears id's registration once its turn is over, dropping anything
@@ -56,9 +76,10 @@ func (t *turnTracker) begin(id string, cancel context.CancelFunc) bool {
 // which does not throw the queue away.
 func (t *turnTracker) end(id string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	delete(t.cancels, id)
 	delete(t.pending, id)
+	t.mu.Unlock()
+	t.changed(id, false)
 }
 
 // inject hands text to the turn currently running for id, to be picked up
@@ -100,7 +121,6 @@ func (t *turnTracker) takeOne(id string) (string, bool) {
 // microseconds before a turn ended would never be answered by anyone.
 func (t *turnTracker) finishOrTake(id string) (string, bool) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if q := t.pending[id]; len(q) > 0 {
 		text := q[0]
 		if len(q) == 1 {
@@ -108,10 +128,13 @@ func (t *turnTracker) finishOrTake(id string) (string, bool) {
 		} else {
 			t.pending[id] = q[1:]
 		}
+		t.mu.Unlock()
 		return text, true
 	}
 	delete(t.cancels, id)
 	delete(t.pending, id)
+	t.mu.Unlock()
+	t.changed(id, false)
 	return "", false
 }
 
@@ -160,9 +183,28 @@ func (t *turnTracker) anyBusy(ids []string) []string {
 // used by the workspace switch, which is process-wide rather than
 // per-session and so refuses on any turn at all, not just a named set.
 func (t *turnTracker) anyRunning() bool {
+	return len(t.running()) > 0
+}
+
+// running lists the sessions with a turn registered, sorted so the answer
+// is stable.
+//
+// Named, not just counted, because "a turn is in progress" with no clue
+// which one is a dead end: the workspace guard is daemon-wide (the
+// working directory is one process-wide thing), so a turn in any session
+// blocks it — including one the user is not looking at and did not know
+// was still going. A turn waiting on an unanswered permission request
+// blocks it indefinitely, and without a name there is nothing to go and
+// answer.
+func (t *turnTracker) running() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.cancels) > 0
+	ids := make([]string, 0, len(t.cancels))
+	for id := range t.cancels {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {

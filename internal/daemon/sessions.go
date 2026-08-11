@@ -138,8 +138,29 @@ func forkTitle(src *session.Session) string {
 // handleListSessions returns every top-level (visible) session, newest
 // first, so a client can offer "resume an existing session" instead of
 // always starting a new one.
+// handleListSessions lists the visible sessions, each decorated with
+// whether a turn is running in it.
+//
+// Decorated here rather than stored on the session, because "is it
+// working right now" is a fact about this process and not about the
+// conversation — it must not be persisted, and it must be right on a
+// fresh page load, which is what a client cannot get from the live
+// activity events alone.
 func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, d.Loop.Store.ListVisible())
+	busy := map[string]bool{}
+	for _, id := range d.turns.running() {
+		busy[id] = true
+	}
+	type listed struct {
+		session.Session
+		Busy bool `json:"busy"`
+	}
+	sessions := d.Loop.Store.ListVisible()
+	out := make([]listed, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, listed{Session: s, Busy: busy[s.ID]})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (d *Daemon) handleGetSession(w http.ResponseWriter, r *http.Request) {

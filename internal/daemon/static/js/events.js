@@ -12,7 +12,7 @@ import { refreshDelegatePanelIfOpen, permissionRequest } from './modals.js';
 // only ever called from inside a function body, never read at module-
 // evaluation time, so the cycle is safe — see MDN's notes on circular ES
 // module imports.
-import { loadSessions } from './sessions.js';
+import { loadSessions, renderSessionList } from './sessions.js';
 
 let eventSource = null;
 
@@ -120,6 +120,15 @@ const handlers = {
   // Daemon-wide, not part of this conversation: it arrives on the same
   // stream but carries the whole server list every time, so the handler
   // replaces rather than merges.
+  // Daemon-wide, like mcp.status: which session is working right now.
+  // The list's own `busy` fields are the load-time answer; these keep it
+  // current without polling.
+  'session.activity': (d) => {
+    const s = (app.sessions || []).find(x => x.id === d.session);
+    if (!s || s.busy === !!d.busy) return;
+    s.busy = !!d.busy;
+    renderSessionList();
+  },
   'mcp.status': (d) => {
     app.mcpServers = d.servers || [];
     renderMCPServers();
