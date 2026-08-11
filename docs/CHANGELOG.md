@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.34.0
+
+Four findings about stored data and one about a credential. Each was reproduced before it was fixed, and two came back different from the review.
+
+- **Fix: one large tool result could corrupt a session's log at the next restart.** The log was read back with a reader that has a maximum line length, and nothing truncates tool output, so a single `cat` of a large file writes a longer line — at which point reading stops in a way indistinguishable from reaching the end of the file. Measured on a four-event log: no error reported, one event restored, and the next message written after the restart was given a sequence number the file already contained. Two events sharing a number breaks reconnect-and-replay for that session permanently, which shows up as a client silently missing part of a conversation. A partly written final line, which is what an interrupted write leaves behind, is still dropped; everything before it is now kept.
+- **Fix: events could be written to disk out of order.** The sequence number was assigned under a lock and the write happened after it was released, so two events could reach the file in the opposite order — 200 concurrent writes put about 55 lines out of sequence. A background task writing its status into the session that spawned it, while that session is streaming a reply, is enough to trigger it. Restoring reads the file in file order, so the conversation came back unsorted. Measured cost of the fix: half a microsecond per event.
+- **Fix: an MCP auth token could be handed to a different server.** Configured headers are attached to every hop, which happens after Go has decided whether a redirect crosses to another host — so a server answering "moved to `https://elsewhere/`" (or anyone able to answer for it) received the bearer token. Confirmed against two real servers with an ordinary client beside it for comparison: the ordinary client sent nothing, this one sent the token. Credentials are now withheld once a redirect leaves the configured host; a redirect that stays on it still carries them.
+- **Fix: JSON request bodies had no size limit.** One megabyte now, on all fourteen endpoints. Dictation and file upload already capped theirs. This matters because the daemon can be told to listen on an address other than loopback.
+
+**Two review claims did not survive checking.** A racing write was said to be able to land in a *different* session's log through descriptor reuse; it cannot, and 200 rounds of exactly that race produced none — what it can lose is one line of a log being deleted anyway. And the log-truncation finding was understated rather than overstated: the reused sequence numbers were not in the report.
+
 ## v0.33.4
 
 Six findings from the code review, each re-checked against the code before it was fixed. One of the six turned out not to be what the review said; see the note at the end.
