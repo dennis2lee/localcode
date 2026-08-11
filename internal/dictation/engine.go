@@ -90,6 +90,27 @@ func Open(cfg Config) (Recognizer, error) {
 	}
 }
 
+// Describe names the engine a config resolves to, for `dictation status`
+// — which is otherwise a bare "ready" that does not say whether the audio
+// is staying on this machine.
+func Describe(cfg Config) string {
+	engine, err := cfg.resolveEngine()
+	if err != nil {
+		return ""
+	}
+	if engine == EngineSherpa {
+		return "sherpa (local, in-process)"
+	}
+	if host := cfg.remoteHost(); host != "" {
+		return "whisper at " + host + " (remote — recorded audio leaves this machine)"
+	}
+	bin, model, err := cfg.whisperPaths()
+	if err != nil {
+		return "whisper (local)"
+	}
+	return "whisper (local): " + bin + " with " + model
+}
+
 // Available reports whether this process could dictate for *some*
 // configuration. It is a build-and-installation question, not a
 // configuration one: a build with no sherpa compiled in and no whisper

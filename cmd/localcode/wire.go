@@ -204,6 +204,7 @@ func dictationConfig(cfg *config.Config) dictation.Config {
 		out.Engine = dictation.Engine(d.Engine)
 		out.WhisperBin = d.WhisperBin
 		out.WhisperModel = d.WhisperModel
+		out.WhisperURL = d.WhisperURL
 		out.Language = d.Language
 		out.Threads = d.Threads
 	}

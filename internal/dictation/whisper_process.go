@@ -41,8 +41,15 @@ import (
 // there is nothing to gain from a copy per speaker and a great deal to
 // lose.
 type whisperProcess struct {
-	cmd  *exec.Cmd
-	port int
+	// cmd is nil for an engine this process did not start — see
+	// acquireWhisper's remote branch. Everything that touches it is
+	// guarded, because for a remote engine there is nothing to wait on,
+	// nothing to kill, and no stderr to quote back.
+	cmd *exec.Cmd
+	// host is where the engine answers, "host:port". For a local engine
+	// that is 127.0.0.1 and a port picked at startup; for a remote one it
+	// is whatever the user configured.
+	host string
 	log  *bytes.Buffer
 
 	// exited is closed when the process ends.
@@ -83,6 +90,22 @@ var (
 // process, since the model is chosen on the command line and cannot be
 // swapped in a running one.
 func acquireWhisper(cfg Config) (*whisperProcess, error) {
+	// A remote engine is not a process at all: nothing is spawned, no
+	// binary or model has to be installed here, and the machine at the
+	// other end is responsible for its own lifetime. All this side needs
+	// is somewhere to POST audio to.
+	//
+	// Not shared through sharedWhisper either — there is no expensive
+	// thing to keep warm, so a plain value per recognizer avoids the
+	// refcount and the kill-on-key-change question entirely.
+	if remote := cfg.remoteHost(); remote != "" {
+		p := &whisperProcess{host: remote, log: &bytes.Buffer{}}
+		if err := p.reachable(); err != nil {
+			return nil, err
+		}
+		return p, nil
+	}
+
 	bin, model, err := cfg.whisperPaths()
 	if err != nil {
 		return nil, err
@@ -160,7 +183,7 @@ func startWhisper(bin, model string, threads int) (*whisperProcess, error) {
 		return nil, fmt.Errorf("start whisper engine %s: %w", bin, err)
 	}
 
-	p := &whisperProcess{cmd: cmd, port: port, log: logBuf}
+	p := &whisperProcess{cmd: cmd, host: "127.0.0.1:" + strconv.Itoa(port), log: logBuf}
 	p.watch()
 	if err := p.waitReady(); err != nil {
 		p.kill()
@@ -187,9 +210,33 @@ func (p *whisperProcess) waitReady() error {
 	return fmt.Errorf("whisper engine did not become ready within 60s: %s", p.tail())
 }
 
-func (p *whisperProcess) addr() string { return "127.0.0.1:" + strconv.Itoa(p.port) }
+func (p *whisperProcess) addr() string { return p.host }
+
+// remote reports that this engine belongs to another machine, so there is
+// no child process behind it.
+func (p *whisperProcess) remote() bool { return p.cmd == nil }
+
+// reachable checks that something is listening before dictation starts.
+//
+// A wrong address should fail when it is entered, with the address in the
+// message, rather than as silence the first time someone speaks — which
+// is indistinguishable from a microphone that is not working.
+func (p *whisperProcess) reachable() error {
+	conn, err := net.DialTimeout("tcp", p.host, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("no speech engine answering at %s: %w", p.host, err)
+	}
+	conn.Close()
+	return nil
+}
 
 func (p *whisperProcess) alive() bool {
+	// A remote engine's health is not this process's to know: it can go
+	// away and come back without anything here noticing, so every request
+	// carries its own verdict and there is nothing useful to cache.
+	if p.remote() {
+		return true
+	}
 	if p.cmd == nil || p.cmd.Process == nil || p.exited == nil {
 		return false
 	}
@@ -214,7 +261,7 @@ func (p *whisperProcess) tail() string {
 }
 
 func (p *whisperProcess) kill() {
-	if p.cmd == nil || p.cmd.Process == nil {
+	if p.remote() || p.cmd.Process == nil {
 		return
 	}
 	p.cmd.Process.Kill()

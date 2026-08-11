@@ -215,6 +215,9 @@ func runDictationStatus() error {
 	}
 	if ready {
 		fmt.Println("dictation is ready")
+		if d := dictation.Describe(cfg); d != "" {
+			fmt.Println("engine:", d)
+		}
 		return nil
 	}
 	fmt.Println("dictation is not available:", why)

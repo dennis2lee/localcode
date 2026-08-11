@@ -1018,8 +1018,10 @@ localcode can take a prompt by voice, in the desktop window and in the
 Web UI. Click the `dictation: off` pill in the status row under the
 prompt box and talk; the text appears as you speak, grey while a
 sentence is still in progress and ordinary text once you pause. Click
-the pill again to stop. Everything runs on your machine: no audio leaves
-it, and it works with no network at all.
+the pill again to stop. By default everything runs on your machine: no
+audio leaves it, and it works with no network at all. Pointing it at
+[another machine](#using-a-whisper-server-on-another-machine) is the one
+thing that changes that, and it says so where you set it.
 
 It is off until an engine and a model are on disk, because there is no
 sensible one to guess and guessing would mean a silent several-hundred-
@@ -1081,6 +1083,7 @@ install` arranged:
 | `language` | ISO 639-1 code, `ko` or `en`. Empty auto-detects, which is what mixed speech wants and slightly slower for speech that is only ever one language. |
 | `whisper_bin` | Path to the engine executable. |
 | `whisper_model` | Path to a `ggml-*.bin`, or a directory holding one. When several are installed the largest is used. |
+| `whisper_url` | A whisper.cpp server on another machine. Set, nothing runs locally. See [below](#using-a-whisper-server-on-another-machine). |
 | `threads` | CPU cap. 0 picks a modest default, since this runs beside a language model doing the actual work. |
 
 `dictation_model_dir` still points sherpa at its model directory, which
@@ -1098,6 +1101,48 @@ invalid character 'U' in string escape code
 and localcode refuses to start, which reads as a broken install rather
 than a mistyped path. Forward slashes work on Windows too and avoid the
 whole problem.
+
+#### Using a whisper server on another machine
+
+A laptop with no GPU and a workstation with one is the usual reason:
+point the laptop at the workstation and the transcription happens there.
+Nothing is installed on this side — no engine, no model, no child
+process — and the microphone, the voice detection and the prompt box all
+work exactly as before.
+
+```json
+{
+  "dictation": {
+    "whisper_url": "http://192.168.1.50:8080",
+    "language": "ko"
+  }
+}
+```
+
+The address is read the way people write one: with or without the
+scheme, with or without a trailing slash, and with or without the port
+(8080 is assumed, which is what whisper.cpp's server uses when started
+without `--port`). `whisper_bin` and `whisper_model` are ignored while it
+is set.
+
+On the other machine, run whisper.cpp's server bound to an address this
+one can reach — its default is loopback only, so it needs telling:
+
+```bash
+whisper-server --model ggml-small-q5_1.bin --host 0.0.0.0 --port 8080
+```
+
+**Recorded audio leaves this machine when you set this.** That is the
+point of it, but it reverses what dictation otherwise guarantees, and
+the wire is plain HTTP with no authentication — whisper.cpp's server has
+none to offer. Treat the address as you would any other unauthenticated
+service on your network, and only point it somewhere you would be
+willing to send what you say out loud. `localcode dictation status`
+prints which engine is in use and says plainly when it is a remote one.
+
+A wrong address fails when dictation starts, naming the address, rather
+than as silence the first time you speak — which is indistinguishable
+from a microphone that is not working.
 
 #### Choosing a Whisper model
 

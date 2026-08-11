@@ -15,9 +15,21 @@ type Config struct {
 	Engine Engine
 	// WhisperBin and WhisperModel override where the whisper engine and
 	// its model are found. Empty means look beside this binary, which is
-	// where the installer puts them.
+	// where the installer puts them. Both are ignored when WhisperURL is
+	// set, since then nothing is run here.
 	WhisperBin   string
 	WhisperModel string
+	// WhisperURL points at a whisper.cpp server on another machine, as
+	// "host:port" or "http://host:port". Set, it wins over everything
+	// local: no engine or model needs to be installed on this machine and
+	// no child process is started.
+	//
+	// The trade is worth stating plainly, because it reverses this
+	// feature's main property: with it set, recorded audio leaves this
+	// machine. That is the point — it puts the work on a box with the
+	// CPU or GPU for it — but it is no longer true that nothing is sent
+	// anywhere, and the wire is plain HTTP.
+	WhisperURL string
 	// Language is the spoken language as an ISO 639-1 code ("ko", "en").
 	// Empty means auto-detect, which is right for mixed speech and a
 	// little slower and less certain for speech that is only ever one

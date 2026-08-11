@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,8 +38,7 @@ func newFakeEngine(t *testing.T, reply func(n int64) string) *fakeEngine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	port, _ := strconv.Atoi(portStr)
-	f.proc = &whisperProcess{port: port}
+	f.proc = &whisperProcess{host: net.JoinHostPort("127.0.0.1", portStr)}
 	return f
 }
 
@@ -119,5 +117,71 @@ func TestUtteranceIsBounded(t *testing.T) {
 	if maxHeld := maxUtterance + SampleRate; held > maxHeld {
 		t.Errorf("holding %.1fs of audio, more than the %.1fs cap",
 			float64(held)/SampleRate, float64(maxHeld)/SampleRate)
+	}
+}
+
+// A remote engine is driven exactly like a local one, minus the process.
+// This is the whole feature: point at another machine, install nothing
+// here, and dictation works.
+func TestRemoteEngineTranscribesWithNothingInstalledLocally(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/inference" {
+			t.Errorf("remote engine was asked for %q, want /inference", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"text":" 안녕하세요\n"}`)
+	}))
+	defer srv.Close()
+
+	// No WhisperBin, no WhisperModel: nothing is installed on this side.
+	cfg := Config{Engine: EngineWhisper, WhisperURL: srv.URL, Language: "ko"}
+	rec, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("opening a remote engine: %v", err)
+	}
+	defer rec.Close()
+
+	sess := NewSession(rec)
+	if _, err := sess.Write(pcm16(tone(SampleRate))); err != nil {
+		t.Fatal(err)
+	}
+	if got := sess.Stop().Final; got != "안녕하세요" {
+		t.Errorf("final = %q, want %q", got, "안녕하세요")
+	}
+}
+
+// A wrong address must fail when dictation starts, naming the address —
+// not as silence the first time someone speaks, which is exactly what a
+// broken microphone looks like.
+func TestAnUnreachableRemoteEngineFailsWithItsAddress(t *testing.T) {
+	// Port 1 on loopback: nothing listens there, and the connection is
+	// refused immediately rather than hanging.
+	_, err := Open(Config{Engine: EngineWhisper, WhisperURL: "127.0.0.1:1"})
+	if err == nil {
+		t.Fatal("opening an unreachable remote engine succeeded")
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Errorf("the error does not name the address: %v", err)
+	}
+}
+
+// Closing a remote recognizer must not try to kill anything: there is no
+// child process, and Shutdown running over it would be reaching into
+// another machine's business.
+func TestClosingARemoteEngineIsHarmless(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"text":"ok"}`)
+	}))
+	defer srv.Close()
+
+	rec, err := Open(Config{Engine: EngineWhisper, WhisperURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Close()
+	Shutdown() // must not panic, and must not touch the remote
+
+	// Still serving: nothing was killed.
+	if _, err := Open(Config{Engine: EngineWhisper, WhisperURL: srv.URL}); err != nil {
+		t.Errorf("the remote engine became unusable after Close/Shutdown: %v", err)
 	}
 }

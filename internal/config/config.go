@@ -121,6 +121,17 @@ type DictationConfig struct {
 	// WhisperModel is the path to a ggml model file, or to a directory
 	// holding one. When several are installed the largest is used.
 	WhisperModel string `json:"whisper_model,omitempty"`
+	// WhisperURL points dictation at a whisper.cpp server on another
+	// machine, as "host:port" or "http://host:port". Set, it wins over
+	// everything local: no engine or model needs to be installed here and
+	// no child process is started, which is the point — it puts the work
+	// on a box that has the CPU or GPU for it.
+	//
+	// It also reverses this feature's main property, so it is worth being
+	// blunt about: recorded audio then leaves this machine, over plain
+	// HTTP. Only point it somewhere you would be willing to send what you
+	// say out loud.
+	WhisperURL string `json:"whisper_url,omitempty"`
 	// Language is the spoken language as an ISO 639-1 code, "ko" or
 	// "en". Empty auto-detects, which is what mixed speech wants and a
 	// little slower and less certain for speech that is only ever one

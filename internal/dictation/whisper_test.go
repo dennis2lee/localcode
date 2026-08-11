@@ -148,3 +148,50 @@ func tone(n int) []float32 {
 }
 
 func silence(n int) []float32 { return make([]float32, n) }
+
+// The address is typed by a person, so it is read the way a person
+// writes one: copied out of a browser bar, out of a colleague's message,
+// with or without the scheme, with or without the port.
+func TestRemoteHostNormalization(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"", ""},
+		{"   ", ""},
+		{"http://box:8080", "box:8080"},
+		{"https://box:9000", "box:9000"},
+		{"box:8080", "box:8080"},
+		{"http://box:8080/", "box:8080"},
+		{"  http://box:8080  ", "box:8080"},
+		// No port: whisper.cpp's server prints 8080 when started without
+		// --port, so that is the one to assume rather than to refuse.
+		{"box", "box:8080"},
+		{"http://box", "box:8080"},
+		{"192.168.1.50", "192.168.1.50:8080"},
+		{"192.168.1.50:9999", "192.168.1.50:9999"},
+	}
+	for _, tc := range tests {
+		if got := (Config{WhisperURL: tc.in}).remoteHost(); got != tc.want {
+			t.Errorf("remoteHost(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A remote engine needs nothing installed on this machine — that is the
+// whole reason to use one. Readiness must not go looking for a binary.
+func TestARemoteEngineNeedsNothingInstalledLocally(t *testing.T) {
+	cfg := Config{Engine: EngineWhisper, WhisperURL: "http://another-box:8080"}
+	if err := cfg.whisperReady(); err != nil {
+		t.Errorf("a configured remote engine reported not ready: %v", err)
+	}
+	if ready, why := NewManager(cfg).Ready(); !ready {
+		t.Errorf("Manager.Ready = false for a remote engine: %s", why)
+	}
+}
+
+// And with no URL, nothing changes: the local path still has to find its
+// engine and model.
+func TestWithoutAURLTheLocalRequirementsStillApply(t *testing.T) {
+	cfg := Config{Engine: EngineWhisper, WhisperBin: "/nope/whisper-server"}
+	if err := cfg.whisperReady(); err == nil {
+		t.Error("a missing local engine reported ready")
+	}
+}

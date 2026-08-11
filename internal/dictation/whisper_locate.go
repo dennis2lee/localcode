@@ -2,6 +2,8 @@ package dictation
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -126,6 +128,29 @@ func largestGGML(dir string) string {
 	return found[0].path
 }
 
+// remoteHost normalizes WhisperURL to the "host:port" the transcribe
+// call dials, or "" when no remote engine is configured.
+//
+// Deliberately forgiving about the form: people copy an address out of a
+// browser bar or a colleague's message, so "http://box:8080",
+// "box:8080", and a trailing slash all mean the same thing. A missing
+// port gets whisper.cpp's own default rather than an error, since 8080
+// is what its server prints when started without --port.
+func (c Config) remoteHost() string {
+	raw := strings.TrimSpace(c.WhisperURL)
+	if raw == "" {
+		return ""
+	}
+	raw = strings.TrimSuffix(raw, "/")
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		raw = u.Host
+	}
+	if _, _, err := net.SplitHostPort(raw); err != nil {
+		raw = net.JoinHostPort(raw, "8080")
+	}
+	return raw
+}
+
 // whisperPaths resolves the engine and model this config would run,
 // naming whichever is missing.
 func (c Config) whisperPaths() (bin, model string, err error) {
@@ -147,6 +172,13 @@ func (c Config) whisperPaths() (bin, model string, err error) {
 }
 
 func (c Config) whisperReady() error {
+	// A remote engine needs nothing installed here, so there is nothing
+	// to check beyond having been told where it is. Whether it actually
+	// answers is checked when a dictation starts, where the address can
+	// be put in the error.
+	if c.remoteHost() != "" {
+		return nil
+	}
 	_, _, err := c.whisperPaths()
 	return err
 }
