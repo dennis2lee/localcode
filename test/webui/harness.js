@@ -281,9 +281,18 @@ async function load(opts = {}) {
   // dictation start path had no coverage at all, and the bug that hid
   // there (the session id posted as "[object Object]") was one no
   // button-visibility test could ever have seen.
+  // getUserMedia records its constraints so a test can assert which
+  // microphone was actually asked for, and enumerateDevices is
+  // overridable so the "labels are hidden until access is granted" case
+  // can be exercised.
+  harness.mediaConstraints = [];
   sandbox.navigator = {
     mediaDevices: {
-      getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }),
+      getUserMedia: async (constraints) => {
+        harness.mediaConstraints.push(constraints);
+        return { getTracks: () => [{ stop() {} }] };
+      },
+      enumerateDevices: async () => opts.devices || [],
     },
   };
   sandbox.URL = { createObjectURL: () => 'blob:worklet', revokeObjectURL() {} };

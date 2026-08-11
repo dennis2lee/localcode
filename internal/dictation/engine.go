@@ -101,7 +101,7 @@ func Describe(cfg Config) string {
 	if engine == EngineSherpa {
 		return "sherpa (local, in-process)"
 	}
-	if host := cfg.remoteHost(); host != "" {
+	if host := cfg.RemoteHost(); host != "" {
 		return "whisper at " + host + " (remote — recorded audio leaves this machine)"
 	}
 	bin, model, err := cfg.whisperPaths()

@@ -56,3 +56,14 @@ export const toggleLeftBtn = document.getElementById('toggle-left');
 export const toggleRightBtn = document.getElementById('toggle-right');
 export const appVersionEl = document.getElementById('app-version');
 export const micBtn = document.getElementById('mic');
+
+// The settings window.
+export const settingsModalEl = document.getElementById('settings-modal');
+export const settingsBtn = document.getElementById('settings-btn');
+export const settingsSaveBtn = document.getElementById('settings-save');
+export const settingsCloseBtn = document.getElementById('settings-close');
+export const settingsSaveNoteEl = document.getElementById('settings-save-note');
+export const micDeviceSelect = document.getElementById('mic-device-select');
+export const dictationLanguageSelect = document.getElementById('dictation-language-select');
+export const whisperURLInput = document.getElementById('whisper-url-input');
+export const dictationEngineNoteEl = document.getElementById('dictation-engine-note');

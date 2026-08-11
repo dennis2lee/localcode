@@ -235,3 +235,28 @@ func SetAutoDelegateTargetInFile(path, agent string, match []string) error {
 func updateAutoDelegateInFile(path string, update func(block map[string]json.RawMessage) error) error {
 	return updateRawSection(path, "auto_delegate", update)
 }
+
+// SetDictationInFile writes the speech settings a settings panel can
+// change, leaving every other key in the "dictation" block — and in the
+// file — exactly as it was.
+//
+// Written even when empty, rather than omitted. "" is a real answer for
+// both of these and not the same as "unset": an empty language means
+// auto-detect, and an empty URL means run the engine locally. Dropping
+// the key would leave the previous value in the file and the panel would
+// appear not to have saved.
+func SetDictationInFile(path, language, whisperURL string) error {
+	return updateRawSection(path, "dictation", func(block map[string]json.RawMessage) error {
+		for key, value := range map[string]string{
+			"language":    language,
+			"whisper_url": whisperURL,
+		} {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return fmt.Errorf("marshal dictation.%s: %w", key, err)
+			}
+			block[key] = encoded
+		}
+		return nil
+	})
+}

@@ -34,12 +34,32 @@ func NewManager(cfg Config) *Manager {
 	return &Manager{cfg: cfg, sessions: map[string]*Session{}}
 }
 
+// SetConfig replaces the settings new dictations will use.
+//
+// Sessions already running keep the recognizer they opened with: a
+// recognizer holds an utterance in progress, and swapping the engine
+// under one mid-sentence would lose it for no gain — the next dictation
+// is a click away.
+func (m *Manager) SetConfig(cfg Config) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cfg = cfg
+}
+
+// Config returns the settings in force, so a caller can change one field
+// without having to reconstruct the rest.
+func (m *Manager) Config() Config {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg
+}
+
 // Ready reports whether a dictation could actually start right now, and
 // why not when it couldn't. Clients use it to decide between offering a
 // microphone button, hiding it, and explaining — a button that can only
 // fail is worse than no button.
 func (m *Manager) Ready() (bool, string) {
-	if _, err := m.cfg.resolveEngine(); err != nil {
+	if _, err := m.Config().resolveEngine(); err != nil {
 		return false, err.Error()
 	}
 	return true, ""
@@ -47,7 +67,7 @@ func (m *Manager) Ready() (bool, string) {
 
 // Start opens a recognizer and returns the id audio should be posted to.
 func (m *Manager) Start() (string, error) {
-	rec, err := Open(m.cfg)
+	rec, err := Open(m.Config())
 	if err != nil {
 		return "", err
 	}

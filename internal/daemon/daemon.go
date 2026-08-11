@@ -36,6 +36,12 @@ type Daemon struct {
 	// desktop one) or none was configured — the handlers answer with an
 	// explanation rather than requiring callers to special-case it.
 	Dictation *dictation.Manager
+	// ConfigPath is the config.json settings changes are written to, or
+	// "" when this daemon was started without one. Empty is not an
+	// error: a live setting still applies for as long as the process
+	// runs, and a panel that says so is better than a control that
+	// silently forgets.
+	ConfigPath string
 
 	// PickDirectory opens a native folder picker on the machine the daemon
 	// runs on, and is nil unless that machine is also the one looking at
@@ -121,6 +127,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/workspace/browse", d.handleBrowseWorkspace)
 	d.mux.HandleFunc("GET /api/mcp-servers", d.handleListMCPServers)
 	d.mux.HandleFunc("GET /api/dictation", d.handleDictationStatus)
+	d.mux.HandleFunc("POST /api/dictation/settings", d.handleSetDictation)
 	d.mux.HandleFunc("POST /api/dictation", d.handleDictationStart)
 	d.mux.HandleFunc("POST /api/dictation/{id}/audio", d.handleDictationAudio)
 	d.mux.HandleFunc("POST /api/dictation/{id}/stop", d.handleDictationStop)

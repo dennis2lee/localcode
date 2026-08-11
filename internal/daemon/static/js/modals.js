@@ -12,6 +12,7 @@ import * as apiClient from './api.js';
 import { appendError, appendTool } from './transcript.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace } from './render.js';
 import { Modal } from './modal.js';
+import { settings } from './settings.js';
 // Circular with sessions.js, which imports applyWorkspace from here — safe
 // for the same reason as the events.js/modals.js pair: both references are
 // only ever called from a function body at runtime, never while the module
@@ -348,6 +349,10 @@ export async function saveWorkspace() {
   workspace.close();
 }
 
+// Every modal, so Tab does not cycle agents underneath an open one. A
+// new modal has to be added here — the list is the whole mechanism, and
+// forgetting it is silent.
 export function anyModalOpen() {
-  return permissionRequest.isOpen || permissionSettings.isOpen || delegate.isOpen || workspace.isOpen;
+  return permissionRequest.isOpen || permissionSettings.isOpen || delegate.isOpen ||
+    workspace.isOpen || settings.isOpen;
 }

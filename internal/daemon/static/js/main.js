@@ -23,6 +23,7 @@ import {
   openWorkspacePicker, closeWorkspaceModal, saveWorkspace, anyModalOpen, permissionRequest,
 } from './modals.js';
 import { initResizers } from './resize.js';
+import { initSettings } from './settings.js';
 
 agentSelectEl.addEventListener('change', async () => {
   const name = agentSelectEl.value;
@@ -139,6 +140,7 @@ workspaceInput.addEventListener('keydown', (e) => {
 
 async function init() {
   initResizers();
+  initSettings();
   renderTasks();
   // Six independent GETs against the same daemon — each one writes its own
   // slice of app state and renders its own pane, so there is no ordering
@@ -183,4 +185,5 @@ export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspac
 export { forkSession } from './sessions.js';
 export { toggleDictation, stopDictation, isDictating } from './dictation.js';
 export { setPanelWidth } from './resize.js';
+export { settings, openSettings, selectedMicDeviceId, MIC_DEVICE_KEY } from './settings.js';
 export { renderSessionList, selectSession } from './sessions.js';

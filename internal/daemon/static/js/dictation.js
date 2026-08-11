@@ -1,6 +1,7 @@
 import { inputEl, micBtn } from './dom.js';
 import * as apiClient from './api.js';
 import { appendError } from './transcript.js';
+import { selectedMicDeviceId } from './settings.js';
 import { autoResizeInput } from './composer.js';
 
 // Live dictation: the microphone button captures audio, the daemon turns
@@ -122,9 +123,15 @@ export async function startDictation() {
   };
 
   try {
-    live.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-    });
+    // The chosen microphone, when there is one. "exact" so a saved
+    // device that is no longer plugged in fails and says so, rather than
+    // silently recording from a different one — someone who picked a
+    // headset mic and got the laptop's built-in instead would have no
+    // way to tell from the transcript that anything was wrong.
+    const audio = { channelCount: 1, echoCancellation: true, noiseSuppression: true };
+    const deviceId = selectedMicDeviceId();
+    if (deviceId) audio.deviceId = { exact: deviceId };
+    live.stream = await navigator.mediaDevices.getUserMedia({ audio });
     live.ctx = new AudioContext();
     const url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'text/javascript' }));
     await live.ctx.audioWorklet.addModule(url);

@@ -1062,10 +1062,35 @@ model it ships with, transcripts came out unspaced and inaccurate; the
 spacing is fixed as of v0.32.13, the accuracy is not. Install it with
 `localcode dictation install --engine sherpa`.
 
+#### Settings window
+
+The ⚙ button in the status row under the prompt box opens a settings
+window. Dictation's live there: which microphone to record from, the
+spoken language, and the speech engine's address.
+
+Two kinds of setting sit in it, and the window says which is which
+because they do not behave the same way:
+
+| | Where it lives | Who it applies to |
+|---|---|---|
+| Microphone | this browser (`localStorage`) | you, on this machine |
+| Language, engine address | the daemon's `config.json` | every client attached to it |
+
+A microphone cannot be a daemon setting: a device id means nothing on
+another machine, and the daemon never sees audio hardware at all, only
+the PCM a page sends it. Device *names* stay hidden until the page has
+been allowed microphone access once, which the window says rather than
+listing anonymous entries.
+
+A daemon started without a `config.json` can still be configured — the
+change applies for as long as it runs — and the window says that too,
+rather than appearing to save and forgetting.
+
 #### Configuration
 
-None of this is required. Set it only to override what `dictation
-install` arranged:
+The settings window covers the common cases; everything below is the
+same thing in the file. None of it is required — set it only to override
+what `dictation install` arranged:
 
 ```json
 {

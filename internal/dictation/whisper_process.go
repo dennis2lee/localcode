@@ -98,7 +98,7 @@ func acquireWhisper(cfg Config) (*whisperProcess, error) {
 	// Not shared through sharedWhisper either — there is no expensive
 	// thing to keep warm, so a plain value per recognizer avoids the
 	// refcount and the kill-on-key-change question entirely.
-	if remote := cfg.remoteHost(); remote != "" {
+	if remote := cfg.RemoteHost(); remote != "" {
 		p := &whisperProcess{host: remote, log: &bytes.Buffer{}}
 		if err := p.reachable(); err != nil {
 			return nil, err

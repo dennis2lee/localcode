@@ -169,7 +169,7 @@ func TestRemoteHostNormalization(t *testing.T) {
 		{"192.168.1.50:9999", "192.168.1.50:9999"},
 	}
 	for _, tc := range tests {
-		if got := (Config{WhisperURL: tc.in}).remoteHost(); got != tc.want {
+		if got := (Config{WhisperURL: tc.in}).RemoteHost(); got != tc.want {
 			t.Errorf("remoteHost(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
@@ -193,5 +193,21 @@ func TestWithoutAURLTheLocalRequirementsStillApply(t *testing.T) {
 	cfg := Config{Engine: EngineWhisper, WhisperBin: "/nope/whisper-server"}
 	if err := cfg.whisperReady(); err == nil {
 		t.Error("a missing local engine reported ready")
+	}
+}
+
+// Half-typed and nonsense addresses resolve to "" rather than to
+// something that merely looks like an address. "http://" in particular is
+// what is left behind while editing the field, and it used to normalize
+// to "http:/" — not something to hand a dialer, or to show back as the
+// setting in force.
+func TestRemoteHostRejectsWhatCannotNameAMachine(t *testing.T) {
+	for _, in := range []string{
+		"http://", "https://", "http:///", "//", "/", ":", ":8080", "http://:8080",
+		"http:// ", "box /8080",
+	} {
+		if got := (Config{WhisperURL: in}).RemoteHost(); got != "" {
+			t.Errorf("RemoteHost(%q) = %q, want \"\"", in, got)
+		}
 	}
 }

@@ -128,7 +128,7 @@ func largestGGML(dir string) string {
 	return found[0].path
 }
 
-// remoteHost normalizes WhisperURL to the "host:port" the transcribe
+// RemoteHost normalizes WhisperURL to the "host:port" the transcribe
 // call dials, or "" when no remote engine is configured.
 //
 // Deliberately forgiving about the form: people copy an address out of a
@@ -136,17 +136,38 @@ func largestGGML(dir string) string {
 // "box:8080", and a trailing slash all mean the same thing. A missing
 // port gets whisper.cpp's own default rather than an error, since 8080
 // is what its server prints when started without --port.
-func (c Config) remoteHost() string {
+func (c Config) RemoteHost() string {
 	raw := strings.TrimSpace(c.WhisperURL)
 	if raw == "" {
 		return ""
 	}
-	raw = strings.TrimSuffix(raw, "/")
-	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+
+	// The scheme check comes before any trimming, because trimming a
+	// trailing slash first turns "http://" into "http:/" and the
+	// separator disappears — which is how "http://", the thing left
+	// behind mid-edit, used to normalize to the address "http:/".
+	//
+	// "://" rather than url.Parse's own idea of a scheme: it reads
+	// "box:8080" as the scheme "box" with opaque "8080", so asking it
+	// whether a scheme is present rejects the most ordinary form there
+	// is.
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return ""
+		}
 		raw = u.Host
 	}
-	if _, _, err := net.SplitHostPort(raw); err != nil {
-		raw = net.JoinHostPort(raw, "8080")
+	raw = strings.TrimSuffix(raw, "/")
+
+	host, _, err := net.SplitHostPort(raw)
+	if err != nil {
+		host, raw = raw, net.JoinHostPort(raw, "8080")
+	}
+	// A bare port, a stray colon, a leftover slash: nothing that cannot
+	// name a machine.
+	if host == "" || strings.ContainsAny(host, "/\\ ") {
+		return ""
 	}
 	return raw
 }
@@ -176,7 +197,7 @@ func (c Config) whisperReady() error {
 	// to check beyond having been told where it is. Whether it actually
 	// answers is checked when a dictation starts, where the address can
 	// be put in the error.
-	if c.remoteHost() != "" {
+	if c.RemoteHost() != "" {
 		return nil
 	}
 	_, _, err := c.whisperPaths()

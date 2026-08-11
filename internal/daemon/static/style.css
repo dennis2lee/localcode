@@ -650,3 +650,35 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   .session-led { animation: none; }
 }
+
+/* The settings window. Same box as the other modals; the additions are
+   the section heading and the per-field grouping, which exist so that
+   adding a setting later is adding a block rather than rebalancing a
+   layout. */
+#settings-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; }
+#settings-modal.open { display: flex; align-items: center; justify-content: center; }
+#settings-modal .box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+#settings-modal h3 { margin-top: 0; }
+#settings-modal h4.settings-section {
+  margin: 18px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.95em;
+  color: var(--muted);
+  font-weight: 600;
+}
+#settings-modal .settings-field { margin-bottom: 16px; }
+#settings-modal select,
+#settings-modal input[type="text"] { width: 100%; }
+/* The one note that has to be noticed rather than merely available:
+   audio leaving the machine is a reversal of what dictation otherwise
+   promises. */
+#settings-modal .note.warn { color: var(--warn); }

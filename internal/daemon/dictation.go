@@ -1,10 +1,13 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
+	"localcode/internal/config"
 	"localcode/internal/dictation"
 )
 
@@ -28,7 +31,76 @@ func (d *Daemon) handleDictationStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ready, detail := d.Dictation.Ready()
-	writeJSON(w, http.StatusOK, map[string]any{"ready": ready, "detail": detail})
+	cfg := d.Dictation.Config()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ready":  ready,
+		"detail": detail,
+		// The current settings travel with the status so a settings panel
+		// can show what is in force without a second request, and so the
+		// engine's identity is visible: whether audio is staying on this
+		// machine is not something to have to go and look up.
+		"language":    cfg.Language,
+		"whisper_url": cfg.WhisperURL,
+		"engine":      dictation.Describe(cfg),
+		"remote":      cfg.RemoteHost() != "",
+		// Whether the daemon has a config.json to write to. Without one
+		// the panel can still change the live setting, but it will not
+		// survive a restart, and saying so beats a control that silently
+		// forgets.
+		"can_save": d.ConfigPath != "",
+	})
+}
+
+// handleSetDictation changes the speech settings a settings panel owns —
+// the spoken language and, when dictation should run somewhere else, the
+// address of that engine.
+//
+// Applied to the live manager first and persisted second, in that order
+// deliberately: the setting taking effect is what the user asked for, and
+// a daemon started without a config.json can still be configured for as
+// long as it runs. A failed write is reported rather than swallowed, but
+// it does not undo the change.
+func (d *Daemon) handleSetDictation(w http.ResponseWriter, r *http.Request) {
+	if d.Dictation == nil {
+		writeError(w, http.StatusServiceUnavailable, dictation.ErrUnavailable)
+		return
+	}
+	var req struct {
+		Language   string `json:"language"`
+		WhisperURL string `json:"whisper_url"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	cfg := d.Dictation.Config()
+	cfg.Language = strings.TrimSpace(req.Language)
+	cfg.WhisperURL = strings.TrimSpace(req.WhisperURL)
+	// Rejected here rather than at the first attempt to dictate: a
+	// settings panel is where someone can still see what they typed.
+	if cfg.WhisperURL != "" && cfg.RemoteHost() == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not an address a speech engine could be at", req.WhisperURL))
+		return
+	}
+	d.Dictation.SetConfig(cfg)
+
+	var saveErr string
+	if d.ConfigPath != "" {
+		if err := config.SetDictationInFile(d.ConfigPath, cfg.Language, cfg.WhisperURL); err != nil {
+			saveErr = err.Error()
+		}
+	}
+	ready, detail := d.Dictation.Ready()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ready":       ready,
+		"detail":      detail,
+		"language":    cfg.Language,
+		"whisper_url": cfg.WhisperURL,
+		"engine":      dictation.Describe(cfg),
+		"remote":      cfg.RemoteHost() != "",
+		"save_error":  saveErr,
+	})
 }
 
 // handleDictationStart opens a recognizer and returns the id to post

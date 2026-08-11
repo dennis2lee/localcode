@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -148,4 +150,94 @@ func TestManagerReadyExplainsWhyNot(t *testing.T) {
 		t.Error("no reason given")
 	}
 	_ = context.Background()
+}
+
+// The settings endpoint changes the live manager and persists to
+// config.json, in that order: the setting taking effect is what the user
+// asked for, and a daemon started without a config.json can still be
+// configured for as long as it runs.
+func TestSetDictationAppliesAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"dictation":{"threads":3}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &Daemon{Dictation: dictation.NewManager(dictation.Config{}), ConfigPath: cfgPath}
+	rec := httptest.NewRecorder()
+	d.handleSetDictation(rec, httptest.NewRequest("POST", "/api/dictation/settings",
+		strings.NewReader(`{"language":"ko","whisper_url":"http://box:8080"}`)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	var got map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got["save_error"] != "" {
+		t.Errorf("save_error = %v", got["save_error"])
+	}
+	if got["remote"] != true {
+		t.Errorf("remote = %v, want true for a configured URL", got["remote"])
+	}
+
+	// Applied to the live manager.
+	if live := d.Dictation.Config(); live.Language != "ko" || live.WhisperURL != "http://box:8080" {
+		t.Errorf("live config = %+v", live)
+	}
+
+	// Persisted, and without trampling the key this build was not asked
+	// to change.
+	raw, _ := os.ReadFile(cfgPath)
+	var onDisk struct {
+		Dictation map[string]any `json:"dictation"`
+	}
+	json.Unmarshal(raw, &onDisk)
+	if onDisk.Dictation["language"] != "ko" {
+		t.Errorf("language not written: %s", raw)
+	}
+	if onDisk.Dictation["whisper_url"] != "http://box:8080" {
+		t.Errorf("whisper_url not written: %s", raw)
+	}
+	if onDisk.Dictation["threads"] != float64(3) {
+		t.Errorf("an untouched key was lost: %s", raw)
+	}
+}
+
+// A nonsense address is refused at the panel, where the person can still
+// see what they typed — not at the first attempt to dictate.
+func TestSetDictationRejectsAnUnusableAddress(t *testing.T) {
+	d := &Daemon{Dictation: dictation.NewManager(dictation.Config{})}
+	rec := httptest.NewRecorder()
+	d.handleSetDictation(rec, httptest.NewRequest("POST", "/api/dictation/settings",
+		strings.NewReader(`{"whisper_url":"http://"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body)
+	}
+	if d.Dictation.Config().WhisperURL != "" {
+		t.Error("the rejected address was applied anyway")
+	}
+}
+
+// Clearing the URL goes back to running locally, and the empty value has
+// to reach the file — leaving the old one there would make the panel
+// appear not to have saved.
+func TestClearingTheURLIsWritten(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	os.WriteFile(cfgPath, []byte(`{"dictation":{"whisper_url":"http://old:8080"}}`), 0o644)
+
+	d := &Daemon{Dictation: dictation.NewManager(dictation.Config{WhisperURL: "http://old:8080"}), ConfigPath: cfgPath}
+	rec := httptest.NewRecorder()
+	d.handleSetDictation(rec, httptest.NewRequest("POST", "/api/dictation/settings",
+		strings.NewReader(`{"language":"","whisper_url":""}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	if d.Dictation.Config().WhisperURL != "" {
+		t.Error("the URL was not cleared on the live manager")
+	}
+	raw, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(raw), `"whisper_url": ""`) && !strings.Contains(string(raw), `"whisper_url":""`) {
+		t.Errorf("the cleared URL was not written: %s", raw)
+	}
 }

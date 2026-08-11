@@ -186,6 +186,11 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// build time: the whisper engine is a file beside the binary, so
 	// every build can dictate if one is installed. Sherpa remains
 	// desktop-only, being linked in rather than run.
+	// The same path "always allow" persists to, and for the same reason:
+	// a settings change the user makes should still be there next time.
+	if path, err := resolvedConfigPath(configPath); err == nil {
+		d.ConfigPath = path
+	}
 	dm := dictation.NewManager(dictationConfig(cfg))
 	dm.StartReaper()
 	d.Dictation = dm

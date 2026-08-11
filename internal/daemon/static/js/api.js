@@ -98,3 +98,13 @@ export const addPermissionRule = (tool, match, decision) =>
   api('POST', '/api/permissions/rules', { tool, match, decision });
 export const removePermissionRule = (tool, match, decision) =>
   api('POST', '/api/permissions/rules/remove', { tool, match, decision });
+
+// dictationStatus reports whether dictation can run, and the settings in
+// force — the settings panel needs both and one request answers it.
+export async function dictationStatus() {
+  return api('GET', '/api/dictation');
+}
+
+export async function setDictationSettings(body) {
+  return api('POST', '/api/dictation/settings', body);
+}
