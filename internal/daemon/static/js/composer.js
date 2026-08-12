@@ -217,6 +217,18 @@ export async function sendMessage() {
         }
         appendError(err);
       });
+    } else {
+      // A command cannot be handed to the running turn: the daemon passes
+      // mid-turn text straight to the model, so "/compact" would arrive as
+      // four words of chat rather than running. Queueing it is not safe
+      // either — if a second turn has started by the time the queue
+      // drains, it takes the same path and reaches the model as text.
+      //
+      // So it is refused, and said out loud. Before this the Enter did
+      // nothing whatsoever: no request, nothing queued, no message, the
+      // text still sitting in the box. The TUI has always explained this;
+      // this is the same sentence.
+      appendTool(`${text} can't run while a turn is in progress — wait for it to finish, or press Esc to cancel it.`);
     }
     return;
   }

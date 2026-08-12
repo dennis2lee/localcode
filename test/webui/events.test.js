@@ -490,3 +490,37 @@ test('cancelling a turn closes out the tool row that was still running', async (
   assert.ok(!app.el('transcript').innerHTML.includes('running'), 'the row is still spinning after a cancel');
   assert.ok(app.el('transcript').innerHTML.includes('stopped'), app.el('transcript').innerHTML);
 });
+
+// A slash command typed while a turn is running used to do nothing at
+// all: no request, nothing queued, no message, and the text still sitting
+// in the box. Enter looked like a dead key.
+//
+// It cannot be handed to the running turn — the daemon passes mid-turn
+// text straight to the model, so "/compact" would arrive as four words of
+// chat — and queueing it is not safe either, since a second turn may have
+// started by the time the queue drains. So it is refused out loud, which
+// is what the TUI has always done.
+test('a command typed during a turn says why it cannot run', async () => {
+  const app = await load();
+  app.state.waiting = true;
+  app.type('/compact');
+  app.press('Enter');
+  await app.settle();
+
+  assert.equal(app.callsTo('POST', /messages/).length, 0, 'the command was sent to the model as text');
+  assert.match(app.transcript(), /can't run while a turn is in progress/);
+  assert.match(app.transcript(), /Esc/);
+});
+
+// An ordinary prompt still goes to the running turn, which is the whole
+// point of being able to type during one.
+test('a plain prompt typed during a turn still reaches the running turn', async () => {
+  const app = await load();
+  app.state.waiting = true;
+  app.type('actually, skip the tests');
+  app.press('Enter');
+  await app.settle();
+
+  assert.equal(app.callsTo('POST', /messages/).length, 1);
+  assert.equal(app.el('input').value, '');
+});
