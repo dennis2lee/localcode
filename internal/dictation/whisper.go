@@ -54,6 +54,9 @@ type whisperRecognizer struct {
 	running  bool
 	lastRun  time.Time
 	closed   bool
+	// lastErr is the most recent transcription failure, waiting to be
+	// reported once by TakeError.
+	lastErr error
 	// forced records that the utterance hit maxUtterance and has to end
 	// even though the speaker has not paused.
 	forced bool
@@ -115,11 +118,15 @@ func (w *whisperRecognizer) Accept(samples []float32) {
 		defer w.mu.Unlock()
 		w.running = false
 		if err != nil || w.closed {
-			// A failed partial is dropped rather than surfaced: the next
-			// one is a second away and covers the same audio, and
-			// replacing good grey text with an error message helps
-			// nobody mid-sentence. A failure that matters will fail the
-			// final transcription too, where it is reported.
+			// The grey text is left alone — replacing a good partial with
+			// an error message mid-sentence helps nobody, and the next
+			// attempt is a second away covering the same audio. But the
+			// failure is remembered, because "dropped rather than
+			// surfaced" was the whole of what a misconfigured server
+			// looked like: every request refused and nothing said.
+			if err != nil && !w.closed {
+				w.lastErr = err
+			}
 			return
 		}
 		if gen != w.utterance {
@@ -127,6 +134,20 @@ func (w *whisperRecognizer) Accept(samples []float32) {
 		}
 		w.text = text
 	}()
+}
+
+// TakeError reports the last transcription failure and forgets it, so a
+// server that is refusing everything says so once per attempt rather than
+// filling the transcript with the same line.
+func (w *whisperRecognizer) TakeError() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.lastErr == nil {
+		return ""
+	}
+	msg := w.lastErr.Error()
+	w.lastErr = nil
+	return msg
 }
 
 func (w *whisperRecognizer) Partial() string {
@@ -164,7 +185,11 @@ func (w *whisperRecognizer) Final() string {
 	if err != nil {
 		// Fall back to the last good partial rather than losing the
 		// sentence: an imperfect transcript beats silently dropping
-		// what someone just said.
+		// what someone just said. Silently is the operative word — the
+		// fallback stays, and the reason is now reportable.
+		w.mu.Lock()
+		w.lastErr = err
+		w.mu.Unlock()
 		return w.Partial()
 	}
 	w.mu.Lock()

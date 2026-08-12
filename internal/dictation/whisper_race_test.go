@@ -124,9 +124,17 @@ func TestUtteranceIsBounded(t *testing.T) {
 // This is the whole feature: point at another machine, install nothing
 // here, and dictation works.
 func TestRemoteEngineTranscribesWithNothingInstalledLocally(t *testing.T) {
+	// Behaves like whisper.cpp's own server: /inference and nothing else.
+	// It used to answer every path, which stopped being a fair imitation
+	// once localcode learned to look for more than one — a server that
+	// says yes to everything settles on whichever is tried first, which
+	// says nothing about whether the right one was found.
+	var asked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
 		if r.URL.Path != "/inference" {
-			t.Errorf("remote engine was asked for %q, want /inference", r.URL.Path)
+			http.NotFound(w, r)
+			return
 		}
 		fmt.Fprint(w, `{"text":" 안녕하세요\n"}`)
 	}))
@@ -146,6 +154,17 @@ func TestRemoteEngineTranscribesWithNothingInstalledLocally(t *testing.T) {
 	}
 	if got := sess.Stop().Final; got != "안녕하세요" {
 		t.Errorf("final = %q, want %q", got, "안녕하세요")
+	}
+	// And it found the endpoint this server actually serves, rather than
+	// giving up on the first 404 the way it did before.
+	var hit bool
+	for _, path := range asked {
+		if path == "/inference" {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Errorf("never asked /inference; tried %v", asked)
 	}
 }
 

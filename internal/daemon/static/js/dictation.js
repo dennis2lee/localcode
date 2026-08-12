@@ -310,6 +310,12 @@ async function drain() {
         return;
       }
       if (live !== session) return; // stopped while the request was in flight
+      // A transcription that failed says why, once. Dictation carries on:
+      // the microphone is still open and the next window may well work.
+      // Saying nothing is what made a remote server speaking a different
+      // protocol look like a broken microphone — audio going out four
+      // times a second, every request refused, no text and no error.
+      if (res.error) appendError(res.error);
       if (res.final) commitFinal(res.final);
       session.provisional = res.provisional || '';
       render();

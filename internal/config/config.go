@@ -132,6 +132,16 @@ type DictationConfig struct {
 	// HTTP. Only point it somewhere you would be willing to send what you
 	// say out loud.
 	WhisperURL string `json:"whisper_url,omitempty"`
+
+	// WhisperAPI names the dialect the remote server speaks, when it
+	// should not be discovered: "openai" (POST /v1/audio/transcriptions),
+	// "whispercpp" (POST /inference) or "whisperx" (POST /asr).
+	//
+	// Empty means find out, which is the right default — the first
+	// transcription tries each in turn and remembers which one answered.
+	// Worth setting only to skip that, or when a server answers a path it
+	// does not really implement.
+	WhisperAPI string `json:"whisper_api,omitempty"`
 	// Language is the spoken language as an ISO 639-1 code, "ko" or
 	// "en". Empty auto-detects, which is what mixed speech wants and a
 	// little slower and less certain for speech that is only ever one

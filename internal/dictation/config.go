@@ -30,6 +30,10 @@ type Config struct {
 	// CPU or GPU for it — but it is no longer true that nothing is sent
 	// anywhere, and the wire is plain HTTP.
 	WhisperURL string
+
+	// WhisperAPI names the remote server's dialect, or "" to discover it.
+	// See whisperAPIs.
+	WhisperAPI string
 	// Language is the spoken language as an ISO 639-1 code ("ko", "en").
 	// Empty means auto-detect, which is right for mixed speech and a
 	// little slower and less certain for speech that is only ever one

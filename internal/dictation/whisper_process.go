@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -51,6 +51,14 @@ type whisperProcess struct {
 	// is whatever the user configured.
 	host string
 	log  *syncBuffer
+
+	// api is the dialect this server speaks, once a request has proved
+	// which one it is. Guarded by apiMu rather than the engine's own
+	// lock: it is written once, from whichever transcription happened to
+	// discover it, and read by every one after that.
+	apiMu      sync.Mutex
+	api        whisperAPI
+	apiSettled bool
 
 	// exited is closed when the process ends.
 	//
@@ -100,6 +108,16 @@ func acquireWhisper(cfg Config) (*whisperProcess, error) {
 	// refcount and the kill-on-key-change question entirely.
 	if remote := cfg.RemoteHost(); remote != "" {
 		p := &whisperProcess{host: remote, log: &syncBuffer{}}
+		// A named dialect skips discovery. An unknown name is not
+		// silently ignored: it would look like it had been honoured while
+		// the search quietly did something else.
+		if name := strings.TrimSpace(cfg.WhisperAPI); name != "" {
+			api, ok := apiByName(name)
+			if !ok {
+				return nil, fmt.Errorf("whisper_api %q is not one of: %s", name, whisperAPINames())
+			}
+			p.api, p.apiSettled = api, true
+		}
 		if err := p.reachable(); err != nil {
 			return nil, err
 		}
@@ -362,23 +380,66 @@ func (p *whisperProcess) transcribe(ctx context.Context, samples []float32, lang
 	if len(samples) == 0 {
 		return "", nil
 	}
+	if language == "" {
+		language = "auto"
+	}
+
+	// The dialect this server speaks, once it is known. A locally spawned
+	// engine is whisper.cpp and always has been, so there is nothing to
+	// discover; a remote one is whatever someone put on that port.
+	p.apiMu.Lock()
+	known, settled := p.api, p.apiSettled
+	p.apiMu.Unlock()
+	if settled {
+		return p.transcribeVia(ctx, known, samples, language)
+	}
+
+	// Not known yet: try each in turn. A 404 or a 405 means this server
+	// does not have that endpoint, which is the one answer that says
+	// nothing about the audio and everything about the dialect — so it
+	// moves on. Any other outcome, success or failure, is this server
+	// answering the question that was asked, and settles the choice.
+	var firstErr error
+	for _, candidate := range whisperAPIs {
+		text, err := p.transcribeVia(ctx, candidate, samples, language)
+		if isWrongEndpoint(err) {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		p.apiMu.Lock()
+		p.api, p.apiSettled = candidate, true
+		p.apiMu.Unlock()
+		debugf("dictation: %s speaks the %q API (%s)", p.addr(), candidate.name, candidate.path)
+		return text, err
+	}
+	if firstErr == nil {
+		firstErr = fmt.Errorf("no endpoint answered")
+	}
+	return "", fmt.Errorf("%s has none of the transcription endpoints localcode knows (%s): %w",
+		p.addr(), whisperAPINames(), firstErr)
+}
+
+// transcribeVia sends one window of audio to one endpoint.
+//
+// The samples are wrapped as a WAV because that is what every one of these
+// servers takes, and building a 44 byte header is cheaper than any
+// argument for a different transport.
+func (p *whisperProcess) transcribeVia(ctx context.Context, api whisperAPI, samples []float32, language string) (string, error) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
-	part, err := w.CreateFormFile("file", "audio.wav")
+	part, err := w.CreateFormFile(api.fileField, "audio.wav")
 	if err != nil {
 		return "", err
 	}
 	if err := writeWAV(part, samples); err != nil {
 		return "", err
 	}
-	if language == "" {
-		language = "auto"
+	if err := w.WriteField("language", language); err != nil {
+		return "", err
 	}
-	for k, v := range map[string]string{
-		"response_format": "json",
-		"language":        language,
-		"temperature":     "0.0",
-	} {
+	for k, v := range api.extra {
 		if err := w.WriteField(k, v); err != nil {
 			return "", err
 		}
@@ -387,7 +448,7 @@ func (p *whisperProcess) transcribe(ctx context.Context, samples []float32, lang
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+p.addr()+"/inference", &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+p.addr()+api.path, &body)
 	if err != nil {
 		return "", err
 	}
@@ -403,19 +464,43 @@ func (p *whisperProcess) transcribe(ctx context.Context, samples []float32, lang
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("whisper engine returned %s: %s", resp.Status, strings.TrimSpace(string(raw)))
+		return "", &wrongEndpointError{
+			status: resp.StatusCode,
+			err: fmt.Errorf("whisper engine returned %s for %s: %s",
+				resp.Status, api.path, truncateForError(string(raw))),
+		}
 	}
-	var out struct {
-		Text  string `json:"text"`
-		Error string `json:"error"`
+	text, err := parseTranscript(raw)
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return "", fmt.Errorf("whisper engine returned unreadable JSON: %s", strings.TrimSpace(string(raw)))
+	return cleanTranscript(text), nil
+}
+
+// wrongEndpointError carries the status alongside the message so the
+// dialect search can tell "this endpoint is not here" from "this endpoint
+// is here and something went wrong", without parsing the message.
+type wrongEndpointError struct {
+	status int
+	err    error
+}
+
+func (e *wrongEndpointError) Error() string { return e.err.Error() }
+func (e *wrongEndpointError) Unwrap() error { return e.err }
+
+// isWrongEndpoint reports whether err means the server has no such
+// endpoint, as opposed to having one that refused this request.
+//
+// Only 404 and 405 qualify. A 400 or a 422 is the endpoint existing and
+// disliking the request, which is a real answer and must not send the
+// search on to try a different path — that would turn one clear error
+// into three confusing ones.
+func isWrongEndpoint(err error) bool {
+	var we *wrongEndpointError
+	if !errors.As(err, &we) {
+		return false
 	}
-	if out.Error != "" {
-		return "", fmt.Errorf("whisper engine: %s", out.Error)
-	}
-	return cleanTranscript(out.Text), nil
+	return we.status == http.StatusNotFound || we.status == http.StatusMethodNotAllowed
 }
 
 // writeWAV emits 16 kHz mono 16-bit PCM with the smallest legal header.

@@ -60,6 +60,18 @@ type Result struct {
 	// grey precisely because it is expected to change — a streaming
 	// recognizer revises earlier words as later ones give it context.
 	Provisional string `json:"provisional"`
+	// Error is a transcription failure worth telling the user about,
+	// reported once and then cleared.
+	//
+	// Failures used to be dropped everywhere: a failed partial on the
+	// grounds that the next one is a second away, and a failed final on
+	// the grounds that the last good partial is better than nothing.
+	// Both are right in isolation and together they add up to dictation
+	// that cannot fail out loud — a microphone that is on, audio going
+	// out four times a second, every request refused, and nothing on
+	// screen. That is what a remote server speaking a different protocol
+	// looked like: not an error, just silence.
+	Error string `json:"error,omitempty"`
 }
 
 // Session is one live dictation, owning a recognizer and the text it has
@@ -134,7 +146,23 @@ func (s *Session) Write(pcm []byte) (Result, error) {
 		s.rec.Reset()
 	}
 	res.Provisional = s.rec.Partial()
+	res.Error = s.takeError()
 	return res, nil
+}
+
+// errorReporter is implemented by a recognizer that can say why it
+// produced nothing. Optional: one that cannot simply never reports.
+type errorReporter interface {
+	// TakeError returns the last failure and clears it, so a persistent
+	// fault is reported once per occurrence rather than on every chunk.
+	TakeError() string
+}
+
+func (s *Session) takeError() string {
+	if r, ok := s.rec.(errorReporter); ok {
+		return r.TakeError()
+	}
+	return ""
 }
 
 // Stop ends the session and returns whatever was still in progress, so a
