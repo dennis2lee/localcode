@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.40.2
+
+* **New: `localcode dictation probe`.** It asks the configured remote speech server what it actually answers, one endpoint at a time, and prints every reply. This exists because the failure it diagnoses tells you nothing on its own: a server that resets the connection produces "an existing connection was forcibly closed by the remote host" with no status and no body, all three candidate endpoints then fail identically, and the transcript gets one line naming only the first. The probe asks the questions separately — does TCP connect, does a plain `GET` work, what does each upload endpoint say — and the distinction between the second and third is the one that matters: if `GET` works and every upload is reset, the address and the endpoint list are fine and something is dropping the audio itself, which is a different thing to go and look at.
+
 ## v0.40.1
 
 Correcting v0.40.0's dictation fix, which had a bug of its own.

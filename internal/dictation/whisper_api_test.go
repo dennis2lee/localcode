@@ -270,13 +270,18 @@ func resettingServer(t *testing.T, reset map[string]bool, serve map[string]strin
 			fmt.Fprint(w, `{"detail":"Not Found"}`)
 			return
 		}
-		if err := r.ParseMultipartForm(1 << 20); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if _, _, err := r.FormFile(fileField); err != nil {
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			return
+		// Only an upload carries a form. A plain GET — which is how the
+		// probe asks whether ordinary HTTP works at all — must be
+		// answered as itself.
+		if r.Method == http.MethodPost {
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if _, _, err := r.FormFile(fileField); err != nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
 		}
 		fmt.Fprint(w, body)
 	}))
@@ -343,5 +348,61 @@ func TestAnUnreachableServerIsReportedAsUnreachable(t *testing.T) {
 	p.apiMu.Unlock()
 	if settled {
 		t.Error("a dialect was settled from requests that never got an answer")
+	}
+}
+
+// The probe exists to separate three failures that look identical from
+// the prompt box: a wrong address, an endpoint that is not there, and
+// HTTP working while the upload specifically is dropped. The last is the
+// one that has no other symptom — every candidate fails the same way and
+// the transcript names only the first.
+func TestProbeSeparatesADroppedUploadFromAMissingEndpoint(t *testing.T) {
+	// GETs answer; every POST is reset. This is the shape that had us
+	// chasing endpoints when the endpoints were never the problem.
+	srv, _ := resettingServer(t,
+		map[string]bool{"/v1/audio/transcriptions": true, "/inference": true, "/asr": true},
+		map[string]string{"/": `{"status":"running"}`, "/health": `{"status":"healthy"}`},
+		"file")
+
+	res, err := Probe(context.Background(), Config{WhisperURL: srv.URL})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+
+	byWhat := map[string]ProbeStep{}
+	for _, s := range res.Steps {
+		byWhat[s.What] = s
+	}
+	if !byWhat["tcp"].OK {
+		t.Error("tcp should connect")
+	}
+	if !byWhat["GET /"].OK {
+		t.Errorf("GET / = %s %s, want it to answer", byWhat["GET /"].Status, byWhat["GET /"].Detail)
+	}
+	for _, api := range whisperAPIs {
+		s := byWhat["POST "+api.path+" ("+api.name+")"]
+		if s.Status != "no reply" {
+			t.Errorf("%s = %q, want it reported as getting no reply", s.What, s.Status)
+		}
+	}
+	if !strings.Contains(res.Summary(), "closes the connection on every upload") {
+		t.Errorf("summary does not name what is actually happening: %s", res.Summary())
+	}
+}
+
+// And when an endpoint does work, the probe says so plainly rather than
+// leaving someone to read four lines and infer it.
+func TestProbeReportsAWorkingEndpoint(t *testing.T) {
+	srv, _ := asrServer(t, map[string]string{
+		"/":    `{"status":"running"}`,
+		"/asr": `{"text":"heard you"}`,
+	}, "audio_file")
+
+	res, err := Probe(context.Background(), Config{WhisperURL: srv.URL})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if !strings.Contains(res.Summary(), "should work") {
+		t.Errorf("summary = %s", res.Summary())
 	}
 }

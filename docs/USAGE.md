@@ -1186,6 +1186,18 @@ actual HTTP response settles the choice: a connection that fails, or that
 the server closes mid-upload, says nothing about which endpoint is there,
 so the search carries on and nothing is remembered.
 
+When nothing comes out and the reason is not obvious, ask the server
+directly:
+
+```
+localcode dictation probe
+```
+
+It reports whether TCP connects, whether a plain `GET` is answered, and
+what each upload endpoint says. A server that answers `GET` and resets
+every upload is not a wrong endpoint — the address and the paths are
+fine, and something is rejecting the audio itself.
+
 If the server wants an OpenAI-style `model` field, set `whisper_model` —
 it is sent only when configured, since a server hosting a single model
 rejects a name it does not recognise.

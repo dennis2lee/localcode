@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"time"
 
 	"localcode/internal/dictation"
 )
@@ -33,6 +34,13 @@ const dictationUsage = `usage: localcode dictation <subcommand>
   localcode dictation remove [--dir <path>] [--engine whisper|sherpa]
                        delete an installed engine and model. Used by the Windows
                        uninstaller, which would otherwise leave the download behind.
+  localcode dictation probe
+                       ask the configured remote speech server what it actually
+                       answers, endpoint by endpoint, and print every reply. Use
+                       this when dictation produces nothing: it separates "the
+                       address is wrong" from "HTTP works but the upload is being
+                       dropped" from "this endpoint does not exist", which all
+                       look the same from the prompt box.
   localcode dictation test <recording.wav>
                        transcribe a 16 kHz mono WAV with the configured model and
                        print the tokens behind the text as well as the text. Use
@@ -57,6 +65,8 @@ func runDictation(args []string) error {
 		return runDictationRemove(args[1:])
 	case "test":
 		return runDictationTest(args[1:])
+	case "probe":
+		return runDictationProbe()
 	default:
 		fmt.Println(dictationUsage)
 		return fmt.Errorf("unknown subcommand %q", args[0])
@@ -185,6 +195,52 @@ func installWhisper(dir string) error {
 		return err
 	}
 	fmt.Println("dictation is ready — no config change needed, since this is where localcode looks by default.")
+	return nil
+}
+
+// runDictationProbe asks the configured remote speech server what it
+// actually does, one endpoint at a time, and prints every answer.
+//
+// It exists because the failure it diagnoses tells you nothing on its
+// own: a server that resets the connection produces "an existing
+// connection was forcibly closed by the remote host" with no status and
+// no body, three candidate endpoints fail identically, and the transcript
+// gets one line naming only the first. Separating "does HTTP work at all"
+// from "does this endpoint accept the audio" is what makes it a question
+// someone can act on.
+func runDictationProbe() error {
+	e, err := resolveEnv()
+	if err != nil {
+		return err
+	}
+	cfg, err := loadConfig("", e)
+	if err != nil {
+		return err
+	}
+	dcfg := dictationConfig(cfg)
+	if dcfg.RemoteHost() == "" {
+		return fmt.Errorf("no remote speech server configured — set dictation.whisper_url in config.json")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	res, err := dictation.Probe(ctx, dcfg)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("speech server: %s\n\n", res.Address)
+	for _, s := range res.Steps {
+		mark := "FAIL"
+		if s.OK {
+			mark = "ok"
+		}
+		fmt.Printf("  %-4s %-34s %s\n", mark, s.What, s.Status)
+		if s.Detail != "" {
+			fmt.Printf("       %s\n", s.Detail)
+		}
+	}
+	fmt.Printf("\n%s\n", res.Summary())
 	return nil
 }
 
