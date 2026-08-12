@@ -180,3 +180,81 @@ func TestProbeFindsTheProxyNamedByThePAC(t *testing.T) {
 		t.Errorf("the summary does not say how to use it:\n%s", summary)
 	}
 }
+
+// WPAD is the proxy mechanism that leaves no URL anywhere localcode can
+// read: "automatically detect settings", on by default, resolved through
+// DNS. A machine can be proxying every browser request while the fixed
+// proxy, the environment and AutoConfigURL are all empty — which is
+// exactly the shape the reporting laptop turned out to have.
+func TestProbeFindsTheProxyViaWPAD(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				buf := make([]byte, 1)
+				c.Read(buf)
+				c.Close()
+			}()
+		}
+	}()
+	target := ln.Addr().String()
+
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !r.URL.IsAbs() || r.URL.Host != target {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		fmt.Fprint(w, `{"status":"running"}`)
+	}))
+	defer proxy.Close()
+
+	wpad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wpad.dat" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprintf(w, `function FindProxyForURL(url, host) { return "PROXY %s"; }`,
+			strings.TrimPrefix(proxy.URL, "http://"))
+	}))
+	defer wpad.Close()
+
+	oldPAC := autoConfigURL
+	autoConfigURL = func() string { return "" } // registry is empty, as reported
+	oldWPAD := wpadCandidates
+	wpadCandidates = func() []string { return []string{wpad.URL + "/wpad.dat"} }
+	defer func() { autoConfigURL = oldPAC; wpadCandidates = oldWPAD }()
+
+	res, err := Probe(context.Background(), Config{WhisperURL: "http://" + target})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if !strings.Contains(res.Summary(), strings.TrimPrefix(proxy.URL, "http://")) {
+		t.Errorf("the summary does not name the WPAD-discovered proxy:\n%s", res.Summary())
+	}
+}
+
+// A web server on the wpad name that answers with an error page is not a
+// PAC, and treating it as one would send the probe chasing proxies out of
+// an HTML 404.
+func TestWPADIgnoresAnswersThatAreNotPACScripts(t *testing.T) {
+	notPAC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>404 Not Found</body></html>`)
+	}))
+	defer notPAC.Close()
+
+	oldWPAD := wpadCandidates
+	wpadCandidates = func() []string { return []string{notPAC.URL + "/wpad.dat"} }
+	defer func() { wpadCandidates = oldWPAD }()
+
+	if url, _ := fetchWPAD(context.Background()); url != "" {
+		t.Errorf("an HTML error page was accepted as a PAC script: %s", url)
+	}
+}

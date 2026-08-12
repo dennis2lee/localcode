@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -187,20 +188,39 @@ var autoConfigURL = systemAutoConfigURL
 // name of the proxy to use.
 func pacSteps(ctx context.Context, scheme, addr string) []ProbeStep {
 	pac := autoConfigURL()
-	if pac == "" {
-		return nil
-	}
-	steps := []ProbeStep{{
-		What:   "proxy auto-config",
-		Status: "found",
-		Detail: pac + " — the script browsers here use to pick their proxy; trying the proxies it names",
-		OK:     true,
-	}}
+	var steps []ProbeStep
+	var body string
 
-	body, err := fetchDirect(ctx, pac)
-	if err != nil {
-		steps = append(steps, ProbeStep{What: "read PAC script", Status: "no reply", Detail: err.Error()})
-		return steps
+	if pac != "" {
+		steps = append(steps, ProbeStep{
+			What:   "proxy auto-config",
+			Status: "found",
+			Detail: pac + " — the script browsers here use to pick their proxy; trying the proxies it names",
+			OK:     true,
+		})
+		var err error
+		body, err = fetchDirect(ctx, pac)
+		if err != nil {
+			steps = append(steps, ProbeStep{What: "read PAC script", Status: "no reply", Detail: err.Error()})
+			return steps
+		}
+	} else {
+		// No PAC in the registry either. Windows has one more mechanism,
+		// and it is the one that leaves no URL anywhere: WPAD,
+		// "automatically detect settings", on by default. The browser
+		// asks DNS for a host literally named wpad and fetches its
+		// wpad.dat — so a machine can be using a proxy for every page
+		// while every setting localcode can read says there is none.
+		pac, body = fetchWPAD(ctx)
+		if pac == "" {
+			return nil
+		}
+		steps = append(steps, ProbeStep{
+			What:   "proxy auto-config (WPAD)",
+			Status: "found",
+			Detail: pac + " — discovered the way browsers do when no proxy is configured anywhere; trying the proxies it names",
+			OK:     true,
+		})
 	}
 	candidates := extractPACProxies(body)
 	if len(candidates) == 0 {
@@ -233,6 +253,32 @@ func pacSteps(ctx context.Context, scheme, addr string) []ProbeStep {
 		steps = append(steps, step)
 	}
 	return steps
+}
+
+// wpadCandidates lists where a wpad.dat could be, injectable for tests.
+// The bare name first — the resolver appends the machine's own DNS
+// suffixes to it — then the domain-qualified form for setups where it
+// does not.
+var wpadCandidates = func() []string {
+	out := []string{"http://wpad/wpad.dat"}
+	if domain := strings.TrimSpace(os.Getenv("USERDNSDOMAIN")); domain != "" {
+		out = append(out, "http://wpad."+strings.ToLower(domain)+"/wpad.dat")
+	}
+	return out
+}
+
+// fetchWPAD tries each candidate and returns the first that serves
+// something that looks like a PAC script. A web server that answers with
+// an error page must not be mistaken for one.
+func fetchWPAD(ctx context.Context) (url, body string) {
+	for _, cand := range wpadCandidates() {
+		b, err := fetchDirect(ctx, cand)
+		if err != nil || !strings.Contains(b, "FindProxyForURL") {
+			continue
+		}
+		return cand, b
+	}
+	return "", ""
 }
 
 // fetchDirect reads one small document with no proxy involved — the PAC

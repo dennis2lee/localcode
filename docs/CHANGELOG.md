@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.41.3
+
+* **`dictation probe` discovers a WPAD proxy.** Windows has one proxy mechanism that leaves no URL anywhere localcode can read: "automatically detect settings", on by default, where the browser asks DNS for a host literally named `wpad` and fetches its `wpad.dat`. A machine can be proxying every browser request while the fixed proxy, the environment and `AutoConfigURL` are all empty — which is exactly the shape the reporting laptop turned out to have. When nothing else is configured, the probe now asks DNS the way the browser does, reads the script it finds, and tries the proxies named in it. An answer that is not a PAC script (a stray web server's error page on the `wpad` name) is ignored rather than mined for proxies.
+
 ## v0.41.2
 
 * **`dictation probe` reads the proxy auto-config script and tries the proxies it names.** v0.41.1 read the registry's fixed proxy, and the machine that prompted all of this has none: like most corporate Windows setups it uses a PAC script (`AutoConfigURL`), which the browser evaluates per URL and which explains "the browser works and nothing else does" while the probe still said `proxy: none`. localcode cannot run the script — it is JavaScript — but it can pull the `PROXY host:port` entries out of it and try each one against the speech server. When one answers, the summary names it and gives the exact PowerShell lines to set `HTTPS_PROXY`/`HTTP_PROXY` to it, which dictation then uses (v0.41.1 reads those fresh per request, so it takes effect without a restart).
