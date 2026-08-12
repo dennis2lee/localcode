@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"localcode/internal/config"
 	"localcode/internal/modelinfo"
@@ -49,11 +51,81 @@ const minOutputTokens = 1024
 
 // contextWindow is the model's total input+output budget: what the config
 // says, or a guess from the model name.
+//
+// Prefer (*Loop).contextWindow, which asks the server first where there is
+// one to ask. This is the answer with no server involved — used where
+// there is no provider to hand, and as the fallback when the server does
+// not say.
 func contextWindow(profile config.Profile) int {
 	if profile.ContextWindow > 0 {
 		return profile.ContextWindow
 	}
 	return modelinfo.MaxContextTokens(profile.Model)
+}
+
+// probeTimeout bounds the question asked of the server. The answer is a
+// nicety — everything works without it — so a slow or hanging server costs
+// a fraction of a turn's setup, not the turn.
+const probeTimeout = 3 * time.Second
+
+// contextWindow resolves the window for one request, asking the server
+// when the answer is not already known.
+//
+// The order is deliberate:
+//
+//  1. What the config says. An explicit context_window is someone stating
+//     a fact about their setup, and nothing discovered at runtime should
+//     quietly overrule it.
+//  2. What the server says, via ProbeContextWindow. For a local server
+//     this is the only source that can be right: it serves whatever was
+//     loaded, under whatever name, and — the part the name cannot express
+//     — it is nearly always started with a smaller window than the model
+//     supports, because the window is what costs VRAM.
+//  3. A guess from the model name, which is what this used to do alone.
+//
+// Asked once per provider and model, then remembered — including when the
+// answer was "I do not say", so a server with no answer is not asked again
+// every turn.
+func (l *Loop) contextWindow(ctx context.Context, profile config.Profile) int {
+	if profile.ContextWindow > 0 {
+		return profile.ContextWindow
+	}
+	guess := modelinfo.MaxContextTokens(profile.Model)
+	if l.ProbeContextWindow == nil {
+		return guess
+	}
+
+	key := profile.Provider + "\x00" + profile.Model
+	l.mu.Lock()
+	cached, seen := l.probedWindows[key]
+	l.mu.Unlock()
+	if seen {
+		if cached > 0 {
+			return cached
+		}
+		return guess
+	}
+
+	// Bounded, and still cancelled with the turn: a probe must not outlive
+	// an Esc, and must not inherit a deadline meant for a streaming reply.
+	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	n, found := l.ProbeContextWindow(pctx, profile.Provider, profile.Model)
+	cancel()
+	if !found {
+		n = 0
+	}
+
+	l.mu.Lock()
+	if l.probedWindows == nil {
+		l.probedWindows = map[string]int{}
+	}
+	l.probedWindows[key] = n
+	l.mu.Unlock()
+
+	if n > 0 {
+		return n
+	}
+	return guess
 }
 
 // clampMaxTokens returns how much output to ask for so that the request as

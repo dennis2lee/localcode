@@ -89,7 +89,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// length of the history, and asking the model again would spend the
 	// rest of the window finding that out.
 	rescues := 0
-	trimBudget := contextWindow(profile) / 2
+	trimBudget := l.contextWindow(ctx, profile) / 2
 
 	for {
 		history := l.history(sessionID)
@@ -105,7 +105,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// remaining is refused by the server as one total that does
 			// not fit — see context_budget.go for the arithmetic and the
 			// error it produces.
-			MaxTokens:   clampMaxTokens(maxTokens, contextWindow(profile), l.inputEstimate(sessionID, systemPrompt, messages)),
+			MaxTokens:   clampMaxTokens(maxTokens, l.contextWindow(ctx, profile), l.inputEstimate(sessionID, systemPrompt, messages)),
 			Temperature: profile.Temperature,
 		}
 
@@ -168,7 +168,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return err
 		}
 		if usage.hasUsage {
-			l.recordUsage(sessionID, profile.Model, contextWindow(profile), usage)
+			l.recordUsage(sessionID, profile.Model, l.contextWindow(ctx, profile), usage)
 		}
 
 		// Nothing is appended for a reply that produced nothing. A turn
@@ -196,7 +196,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return nil
 		}
 
-		resultBlocks := l.runTools(ctx, sessionID, toolUses, agentCfg.Tools, contextWindow(profile))
+		resultBlocks := l.runTools(ctx, sessionID, toolUses, agentCfg.Tools, l.contextWindow(ctx, profile))
 		resultBlocks = append(resultBlocks, l.takeInjected(sessionID)...)
 		l.appendHistory(sessionID, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
 	}

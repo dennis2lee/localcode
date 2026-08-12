@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"context"
 	"sync"
 
 	"localcode/internal/commands"
@@ -107,6 +108,19 @@ type Loop struct {
 	// delegation rather than a nil dereference.
 	Tasks *TaskManager
 
+	// ProbeContextWindow, if set, asks a provider's server how big a
+	// context window it is actually serving for a model — see
+	// (*Loop).contextWindow and provider.OpenAICompat.ContextWindow.
+	//
+	// A hook rather than something this package does for itself, for the
+	// same reason PickDirectory is one: it puts a request on the wire, and
+	// what that costs depends on which provider is behind it. The daemon
+	// wires it for the openai-compatible providers, where GET /v1/models
+	// is free and is the only source that knows what a local server
+	// actually loaded. Left nil, nothing is asked and the window is
+	// guessed from the model name exactly as before.
+	ProbeContextWindow func(ctx context.Context, providerKey, model string) (int, bool)
+
 	// MemoryDir is this project's auto-memory directory (see
 	// internal/memory) — "" if auto memory is disabled. Backs the
 	// "/memory" local command; the actual read/write of memory files
@@ -123,6 +137,11 @@ type Loop struct {
 	usage           map[string]sessionUsage           // sessionID -> latest known usage
 	cumulativeUsage map[string]map[string]modelTotals // sessionID -> model -> running totals, see /usage
 	turnRate        map[string]turnRate               // sessionID -> this turn's tokens/generation time
+	// probedWindows caches what a provider's server said its context
+	// window is, keyed by provider+model. A zero value means "asked, and
+	// it did not say" — recorded so a server that has no answer is not
+	// asked again on every turn.
+	probedWindows map[string]int
 
 	settings liveSettings
 }
@@ -143,6 +162,7 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 		usage:           map[string]sessionUsage{},
 		cumulativeUsage: map[string]map[string]modelTotals{},
 		turnRate:        map[string]turnRate{},
+		probedWindows:   map[string]int{},
 	}
 }
 

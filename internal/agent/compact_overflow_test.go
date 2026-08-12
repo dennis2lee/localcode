@@ -203,3 +203,94 @@ func TestATurnTrimsRepeatedlyUntilTheServerAcceptsIt(t *testing.T) {
 	}
 	t.Logf("took %d requests to get there", count())
 }
+
+// End to end: a server that says how big its window is should be believed
+// by the meter too, not only by the request sizing. The meter is what
+// drives auto-compaction at 80%, so a window that reaches one and not the
+// other is the split that shipped in v0.37.0 for configured windows.
+func TestTheProbedWindowReachesTheMeter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			fmt.Fprint(w, `{"data":[{"id":"muse-glimmer-30b","max_model_len":8192}]}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, c := range []string{
+			`{"choices":[{"delta":{"content":"hi"}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+			// Usage arrives as its own final chunk with no choices, which
+			// is how a real server sends it under include_usage.
+			`{"choices":[],"usage":{"prompt_tokens":800,"completion_tokens":19}}`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	cfg := &config.Config{
+		Providers: map[string]config.ProviderConfig{
+			"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL + "/v1"},
+		},
+		// No context_window: the name is unrecognised, so without the
+		// probe this is the 128000 default — 16x what the server serves.
+		Profiles:       map[string]config.Profile{"p": {Provider: "local", Model: "muse-glimmer-30b"}},
+		Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "p"}},
+		DefaultProfile: "p",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("invalid config: %v", err)
+	}
+	client := provider.NewOpenAICompat(srv.URL+"/v1", "")
+	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{"local": client}, cfg)
+	// Wired the way cmd/localcode wires it in a real build.
+	loop.ProbeContextWindow = func(ctx context.Context, _, model string) (int, bool) {
+		return client.ContextWindow(ctx, model)
+	}
+
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "hello"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	all, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	// Read as numbers whichever way they were stored: an event held in
+	// memory keeps Go's int, one replayed from the log comes back float64.
+	num := func(v any) float64 {
+		switch t := v.(type) {
+		case int:
+			return float64(t)
+		case float64:
+			return t
+		}
+		return 0
+	}
+	var maxContext, percent float64
+	for _, ev := range all {
+		if ev.Type == "usage" {
+			maxContext = num(ev.Data["max_context"])
+			percent = num(ev.Data["percent"])
+		}
+	}
+	if int(maxContext) != 8192 {
+		t.Errorf("max_context = %d, want the 8192 the server reported", int(maxContext))
+	}
+	// 819/8192 is 10%; against the 128000 default it would read 0.6%, and
+	// auto-compaction would never fire until long after the server had
+	// started refusing.
+	if percent < 9 || percent > 11 {
+		t.Errorf("percent = %.1f, want about 10", percent)
+	}
+}

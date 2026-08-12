@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"localcode/internal/config"
+	"localcode/internal/modelinfo"
 	"localcode/internal/provider"
 	"localcode/internal/session"
 	"localcode/internal/tools"
@@ -634,5 +635,109 @@ func TestASecondOverflowIsTrimmedRatherThanEndingTheSession(t *testing.T) {
 	}
 	if got := text.String(); !strings.Contains(got, "answered anyway") {
 		t.Errorf("final text = %q, want the answer from after the trim", got)
+	}
+}
+
+// probeCounter is a provider that answers the window question and counts
+// how many times it was asked.
+type probeCounter struct {
+	window int
+	found  bool
+	calls  int
+	mu     sync.Mutex
+}
+
+func (p *probeCounter) ContextWindow(context.Context, string, string) (int, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	return p.window, p.found
+}
+
+func (p *probeCounter) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func probeTestLoop(t *testing.T, p *probeCounter, profile config.Profile) *Loop {
+	t.Helper()
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	cfg := &config.Config{
+		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: "http://127.0.0.1:1/v1"}},
+		Profiles:       map[string]config.Profile{"p": profile},
+		Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "p"}},
+		DefaultProfile: "p",
+	}
+	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{"local": nil}, cfg)
+	loop.ProbeContextWindow = p.ContextWindow
+	return loop
+}
+
+// The name cannot answer this for a local server, and the server can. A
+// model whose name matches nothing used to be handed the 128k default,
+// which on a server started at 8k is 16x too high — every request sized
+// against a limit that is not there.
+func TestTheServersAnswerBeatsGuessingFromTheName(t *testing.T) {
+	p := &probeCounter{window: 8192, found: true}
+	profile := config.Profile{Provider: "local", Model: "muse-glimmer-30b"}
+	loop := probeTestLoop(t, p, profile)
+
+	if guess := contextWindow(profile); guess != modelinfo.DefaultMaxContextTokens {
+		t.Fatalf("precondition: the name should be unrecognised, guessed %d", guess)
+	}
+	if got := loop.contextWindow(context.Background(), profile); got != 8192 {
+		t.Errorf("window = %d, want the 8192 the server reported", got)
+	}
+}
+
+// Configuration is someone stating a fact about their own setup. Nothing
+// discovered at runtime gets to overrule it quietly.
+func TestConfiguredWindowIsNotOverruledByTheServer(t *testing.T) {
+	p := &probeCounter{window: 8192, found: true}
+	profile := config.Profile{Provider: "local", Model: "muse-glimmer-30b", ContextWindow: 32768}
+	loop := probeTestLoop(t, p, profile)
+
+	if got := loop.contextWindow(context.Background(), profile); got != 32768 {
+		t.Errorf("window = %d, want the configured 32768", got)
+	}
+	if p.count() != 0 {
+		t.Error("the server was asked a question that was already answered in config")
+	}
+}
+
+// Asked once, then remembered — including when the answer was "I don't
+// say", or every turn pays for a round trip that will never succeed.
+func TestTheWindowIsProbedOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		found bool
+	}{{"server answers", true}, {"server does not answer", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &probeCounter{window: 8192, found: tc.found}
+			profile := config.Profile{Provider: "local", Model: "muse-glimmer-30b"}
+			loop := probeTestLoop(t, p, profile)
+
+			for range 5 {
+				loop.contextWindow(context.Background(), profile)
+			}
+			if p.count() != 1 {
+				t.Errorf("asked %d times, want once", p.count())
+			}
+		})
+	}
+}
+
+// A server that says nothing leaves everything exactly as it was.
+func TestAnUnhelpfulServerFallsBackToTheNameGuess(t *testing.T) {
+	p := &probeCounter{found: false}
+	profile := config.Profile{Provider: "local", Model: "claude-sonnet-5"}
+	loop := probeTestLoop(t, p, profile)
+
+	if got := loop.contextWindow(context.Background(), profile); got != 1000000 {
+		t.Errorf("window = %d, want the name-based 1000000", got)
 	}
 }

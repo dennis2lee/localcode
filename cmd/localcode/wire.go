@@ -150,6 +150,22 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.Commands = cmdList
 	loop.ProjectDir = e.cwd
 	loop.MemoryDir = memDir
+	// Ask the server how big a window it is serving, rather than guessing
+	// from the model's name. Only the openai-compatible clients implement
+	// it: a hosted model's name identifies it exactly, while a local
+	// server serves whatever was loaded — usually with a smaller window
+	// than the model supports, since the window is what costs VRAM, which
+	// no name can express. Anything that does not answer falls back to the
+	// name-based guess.
+	loop.ProbeContextWindow = func(ctx context.Context, providerKey, model string) (int, bool) {
+		prober, ok := providers[providerKey].(interface {
+			ContextWindow(context.Context, string) (int, bool)
+		})
+		if !ok {
+			return 0, false
+		}
+		return prober.ContextWindow(ctx, model)
+	}
 	// Restores conversation history and /usage totals for every session
 	// just loaded from disk — the event log survives a restart on its
 	// own, but Loop's in-memory history/usage maps don't, so without this

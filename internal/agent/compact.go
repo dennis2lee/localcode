@@ -80,7 +80,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	// Whatever had to be dropped is said out loud in the instructions, so
 	// the model summarizes what it was given rather than asserting the
 	// conversation began there.
-	window := contextWindow(profile)
+	window := l.contextWindow(ctx, profile)
 	budget := window - defaultMaxTokens - contextHeadroom
 
 	// And shrunk again for each refusal, rather than giving up on the
