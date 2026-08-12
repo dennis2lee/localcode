@@ -123,6 +123,18 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.endTurn()
 		m.appendTool("[cancelled]")
 	case events.TypeError:
+		// A recovered condition is not the end of anything: the loop has
+		// already dealt with it and the turn is still running. Ending the
+		// turn here stopped the spinner and put a red error on screen for
+		// a session that then carried on and answered — which is exactly
+		// the "this thing keeps erroring" impression the recovery exists
+		// to remove. It goes in the transcript as a note instead.
+		if recovered, _ := ev.Data["recovered"].(bool); recovered {
+			if msg, ok := ev.Data["error"].(string); ok {
+				m.appendTool("[" + msg + "]")
+			}
+			break
+		}
 		m.endTurn()
 		if msg, ok := ev.Data["error"].(string); ok {
 			m.errMsg = msg

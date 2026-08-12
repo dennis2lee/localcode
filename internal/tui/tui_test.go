@@ -1273,3 +1273,34 @@ func TestBlankEntriesDoNotProduceGaps(t *testing.T) {
 		t.Errorf("blank entry left a gap: %q", got)
 	}
 }
+
+// A context-window overflow is recovered from inside the loop: the history
+// is summarized and the request retried, so the turn is still running and
+// a reply is still on its way. The notice the loop writes for it travels
+// as an error event with recovered:true, and treating that like any other
+// error stopped the spinner and painted a red failure over a session that
+// then answered normally — which is precisely the "this keeps erroring"
+// experience the recovery was added to remove.
+func TestRecoveredErrorDoesNotEndTheTurn(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+	m.runningTool = "bash"
+
+	m.applyEvent(events.Event{Type: events.TypeError, Data: map[string]any{
+		"error":     "the conversation no longer fits in this model's context window; summarizing it and retrying",
+		"recovered": true,
+	}})
+
+	if !m.waiting {
+		t.Error("the turn is still running; the spinner should not have stopped")
+	}
+	if m.runningTool != "bash" {
+		t.Errorf("runningTool = %q, want the running tool left alone", m.runningTool)
+	}
+	if m.errMsg != "" {
+		t.Errorf("errMsg = %q, want no error banner for something already handled", m.errMsg)
+	}
+	if !strings.Contains(m.transcriptText(), "summarizing it and retrying") {
+		t.Error("the notice should still be visible in the transcript, as a note")
+	}
+}

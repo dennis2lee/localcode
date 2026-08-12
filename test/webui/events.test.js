@@ -524,3 +524,36 @@ test('a plain prompt typed during a turn still reaches the running turn', async 
   assert.equal(app.callsTo('POST', /messages/).length, 1);
   assert.equal(app.el('input').value, '');
 });
+
+// The context-window overflow is handled inside the agent loop: the
+// history is summarized and the request retried, so the turn is still
+// running and a reply is still coming. The notice travels as an error
+// event carrying recovered:true, and treating it like any other error
+// stopped the activity light and painted a red failure over a session
+// that went on to answer — the "it keeps erroring" impression that the
+// recovery exists to remove.
+test('a recovered error is a note, not the end of the turn', async () => {
+  const app = await load();
+  app.state.waiting = true;
+
+  app.applyEvent({ type: 'error', data: {
+    error: "the conversation no longer fits in this model's context window; summarizing it and retrying",
+    recovered: true,
+  } });
+
+  assert.equal(app.state.waiting, true, 'the turn is still running; the spinner should not have stopped');
+  assert.match(app.transcript(), /summarizing it and retrying/);
+  assert.ok(!app.el('transcript').innerHTML.includes('class="error"'),
+    'a handled condition should not be painted as a failure: ' + app.el('transcript').innerHTML);
+});
+
+// An error that nobody handled still ends the turn and still shows red.
+test('an unrecovered error still ends the turn', async () => {
+  const app = await load();
+  app.state.waiting = true;
+
+  app.applyEvent({ type: 'error', data: { error: 'model endpoint refused the connection' } });
+
+  assert.equal(app.state.waiting, false);
+  assert.ok(app.el('transcript').innerHTML.includes('error'), app.el('transcript').innerHTML);
+});

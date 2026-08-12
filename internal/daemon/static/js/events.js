@@ -161,6 +161,14 @@ const handlers = {
     appendTool('[cancelled]');
   },
   error: (d) => {
+    // "recovered" means the loop already handled it and the turn is still
+    // going — most often the context-window overflow, which is summarized
+    // and retried rather than surfaced. Clearing the spinner and painting
+    // it red would say the turn is over when the reply is still coming.
+    if (d.recovered) {
+      appendTool(`[${d.error || ''}]`);
+      return;
+    }
     session.runningTool = '';
     setWaiting(false);
     appendError(d.error || '');
