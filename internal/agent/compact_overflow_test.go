@@ -294,3 +294,75 @@ func TestTheProbedWindowReachesTheMeter(t *testing.T) {
 		t.Errorf("percent = %.1f, want about 10", percent)
 	}
 }
+
+// A reply that runs into max_tokens stops mid-sentence, and the providers
+// say so — stop_reason "max_tokens". Dropping that meant the text simply
+// ended, with nothing to distinguish "the model finished" from "the model
+// was cut off", and the default cap is modest enough that this is a
+// routine event rather than an exotic one.
+func TestATruncatedReplySaysSo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, c := range []string{
+			`{"choices":[{"delta":{"content":"func main() { the answer is "}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"length"}]}`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	cfg := &config.Config{
+		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL}},
+		Profiles:       map[string]config.Profile{"p": {Provider: "local", Model: "m", MaxTokens: 4096, ContextWindow: 200000}},
+		Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "p"}},
+		DefaultProfile: "p",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("invalid config: %v", err)
+	}
+	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{
+		"local": provider.NewOpenAICompat(srv.URL, ""),
+	}, cfg)
+
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "write me a long program"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	all, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	said := ""
+	for _, ev := range all {
+		if ev.Type == "error" {
+			msg, _ := ev.Data["error"].(string)
+			if strings.Contains(msg, "max_tokens") {
+				said = msg
+				// It is not a failed turn: the text that did arrive is
+				// good, so this must not stop the client waiting or paint
+				// itself red.
+				if ev.Data["recovered"] != true {
+					t.Error("a truncated reply was reported as a failure rather than a note")
+				}
+			}
+		}
+	}
+	if said == "" {
+		t.Fatal("the reply was cut off and nothing said so")
+	}
+	if !strings.Contains(said, "4096") {
+		t.Errorf("the message does not say what the limit was: %q", said)
+	}
+}

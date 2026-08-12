@@ -185,6 +185,23 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		}
 
 		if stopReason != "tool_use" || len(toolUses) == 0 {
+			// A reply that ran into its own length cap is not a reply that
+			// finished, and it is indistinguishable from one that did:
+			// providers report it as stop_reason "max_tokens" and this
+			// used to drop the fact on the floor, so the text simply
+			// stopped, often mid-sentence, mid-function. The default cap
+			// is deliberately modest, which makes this common rather than
+			// exotic — and unexplained, someone reasonably concludes the
+			// model is broken rather than that a number needs raising.
+			if stopReason == "max_tokens" {
+				l.Store.Append(sessionID, events.TypeError, map[string]any{
+					"error": fmt.Sprintf(
+						"the reply hit this profile's max_tokens limit of %d and was cut off — raise max_tokens on the %q profile in config.json for longer answers",
+						clampMaxTokens(maxTokens, l.contextWindow(ctx, profile), l.inputEstimate(sessionID, systemPrompt, messages)),
+						profile.Model),
+					"recovered": true,
+				})
+			}
 			if len(l.Config.Hooks) > 0 {
 				// Fire-and-forget: a Stop hook is purely a notification
 				// point here (e.g. "ping me when a turn finishes") — its
