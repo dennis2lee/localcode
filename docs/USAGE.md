@@ -1050,7 +1050,7 @@ prompt box and talk; the text appears as you speak, grey while a
 sentence is still in progress and ordinary text once you pause. Click
 the pill again to stop. By default everything runs on your machine: no
 audio leaves it, and it works with no network at all. Pointing it at
-[another machine](#using-a-whisper-server-on-another-machine) is the one
+[another machine](#using-a-speech-server-on-another-machine) is the one
 thing that changes that, and it says so where you set it.
 
 It is off until an engine and a model are on disk, because there is no
@@ -1138,7 +1138,8 @@ what `dictation install` arranged:
 | `language` | ISO 639-1 code, `ko` or `en`. Empty auto-detects, which is what mixed speech wants and slightly slower for speech that is only ever one language. |
 | `whisper_bin` | Path to the engine executable. |
 | `whisper_model` | Path to a `ggml-*.bin`, or a directory holding one. When several are installed the largest is used. |
-| `whisper_url` | A whisper.cpp server on another machine. Set, nothing runs locally. See [below](#using-a-whisper-server-on-another-machine). |
+| `whisper_url` | A speech server on another machine. Set, nothing runs locally. See [below](#using-a-speech-server-on-another-machine). |
+| `whisper_api` | Which dialect that server speaks: `openai`, `whispercpp` or `whisperx`. Omit to work it out on the first utterance. |
 | `threads` | CPU cap. 0 picks a modest default, since this runs beside a language model doing the actual work. |
 
 `dictation_model_dir` still points sherpa at its model directory, which
@@ -1157,13 +1158,30 @@ and localcode refuses to start, which reads as a broken install rather
 than a mistyped path. Forward slashes work on Windows too and avoid the
 whole problem.
 
-#### Using a whisper server on another machine
+#### Using a speech server on another machine
 
 A laptop with no GPU and a workstation with one is the usual reason:
 point the laptop at the workstation and the transcription happens there.
 Nothing is installed on this side — no engine, no model, no child
 process — and the microphone, the voice detection and the prompt box all
 work exactly as before.
+
+It does not have to be whisper.cpp. Three server dialects are understood,
+and which one is in front of you is worked out on the first utterance and
+remembered:
+
+| Dialect | Endpoint | Servers |
+|---|---|---|
+| `openai` | `POST /v1/audio/transcriptions` | anything OpenAI-compatible, including WhisperX's compatibility layer |
+| `whispercpp` | `POST /inference` | whisper.cpp's own server, and what localcode runs locally |
+| `whisperx` | `POST /asr` | WhisperX's native API |
+
+Discovery costs two extra requests once per engine and none after that.
+Only a 404 or a 405 moves on to the next candidate: a server that has the
+endpoint and rejects the request is answering, and its error is reported
+rather than buried under two more attempts.
+
+Set `whisper_api` to one of the names above to skip discovery.
 
 ```json
 {
