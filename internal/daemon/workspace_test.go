@@ -12,15 +12,15 @@ import (
 	"localcode/internal/agent"
 )
 
-// The workspace guard is daemon-wide: the working directory is one
-// process-wide thing, so a turn in *any* session refuses the move —
-// including one nobody is watching, and including one parked forever on an
-// unanswered permission request.
+// A turn in some *other* session no longer blocks a switch.
 //
-// Naming them in prose left the person to go and find them, which is what
-// "I often just can't change the workspace" is. The ids travel as data so
-// a client can offer to stop them.
-func TestSetWorkspaceRefusalNamesTheBusySessions(t *testing.T) {
+// It used to, because the working directory was one process-wide thing, so
+// the guard had to be daemon-wide — including a turn nobody was watching
+// and one parked forever on an unanswered permission request. That is what
+// "I often just can't change the workspace" was. Each session carries its
+// own directory now, so another session being busy is simply not this
+// session's business.
+func TestAnotherSessionsTurnNoLongerBlocksASwitch(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer model.Close()
 
@@ -28,16 +28,68 @@ func TestSetWorkspaceRefusalNamesTheBusySessions(t *testing.T) {
 	srv := httptest.NewServer(d.Handler())
 	defer srv.Close()
 
-	if _, err := d.Loop.Store.CreateSession("s-busy", "", "general-purpose", true); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{"s-busy", "s-mine"} {
+		if _, err := d.Loop.Store.CreateSession(id, "", "general-purpose", true); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if !d.turns.begin("s-busy", cancel) {
+		t.Fatal("could not mark the other session busy")
+	}
+
+	target := t.TempDir()
+	body, _ := json.Marshal(map[string]string{"path": target, "session_id": "s-mine"})
+	resp, err := http.Post(srv.URL+"/api/workspace", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		buf := make([]byte, 300)
+		n, _ := resp.Body.Read(buf)
+		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, buf[:n])
+	}
+
+	// And it moved the session that asked, not the busy one.
+	mine, err := d.Loop.Store.Get("s-mine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mine.Workspace != target {
+		t.Errorf("s-mine workspace = %q, want %q", mine.Workspace, target)
+	}
+	busy, err := d.Loop.Store.Get("s-busy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if busy.Workspace == target {
+		t.Error("moving one session moved another; that is the shared workspace this replaced")
+	}
+}
+
+// This session's own turn still blocks it: its tool call, mid-execution,
+// would otherwise find the ground moved under it. Unlike the old
+// daemon-wide guard, this is a turn the person asking can see.
+func TestThisSessionsOwnTurnStillBlocksASwitch(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	if _, err := d.Loop.Store.CreateSession("s-mine", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !d.turns.begin("s-mine", cancel) {
 		t.Fatal("could not mark the session busy")
 	}
 
-	body, _ := json.Marshal(map[string]string{"path": t.TempDir()})
+	body, _ := json.Marshal(map[string]string{"path": t.TempDir(), "session_id": "s-mine"})
 	resp, err := http.Post(srv.URL+"/api/workspace", "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatal(err)
@@ -46,19 +98,14 @@ func TestSetWorkspaceRefusalNamesTheBusySessions(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", resp.StatusCode)
 	}
-
 	var out struct {
-		Error string   `json:"error"`
-		Busy  []string `json:"busy"`
+		Busy []string `json:"busy"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("the refusal is not JSON a client can act on: %v", err)
 	}
-	if len(out.Busy) != 1 || out.Busy[0] != "s-busy" {
-		t.Errorf("busy = %v, want the one session holding the switch up", out.Busy)
-	}
-	if !strings.Contains(out.Error, "s-busy") {
-		t.Errorf("the message does not name the session: %q", out.Error)
+	if len(out.Busy) != 1 || out.Busy[0] != "s-mine" {
+		t.Errorf("busy = %v, want [s-mine]", out.Busy)
 	}
 }
 
@@ -146,6 +193,8 @@ func TestStoppingATurnParkedOnAPermissionFreesTheWorkspace(t *testing.T) {
 	srv := httptest.NewServer(d.Handler())
 	defer srv.Close()
 
+	// The parked session is the one being moved: with a per-session
+	// workspace, that is the only session whose turn can block it.
 	const busy = "s-parked"
 	if _, err := d.Loop.Store.CreateSession(busy, "", "general-purpose", true); err != nil {
 		t.Fatal(err)
@@ -173,7 +222,7 @@ func TestStoppingATurnParkedOnAPermissionFreesTheWorkspace(t *testing.T) {
 
 	// The switch is refused, and says which session to go and deal with.
 	target := t.TempDir()
-	body, _ := json.Marshal(map[string]string{"path": target})
+	body, _ := json.Marshal(map[string]string{"path": target, "session_id": busy})
 	resp, err := http.Post(srv.URL+"/api/workspace", "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatal(err)

@@ -1284,20 +1284,46 @@ func TestDaemonSetWorkspaceRecordsItOnTheNamedSession(t *testing.T) {
 	}
 }
 
-// An unknown session id must not fail the switch: the directory has
-// already moved by then, and reporting that truthfully matters more than
-// the bookkeeping.
-func TestDaemonSetWorkspaceSucceedsWithAnUnknownSession(t *testing.T) {
-	// handleSetWorkspace calls os.Chdir, which is process-wide: without
-	// restoring it, every later test in this package that resolves a
-	// relative path (webui_test.go finds test/webui that way) would look
-	// for it under this test's temp dir.
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
+// An unknown session id is now a genuine 404, and this is a deliberate
+// change of meaning.
+//
+// It used to have to succeed: the directory was process-wide and had
+// already moved by the time the session was looked up, so failing would
+// have reported a switch that in fact happened as an error. Recording it
+// on the session was bookkeeping.
+//
+// The session *is* the thing being moved now. There is no global
+// directory that changed underneath, so there is nothing to report as
+// having succeeded, and answering 200 would claim a session was moved
+// that does not exist.
+func TestDaemonSetWorkspaceOnAnUnknownSessionIs404(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
 
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	before := d.Loop.GetProjectDir()
+	moved := t.TempDir()
+	body := fmt.Sprintf(`{"path":%q,"session_id":"no-such-session"}`, moved)
+	resp, err := http.Post(httpSrv.URL+"/api/workspace", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/workspace: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	// And nothing moved as a side effect of the failed request.
+	if got := d.Loop.GetProjectDir(); got != before {
+		t.Errorf("default dir = %q, want it untouched at %q", got, before)
+	}
+}
+
+// Omitting the session id sets the default a new session starts in, which
+// is the only daemon-wide meaning the workspace still has.
+func TestDaemonSetWorkspaceWithNoSessionSetsTheDefault(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer model.Close()
 
@@ -1306,17 +1332,17 @@ func TestDaemonSetWorkspaceSucceedsWithAnUnknownSession(t *testing.T) {
 	defer httpSrv.Close()
 
 	moved := t.TempDir()
-	body := fmt.Sprintf(`{"path":%q,"session_id":"no-such-session"}`, moved)
+	body := fmt.Sprintf(`{"path":%q}`, moved)
 	resp, err := http.Post(httpSrv.URL+"/api/workspace", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST /api/workspace: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 — the switch itself succeeded", resp.StatusCode)
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	if got := d.Loop.GetProjectDir(); got != moved {
-		t.Errorf("project dir = %q, want %q", got, moved)
+		t.Errorf("default dir = %q, want %q", got, moved)
 	}
 }
 

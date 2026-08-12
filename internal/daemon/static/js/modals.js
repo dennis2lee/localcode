@@ -267,7 +267,7 @@ export function openWorkspacePicker() {
 // front of nobody.
 export async function revealWorkspace() {
   try {
-    await apiClient.revealWorkspace();
+    await apiClient.revealWorkspace(session.sessionID);
   } catch (err) {
     appendError(`could not open a window on ${app.workspacePath}: ${err}`);
   }

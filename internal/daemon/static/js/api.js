@@ -57,7 +57,11 @@ export const getAgents = () => api('GET', '/api/agents');
 export const getCommands = () => api('GET', '/api/commands');
 export const getSettings = () => api('GET', '/api/settings');
 export const getVersion = () => api('GET', '/api/version');
-export const getWorkspace = () => api('GET', '/api/workspace');
+// The workspace is per-session, so which session is asking is part of the
+// question. Without it the daemon can only answer with the default a new
+// session would start in, which is not what the header should be showing.
+export const getWorkspace = (sessionID) =>
+  api('GET', '/api/workspace' + (sessionID ? `?session=${encodeURIComponent(sessionID)}` : ''));
 // sessionID is what lets the daemon record the move on the session, so the
 // session list keeps naming where the conversation is and re-selecting it
 // later doesn't put the workspace back where the session was created.
@@ -96,7 +100,8 @@ export const deleteAllSessions = () => api('DELETE', '/api/sessions');
 export const switchAgent = (sessionID, agent) => api('POST', `/api/sessions/${sessionID}/agent`, { agent });
 export const sendChatMessage = (sessionID, text) => api('POST', `/api/sessions/${sessionID}/messages`, { text });
 export const cancelTask = (taskID) => api('POST', `/api/tasks/${taskID}/cancel`, {});
-export const revealWorkspace = () => api('POST', '/api/workspace/reveal', {});
+export const revealWorkspace = (sessionID) =>
+  api('POST', '/api/workspace/reveal' + (sessionID ? `?session=${encodeURIComponent(sessionID)}` : ''), {});
 export const cancelSessionTurn = (sessionID) => api('POST', `/api/sessions/${sessionID}/cancel`, {});
 export const resolvePermissionRequest = (sessionID, id, allow, scope) =>
   api('POST', `/api/sessions/${sessionID}/permissions/${id}`, { allow, scope });

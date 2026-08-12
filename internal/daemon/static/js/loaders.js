@@ -116,7 +116,7 @@ export async function loadSettings() {
 
 export async function loadWorkspace() {
   try {
-    const w = await apiClient.getWorkspace();
+    const w = await apiClient.getWorkspace(session.sessionID);
     app.workspacePath = w.path || '';
     app.canBrowseWorkspace = !!w.can_browse;
     app.canRevealWorkspace = !!w.can_reveal;

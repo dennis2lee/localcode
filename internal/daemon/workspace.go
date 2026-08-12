@@ -4,21 +4,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"localcode/internal/dialog"
 )
 
-// handleGetWorkspace reports the daemon's current working directory — the
-// root every relative file path and bash command resolves against — and
-// whether this daemon can open a native folder picker for it.
+// handleGetWorkspace reports the directory a session's file paths and bash
+// commands resolve against, and whether this daemon can open a native
+// folder picker for it.
+//
+// ?session=<id> asks about one session, which is what a client should do:
+// the workspace is per-session now, so a daemon-wide answer is only the
+// default a session inherits when it has none of its own.
 func (d *Daemon) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"path":       d.Loop.GetProjectDir(),
+		"path":       d.Loop.SessionDir(r.URL.Query().Get("session")),
 		"can_browse": d.PickDirectory != nil,
 		"can_reveal": d.RevealDirectory != nil,
 	})
@@ -37,7 +39,7 @@ func (d *Daemon) handleRevealWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this daemon cannot open a file-manager window (it is only available in the desktop-window mode)", http.StatusNotFound)
 		return
 	}
-	dir := d.Loop.GetProjectDir()
+	dir := d.Loop.SessionDir(r.URL.Query().Get("session"))
 	if err := d.RevealDirectory(r.Context(), dir); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -79,25 +81,29 @@ func (d *Daemon) handleBrowseWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"path": path})
 }
 
-// handleSetWorkspace changes the daemon's working directory for the rest of
-// this run: os.Chdir (which every tool's relative-path resolution follows,
-// since none of them carry their own base directory) plus updating
-// Loop.ProjectDir (which only custom-command expansion reads directly).
+// handleSetWorkspace moves a session into a different directory.
 //
-// This is process-wide, not per-session — there is one workspace at a
-// time, same as opening a different folder in an editor. Refused while any
-// session has a turn in flight, since a tool call that's mid-execution
-// against the old directory would otherwise silently start seeing the new
-// one partway through.
+// Per-session, as of v0.39.0. It used to be process-wide — os.Chdir plus
+// Loop.ProjectDir — and everything awkward about it followed from that:
+// the change had to be refused while a turn was running in *any* session,
+// including one nobody was watching and one parked forever on an
+// unanswered permission request, and two clients on one daemon could not
+// work in two projects because moving one moved the other. Now each turn
+// carries its session's directory on the context (see agent.SessionDir and
+// tools.WithWorkingDir), so a move touches one session and nothing else.
+//
+// Still refused while *this* session has a turn in flight: its own tool
+// call, mid-execution, would otherwise find the ground moved under it.
+// That is a real race rather than a shared-state artifact, and it is one
+// the person asking can see and wait out, because it is the session in
+// front of them.
 func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path string `json:"path"`
-		// SessionID is the session the workspace is being changed for. It
-		// is optional (a client that doesn't track sessions can omit it),
-		// but without it the move is invisible to the session list, and
-		// re-selecting the session later would put the workspace back
-		// where the session was created — which is what made a switch
-		// look like it had not taken.
+		// SessionID is the session being moved. Omitted, the directory
+		// becomes the daemon's default: what a newly created session
+		// starts in, and what a session with no recorded workspace of its
+		// own falls back to.
 		SessionID string `json:"session_id"`
 	}
 	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil || req.Path == "" {
@@ -105,70 +111,51 @@ func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Named, because the working directory is one process-wide thing and
-	// this guard is therefore daemon-wide: the blocking turn is often in
-	// a session the user is not looking at. A turn stuck on an unanswered
-	// permission request blocks every workspace change until it is
-	// answered, and "a turn is in progress" gave no way to find it.
-	// The whole check-and-move runs with turns held off, not just the
-	// check. A turn that began in the gap ran its first relative-path
-	// write against the new directory — a file written into the wrong
-	// repository, with nothing reported anywhere.
-	var abs string
-	busy, err := d.turns.whileIdle(func() error {
-		var err error
-		abs, err = filepath.Abs(req.Path)
-		if err != nil {
-			return &httpError{http.StatusBadRequest, fmt.Sprintf("resolve path: %v", err)}
-		}
-		info, err := os.Stat(abs)
-		if err != nil {
-			return &httpError{http.StatusBadRequest, fmt.Sprintf("stat %s: %v", abs, err)}
-		}
-		if !info.IsDir() {
-			return &httpError{http.StatusBadRequest, fmt.Sprintf("%s is not a directory", abs)}
-		}
-		if err := os.Chdir(abs); err != nil {
-			return &httpError{http.StatusInternalServerError, fmt.Sprintf("chdir %s: %v", abs, err)}
+	abs, err := filepath.Abs(req.Path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("resolve path: %w", err))
+		return
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("stat %s: %w", abs, err))
+		return
+	}
+	if !info.IsDir() {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%s is not a directory", abs))
+		return
+	}
+
+	// No session named: this is the default for sessions that have none.
+	if req.SessionID == "" {
+		d.Loop.SetProjectDir(abs)
+		writeJSON(w, http.StatusOK, map[string]any{"path": abs})
+		return
+	}
+
+	// The check and the move together, not one after the other: a turn
+	// starting in the gap would run its first relative-path write against
+	// whichever directory won the race.
+	busy, err := d.turns.whileSessionIdle(req.SessionID, func() error {
+		if _, err := d.Loop.Store.SetWorkspace(req.SessionID, abs); err != nil {
+			return &httpError{http.StatusNotFound, err.Error()}
 		}
 		return nil
 	})
-	if len(busy) > 0 {
-		// Named *and* listed as data, because the working directory is one
-		// process-wide thing and this guard is therefore daemon-wide: the
-		// blocking turn is usually in a session the user is not looking
-		// at, and a turn stuck on an unanswered permission request blocks
-		// every workspace change until it is answered.
-		//
-		// Prose alone left the person to go and find those sessions
-		// themselves — which is why "I often can't change the workspace"
-		// is the shape the problem arrives in. The ids travel in a field
-		// so the client can offer to stop them and try again, rather than
-		// reprinting the sentence.
+	if busy {
+		// One session now, and it is the one the person is looking at, so
+		// the id is enough to act on. Still sent as data: the client
+		// offers to stop it and try again rather than reprinting a
+		// sentence about it.
 		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": fmt.Sprintf(
-				"a turn is in progress in %s; stop it or wait for it before switching workspace (a session waiting on a permission request stays busy until you answer it)",
-				strings.Join(busy, ", ")),
-			"busy": busy,
+			"error": "a turn is in progress in this session; stop it or wait for it before switching workspace",
+			"busy":  []string{req.SessionID},
 		})
 		return
 	}
 	if err != nil {
 		writeHTTPError(w, err)
 		return
-	}
-
-	d.Loop.SetProjectDir(abs)
-
-	// Record the move on the session that asked for it. Non-fatal on
-	// failure: the workspace has already changed and reporting that
-	// truthfully matters more than the bookkeeping — an unknown session id
-	// (a client that made one up, or a session deleted mid-request) must
-	// not turn a successful switch into an error.
-	if req.SessionID != "" {
-		if _, err := d.Loop.Store.SetWorkspace(req.SessionID, abs); err != nil {
-			log.Printf("workspace: could not record %s on session %s: %v", abs, req.SessionID, err)
-		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"path": abs})

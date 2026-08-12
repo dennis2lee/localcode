@@ -54,6 +54,13 @@ func (b Bash) Execute(ctx context.Context, input json.RawMessage) Result {
 	defer cancel()
 
 	cmd := shell.Command(ctx, args.Command)
+	// The session's directory, not the daemon's. Leaving this unset is
+	// what made the workspace process-wide: every shell command ran
+	// wherever localcode itself was started, so two sessions in different
+	// projects could not both be right, and moving one had to move both.
+	// Empty means "inherit the process's own", which is the old behaviour
+	// and the right fallback when nothing has said otherwise.
+	cmd.Dir = WorkingDir(ctx)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return Result{Content: fmt.Sprintf("%s\n(exit error: %v)", out, err), IsError: true}

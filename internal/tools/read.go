@@ -19,7 +19,7 @@ func (ReadFile) InputSchema() json.RawMessage {
 }
 func (ReadFile) RequiresPermission(json.RawMessage) bool { return false }
 
-func (ReadFile) Execute(_ context.Context, input json.RawMessage) Result {
+func (ReadFile) Execute(ctx context.Context, input json.RawMessage) Result {
 	var args struct {
 		Path string `json:"path"`
 	}
@@ -27,7 +27,7 @@ func (ReadFile) Execute(_ context.Context, input json.RawMessage) Result {
 		return Result{Content: fmt.Sprintf("invalid input: %v", err), IsError: true}
 	}
 
-	data, err := os.ReadFile(args.Path)
+	data, err := os.ReadFile(resolve(ctx, args.Path))
 	if err != nil {
 		return Result{Content: fmt.Sprintf("read %s: %v", args.Path, err), IsError: true}
 	}

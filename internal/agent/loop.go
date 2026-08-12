@@ -213,14 +213,31 @@ func (l *Loop) GetProjectDir() string {
 	return l.ProjectDir
 }
 
-// SetProjectDir changes the live project directory. The caller is
-// responsible for also os.Chdir-ing the process, since ProjectDir alone
-// only affects custom-command expansion — tools resolve relative paths
-// against the process's actual working directory.
+// SetProjectDir changes the default project directory — the one a session
+// with no directory of its own works in. It no longer touches the
+// process's working directory: each turn carries its session's directory
+// on the context instead (see SessionDir and tools.WithWorkingDir), which
+// is what lets two sessions work in two different projects at once.
 func (l *Loop) SetProjectDir(dir string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.ProjectDir = dir
+}
+
+// SessionDir is the directory sessionID's tools work in: the workspace
+// stamped on the session, or the daemon's default when it has none.
+//
+// A session records its workspace at creation and whenever it is moved, so
+// this survives a restart — which is the other half of the reason it is
+// per-session. Before, reopening yesterday's session put its files
+// wherever the daemon happened to be started today.
+func (l *Loop) SessionDir(sessionID string) string {
+	if sessionID != "" && l.Store != nil {
+		if sess, err := l.Store.Get(sessionID); err == nil && sess.Workspace != "" {
+			return sess.Workspace
+		}
+	}
+	return l.GetProjectDir()
 }
 
 func (l *Loop) appendHistory(sessionID string, msg provider.Message) {

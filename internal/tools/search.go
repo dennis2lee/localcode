@@ -21,7 +21,7 @@ func (Glob) InputSchema() json.RawMessage {
 }
 func (Glob) RequiresPermission(json.RawMessage) bool { return false }
 
-func (Glob) Execute(_ context.Context, input json.RawMessage) Result {
+func (Glob) Execute(ctx context.Context, input json.RawMessage) Result {
 	var args struct {
 		Pattern string `json:"pattern"`
 	}
@@ -29,12 +29,17 @@ func (Glob) Execute(_ context.Context, input json.RawMessage) Result {
 		return Result{Content: fmt.Sprintf("invalid input: %v", err), IsError: true}
 	}
 
-	matches, err := doubleStarGlob(args.Pattern)
+	// Matched inside the session's directory, but reported relative to it.
+	// The model asked about "**/*.go" in its workspace and the answer
+	// reads best in the same terms — and a relative path it hands to
+	// read_file next resolves back to the same file, since every tool
+	// resolves against the same directory.
+	matches, err := doubleStarGlob(resolve(ctx, args.Pattern))
 	if err != nil {
 		return Result{Content: fmt.Sprintf("glob %s: %v", args.Pattern, err), IsError: true}
 	}
 	sort.Strings(matches)
-	return Result{Content: strings.Join(matches, "\n")}
+	return Result{Content: strings.Join(relativeTo(WorkingDir(ctx), matches), "\n")}
 }
 
 // doubleStarGlob supports "**" (recursive) in addition to filepath.Glob's
@@ -80,7 +85,7 @@ func (Grep) InputSchema() json.RawMessage {
 }
 func (Grep) RequiresPermission(json.RawMessage) bool { return false }
 
-func (Grep) Execute(_ context.Context, input json.RawMessage) Result {
+func (Grep) Execute(ctx context.Context, input json.RawMessage) Result {
 	var args struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
@@ -101,7 +106,9 @@ func (Grep) Execute(_ context.Context, input json.RawMessage) Result {
 	matches := 0
 	const maxMatches = 200
 
-	walkErr := filepath.WalkDir(args.Path, func(path string, d os.DirEntry, err error) error {
+	root := resolve(ctx, args.Path)
+	base := WorkingDir(ctx)
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || matches >= maxMatches {
 			return nil
 		}
@@ -116,7 +123,7 @@ func (Grep) Execute(_ context.Context, input json.RawMessage) Result {
 		for scanner.Scan() {
 			lineNo++
 			if re.MatchString(scanner.Text()) {
-				fmt.Fprintf(&b, "%s:%d:%s\n", path, lineNo, scanner.Text())
+				fmt.Fprintf(&b, "%s:%d:%s\n", relativeTo(base, []string{path})[0], lineNo, scanner.Text())
 				matches++
 				if matches >= maxMatches {
 					break

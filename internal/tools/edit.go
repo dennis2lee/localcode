@@ -29,7 +29,7 @@ func (Edit) Subject(input json.RawMessage) string {
 	return args.Path
 }
 
-func (Edit) Execute(_ context.Context, input json.RawMessage) Result {
+func (Edit) Execute(ctx context.Context, input json.RawMessage) Result {
 	var args struct {
 		Path       string `json:"path"`
 		OldString  string `json:"old_string"`
@@ -40,7 +40,8 @@ func (Edit) Execute(_ context.Context, input json.RawMessage) Result {
 		return Result{Content: fmt.Sprintf("invalid input: %v", err), IsError: true}
 	}
 
-	data, err := os.ReadFile(args.Path)
+	path := resolve(ctx, args.Path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return Result{Content: fmt.Sprintf("read %s: %v", args.Path, err), IsError: true}
 	}
@@ -61,7 +62,7 @@ func (Edit) Execute(_ context.Context, input json.RawMessage) Result {
 		updated = strings.Replace(content, args.OldString, args.NewString, 1)
 	}
 
-	if err := os.WriteFile(args.Path, []byte(updated), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
 		return Result{Content: fmt.Sprintf("write %s: %v", args.Path, err), IsError: true}
 	}
 	return Result{Content: fmt.Sprintf("replaced %d occurrence(s) in %s", count, args.Path)}

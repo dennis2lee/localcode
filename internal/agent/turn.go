@@ -406,6 +406,12 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 // offered.
 func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block, allowedTools []string, window int) []provider.Block {
 	ctx = WithSessionID(ctx, sessionID)
+	// Every tool in this turn resolves relative paths, and runs shell
+	// commands, in this session's own directory. This is what replaced
+	// os.Chdir: the workspace travels with the turn rather than being a
+	// property of the process, so a second session working somewhere else
+	// is simply a second context.
+	ctx = tools.WithWorkingDir(ctx, l.SessionDir(sessionID))
 	results := make([]provider.Block, 0, len(toolUses))
 	for _, tu := range toolUses {
 		var res tools.Result
