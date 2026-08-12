@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.38.0
+
+Stop guessing what the server can take, and say so when a limit bites.
+
+* **New: the context window is read from the server, not guessed from the model's name.** For a local server the name cannot answer the question even in principle: it serves whatever was loaded, under whatever name the file happened to have, and it is nearly always started with a *smaller* window than the model supports, because the window is what costs VRAM. A model capable of 128k routinely runs at 8k on a laptop, and that setup was being handed 128000 for the number that keeps every request inside the limit. `GET /v1/models` supplies it now, and `/props` for llama.cpp, which does not put it there. All five spellings the various servers use are read (`max_model_len`, `max_context_length`, `loaded_context_length`, `context_length`, `n_ctx`); where a server reports both a loaded size and the model's maximum, the loaded one wins, because that is what a request has to fit inside. An explicit `context_window` in config still wins over all of it, and anything that does not answer falls back to the name guess exactly as before. Asked once per provider and model, then remembered.
+* **Fix: a reply cut off by `max_tokens` said nothing about it.** The providers report it, and it was dropped, so the text simply stopped, usually mid-sentence and often mid-function, with nothing to distinguish it from a model that had finished. The default cap is 4096, which makes this routine rather than exotic; unexplained, the reasonable conclusion is that the model is broken rather than that a number needs raising. The note names the limit that was actually applied and the profile to raise. Not reported as a failure: the text that did arrive is good.
+* **Fix: the folder icon could fail silently on Windows.** `RevealDirectory` forgave every error, not just explorer.exe's habit of exiting 1 when it has in fact opened a window, so the failures that mean no window opened were swallowed too. That is the worst result a button can produce: nothing happens and nothing is said. Only the exit code is forgiven now.
+
 ## v0.37.0
 
 Ten things reported from real use. Each was reproduced against the code before it was touched; one of the ten turned out to already work, and the change there is to say so on screen.

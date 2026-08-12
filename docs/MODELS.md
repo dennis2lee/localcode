@@ -217,6 +217,8 @@ Use this to run entirely locally without Bedrock, or to point light and fast wor
 2. Open the **Developer** tab on the left and start the local server. The default address is `http://localhost:1234/v1`.
 3. Copy the exact model name LM Studio displays into `profiles.<name>.model`. A mismatched name makes the request fail.
 
+There is no need to tell localcode how big the context window is: as of v0.38.0 the server is asked directly, which is the only reliable source for a local one. A server started at 8k while serving a model capable of 128k reports 8k, and 8k is what a request has to fit inside. Set `context_window` on the profile only if your server reports nothing. `max_tokens` is a separate matter and is worth setting: it is how long an answer you want, not something the server knows, and it defaults to 4096.
+
 ```json
 {
   "providers": {

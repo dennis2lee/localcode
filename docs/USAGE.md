@@ -129,9 +129,9 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 |---|---|
 | `provider` | Key into `providers` |
 | `model` | Model id, as the provider names it |
-| `max_tokens` | Cap on one reply. Reduced automatically when the conversation leaves less room than this in the context window, so it is a ceiling rather than a reservation. |
+| `max_tokens` | Cap on one reply, 4096 if unset. Unlike `context_window` this cannot be discovered: it is a choice about how long an answer you want, not a fact about the server. Reduced automatically when the conversation leaves less room than this in the window, so a generous ceiling is safe, and a reply that runs into it says so rather than just stopping. |
 | `temperature` | Sampling temperature |
-| `context_window` | The model's total input+output token limit. Omit it and the limit is guessed from the model name, which falls back to 128k for anything unrecognised. Worth setting for a local server, which can host any model under any name: guessing high is the harmful direction, since this number is what keeps a request inside the real limit. |
+| `context_window` | The model's total input+output token limit. Usually unnecessary: an openai-compatible server is asked directly (`GET /v1/models`, or `/props` on llama.cpp), and only when it does not answer is the limit guessed from the model name, falling back to 128k for anything unrecognised. Set it when the server reports nothing and the name gives no clue, or to override both. Guessing high is the harmful direction, since this number is what keeps a request inside the real limit. |
 
 #### Provider fields
 
