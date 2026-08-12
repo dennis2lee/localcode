@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"localcode/internal/events"
-	"localcode/internal/modelinfo"
 )
 
 // sessionUsage is the latest known token usage for one session, used to
@@ -51,8 +50,14 @@ func (l *Loop) startTurnRate(sessionID string) {
 // full history sent so far — not something to accumulate across calls)
 // and appends an events.TypeUsage event so any subscribed client can
 // update its context-window/TPS display.
-func (l *Loop) recordUsage(sessionID, model string, usage streamUsage) {
-	maxContext := modelinfo.MaxContextTokens(model)
+// maxContext is the model's total input+output budget, resolved by the
+// caller from the profile — not looked up here. The lookup guesses from
+// the model name, and a profile is allowed to say what the name cannot:
+// that this local server's "my-model" holds 32k, or that a proxy trims a
+// window down. Resolving it in one place is what keeps the meter, the
+// auto-compaction trigger, and the size of the next request from
+// disagreeing about how much room there is.
+func (l *Loop) recordUsage(sessionID, model string, maxContext int, usage streamUsage) {
 
 	// Rate over the whole turn so far, not over this one model call.
 	//

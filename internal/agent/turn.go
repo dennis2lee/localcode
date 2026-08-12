@@ -129,7 +129,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return err
 		}
 		if usage.hasUsage {
-			l.recordUsage(sessionID, profile.Model, usage)
+			l.recordUsage(sessionID, profile.Model, contextWindow(profile), usage)
 		}
 
 		// Nothing is appended for a reply that produced nothing. A turn

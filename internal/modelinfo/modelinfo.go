@@ -20,6 +20,25 @@ type entry struct {
 }
 
 var knownFamilies = []entry{
+	// The million-token models, listed before the family fallbacks below
+	// because first match wins and every one of these also contains its
+	// family name.
+	//
+	// Getting these wrong is not cosmetic. The meter drives automatic
+	// compaction at 80%, so a window reported as 200k when it is really
+	// 1M summarizes the conversation at 160k — a fifth of the way in, and
+	// four times over before the real limit is anywhere near. It also
+	// makes every request's reply cap shrink against a ceiling that isn't
+	// there. Under-reporting the window is the expensive direction.
+	{"claude-opus-5", 1000000},
+	{"claude-opus-4-8", 1000000},
+	{"claude-opus-4-7", 1000000},
+	{"claude-opus-4-6", 1000000},
+	{"claude-sonnet-5", 1000000},
+	{"claude-sonnet-4-6", 1000000},
+	{"claude-fable", 1000000},
+	{"claude-mythos", 1000000},
+
 	// Claude (Bedrock model IDs carry a region prefix like "us."/"global."
 	// and an "anthropic." vendor prefix; direct Anthropic API IDs don't —
 	// matching on the family substring handles both).
@@ -31,7 +50,6 @@ var knownFamilies = []entry{
 	{"claude-opus", 200000},
 	{"claude-sonnet", 200000},
 	{"claude-haiku", 200000},
-	{"claude-fable", 200000},
 
 	// OpenAI (in case an openai-compat endpoint proxies to real OpenAI
 	// models under their own names).

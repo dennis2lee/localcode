@@ -34,7 +34,11 @@ func newUsageTestLoop(t *testing.T, modelURL string) (*Loop, *session.Store) {
 			"local": {Type: config.ProviderOpenAICompat, BaseURL: modelURL},
 		},
 		Profiles: map[string]config.Profile{
-			"balanced": {Provider: "local", Model: "claude-sonnet-5"},
+			// Pinned rather than left to the model-name lookup: these
+			// tests are about the meter and the compaction trigger, not
+			// about what any particular model's window happens to be
+			// this year.
+			"balanced": {Provider: "local", Model: "claude-sonnet-5", ContextWindow: 200000},
 		},
 		Agents: map[string]config.AgentConfig{
 			"general-purpose": {Profile: "balanced"},

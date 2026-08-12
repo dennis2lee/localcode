@@ -337,3 +337,73 @@ func TestTurnRecoversFromAContextOverflow(t *testing.T) {
 		t.Errorf("the retry carried %d messages, no shorter than the %d that were refused", reqs[len(reqs)-1], reqs[0])
 	}
 }
+
+// A configured context_window has to reach every consumer of it, not just
+// the one that sizes the request.
+//
+// Three things read "how much room is there": the meter under the prompt,
+// the 80% auto-compaction trigger, and the cap on the next reply. They
+// used to disagree — the first two guessed from the model name while only
+// the third read the config — so setting context_window fixed the request
+// and left the meter reporting a window that wasn't there.
+func TestConfiguredContextWindowReachesTheMeter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, c := range []string{
+			`{"choices":[{"delta":{"content":"hi"}}],"usage":{"prompt_tokens":1000,"completion_tokens":100}}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	defer srv.Close()
+
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A name the lookup table would guess 1,000,000 for, configured to the
+	// 32k this server actually serves.
+	cfg := &config.Config{
+		Providers: map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL}},
+		Profiles: map[string]config.Profile{
+			"p": {Provider: "local", Model: "claude-opus-5", ContextWindow: 32768},
+		},
+		Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "p"}},
+		DefaultProfile: "p",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{
+		"local": provider.NewOpenAICompat(srv.URL, ""),
+	}, cfg)
+
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "hi"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	all, _ := store.Events(sid, 0)
+	var usage map[string]any
+	for _, ev := range all {
+		if ev.Type == "usage" && ev.Data["max_context"] != nil {
+			usage = ev.Data
+		}
+	}
+	if usage == nil {
+		t.Fatal("no usage event carrying a window")
+	}
+	if got := usage["max_context"]; got != 32768 {
+		t.Errorf("the meter reports a window of %v, not the configured 32768", got)
+	}
+	// 1100 of 32768 is 3.4%; of the guessed 1,000,000 it would read 0.1%.
+	if got := usage["percent"].(float64); got < 3.3 || got > 3.5 {
+		t.Errorf("percent = %v, want ~3.4 (1100 of 32768)", got)
+	}
+}
