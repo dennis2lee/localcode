@@ -3,6 +3,7 @@ package dictation
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -102,5 +103,80 @@ func TestLoopbackIsNeverProxied(t *testing.T) {
 		if u != nil {
 			t.Errorf("%s would be proxied through %s", target, u)
 		}
+	}
+}
+
+// A realistic PAC body: per-URL logic localcode cannot run, with the
+// proxies named inside it as the extractable part.
+func TestExtractPACProxies(t *testing.T) {
+	pac := `function FindProxyForURL(url, host) {
+	  if (shExpMatch(host, "*.internal.corp")) return "DIRECT";
+	  if (isInNet(host, "10.0.0.0", "255.0.0.0")) return "PROXY proxy-a.corp:8080; PROXY proxy-b.corp:8080; DIRECT";
+	  return "PROXY proxy-a.corp:8080";
+	}`
+	got := extractPACProxies(pac)
+	want := []string{"proxy-a.corp:8080", "proxy-b.corp:8080"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("extractPACProxies = %v, want %v", got, want)
+	}
+}
+
+// The situation the PAC path exists for, end to end: the registry has no
+// fixed proxy, a middlebox kills every direct payload, the browser works
+// because a PAC script sends it through a proxy — and the probe's job is
+// to come back with that proxy's name.
+func TestProbeFindsTheProxyNamedByThePAC(t *testing.T) {
+	// A port where TCP connects and the first byte closes the connection:
+	// what the middlebox looks like from this side.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				buf := make([]byte, 1)
+				c.Read(buf)
+				c.Close()
+			}()
+		}
+	}()
+	target := ln.Addr().String()
+
+	// The proxy the PAC names, which can reach the "server".
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !r.URL.IsAbs() || r.URL.Host != target {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		fmt.Fprint(w, `{"status":"running"}`)
+	}))
+	defer proxy.Close()
+
+	pacServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `function FindProxyForURL(url, host) { return "PROXY %s; DIRECT"; }`,
+			strings.TrimPrefix(proxy.URL, "http://"))
+	}))
+	defer pacServer.Close()
+
+	old := autoConfigURL
+	autoConfigURL = func() string { return pacServer.URL }
+	defer func() { autoConfigURL = old }()
+
+	res, err := Probe(context.Background(), Config{WhisperURL: "http://" + target})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	summary := res.Summary()
+	if !strings.Contains(summary, strings.TrimPrefix(proxy.URL, "http://")) {
+		t.Errorf("the summary does not name the working proxy:\n%s", summary)
+	}
+	if !strings.Contains(summary, "HTTPS_PROXY") {
+		t.Errorf("the summary does not say how to use it:\n%s", summary)
 	}
 }

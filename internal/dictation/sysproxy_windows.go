@@ -34,6 +34,23 @@ func systemProxyDescription() string {
 	return server
 }
 
+// systemAutoConfigURL reads the PAC script address, which is how most
+// corporate Windows setups actually configure their proxy: ProxyEnable
+// stays 0, and the browser runs this script to pick a proxy per URL.
+func systemAutoConfigURL() string {
+	k, err := registry.OpenKey(registry.CURRENT_USER,
+		`Software\Microsoft\Windows\CurrentVersion\Internet Settings`, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer k.Close()
+	u, _, err := k.GetStringValue("AutoConfigURL")
+	if err != nil {
+		return ""
+	}
+	return u
+}
+
 func readRegistryProxy() (server, override string, ok bool) {
 	k, err := registry.OpenKey(registry.CURRENT_USER,
 		`Software\Microsoft\Windows\CurrentVersion\Internet Settings`, registry.QUERY_VALUE)

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.41.2
+
+* **`dictation probe` reads the proxy auto-config script and tries the proxies it names.** v0.41.1 read the registry's fixed proxy, and the machine that prompted all of this has none: like most corporate Windows setups it uses a PAC script (`AutoConfigURL`), which the browser evaluates per URL and which explains "the browser works and nothing else does" while the probe still said `proxy: none`. localcode cannot run the script — it is JavaScript — but it can pull the `PROXY host:port` entries out of it and try each one against the speech server. When one answers, the summary names it and gives the exact PowerShell lines to set `HTTPS_PROXY`/`HTTP_PROXY` to it, which dictation then uses (v0.41.1 reads those fresh per request, so it takes effect without a restart).
+
 ## v0.41.1
 
 * **Dictation traffic uses the Windows system proxy.** This is the answer to a contradiction the probe surfaced: an analysis made through a browser said the speech server answered `GET /` with JSON, and localcode's own probe said every byte sent — HTTP or TLS — had the connection reset. Both were true, about two different network paths. On a corporate laptop the browser goes through the IT-configured proxy in the Windows registry, which Go does not read; localcode connected directly, into whatever middlebox resets unproxied traffic. Dictation requests now use the `HTTP_PROXY`/`HTTPS_PROXY` environment when set (read fresh per request, not cached at startup, so exporting the variable after the fact works) and otherwise the same registry setting every browser on the machine uses, honouring `ProxyOverride`. Loopback is never proxied, whatever the registry says — the local whisper engine lives at `127.0.0.1`, and routing it to a corporate gateway would break local dictation on every proxied laptop at once.

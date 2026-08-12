@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -86,7 +87,15 @@ func Probe(ctx context.Context, cfg Config) (*ProbeResult, error) {
 		res.Steps = append(res.Steps, step)
 	}
 
-	// 3. If nothing spoke HTTP, find out whether the port speaks TLS.
+	// 3. If nothing spoke HTTP, two more questions, each of which has
+	// turned a dead "connection reset" into an instruction at least once:
+	// does the port speak TLS, and does the network's proxy auto-config
+	// script name a proxy that can reach the server.
+	if !httpWorks {
+		res.Steps = append(res.Steps, pacSteps(ctx, scheme, addr)...)
+	}
+
+	// If nothing spoke HTTP, find out whether the port speaks TLS.
 	//
 	// A TLS port answers a plaintext request by closing the connection,
 	// with no status and no message — which is exactly what "an existing
@@ -166,6 +175,104 @@ func probeGet(ctx context.Context, scheme, addr, path string) ProbeStep {
 	return step
 }
 
+// autoConfigURL is the PAC address the OS reports, injectable so the PAC
+// path can be tested on machines with no Windows registry.
+var autoConfigURL = systemAutoConfigURL
+
+// pacSteps handles the configuration most corporate Windows machines
+// actually have: no fixed proxy in the registry, just a PAC script the
+// browser evaluates per URL. localcode cannot run the script — it is
+// JavaScript — but it can read the PROXY entries out of it and try each
+// one, which converts "the browser works and nothing else does" into the
+// name of the proxy to use.
+func pacSteps(ctx context.Context, scheme, addr string) []ProbeStep {
+	pac := autoConfigURL()
+	if pac == "" {
+		return nil
+	}
+	steps := []ProbeStep{{
+		What:   "proxy auto-config",
+		Status: "found",
+		Detail: pac + " — the script browsers here use to pick their proxy; trying the proxies it names",
+		OK:     true,
+	}}
+
+	body, err := fetchDirect(ctx, pac)
+	if err != nil {
+		steps = append(steps, ProbeStep{What: "read PAC script", Status: "no reply", Detail: err.Error()})
+		return steps
+	}
+	candidates := extractPACProxies(body)
+	if len(candidates) == 0 {
+		steps = append(steps, ProbeStep{What: "read PAC script", Status: "no PROXY entries",
+			Detail: "the script decides dynamically and names no proxy localcode can extract"})
+		return steps
+	}
+	if len(candidates) > 4 {
+		candidates = candidates[:4]
+	}
+	for _, cand := range candidates {
+		proxyURL, err := asProxyURL(cand)
+		if err != nil || proxyURL == nil {
+			continue
+		}
+		step := ProbeStep{What: "GET / via proxy " + cand}
+		client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+addr+"/", nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			step.Status = "no reply"
+			step.Detail = truncateForError(err.Error())
+		} else {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 400))
+			resp.Body.Close()
+			step.Status = resp.Status
+			step.Detail = truncateForError(string(body))
+			step.OK = resp.StatusCode == http.StatusOK
+		}
+		steps = append(steps, step)
+	}
+	return steps
+}
+
+// fetchDirect reads one small document with no proxy involved — the PAC
+// script itself is served from the intranet and must be fetched the way a
+// browser fetches it, directly.
+func fetchDirect(ctx context.Context, rawurl string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawurl, nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return string(body), err
+}
+
+// extractPACProxies pulls the "PROXY host:port" literals out of a PAC
+// script, in order, deduplicated. Not an evaluation — the script may pick
+// different proxies for different URLs — but the candidate list is short
+// in practice, and trying each is cheap.
+func extractPACProxies(pac string) []string {
+	matches := pacProxyRe.FindAllStringSubmatch(pac, -1)
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range matches {
+		cand := m[1]
+		if !seen[cand] {
+			seen[cand] = true
+			out = append(out, cand)
+		}
+	}
+	return out
+}
+
+var pacProxyRe = regexp.MustCompile(`(?i)PROXY\s+([A-Za-z0-9_.-]+:\d+)`)
+
 // probeTLS reports whether the port completes a TLS handshake, which
 // answers the question a plaintext failure cannot: is this an HTTPS
 // service being addressed as HTTP.
@@ -201,6 +308,15 @@ func (r *ProbeResult) Summary() string {
 			postOK++
 		case strings.HasPrefix(s.What, "POST") && s.Status == "no reply":
 			postNoReply++
+		}
+	}
+	for _, s := range r.Steps {
+		if strings.HasPrefix(s.What, "GET / via proxy ") && s.OK {
+			proxy := strings.TrimPrefix(s.What, "GET / via proxy ")
+			return "the server answers through the proxy " + proxy + ", which the network's own auto-config " +
+				"script names — the same path the browser takes. Tell localcode to use it (PowerShell):\n\n" +
+				"  $env:HTTPS_PROXY = \"http://" + proxy + "\"; $env:HTTP_PROXY = $env:HTTPS_PROXY\n\n" +
+				"then start localcode from that window. setx makes it permanent."
 		}
 	}
 	for _, s := range r.Steps {
