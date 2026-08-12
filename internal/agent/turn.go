@@ -76,18 +76,20 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		Content: []provider.Block{provider.TextBlock(modelText)},
 	})
 
-	// Two rescues per turn, and they are different rescues.
+	// Rescues come in two kinds, in order.
 	//
 	// The first summarizes, which is what the session wants: it keeps the
-	// meaning of the conversation and costs a model call. The second is
-	// what it needs if that was not enough — a forced trim that cannot
-	// fail, because it is allowed to cut into the messages themselves.
+	// meaning of the conversation and costs a model call. Every one after
+	// it is a forced trim, which is what the session needs when that was
+	// not enough — it cannot fail, because it is allowed to cut into the
+	// messages themselves, and each one cuts deeper than the last.
 	//
 	// Summarizing twice would be the wrong second attempt: a second
 	// overflow after a successful compaction means the trouble is not the
 	// length of the history, and asking the model again would spend the
 	// rest of the window finding that out.
 	rescues := 0
+	trimBudget := contextWindow(profile) / 2
 
 	for {
 		history := l.history(sessionID)
@@ -114,7 +116,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// the user would have to do by hand anyway. Reported in the
 			// transcript either way, so a turn that took a detour through
 			// a summary does not look like it simply took a while.
-			if isContextOverflow(err) && rescues < 2 {
+			if isContextOverflow(err) && rescues < maxRescues {
 				rescues++
 				if rescues == 1 {
 					l.Store.Append(sessionID, events.TypeError, map[string]any{
@@ -137,25 +139,16 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				// matters, because this is the difference between a
 				// session that carries on and one that is finished.
 				//
-				// Half the window: the estimate was already wrong once, so
-				// aiming just under the limit would be trusting the same
-				// arithmetic that has already been refused.
-				//
-				// And never more than two thirds of what the history is
-				// estimated to be, so this always removes something. The
-				// estimate can be wrong by a lot in the direction that
-				// matters — four characters per token is roughly right for
-				// English and roughly quadruple for Korean or Japanese, so
-				// a history the server calls 90k can measure 25k here. If
-				// the budget were taken from the window alone, a request
-				// the server has just refused would look like it already
-				// fits, nothing would be cut, and the turn would die on
-				// the exact conversations this exists for.
-				budget := contextWindow(profile) / 2
-				if est := estimateTokens(systemPrompt, sendableHistory(l.history(sessionID))); est > 0 && est*2/3 < budget {
-					budget = est * 2 / 3
-				}
-				trimmed, changed := forceFit(systemPrompt, l.history(sessionID), budget)
+				// Each refusal cuts deeper than the last, rather than
+				// trying the same size again. shrinkBudget takes the
+				// history's measured size into account precisely because
+				// the estimate cannot be trusted to be right about the
+				// window: a request the server has just refused can
+				// measure as comfortably fitting on this side, and a
+				// budget derived from the window alone would then cut
+				// nothing and lose the turn.
+				trimBudget = shrinkBudget(trimBudget, systemPrompt, sendableHistory(l.history(sessionID)))
+				trimmed, changed := forceFit(systemPrompt, l.history(sessionID), trimBudget)
 				if changed {
 					l.setHistory(sessionID, trimmed)
 					l.clearUsage(sessionID)
@@ -212,6 +205,14 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 // injectedPreface tells the model where the text that follows came from.
 // Without it the message arrives in the same user turn as the tool results
 // and reads like part of a tool's output.
+// maxRescues bounds how many times one turn will recover from a refused
+// request before giving up. The first is a summary; the rest are forced
+// trims, each aiming at two thirds of what the last one measured, so five
+// of them reach about a fifth of where the conversation started. Bounded
+// rather than open-ended because a server that phrases some other refusal
+// like an overflow must not become an endless retry.
+const maxRescues = 5
+
 const injectedPreface = "[The user sent this while you were working — take it into account from here on]\n\n"
 
 // takeInjected collects anything the user typed since this turn started

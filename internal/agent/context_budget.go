@@ -254,6 +254,34 @@ func capToolResult(content string, window int) string {
 		"this result was too large for the model's context window; read the file in ranges, or narrow the command, to see the rest")
 }
 
+// shrinkBudget returns the next, smaller budget to try after a request has
+// been refused for being too long.
+//
+// Two thirds of the current budget, and never more than two thirds of what
+// the history actually measures — the second clause is what makes this
+// terminate. A budget derived from the window alone can sit far above the
+// real size of the conversation, so shrinking it does nothing for several
+// rounds while every round costs a refused request. Taking the measured
+// size into account means each attempt removes about a third of what is
+// really there, whatever the window says.
+//
+// No floor: a floor is what turns "cut something" into "already fits,
+// nothing to do", which is the one answer this must never give — a
+// request the server has just refused is not one to leave alone. The
+// callers bound the number of attempts instead.
+//
+// Both clauses matter because the estimate is unreliable in the direction
+// that hurts: four characters per token is about right for English and
+// about four times too generous for Korean, so the server can refuse a
+// history this side measures as comfortably small.
+func shrinkBudget(current int, system string, msgs []provider.Message) int {
+	next := current * 2 / 3
+	if est := estimateTokens(system, msgs); est > 0 && est*2/3 < next {
+		next = est * 2 / 3
+	}
+	return next
+}
+
 // forceFit makes a history fit budget, whatever it takes, and reports
 // whether it had to change anything.
 //
