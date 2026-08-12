@@ -56,8 +56,31 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		instructions = compactionPrompt
 	}
 
-	summaryMessages := make([]provider.Message, len(history), len(history)+1)
-	copy(summaryMessages, history)
+	// Trimmed to fit before anything else.
+	//
+	// Compaction is what rescues a session that has run out of context, and
+	// it used to do that by sending the whole history — the one thing
+	// already known not to fit. So /compact answered "compaction failed:
+	// ... maximum context length is N tokens" in precisely the situation it
+	// exists for, and auto-compaction failed silently the same way.
+	//
+	// Whatever had to be dropped is said out loud in the instructions, so
+	// the model summarizes what it was given rather than asserting the
+	// conversation began there.
+	window := contextWindow(profile)
+	budget := window - defaultMaxTokens - contextHeadroom
+	kept, dropped, err := fitHistory(systemPrompt, history, budget)
+	if err != nil {
+		return fmt.Errorf("compaction request: %w", err)
+	}
+	if dropped > 0 {
+		instructions = fmt.Sprintf(
+			"%s\n\n(Note: the earliest %d messages of this conversation were too long to include here and are not shown. Summarize what you can see, and say that earlier context was dropped.)",
+			instructions, dropped)
+	}
+
+	summaryMessages := make([]provider.Message, len(kept), len(kept)+1)
+	copy(summaryMessages, kept)
 	summaryMessages = append(summaryMessages, provider.Message{
 		Role:    provider.RoleUser,
 		Content: []provider.Block{provider.TextBlock(instructions)},

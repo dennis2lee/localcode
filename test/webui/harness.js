@@ -120,7 +120,13 @@ class FakeEventSource {
     this.onopen = null;
     this.onmessage = null;
     this.onerror = null;
-    harness.sse = this;
+    // Every stream the page opens, in the order it opened them. There is
+    // more than one now: the conversation's, and one per background-task
+    // window. `harness.sse` used to be simply "the last one created",
+    // which meant opening a task window silently re-pointed every test's
+    // .emit() at the task's stream — events aimed at the conversation
+    // went somewhere that ignores them.
+    harness.streams.push(this);
     // A real EventSource connects asynchronously; opening here would mean
     // onopen ran before app code had a chance to assign it.
     queueMicrotask(() => {
@@ -285,6 +291,7 @@ async function load(opts = {}) {
   // microphone was actually asked for, and enumerateDevices is
   // overridable so the "labels are hidden until access is granted" case
   // can be exercised.
+  harness.streams = [];
   harness.mediaConstraints = [];
   // Tracks how many microphones are open right now, so a test can catch
   // one that was opened and then lost track of — the browser keeps
@@ -343,7 +350,29 @@ async function load(opts = {}) {
     await settle();
   }
 
+  // Defined rather than assigned, because it has to be evaluated at the
+  // moment a test reads it: Object.assign would call the getter once, here,
+  // and store whichever stream was current then.
+  //
+  // "The stream carrying the conversation being looked at" — not whichever
+  // stream was opened most recently, which became a different thing as soon
+  // as a background-task window could be open at the same time.
+  Object.defineProperty(harness, 'sse', {
+    configurable: true,
+    get() {
+      const id = internals.session.sessionID;
+      for (let i = harness.streams.length - 1; i >= 0; i--) {
+        const s = harness.streams[i];
+        if (!s.closed && s.url.includes(`/api/sessions/${id}/`)) return s;
+      }
+      return harness.streams[harness.streams.length - 1];
+    },
+  });
+
   return Object.assign(harness, internals, {
+    // streamFor finds a stream by a fragment of its URL — a task window's,
+    // for instance.
+    streamFor: (fragment) => harness.streams.find((s) => !s.closed && s.url.includes(fragment)),
     // doc is the document itself, for the handful of listeners the app
     // attaches there rather than to an element (global keys, and the
     // pointermove/pointerup of a panel drag).

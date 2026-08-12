@@ -13,6 +13,7 @@ export const app = {
   mcpServers: [],
   workspacePath: '',
   canBrowseWorkspace: false, // true only in the desktop-window mode
+  canRevealWorkspace: false, // likewise: a file-manager window needs a screen
   autoCompactEnabled: true,
   showTPS: true,
   autoDelegate: false,

@@ -63,6 +63,10 @@ func runGUI(configPath string) error {
 			d.PickDirectory = func(ctx context.Context, startDir string) (string, error) {
 				return dialog.PickDirectory(ctx, "Choose a workspace folder", startDir)
 			}
+			// Same machine, same rule: the folder icon in the header opens
+			// an Explorer/Finder window, which is only useful in front of
+			// the person who clicked it.
+			d.RevealDirectory = dialog.RevealDirectory
 		}
 		return d.Handler(), nil
 	})

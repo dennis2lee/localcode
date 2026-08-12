@@ -119,9 +119,11 @@ export async function loadWorkspace() {
     const w = await apiClient.getWorkspace();
     app.workspacePath = w.path || '';
     app.canBrowseWorkspace = !!w.can_browse;
+    app.canRevealWorkspace = !!w.can_reveal;
   } catch (err) {
     app.workspacePath = '';
     app.canBrowseWorkspace = false;
+    app.canRevealWorkspace = false;
   }
   renderWorkspace();
 }

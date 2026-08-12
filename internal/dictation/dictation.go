@@ -110,6 +110,16 @@ func (s *Session) Write(pcm []byte) (Result, error) {
 		return Result{}, fmt.Errorf("pcm length %d is not a whole number of 16-bit samples", len(pcm))
 	}
 	s.touch()
+	// And again on the way out, however long the engine took. Committing an
+	// utterance calls Final, which re-reads the whole thing and is allowed
+	// a minute to do it; on a slow machine that is a minute in which this
+	// session receives no audio, because the client sends one chunk at a
+	// time and is waiting on this very request. The reaper only looks at
+	// when audio last *arrived*, so a long transcription made the session
+	// look abandoned and it was closed underneath the microphone — the
+	// next chunk got "no dictation session" and dictation stopped
+	// mid-sentence.
+	defer s.touch()
 
 	s.rec.Accept(decodePCM16(pcm))
 

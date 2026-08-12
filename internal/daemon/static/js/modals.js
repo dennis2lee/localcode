@@ -5,7 +5,7 @@ import {
   permissionSettingsModal, skipPermissionsCheckbox, permissionRulesListEl,
   ruleToolInput, ruleMatchInput, ruleDecisionSelect,
   permissionSettingsNote,
-  workspaceModal, workspaceInput, workspaceNote, workspaceBtn,
+  workspaceModal, workspaceInput, workspaceNote, workspaceBrowseBtn, workspaceStopBusyBtn,
 } from './dom.js';
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
@@ -14,6 +14,7 @@ import { setInputLocked } from './composer.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace } from './render.js';
 import { Modal } from './modal.js';
 import { settings } from './settings.js';
+import { taskView } from './taskview.js';
 // Circular with sessions.js, which imports applyWorkspace from here — safe
 // for the same reason as the events.js/modals.js pair: both references are
 // only ever called from a function body at runtime, never while the module
@@ -241,15 +242,35 @@ export async function resolvePermission(allow, scope) {
 
 // ---- Workspace modal / picker ----
 
-// The desktop window can open the OS folder picker, so clicking the
-// workspace goes straight to it rather than to a box you have to type an
-// absolute path into. A browser can't: neither <input webkitdirectory> nor
-// showDirectoryPicker() hands back a real filesystem path, and asking the
-// *daemon* to open a dialog only makes sense when it's on the same machine
-// as the screen — so that case keeps the typed-path modal.
+// Clicking the workspace always opens the modal, which offers both ways
+// in: a box to type or paste a path into, and a Browse button that opens
+// the OS folder picker when this daemon has one.
+//
+// It used to go straight to the picker whenever the picker existed, which
+// meant the desktop build — the one build that has a picker — was the one
+// build with no way to type a path at all. That is the wrong way round: a
+// path is often something you already have (copied from a terminal, from
+// an editor's title bar, from a bug report), and clicking through a folder
+// tree to reach somewhere you could have pasted in full is the slow way to
+// do it. A browser has no picker to offer either way: neither <input
+// webkitdirectory> nor showDirectoryPicker() hands back a real filesystem
+// path, and a dialog opened by the *daemon* only makes sense when the
+// daemon is on the same machine as the screen.
 export function openWorkspacePicker() {
-  if (app.canBrowseWorkspace) browseWorkspace();
-  else openWorkspaceModal();
+  openWorkspaceModal();
+}
+
+// revealWorkspace asks the daemon to open the current workspace in the
+// machine's own file manager — an Explorer or Finder window on the folder
+// the agent is working in. Only offered when the daemon is on the machine
+// with the screen (see can_reveal); anywhere else the window would open in
+// front of nobody.
+export async function revealWorkspace() {
+  try {
+    await apiClient.revealWorkspace();
+  } catch (err) {
+    appendError(`could not open a window on ${app.workspacePath}: ${err}`);
+  }
 }
 
 // browsing guards against opening a second folder dialog on top of the
@@ -267,26 +288,33 @@ export function openWorkspacePicker() {
 // is visible rather than a click that does nothing for no stated reason.
 let browsing = false;
 
+// browseWorkspace opens the OS folder picker and puts what was chosen in
+// the modal's path box, rather than applying it straight away — so the
+// picker is a way to fill the field, and Save is still the one action that
+// moves the workspace. Picking the wrong folder is then a correction, not
+// a switch that has to be undone.
 export async function browseWorkspace() {
   if (browsing) return;
   browsing = true;
-  workspaceBtn.disabled = true;
+  workspaceBrowseBtn.disabled = true;
   try {
     let picked;
     try {
-      picked = await apiClient.browseWorkspace(app.workspacePath);
+      picked = await apiClient.browseWorkspace(workspaceInput.value || app.workspacePath);
     } catch (err) {
-      // The picker itself failed (not a cancel) — fall back to typing,
-      // rather than leaving the click doing nothing at all.
-      appendError(`could not open the folder picker: ${err}`);
-      openWorkspaceModal();
+      // The picker itself failed (not a cancel). The typed path is still
+      // there and still works, so this is a note, not a dead end.
+      workspaceNote.textContent = `The folder picker could not open (${err}). Type or paste a path instead.`;
+      workspaceNote.classList.add('err');
       return;
     }
     if (!picked || !picked.path) return; // 204: dialog dismissed, nothing to do
-    await applyWorkspace(picked.path);
+    workspaceInput.value = picked.path;
+    workspaceNote.textContent = workspaceNoteDefault;
+    workspaceNote.classList.remove('err');
   } finally {
     browsing = false;
-    workspaceBtn.disabled = false;
+    workspaceBrowseBtn.disabled = false;
   }
 }
 
@@ -334,13 +362,30 @@ export function openWorkspaceModal() {
   workspaceInput.value = app.workspacePath;
   workspaceNote.textContent = workspaceNoteDefault;
   workspaceNote.classList.remove('err');
+  // Hidden rather than disabled where there is no picker to open: a
+  // browser talking to a daemon on another machine has nothing behind
+  // this button, and an inert control invites clicking.
+  workspaceBrowseBtn.style.display = app.canBrowseWorkspace ? '' : 'none';
+  blockingSessions = [];
+  workspaceStopBusyBtn.style.display = 'none';
   workspace.open();
   workspaceInput.focus();
+  workspaceInput.select();
 }
 
 export function closeWorkspaceModal() {
   workspace.close();
 }
+
+// The sessions the daemon named as holding up the last refused switch.
+//
+// The working directory is one process-wide thing, so a turn in *any*
+// session blocks a move — including one nobody is watching, and including
+// one parked forever on a permission request nobody answered. Being told
+// "a turn is in progress" and left to go and find it is what makes this
+// read as "I often just can't change the workspace". Keeping the ids means
+// the way out can be a button.
+let blockingSessions = [];
 
 export async function saveWorkspace() {
   const path = workspaceInput.value.trim();
@@ -352,11 +397,42 @@ export async function saveWorkspace() {
   if (res.err) {
     // Stays open with the error inline, so a typo can be corrected without
     // retyping the whole path.
-    workspaceNote.textContent = String(res.err);
+    workspaceNote.textContent = String(res.err.message || res.err);
     workspaceNote.classList.add('err');
+    blockingSessions = (res.err.data && Array.isArray(res.err.data.busy)) ? res.err.data.busy : [];
+    workspaceStopBusyBtn.style.display = blockingSessions.length > 0 ? '' : 'none';
     return;
   }
   workspace.close();
+}
+
+// stopBlockingTurns cancels the turns the daemon named, then tries the
+// switch again.
+//
+// Cancelling is the honest thing to offer here rather than switching
+// anyway: the guard exists because a tool call mid-execution would
+// otherwise find the ground moved under it. So the turns really do have to
+// end first — this only saves having to find them.
+export async function stopBlockingTurns() {
+  const ids = blockingSessions.slice();
+  if (ids.length === 0) return;
+  workspaceStopBusyBtn.disabled = true;
+  try {
+    for (const id of ids) {
+      try {
+        await apiClient.cancelSessionTurn(id);
+      } catch (err) {
+        workspaceNote.textContent = `could not stop the turn in ${id}: ${err}`;
+        workspaceNote.classList.add('err');
+        return;
+      }
+    }
+    workspaceStopBusyBtn.style.display = 'none';
+    blockingSessions = [];
+    await saveWorkspace();
+  } finally {
+    workspaceStopBusyBtn.disabled = false;
+  }
 }
 
 // Every modal, so Tab does not cycle agents underneath an open one. A
@@ -364,5 +440,5 @@ export async function saveWorkspace() {
 // forgetting it is silent.
 export function anyModalOpen() {
   return permissionRequest.isOpen || permissionSettings.isOpen || delegate.isOpen ||
-    workspace.isOpen || settings.isOpen;
+    workspace.isOpen || settings.isOpen || taskView.isOpen;
 }

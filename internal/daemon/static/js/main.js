@@ -5,6 +5,7 @@ import {
   delegateMatchAddBtn, delegateMatchInput,
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
   workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, micBtn, stopBtn,
+  workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskCloseBtn,
 } from './dom.js';
 import { app, session } from './state.js';
 import { uploadFile, switchAgent } from './api.js';
@@ -21,7 +22,9 @@ import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
   openPermissionSettings, closePermissionSettings, toggleSkipPermissions, addPermissionRule,
   openWorkspacePicker, closeWorkspaceModal, saveWorkspace, anyModalOpen, permissionRequest,
+  browseWorkspace, revealWorkspace, stopBlockingTurns,
 } from './modals.js';
+import { closeTaskView, cancelOpenTask, taskView } from './taskview.js';
 import { initResizers } from './resize.js';
 import { initSettings } from './settings.js';
 
@@ -132,6 +135,11 @@ skipPermissionsCheckbox.addEventListener('change', () => toggleSkipPermissions(s
 ruleAddBtn.addEventListener('click', addPermissionRule);
 
 workspaceBtn.addEventListener('click', openWorkspacePicker);
+workspaceBrowseBtn.addEventListener('click', browseWorkspace);
+workspaceRevealBtn.addEventListener('click', revealWorkspace);
+workspaceStopBusyBtn.addEventListener('click', stopBlockingTurns);
+taskCloseBtn.addEventListener('click', closeTaskView);
+taskCancelBtn.addEventListener('click', cancelOpenTask);
 workspaceCancelBtn.addEventListener('click', closeWorkspaceModal);
 workspaceSaveBtn.addEventListener('click', saveWorkspace);
 workspaceInput.addEventListener('keydown', (e) => {
@@ -185,5 +193,6 @@ export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspac
 export { forkSession } from './sessions.js';
 export { toggleDictation, stopDictation, isDictating } from './dictation.js';
 export { setPanelWidth } from './resize.js';
+export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings, selectedMicDeviceId, MIC_DEVICE_KEY } from './settings.js';
 export { renderSessionList, selectSession } from './sessions.js';

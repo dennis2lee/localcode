@@ -80,6 +80,13 @@ func TestEverySpawnSiteHidesItsWindow(t *testing.T) {
 				if !ok {
 					return true
 				}
+				// A call to Hide from inside this package has no
+				// qualifier, so matching only "childproc.Hide" reported
+				// childproc's own spawn site as unhidden.
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "Hide" {
+					hides = true
+					return true
+				}
 				sel, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok {
 					return true

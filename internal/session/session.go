@@ -625,8 +625,16 @@ func (s *Store) restoreOne(dir, id string) error {
 // Bounded at 2n, because one turn can be longer than the whole window
 // and "start at a turn boundary" must not become "send everything".
 //
-// Returns 0 when the log is shorter than n — there is nothing to trim,
-// and 0 is what "from the beginning" already means everywhere else.
+// n counts entries the reader will actually see, which is not the same as
+// entries in the log. Nearly every event in a busy log is one
+// message.part.delta — one fragment of streamed text, a few characters
+// each — and every one of them was counted. So a single 2,000-token reply
+// was 2,000 events, a tail of 400 landed inside it, and re-opening a
+// conversation showed the last paragraph of the last answer and nothing
+// else: the whole conversation above it, gone. Deltas are excluded from
+// the count here and dropped from the replay in the daemon (they are
+// superseded by the message.part.end that carries the same text whole), so
+// n now means roughly what a reader would call n messages.
 func (s *Store) TailSince(sessionID string, n int) (uint64, error) {
 	if n <= 0 {
 		return 0, nil
@@ -637,18 +645,26 @@ func (s *Store) TailSince(sessionID string, n int) (uint64, error) {
 	if !ok {
 		return 0, fmt.Errorf("session %s not found", sessionID)
 	}
-	if len(st.log) <= n {
+
+	// The positions of the events that count, oldest first.
+	counted := make([]int, 0, len(st.log))
+	for i, ev := range st.log {
+		if ev.Type != events.TypeMessagePartDelta {
+			counted = append(counted, i)
+		}
+	}
+	if len(counted) <= n {
 		return 0, nil
 	}
 
-	start := len(st.log) - n
-	limit := len(st.log) - 2*n
-	if limit < 0 {
-		limit = 0
+	start := counted[len(counted)-n]
+	limitIdx := len(counted) - 2*n
+	if limitIdx < 0 {
+		limitIdx = 0
 	}
-	for i := start; i >= limit; i-- {
-		if st.log[i].Type == events.TypeUserMessage {
-			start = i
+	for i := len(counted) - n; i >= limitIdx; i-- {
+		if st.log[counted[i]].Type == events.TypeUserMessage {
+			start = counted[i]
 			break
 		}
 	}

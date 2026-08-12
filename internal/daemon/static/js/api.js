@@ -4,9 +4,13 @@
 // `/api/...` string.
 
 export class ApiError extends Error {
-  constructor(status, message) {
+  // data is the daemon's JSON error body when it sent one, so a caller can
+  // act on what the refusal says rather than only print it — the workspace
+  // switch reads the list of sessions that are holding it up.
+  constructor(status, message, data) {
     super(message);
     this.status = status;
+    this.data = data || null;
   }
 }
 
@@ -23,7 +27,10 @@ export async function api(method, path, body) {
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
-    throw new ApiError(resp.status, `${method} ${path}: ${resp.status} ${text}`);
+    let data = null;
+    try { data = JSON.parse(text); } catch { /* plain-text error; the message is all there is */ }
+    const detail = (data && typeof data.error === 'string') ? data.error : text;
+    throw new ApiError(resp.status, `${method} ${path}: ${resp.status} ${detail}`, data);
   }
   if (resp.status === 204) return null;
   const ct = resp.headers.get('content-type') || '';
@@ -88,6 +95,8 @@ export const deleteAllSessions = () => api('DELETE', '/api/sessions');
 
 export const switchAgent = (sessionID, agent) => api('POST', `/api/sessions/${sessionID}/agent`, { agent });
 export const sendChatMessage = (sessionID, text) => api('POST', `/api/sessions/${sessionID}/messages`, { text });
+export const cancelTask = (taskID) => api('POST', `/api/tasks/${taskID}/cancel`, {});
+export const revealWorkspace = () => api('POST', '/api/workspace/reveal', {});
 export const cancelSessionTurn = (sessionID) => api('POST', `/api/sessions/${sessionID}/cancel`, {});
 export const resolvePermissionRequest = (sessionID, id, allow, scope) =>
   api('POST', `/api/sessions/${sessionID}/permissions/${id}`, { allow, scope });

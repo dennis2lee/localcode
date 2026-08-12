@@ -1612,11 +1612,23 @@ func TestDaemonForkCopiesTheConversation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
-	if len(evs) != 2 {
-		t.Fatalf("fork log has %d events, want just the 2 conversation ones (the source's rename is not part of the conversation): %+v", len(evs), evs)
+	if len(evs) != 3 {
+		t.Fatalf("fork log has %d events, want the fork marker plus the 2 conversation ones (the source's rename is not part of the conversation): %+v", len(evs), evs)
 	}
 	if evs[0].Seq != 1 {
 		t.Errorf("fork log starts at seq %d, want its own sequence from 1", evs[0].Seq)
+	}
+	// A fork is a verbatim copy, so the two transcripts read identically
+	// and neither says which is which. This line is the answer to "is
+	// 'fork of X' the copy or the original?", written where it is read.
+	if evs[0].Type != events.TypeSessionForked {
+		t.Errorf("the fork's log opens with %v, not a note saying it is a fork", evs[0].Type)
+	}
+	if got := evs[0].Data["from_title"]; got != "the original" {
+		t.Errorf("the fork names its source as %q, want %q", got, "the original")
+	}
+	if got := evs[0].Data["from"]; got != src.ID {
+		t.Errorf("the fork names its source id as %q, want %q", got, src.ID)
 	}
 
 	// Both sessions are top-level and listed; the source is untouched.

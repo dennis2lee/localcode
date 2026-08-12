@@ -7,6 +7,7 @@ import {
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers } from './render.js';
 import { setWaiting, setConnected, setInputLocked } from './composer.js';
 import { refreshDelegatePanelIfOpen, permissionRequest } from './modals.js';
+import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
 // only ever called from inside a function body, never read at module-
@@ -36,8 +37,8 @@ const handlers = {
   // several of these. Ending the wait here is what used to make a prompt
   // typed during tool execution skip the queue and bounce off the daemon's
   // busy flag with a 409.
-  'message.part.end': () => {
-    endModelText();
+  'message.part.end': (d) => {
+    endModelText(typeof d.text === 'string' ? d.text : '');
   },
   // The daemon's real turn boundary, emitted after its busy flag is
   // cleared — safe to stop waiting and let the queue drain.
@@ -81,6 +82,16 @@ const handlers = {
     if (session.tasks.has(d.task_id)) session.tasks.get(d.task_id).status = d.status;
     else session.tasks.set(d.task_id, { agent: '', status: d.status });
     renderTasks();
+    refreshTaskViewStatus(d.task_id, d.status);
+  },
+  // What a task is doing right now, mirrored into the parent as it
+  // happens. "running" for twenty minutes says nothing about whether
+  // anything is happening; the name of the tool it is in says a lot.
+  'task.progress': (d) => {
+    const t = session.tasks.get(d.task_id);
+    if (!t) return;
+    t.doing = d.doing || '';
+    renderTasks();
   },
   // Just update the state the status bar already renders every time — no
   // transcript line here. A line on every single switch would leave a
@@ -113,6 +124,12 @@ const handlers = {
       renderAutoDelegate();
       refreshDelegatePanelIfOpen();
     }
+  },
+  // A fork is a verbatim copy of a conversation, so its transcript is
+  // indistinguishable from the original's. This line is the only thing
+  // that says which one you are looking at.
+  'session.forked': (d) => {
+    appendTool(`[this is a fork of "${d.from_title || d.from || 'another session'}" — the original is untouched]`);
   },
   'session.renamed': () => {
     loadSessions();

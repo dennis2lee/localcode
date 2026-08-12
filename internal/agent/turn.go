@@ -76,20 +76,50 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		Content: []provider.Block{provider.TextBlock(modelText)},
 	})
 
+	// One rescue per turn. A second overflow after a successful compaction
+	// means the trouble is not the length of the history, and retrying
+	// forever would spend the whole window discovering that.
+	rescued := false
+
 	for {
 		history := l.history(sessionID)
+		messages := sendableHistory(history)
 
 		req := provider.ChatRequest{
-			Model:       profile.Model,
-			System:      systemPrompt,
-			Messages:    sendableHistory(history),
-			Tools:       l.Tools.SpecsFor(agentCfg.Tools),
-			MaxTokens:   maxTokens,
+			Model:    profile.Model,
+			System:   systemPrompt,
+			Messages: messages,
+			Tools:    l.Tools.SpecsFor(agentCfg.Tools),
+			// Sized against what is left of the window rather than taken
+			// from config as-is. A max_tokens larger than the room
+			// remaining is refused by the server as one total that does
+			// not fit — see context_budget.go for the arithmetic and the
+			// error it produces.
+			MaxTokens:   clampMaxTokens(maxTokens, contextWindow(profile), l.inputEstimate(sessionID, systemPrompt, messages)),
 			Temperature: profile.Temperature,
 		}
 
 		stream, err := p.Chat(ctx, req)
 		if err != nil {
+			// Too long is a recoverable condition, not an error to hand
+			// back: compacting is exactly what the session needs and what
+			// the user would have to do by hand anyway. Reported in the
+			// transcript either way, so a turn that took a detour through
+			// a summary does not look like it simply took a while.
+			if isContextOverflow(err) && !rescued {
+				rescued = true
+				l.Store.Append(sessionID, events.TypeError, map[string]any{
+					"error":     "the conversation no longer fits in this model's context window; summarizing it and retrying",
+					"recovered": true,
+				})
+				if cerr := l.compactHistory(ctx, sessionID, p, profile, systemPrompt, "", false); cerr == nil {
+					continue
+				} else {
+					l.Store.Append(sessionID, events.TypeError, map[string]any{
+						"error": fmt.Sprintf("could not summarize to recover space: %v", cerr),
+					})
+				}
+			}
 			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
 			return fmt.Errorf("chat request: %w", err)
 		}
@@ -315,6 +345,22 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 	results := make([]provider.Block, 0, len(toolUses))
 	for _, tu := range toolUses {
 		var res tools.Result
+		// A model can ask for several tools in one step, and Esc during the
+		// first should not be followed by the other four running anyway.
+		// Each still gets a result block, because a tool_use with no
+		// tool_result is a history the provider rejects — and this history
+		// is what a later /compact or a restart replays.
+		if err := ctx.Err(); err != nil {
+			res = tools.Result{Content: "not run: the turn was cancelled", IsError: true}
+			l.Store.Append(sessionID, events.TypeToolEnd, map[string]any{
+				"tool_use_id": tu.ToolUseID,
+				"content":     res.Content,
+				"is_error":    true,
+				"input":       string(tu.ToolInput),
+			})
+			results = append(results, provider.ToolResultBlock(tu.ToolUseID, res.Content, true))
+			continue
+		}
 		if !tools.IsAllowed(allowedTools, tu.ToolName) {
 			res = tools.Result{
 				Content: fmt.Sprintf("tool %q is not available to this agent", tu.ToolName),

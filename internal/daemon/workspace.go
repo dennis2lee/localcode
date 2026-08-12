@@ -20,7 +20,29 @@ func (d *Daemon) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path":       d.Loop.GetProjectDir(),
 		"can_browse": d.PickDirectory != nil,
+		"can_reveal": d.RevealDirectory != nil,
 	})
+}
+
+// handleRevealWorkspace opens the current workspace in the machine's file
+// manager — the folder icon beside the workspace name in the header.
+//
+// The daemon's own working directory, not a path from the request: this
+// starts a process with a path argument, and taking that path from the
+// caller would make it a way to ask the daemon to open anything at all.
+// There is nothing to choose here anyway — the button means "show me this
+// folder", and which folder that is, is not the client's to say.
+func (d *Daemon) handleRevealWorkspace(w http.ResponseWriter, r *http.Request) {
+	if d.RevealDirectory == nil {
+		http.Error(w, "this daemon cannot open a file-manager window (it is only available in the desktop-window mode)", http.StatusNotFound)
+		return
+	}
+	dir := d.Loop.GetProjectDir()
+	if err := d.RevealDirectory(r.Context(), dir); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"path": dir})
 }
 
 // handleBrowseWorkspace opens the OS folder picker and returns the chosen
@@ -112,15 +134,23 @@ func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if len(busy) > 0 {
-		// Named, because the working directory is one process-wide thing
-		// and this guard is therefore daemon-wide: the blocking turn is
-		// often in a session the user is not looking at. A turn stuck on
-		// an unanswered permission request blocks every workspace change
-		// until it is answered, and "a turn is in progress" gave no way
-		// to find it.
-		http.Error(w, fmt.Sprintf(
-			"a turn is in progress in %s; cancel or wait for it before switching workspace (a session waiting on a permission request stays busy until you answer it)",
-			strings.Join(busy, ", ")), http.StatusConflict)
+		// Named *and* listed as data, because the working directory is one
+		// process-wide thing and this guard is therefore daemon-wide: the
+		// blocking turn is usually in a session the user is not looking
+		// at, and a turn stuck on an unanswered permission request blocks
+		// every workspace change until it is answered.
+		//
+		// Prose alone left the person to go and find those sessions
+		// themselves — which is why "I often can't change the workspace"
+		// is the shape the problem arrives in. The ids travel in a field
+		// so the client can offer to stop them and try again, rather than
+		// reprinting the sentence.
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": fmt.Sprintf(
+				"a turn is in progress in %s; stop it or wait for it before switching workspace (a session waiting on a permission request stays busy until you answer it)",
+				strings.Join(busy, ", ")),
+			"busy": busy,
+		})
 		return
 	}
 	if err != nil {

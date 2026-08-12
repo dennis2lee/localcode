@@ -201,7 +201,18 @@ export function appendModelText(text) {
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
 
-export function endModelText() {
+// endModelText closes off one model message. text is the whole reply, as
+// the daemon recorded it.
+//
+// Passing it matters on replay. A conversation being re-opened does not
+// receive the deltas of replies that already finished — they are the same
+// characters as the message.part.end that follows them, and sending both
+// meant the client re-rendered markdown once per fragment for text it was
+// about to replace, and meant a "last 400 events" window could be filled
+// entirely by one long answer. So on replay this is the only place the
+// text arrives, and it has to be drawn here.
+export function endModelText(text) {
+  if (!session.currentModelEl && text) appendModelText(text);
   session.currentModelEl = null;
   session.currentModelBuffer = '';
 }

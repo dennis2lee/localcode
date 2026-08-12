@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 
 	"localcode/internal/childproc"
 )
@@ -90,13 +91,43 @@ func fileExists(p string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// Command builds an exec.Cmd that runs script under the resolved shell.
+// killGrace is how long Wait may go on waiting after the command has been
+// killed, before the pipes are closed out from under whatever still holds
+// them and Wait is made to return.
+//
+// It is a grace period, not a timeout on the command: it starts only once
+// the context is cancelled and the tree has been killed. A second is
+// enough for a process that is dying to finish dying, and short enough
+// that Esc feels like it did something.
+const killGrace = time.Second
+
+// Command builds an exec.Cmd that runs script under the resolved shell,
+// arranged so that cancelling ctx actually ends the command.
+//
+// Two things are needed for that, and neither is the default.
+//
+// The child gets a process group of its own and the whole group is killed,
+// because killing the shell alone leaves its children running. That is not
+// an edge case: `npm run dev &`, a test runner, anything that forks. Those
+// children inherit the pipe CombinedOutput reads, and the read does not end
+// until the last holder of the pipe closes it — so the tool call went on
+// blocking after the kill, for as long as the orphan lived. Measured
+// before the fix: cancelling `sh -c "sleep 30 & sleep 30"` returned after
+// 30.0s, with the shell itself reported as killed half a second in.
+//
+// WaitDelay is the backstop for whatever the kill does not reach — a
+// process ignoring SIGKILL is impossible, but a grandchild in a different
+// session, or a Windows tree taskkill declined, is not. It bounds the wait
+// rather than trusting it.
 func Command(ctx context.Context, script string) *exec.Cmd {
 	sh := current()
 	cmd := exec.CommandContext(ctx, sh.path, append(append([]string{}, sh.args...), script)...)
 	// Without this, every bash tool call from the Windows desktop build
 	// pops up its own console window. See internal/childproc.
 	childproc.Hide(cmd)
+	childproc.NewGroup(cmd)
+	cmd.Cancel = func() error { return childproc.KillGroup(cmd) }
+	cmd.WaitDelay = killGrace
 	return cmd
 }
 

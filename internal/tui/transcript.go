@@ -115,7 +115,15 @@ func (m *Model) appendModelDelta(text string) {
 
 // endModelStream closes the currently-open model entry, if any, so the next
 // message.part.delta starts a new paragraph instead of continuing this one.
-func (m *Model) endModelStream() {
+// endModelStream closes one model message. text is the whole reply as the
+// daemon recorded it, and is drawn here when no deltas arrived for it —
+// which is the case on replay, where the daemon drops the fragments of
+// replies that have already finished and sends only this. See
+// collapseFinishedDeltas in the daemon.
+func (m *Model) endModelStream(text string) {
+	if !m.streamOpen && text != "" {
+		m.appendModelDelta(text)
+	}
 	m.streamOpen = false
 }
 

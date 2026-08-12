@@ -285,6 +285,12 @@ class Element {
     this.selectionStart = start;
     this.selectionEnd = end;
   }
+
+  // Real inputs have this, and the workspace box uses it so the path
+  // already in it can be replaced by typing.
+  select() {
+    this.setSelectionRange(0, String(this.value ?? '').length);
+  }
 }
 
 // Extracts every element that carries an id from an HTML source string.

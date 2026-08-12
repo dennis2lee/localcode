@@ -25,8 +25,17 @@ const (
 	TypePermissionResolved Type = "permission.resolved"
 	TypeTaskSpawned        Type = "task.spawned"
 	TypeTaskStatus         Type = "task.status"
-	TypeAgentSwitched      Type = "agent.switched"
-	TypeError              Type = "error"
+	// TypeTaskProgress reports what a background task is doing right now,
+	// mirrored into the parent conversation: {"task_id", "doing"}.
+	//
+	// Transient (broadcast, never written to a log): it is true only at
+	// the moment it is sent, and a line per tool call would bury the
+	// conversation it is mirrored into. A status of "running" for twenty
+	// minutes says nothing about whether anything is happening; the name
+	// of the tool the task is in says a great deal.
+	TypeTaskProgress  Type = "task.progress"
+	TypeAgentSwitched Type = "agent.switched"
+	TypeError         Type = "error"
 
 	// TypeMCPStatus reports the state of every configured MCP server:
 	// {"servers":[{"name","status","detail"}]}, status being one of
@@ -63,6 +72,16 @@ const (
 	TypeConfigChanged Type = "config.changed"
 	// TypeSessionRenamed reports a session's title changing: {"title"}.
 	TypeSessionRenamed Type = "session.renamed"
+	// TypeSessionForked opens the log of a session created by forking
+	// another, naming what it was forked from: {"from", "from_title"}.
+	//
+	// A fork is a copy of a conversation, so the two transcripts are
+	// identical and nothing in either one says which is which. "Is 'fork
+	// of X' the copy or the original?" is then a fair question with no
+	// answer on screen — this is the answer, written where it is read.
+	// Purely a note for the reader: rehydration ignores it, so the model
+	// is not told it is talking to a copy.
+	TypeSessionForked Type = "session.forked"
 	// TypeDelegated marks a turn answered by a sub-agent on its own model
 	// instead of the session's own: {"agent", "prompt"}. Clients show it so
 	// a cheaper model answering is visible rather than silent.

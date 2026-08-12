@@ -57,6 +57,12 @@ type Daemon struct {
 	// It returns dialog.ErrCancelled when the user dismisses the dialog.
 	PickDirectory func(ctx context.Context, startDir string) (string, error)
 
+	// RevealDirectory opens a directory in the machine's file manager. Set
+	// and left nil under exactly the same rule as PickDirectory, and for
+	// the same reason: a window opened on a machine nobody is looking at
+	// helps nobody. Clients read "can_reveal" from GET /api/workspace.
+	RevealDirectory func(ctx context.Context, dir string) error
+
 	mux *http.ServeMux
 
 	// turns tracks which sessions currently have a turn in flight and how
@@ -128,6 +134,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/workspace", d.handleGetWorkspace)
 	d.mux.HandleFunc("POST /api/workspace", d.handleSetWorkspace)
 	d.mux.HandleFunc("POST /api/workspace/browse", d.handleBrowseWorkspace)
+	d.mux.HandleFunc("POST /api/workspace/reveal", d.handleRevealWorkspace)
 	d.mux.HandleFunc("GET /api/mcp-servers", d.handleListMCPServers)
 	d.mux.HandleFunc("GET /api/dictation", d.handleDictationStatus)
 	d.mux.HandleFunc("POST /api/dictation/settings", d.handleSetDictation)

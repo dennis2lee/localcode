@@ -21,6 +21,40 @@ import (
 // shorten it rather than sleeping through the real thing.
 var heartbeatInterval = 20 * time.Second
 
+// collapseFinishedDeltas removes the streamed text fragments of replies
+// that have already finished.
+//
+// A model reply arrives as one message.part.delta per few characters and
+// ends with a message.part.end carrying the whole text — so for any reply
+// that is over, every delta in the log is a slice of a string that is
+// about to be sent again in full. Replaying them cost the client one
+// markdown re-render and one relayout per fragment, for text it then
+// replaced.
+//
+// Only the deltas of *finished* replies go. The ones after the last
+// message.part.end belong to a reply still streaming, where they are the
+// only text there is — that is what makes re-opening a conversation while
+// the model is mid-sentence show the sentence so far rather than nothing.
+func collapseFinishedDeltas(evs []events.Event) []events.Event {
+	lastEnd := -1
+	for i, ev := range evs {
+		if ev.Type == events.TypeMessagePartEnd {
+			lastEnd = i
+		}
+	}
+	if lastEnd < 0 {
+		return evs
+	}
+	out := make([]events.Event, 0, len(evs))
+	for i, ev := range evs {
+		if i < lastEnd && ev.Type == events.TypeMessagePartDelta {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
 func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	// Where to start replaying from, in precedence order: an explicit
@@ -129,7 +163,7 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	for _, ev := range backlog {
+	for _, ev := range collapseFinishedDeltas(backlog) {
 		writeSSE(ev)
 	}
 

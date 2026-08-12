@@ -173,6 +173,8 @@ export async function startDictation() {
     node: null,
     sending: false,
     queue: [],
+    // Consecutive upload failures, so one hiccup is not fatal.
+    failures: 0,
   };
 
   try {
@@ -227,6 +229,38 @@ function enqueue(buffer) {
   if (!live.sending) live.draining = drain();
 }
 
+// takeQueued removes everything queued and returns it as one buffer.
+//
+// Audio arrives on a fixed clock — a chunk every CHUNK_MS — while a
+// request can take much longer than that: committing an utterance
+// re-transcribes the whole sentence, and on a slow machine that is
+// seconds. Uploading one chunk per round trip then falls further and
+// further behind, which is what "I am still talking and the text has
+// stopped moving" is. Concatenating is lossless (the recognizer takes any
+// length of PCM) and turns a backlog into a single request.
+function takeQueued(session) {
+  const chunks = session.queue.splice(0, session.queue.length);
+  if (chunks.length === 1) return chunks[0];
+  let total = 0;
+  for (const c of chunks) total += c.byteLength;
+  const joined = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    joined.set(new Uint8Array(c), at);
+    at += c.byteLength;
+  }
+  return joined.buffer;
+}
+
+// How many upload failures in a row before dictation gives up.
+//
+// One was the old answer, and it made every hiccup fatal: a chunk that
+// failed for any reason at all turned the microphone off mid-sentence and
+// left an error in the transcript. Most causes are momentary — a request
+// that raced a reap, an engine that was busy — and the next chunk is a
+// quarter of a second away.
+const MAX_UPLOAD_FAILURES = 3;
+
 async function drain() {
   if (!live || live.sending) return;
   // Pinned rather than re-read through `live` on every line: this loop
@@ -237,10 +271,11 @@ async function drain() {
   session.sending = true;
   try {
     while (live === session && session.queue.length > 0) {
-      const chunk = session.queue.shift();
+      const chunk = takeQueued(session);
       let res;
       try {
         res = await apiClient.sendDictationAudio(session.id, chunk);
+        session.failures = 0;
       } catch (err) {
         // A chunk still in flight when the session was stopped fails
         // because the session is gone — which is what stopping means.
@@ -248,6 +283,23 @@ async function drain() {
         // appeared every time a dictated prompt was sent: pressing Enter
         // stops the microphone, and the last chunk lost the race.
         if (live !== session) return;
+
+        // Back at the front of the queue, ahead of whatever arrived while
+        // this was in flight, so a retry sends the same audio in the same
+        // order. Dropping it would lose the words in it silently, which is
+        // the one outcome dictation must not have.
+        session.queue.unshift(chunk);
+
+        // The daemon closes a session it believes has been abandoned. If
+        // that happens while someone is still talking, the honest repair
+        // is to open another one and carry on — the words already
+        // committed stay in the box, and the alternative is the
+        // microphone switching itself off mid-sentence.
+        if (err && err.status === 404 && await reopen(session)) continue;
+
+        session.failures = (session.failures || 0) + 1;
+        if (session.failures < MAX_UPLOAD_FAILURES) continue;
+
         appendError(`dictation stopped: ${err}`);
         // Cleared before stopping: stopDictation waits on this promise to
         // let the tail of the audio finish, and this *is* that promise —
@@ -264,6 +316,31 @@ async function drain() {
     }
   } finally {
     session.sending = false;
+  }
+}
+
+// reopen replaces the daemon-side session of a dictation that is still
+// running, after the daemon closed the old one. Reports whether it worked;
+// the caller falls through to the ordinary failure path if it did not.
+async function reopen(session) {
+  try {
+    const id = await apiClient.startDictation();
+    if (live !== session) {
+      apiClient.stopDictation(id).catch(() => {});
+      return false;
+    }
+    session.id = id;
+    // The new recognizer has never heard the sentence in progress, so the
+    // grey text belongs to a session that no longer exists. What was
+    // committed stays; the unsettled tail is gone, and pretending
+    // otherwise would leave words on screen that nothing will ever
+    // correct.
+    session.provisional = '';
+    session.failures = 0;
+    render();
+    return true;
+  } catch {
+    return false;
   }
 }
 

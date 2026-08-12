@@ -34,7 +34,16 @@ func (m *Model) applyEvent(ev events.Event) {
 		// streams several of these (text, then the post-tool follow-up),
 		// and treating the first as end-of-turn is what used to make a
 		// prompt typed during tool execution skip the queue and 409.
-		m.endModelStream()
+		text, _ := ev.Data["text"].(string)
+		m.endModelStream(text)
+	case events.TypeSessionForked:
+		// A fork copies the conversation verbatim, so nothing else in this
+		// transcript says it is a copy.
+		from, _ := ev.Data["from_title"].(string)
+		if from == "" {
+			from, _ = ev.Data["from"].(string)
+		}
+		m.appendTool("[this is a fork of \"" + from + "\" — the original is untouched]")
 	case events.TypeTurnDone:
 		// The daemon's real turn boundary, emitted after its busy flag is
 		// cleared — safe to stop waiting and let the queue drain.
@@ -47,7 +56,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.runningTool, _ = ev.Data["name"].(string)
 		name, _ := ev.Data["name"].(string)
 		input, _ := ev.Data["input"].(string)
-		m.endModelStream()
+		m.endModelStream("")
 		if arg := summarizeToolInput(input); arg != "" {
 			m.appendEntry(entryTool, "▸ "+name+"  "+arg)
 		} else {

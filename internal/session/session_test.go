@@ -604,8 +604,13 @@ func TestTailSince(t *testing.T) {
 	if tail[0].Type != events.TypeUserMessage {
 		t.Errorf("the tail starts at %v, not at a user message", tail[0].Type)
 	}
-	if len(tail) > 24 {
-		t.Errorf("the tail is %d events, past the 2n bound", len(tail))
+	// n counts what a reader sees, not raw log entries: a streamed reply
+	// is one message.part.delta per few characters, and counting those
+	// meant a single long answer used up the whole window and pushed the
+	// conversation above it off the screen. The deltas ride along in the
+	// tail and the daemon drops the finished ones on replay.
+	if n := countExcludingDeltas(tail); n > 24 {
+		t.Errorf("the tail is %d readable events, past the 2n bound", n)
 	}
 	// And it really is the end of the conversation.
 	if last := tail[len(tail)-1]; last.Seq != 50 {
@@ -633,9 +638,45 @@ func TestTailSinceOnAShortLog(t *testing.T) {
 	}
 }
 
+func countExcludingDeltas(evs []events.Event) int {
+	n := 0
+	for _, ev := range evs {
+		if ev.Type != events.TypeMessagePartDelta {
+			n++
+		}
+	}
+	return n
+}
+
 // One turn can be longer than the window, and "start at a turn boundary"
 // must not quietly become "send the whole log".
 func TestTailSinceIsBoundedByAVeryLongTurn(t *testing.T) {
+	store, _ := NewStore(t.TempDir())
+	store.CreateSession("s1", "", "general-purpose", true)
+	for turn := 0; turn < 40; turn++ {
+		store.Append("s1", events.TypeUserMessage, map[string]any{"text": "q"})
+		for i := 0; i < 50; i++ {
+			store.Append("s1", events.TypeMessagePartDelta, map[string]any{"text": "a"})
+		}
+		store.Append("s1", events.TypeMessagePartEnd, map[string]any{"text": "aaa"})
+	}
+
+	since, _ := store.TailSince("s1", 10)
+	tail, _ := store.Events("s1", since)
+	if n := countExcludingDeltas(tail); n > 20 {
+		t.Errorf("one long turn produced a %d-event tail, past the 2n bound", n)
+	}
+	// The point of the change: it is not the length of the replies that
+	// decides how much conversation is visible.
+	if n := countExcludingDeltas(tail); n < 10 {
+		t.Errorf("the tail carries only %d readable events, fewer than the %d asked for", n, 10)
+	}
+}
+
+// A reply still streaming has no message.part.end yet, so its fragments
+// are the only text there is and the tail has to carry them — this is what
+// makes re-opening a conversation mid-sentence show the sentence so far.
+func TestTailSinceKeepsAnUnfinishedReply(t *testing.T) {
 	store, _ := NewStore(t.TempDir())
 	store.CreateSession("s1", "", "general-purpose", true)
 	store.Append("s1", events.TypeUserMessage, map[string]any{"text": "q"})
@@ -645,7 +686,8 @@ func TestTailSinceIsBoundedByAVeryLongTurn(t *testing.T) {
 
 	since, _ := store.TailSince("s1", 10)
 	tail, _ := store.Events("s1", since)
-	if len(tail) > 20 {
-		t.Errorf("one long turn produced a %d-event tail, past the 2n bound", len(tail))
+	deltas := len(tail) - countExcludingDeltas(tail)
+	if deltas != 500 {
+		t.Errorf("the tail carries %d of the 500 fragments of the reply in progress", deltas)
 	}
 }

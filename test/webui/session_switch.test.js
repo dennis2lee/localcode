@@ -93,3 +93,36 @@ test('a session.activity event moves the dot without a reload', async () => {
   app.sse.emit({ type: 'session.activity', data: { session: 's1', busy: false } });
   assert.equal(dots(), 0, 'the dot did not clear');
 });
+
+// Coming back to a conversation has to show the conversation.
+//
+// The transcript was built entirely from message.part.delta events — one
+// per few characters of streamed text — and the replay window is counted
+// in events. So a single long answer was hundreds of events, the window
+// landed inside it, and re-opening a session showed the tail of the last
+// reply with everything above it gone. The daemon now drops the fragments
+// of replies that have finished and sends only the message.part.end, which
+// carries the same text whole; this is the client half of that.
+test('a replayed reply renders from its message.part.end', async () => {
+  const app = await load();
+
+  app.sse.emit({ seq: 1, type: 'message.user', data: { text: 'what is 2+2' } });
+  app.sse.emit({ seq: 2, type: 'message.part.end', data: { text: 'It is 4.' } });
+
+  const html = app.el('transcript').innerHTML;
+  assert.match(html, /what is 2\+2/);
+  assert.match(html, /It is 4\./, `the replayed reply is missing: ${html}`);
+});
+
+// The live path is unchanged: the fragments still draw the reply as it
+// arrives, and the end that follows must not append a second copy of it.
+test('a live reply is not duplicated by the message.part.end that closes it', async () => {
+  const app = await load();
+
+  app.sse.emit({ seq: 1, type: 'message.part.delta', data: { text: 'It is ' } });
+  app.sse.emit({ seq: 2, type: 'message.part.delta', data: { text: '4.' } });
+  app.sse.emit({ seq: 3, type: 'message.part.end', data: { text: 'It is 4.' } });
+
+  const text = app.el('transcript').textContent;
+  assert.equal((text.match(/It is 4\./g) || []).length, 1, `the reply appears twice: ${text}`);
+});

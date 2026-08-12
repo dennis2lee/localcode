@@ -1,8 +1,9 @@
 import {
   tasksEl, mcpServersEl, statusTextEl, statusBarEl, agentSelectEl,
-  permissionStatusBtn, autoDelegateBtn, workspaceBtn, stopBtn,
+  permissionStatusBtn, autoDelegateBtn, workspaceBtn, workspaceRevealBtn, stopBtn,
 } from './dom.js';
 import { app, session } from './state.js';
+import { openTaskView } from './taskview.js';
 
 // renderTasks builds each row with createElement/textContent rather than an
 // innerHTML template string — t.agent and t.status come straight from SSE
@@ -31,6 +32,22 @@ export function renderTasks() {
     statusDiv.className = `status-${t.status}`;
     statusDiv.textContent = t.status;
     div.appendChild(statusDiv);
+
+    // What it is doing right now. A status of "running" for twenty
+    // minutes says nothing about whether anything is happening; the name
+    // of the tool it is in says quite a lot.
+    if (t.doing) {
+      const doing = document.createElement('div');
+      doing.className = 'doing';
+      doing.textContent = t.doing;
+      div.appendChild(doing);
+    }
+
+    // The whole row opens the task's own conversation. A task is a
+    // session, so there is a full transcript behind these three words —
+    // there was just no way to reach it.
+    div.title = 'click to watch this task';
+    div.addEventListener('click', () => openTaskView(id));
 
     tasksEl.appendChild(div);
   }
@@ -158,9 +175,12 @@ export function renderAutoDelegate() {
 
 export function renderWorkspace() {
   workspaceBtn.textContent = app.workspacePath || '(unknown workspace)';
-  workspaceBtn.title = app.canBrowseWorkspace
-    ? `${app.workspacePath}\nclick to pick a workspace folder`
-    : `${app.workspacePath}\nclick to change the workspace directory`;
+  workspaceBtn.title = `${app.workspacePath}\nclick to change the workspace directory`;
+  // Only where a window would open in front of the person clicking. Over
+  // the network the daemon would open Explorer on the server, which is
+  // the same reason the folder picker is hidden there.
+  workspaceRevealBtn.style.display = app.canRevealWorkspace ? '' : 'none';
+  workspaceRevealBtn.title = `open ${app.workspacePath} in a file-manager window`;
 }
 
 // setCurrentAgent updates session state and the header dropdown together —

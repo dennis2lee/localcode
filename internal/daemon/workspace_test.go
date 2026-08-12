@@ -1,0 +1,130 @@
+package daemon
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// The workspace guard is daemon-wide: the working directory is one
+// process-wide thing, so a turn in *any* session refuses the move —
+// including one nobody is watching, and including one parked forever on an
+// unanswered permission request.
+//
+// Naming them in prose left the person to go and find them, which is what
+// "I often just can't change the workspace" is. The ids travel as data so
+// a client can offer to stop them.
+func TestSetWorkspaceRefusalNamesTheBusySessions(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	if _, err := d.Loop.Store.CreateSession("s-busy", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !d.turns.begin("s-busy", cancel) {
+		t.Fatal("could not mark the session busy")
+	}
+
+	body, _ := json.Marshal(map[string]string{"path": t.TempDir()})
+	resp, err := http.Post(srv.URL+"/api/workspace", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+
+	var out struct {
+		Error string   `json:"error"`
+		Busy  []string `json:"busy"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("the refusal is not JSON a client can act on: %v", err)
+	}
+	if len(out.Busy) != 1 || out.Busy[0] != "s-busy" {
+		t.Errorf("busy = %v, want the one session holding the switch up", out.Busy)
+	}
+	if !strings.Contains(out.Error, "s-busy") {
+		t.Errorf("the message does not name the session: %q", out.Error)
+	}
+}
+
+// Opening a file-manager window only makes sense on the machine with the
+// screen, which is the same rule the folder picker follows. A daemon
+// reached over the network says so rather than opening a window in front
+// of nobody.
+func TestRevealWorkspaceIsRefusedWithoutAScreen(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/workspace/reveal", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+
+	// And the client is told, so it can hide the button rather than
+	// offering one that always fails.
+	wresp, err := http.Get(srv.URL + "/api/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wresp.Body.Close()
+	var w struct {
+		CanReveal bool `json:"can_reveal"`
+	}
+	json.NewDecoder(wresp.Body).Decode(&w)
+	if w.CanReveal {
+		t.Error("can_reveal is true on a daemon with no screen attached")
+	}
+}
+
+// It opens the daemon's own workspace, not a path from the request: this
+// starts a process with a path argument, and taking that path from the
+// caller would make it a way to ask the daemon to open anything at all.
+func TestRevealWorkspaceOpensTheWorkspaceNotACallerPath(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	workspace := t.TempDir()
+	d.Loop.SetProjectDir(workspace)
+
+	var opened string
+	d.RevealDirectory = func(ctx context.Context, dir string) error {
+		opened = dir
+		return nil
+	}
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/workspace/reveal", "application/json",
+		strings.NewReader(`{"path":"/etc"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if opened != workspace {
+		t.Errorf("opened %q, want the daemon's own workspace %q", opened, workspace)
+	}
+}

@@ -231,6 +231,15 @@ type Profile struct {
 	Model       string  `json:"model"`
 	MaxTokens   int     `json:"max_tokens,omitempty"`
 	Temperature float64 `json:"temperature,omitempty"`
+
+	// ContextWindow is the model's total input+output token limit. Zero
+	// means "look it up from the model name", which is a guess: a local
+	// server can host anything under any name, and the guess for an
+	// unrecognised one is 128k. Guessing high is the harmful direction —
+	// the whole point of knowing this number is to keep a request inside
+	// the limit, and a request built against a window larger than the real
+	// one is refused outright by the server.
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // AgentConfig defines one named agent role: which model profile it runs

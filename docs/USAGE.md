@@ -97,7 +97,7 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
   "profiles": {
     "strong":   { "provider": "bedrock", "model": "us.anthropic.claude-opus-4-5-20251101-v1:0", "max_tokens": 8192 },
     "balanced": { "provider": "bedrock", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "max_tokens": 8192 },
-    "cheap":    { "provider": "local", "model": "qwen3-30b-a3b", "max_tokens": 4096 }
+    "cheap":    { "provider": "local", "model": "qwen3-30b-a3b", "max_tokens": 4096, "context_window": 32768 }
   },
   "agents": {
     "general-purpose": { "profile": "balanced" },
@@ -116,12 +116,22 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 | Field | Meaning |
 |---|---|
 | `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. |
-| `profiles` | A named provider and model pairing. `max_tokens` and `temperature` are optional. |
+| `profiles` | A named provider and model pairing. `max_tokens`, `temperature` and `context_window` are optional. |
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
 | `max_concurrent_tasks` | Caps how many background tasks run at once |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `dictation` | Speech engine settings. Every field optional; with none set, an installed engine beside the binary is found and used. See [Dictating a prompt](#dictating-a-prompt). |
 | `dictation_model_dir` | Path to an unpacked sherpa-onnx model, for the older sherpa engine only. See [Engines](#engines). |
+
+#### Profile fields
+
+| Field | Meaning |
+|---|---|
+| `provider` | Key into `providers` |
+| `model` | Model id, as the provider names it |
+| `max_tokens` | Cap on one reply. Reduced automatically when the conversation leaves less room than this in the context window, so it is a ceiling rather than a reservation. |
+| `temperature` | Sampling temperature |
+| `context_window` | The model's total input+output token limit. Omit it and the limit is guessed from the model name, which falls back to 128k for anything unrecognised. Worth setting for a local server, which can host any model under any name: guessing high is the harmful direction, since this number is what keeps a request inside the real limit. |
 
 #### Provider fields
 
@@ -700,6 +710,8 @@ At the end of every turn, the token usage the provider reports is recorded as a 
 Each event carries input and output token counts, the model's known maximum context from the best effort table in [internal/modelinfo](../internal/modelinfo/modelinfo.go) defaulting to 128000 for unknown models, the percentage filled, and tokens per second. Both clients drive their status bar from this.
 
 **Automatic compaction.** Once context use passes **80%**, and `auto_compact` is on, the next message triggers a one time summarization of the whole conversation. That summary replaces the history and the new message is sent after it. The transcript notes that compaction happened.
+
+**When a request is too big anyway.** The 80% figure watches the history alone, and what a server refuses is the history *plus* the room the request reserves for the reply — so a large `max_tokens` against a small window can be refused while the meter reads half full. Two things guard against that. Every request's `max_tokens` is reduced to what is actually left of the window, and a request refused for being too long is not the end of the turn: the conversation is summarized and the turn is retried once, with a line in the transcript saying so. Set `context_window` on the profile if the model is one whose name gives no clue to its real limit.
 
 If summarization fails, for example on a network error, compaction is skipped and the original history is used. It never blocks the conversation.
 

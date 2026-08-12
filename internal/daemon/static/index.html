@@ -15,7 +15,10 @@
       <span class="version" id="app-version"></span>
     </div>
   </div>
-  <button id="workspace-btn" title="click to change the workspace directory"></button>
+  <div class="workspace-group">
+    <button id="workspace-btn" title="click to change the workspace directory"></button>
+    <button id="workspace-reveal-btn" class="icon-btn" title="open this folder in a file-manager window">&#128193;</button>
+  </div>
   <div class="right">
     <select class="agent-select" id="agent-select" title="switch agent"></select>
     <span class="session-id" id="session-id">connecting…</span>
@@ -26,11 +29,26 @@
 <div id="workspace-modal">
   <div class="box">
     <h3>Workspace</h3>
-    <input type="text" id="workspace-input">
+    <div class="path-row">
+      <input type="text" id="workspace-input" spellcheck="false" autocapitalize="off" autocorrect="off">
+      <button id="workspace-browse">Browse&hellip;</button>
+    </div>
     <p class="note" id="workspace-note">Changing this restarts relative-path resolution for every tool from the new directory. Refused while a turn is in progress.</p>
     <div class="actions">
+      <button id="workspace-stop-busy" style="display:none">Stop those turns and switch</button>
       <button id="workspace-cancel">Cancel</button>
       <button id="workspace-save">Save</button>
+    </div>
+  </div>
+</div>
+<div id="task-modal">
+  <div class="box">
+    <h3 id="task-modal-title"></h3>
+    <div id="task-modal-body"></div>
+    <p class="note" id="task-modal-note"></p>
+    <div class="actions">
+      <button id="task-cancel" class="danger-btn">Stop this task</button>
+      <button id="task-close">Close</button>
     </div>
   </div>
 </div>

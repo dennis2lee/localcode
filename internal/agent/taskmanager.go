@@ -118,7 +118,9 @@ func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentNa
 		"status":  "running",
 	})
 
+	stopMirror := tm.mirrorProgress(taskID, parentSessionID)
 	err := tm.loop.SendMessage(ctx, taskID, agentName, prompt)
+	stopMirror()
 
 	data := map[string]any{"task_id": taskID, "status": "completed"}
 	switch {
@@ -132,6 +134,53 @@ func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentNa
 		data["error"] = err.Error()
 	}
 	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, data)
+}
+
+// mirrorProgress echoes what a task is doing into the conversation that
+// started it, and returns a function that stops doing so.
+//
+// A background task's own log is a session nothing lists and nothing
+// opens, so the parent's only news of it was three words — "spawned",
+// "running", "completed". A task that spends twenty minutes in tools
+// looked exactly like a task that was wedged, which is how "1 background
+// task" that never finishes came to be the whole progress report.
+//
+// Broadcast, not Append: this is true only at the moment it is sent, and
+// writing a line per tool call into the parent's log would bury the
+// conversation it is mirrored into. Clients that are not looking simply
+// miss it, which is correct for a progress indicator.
+func (tm *TaskManager) mirrorProgress(taskID, parentSessionID string) func() {
+	ch, _, unsub, err := tm.loop.Store.Subscribe(taskID)
+	if err != nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for ev := range ch {
+			doing := ""
+			switch ev.Type {
+			case events.TypeToolStart:
+				name, _ := ev.Data["name"].(string)
+				doing = name
+			case events.TypeMessagePartEnd:
+				doing = "thinking"
+			default:
+				continue
+			}
+			tm.loop.Store.Broadcast(parentSessionID, events.TypeTaskProgress, map[string]any{
+				"task_id": taskID,
+				"doing":   doing,
+			})
+		}
+	}()
+	return func() {
+		// unsub closes the channel, which ends the goroutine above; waiting
+		// for it means no progress line can land after the task's final
+		// status and leave the panel claiming it is still working.
+		unsub()
+		<-done
+	}
 }
 
 // taskDepthKey tracks how many levels deep a chain of synchronous Task

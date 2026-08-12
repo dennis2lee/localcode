@@ -98,6 +98,25 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The first line of the fork's transcript says what it is.
+	//
+	// A fork is a verbatim copy, so the two conversations read identically
+	// and neither says which is which — "is 'fork of X' the copy or the
+	// original?" is a fair question with nothing on screen to answer it.
+	// It goes in ahead of the copied events so it reads as a heading, and
+	// rehydration ignores it, so the model is not told it is a copy.
+	sourceName := src.Title
+	if sourceName == "" {
+		sourceName = src.ID
+	}
+	if _, err := d.Loop.Store.Append(newID, events.TypeSessionForked, map[string]any{
+		"from":       src.ID,
+		"from_title": sourceName,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("record the fork: %w", err))
+		return
+	}
+
 	for _, ev := range evs {
 		// session.renamed describes the *source's* title, which the fork
 		// does not share — copying it would put a claim in the fork's log

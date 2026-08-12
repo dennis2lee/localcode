@@ -320,7 +320,10 @@ test('stopping waits for the audio already recorded, then closes the session', a
 });
 
 // A failure while still recording is a real one and must still be shown.
-test('an audio failure during recording is still reported', async () => {
+// A failure that keeps happening is still reported and still stops the
+// microphone — the recognizer really is gone and pretending otherwise
+// would leave a lit recording indicator over nothing.
+test('an audio failure that persists is still reported', async () => {
   const app = await load({
     routes: {
       'GET /api/dictation': { ready: true },
@@ -331,11 +334,77 @@ test('an audio failure during recording is still reported', async () => {
 
   app.el('mic').click();
   await app.settle();
-  app.micChunk();
-  await app.settle();
+  for (let i = 0; i < 4; i++) {
+    app.micChunk();
+    await app.settle();
+  }
 
   assert.match(app.transcript(), /dictation stopped/);
   assert.equal(app.isDictating(), false);
+});
+
+// One hiccup used to be fatal: any failed chunk switched the microphone
+// off mid-sentence. Most causes are momentary and the next chunk is a
+// quarter of a second away.
+test('one failed chunk does not switch the microphone off', async () => {
+  let n = 0;
+  const app = await load({
+    routes: {
+      'GET /api/dictation': { ready: true },
+      'POST /api/dictation': { status: 201, body: { id: 'd-1' } },
+      'POST /api/dictation/d-1/audio': () => {
+        n++;
+        if (n === 1) return { status: 500, body: { error: 'busy' } };
+        return { provisional: 'still here' };
+      },
+    },
+  });
+
+  app.el('mic').click();
+  await app.settle();
+  app.micChunk();
+  await app.settle();
+  assert.equal(app.isDictating(), true, 'a single failure stopped dictation');
+  // The retry happens straight away with the same audio, so nothing said
+  // during the hiccup is lost.
+  assert.equal(app.el('input').value, 'still here');
+
+  app.micChunk();
+  await app.settle();
+  assert.equal(app.el('input').value, 'still here');
+  assert.equal(app.transcript().includes('dictation stopped'), false, app.transcript());
+});
+
+// The daemon closes a session it believes has been abandoned — which can
+// happen while someone is still talking, because a long transcription is
+// time in which no audio arrives. Switching the microphone off in the
+// middle of a sentence is the worst possible answer; opening another
+// session and carrying on is the right one.
+test('a session closed by the daemon is reopened rather than ending dictation', async () => {
+  let opened = 0;
+  const app = await load({
+    routes: {
+      'GET /api/dictation': { ready: true },
+      'POST /api/dictation': () => {
+        opened++;
+        return { status: 201, body: { id: `d-${opened}` } };
+      },
+      'POST /api/dictation/d-1/audio': { status: 404, body: { error: 'no dictation session d-1' } },
+      'POST /api/dictation/d-2/audio': { provisional: 'carried on' },
+    },
+  });
+
+  app.el('mic').click();
+  await app.settle();
+  app.micChunk();
+  await app.settle();
+
+  assert.equal(opened, 2, 'the closed session was not replaced');
+  assert.equal(app.isDictating(), true);
+  assert.equal(app.transcript().includes('dictation stopped'), false, app.transcript());
+  // The audio that failed is sent again rather than dropped: the words in
+  // it are words somebody said.
+  assert.equal(app.el('input').value, 'carried on');
 });
 
 // The guard on `live` used to sit before the first await, but `live` was
@@ -399,4 +468,44 @@ test('text typed after stopping survives the final transcription', async () => {
   await app.settle();
 
   assert.equal(app.el('input').value, 'half a sentence and then some');
+});
+
+// Audio arrives on a fixed clock while a request can take much longer
+// than one chunk: committing an utterance re-transcribes the whole
+// sentence, and on a slow machine that is seconds. One chunk per round
+// trip then falls further and further behind, which is what "I am still
+// talking and the text has stopped moving" is. The backlog goes as a
+// single request instead — lossless, since the recognizer takes any
+// length of PCM.
+test('a backlog of audio is uploaded as one request, not one per chunk', async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let posts = 0;
+
+  const app = await load({
+    routes: {
+      'GET /api/dictation': { ready: true },
+      'POST /api/dictation': { status: 201, body: { id: 'd-1' } },
+      'POST /api/dictation/d-1/audio': async () => {
+        posts++;
+        if (posts === 1) await held; // the engine is busy finishing a sentence
+        return { provisional: 'caught up' };
+      },
+    },
+  });
+
+  app.el('mic').click();
+  await app.settle();
+
+  // The first chunk is in flight and stuck; eight more pile up behind it.
+  app.micChunk();
+  for (let i = 0; i < 8; i++) app.micChunk();
+  await app.settle();
+  assert.equal(posts, 1, 'the queue was uploaded while the first request was still out');
+
+  release();
+  await app.settle();
+
+  assert.equal(posts, 2, `the backlog took ${posts - 1} requests instead of one`);
+  assert.equal(app.el('input').value, 'caught up');
 });
