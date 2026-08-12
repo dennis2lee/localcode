@@ -711,9 +711,20 @@ Each event carries input and output token counts, the model's known maximum cont
 
 **Automatic compaction.** Once context use passes **80%**, and `auto_compact` is on, the next message triggers a one time summarization of the whole conversation. That summary replaces the history and the new message is sent after it. The transcript notes that compaction happened.
 
-**When a request is too big anyway.** The 80% figure watches the history alone, and what a server refuses is the history *plus* the room the request reserves for the reply — so a large `max_tokens` against a small window can be refused while the meter reads half full. Two things guard against that. Every request's `max_tokens` is reduced to what is actually left of the window, and a request refused for being too long is not the end of the turn: the conversation is summarized and the turn is retried once, with a line in the transcript saying so. Set `context_window` on the profile if the model is one whose name gives no clue to its real limit.
+**When a request is too big anyway.** The 80% figure watches the history alone, and what a server refuses is the history *plus* the room the request reserves for the reply, so a large `max_tokens` against a small window can be refused while the meter reads half full. Four things guard against that.
 
-If summarization fails, for example on a network error, compaction is skipped and the original history is used. It never blocks the conversation.
+| Guard | What it does |
+|---|---|
+| `max_tokens` is clamped | Every request asks for only what is left of the window, so the reply cap cannot be what pushes a request over. |
+| Tool output is capped | One tool result may take at most a quarter of the window. The start and the end are kept and the gap is described, so the model knows to read a file in ranges rather than believing it saw all of it. Without this, `read_file` on a large file or `bash` running `cat` could exceed the whole window inside a single message, which no summarizing or dropping can undo. |
+| A refused turn is summarized and retried | Not the end of the turn. The transcript says it happened, and the turn carries on. |
+| Still refused, it is trimmed | Whole messages go from the oldest end, and the remaining text is cut if dropping is not enough. Each attempt aims at two thirds of what the conversation *measures*, not of the window, so it converges on a size the server accepts. This matters most for Korean and Japanese, where the character-count estimate runs about 4x low and a request the server refuses can measure as comfortably fitting. |
+
+`/compact` shrinks its own request the same way, rather than failing for being too long, which is the one failure it cannot have.
+
+Set `context_window` on the profile if the model is one whose name gives no clue to its real limit.
+
+If summarization fails for some other reason, a network error say, compaction is skipped and the original history is used. It never blocks the conversation.
 
 | Setting | Default | Change it |
 |---|---|---|
