@@ -172,6 +172,22 @@ func (c Config) RemoteHost() string {
 	return raw
 }
 
+// RemoteScheme reports whether the remote engine is reached over https,
+// which is thrown away by RemoteHost — that returns the host:port to dial
+// and nothing else.
+//
+// Keeping it matters because a TLS port answers a plaintext HTTP request
+// by closing the connection, with no status and no message. From this
+// side that is indistinguishable from a server that is refusing the
+// request, so an https:// address quietly ignored looked exactly like a
+// speech server that did not work.
+func (c Config) RemoteScheme() string {
+	if strings.HasPrefix(strings.TrimSpace(strings.ToLower(c.WhisperURL)), "https://") {
+		return "https"
+	}
+	return "http"
+}
+
 // whisperPaths resolves the engine and model this config would run,
 // naming whichever is missing.
 func (c Config) whisperPaths() (bin, model string, err error) {

@@ -2,6 +2,7 @@ package dictation
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -65,16 +66,33 @@ func Probe(ctx context.Context, cfg Config) (*ProbeResult, error) {
 	conn.Close()
 	res.Steps = append(res.Steps, ProbeStep{What: "tcp", Status: "connected", OK: true})
 
-	// 2. Plain GETs. If these work and the POSTs do not, the address is
-	// right and the endpoint list is not the problem.
+	// 2. Ordinary GETs. If these work and the uploads do not, the address
+	// is right and the endpoint list is not the problem.
+	scheme := cfg.RemoteScheme()
+	httpWorks := false
 	for _, path := range []string{"/", "/health"} {
-		res.Steps = append(res.Steps, probeGet(ctx, addr, path))
+		step := probeGet(ctx, scheme, addr, path)
+		if step.OK {
+			httpWorks = true
+		}
+		res.Steps = append(res.Steps, step)
 	}
 
-	// 3. Every endpoint localcode would try, with real audio: half a
+	// 3. If nothing spoke HTTP, find out whether the port speaks TLS.
+	//
+	// A TLS port answers a plaintext request by closing the connection,
+	// with no status and no message — which is exactly what "an existing
+	// connection was forcibly closed by the remote host" is, and is
+	// indistinguishable from a server refusing the request. Asking
+	// directly turns the whole dead end into one line of instruction.
+	if !httpWorks && scheme == "http" {
+		res.Steps = append(res.Steps, probeTLS(ctx, addr))
+	}
+
+	// 4. Every endpoint localcode would try, with real audio: half a
 	// second of silence, which is a valid WAV and a legitimate thing to
 	// transcribe.
-	p := &whisperProcess{host: addr, log: &syncBuffer{}, model: strings.TrimSpace(cfg.WhisperModel)}
+	p := &whisperProcess{host: addr, log: &syncBuffer{}, model: strings.TrimSpace(cfg.WhisperModel), scheme: scheme}
 	silence := make([]float32, SampleRate/2)
 	for _, api := range whisperAPIs {
 		step := ProbeStep{What: "POST " + api.path + " (" + api.name + ")"}
@@ -96,9 +114,9 @@ func Probe(ctx context.Context, cfg Config) (*ProbeResult, error) {
 	return res, nil
 }
 
-func probeGet(ctx context.Context, addr, path string) ProbeStep {
+func probeGet(ctx context.Context, scheme, addr, path string) ProbeStep {
 	step := ProbeStep{What: "GET " + path}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+addr+path, nil)
 	if err != nil {
 		step.Status = "bad request"
 		step.Detail = err.Error()
@@ -119,6 +137,30 @@ func probeGet(ctx context.Context, addr, path string) ProbeStep {
 	return step
 }
 
+// probeTLS reports whether the port completes a TLS handshake, which
+// answers the question a plaintext failure cannot: is this an HTTPS
+// service being addressed as HTTP.
+//
+// The certificate is not verified. This is a question about what protocol
+// the port speaks, not about whether to trust it — and refusing to answer
+// because of a self-signed certificate would withhold the one fact being
+// asked for.
+func probeTLS(ctx context.Context, addr string) ProbeStep {
+	step := ProbeStep{What: "TLS handshake"}
+	d := &tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // see above
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		step.Status = "not TLS"
+		step.Detail = err.Error()
+		return step
+	}
+	conn.Close()
+	step.Status = "this port speaks TLS"
+	step.OK = true
+	step.Detail = "set whisper_url to https://" + addr + " — it is being addressed as plain http, and a TLS port answers that by closing the connection"
+	return step
+}
+
 // Summary is the one sentence to read first: what the answers add up to.
 func (r *ProbeResult) Summary() string {
 	var getOK, postOK, postNoReply int
@@ -130,6 +172,12 @@ func (r *ProbeResult) Summary() string {
 			postOK++
 		case strings.HasPrefix(s.What, "POST") && s.Status == "no reply":
 			postNoReply++
+		}
+	}
+	for _, s := range r.Steps {
+		if s.What == "TLS handshake" && s.OK {
+			return "this port speaks TLS, and localcode is addressing it as plain http — which is why " +
+				"every request is closed without an answer. Set dictation.whisper_url to https://" + r.Address + "."
 		}
 	}
 	switch {

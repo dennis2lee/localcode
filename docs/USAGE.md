@@ -1211,6 +1211,12 @@ rejects a name it does not recognise.
 }
 ```
 
+`https://` is honoured. A TLS port answers a plaintext request by closing
+the connection with no status and no message, which looks exactly like a
+server refusing the request, so an https address quietly downgraded is a
+failure with no evidence in it. `localcode dictation probe` detects that
+case and says so.
+
 The address is read the way people write one: with or without the
 scheme, with or without a trailing slash, and with or without the port
 (8080 is assumed, which is what whisper.cpp's server uses when started

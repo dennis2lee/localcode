@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.41.0
+
+* **Fix: an `https://` speech server address had its scheme thrown away.** `whisper_url` was normalized to a bare `host:port` and every request hardcoded `http://`, so an HTTPS server could not be reached at all — and the way that fails is the worst kind: a TLS port answers a plaintext request by closing the connection, with no status and no message. Identical, from this side, to a server refusing the request. https is carried through now.
+* **`localcode dictation probe` identifies a port that speaks TLS.** When nothing gets through over plain HTTP it attempts a TLS handshake, and if that succeeds it says so and names the change to make. That turns the one failure with no evidence in it into a line of instruction. The certificate is not verified: the question is which protocol the port speaks, not whether to trust it, and refusing to answer over a self-signed certificate would withhold the fact being asked for.
+
 ## v0.40.3
 
 * **Fix: a word localcode did not understand started the agent instead of saying so.** `flag.Parse` ignores leftover arguments, so `localcode dictaton probe` — a typo, or any subcommand the installed build is too old to have — brought up the TUI exactly as if nothing had been typed. Someone waiting for a command's output got a chat prompt and no explanation. An unrecognised command is now refused, named, and answered with the list of the ones that exist.

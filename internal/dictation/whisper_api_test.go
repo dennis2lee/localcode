@@ -406,3 +406,48 @@ func TestProbeReportsAWorkingEndpoint(t *testing.T) {
 		t.Errorf("summary = %s", res.Summary())
 	}
 }
+
+// The dead end this turns into an instruction: a TLS port addressed as
+// plain http closes every connection without answering, which is
+// indistinguishable from a server refusing the request — TCP connects,
+// nothing else works, and nothing says why.
+func TestProbeIdentifiesAPortThatSpeaksTLS(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"running"}`)
+	}))
+	defer srv.Close()
+
+	// Configured as http://, which is what makes it fail.
+	plain := strings.Replace(srv.URL, "https://", "http://", 1)
+	res, err := Probe(context.Background(), Config{WhisperURL: plain})
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+
+	var tlsStep ProbeStep
+	for _, s := range res.Steps {
+		if s.What == "TLS handshake" {
+			tlsStep = s
+		}
+	}
+	if !tlsStep.OK {
+		t.Fatalf("a TLS port was not identified as one: %+v", res.Steps)
+	}
+	if !strings.Contains(res.Summary(), "https://") {
+		t.Errorf("the summary does not say what to change: %s", res.Summary())
+	}
+}
+
+// And with https:// configured, the same server just works — the scheme
+// used to be discarded, so an https address was silently sent as http.
+func TestAnHTTPSServerIsReachedWhenConfiguredAsSuch(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"running"}`)
+	}))
+	defer srv.Close()
+
+	cfg := Config{WhisperURL: srv.URL}
+	if got := cfg.RemoteScheme(); got != "https" {
+		t.Fatalf("RemoteScheme() = %q, want https — the scheme is being thrown away", got)
+	}
+}

@@ -56,6 +56,10 @@ type whisperProcess struct {
 	// which one it is. Guarded by apiMu rather than the engine's own
 	// lock: it is written once, from whichever transcription happened to
 	// discover it, and read by every one after that.
+	// scheme is "http" or "https" — see Config.RemoteScheme. A local
+	// engine is always plain http on loopback.
+	scheme string
+
 	// model is sent as the OpenAI "model" field when set — see
 	// transcribeVia. Comes from whisper_model, which is otherwise only
 	// used to find a local model file.
@@ -112,7 +116,7 @@ func acquireWhisper(cfg Config) (*whisperProcess, error) {
 	// thing to keep warm, so a plain value per recognizer avoids the
 	// refcount and the kill-on-key-change question entirely.
 	if remote := cfg.RemoteHost(); remote != "" {
-		p := &whisperProcess{host: remote, log: &syncBuffer{}, model: strings.TrimSpace(cfg.WhisperModel)}
+		p := &whisperProcess{host: remote, log: &syncBuffer{}, model: strings.TrimSpace(cfg.WhisperModel), scheme: cfg.RemoteScheme()}
 		// A named dialect skips discovery. An unknown name is not
 		// silently ignored: it would look like it had been honoured while
 		// the search quietly did something else.
@@ -294,6 +298,15 @@ func (p *whisperProcess) waitReady() error {
 }
 
 func (p *whisperProcess) addr() string { return p.host }
+
+// baseURL is the address requests are actually sent to, scheme included.
+func (p *whisperProcess) baseURL() string {
+	scheme := p.scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+	return scheme + "://" + p.host
+}
 
 // remote reports that this engine belongs to another machine, so there is
 // no child process behind it.
@@ -488,7 +501,7 @@ func (p *whisperProcess) transcribeVia(ctx context.Context, api whisperAPI, samp
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+p.addr()+api.path, &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL()+api.path, &body)
 	if err != nil {
 		return "", err
 	}
