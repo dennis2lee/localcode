@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"localcode/internal/gui"
 )
@@ -24,6 +26,17 @@ var subcommands = map[string]func(args []string) error{
 	"login":     runLogin,
 	"mcp":       runMCP,
 	"version":   runVersionCommand,
+}
+
+// subcommandNames lists what main dispatches on, for the error above.
+// Sorted so the message does not change shape between runs.
+func subcommandNames() string {
+	names := make([]string, 0, len(subcommands))
+	for name := range subcommands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 func runVersionCommand(args []string) error {
@@ -56,6 +69,17 @@ func run() error {
 	useGUI := flag.Bool("gui", gui.Available(), "open a native desktop window instead of the TUI (requires a build made with -tags gui; defaults to on for such a build, pass --gui=false to force the TUI instead)")
 	showVersion := flag.Bool("version", false, "print version and exit (same as the \"localcode version\" subcommand)")
 	flag.Parse()
+
+	// A word that is not a flag and not a subcommand is a mistake, and it
+	// used to be an invisible one: flag.Parse ignores leftovers, so
+	// "localcode dictaton probe" — or any subcommand this build is too
+	// old to have — started the agent exactly as if nothing had been
+	// typed. The TUI comes up, the command never runs, and there is
+	// nothing on screen to say why.
+	if flag.NArg() > 0 {
+		return fmt.Errorf("unknown command %q\n\nsubcommands: %s\nrun \"localcode --help\" for flags",
+			flag.Arg(0), subcommandNames())
+	}
 
 	if *showVersion {
 		fmt.Println(version)

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.40.3
+
+* **Fix: a word localcode did not understand started the agent instead of saying so.** `flag.Parse` ignores leftover arguments, so `localcode dictaton probe` — a typo, or any subcommand the installed build is too old to have — brought up the TUI exactly as if nothing had been typed. Someone waiting for a command's output got a chat prompt and no explanation. An unrecognised command is now refused, named, and answered with the list of the ones that exist.
+
 ## v0.40.2
 
 * **New: `localcode dictation probe`.** It asks the configured remote speech server what it actually answers, one endpoint at a time, and prints every reply. This exists because the failure it diagnoses tells you nothing on its own: a server that resets the connection produces "an existing connection was forcibly closed by the remote host" with no status and no body, all three candidate endpoints then fail identically, and the transcript gets one line naming only the first. The probe asks the questions separately — does TCP connect, does a plain `GET` work, what does each upload endpoint say — and the distinction between the second and third is the one that matters: if `GET` works and every upload is reset, the address and the endpoint list are fine and something is dropping the audio itself, which is a different thing to go and look at.
