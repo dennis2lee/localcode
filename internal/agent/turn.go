@@ -76,10 +76,18 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		Content: []provider.Block{provider.TextBlock(modelText)},
 	})
 
-	// One rescue per turn. A second overflow after a successful compaction
-	// means the trouble is not the length of the history, and retrying
-	// forever would spend the whole window discovering that.
-	rescued := false
+	// Two rescues per turn, and they are different rescues.
+	//
+	// The first summarizes, which is what the session wants: it keeps the
+	// meaning of the conversation and costs a model call. The second is
+	// what it needs if that was not enough — a forced trim that cannot
+	// fail, because it is allowed to cut into the messages themselves.
+	//
+	// Summarizing twice would be the wrong second attempt: a second
+	// overflow after a successful compaction means the trouble is not the
+	// length of the history, and asking the model again would spend the
+	// rest of the window finding that out.
+	rescues := 0
 
 	for {
 		history := l.history(sessionID)
@@ -106,18 +114,56 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// the user would have to do by hand anyway. Reported in the
 			// transcript either way, so a turn that took a detour through
 			// a summary does not look like it simply took a while.
-			if isContextOverflow(err) && !rescued {
-				rescued = true
-				l.Store.Append(sessionID, events.TypeError, map[string]any{
-					"error":     "the conversation no longer fits in this model's context window; summarizing it and retrying",
-					"recovered": true,
-				})
-				if cerr := l.compactHistory(ctx, sessionID, p, profile, systemPrompt, "", false); cerr == nil {
-					continue
-				} else {
+			if isContextOverflow(err) && rescues < 2 {
+				rescues++
+				if rescues == 1 {
 					l.Store.Append(sessionID, events.TypeError, map[string]any{
-						"error": fmt.Sprintf("could not summarize to recover space: %v", cerr),
+						"error":     "the conversation no longer fits in this model's context window; summarizing it and retrying",
+						"recovered": true,
 					})
+					if cerr := l.compactHistory(ctx, sessionID, p, profile, systemPrompt, "", false); cerr == nil {
+						continue
+					} else {
+						l.Store.Append(sessionID, events.TypeError, map[string]any{
+							"error":     fmt.Sprintf("could not summarize to recover space (%v); trimming instead", cerr),
+							"recovered": true,
+						})
+					}
+				}
+				// Second time, or the summary itself could not be made:
+				// stop negotiating and make it fit. forceFit drops from
+				// the front and then cuts into what is left, so unlike
+				// summarizing there is no way for it not to work — which
+				// matters, because this is the difference between a
+				// session that carries on and one that is finished.
+				//
+				// Half the window: the estimate was already wrong once, so
+				// aiming just under the limit would be trusting the same
+				// arithmetic that has already been refused.
+				//
+				// And never more than two thirds of what the history is
+				// estimated to be, so this always removes something. The
+				// estimate can be wrong by a lot in the direction that
+				// matters — four characters per token is roughly right for
+				// English and roughly quadruple for Korean or Japanese, so
+				// a history the server calls 90k can measure 25k here. If
+				// the budget were taken from the window alone, a request
+				// the server has just refused would look like it already
+				// fits, nothing would be cut, and the turn would die on
+				// the exact conversations this exists for.
+				budget := contextWindow(profile) / 2
+				if est := estimateTokens(systemPrompt, sendableHistory(l.history(sessionID))); est > 0 && est*2/3 < budget {
+					budget = est * 2 / 3
+				}
+				trimmed, changed := forceFit(systemPrompt, l.history(sessionID), budget)
+				if changed {
+					l.setHistory(sessionID, trimmed)
+					l.clearUsage(sessionID)
+					l.Store.Append(sessionID, events.TypeError, map[string]any{
+						"error":     "still too long — the oldest part of the conversation has been dropped so this turn can continue",
+						"recovered": true,
+					})
+					continue
 				}
 			}
 			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
@@ -157,7 +203,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return nil
 		}
 
-		resultBlocks := l.runTools(ctx, sessionID, toolUses, agentCfg.Tools)
+		resultBlocks := l.runTools(ctx, sessionID, toolUses, agentCfg.Tools, contextWindow(profile))
 		resultBlocks = append(resultBlocks, l.takeInjected(sessionID)...)
 		l.appendHistory(sessionID, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
 	}
@@ -340,7 +386,7 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 // non-empty, is enforced here too (not just in the specs the model saw) —
 // a belt-and-suspenders check in case a model calls a tool it wasn't
 // offered.
-func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block, allowedTools []string) []provider.Block {
+func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block, allowedTools []string, window int) []provider.Block {
 	ctx = WithSessionID(ctx, sessionID)
 	results := make([]provider.Block, 0, len(toolUses))
 	for _, tu := range toolUses {
@@ -369,6 +415,11 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		} else {
 			res = l.Tools.Call(ctx, tu.ToolName, tu.ToolInput, "")
 		}
+		// Capped here, before it becomes either a stored event or a
+		// message — a tool result is the one part of a conversation whose
+		// size nobody chose, and one `cat` of a log file could exceed the
+		// whole window in a single message. See capToolResult.
+		res.Content = capToolResult(res.Content, window)
 		l.Store.Append(sessionID, events.TypeToolEnd, map[string]any{
 			"tool_use_id": tu.ToolUseID,
 			"content":     res.Content,

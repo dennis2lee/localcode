@@ -407,3 +407,232 @@ func TestConfiguredContextWindowReachesTheMeter(t *testing.T) {
 		t.Errorf("percent = %v, want ~3.4 (1100 of 32768)", got)
 	}
 }
+
+// A tool result is the one part of a conversation whose size nobody chose.
+// read_file on a large file put the whole file into the history, and bash
+// returns whatever the command printed — so `cat` on a log could exceed
+// the entire window in a single message. Nothing downstream could fix
+// that: summarizing sends the same message, and dropping older messages
+// cannot drop the one that just arrived.
+func TestAnEnormousToolResultCannotOverflowTheWindowOnItsOwn(t *testing.T) {
+	const window = 8192
+	huge := strings.Repeat("x", window*charsPerToken*4) // four windows of text
+
+	capped := capToolResult(huge, window)
+
+	if len(capped) >= len(huge) {
+		t.Fatalf("result was not capped: %d bytes in, %d out", len(huge), len(capped))
+	}
+	if estimateTokens("", []provider.Message{{
+		Role:    provider.RoleUser,
+		Content: []provider.Block{provider.ToolResultBlock("t1", capped, false)},
+	}}) > window {
+		t.Error("one tool result still fills the whole window by itself")
+	}
+	if !strings.Contains(capped, "bytes omitted") {
+		t.Error("the truncation is silent; the model cannot know it is looking at part of a file")
+	}
+	// Both ends survive: the head of a file is its structure, the tail of
+	// a command is its error and exit status.
+	if !strings.HasPrefix(capped, "x") || !strings.HasSuffix(capped, "x") {
+		t.Error("truncation should keep the start and the end, not just one")
+	}
+}
+
+// Output that fits is left exactly alone — the cap must not be something
+// that quietly edits ordinary tool output.
+func TestOrdinaryToolOutputIsUntouched(t *testing.T) {
+	out := "PASS\nok  	localcode/internal/agent	1.790s\n"
+	if got := capToolResult(out, 200000); got != out {
+		t.Errorf("ordinary output was modified:\n%q\n%q", out, got)
+	}
+}
+
+// forceFit is the last line of defence and it is not allowed to fail. The
+// case fitHistory cannot solve is a single message bigger than the whole
+// window: there is nothing to drop, because the thing that does not fit is
+// what is left after dropping everything.
+func TestForceFitCutsIntoASingleOversizedMessage(t *testing.T) {
+	budget := 1000
+	msgs := []provider.Message{{
+		Role:    provider.RoleUser,
+		Content: []provider.Block{provider.TextBlock(strings.Repeat("y", budget*charsPerToken*10))},
+	}}
+
+	got, changed := forceFit("", msgs, budget)
+
+	if !changed {
+		t.Fatal("forceFit reported nothing to do for a message ten times the budget")
+	}
+	if n := estimateTokens("", got); n > budget {
+		t.Errorf("still %d tokens against a budget of %d — forceFit did not fit", n, budget)
+	}
+	if len(got) != 1 {
+		t.Fatalf("kept %d messages, want the one that was there", len(got))
+	}
+	if !strings.Contains(got[0].Content[0].Text, "cut to fit") {
+		t.Error("the cut is not visible in the text it cut")
+	}
+	// The caller's slice must not have been edited underneath it: these
+	// blocks are shared with the session's stored history.
+	if len(msgs[0].Content[0].Text) != budget*charsPerToken*10 {
+		t.Error("forceFit modified the history it was given in place")
+	}
+}
+
+// The ordinary case still prefers dropping whole messages over cutting
+// into any of them.
+func TestForceFitDropsWholeMessagesBeforeCutting(t *testing.T) {
+	var msgs []provider.Message
+	for i := range 20 {
+		msgs = append(msgs, provider.Message{
+			Role:    provider.RoleUser,
+			Content: []provider.Block{provider.TextBlock(fmt.Sprintf("%d %s", i, strings.Repeat("z", 400)))},
+		})
+	}
+
+	got, changed := forceFit("", msgs, 500)
+
+	if !changed {
+		t.Fatal("nothing was trimmed")
+	}
+	if n := estimateTokens("", got); n > 500 {
+		t.Errorf("%d tokens against a budget of 500", n)
+	}
+	if len(got) >= len(msgs) {
+		t.Errorf("kept %d of %d messages; nothing was dropped", len(got), len(msgs))
+	}
+	last := got[len(got)-1].Content[0].Text
+	if !strings.HasPrefix(last, "19 ") || strings.Contains(last, "cut to fit") {
+		t.Errorf("the newest message should survive whole, got %.20q", last)
+	}
+}
+
+// overflowAtServer refuses the requests whose indices are named and
+// answers the rest, so a test can put the refusals exactly where the
+// escalation has to survive them — in particular, letting the
+// summarization call through so the second overflow is the one that
+// arrives *after* a successful summary.
+func overflowAtServer(t *testing.T, failAt map[int]bool) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	n := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		i := n
+		n++
+		mu.Unlock()
+
+		if failAt[i] {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"This model's maximum context length is 8192 tokens. However, your prompt contains at least 90000 input tokens."}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, c := range []string{
+			`{"choices":[{"delta":{"content":"answered anyway"}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+
+	return srv, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return n
+	}
+}
+
+// A second overflow after a successful summary used to be the end of the
+// session: the rescue was one-shot, so the 400 went into the transcript
+// and every later message failed the same way. Summarizing again is the
+// wrong answer — if the first summary did not fit, the trouble is not the
+// length of the conversation — so the second attempt stops negotiating and
+// forces the history to fit.
+func TestASecondOverflowIsTrimmedRatherThanEndingTheSession(t *testing.T) {
+	// request 0: refused. request 1: the summary, which succeeds.
+	// request 2: the retry, refused again. request 3: after the forced
+	// trim, succeeds.
+	srv, count := overflowAtServer(t, map[int]bool{0: true, 2: true})
+	defer srv.Close()
+
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	cfg := &config.Config{
+		Providers: map[string]config.ProviderConfig{
+			"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL},
+		},
+		Profiles: map[string]config.Profile{
+			"small": {Provider: "local", Model: "small-model", ContextWindow: 8192},
+		},
+		Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "small"}},
+		DefaultProfile: "small",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("invalid config: %v", err)
+	}
+	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{
+		"local": provider.NewOpenAICompat(srv.URL, ""),
+	}, cfg)
+
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	for i := range 10 {
+		loop.appendHistory(sid, provider.Message{
+			Role:    provider.RoleUser,
+			Content: []provider.Block{provider.TextBlock(fmt.Sprintf("message %d: %s", i, strings.Repeat("x", 400)))},
+		})
+		loop.appendHistory(sid, provider.Message{
+			Role:    provider.RoleAssistant,
+			Content: []provider.Block{provider.TextBlock("ok")},
+		})
+	}
+
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "carry on"); err != nil {
+		t.Fatalf("the turn ended in an error instead of trimming its way through: %v", err)
+	}
+	if n := count(); n < 4 {
+		t.Errorf("only %d requests; the escalation never reached the forced trim", n)
+	}
+
+	all, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var text strings.Builder
+	sawDrop, sawFatal := false, false
+	for _, ev := range all {
+		switch ev.Type {
+		case "message.part.delta":
+			if s, ok := ev.Data["text"].(string); ok {
+				text.WriteString(s)
+			}
+		case "error":
+			if ev.Data["recovered"] == true {
+				if msg, _ := ev.Data["error"].(string); strings.Contains(msg, "oldest part") {
+					sawDrop = true
+				}
+			} else {
+				sawFatal = true
+			}
+		}
+	}
+	if sawFatal {
+		t.Error("an unrecovered error reached the transcript; the turn was supposed to survive")
+	}
+	if !sawDrop {
+		t.Error("the user was never told that part of the conversation had been dropped")
+	}
+	if got := text.String(); !strings.Contains(got, "answered anyway") {
+		t.Errorf("final text = %q, want the answer from after the trim", got)
+	}
+}

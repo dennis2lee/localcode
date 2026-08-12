@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"localcode/internal/config"
@@ -190,6 +191,137 @@ func fitHistory(system string, msgs []provider.Message, budget int) ([]provider.
 		return nil, 0, errNoRoom
 	}
 	return msgs[start:], start, nil
+}
+
+// charsPerToken is the ratio estimateTokens works in, named here because
+// the truncation below has to convert a token budget back into bytes.
+const charsPerToken = 4
+
+// toolResultWindowShare is the largest share of the context window one
+// tool result is allowed to occupy: a quarter.
+//
+// A tool result is the one thing in a conversation whose size nobody
+// chose. read_file on a 5MB file put 5MB into the history, and bash
+// returns whatever the command printed — so a single `cat` of a log could
+// exceed the whole window by itself, in one message, which no amount of
+// summarizing or dropping older messages can fix. That was the failure
+// with no way out: the history could not be made to fit because the thing
+// that did not fit was one message inside it.
+//
+// A quarter leaves room for the conversation the result is supposed to be
+// part of. Above that, the result is not context, it is the whole context.
+const toolResultWindowShare = 4
+
+// truncateMiddle cuts text down to maxBytes, keeping the start and the end
+// and saying in the middle what it removed.
+//
+// Both ends, because which one matters depends on the tool: the head of a
+// file is its imports and structure, and the tail of a command is its
+// error and exit status. Keeping only one end reliably discards the point
+// of about half of all calls.
+//
+// note is addressed to the model, since the model is who has to decide
+// what to do about it.
+func truncateMiddle(text string, maxBytes int, note string) string {
+	if maxBytes <= 0 || len(text) <= maxBytes {
+		return text
+	}
+	marker := fmt.Sprintf("\n\n... [%d bytes omitted — %s] ...\n\n", len(text)-maxBytes, note)
+	if len(marker) >= maxBytes {
+		// Pathological budget: no room for both ends and the explanation.
+		// The explanation wins, because a silent truncation is worse than
+		// a short one.
+		return marker
+	}
+	room := maxBytes - len(marker)
+	head := room * 3 / 5
+	tail := room - head
+	return text[:head] + marker + text[len(text)-tail:]
+}
+
+// capToolResult limits one tool result to a share of the window.
+//
+// Applied to what is stored as well as what is sent, so the transcript and
+// the model see the same thing — and so the event log, the SSE stream to
+// every attached client, and the replay after a restart are not each
+// carrying a copy of a file that nothing was ever going to be able to use.
+func capToolResult(content string, window int) string {
+	if window <= 0 {
+		window = modelinfo.DefaultMaxContextTokens
+	}
+	maxBytes := (window / toolResultWindowShare) * charsPerToken
+	return truncateMiddle(content, maxBytes,
+		"this result was too large for the model's context window; read the file in ranges, or narrow the command, to see the rest")
+}
+
+// forceFit makes a history fit budget, whatever it takes, and reports
+// whether it had to change anything.
+//
+// This is the last line of defence, and unlike fitHistory it cannot fail:
+// it drops whole messages from the front first, and when what remains
+// still does not fit — one enormous message, the case dropping cannot
+// solve — it truncates the text inside the messages that are left.
+//
+// Something being cut is not in question by the time this runs; the
+// request has already been refused. The choice is between cutting and a
+// session that answers nothing ever again, and a session that keeps
+// working with a gap in it, clearly marked, is worth more than a correct
+// refusal.
+func forceFit(system string, msgs []provider.Message, budget int) ([]provider.Message, bool) {
+	if budget <= 0 || len(msgs) == 0 {
+		return msgs, false
+	}
+	if estimateTokens(system, msgs) <= budget {
+		return msgs, false
+	}
+
+	// Drop from the front while there is more than one message left. The
+	// last message is kept whatever its size — it is the request being
+	// answered — and truncated below if it is what overflowed.
+	start := 0
+	for start < len(msgs)-1 && estimateTokens(system, msgs[start:]) > budget {
+		start++
+	}
+	for start < len(msgs)-1 && startsWithToolResult(msgs[start]) {
+		start++
+	}
+	kept := append([]provider.Message(nil), msgs[start:]...)
+
+	if estimateTokens(system, kept) <= budget {
+		return kept, true
+	}
+
+	// Still too big: the content itself is. Truncate the largest block in
+	// the largest message and repeat, so a conversation of ordinary
+	// messages plus one monster loses only the monster.
+	for range 64 {
+		if estimateTokens(system, kept) <= budget {
+			break
+		}
+		mi, bi, size := -1, -1, 0
+		for i := range kept {
+			for j, b := range kept[i].Content {
+				if n := len(b.Text) + len(b.ToolResultContent); n > size {
+					mi, bi, size = i, j, n
+				}
+			}
+		}
+		if mi < 0 || size == 0 {
+			break
+		}
+		// Copy before writing: history blocks are shared with the session's
+		// stored history, and this must not edit it in place.
+		blocks := append([]provider.Block(nil), kept[mi].Content...)
+		target := size / 2
+		if target < 512 {
+			target = 512
+		}
+		const note = "cut to fit the model's context window"
+		blocks[bi].Text = truncateMiddle(blocks[bi].Text, target, note)
+		blocks[bi].ToolResultContent = truncateMiddle(blocks[bi].ToolResultContent, target, note)
+		kept[mi].Content = blocks
+	}
+	return kept, true
 }
 
 func startsWithToolResult(m provider.Message) bool {
