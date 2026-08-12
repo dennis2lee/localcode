@@ -659,10 +659,21 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   height: 7px;
   margin-right: 6px;
   border-radius: 50%;
-  background: var(--accent);
+  /* Green, matching the status-bar light under the prompt, which has
+     always been green for "connected and working". The same fact about
+     the same thing should not be two different colours depending on
+     which panel it is in — blue here read as a category of its own. */
+  background: var(--ok);
   vertical-align: middle;
-  animation: session-led-pulse 1.2s ease-in-out infinite;
 }
+
+/* Working: blinking, the same beat as the status-bar light. */
+.session-led.running { animation: session-led-pulse 1.2s ease-in-out infinite; }
+
+/* Finished while you were elsewhere: steady, so it reads as a state
+   rather than an activity. Blinking means "happening now"; this has
+   already happened and is waiting for you. */
+.session-led.unread { animation: none; }
 
 @keyframes session-led-pulse {
   0%, 100% { opacity: 1; }
@@ -670,9 +681,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
 /* Someone who has asked for less motion gets a steady dot rather than
-   none: the information is the point, the blinking is decoration. */
+   none: the information is the point, the blinking is decoration.
+   Running and unread then look alike, which is the honest trade — both
+   still say "this session has something", and the alternative is motion
+   someone has explicitly asked not to see. */
 @media (prefers-reduced-motion: reduce) {
-  .session-led { animation: none; }
+  .session-led.running { animation: none; }
 }
 
 /* The settings window. Same box as the other modals; the additions are

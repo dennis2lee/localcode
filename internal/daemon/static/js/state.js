@@ -14,6 +14,11 @@ export const app = {
   workspacePath: '',
   canBrowseWorkspace: false, // true only in the desktop-window mode
   canRevealWorkspace: false, // likewise: a file-manager window needs a screen
+  // Sessions that finished a turn while you were somewhere else, and so
+  // are holding an answer nobody has looked at yet. Cleared by opening
+  // the session. Not persisted: "unread" means since this page loaded,
+  // which is the only span in which it can be true of *you*.
+  unreadSessions: new Set(),
   autoCompactEnabled: true,
   showTPS: true,
   autoDelegate: false,

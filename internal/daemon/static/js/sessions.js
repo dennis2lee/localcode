@@ -58,10 +58,22 @@ export function renderSessionList() {
     // conversation, so a turn left running in another one was invisible
     // — including a turn stuck waiting on a permission request, which
     // blocks workspace switching for every session until it is answered.
-    if (s.busy) {
+    // Three states, one dot:
+    //   running        green, blinking  — the model is working
+    //   answer unread  green, steady    — it finished while you were elsewhere
+    //   nothing        no dot           — idle, or you have read it
+    //
+    // The steady green is the one that was missing. A turn finishing in
+    // another session used to just stop blinking, which is the same thing
+    // the list shows for a session that has done nothing all day, so the
+    // one moment worth noticing looked exactly like nothing happening.
+    const unread = app.unreadSessions.has(s.id);
+    if (s.busy || unread) {
       const led = document.createElement('span');
-      led.className = 'session-led';
-      led.title = 'a turn is running in this session';
+      led.className = s.busy ? 'session-led running' : 'session-led unread';
+      led.title = s.busy
+        ? 'a turn is running in this session'
+        : 'this session has a reply you have not looked at';
       title.appendChild(led);
     }
     title.appendChild(document.createTextNode(s.title ? s.title : s.id));
@@ -161,6 +173,8 @@ export async function deleteSessionConfirm(s) {
 // sessions from before the field existed have none, and those leave the
 // workspace alone rather than guessing.
 export function selectSession(id, agent, workspace) {
+  // Opening it is reading it.
+  app.unreadSessions.delete(id);
   resetSession(id);
   renderSessionHeader();
   clearTranscript();

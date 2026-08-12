@@ -143,7 +143,16 @@ const handlers = {
   'session.activity': (d) => {
     const s = (app.sessions || []).find(x => x.id === d.session);
     if (!s || s.busy === !!d.busy) return;
+    const finished = s.busy && !d.busy;
     s.busy = !!d.busy;
+    // A turn that ended somewhere you were not looking leaves an answer
+    // behind, and the light says so until you go and read it. A turn that
+    // ended in the session on screen does not: you watched it arrive, so
+    // the light goes straight back to idle rather than asking you to
+    // acknowledge something you have already seen.
+    if (finished && d.session !== session.sessionID) {
+      app.unreadSessions.add(d.session);
+    }
     renderSessionList();
   },
   'mcp.status': (d) => {
