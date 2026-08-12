@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"localcode/internal/agent"
 )
 
 // The workspace guard is daemon-wide: the working directory is one
@@ -126,5 +129,95 @@ func TestRevealWorkspaceOpensTheWorkspaceNotACallerPath(t *testing.T) {
 	}
 	if opened != workspace {
 		t.Errorf("opened %q, want the daemon's own workspace %q", opened, workspace)
+	}
+}
+
+// The refusal offers to stop the turns holding the switch up, and the case
+// that matters most is a session parked on a permission request nobody
+// answered — the daemon's own message names it, because that session stays
+// busy indefinitely and its question is only visible in a session the user
+// may not be looking at. If stopping it did not actually release the
+// workspace, the button would be an offer the daemon cannot keep.
+func TestStoppingATurnParkedOnAPermissionFreesTheWorkspace(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	const busy = "s-parked"
+	if _, err := d.Loop.Store.CreateSession(busy, "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+
+	// A turn parked exactly the way a permission request parks one: the
+	// broker blocks until an answer arrives or the turn's context is
+	// cancelled.
+	ctx, cancel := context.WithCancel(context.Background())
+	if !d.turns.begin(busy, cancel) {
+		t.Fatal("could not mark the session busy")
+	}
+	asked := make(chan struct{})
+	answered := make(chan bool, 1)
+	go func() {
+		close(asked)
+		// The session id has to travel on the context, the way a real turn
+		// carries it — without it the broker refuses rather than asking,
+		// and nothing parks.
+		allow, _ := d.Broker.Func()(agent.WithSessionID(ctx, busy), "bash", "rm -rf /", "delete everything")
+		answered <- allow
+		d.turns.end(busy)
+	}()
+	<-asked
+
+	// The switch is refused, and says which session to go and deal with.
+	target := t.TempDir()
+	body, _ := json.Marshal(map[string]string{"path": target})
+	resp, err := http.Post(srv.URL+"/api/workspace", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", resp.StatusCode)
+	}
+	var refusal struct {
+		Busy []string `json:"busy"`
+	}
+	json.NewDecoder(resp.Body).Decode(&refusal)
+	if len(refusal.Busy) != 1 || refusal.Busy[0] != busy {
+		t.Fatalf("busy = %v, want [%s]", refusal.Busy, busy)
+	}
+
+	// What the button does: cancel the named turn...
+	cresp, err := http.Post(srv.URL+"/api/sessions/"+busy+"/cancel", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cresp.Body.Close()
+	if cresp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel status = %d, want 200", cresp.StatusCode)
+	}
+
+	select {
+	case allow := <-answered:
+		if allow {
+			t.Error("a cancelled permission request was treated as an approval")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelling did not release the turn parked on the permission request")
+	}
+
+	// ...and then retries the switch, which must now succeed.
+	resp2, err := http.Post(srv.URL+"/api/workspace", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		buf := make([]byte, 300)
+		n, _ := resp2.Body.Read(buf)
+		t.Fatalf("switch after stopping the turn = %d: %s", resp2.StatusCode, buf[:n])
 	}
 }
