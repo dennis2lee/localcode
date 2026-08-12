@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.39.0
+
+The workspace is per session now, and `os.Chdir` is gone.
+
+* **New: each session has its own working directory.** It used to be the process's own — one `os.Chdir` for the whole daemon — and every awkward part of the workspace followed from that. A change had to be refused while a turn ran in *any* session, including one nobody was watching and one parked forever on an unanswered permission request, which is what "I often just can't change the workspace" was. Two clients on one daemon could not work in two projects, because selecting a session in one moved the other's ground. And reopening yesterday's session put its files wherever the daemon happened to be started today. Each turn now carries its session's directory on the context: `read_file`/`write_file`/`edit` join relative paths onto it, `glob` and `grep` search inside it, and `bash` runs in it. Nothing calls `os.Chdir`; the process's own directory is left where localcode was started and remains the fallback when nothing else is set, so every existing caller behaves as before.
+* **A turn in another session no longer blocks a workspace switch.** This session's own turn still does: its tool call, mid-execution, would otherwise find the ground moved under it. That is a real race rather than an artifact of shared state, and it is one the person asking can see and wait out.
+* **Searches answer in the terms they were asked in.** A relative pattern gets relative results, so a `grep` no longer prints the whole of `C:\work\localcode-main` in front of every line, and a path it reports can be handed straight back to `read_file`.
+* **Changed: `POST /api/workspace` with an unknown session id is now 404,** where it used to answer 200. That was right when the directory was process-wide: it had already moved by the time the session was looked up, so failing would have reported a switch that did happen as an error. The session is what moves now, so there is nothing that succeeded. Omitting the session id sets the daemon's default — what a new session starts in — which is the only daemon-wide meaning the workspace still has.
+
 ## v0.38.0
 
 Stop guessing what the server can take, and say so when a limit bites.

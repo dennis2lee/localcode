@@ -373,9 +373,13 @@ What that click does depends on where you are:
 | GUI window | Opens the operating system's own folder picker (macOS `choose folder`, Windows' folder browser, zenity/kdialog on Linux), starting in the current workspace. Choosing a folder applies it immediately; dismissing the dialog changes nothing. |
 | Browser | Opens a box to type an absolute path into. The web platform gives no way to get a real filesystem path out of a file dialog — neither `<input webkitdirectory>` nor `showDirectoryPicker()` exposes one — and a daemon you reached over the network would open its dialog on the *server*, so the picker is deliberately offered only in the desktop window. |
 
-Switching is refused while any session has a turn in flight, since redirecting it mid-tool-call would silently change what an already-running command is operating on. It's process-wide, not per-session — one workspace at a time, the same way opening a different folder in an editor replaces what was open before.
+**Each session has its own workspace.** Every relative file path and every bash command resolves against the directory of the session it belongs to, so two sessions can work in two different projects at the same time, on the same daemon, without disturbing each other. It is a property of the session, not of the localcode process, which is why reopening a conversation about another project puts you back in that project rather than wherever the daemon happens to have been started.
 
-**Switching sessions moves the workspace with them.** Each session records the directory it was created in, and selecting one in the [left panel](#left-panel-sessions) switches the workspace to that directory, so reopening a conversation about another project actually puts you back in that project instead of leaving its transcript pointed at wherever you happen to be. A `[workspace] <path>` line marks it in the transcript, since it changes where every later command runs. Sessions from before this was recorded leave the workspace alone rather than guessing, and if the switch is refused (another session mid-turn) or the directory has since been deleted, that's reported and the session still opens.
+Switching is refused only while *this* session has a turn in flight, since redirecting it mid-tool-call would change what an already-running command is operating on. A turn in some other session is not your business and no longer blocks anything.
+
+Omitting the session (a client that does not track them) sets the default instead: what a newly created session starts in, and what a session with no recorded workspace of its own falls back to.
+
+Before v0.39.0 this was process-wide — one `os.Chdir` for the whole daemon — which is why a workspace change used to be refused whenever *any* session was busy, including one nobody was watching and one parked forever on an unanswered permission request.
 
 ### Hooks
 
