@@ -548,7 +548,11 @@ func (p *whisperProcess) transcribeVia(ctx context.Context, api whisperAPI, samp
 // above does nothing.
 var transcribeClient = &http.Client{
 	Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		// Env first, then the Windows system proxy — see sysproxy.go.
+		// The browser on the same machine reaches the speech server
+		// through that proxy; connecting directly instead is how a
+		// working server looked permanently unreachable.
+		Proxy:                 dictationProxy,
 		ExpectContinueTimeout: 2 * time.Second,
 	},
 }

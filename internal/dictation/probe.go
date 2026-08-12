@@ -66,6 +66,14 @@ func Probe(ctx context.Context, cfg Config) (*ProbeResult, error) {
 	conn.Close()
 	res.Steps = append(res.Steps, ProbeStep{What: "tcp", Status: "connected", OK: true})
 
+	// Which proxy the requests below will go through, because that is
+	// the invisible difference between this probe and the browser on the
+	// same machine. On a corporate laptop the browser reaches the server
+	// through the IT-configured system proxy; a probe connecting directly
+	// runs into whatever middlebox resets unproxied traffic, and the two
+	// results contradict each other with no visible reason.
+	res.Steps = append(res.Steps, proxyStep())
+
 	// 2. Ordinary GETs. If these work and the uploads do not, the address
 	// is right and the endpoint list is not the problem.
 	scheme := cfg.RemoteScheme()
@@ -114,6 +122,24 @@ func Probe(ctx context.Context, cfg Config) (*ProbeResult, error) {
 	return res, nil
 }
 
+// proxyStep reports how the requests will travel: through the Go
+// environment's proxy, the OS's own proxy setting, or directly.
+func proxyStep() ProbeStep {
+	step := ProbeStep{What: "proxy", OK: true}
+	switch {
+	case envProxyConfigured():
+		step.Status = "from environment"
+		step.Detail = "HTTP_PROXY/HTTPS_PROXY are set and will be used"
+	case systemProxyDescription() != "":
+		step.Status = "from Windows settings"
+		step.Detail = systemProxyDescription() + " — the system proxy every browser here uses; requests go through it"
+	default:
+		step.Status = "none"
+		step.Detail = "connecting directly"
+	}
+	return step
+}
+
 func probeGet(ctx context.Context, scheme, addr, path string) ProbeStep {
 	step := ProbeStep{What: "GET " + path}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+addr+path, nil)
@@ -122,7 +148,10 @@ func probeGet(ctx context.Context, scheme, addr, path string) ProbeStep {
 		step.Detail = err.Error()
 		return step
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	// The same proxy path the real transcriptions take — a probe that
+	// dialed directly would diagnose a different network than the one
+	// dictation actually uses.
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: dictationProxy}}
 	resp, err := client.Do(req)
 	if err != nil {
 		step.Status = "no reply"
@@ -193,7 +222,13 @@ func (r *ProbeResult) Summary() string {
 		return "the server is reachable, but none of the transcription endpoints accepted the audio. " +
 			"The refusals above say why."
 	default:
-		return "nothing got through over HTTP, though the port accepts a TCP connection. " +
-			"Something is listening that is not this server, or not speaking plain HTTP on this port."
+		msg := "nothing got through over HTTP, though the port accepts a TCP connection: " +
+			"every payload sent — HTTP or TLS — has the connection closed on it, which is what a " +
+			"network middlebox does to traffic it does not allow."
+		if !envProxyConfigured() && systemProxyDescription() == "" {
+			msg += " No proxy is configured anywhere; if a browser on this machine can open the " +
+				"server's address, find out what proxy it uses and set HTTPS_PROXY/HTTP_PROXY to it."
+		}
+		return msg
 	}
 }

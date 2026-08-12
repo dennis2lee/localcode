@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.41.1
+
+* **Dictation traffic uses the Windows system proxy.** This is the answer to a contradiction the probe surfaced: an analysis made through a browser said the speech server answered `GET /` with JSON, and localcode's own probe said every byte sent — HTTP or TLS — had the connection reset. Both were true, about two different network paths. On a corporate laptop the browser goes through the IT-configured proxy in the Windows registry, which Go does not read; localcode connected directly, into whatever middlebox resets unproxied traffic. Dictation requests now use the `HTTP_PROXY`/`HTTPS_PROXY` environment when set (read fresh per request, not cached at startup, so exporting the variable after the fact works) and otherwise the same registry setting every browser on the machine uses, honouring `ProxyOverride`. Loopback is never proxied, whatever the registry says — the local whisper engine lives at `127.0.0.1`, and routing it to a corporate gateway would break local dictation on every proxied laptop at once.
+* **`dictation probe` reports which proxy it is using** — environment, Windows settings, or none — because that is the invisible difference between the probe and the browser on the same machine. When everything is reset and no proxy is configured anywhere, the summary now says what that failure is and what to check.
+
 ## v0.41.0
 
 * **Fix: an `https://` speech server address had its scheme thrown away.** `whisper_url` was normalized to a bare `host:port` and every request hardcoded `http://`, so an HTTPS server could not be reached at all — and the way that fails is the worst kind: a TLS port answers a plaintext request by closing the connection, with no status and no message. Identical, from this side, to a server refusing the request. https is carried through now.
