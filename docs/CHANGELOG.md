@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.40.1
+
+Correcting v0.40.0's dictation fix, which had a bug of its own.
+
+* **Fix: a connection reset settled the protocol search on the wrong endpoint.** v0.40.0 learned three server dialects and picked whichever answered, treating anything that was not a 404 or a 405 as an answer. A request that got no HTTP response at all — the server closing the connection mid-upload, which is what it does when it means to reject a request and does not wait to read the body — is not an answer, and it is not evidence about which endpoint exists. It settled the search anyway, so every later utterance went back to a path that was never going to reply, and the endpoint that does work went untried. A failure with no response now neither settles the choice nor ends the search.
+* **Fix: an unreachable server was reported as one missing the endpoints.** Two different problems, and naming the wrong one sends you to look in the wrong place. It also leaves the dialect unsettled, so a network that dropped for a second does not disable dictation for the rest of the run.
+* **Transcription requests now ask before sending the audio** (`Expect: 100-continue`). A server that means to reject the request answers as soon as it has the headers and closes the connection without draining the body, which arrives here as a connection reset with no status and no message. With this the rejection comes back as the status it really is.
+* **New: the OpenAI `model` field is sent when `whisper_model` is set.** Some servers imitating that API require it. Sent only when configured, since a server hosting one model rejects a name it does not recognise.
+
 ## v0.40.0
 
 * **Fix: dictation against a remote server could be completely silent.** localcode spawns whisper.cpp locally, so the only transcription endpoint it knew was whisper.cpp's — `POST /inference`, audio in a form field called `file`. Pointing `whisper_url` at another machine kept using exactly that, and a remote server is precisely where it is likely to be something else. The report was a WhisperX ASR server, which serves `/asr` and `/v1/audio/transcriptions` and answers `/inference` with 404: the microphone on, audio going out every 900ms, every request refused, and nothing on screen. Indistinguishable from a broken microphone. Three dialects are known now — OpenAI-compatible, whisper.cpp, WhisperX — differing in the path, the name of the file field, and which extra fields are accepted. The first utterance tries each and remembers which answered, so discovery costs two extra requests once per engine. Only a 404 or a 405 moves on; a 400 or a 422 is the endpoint existing and disliking the request, which is a real answer and must not become three confusing ones. `whisper_api` pins the choice. Replies are read for the words wherever they are (`text`, `transcription`, or a list of segments), since a transcript under a key nobody reads is indistinguishable from silence.

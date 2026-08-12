@@ -56,6 +56,11 @@ type whisperProcess struct {
 	// which one it is. Guarded by apiMu rather than the engine's own
 	// lock: it is written once, from whichever transcription happened to
 	// discover it, and read by every one after that.
+	// model is sent as the OpenAI "model" field when set — see
+	// transcribeVia. Comes from whisper_model, which is otherwise only
+	// used to find a local model file.
+	model string
+
 	apiMu      sync.Mutex
 	api        whisperAPI
 	apiSettled bool
@@ -107,7 +112,7 @@ func acquireWhisper(cfg Config) (*whisperProcess, error) {
 	// thing to keep warm, so a plain value per recognizer avoids the
 	// refcount and the kill-on-key-change question entirely.
 	if remote := cfg.RemoteHost(); remote != "" {
-		p := &whisperProcess{host: remote, log: &syncBuffer{}}
+		p := &whisperProcess{host: remote, log: &syncBuffer{}, model: strings.TrimSpace(cfg.WhisperModel)}
 		// A named dialect skips discovery. An unknown name is not
 		// silently ignored: it would look like it had been honoured while
 		// the search quietly did something else.
@@ -400,22 +405,47 @@ func (p *whisperProcess) transcribe(ctx context.Context, samples []float32, lang
 	// moves on. Any other outcome, success or failure, is this server
 	// answering the question that was asked, and settles the choice.
 	var firstErr error
+	transportOnly := true
 	for _, candidate := range whisperAPIs {
 		text, err := p.transcribeVia(ctx, candidate, samples, language)
-		if isWrongEndpoint(err) {
+
+		// A request that never got an answer says nothing about which
+		// endpoint is there — the connection failed, or the server closed
+		// it mid-upload, which it does when it means to reject the
+		// request and does not wait for the rest of the body. Settling on
+		// a candidate for that reason is how the first version of this
+		// picked /v1/audio/transcriptions on a server that was resetting
+		// the connection, and then sent every later utterance to the same
+		// place instead of trying the endpoint that worked.
+		if isTransportFailure(err) || isWrongEndpoint(err) {
 			if firstErr == nil {
 				firstErr = err
 			}
+			if !isTransportFailure(err) {
+				transportOnly = false
+			}
 			continue
 		}
+
+		// An actual HTTP response, whatever it says. That is the server
+		// answering the question that was asked, and it settles the
+		// choice.
 		p.apiMu.Lock()
 		p.api, p.apiSettled = candidate, true
 		p.apiMu.Unlock()
 		debugf("dictation: %s speaks the %q API (%s)", p.addr(), candidate.name, candidate.path)
 		return text, err
 	}
+
 	if firstErr == nil {
 		firstErr = fmt.Errorf("no endpoint answered")
+	}
+	// Nothing was reachable at all: report it as what it is rather than
+	// as "this server has none of the endpoints", and leave the dialect
+	// unsettled so the next utterance tries again. A network that dropped
+	// for a second must not disable dictation for the rest of the run.
+	if transportOnly {
+		return "", fmt.Errorf("could not reach the speech engine at %s: %w", p.addr(), firstErr)
 	}
 	return "", fmt.Errorf("%s has none of the transcription endpoints localcode knows (%s): %w",
 		p.addr(), whisperAPINames(), firstErr)
@@ -439,6 +469,16 @@ func (p *whisperProcess) transcribeVia(ctx context.Context, api whisperAPI, samp
 	if err := w.WriteField("language", language); err != nil {
 		return "", err
 	}
+	// The OpenAI shape has a required "model" on the real API, and the
+	// servers that imitate it vary in whether they enforce it. Sent only
+	// when configured: a server hosting one model rejects a name it does
+	// not recognise, so guessing one would break the servers that do not
+	// need it in order to satisfy the ones that do.
+	if api.name == "openai" && p.model != "" {
+		if err := w.WriteField("model", p.model); err != nil {
+			return "", err
+		}
+	}
 	for k, v := range api.extra {
 		if err := w.WriteField(k, v); err != nil {
 			return "", err
@@ -453,10 +493,21 @@ func (p *whisperProcess) transcribeVia(ctx context.Context, api whisperAPI, samp
 		return "", err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
+	// Ask before sending the audio.
+	//
+	// A server that means to reject the request — a missing field, a
+	// path it does not serve — answers as soon as it has the headers and
+	// closes the connection without draining the body. From this side
+	// that arrives as a connection reset partway through the upload, with
+	// no status and no message: "an existing connection was forcibly
+	// closed by the remote host", which says nothing about what was
+	// wrong. With 100-continue the rejection comes back as the status it
+	// really is, and the body is never sent.
+	req.Header.Set("Expect", "100-continue")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := transcribeClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("whisper engine: %w", err)
+		return "", &transportError{err: fmt.Errorf("whisper engine: %w", err)}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
@@ -475,6 +526,31 @@ func (p *whisperProcess) transcribeVia(ctx context.Context, api whisperAPI, samp
 		return "", err
 	}
 	return cleanTranscript(text), nil
+}
+
+// transcribeClient is the client transcription requests go through.
+//
+// It differs from the default in one way that matters: ExpectContinueTimeout
+// is set, without which Go sends the body immediately and the Expect header
+// above does nothing.
+var transcribeClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ExpectContinueTimeout: 2 * time.Second,
+	},
+}
+
+// transportError marks a failure that produced no HTTP response at all.
+// It is not evidence about the endpoint, so it neither settles the dialect
+// search nor ends it.
+type transportError struct{ err error }
+
+func (e *transportError) Error() string { return e.err.Error() }
+func (e *transportError) Unwrap() error { return e.err }
+
+func isTransportFailure(err error) bool {
+	var te *transportError
+	return errors.As(err, &te)
 }
 
 // wrongEndpointError carries the status alongside the message so the

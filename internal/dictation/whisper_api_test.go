@@ -240,3 +240,108 @@ func TestAFailingServerIsReportedOnce(t *testing.T) {
 		t.Errorf("the same failure was reported twice: %q", again)
 	}
 }
+
+// resettingServer accepts the connection and then closes it without
+// answering, for the paths named. That is what "an existing connection was
+// forcibly closed by the remote host" looks like from the other side, and
+// it is what a server does when it decides to reject a request and does
+// not wait to read the body first.
+func resettingServer(t *testing.T, reset map[string]bool, serve map[string]string, fileField string) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var tried []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		tried = append(tried, r.URL.Path)
+		mu.Unlock()
+
+		if reset[r.URL.Path] {
+			// Hijack and close: no status line, no body, connection gone.
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				conn.Close()
+			}
+			return
+		}
+		body, ok := serve[r.URL.Path]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"detail":"Not Found"}`)
+			return
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if _, _, err := r.FormFile(fileField); err != nil {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			return
+		}
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), tried...)
+	}
+}
+
+// The bug this test exists for: a connection reset is not evidence about
+// which endpoint the server has, and settling the dialect on it sent every
+// later utterance to a path that was never going to answer — while the
+// endpoint that does work went untried.
+func TestAResetConnectionDoesNotSettleTheDialect(t *testing.T) {
+	srv, tried := resettingServer(t,
+		map[string]bool{"/v1/audio/transcriptions": true},
+		map[string]string{"/asr": `{"text":"found the working one"}`},
+		"audio_file")
+	p := remoteProcess(t, srv)
+
+	got, err := p.transcribe(context.Background(), testAudio, "ko")
+	if err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
+	if got != "found the working one" {
+		t.Errorf("text = %q", got)
+	}
+	paths := tried()
+	if len(paths) < 3 {
+		t.Fatalf("stopped after %v; a reset must not end the search", paths)
+	}
+
+	// And the dialect that settled is the one that answered.
+	p.apiMu.Lock()
+	settled := p.api.name
+	p.apiMu.Unlock()
+	if settled != "whisperx" {
+		t.Errorf("settled on %q, want the endpoint that actually replied", settled)
+	}
+}
+
+// A server that is entirely unreachable is a different thing from a server
+// missing these endpoints, and saying the wrong one sends someone to look
+// in the wrong place. It also must not settle anything: a network that
+// dropped for a second must not disable dictation for the rest of the run.
+func TestAnUnreachableServerIsReportedAsUnreachable(t *testing.T) {
+	srv, _ := resettingServer(t,
+		map[string]bool{"/v1/audio/transcriptions": true, "/inference": true, "/asr": true},
+		nil, "file")
+	p := remoteProcess(t, srv)
+
+	_, err := p.transcribe(context.Background(), testAudio, "ko")
+	if err == nil {
+		t.Fatal("a server that reset every connection reported success")
+	}
+	if !strings.Contains(err.Error(), "could not reach") {
+		t.Errorf("error = %v, want it to say the server could not be reached", err)
+	}
+
+	p.apiMu.Lock()
+	settled := p.apiSettled
+	p.apiMu.Unlock()
+	if settled {
+		t.Error("a dialect was settled from requests that never got an answer")
+	}
+}

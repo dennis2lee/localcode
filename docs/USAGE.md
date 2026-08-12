@@ -1181,7 +1181,14 @@ Only a 404 or a 405 moves on to the next candidate: a server that has the
 endpoint and rejects the request is answering, and its error is reported
 rather than buried under two more attempts.
 
-Set `whisper_api` to one of the names above to skip discovery.
+Set `whisper_api` to one of the names above to skip discovery. Only an
+actual HTTP response settles the choice: a connection that fails, or that
+the server closes mid-upload, says nothing about which endpoint is there,
+so the search carries on and nothing is remembered.
+
+If the server wants an OpenAI-style `model` field, set `whisper_model` —
+it is sent only when configured, since a server hosting a single model
+rejects a name it does not recognise.
 
 ```json
 {
