@@ -1372,3 +1372,63 @@ func TestFailedSendRemovesItsEcho(t *testing.T) {
 		t.Error("the failure should still be reported")
 	}
 }
+
+// TestReplayedPromptsFillHistory covers attaching to an existing session:
+// the prompts are visible in the transcript the daemon replays, and Up used
+// to recall none of them because history only ever held what this process
+// had typed itself.
+func TestReplayedPromptsFillHistory(t *testing.T) {
+	m := newTestModel()
+
+	for _, text := range []string{"ask one", "ask two"} {
+		m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": text}})
+	}
+
+	if !m.historyPrev() {
+		t.Fatal("Up recalled nothing after attaching to a session with prompts in it")
+	}
+	if got := m.input.Value(); got != "ask two" {
+		t.Errorf("first recall = %q, want the newest prompt", got)
+	}
+	m.historyPrev()
+	if got := m.input.Value(); got != "ask one" {
+		t.Errorf("second recall = %q, want the older prompt", got)
+	}
+}
+
+// A prompt sent from here is recorded once, not twice: rememberPrompt at
+// submit time and the daemon's own message.user event for the same text.
+func TestOwnPromptIsRecordedOnce(t *testing.T) {
+	m := newTestModel()
+	m.rememberPrompt("only once")
+
+	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "only once"}})
+
+	if len(m.history) != 1 {
+		t.Errorf("history = %v, want one entry", m.history)
+	}
+}
+
+// An event arriving mid-walk must not move the box or lose the walker's
+// place.
+func TestArrivingPromptDoesNotInterruptAWalk(t *testing.T) {
+	m := newTestModel()
+	m.rememberPrompt("older")
+	m.rememberPrompt("newer")
+
+	m.historyPrev()
+	m.historyPrev()
+	if got := m.input.Value(); got != "older" {
+		t.Fatalf("walked to %q, want \"older\"", got)
+	}
+
+	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "from another client"}})
+
+	if got := m.input.Value(); got != "older" {
+		t.Errorf("the box changed under the walk: %q", got)
+	}
+	m.historyNext()
+	if got := m.input.Value(); got != "newer" {
+		t.Errorf("the walk lost its place: %q", got)
+	}
+}

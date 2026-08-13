@@ -12,6 +12,30 @@ func (m *Model) rememberPrompt(text string) {
 	m.draft = ""
 }
 
+// recordHistory adds a prompt this client did not submit: the ones the
+// daemon replays when the TUI attaches to an existing session, and any sent
+// from another client while it is attached. Attaching to a conversation and
+// finding Up empty is the case this exists for — the prompts are right
+// there in the transcript above the box.
+//
+// Unlike rememberPrompt it leaves navigation alone: an event arriving while
+// someone is walking back through history must not empty the box under
+// them, and appending at the end cannot move the entries they are looking
+// at.
+func (m *Model) recordHistory(text string) {
+	if text == "" {
+		return
+	}
+	if n := len(m.history); n > 0 && m.history[n-1] == text {
+		return
+	}
+	composing := m.historyIdx >= len(m.history)
+	m.history = append(m.history, text)
+	if composing {
+		m.historyIdx = len(m.history)
+	}
+}
+
 // atInputTop reports whether the cursor sits on the very first visual row
 // of the prompt box, which is when Up should recall history instead of
 // moving the cursor. RowOffset accounts for a single long logical line

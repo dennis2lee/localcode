@@ -51,7 +51,10 @@ export function freshSessionState(id) {
     promptQueue: [],   // plain prompts submitted while a turn is in flight
     // Up/Down prompt recall, mirroring the TUI. Client-side and in-memory:
     // a typing convenience, not session state that outlives the tab.
-    history: [],       // submitted prompts, oldest first
+    // The array itself belongs to the session (see promptHistories) and is
+    // reattached by resetSession, so switching away and back finds the same
+    // prompts rather than an empty list.
+    history: [],       // this session's prompts, oldest first
     historyIdx: 0,      // === history.length means "not navigating"
     historyDraft: '',   // text stashed when recall started
     pendingPermissionID: null,
@@ -89,6 +92,44 @@ export function turnInFlight() {
   return session.waiting || currentSessionBusy();
 }
 
+// Prompt recall is per conversation, and outlives a switch away from it.
+//
+// It used to live entirely inside the per-session state, which resetSession
+// wipes — so opening another session and coming back left Up recalling
+// nothing, and the prompts of the session you were in were gone for good.
+// Recall is most useful exactly there: the last thing you asked in *this*
+// project, after a detour through another one.
+//
+// Still in memory only. These are the prompts of this page's lifetime plus
+// whatever the transcript replayed when the session opened (see
+// recordHistoryEntry), which is what makes a reloaded session's history
+// come back without anything being persisted client-side.
+const promptHistories = new Map(); // sessionID -> [prompts, oldest first]
+
+// historyLimit caps one session's recall list. The transcript tail is 400
+// events, so a busy session can seed a few hundred entries; past this many
+// the list has stopped being something anyone walks through with an arrow
+// key and is just memory held by a page that never reloads.
+export const historyLimit = 200;
+
+export function historyFor(id) {
+  if (!id) return [];
+  let h = promptHistories.get(id);
+  if (!h) {
+    h = [];
+    promptHistories.set(id, h);
+  }
+  return h;
+}
+
+export function forgetHistory(id) {
+  promptHistories.delete(id);
+}
+
 export function resetSession(id) {
   Object.assign(session, freshSessionState(id));
+  // The array is shared with promptHistories rather than copied: everything
+  // appended while this session is open is still there when it is reopened.
+  session.history = historyFor(id);
+  session.historyIdx = session.history.length;
 }

@@ -1,5 +1,5 @@
 import { inputEl, sendBtn, commDotEl } from './dom.js';
-import { session, turnInFlight } from './state.js';
+import { session, turnInFlight, historyLimit } from './state.js';
 import * as apiClient from './api.js';
 import { appendTool, appendError, appendPendingUser, resolvePendingUser } from './transcript.js';
 import { renderStatusBar } from './render.js';
@@ -58,7 +58,51 @@ export function setConnected(v) {
 export function rememberPrompt(text) {
   const h = session.history;
   if (h.length === 0 || h[h.length - 1] !== text) h.push(text);
+  if (h.length > historyLimit) h.splice(0, h.length - historyLimit);
   session.historyIdx = h.length;
+  session.historyDraft = '';
+}
+
+// recordHistoryEntry adds a prompt this client did not type: the ones the
+// transcript replays when a session opens, and any sent from another client
+// while it is open. That replay is what gives a reloaded — or reopened —
+// session its recall list back, since nothing about history is persisted
+// here.
+//
+// Unlike rememberPrompt it leaves navigation alone. An event arriving while
+// someone is walking back through history must not yank the box out from
+// under them, and appending at the end cannot move the entries they are
+// already looking at.
+export function recordHistoryEntry(text) {
+  if (!text) return;
+  const h = session.history;
+  if (h.length > 0 && h[h.length - 1] === text) return;
+  const composing = session.historyIdx >= h.length;
+  h.push(text);
+  if (h.length > historyLimit) h.splice(0, h.length - historyLimit);
+  if (composing) session.historyIdx = h.length;
+}
+
+// navigatingHistory is true from the first Up until the walk ends (Down
+// past the newest entry, or a new prompt sent). While it is true, Up and
+// Down keep walking wherever the caret happens to be.
+//
+// Without it the second Up in a row did nothing: recall parks the caret at
+// the end of the text it just inserted, and Up only recalled with the caret
+// at offset 0 — so history was one entry deep unless you moved the caret
+// back by hand between presses. The TUI never had this, because its
+// condition is "the cursor is on the first visual row", which survives its
+// own jump to the end.
+export function navigatingHistory() {
+  return session.historyIdx < session.history.length;
+}
+
+// endHistoryNavigation is called when the box is edited: at that point the
+// recalled text has become a draft of its own, and the next Up should start
+// a fresh walk from the newest entry rather than continuing one and
+// throwing the edit away.
+export function endHistoryNavigation() {
+  session.historyIdx = session.history.length;
   session.historyDraft = '';
 }
 

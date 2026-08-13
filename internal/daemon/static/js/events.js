@@ -5,7 +5,7 @@ import {
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
 } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers } from './render.js';
-import { setWaiting, setConnected, setInputLocked, renderCommDot } from './composer.js';
+import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
 import { refreshDelegatePanelIfOpen, permissionRequest } from './modals.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
@@ -31,6 +31,11 @@ const handlers = {
     // it is a no-op for text no placeholder was made for (another client's
     // message, or a replayed one).
     resolvePendingUser(d.text);
+    // Every prompt this session has seen goes into Up/Down recall, whoever
+    // typed it and whenever. On the replay that opens a session this is
+    // what rebuilds the list, so recall survives a reload and a switch
+    // through another conversation.
+    recordHistoryEntry(d.text);
     appendUser(d.text);
   },
   'message.part.delta': (d) => {

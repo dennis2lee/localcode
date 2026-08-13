@@ -357,14 +357,38 @@ test('Up and Down walk prompt history and restore the draft', async () => {
   assert.equal(input.value, 'a draft'); // the stashed draft comes back
 });
 
-// Known gap, found by this harness. Recall parks the caret at the end of the
-// recalled text, and the Web UI only recalls when the caret is at offset 0 —
-// so a second Up in a row does nothing and the caret has to be moved back to
-// the start by hand. The TUI does not have this problem: its condition is
-// "the cursor is on the first visual row" (internal/tui/history.go
-// atInputTop), which stays true after its own CursorEnd. Pinned here as
-// today's behaviour, not as desirable behaviour.
-test('known gap: a second Up in a row does not walk further back', async () => {
+// This was a known gap until v0.42.1. Recall parks the caret at the end of
+// the text it inserts, and Up only recalled with the caret at offset 0 — so
+// the second Up in a row did nothing and history was one entry deep unless
+// the caret was moved back by hand between presses. A walk already under
+// way now continues wherever the caret is, which is what the TUI has always
+// done ("the cursor is on the first visual row", internal/tui/history.go
+// atInputTop, stays true after its own CursorEnd).
+test('Up keeps walking back without touching the caret', async () => {
+  const app = await load();
+  app.state.history = ['oldest', 'older', 'newer'];
+  app.state.historyIdx = 3;
+
+  const input = app.type('');
+  input.selectionStart = input.selectionEnd = 0;
+  app.press('ArrowUp');
+  assert.equal(input.value, 'newer');
+
+  app.press('ArrowUp');
+  assert.equal(input.value, 'older', 'the caret sits at the end after recall; the walk must continue anyway');
+  app.press('ArrowUp');
+  assert.equal(input.value, 'oldest');
+  app.press('ArrowUp');
+  assert.equal(input.value, 'oldest', 'there is nothing older');
+
+  app.press('ArrowDown');
+  assert.equal(input.value, 'older', 'Down walks back the other way from mid-list too');
+});
+
+// Typing ends the walk: the recalled text has become a draft of its own,
+// and the next Up starts again from the newest entry instead of walking
+// over the top of an edit.
+test('editing a recalled prompt ends the walk', async () => {
   const app = await load();
   app.state.history = ['older', 'newer'];
   app.state.historyIdx = 2;
@@ -374,8 +398,12 @@ test('known gap: a second Up in a row does not walk further back', async () => {
   app.press('ArrowUp');
   assert.equal(input.value, 'newer');
 
-  app.press('ArrowUp'); // caret now sits at the end, so this is swallowed
-  assert.equal(input.value, 'newer');
+  input.value = 'newer, with an edit';
+  input.fire('input');
+  input.selectionStart = input.selectionEnd = 0;
+  app.press('ArrowUp');
+
+  assert.equal(input.value, 'newer', 'the walk restarted from the newest entry, as it should');
 });
 
 test('history does not record the same prompt twice in a row', async () => {
@@ -386,7 +414,7 @@ test('history does not record the same prompt twice in a row', async () => {
   assert.deepEqual(Array.from(app.state.history), ['same', 'other']);
 });
 
-test('switching session clears the transcript, queue and history', async () => {
+test('switching session clears the transcript and queue', async () => {
   const app = await load();
   app.state.promptQueue = ['pending'];
   app.rememberPrompt('typed here');
@@ -399,7 +427,7 @@ test('switching session clears the transcript, queue and history', async () => {
   assert.equal(app.state.sessionID, 'sess-2');
   assert.equal(app.transcript(), '');
   assert.deepEqual(Array.from(app.state.promptQueue), []);
-  assert.deepEqual(Array.from(app.state.history), []);
+  assert.deepEqual(Array.from(app.state.history), [], 'a different conversation starts with its own empty recall list');
   assert.match(app.sse.url, /^\/api\/sessions\/sess-2\/events\?tail=\d+$/);
 });
 

@@ -552,11 +552,13 @@ Other behavior:
 
 **Up and Down recall previous prompts**, the way a shell's history does. Up walks back through what you have already sent, newest first, and Down walks forward again. Stepping forward past the newest entry restores whatever you had half-typed before you started recalling, so reaching for history never costs you a draft.
 
-Recall only kicks in at the edges of the prompt box: the cursor has to already be on the first line before Up reaches for history, and on the last line before Down does. Inside a multi-line prompt the arrows just move the cursor as usual. Repeating the same message twice in a row stores it once.
+Recall *starts* at the edges of the prompt box: the cursor has to already be on the first line before Up reaches for history, and on the last line before Down does. Inside a multi-line prompt the arrows just move the cursor as usual. Once a walk is under way both keys keep walking wherever the cursor has landed, so Up, Up, Up goes three prompts back; editing what was recalled ends the walk, and the next Up starts again from the newest entry. Repeating the same message twice in a row stores it once.
 
-The list lives in the client, in memory, and is not part of the session. It starts empty each time you launch the TUI, and the Web UI clears it when you switch sessions.
+**The list belongs to the conversation.** Each session has its own, and switching away and back finds it as you left it. It is filled from two places: what you send, and the prompts in the transcript the daemon replays when the session opens — so reopening a session (or reattaching the TUI to one) recalls what was asked in it before, including prompts sent from another client. Nothing is stored on disk for this; the replayed transcript is the record.
 
-**Messages sent while a turn is still running are queued.** This covers the whole turn, tool execution included, not just while text is streaming. The transcript shows `[queued] <text>` immediately and the status line shows `(N queued)`. The first queued message sends automatically the moment the turn actually ends, and several stack up and go out in order. If a send does slip through while the daemon is busy (for example, a turn started from another client on the same session), it is queued and retried rather than shown as an error.
+Up to 200 entries per session are kept.
+
+**Messages sent while a turn is still running are queued.** This covers the whole turn, tool execution included, not just while text is streaming. The prompt appears in the transcript immediately (the TUI marks it `[queued] <text>`) and the status line shows `(N queued)`. The first queued message sends automatically the moment the turn actually ends, and several stack up and go out in order. If a send does slip through while the daemon is busy (for example, a turn started from another client on the same session), it is queued and retried rather than shown as an error.
 
 Commands starting with `/`, along with `exit` and `:q`, are not queued. They keep the old behavior of being ignored until the turn finishes, because replaying them later would send them to the model as ordinary text instead of running them.
 

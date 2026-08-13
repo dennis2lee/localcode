@@ -1,5 +1,5 @@
 import { sessionListEl, sessionIdEl } from './dom.js';
-import { app, session, resetSession } from './state.js';
+import { app, session, resetSession, forgetHistory } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, clearTranscript } from './transcript.js';
 import { formatTime, shortenPath } from './format.js';
@@ -155,6 +155,9 @@ export async function deleteSessionConfirm(s) {
   if (!window.confirm(`Delete session "${s.title || s.id}"? This cannot be undone.`)) return;
   try {
     await apiClient.deleteSession(s.id);
+    // The conversation is gone; its recall list has nothing left to be
+    // about.
+    forgetHistory(s.id);
   } catch (err) {
     appendError(`failed to delete session: ${err}`);
     return;

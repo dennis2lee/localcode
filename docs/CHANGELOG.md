@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.42.1
+
+* **Prompt recall belongs to the conversation now, and survives leaving it.** Up/Down history lived in the per-session state a switch wipes, and nothing ever refilled it: opening another session and coming back left Up recalling nothing, and the prompts of the session you had been in were gone. Each session now keeps its own list, and it is also filled from the transcript the daemon replays when a session opens — so reopening a session, reloading the page, or attaching the TUI to an existing session recalls what was asked in it before, including prompts sent from another client. Still in memory only; the replayed transcript is the record. Capped at 200 entries per session.
+* **Fix: the second Up in a row did nothing in the Web UI.** Recall parks the caret at the end of the text it inserts, and Up only recalled with the caret at offset 0, so history was one entry deep unless the caret was moved back by hand between presses. A walk already under way now continues wherever the caret is — the behavior the TUI has always had. Editing what was recalled ends the walk, so the next Up starts again from the newest entry instead of walking over an edit.
+
 ## v0.42.0
 
 * **Fix: the light under the prompt could sit solid through a whole turn.** It read this client's own belief about whether it was waiting, while the light on the session's row in the left panel reads the daemon's busy flag — so anything that left the first false mid-turn showed one light blinking and the other steady about the same turn. A reload, a switch away and back, or a turn started from another client (the TUI, a second tab) all did it. Both lights now report the same thing, and the stop button is offered — and works — for any turn the daemon says is running, whoever started it.

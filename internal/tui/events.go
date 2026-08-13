@@ -23,6 +23,10 @@ func (m *Model) applyEvent(ev events.Event) {
 	switch ev.Type {
 	case events.TypeUserMessage:
 		if text, ok := ev.Data["text"].(string); ok {
+			// Every prompt this session has seen goes into Up/Down recall,
+			// whoever typed it and whenever — which is what gives a session
+			// the TUI has just attached to a recall list at all.
+			m.recordHistory(text)
 			m.appendUser(text)
 		}
 	case events.TypeMessagePartDelta:

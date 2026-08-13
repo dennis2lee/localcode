@@ -14,6 +14,7 @@ import { renderTasks, renderStatusBar } from './render.js';
 import {
   sendMessage, cancelTurn, autoResizeInput, insertAtCursor,
   atInputStart, atInputEnd, historyPrev, historyNext,
+  navigatingHistory, endHistoryNavigation,
 } from './composer.js';
 import { loadAgents, loadCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, loadDictation, cycleAgent } from './loaders.js';
 import { toggleDictation, stopDictation, isDictating } from './dictation.js';
@@ -70,7 +71,15 @@ micBtn.addEventListener('click', toggleDictation);
 stopBtn.addEventListener('click', cancelTurn);
 
 sendBtn.addEventListener('click', sendMessage);
-inputEl.addEventListener('input', autoResizeInput);
+inputEl.addEventListener('input', () => {
+  autoResizeInput();
+  // Typing ends a history walk: what is in the box is now this person's
+  // own text, and the next Up should start again from the newest entry
+  // instead of continuing the walk over the top of an edit. Only real
+  // typing fires this — setting .value from code (which is how recall
+  // fills the box) does not.
+  endHistoryNavigation();
+});
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -82,9 +91,12 @@ inputEl.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     e.preventDefault();
     cancelTurn();
-  } else if (e.key === 'ArrowUp' && atInputStart()) {
+  } else if (e.key === 'ArrowUp' && (atInputStart() || navigatingHistory())) {
+    // Either the caret is at the very top, which starts a walk, or one is
+    // already under way — in which case recall has parked the caret at the
+    // end of the text it inserted and the key means "keep going".
     if (historyPrev()) e.preventDefault();
-  } else if (e.key === 'ArrowDown' && atInputEnd()) {
+  } else if (e.key === 'ArrowDown' && (atInputEnd() || navigatingHistory())) {
     if (historyNext()) e.preventDefault();
   }
 });
@@ -195,4 +207,4 @@ export { toggleDictation, stopDictation, isDictating } from './dictation.js';
 export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings, selectedMicDeviceId, MIC_DEVICE_KEY } from './settings.js';
-export { renderSessionList, selectSession } from './sessions.js';
+export { renderSessionList, selectSession, deleteSessionConfirm } from './sessions.js';
