@@ -205,7 +205,10 @@ test('a 409 from the daemon queues the prompt instead of reporting an error', as
   await app.settle();
 
   assert.deepEqual(Array.from(app.state.promptQueue), ['hello']);
-  assert.ok(app.transcript().includes('[queued] hello'), app.transcript());
+  // The prompt is on screen as the pending line drawn when Enter was
+  // pressed — it is queued, not lost, and the status bar counts it. There
+  // is no separate "[queued]" line any more: it said the same thing twice.
+  assert.ok(app.transcript().includes('You: hello'), app.transcript());
   assert.ok(!app.transcript().includes('Error:'), app.transcript());
   assert.equal(app.state.waiting, true);
 });

@@ -17,16 +17,27 @@ function appendDiv(cls, text) {
 
 export function appendUser(text) { return appendDiv('msg-user', 'You: ' + text); }
 
-// A prompt sent mid-turn shows a placeholder straight away — the wait
-// until the model is handed it can be minutes, and silence in between
-// reads as the message having gone nowhere. When the real line arrives
-// (the message.user event the daemon writes at that moment) the
-// placeholder is removed, so the transcript ends up with one entry per
-// message rather than two, and matches what a reload would show.
+// A prompt shows a placeholder straight away — the wait until the model is
+// handed it can be seconds (a turn starting) or minutes (a turn already
+// running), and silence in between reads as the message having gone
+// nowhere. When the real line arrives (the message.user event the daemon
+// writes at that moment) the placeholder is removed, so the transcript ends
+// up with one entry per message rather than two, and matches what a reload
+// would show.
+//
+// Two shapes, because the two waits mean different things. Sending into a
+// running turn is worth explaining — the model picks it up at its next
+// step, not now. An ordinary prompt is not: it is going to be answered, so
+// it is drawn as the user line it is about to become, just dimmed until
+// the daemon confirms it. Before this the ordinary case drew nothing at
+// all, and a prompt typed into an idle session sat invisible until the
+// model started work on it.
 const sentPlaceholders = new Map(); // text -> [element]
 
-export function appendPendingUser(text) {
-  const div = appendDiv('msg-tool', `[sent — the model will pick this up at its next step] ${text}`);
+export function appendPendingUser(text, midTurn = false) {
+  const div = midTurn
+    ? appendDiv('msg-tool', `[sent — the model will pick this up at its next step] ${text}`)
+    : appendDiv('msg-user pending', 'You: ' + text);
   const list = sentPlaceholders.get(text) || [];
   list.push(div);
   sentPlaceholders.set(text, list);

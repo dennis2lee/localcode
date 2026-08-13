@@ -2,13 +2,9 @@ package dialog
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
-
-	"localcode/internal/childproc"
+	"path/filepath"
 )
 
 // RevealDirectory opens dir in the operating system's file manager — a new
@@ -19,7 +15,29 @@ import (
 // on it. A daemon reached over the network would open a window in front of
 // nobody, so the caller gates this on the same condition as PickDirectory
 // (see Daemon.RevealDirectory).
+//
+// The per-OS half lives in reveal_windows.go / reveal_darwin.go /
+// reveal_other.go, one file each, because the three do genuinely different
+// things: Windows hands the path to the shell and must NOT be started
+// hidden, macOS goes through Finder and has to be brought to the front, and
+// the rest of the world has xdg-open or nothing at all. A single switch
+// with three branches kept hiding that the flags of one were wrong for the
+// others — which is exactly how the Windows window went missing.
 func RevealDirectory(ctx context.Context, dir string) error {
+	if dir == "" {
+		return fmt.Errorf("no workspace directory to open")
+	}
+	// Absolute and in the OS's own notation before anything sees it. A
+	// workspace typed (or read from config.json) as C:/Users/me/proj is a
+	// perfectly good path to every Go file API and to this daemon, and
+	// explorer.exe silently ignores it: it opens the default Documents
+	// window instead, which looks exactly like the button working and
+	// going to the wrong place.
+	dir = filepath.Clean(filepath.FromSlash(dir))
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+
 	info, err := os.Stat(dir)
 	if err != nil {
 		return err
@@ -27,38 +45,10 @@ func RevealDirectory(ctx context.Context, dir string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%s is not a directory", dir)
 	}
-
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.CommandContext(ctx, "open", dir)
-	case "windows":
-		cmd = exec.CommandContext(ctx, "explorer", dir)
-	default:
-		if _, err := exec.LookPath("xdg-open"); err != nil {
-			return ErrUnsupported
-		}
-		cmd = exec.CommandContext(ctx, "xdg-open", dir)
-	}
-	childproc.Hide(cmd)
-
-	if err := cmd.Run(); err != nil {
-		// explorer.exe exits 1 on success as often as not — it hands the
-		// path to the already-running shell process and reports that it
-		// did not open a window itself. Taking it at its word would put
-		// an error on screen every time the window opened correctly.
-		//
-		// Only its *exit code* is forgiven, though. This used to return
-		// nil for any error at all, which also swallowed the ones that
-		// mean no window opened — explorer.exe not found on PATH, or the
-		// process failing to start. Those produced the worst possible
-		// result: a button that does nothing and says nothing, with no
-		// way to tell a working feature from a broken one.
-		var exitErr *exec.ExitError
-		if runtime.GOOS == "windows" && errors.As(err, &exitErr) {
-			return nil
-		}
-		return fmt.Errorf("open %s: %w%s", dir, err, stderrSuffix(err))
-	}
-	return nil
+	return openInFileManager(ctx, dir)
 }
+
+// openInFileManager is revealDir behind a variable so a test can watch what
+// RevealDirectory hands the platform half without actually opening a window
+// on the machine running the test suite.
+var openInFileManager = revealDir

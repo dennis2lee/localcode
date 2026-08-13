@@ -5,7 +5,7 @@ import {
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
 } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers } from './render.js';
-import { setWaiting, setConnected, setInputLocked } from './composer.js';
+import { setWaiting, setConnected, setInputLocked, renderCommDot } from './composer.js';
 import { refreshDelegatePanelIfOpen, permissionRequest } from './modals.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
@@ -24,10 +24,13 @@ let eventSource = null;
 const handlers = {
   'message.user': (d) => {
     if (typeof d.text !== 'string') return;
-    // A message sent mid-turn already has a placeholder saying it was
-    // accepted; this is the same message finally reaching the model, so
-    // the placeholder goes rather than sitting above a duplicate.
-    if (d.injected) resolvePendingUser(d.text);
+    // A message this client sent already has a placeholder standing in for
+    // it; this is that message finally reaching the model, so the
+    // placeholder goes rather than sitting above a duplicate. Unconditional
+    // because every prompt gets one now, not just the mid-turn ones — and
+    // it is a no-op for text no placeholder was made for (another client's
+    // message, or a replayed one).
+    resolvePendingUser(d.text);
     appendUser(d.text);
   },
   'message.part.delta': (d) => {
@@ -154,6 +157,10 @@ const handlers = {
       app.unreadSessions.add(d.session);
     }
     renderSessionList();
+    // The light under the prompt reads this same flag for the session on
+    // screen (see turnInFlight), so it is redrawn from the event that
+    // changed it rather than waiting for something else to happen.
+    if (d.session === session.sessionID) renderCommDot();
   },
   'mcp.status': (d) => {
     app.mcpServers = d.servers || [];

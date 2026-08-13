@@ -131,6 +131,10 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.waiting = false
 		m.errMsg = msg.err.Error()
+		// Nothing took the prompt, so its echo is a lie: remove it rather
+		// than leaving a line that says it was sent above the reason it
+		// was not.
+		m.resolvePendingUser(msg.text)
 		if cmd := m.dequeue(); cmd != nil {
 			return m, cmd
 		}

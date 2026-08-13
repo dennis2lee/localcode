@@ -1,7 +1,7 @@
 import { inputEl, sendBtn, commDotEl } from './dom.js';
-import { session } from './state.js';
+import { session, turnInFlight } from './state.js';
 import * as apiClient from './api.js';
-import { appendTool, appendError, appendPendingUser } from './transcript.js';
+import { appendTool, appendError, appendPendingUser, resolvePendingUser } from './transcript.js';
 import { renderStatusBar } from './render.js';
 import { isPlainPrompt, tryLocalCommand } from './commands.js';
 
@@ -22,12 +22,20 @@ export function setInputLocked(locked, hint) {
 // when there's no live event stream to the daemon (so no path to the
 // model), solid green when there is, blinking green while a turn is
 // actually running.
-function renderCommDot() {
+//
+// "Running" is turnInFlight(), not session.waiting: this light and the one
+// on the session's row in the left panel report the same turn, and they
+// have to agree. The panel reads the daemon's busy flag, so anything that
+// left session.waiting false mid-turn — a reload, a session switch back
+// into a working conversation, an error the loop recovered from — showed
+// this dot solid while that one blinked.
+export function renderCommDot() {
+  const working = turnInFlight();
   commDotEl.classList.toggle('connected', session.connected);
-  commDotEl.classList.toggle('active', session.connected && session.waiting);
+  commDotEl.classList.toggle('active', session.connected && working);
   if (!session.connected) {
     commDotEl.title = 'not connected to the model (event stream is down)';
-  } else if (session.waiting) {
+  } else if (working) {
     commDotEl.title = 'model is running your prompt';
   } else {
     commDotEl.title = 'connected to the model, idle';
@@ -99,7 +107,12 @@ export function historyNext() {
 // from any client is reported in every client the same way — but this
 // client stops waiting on the strength of the reply, not the event.
 export async function cancelTurn() {
-  if (!session.waiting || !session.sessionID) return;
+  // turnInFlight, not session.waiting: the stop button is shown whenever
+  // the daemon says this session is busy, so the key and the button that
+  // share this function have to accept the same situations the button is
+  // offered in — otherwise pressing stop on a turn this client did not
+  // start is a no-op.
+  if (!turnInFlight() || !session.sessionID) return;
   // Drop the queue here rather than waiting for the event, so a second Esc
   // press cannot race an already queued prompt out the door.
   session.promptQueue = [];
@@ -197,7 +210,7 @@ export async function sendMessage() {
   //
   // Commands still wait for the turn to end — they don't go through the
   // /messages endpoint, so there is nothing to hand over.
-  if (session.waiting) {
+  if (turnInFlight()) {
     if (isPlainPrompt(text)) {
       rememberPrompt(text);
       inputEl.value = '';
@@ -206,7 +219,7 @@ export async function sendMessage() {
       // daemon writes when the model is actually given the text. Until
       // then this stands in for it, since the wait can be minutes; it is
       // removed when that event lands.
-      appendPendingUser(text);
+      appendPendingUser(text, true);
       apiClient.sendChatMessage(session.sessionID, text).catch((err) => {
         if (apiClient.isBusy(err)) {
           // The turn ended in the gap. Queue it for dequeueNext, which
@@ -215,6 +228,9 @@ export async function sendMessage() {
           renderStatusBar();
           return;
         }
+        // Nothing took it, so the placeholder is a lie: remove it with the
+        // error, rather than leaving "sent" above the reason it wasn't.
+        resolvePendingUser(text);
         appendError(err);
       });
     } else {
@@ -239,9 +255,14 @@ export async function sendMessage() {
 
   if (await tryLocalCommand(text)) return;
 
-  // The user line renders from the message.user event (see applyEvent), not
-  // optimistically here, so a resumed/replayed session shows the same
-  // transcript a live one did.
+  // A dimmed stand-in for the user line, drawn now and replaced by the real
+  // one when the daemon's message.user event lands. The authoritative line
+  // still comes from that event, so a replayed session shows exactly what a
+  // live one did — but the gap before it arrives is the whole time the
+  // daemon spends starting a turn (hooks, delegation, the first request),
+  // and an Enter that leaves the screen unchanged for seconds reads as an
+  // Enter that did not register.
+  appendPendingUser(text);
   setWaiting(true);
   try {
     await apiClient.sendChatMessage(session.sessionID, text);
@@ -252,11 +273,11 @@ export async function sendMessage() {
       // turn's turn.done will drain it. waiting stays true so further
       // prompts queue too.
       session.promptQueue.unshift(text);
-      appendTool(`[queued] ${text}`);
       renderStatusBar();
       retryQueueSoon();
       return;
     }
+    resolvePendingUser(text);
     setWaiting(false);
     appendError(err);
   }

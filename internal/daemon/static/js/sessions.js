@@ -4,7 +4,7 @@ import * as apiClient from './api.js';
 import { appendError, clearTranscript } from './transcript.js';
 import { formatTime, shortenPath } from './format.js';
 import { renderTasks, renderStatusBar, setCurrentAgent } from './render.js';
-import { setWaiting, setInputLocked } from './composer.js';
+import { setWaiting, setInputLocked, renderCommDot } from './composer.js';
 import { connectEvents } from './events.js';
 import { applyWorkspace, permissionRequest } from './modals.js';
 
@@ -15,6 +15,12 @@ export async function loadSessions() {
     app.sessions = [];
   }
   renderSessionList();
+  // The listing carries each session's busy flag, which is also what the
+  // light under the prompt reports for the one on screen — so a refresh
+  // that changes it has to redraw that light too. This is the path that
+  // corrects the dot after a reload into a session that is already
+  // working: no activity event is coming, because nothing changed.
+  renderCommDot();
   // The header names the current session too, and its name lives in the
   // listing that was just refetched — so it is re-rendered from the same
   // data, in the same place, rather than left to whoever caused the

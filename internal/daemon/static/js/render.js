@@ -2,7 +2,7 @@ import {
   tasksEl, mcpServersEl, statusTextEl, statusBarEl, agentSelectEl,
   permissionStatusBtn, autoDelegateBtn, workspaceBtn, workspaceRevealBtn, stopBtn,
 } from './dom.js';
-import { app, session } from './state.js';
+import { app, session, turnInFlight } from './state.js';
 import { openTaskView } from './taskview.js';
 
 // renderTasks builds each row with createElement/textContent rather than an
@@ -122,8 +122,12 @@ export function renderStatusBar() {
   // not something a host webview guarantees, and when it does not the
   // only apparent way out of a long turn is to kill the window. A button
   // cannot be swallowed.
-  stopBtn.hidden = !session.waiting;
-  if (session.waiting) {
+  // turnInFlight, not session.waiting: a turn running in this session is a
+  // turn worth offering to stop, whoever started it and whatever this
+  // client believes about it.
+  const working = turnInFlight();
+  stopBtn.hidden = !working;
+  if (working) {
     let busyText = session.runningTool ? `${session.runningTool}…` : 'working…';
     if (session.promptQueue.length > 0) busyText += ` (${session.promptQueue.length} queued)`;
     parts.push(busyText);

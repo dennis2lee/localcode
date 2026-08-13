@@ -23,6 +23,10 @@ var exemptSpawnSites = map[string]string{
 	"internal/dialog/dialog.go:pickLinux":  "Linux only; Hide is a no-op on linux",
 	// LookPath, not a spawn.
 	"internal/dialog/dialog.go:linuxHelper": "exec.LookPath only, starts nothing",
+	// The mac/linux halves of the file-manager button, same as the pickers
+	// above: build-tagged to one OS each, and Hide is a no-op on both.
+	"internal/dialog/reveal_darwin.go:revealDir": "macOS only; Hide is a no-op on darwin",
+	"internal/dialog/reveal_other.go:revealDir":  "non-Windows only; Hide is a no-op there",
 }
 
 // TestEverySpawnSiteHidesItsWindow walks the repository's non-test Go source
@@ -83,7 +87,10 @@ func TestEverySpawnSiteHidesItsWindow(t *testing.T) {
 				// A call to Hide from inside this package has no
 				// qualifier, so matching only "childproc.Hide" reported
 				// childproc's own spawn site as unhidden.
-				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "Hide" {
+				// HideConsole counts: it is the same guarantee for a GUI
+				// child (no console window), minus the SW_HIDE that would
+				// suppress the window that child exists to open.
+				if id, ok := call.Fun.(*ast.Ident); ok && (id.Name == "Hide" || id.Name == "HideConsole") {
 					hides = true
 					return true
 				}
@@ -98,7 +105,7 @@ func TestEverySpawnSiteHidesItsWindow(t *testing.T) {
 				switch {
 				case pkg.Name == "exec" && (sel.Sel.Name == "Command" || sel.Sel.Name == "CommandContext"):
 					spawns = true
-				case pkg.Name == "childproc" && sel.Sel.Name == "Hide":
+				case pkg.Name == "childproc" && (sel.Sel.Name == "Hide" || sel.Sel.Name == "HideConsole"):
 					hides = true
 				}
 				return true

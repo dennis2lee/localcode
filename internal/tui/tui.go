@@ -18,11 +18,15 @@ import (
 )
 
 var (
-	userStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
-	toolStyle   = lipgloss.NewStyle().Faint(true)
-	errorStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
-	modalStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
-	statusStyle = lipgloss.NewStyle().Faint(true)
+	userStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	toolStyle = lipgloss.NewStyle().Faint(true)
+	// A prompt already on screen but not yet confirmed by the daemon: the
+	// user line's colour, without its weight, so it reads as the same line
+	// in a quieter voice.
+	pendingStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("6"))
+	errorStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
+	modalStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
+	statusStyle  = lipgloss.NewStyle().Faint(true)
 )
 
 // inputMaxHeight caps how tall the prompt box can grow (in rows) before it

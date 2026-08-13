@@ -48,10 +48,11 @@ func oneLine(s string) string {
 type entryKind int
 
 const (
-	entryUser  entryKind = iota // "You: <prompt>"
-	entryModel                  // streamed model output, unstyled
-	entryTool                   // a server-driven status line ([delegated to x], [cancelled])
-	entryLocal                  // a client-only reply (/help, /version, a queued-prompt notice, ...)
+	entryUser    entryKind = iota // "You: <prompt>"
+	entryModel                    // streamed model output, unstyled
+	entryTool                     // a server-driven status line ([delegated to x], [cancelled])
+	entryLocal                    // a client-only reply (/help, /version, a queued-prompt notice, ...)
+	entryPending                  // a prompt drawn on Enter, until the daemon confirms it
 )
 
 // transcriptEntry is one unit of transcript content. Plain data — no
@@ -73,12 +74,44 @@ func (m *Model) appendEntry(kind entryKind, text string) {
 	m.transcriptRev++
 }
 
-// appendUser records a prompt as it comes back from the daemon's event log
-// (the TUI deliberately doesn't echo locally — the server's message.user
-// event is the single source of truth for what the session actually holds).
+// appendUser records a prompt as it comes back from the daemon's event log.
+// The server's message.user event stays the single source of truth for what
+// the session actually holds, so the local echo this replaces (see
+// appendPendingUser) is removed rather than left above a duplicate.
 func (m *Model) appendUser(text string) {
+	m.resolvePendingUser(text)
 	m.appendEntry(entryUser, text)
 	m.streamOpen = false
+}
+
+// appendPendingUser draws a prompt the instant Enter is pressed, dimmed,
+// until the daemon's message.user event arrives with the real line.
+//
+// The wait in between is everything the daemon does before the model is
+// handed the text — hooks, the delegation decision, the first request — and
+// on a slow or remote model it is seconds. A screen that does not change in
+// that time reads as an Enter that never registered, and the honest
+// response to that is to type it again.
+func (m *Model) appendPendingUser(text string) {
+	m.appendEntry(entryPending, text)
+	m.streamOpen = false
+	// Called from the key handler, not applyEvent, so it refreshes itself.
+	m.refreshViewport()
+}
+
+// resolvePendingUser drops the oldest echo of text, and reports whether it
+// found one. Oldest first: the same prompt can be sent twice, and each send
+// owns one echo.
+func (m *Model) resolvePendingUser(text string) bool {
+	for i, e := range m.transcript {
+		if e.kind != entryPending || e.text != text {
+			continue
+		}
+		m.transcript = append(m.transcript[:i:i], m.transcript[i+1:]...)
+		m.transcriptRev++
+		return true
+	}
+	return false
 }
 
 // appendLocal writes text straight into the transcript without going

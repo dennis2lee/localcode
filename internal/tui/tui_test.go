@@ -1304,3 +1304,71 @@ func TestRecoveredErrorDoesNotEndTheTurn(t *testing.T) {
 		t.Error("the notice should still be visible in the transcript, as a note")
 	}
 }
+
+// TestPromptIsEchoedUntilTheDaemonConfirmsIt covers the gap between Enter
+// and the daemon's message.user event — hooks, the delegation decision and
+// the first request all happen in it, which on a slow model is seconds of a
+// screen that does not change. That reads as an Enter that never
+// registered.
+func TestPromptIsEchoedUntilTheDaemonConfirmsIt(t *testing.T) {
+	m := newTestModel()
+
+	m, _ = pressEnterWith(t, m, "hello there")
+
+	if !strings.Contains(m.transcriptText(), "hello there") {
+		t.Fatalf("transcript = %q, want the prompt visible as soon as it was sent", m.transcriptText())
+	}
+	if m.transcript[len(m.transcript)-1].kind != entryPending {
+		t.Errorf("echo kind = %v, want entryPending (it is not confirmed yet)", m.transcript[len(m.transcript)-1].kind)
+	}
+
+	// The daemon's own line for the same message replaces the echo.
+	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "hello there"}})
+
+	if n := strings.Count(m.transcriptText(), "hello there"); n != 1 {
+		t.Errorf("transcript = %q, want exactly one line for the message, got %d", m.transcriptText(), n)
+	}
+	for _, e := range m.transcript {
+		if e.kind == entryPending {
+			t.Error("the echo outlived the real line it stands in for")
+		}
+	}
+}
+
+// The same prompt twice owns one echo each, so the second confirmation
+// cannot clear the first send's line and leave the second's behind.
+func TestRepeatedPromptKeepsOneLineEach(t *testing.T) {
+	m := newTestModel()
+
+	m.appendPendingUser("again")
+	m.appendPendingUser("again")
+	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "again"}})
+
+	pending := 0
+	for _, e := range m.transcript {
+		if e.kind == entryPending {
+			pending++
+		}
+	}
+	if pending != 1 {
+		t.Errorf("pending echoes left = %d, want 1 (one confirmation resolves one send)", pending)
+	}
+}
+
+// A send the daemon refused outright must take its echo with it: a line
+// saying the prompt was sent, sitting above the error saying it was not, is
+// worse than no line at all.
+func TestFailedSendRemovesItsEcho(t *testing.T) {
+	m := newTestModel()
+	m.appendPendingUser("doomed")
+
+	updated, _ := m.Update(turnDoneMsg{text: "doomed", err: fmt.Errorf("daemon said no")})
+	m = updated.(Model)
+
+	if strings.Contains(m.transcriptText(), "doomed") {
+		t.Errorf("transcript = %q, want the echo gone with the failure", m.transcriptText())
+	}
+	if m.errMsg == "" {
+		t.Error("the failure should still be reported")
+	}
+}

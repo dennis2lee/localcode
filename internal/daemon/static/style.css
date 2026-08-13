@@ -101,6 +101,10 @@ main {
   white-space: pre-wrap;
 }
 #transcript .msg-user { color: var(--accent); font-weight: 600; }
+/* A prompt drawn the instant Enter is pressed, before the daemon has
+   confirmed it. Same line, dimmed: it says "this is on its way" without
+   moving or changing shape when the real one replaces it. */
+#transcript .msg-user.pending { opacity: 0.55; }
 #transcript .msg-tool { color: var(--muted); font-style: italic; }
 #transcript .msg-error { color: var(--err); font-weight: 600; }
 

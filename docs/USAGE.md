@@ -373,6 +373,8 @@ What that click does depends on where you are:
 | GUI window | Opens the operating system's own folder picker (macOS `choose folder`, Windows' folder browser, zenity/kdialog on Linux), starting in the current workspace. Choosing a folder applies it immediately; dismissing the dialog changes nothing. |
 | Browser | Opens a box to type an absolute path into. The web platform gives no way to get a real filesystem path out of a file dialog — neither `<input webkitdirectory>` nor `showDirectoryPicker()` exposes one — and a daemon you reached over the network would open its dialog on the *server*, so the picker is deliberately offered only in the desktop window. |
 
+The folder icon beside the path opens that directory in a file-manager window — Explorer on Windows, Finder (brought to the front) on macOS, whatever `xdg-open` is registered to elsewhere. Offered only in the desktop window, for the same reason as the picker: over the network the window would open on the daemon's machine.
+
 **Each session has its own workspace.** Every relative file path and every bash command resolves against the directory of the session it belongs to, so two sessions can work in two different projects at the same time, on the same daemon, without disturbing each other. It is a property of the session, not of the localcode process, which is why reopening a conversation about another project puts you back in that project rather than wherever the daemon happens to have been started.
 
 Switching is refused only while *this* session has a turn in flight, since redirecting it mid-tool-call would change what an already-running command is operating on. A turn in some other session is not your business and no longer blocks anything.
@@ -801,8 +803,8 @@ One line directly below the input box:
 | Agent and model | Which agent answers the next message, and the model its profile resolves to. The model shows from the moment a session opens, taken from the agent's profile, and switches to whatever the provider actually reports once the first reply arrives. |
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Shown when `show_tps` is on. It is a **generation** rate: the clock runs from the first token to the last, so the wait before a model starts answering (prefill, and on a shared local server the queue in front of you) is not divided into the output. It covers the whole turn, not the last model call — a turn that uses tools is several calls, and the last is often a handful of tokens. A `~` prefix marks a live estimate made while the model is still talking, counted from stream chunks because the real token count only arrives when the stream ends; it is replaced by the exact figure at that point. A reply that arrives in a single chunk shows nothing at all: there is no interval to measure across. |
-| Activity light | Three states: **gray** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — the model is running your prompt. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. |
-| Stop button | Appears while a turn is running. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
+| Activity light | Three states: **gray** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — a turn is running in this session. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. "Running" is the daemon's own answer, not this page's memory of having sent something, so it agrees with the light on the session's row in the left panel however the turn started — from another client, or before this page was loaded. |
+| Stop button | Appears while a turn is running, whoever started it. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
 | Dictation pill | `dictation: off`. Click to talk your prompt instead of typing it; the pill turns red and blinks while it listens. Reads `dictation: unavailable`, disabled with the reason in its tooltip, when no speech model is configured or the build has no recognizer. See [Dictating a prompt](#dictating-a-prompt). |
 | Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
@@ -831,6 +833,8 @@ The marker pulses while the call is running, and turns into `✓` or a red `✗`
 This matters most on the turns where the model spends minutes in tools and says nothing: without those lines, the screen shows a blinking light and no other sign that anything is happening. The status bar still names the tool currently running; the transcript is what remains afterwards.
 
 The TUI writes the same one-line entries, without the expandable detail.
+
+A submitted prompt appears immediately, dimmed, and turns into an ordinary `You:` line once the daemon confirms it. The gap between the two is everything that happens before the model is handed the text — hooks, the auto-delegation decision, the first request — which on a remote or loaded model is seconds. Both clients do this; the transcript still holds one entry per message, the one the daemon recorded.
 
 ### Redirecting a turn while it runs
 

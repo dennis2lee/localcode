@@ -66,6 +66,29 @@ export function freshSessionState(id) {
 
 export const session = freshSessionState(null);
 
+// turnInFlight answers "is the model working on this conversation right
+// now" from both things that know something about it.
+//
+// session.waiting is this client's own belief, set when it sends a prompt
+// and cleared on turn.done. It can be wrong in the middle of a turn: a
+// reload or a session switch starts it at false while a turn is still
+// running, and any path that clears it early (an error the loop recovered
+// from, an optimistic Esc) leaves it false with the model still going.
+//
+// The session listing's `busy` flag is the daemon's own answer, kept
+// current by session.activity events — it is what the blinking dot in the
+// session panel reads. Taking either as "working" is what stops the light
+// under the prompt from sitting solid while the light in the panel, three
+// inches away, blinks about the same turn.
+export function currentSessionBusy() {
+  const s = (app.sessions || []).find(x => x.id === session.sessionID);
+  return !!(s && s.busy);
+}
+
+export function turnInFlight() {
+  return session.waiting || currentSessionBusy();
+}
+
 export function resetSession(id) {
   Object.assign(session, freshSessionState(id));
 }

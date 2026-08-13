@@ -29,6 +29,10 @@ func renderTranscript(entries []transcriptEntry) string {
 		switch e.kind {
 		case entryUser:
 			parts = append(parts, userStyle.Render("You: ")+text)
+		case entryPending:
+			// The same line, dimmed: it says "on its way" without moving
+			// or changing shape when the real one replaces it.
+			parts = append(parts, pendingStyle.Render("You: "+text))
 		case entryTool, entryLocal:
 			parts = append(parts, toolStyle.Render(text))
 		default: // entryModel: streamed as-is, no style

@@ -96,9 +96,11 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// The user line itself renders from the message.user event (see
-	// applyEvent), not optimistically here, so a resumed/replayed session
-	// shows the same transcript a live one did.
+	// A dimmed stand-in, replaced by the real line when the daemon's
+	// message.user event lands (see appendPendingUser). That event is still
+	// what the transcript keeps, so a resumed or replayed session shows
+	// exactly what a live one did.
+	m.appendPendingUser(text)
 	m.waiting = true
 	return m, tea.Batch(m.sendMessage(text), m.startSpin())
 }
