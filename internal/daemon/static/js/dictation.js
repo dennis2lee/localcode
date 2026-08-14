@@ -392,12 +392,20 @@ async function postChunk(session, chunk) {
   // and it is what a browser turns into a rejected fetch — but a
   // transport that ignores the signal would otherwise leave this awaiting
   // a promise that never settles, which is the exact failure being fixed.
+  let timedOut = false;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => {
-      controller.abort();
+      // Rejected before the abort, not after it. Aborting rejects the
+      // fetch too, and whichever settles first is what the race reports —
+      // so doing it the other way round showed the browser's own words
+      // for it, "signal is aborted without reason", which names neither
+      // the speech engine nor the deadline nor anything else a person
+      // could act on.
+      timedOut = true;
       reject(new Error(
         `the speech engine has not answered in ${Math.round(dictationTimeouts.requestMs / 1000)}s`
-        + ' — check the engine address in settings (the gear under the prompt)'));
+        + ' — run `localcode dictation probe` to see what it does answer'));
+      controller.abort();
     }, dictationTimeouts.requestMs);
   });
   try {
@@ -409,7 +417,7 @@ async function postChunk(session, chunk) {
     // Said the first time it happens, not after three of them. The whole
     // complaint about this failure was that nothing was ever said, and
     // three deadlines is most of a minute of silence.
-    if (controller.signal.aborted && !session.warnedSlow) {
+    if (timedOut && !session.warnedSlow) {
       session.warnedSlow = true;
       appendError(String(err.message || err));
     }

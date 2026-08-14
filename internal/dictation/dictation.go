@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,6 +82,16 @@ type Session struct {
 	mu   sync.Mutex
 	rec  Recognizer
 	done bool
+
+	// committed holds sentences that have finished transcribing and have
+	// not been handed to the client yet, in the order they were spoken.
+	// Its own lock because the transcriptions that fill it run on their own
+	// goroutines — see commit — while Write is holding mu.
+	committedMu sync.Mutex
+	committed   []string
+	// pending counts transcriptions still running, so Stop can wait a
+	// moment for the last sentence rather than dropping it.
+	pending sync.WaitGroup
 
 	// lastActivity is used by the daemon to reap a session whose client
 	// went away mid-utterance — a browser tab closed with the microphone
@@ -147,13 +158,90 @@ func (s *Session) Write(ctx context.Context, pcm []byte) (Result, error) {
 	// this before reading Partial is what keeps a finished sentence from
 	// being reported as both final and provisional in the same reply.
 	if s.rec.Endpoint() {
-		res.Final = s.settled(ctx)
-		s.logUtterance(res.Final)
-		s.rec.Reset()
+		s.commit(ctx)
 	}
 	res.Provisional = s.rec.Partial()
+	// Whatever finished committing since the last chunk, in the order the
+	// sentences were spoken.
+	res.Final = s.takeCommitted()
 	res.Error = s.takeError()
 	return res, nil
+}
+
+// commit sends the finished utterance for transcription and moves on.
+//
+// It does not wait for the answer, and that is the whole point. This used
+// to be a blocking call inside the request that delivered the audio, so
+// the time the engine took was time the browser sat on an open POST, with
+// this session's lock held and its own audio queueing up behind it. On a
+// local engine that is a few hundred milliseconds and nobody notices; on a
+// speech server on another machine it is however long that machine takes,
+// and every mechanism built on top of it — the client's deadline, the
+// session lock, the queue — turned that delay into a failure. There is
+// nothing to wait for anyway: the text is delivered with the next chunk of
+// audio, which is a quarter of a second away.
+//
+// A recognizer that cannot hand over its audio (sherpa, which decodes as
+// it goes) keeps the old behaviour: its Partial is already the answer.
+func (s *Session) commit(ctx context.Context) {
+	async, ok := s.rec.(asyncFinalizer)
+	if !ok {
+		// The blocking path, for a recognizer that cannot hand its audio
+		// over. It still runs on the request's own context, so a client
+		// that gives up takes the work with it.
+		text := s.settled(ctx)
+		s.logUtterance(text)
+		s.rec.Reset()
+		s.queueCommitted(text)
+		return
+	}
+
+	window := async.TakeUtterance()
+	s.rec.Reset()
+	if len(window) == 0 {
+		return
+	}
+	s.pending.Add(1)
+	go func() {
+		defer s.pending.Done()
+		text := async.Transcribe(context.Background(), window)
+		s.logUtterance(text)
+		s.queueCommitted(text)
+	}()
+}
+
+// queueCommitted records a sentence that is ready to be handed over.
+func (s *Session) queueCommitted(text string) {
+	if text == "" {
+		return
+	}
+	s.committedMu.Lock()
+	defer s.committedMu.Unlock()
+	s.committed = append(s.committed, text)
+}
+
+// takeCommitted empties the queue into one string, keeping the order the
+// sentences were spoken in.
+func (s *Session) takeCommitted() string {
+	s.committedMu.Lock()
+	defer s.committedMu.Unlock()
+	if len(s.committed) == 0 {
+		return ""
+	}
+	text := strings.Join(s.committed, " ")
+	s.committed = nil
+	return text
+}
+
+// asyncFinalizer is a recognizer whose finished utterance can be taken
+// away and transcribed on its own, without holding up whatever else the
+// recognizer is doing. Optional: see commit.
+type asyncFinalizer interface {
+	// TakeUtterance removes the audio accumulated so far and returns it.
+	TakeUtterance() []float32
+	// Transcribe turns one window of audio into text. A failure comes back
+	// as "" — it is reported through TakeError like any other.
+	Transcribe(ctx context.Context, window []float32) string
 }
 
 // errorReporter is implemented by a recognizer that can say why it
@@ -194,11 +282,32 @@ func (s *Session) Stop() Result {
 		return Result{}
 	}
 	s.done = true
-	res := Result{Final: s.settled(context.Background())}
-	s.logUtterance(res.Final)
+
+	// Whatever was still being spoken when the microphone went off is text
+	// the person said and meant, so it is transcribed too — but on the
+	// clock, because this answer is what the click is waiting for. An
+	// engine that takes longer than that has already had its cancel (see
+	// above), and the sentence is lost rather than the button appearing
+	// stuck.
+	s.commit(context.Background())
+	waited := make(chan struct{})
+	go func() {
+		s.pending.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-time.After(stopGrace):
+	}
+
+	res := Result{Final: s.takeCommitted()}
 	s.rec.Close()
 	return res
 }
+
+// stopGrace is how long switching the microphone off waits for the
+// sentence in progress to come back from the engine.
+const stopGrace = 3 * time.Second
 
 // Idle reports how long since this session last received audio.
 func (s *Session) Idle() time.Duration {

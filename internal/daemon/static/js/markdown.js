@@ -217,11 +217,32 @@ function tableAt(lines, i, out, endBlock) {
 // left alone; and only commands with an obvious plain-text equivalent are
 // translated, so nothing is invented for the ones that do not have one.
 const mathSymbols = {
-  rightarrow: '→', to: '→', longrightarrow: '→', Rightarrow: '⇒',
-  leftarrow: '←', gets: '←', Leftarrow: '⇐', leftrightarrow: '↔',
-  times: '×', cdot: '·', div: '÷', pm: '±',
+  // Arrows.
+  rightarrow: '→', to: '→', longrightarrow: '→', Rightarrow: '⇒', implies: '⇒',
+  leftarrow: '←', gets: '←', Leftarrow: '⇐', leftrightarrow: '↔', Leftrightarrow: '⇔',
+  uparrow: '↑', downarrow: '↓', mapsto: '↦',
+  // Operators and relations. `sim` is the one this list was missing:
+  // "$S1 \\sim S6$" is how a model writes "S1 ~ S6", and a range like
+  // that is far more common in ordinary prose than any actual formula.
+  sim: '∼', simeq: '≃', propto: '∝', cong: '≅',
+  times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓', ast: '∗', star: '⋆',
   le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠',
-  approx: '≈', equiv: '≡', infty: '∞', ldots: '…', dots: '…',
+  ll: '≪', gg: '≫', approx: '≈', equiv: '≡',
+  in: '∈', notin: '∉', subset: '⊂', subseteq: '⊆', supset: '⊃', supseteq: '⊇',
+  cup: '∪', cap: '∩', setminus: '∖', emptyset: '∅', varnothing: '∅',
+  forall: '∀', exists: '∃', neg: '¬', land: '∧', lor: '∨', therefore: '∴', because: '∵',
+  infty: '∞', partial: '∂', nabla: '∇', deg: '°', prime: '′',
+  ldots: '…', dots: '…', cdots: '⋯', bullet: '•', circ: '∘',
+  perp: '⊥', parallel: '∥', angle: '∠', triangle: '△', square: '□',
+  // Greek, lower and upper. A model naming a variable α writes \\alpha.
+  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε',
+  zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'ϑ', iota: 'ι', kappa: 'κ',
+  lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ',
+  tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+  Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π',
+  Sigma: 'Σ', Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+  // Spacing commands, which carry no meaning outside a formula.
+  quad: ' ', qquad: ' ', thinspace: ' ', space: ' ',
 };
 
 export function unwrapMath(s) {
@@ -235,7 +256,11 @@ export function unwrapMath(s) {
       // Escaped punctuation, which is only escaped because it was inside
       // maths. Deliberately not & or #: this text has already been through
       // escapeHtml, and putting a bare & back would undo that.
-      .replace(/\\([%_])/g, '$1');
+      .replace(/\\([%_])/g, '$1')
+      // Thin spaces: \, \; \! and a backslash-space are all spacing
+      // inside a formula and nothing outside one.
+      .replace(/\\[,;!:> ]/g, ' ')
+      .replace(/ +/g, ' ');
     out = out.trim();
     // If it still carries backslashes, this is real maths rather than a
     // symbol in disguise. Leaving it as it was at least keeps the

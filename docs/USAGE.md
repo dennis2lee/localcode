@@ -1335,6 +1335,16 @@ What happens now:
 
 A slow engine is also not asked for a new preview until at least as long as the last one took, and audio queued behind it is uploaded in pieces of at most 512KB rather than as one ever-growing body — which the daemon used to refuse outright (`request body too large`), stopping dictation a few seconds into every attempt.
 
+As of v0.45.1 the request carrying audio never waits for the engine at all: a finished sentence is transcribed on its own and arrives with a later chunk. That is what makes a slow engine slow rather than broken — before it, the engine's time was time the browser spent holding an open request, and everything else followed from that.
+
+When dictation still produces nothing, ask the server directly rather than guessing:
+
+```
+localcode dictation probe
+```
+
+Run it from `localcode.exe` on Windows — `localcode-gui.exe` has no console to print to. It reports whether TCP connects, whether a plain `GET` is answered, and what each upload endpoint says, which separates a wrong address from a wrong endpoint from a server that takes the audio and never replies.
+
 The daemon end matches: a transcription can be cancelled, so switching the
 microphone off no longer queues behind a request that will never land, and
 a browser that gives up on a chunk takes that work with it instead of

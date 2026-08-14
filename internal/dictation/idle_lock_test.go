@@ -161,3 +161,72 @@ func TestAnAbandonedRequestDoesNotHoldTheSession(t *testing.T) {
 	}
 	close(rec.release)
 }
+
+// slowAsyncFinalizer is a recognizer that hands its audio over — the shape
+// the whisper one has — and takes a long time to transcribe it.
+type slowAsyncFinalizer struct {
+	fakeRecognizer
+	release chan struct{}
+	took    chan struct{}
+}
+
+func (s *slowAsyncFinalizer) TakeUtterance() []float32 {
+	select {
+	case s.took <- struct{}{}:
+	default:
+	}
+	return []float32{0.1, 0.2}
+}
+
+func (s *slowAsyncFinalizer) Transcribe(ctx context.Context, window []float32) string {
+	select {
+	case <-s.release:
+		return "committed"
+	case <-ctx.Done():
+		return ""
+	}
+}
+
+// The request that delivers audio must not wait for the engine.
+//
+// It used to: committing an utterance was a blocking call inside that
+// request, so the engine's time was time the browser sat on an open POST
+// with this session's lock held. On a speech server on another machine
+// that is however long the other machine takes, and every mechanism built
+// on top of it — the client's deadline, the lock, the queue — turned the
+// delay into a failure.
+func TestCommittingAnUtteranceDoesNotBlockTheAudioRequest(t *testing.T) {
+	rec := &slowAsyncFinalizer{release: make(chan struct{}), took: make(chan struct{}, 1)}
+	rec.endpointNow = true
+	s := NewSession(rec)
+
+	done := make(chan Result, 1)
+	go func() {
+		res, _ := s.Write(context.Background(), pcm(1, 2, 3, 4))
+		done <- res
+	}()
+
+	select {
+	case res := <-done:
+		if res.Final != "" {
+			t.Errorf("Final = %q, want the sentence to arrive later rather than hold the request", res.Final)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the audio request waited for the engine")
+	}
+
+	// And the sentence is delivered with a later chunk, not lost.
+	close(rec.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		res, err := s.Write(context.Background(), pcm(5, 6))
+		if err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if res.Final == "committed" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the committed sentence never arrived")
+}

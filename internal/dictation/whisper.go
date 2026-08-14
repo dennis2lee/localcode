@@ -237,6 +237,42 @@ func (w *whisperRecognizer) Endpoint() bool {
 	return w.forced || w.detector.feed(nil)
 }
 
+// TakeUtterance removes the audio recorded so far and returns it, so the
+// session can have it transcribed without this recognizer waiting for the
+// answer — see Session.commit.
+//
+// The slice is the recognizer's own, handed over rather than copied: it is
+// cleared here, so nothing else refers to it afterwards.
+func (w *whisperRecognizer) TakeUtterance() []float32 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed || !w.detector.spoke() {
+		return nil
+	}
+	window := w.audio
+	w.audio = nil
+	return window
+}
+
+// Transcribe turns one window of audio into text, reporting a failure the
+// way every other transcription does — through TakeError, so it reaches
+// the transcript once rather than being swallowed or repeated.
+func (w *whisperRecognizer) Transcribe(parent context.Context, window []float32) string {
+	if len(window) == 0 {
+		return ""
+	}
+	ctx, done := w.begin(parent, finalTimeout)
+	defer done()
+	text, err := w.proc.transcribe(ctx, window, w.language)
+	if err != nil {
+		w.mu.Lock()
+		w.lastErr = err
+		w.mu.Unlock()
+		return ""
+	}
+	return text
+}
+
 // Final transcribes the complete utterance and waits for the answer.
 //
 // Separate from Partial because the partials are a preview and this is

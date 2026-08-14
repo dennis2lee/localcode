@@ -262,3 +262,20 @@ test('a rendered reply shows the symbol, not the LaTeX', async () => {
   assert.match(html, /read → edit/);
   assert.ok(!html.includes('rightarrow'), html);
 });
+
+// The one that got through: a model writing a range as `$S1 \sim S6$`.
+// Ranges like that are ordinary prose, not formulas, and far more common
+// than anything this could not translate.
+test('symbols outside the first table are unwrapped too', async () => {
+  const app = await load();
+  const cases = [
+    ['$S1 \\sim S6$ 구간', 'S1 ∼ S6 구간'],
+    ['$\\alpha$ and $\\Omega$', 'α and Ω'],
+    ['$x \\in S$', 'x ∈ S'],
+    ['$a \\ne b$, $c \\propto d$', 'a ≠ b, c ∝ d'],
+    ['$\\text{peak} \\approx 3$', 'peak ≈ 3'],
+  ];
+  for (const [input, want] of cases) {
+    assert.equal(app.unwrapMath(input), want, input);
+  }
+});
