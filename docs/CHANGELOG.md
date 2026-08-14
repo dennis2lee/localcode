@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.45.2
 
 * **Fix: LaTeX font commands nested in each other were left on screen whole.** Reported with a screenshot of a Gemma reply: `$\mathbf{\text{ vs }}$` — the word "vs", wrapped twice — came through as itself, dollars, braces and both backslashes. The unwrapper took `\text{...}` and `\mathbf{...}` in a single pass, and a single pass can only reach the innermost pair of braces; the `\mathbf` it left behind then matched the test for "this is real maths, leave it alone", and the whole span was kept as source. It now strips them until nothing changes, and covers the rest of the family (`\boldsymbol`, `\mathcal`, `\texttt` and so on). Gemma's own note has been widened to name `\mathbf` and to ask for `**bold**` instead.
 

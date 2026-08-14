@@ -537,9 +537,13 @@ system prompt: this interface renders Markdown only, write the character
 itself. Nothing is added for any other model.
 
 The Web UI also unwraps the ones that arrive anyway, so a reply already in
-a transcript reads properly. That half is deliberately narrow: a `$` span
-is only touched when it contains a LaTeX command, so `$PATH`, `$5` and a
-real formula are left alone.
+a transcript reads properly. It handles symbols (`\rightarrow`, `\sim`,
+Greek letters, relations) and the font commands that carry words rather
+than maths (`\text`, `\mathbf`, `\mathrm`, `\boldsymbol` and the rest),
+including when those are nested in each other: `$\mathbf{\text{ vs }}$`
+is the word "vs". That half is deliberately narrow: a `$` span is only
+touched when it contains a LaTeX command, so `$PATH`, `$5` and a real
+formula are left alone.
 
 The table is `modelQuirks` in `internal/agent/quirks.go`, matched as a
 lowercased substring of the model id.
