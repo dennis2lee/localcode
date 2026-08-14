@@ -49,6 +49,15 @@ func Launch(title, version string, start func(progress func(string)) (http.Handl
 	setWindowIcon(uintptr(w.Window()))
 	hideTitleBar(uintptr(w.Window()))
 
+	// Where the OS frame has been taken away, the page draws the buttons
+	// that went with it and works them through here. Bound before the
+	// first navigation, and re-injected by webview on every document
+	// after it, which is also how the page knows to draw them at all: it
+	// checks whether this function exists.
+	if cmd := windowControls(uintptr(w.Window())); cmd != nil {
+		w.Bind("lcWindowCommand", cmd)
+	}
+
 	// Written by the start goroutine, read after Run returns — the window
 	// closing is what synchronizes them, since Run does not return until
 	// the message loop is finished with the goroutine's last Dispatch.

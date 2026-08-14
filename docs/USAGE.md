@@ -62,7 +62,17 @@ The window links a native webview through CGo, which cannot be cross compiled th
 * macOS: `make dist-mac-gui` produces a double-clickable `LocalCode.app` (universal, arm64 + amd64). `make gui-mac` builds just the bare `localcode-gui` binary. macOS always has WKWebView.
 * Windows: built in CI by `.github/workflows/gui-windows.yml` on a Windows runner (CGo cannot cross compile from macOS), which uploads `localcode-gui.exe` as an artifact. It is linked with `-H windowsgui`, so starting it from `cmd` opens the window and **gives the prompt straight back** instead of tying up the console until the window closes (and launching it from Explorer doesn't flash an empty console box). The trade-off is that a GUI-subsystem process has no console of its own, so the console-only subcommands — `version`, `mcp`, `login` — print nowhere useful from `localcode-gui.exe`; run those from `localcode.exe`, which the same MSI installs. The Windows MSI (`make dist-msi VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe`) installs it alongside the TUI binary with its own Start Menu shortcut ("LocalCode (Desktop)"), and runs Microsoft's WebView2 Evergreen Bootstrapper silently during install so the runtime is there even on older Windows 10 systems that do not ship it already. That install step is skipped quietly (not a failed install) if there is no network access at install time, if the runtime is already present, or if the bootstrapper itself isn't being reinstalled (which is the normal case when upgrading over an existing version).
 
-**Title bar.** On macOS there isn't one to speak of: the bar is drawn transparent over the window's own background and the title text is hidden, so the app is one surface from the top down with the close/minimise/zoom buttons floating on it. The bar itself is still there, which is what still lets the window be dragged and closed. On Windows the ordinary caption remains — removing it there means answering `WM_NCCALCSIZE` and `WM_NCHITTEST` by hand and drawing the buttons in the page, or the window cannot be moved, resized from the top, or closed at all.
+**Title bar.** There isn't one on either platform, by two different routes.
+
+* **macOS**: the bar is drawn transparent over the window's own background and the title text is hidden, so the app is one surface from the top down with the close/minimise/zoom buttons floating on it. The bar itself is still there, which is what still lets the window be dragged and closed.
+* **Windows** (v0.44.0): the frame is genuinely removed, and everything it did is put back by hand. A 28px strip across the top behaves as the caption did — drag to move, double-click to maximise, right-click for the system menu — the window edges still resize, and the page draws its own minimise/maximise/close buttons at the right-hand end of that strip. Alt+F4 and the taskbar's own Close work as always, whatever else does not.
+
+If the Windows window misbehaves — it cannot be moved, an edge will not resize, the buttons do nothing — start it with `LOCALCODE_TITLEBAR=1` and it keeps the ordinary Windows frame instead, with nothing else about the app changed:
+
+```
+set LOCALCODE_TITLEBAR=1
+localcode-gui.exe
+```
 
 The macOS `.app` is unsigned, so Gatekeeper needs a right click then Open the first time, same as the TUI app.
 

@@ -7,6 +7,19 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<!-- The window's own title bar, drawn by the page.
+     Hidden everywhere except the desktop window on Windows, where the
+     system frame has been taken away and these are the buttons that went
+     with it. The strip left of them is a drag region the OS is told
+     about: see internal/gui/chrome_windows.go. -->
+<div id="window-bar" hidden>
+  <span class="title">LocalCode</span>
+  <div class="window-buttons">
+    <button id="window-minimize" title="minimise">&#8722;</button>
+    <button id="window-maximize" title="maximise / restore">&#9633;</button>
+    <button id="window-close" class="close" title="close">&#10005;</button>
+  </div>
+</div>
 <header>
   <div class="left-group">
     <button class="panel-toggle" id="toggle-left" title="show/hide the session panel">&#9776;</button>

@@ -37,6 +37,10 @@ import "C"
 
 import "unsafe"
 
+// windowControls reports that the page draws no buttons of its own: the
+// macOS window keeps its real title bar, and with it the traffic lights.
+func windowControls(uintptr) func(string) { return nil }
+
 // hideTitleBar blends the title bar into the window on macOS.
 func hideTitleBar(win uintptr) {
 	if win == 0 {

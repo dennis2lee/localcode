@@ -119,6 +119,10 @@ class Element {
     this.value = '';
     this.checked = false;
     this.disabled = false;
+    // Present in the markup as a bare attribute, and set from script by
+    // the stop button and the window title bar. Modelled because "is it
+    // on screen" is exactly what those two are asserted on.
+    this.hidden = false;
     this.title = '';
     this.placeholder = '';
     this.selectionStart = 0;
@@ -322,6 +326,7 @@ function elementsWithIDs(doc, html) {
     if (attrs.placeholder) el.placeholder = attrs.placeholder;
     if (attrs.value) el.value = attrs.value;
     if (attrs.type) el.type = attrs.type;
+    if ('hidden' in attrs) el.hidden = true;
     byID.set(attrs.id, el);
   }
   return byID;

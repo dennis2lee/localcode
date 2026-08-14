@@ -31,6 +31,40 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* The page's own title bar.
+   Only shown in the desktop window on Windows, where the system frame has
+   been removed — everywhere else the OS still draws one and this stays
+   hidden. The strip is a drag region the OS is told about by coordinates,
+   so the two sides have to agree on its size: internal/gui/chrome_windows.go
+   holds the same numbers and chrome_test.go reads them out of this file.
+   The buttons sit in the part the hit test hands back to the page, which is
+   why they can be clicked at all. */
+#window-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+#window-bar[hidden] { display: none; }
+#window-bar .title { padding-left: 12px; font-size: 12px; color: var(--muted); }
+#window-bar .window-buttons { display: flex; height: 100%; }
+#window-bar button {
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+}
+#window-bar button:hover { background: var(--raised); color: var(--text); }
+#window-bar button.close:hover { background: var(--err); color: #fff; }
+
 header {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);

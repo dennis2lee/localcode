@@ -271,6 +271,10 @@ async function load(opts = {}) {
     // does not.
     AbortController,
   };
+  // Globals the page finds in a particular host rather than in a browser:
+  // the desktop window binds lcWindowCommand, and the page draws its own
+  // title bar only when it is there.
+  Object.assign(sandbox, opts.globals || {});
   const context = vm.createContext(sandbox);
   // app code reaches for window.prompt / window.confirm; in a browser
   // window *is* the global, so wire it up the same way here.

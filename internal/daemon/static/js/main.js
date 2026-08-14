@@ -6,6 +6,7 @@ import {
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
   workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, micBtn, stopBtn,
   workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskCloseBtn,
+  windowBarEl, windowMinimizeBtn, windowMaximizeBtn, windowCloseBtn,
 } from './dom.js';
 import { app, session } from './state.js';
 import { uploadFile, switchAgent } from './api.js';
@@ -158,7 +159,24 @@ workspaceInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); saveWorkspace(); }
 });
 
+// initWindowControls shows the page's own title bar, and only where there
+// is no other one.
+//
+// The desktop window on Windows has had its system frame removed, and
+// these buttons are what went with it — so the test for "should they be
+// here" is whether the window that removed it bound the function they
+// call. A browser tab has never seen lcWindowCommand and gets nothing;
+// the macOS window keeps its real title bar, and its traffic lights.
+function initWindowControls() {
+  if (typeof window.lcWindowCommand !== 'function') return;
+  windowBarEl.hidden = false;
+  windowMinimizeBtn.addEventListener('click', () => window.lcWindowCommand('minimize'));
+  windowMaximizeBtn.addEventListener('click', () => window.lcWindowCommand('maximize'));
+  windowCloseBtn.addEventListener('click', () => window.lcWindowCommand('close'));
+}
+
 async function init() {
+  initWindowControls();
   initResizers();
   initSettings();
   renderTasks();
