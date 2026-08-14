@@ -49,8 +49,8 @@ const maxUtterance = 30 * SampleRate
 // on another machine can also accept the connection and then say nothing
 // at all, and against that the timeout is the entire experience.
 const (
-	partialTimeout = 12 * time.Second
-	finalTimeout   = 25 * time.Second
+	partialTimeout = 20 * time.Second
+	finalTimeout   = 45 * time.Second
 )
 
 // whisperRecognizer adapts a window-at-a-time model to the streaming
@@ -77,6 +77,13 @@ type whisperRecognizer struct {
 	// forced records that the utterance hit maxUtterance and has to end
 	// even though the speaker has not paused.
 	forced bool
+	// lastCost is how long the last partial actually took. A slow engine —
+	// a big model, or one on another machine — is not helped by being
+	// asked again the moment it answers, so the next partial waits at
+	// least as long as the last one took. On a fast engine this is a few
+	// hundred milliseconds and the interval below governs; on a slow one
+	// it is the difference between one queue and an ever-growing one.
+	lastCost time.Duration
 	// inflight holds the cancel func of every transcription running right
 	// now, so Cancel can end them without waiting for their timeouts. A
 	// map rather than one func because a partial and a final can overlap.
@@ -157,7 +164,11 @@ func (w *whisperRecognizer) Accept(samples []float32) {
 	// a backlog of transcriptions of audio that has already been
 	// superseded, and the newest window contains everything the older
 	// ones did.
-	if w.running || time.Since(w.lastRun) < partialInterval || !w.detector.spoke() {
+	wait := partialInterval
+	if w.lastCost > wait {
+		wait = w.lastCost
+	}
+	if w.running || time.Since(w.lastRun) < wait || !w.detector.spoke() {
 		w.mu.Unlock()
 		return
 	}
@@ -172,11 +183,13 @@ func (w *whisperRecognizer) Accept(samples []float32) {
 		defer w.wg.Done()
 		ctx, done := w.begin(context.Background(), partialTimeout)
 		defer done()
+		started := time.Now()
 		text, err := w.proc.transcribe(ctx, window, w.language)
 
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		w.running = false
+		w.lastCost = time.Since(started)
 		if err != nil || w.closed {
 			// The grey text is left alone — replacing a good partial with
 			// an error message mid-sentence helps nobody, and the next

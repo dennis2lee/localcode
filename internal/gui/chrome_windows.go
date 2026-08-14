@@ -3,7 +3,9 @@
 package gui
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -39,7 +41,10 @@ import (
 // gwlpWndProc is a var rather than a const because it is negative and is
 // passed as a uintptr: the conversion wraps at runtime, which is what the
 // API expects, and a constant conversion would not compile at all.
-var gwlpWndProc = -4
+var (
+	gwlpWndProc = -4
+	gwlStyle    = -16
+)
 
 const (
 	wmNCCalcSize  = 0x0083
@@ -55,6 +60,12 @@ const (
 	swpNoSize     = 0x0001
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
+
+	wsCaption     = 0x00C00000
+	wsThickFrame  = 0x00040000
+	wsSysMenu     = 0x00080000
+	wsMinimizeBox = 0x00020000
+	wsMaximizeBox = 0x00010000
 
 	smCXFrame        = 32
 	smCYFrame        = 33
@@ -84,6 +95,7 @@ const (
 var (
 	user32               = windows.NewLazySystemDLL("user32.dll")
 	procSetWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
+	procGetWindowLongPtr = user32.NewProc("GetWindowLongPtrW")
 	procCallWindowProc   = user32.NewProc("CallWindowProcW")
 	procGetWindowRect    = user32.NewProc("GetWindowRect")
 	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
@@ -105,6 +117,14 @@ type nccalcsizeParams struct {
 }
 
 var (
+	frameLogMu     sync.Mutex
+	frameLogOpened bool
+	// One line each, the first time they happen: enough to tell "the
+	// subclass is not being called" from "it is, and the caption is coming
+	// from somewhere else".
+	firstNCCalcSize sync.Once
+	firstHitTest    sync.Once
+
 	framedMu sync.Mutex
 	// frameRemoved records that the subclass actually took. The page's own
 	// title bar is only offered when it did: drawing buttons over a window
@@ -118,24 +138,87 @@ var (
 )
 
 // hideTitleBar takes the frame off the window, unless asked not to.
+//
+// Two mechanisms, because the first one shipped alone in v0.44.0 and the
+// caption was still there on the machine it was tried on:
+//
+//   - the subclass below, which answers WM_NCCALCSIZE, and
+//   - WS_CAPTION cleared from the window style outright.
+//
+// The style change is the blunt one, and on its own it would take the
+// move/resize/close behaviour with it — which is why the styles that carry
+// resizing, the system menu and the minimise/maximise commands are kept,
+// and why the hit test exists. Doing both means the caption cannot be
+// drawn whichever of them Windows was ignoring.
 func hideTitleBar(hwnd uintptr) {
 	if hwnd == 0 || os.Getenv("LOCALCODE_TITLEBAR") != "" {
 		return
 	}
-	prev, _, _ := procSetWindowLongPtr.Call(hwnd, uintptr(gwlpWndProc), syscall.NewCallback(framelessProc))
+	prev, _, callErr := procSetWindowLongPtr.Call(hwnd, uintptr(gwlpWndProc), syscall.NewCallback(framelessProc))
 	if prev == 0 {
-		return // nothing was replaced; leave the window exactly as it was
+		// Nothing was replaced. Leave the window exactly as it was, and
+		// leave a note saying so, because from the outside this is
+		// indistinguishable from the whole feature being absent.
+		frameLog("subclass failed: hwnd=%#x err=%v", hwnd, callErr)
+		return
 	}
 	framedMu.Lock()
 	framed[hwnd] = prev
 	frameRemoved = true
 	framedMu.Unlock()
 
+	before, _, _ := procGetWindowLongPtr.Call(hwnd, uintptr(gwlStyle))
+	after := before &^ uintptr(wsCaption)
+	// Kept: the thick frame is what Windows sizes the window by (and what
+	// Aero Snap uses), the system menu is Alt+Space and the taskbar's
+	// right-click Close, and the two box styles are the minimise and
+	// maximise commands the page's buttons post.
+	after |= uintptr(wsThickFrame | wsSysMenu | wsMinimizeBox | wsMaximizeBox)
+	procSetWindowLongPtr.Call(hwnd, uintptr(gwlStyle), after)
+
 	// The frame only changes when Windows is told to recalculate it. Without
 	// this the caption stays on screen until something else resizes the
 	// window.
 	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
 		uintptr(swpFrameChang|swpNoMove|swpNoSize|swpNoZOrder|swpNoActivate))
+
+	frameLog("subclass installed: hwnd=%#x style=%#x -> %#x", hwnd, before, after)
+}
+
+// frameLog records what the frame removal did, one file per launch.
+//
+// The desktop build has no console — that is deliberate, so starting it
+// from cmd returns the prompt — so a failure here has nowhere to go and no
+// symptom beyond "the title bar is still there", which is also what a
+// build without the feature looks like. This is the difference between
+// those two, and it is the only thing that can be asked for from a machine
+// the developer does not have.
+func frameLog(format string, args ...any) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	dir = filepath.Join(dir, "localcode")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(dir, "gui-frame.log")
+
+	frameLogMu.Lock()
+	defer frameLogMu.Unlock()
+	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	if !frameLogOpened {
+		// Truncated once per launch: this is a handful of lines about the
+		// last start, not a history.
+		flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		frameLogOpened = true
+	}
+	f, err := os.OpenFile(path, flags, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, format+"\n", args...)
 }
 
 func previousProc(hwnd uintptr) uintptr {
@@ -154,6 +237,7 @@ func framelessProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	switch msg {
 	case wmNCCalcSize:
 		if wparam != 0 {
+			firstNCCalcSize.Do(func() { frameLog("first WM_NCCALCSIZE handled") })
 			// The client area becomes the whole window, which is what
 			// removes the caption and the frame.
 			//
@@ -174,6 +258,7 @@ func framelessProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 
 	case wmNCHitTest:
 		if where, ok := hitTest(hwnd, lparam); ok {
+			firstHitTest.Do(func() { frameLog("first WM_NCHITTEST answered with %d", where) })
 			return uintptr(where)
 		}
 

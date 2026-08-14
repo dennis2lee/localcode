@@ -214,7 +214,7 @@ export const ready = init();
 // module>), so this surface exists purely for the test harness.
 export { session, app } from './state.js';
 export { escapeHtml, formatTime, shortenPath } from './format.js';
-export { renderMarkdown, inline } from './markdown.js';
+export { renderMarkdown, inline, unwrapMath } from './markdown.js';
 export { HELP_TEXT, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
 export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage } from './composer.js';

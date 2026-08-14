@@ -12,11 +12,20 @@ import (
 )
 
 // maxAudioChunkBytes bounds one POST of audio. At 16kHz 16-bit mono a
-// second is 32KB, so this is about eight seconds — far more than the
-// quarter-second chunks a client actually sends, and small enough that a
-// confused (or hostile) caller cannot make the daemon buffer megabytes
-// per request.
-const maxAudioChunkBytes = 256 << 10
+// second is 32KB, so this is about two minutes.
+//
+// It used to be 256KB, on the reasoning that a client sends quarter-second
+// chunks. It does — until the engine is slow, at which point the client
+// concatenates its backlog into one request rather than falling further
+// behind, and a slow engine on another machine produced bodies well over
+// 256KB within a few seconds. The daemon refused them, and dictation
+// stopped with "read audio: http: request body too large" — a limit
+// chosen to bound memory, ending the feature it was protecting.
+//
+// The client now caps what it sends per request too; this is the ceiling
+// above that, still small enough that a confused or hostile caller cannot
+// make the daemon buffer anything alarming.
+const maxAudioChunkBytes = 4 << 20
 
 // handleDictationStatus tells a client whether to offer a microphone
 // button at all, and why not when it shouldn't. A button that can only

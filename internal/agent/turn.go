@@ -53,6 +53,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	if agentCfg.Prompt != "" {
 		systemPrompt = systemPrompt + "\n\n" + agentCfg.Prompt
 	}
+	// Last, so a per-model note about how to write for this window is not
+	// buried under the project's rules — and only for the models that need
+	// one. See quirks.go.
+	if note := quirkNote(profile.Model); note != "" {
+		systemPrompt = systemPrompt + "\n\n" + note
+	}
 
 	// Tokens-per-second describes the turn about to run, not the one
 	// before it, so the accumulator starts empty here.

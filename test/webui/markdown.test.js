@@ -221,3 +221,44 @@ test('cell contents are escaped, not interpreted as HTML', () => {
   assert.ok(!html.includes('<img'), html);
   assert.match(html, /&lt;img/);
 });
+
+// Some models write arrows and names as LaTeX — right for a client with
+// MathJax in it, literal noise here. The model is asked not to (see
+// internal/agent/quirks.go); this is the other half, for the replies that
+// already exist and the times it does it anyway.
+test('inline LaTeX a model meant as a symbol is unwrapped', async () => {
+  const app = await load();
+  const cases = [
+    ['a $\\rightarrow$ b', 'a → b'],
+    ['$\\text{Bla-Bla}$ is the name', 'Bla-Bla is the name'],
+    ['x $\\le$ y and p $\\times$ q', 'x ≤ y and p × q'],
+    ['$\\mathrm{max}$ tokens', 'max tokens'],
+  ];
+  for (const [input, want] of cases) {
+    assert.equal(app.unwrapMath(input), want, input);
+  }
+});
+
+// Narrow on purpose: a dollar sign is usually a dollar sign.
+test('ordinary dollars are left alone', async () => {
+  const app = await load();
+  for (const s of ['it costs $5 and $10', 'echo $PATH is $HOME', 'no math here']) {
+    assert.equal(app.unwrapMath(s), s, s);
+  }
+});
+
+// Real maths is not something this can render, and half-translating it
+// would be worse than leaving the delimiters that say what it was.
+test('actual formulas keep their delimiters', async () => {
+  const app = await load();
+  const s = 'the bound is $\\sum_{i=1}^{n} x_i^2$ here';
+  assert.equal(app.unwrapMath(s), s);
+});
+
+// And it runs as part of rendering a reply, not just on its own.
+test('a rendered reply shows the symbol, not the LaTeX', async () => {
+  const app = await load();
+  const html = app.renderMarkdown('plan: read $\\rightarrow$ edit');
+  assert.match(html, /read → edit/);
+  assert.ok(!html.includes('rightarrow'), html);
+});

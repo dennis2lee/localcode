@@ -67,6 +67,8 @@ The window links a native webview through CGo, which cannot be cross compiled th
 * **macOS**: the bar is drawn transparent over the window's own background and the title text is hidden, so the app is one surface from the top down with the close/minimise/zoom buttons floating on it. The bar itself is still there, which is what still lets the window be dragged and closed.
 * **Windows** (v0.44.0): the frame is genuinely removed, and everything it did is put back by hand. A 28px strip across the top behaves as the caption did — drag to move, double-click to maximise, right-click for the system menu — the window edges still resize, and the page draws its own minimise/maximise/close buttons at the right-hand end of that strip. Alt+F4 and the taskbar's own Close work as always, whatever else does not.
 
+Every launch writes `%LOCALAPPDATA%\localcode\gui-frame.log` saying whether the frame was actually removed, what the window style was before and after, and whether the messages the drag and resize regions depend on arrived. It is a handful of lines, replaced each time, and it is the thing to look at (or send) when the window does not behave.
+
 If the Windows window misbehaves — it cannot be moved, an edge will not resize, the buttons do nothing — start it with `LOCALCODE_TITLEBAR=1` and it keeps the ordinary Windows frame instead, with nothing else about the app changed:
 
 ```
@@ -521,6 +523,26 @@ An imported file can import further files, followed up to 4 levels deep. Anythin
 Read @README.md for a project overview.
 Personal workflow: @~/.localcode/my-workflow.md
 ```
+
+### Per-model formatting notes
+
+A model's habits are not always right for this window, and a few are wrong
+in a way the user pays for. Gemma writes symbols and names as LaTeX
+(`$\rightarrow$`, `$\text{Bla-Bla}$`), which a client with MathJax renders
+as an arrow and a name, and this one shows as the dollars and backslashes
+they are.
+
+So a model whose id contains `gemma` gets one extra paragraph in its
+system prompt: this interface renders Markdown only, write the character
+itself. Nothing is added for any other model.
+
+The Web UI also unwraps the ones that arrive anyway, so a reply already in
+a transcript reads properly. That half is deliberately narrow: a `$` span
+is only touched when it contains a LaTeX command, so `$PATH`, `$5` and a
+real formula are left alone.
+
+The table is `modelQuirks` in `internal/agent/quirks.go`, matched as a
+lowercased substring of the model id.
 
 ### Auto memory
 
@@ -1306,9 +1328,12 @@ What happens now:
 
 | After | What you see |
 |---|---|
-| 12s on one chunk | The upload is abandoned and the transcript says the engine has not answered, naming the settings window. |
-| 3 such failures | Dictation stops itself and says why. |
+| 20s on one preview, 45s on one committed sentence | The daemon gives up on that transcription and the transcript says so. These are the limits that normally fire. |
+| 60s on one upload | The browser gives up on the request itself. A backstop above the daemon's own limits, not the usual path — set below them, it used to abort commits that were about to succeed. |
+| 3 failures in a row | Dictation stops itself and says why. |
 | A click on the pill | The microphone goes off immediately. It waits up to 1.5s for already-recorded audio to finish uploading and no longer. |
+
+A slow engine is also not asked for a new preview until at least as long as the last one took, and audio queued behind it is uploaded in pieces of at most 512KB rather than as one ever-growing body — which the daemon used to refuse outright (`request body too large`), stopping dictation a few seconds into every attempt.
 
 The daemon end matches: a transcription can be cancelled, so switching the
 microphone off no longer queues behind a request that will never land, and

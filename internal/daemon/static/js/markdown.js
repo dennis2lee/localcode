@@ -202,11 +202,53 @@ function tableAt(lines, i, out, endBlock) {
   return n - i;
 }
 
+// The LaTeX a model writes for a client that renders it, unwrapped for
+// one that does not.
+//
+// Some models — Gemma is the one this was reported for — write arrows and
+// symbols as `$\rightarrow$` and names as `$\text{Bla}$`, which is right
+// in a chat client with MathJax in it and literal noise here: the dollars
+// and the backslashes are shown exactly as typed. The models are asked not
+// to (see internal/agent/quirks.go), and this is the other half, for the
+// replies that already exist and the times the model does it anyway.
+//
+// Deliberately narrow. A `$` span is only touched when it contains a
+// backslash command, so a shell variable, a price, and `$PATH` are all
+// left alone; and only commands with an obvious plain-text equivalent are
+// translated, so nothing is invented for the ones that do not have one.
+const mathSymbols = {
+  rightarrow: '→', to: '→', longrightarrow: '→', Rightarrow: '⇒',
+  leftarrow: '←', gets: '←', Leftarrow: '⇐', leftrightarrow: '↔',
+  times: '×', cdot: '·', div: '÷', pm: '±',
+  le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠',
+  approx: '≈', equiv: '≡', infty: '∞', ldots: '…', dots: '…',
+};
+
+export function unwrapMath(s) {
+  return s.replace(/\$\$?([^$\n]+?)\$?\$/g, (whole, body) => {
+    if (!body.includes('\\')) return whole; // no LaTeX in it; not ours to touch
+    let out = body
+      // \text{x}, \mathrm{x}, \mathbf{x}: the braces are the markup and
+      // the contents are the words.
+      .replace(/\\(?:text|textbf|textit|mathrm|mathbf|mathit|operatorname)\{([^{}]*)\}/g, '$1')
+      .replace(/\\([a-zA-Z]+)/g, (cmd, name) => (name in mathSymbols ? mathSymbols[name] : cmd))
+      // Escaped punctuation, which is only escaped because it was inside
+      // maths. Deliberately not & or #: this text has already been through
+      // escapeHtml, and putting a bare & back would undo that.
+      .replace(/\\([%_])/g, '$1');
+    out = out.trim();
+    // If it still carries backslashes, this is real maths rather than a
+    // symbol in disguise. Leaving it as it was at least keeps the
+    // delimiters, which say "this was meant to be a formula".
+    return /\\/.test(out) ? whole : out;
+  });
+}
+
 // inline applies span-level markdown (bold, italic, links) to text that
 // has already been through escapeHtml — it only ever matches the plain
 // characters left behind (*, _, [, ], (, )), never entities.
 export function inline(s) {
-  return s
+  return unwrapMath(s)
     .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_, a, b) => `<strong>${a || b}</strong>`)
     .replace(/\*([^*]+)\*|_([^_]+)_/g, (_, a, b) => `<em>${a || b}</em>`)
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);

@@ -69,3 +69,54 @@ func TestEachSessionGetsItsOwnWorkspaceRules(t *testing.T) {
 		t.Errorf("second system prompt still carries the other session's rules: %q", p.systems[1])
 	}
 }
+
+// A model whose habits are wrong for this window is told so, and only
+// that model is.
+//
+// Gemma writes arrows and names as LaTeX (`$\rightarrow$`,
+// `$\text{Bla}$`), which renders as itself in a client with MathJax and
+// as dollars and backslashes here.
+func TestOnlyTheModelsThatNeedItGetAFormattingNote(t *testing.T) {
+	for _, tt := range []struct {
+		model string
+		want  bool
+	}{
+		{"gemma-3-27b-it-q4_K_M", true},
+		{"google/Gemma-2-9B", true},
+		{"qwen3-30b-a3b", false},
+		{"claude-opus-5", false},
+	} {
+		store, err := session.NewStore("")
+		if err != nil {
+			t.Fatalf("new store: %v", err)
+		}
+		if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+		cfg := &config.Config{
+			Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: "http://127.0.0.1:1"}},
+			Profiles:       map[string]config.Profile{"balanced": {Provider: "local", Model: tt.model}},
+			Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "balanced"}},
+			DefaultProfile: "balanced",
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("invalid config: %v", err)
+		}
+		p := &scriptedProvider{turns: [][]provider.StreamEvent{{
+			{Type: provider.EventTextDelta, TextDelta: "ok"},
+			{Type: provider.EventMessageStop, StopReason: "end_turn"},
+		}}}
+		loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{"local": p}, cfg)
+
+		if err := loop.SendMessage(context.Background(), "s-1", "general-purpose", "hi"); err != nil {
+			t.Fatalf("SendMessage: %v", err)
+		}
+		if len(p.systems) != 1 {
+			t.Fatalf("provider saw %d requests, want 1", len(p.systems))
+		}
+		got := strings.Contains(p.systems[0], "there is no LaTeX or MathJax")
+		if got != tt.want {
+			t.Errorf("model %q: formatting note present = %v, want %v", tt.model, got, tt.want)
+		}
+	}
+}

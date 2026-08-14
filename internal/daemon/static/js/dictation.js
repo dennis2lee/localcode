@@ -31,14 +31,19 @@ const SAMPLE_RATE = 16000;
 // stopping waits for the uploads to finish and they never did. From the
 // outside, dictation was simply hung.
 //
-//   requestMs  how long one chunk's upload may take. Past it the request
-//              is abandoned and said out loud.
+//   requestMs  how long one chunk's upload may take. It is a backstop
+//              above the daemon's own limits, not the thing that normally
+//              fires: the daemon caps a partial and a final itself and
+//              answers with the reason, which is a better error than
+//              "no reply". Set below them, it aborted finals that were
+//              about to succeed — a slow engine on another machine can
+//              legitimately take half a minute over a long sentence.
 //   flushMs    how long stopping will wait for already-recorded audio to
 //              finish uploading. The tail of a sentence is worth a moment;
 //              it is not worth the microphone appearing not to switch off.
 //   stopMs     how long stopping will wait for the daemon's own answer,
 //              which carries whatever was mid-sentence.
-export const dictationTimeouts = { requestMs: 12000, flushMs: 1500, stopMs: 4000 };
+export const dictationTimeouts = { requestMs: 60000, flushMs: 1500, stopMs: 4000 };
 
 // after resolves once ms have passed, for racing against a wait that may
 // never end.
@@ -317,7 +322,21 @@ function enqueue(buffer) {
   if (!live.sending) live.draining = drain();
 }
 
-// takeQueued removes everything queued and returns it as one buffer.
+// maxUploadBytes caps one request's worth of audio.
+//
+// takeQueued concatenates the whole backlog, and against a slow engine
+// that backlog grows for as long as the engine is behind — a minute of it
+// is 2MB. The daemon refuses a body over its own limit, which turned
+// "the engine is slow" into "read audio: http: request body too large"
+// and then, three of those later, into dictation stopping altogether.
+//
+// 512KB is 16 seconds of audio, comfortably inside the daemon's limit,
+// and what does not fit stays queued for the next request in the same
+// order.
+const maxUploadBytes = 512 * 1024;
+
+// takeQueued removes what will fit in one request and returns it as one
+// buffer, leaving the rest queued.
 //
 // Audio arrives on a fixed clock — a chunk every CHUNK_MS — while a
 // request can take much longer than that: committing an utterance
@@ -327,10 +346,18 @@ function enqueue(buffer) {
 // stopped moving" is. Concatenating is lossless (the recognizer takes any
 // length of PCM) and turns a backlog into a single request.
 function takeQueued(session) {
-  const chunks = session.queue.splice(0, session.queue.length);
-  if (chunks.length === 1) return chunks[0];
+  const chunks = [];
   let total = 0;
-  for (const c of chunks) total += c.byteLength;
+  while (session.queue.length > 0) {
+    const next = session.queue[0];
+    // Always take at least one, whatever its size: a single chunk larger
+    // than the cap would otherwise never be sent and the queue would
+    // never drain.
+    if (chunks.length > 0 && total + next.byteLength > maxUploadBytes) break;
+    chunks.push(session.queue.shift());
+    total += next.byteLength;
+  }
+  if (chunks.length === 1) return chunks[0];
   const joined = new Uint8Array(total);
   let at = 0;
   for (const c of chunks) {
