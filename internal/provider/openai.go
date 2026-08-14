@@ -220,6 +220,54 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			started  bool
 		}
 		calls := map[int]*pending{}
+		flushed := false
+
+		// callID is the id this tool call will be answered under.
+		//
+		// The real API always sends one, and several local servers do not:
+		// they stream a tool call with a name, arguments, and no id at all.
+		// An empty id travels all the way back as a tool_result nothing can
+		// be matched to, so one is made up here — the only requirement is
+		// that it is stable within the reply, which the stream index is.
+		callID := func(index int, p *pending) string {
+			if p.id == "" {
+				p.id = fmt.Sprintf("call_%d", index)
+			}
+			return p.id
+		}
+
+		// flushCalls closes out every tool call the reply asked for, in the
+		// index order the model issued them — tools are executed in the
+		// order these arrive, and the model's own ordering is usually the
+		// point (read a file, then edit what was read).
+		//
+		// Called both when a finish_reason arrives and, failing that, when
+		// the stream simply ends. The second case is not hypothetical: a
+		// local server that closes after [DONE] without ever sending a
+		// finish_reason left every tool call it had just streamed sitting in
+		// this map, so the turn ended with the model having asked to run
+		// something and nothing having run. That is what "it stops
+		// mid-task, and one more prompt carries on" looked like.
+		flushCalls := func() bool {
+			if flushed {
+				return false
+			}
+			flushed = true
+			indexes := make([]int, 0, len(calls))
+			for i := range calls {
+				indexes = append(indexes, i)
+			}
+			sort.Ints(indexes)
+			for _, i := range indexes {
+				p := calls[i]
+				select {
+				case out <- StreamEvent{Type: EventToolUseEnd, ToolUseID: callID(i, p), ToolInput: json.RawMessage(p.args.String())}:
+				case <-ctx.Done():
+					return false
+				}
+			}
+			return len(calls) > 0
+		}
 
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -283,10 +331,10 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 				if tc.Function.Name != "" {
 					p.name = tc.Function.Name
 				}
-				if !p.started && p.id != "" && p.name != "" {
+				if !p.started && p.name != "" {
 					p.started = true
 					select {
-					case out <- StreamEvent{Type: EventToolUseStart, ToolUseID: p.id, ToolName: p.name}:
+					case out <- StreamEvent{Type: EventToolUseStart, ToolUseID: callID(tc.Index, p), ToolName: p.name}:
 					case <-ctx.Done():
 						return
 					}
@@ -294,7 +342,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 				if tc.Function.Arguments != "" {
 					p.args.WriteString(tc.Function.Arguments)
 					select {
-					case out <- StreamEvent{Type: EventToolUseInputDelta, ToolUseID: p.id, InputDelta: tc.Function.Arguments}:
+					case out <- StreamEvent{Type: EventToolUseInputDelta, ToolUseID: callID(tc.Index, p), InputDelta: tc.Function.Arguments}:
 					case <-ctx.Done():
 						return
 					}
@@ -302,27 +350,18 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			}
 
 			if choice.FinishReason != "" {
-				// In the index order the model issued them, not map
-				// order. Tool calls are executed in the order these
-				// arrive, so ranging the map made a multi-call turn run
-				// its tools in a different order each time — and the
-				// model's own ordering is often the point (read a file,
-				// then edit what was read).
-				indexes := make([]int, 0, len(calls))
-				for i := range calls {
-					indexes = append(indexes, i)
-				}
-				sort.Ints(indexes)
-				for _, i := range indexes {
-					p := calls[i]
-					select {
-					case out <- StreamEvent{Type: EventToolUseEnd, ToolUseID: p.id, ToolInput: json.RawMessage(p.args.String())}:
-					case <-ctx.Done():
-						return
-					}
+				hadCalls := flushCalls()
+				// A reply that asked for tools asked for tools, whatever
+				// the server called the reason it stopped. "stop"
+				// alongside tool_calls is common on local servers, and
+				// taking it at its word ended the turn with the calls
+				// never run.
+				reason := mapFinishReason(choice.FinishReason)
+				if hadCalls && reason == "end_turn" {
+					reason = "tool_use"
 				}
 				select {
-				case out <- StreamEvent{Type: EventMessageStop, StopReason: mapFinishReason(choice.FinishReason)}:
+				case out <- StreamEvent{Type: EventMessageStop, StopReason: reason}:
 				case <-ctx.Done():
 					return
 				}
@@ -330,6 +369,16 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		}
 		if err := scanner.Err(); err != nil {
 			emitErr(fmt.Errorf("read stream: %w", err))
+			return
+		}
+		// The stream ended without a finish_reason ever arriving. Whatever
+		// the server meant by that, the tool calls it streamed are still
+		// the ones the model asked for.
+		if flushCalls() {
+			select {
+			case out <- StreamEvent{Type: EventMessageStop, StopReason: "tool_use"}:
+			case <-ctx.Done():
+			}
 		}
 	}()
 

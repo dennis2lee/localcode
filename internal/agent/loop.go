@@ -121,6 +121,22 @@ type Loop struct {
 	// guessed from the model name exactly as before.
 	ProbeContextWindow func(ctx context.Context, providerKey, model string) (int, bool)
 
+	// WorkspaceRules, if set, returns the AGENTS.md/CLAUDE.md section for a
+	// directory, and is asked once per turn for the directory the session
+	// is actually working in — see internal/rules.
+	//
+	// A hook rather than a string baked into SystemPrompt, because the
+	// answer is not a property of the daemon. Rules used to be loaded once
+	// at startup from the process's own working directory, so a session
+	// working in another project was told that project's rules did not
+	// exist and the startup directory's did — and a desktop build launched
+	// from Finder, whose working directory is "/", had no project rules at
+	// all no matter which workspace was open.
+	//
+	// Left nil, no project rules are added, which is what a bare Loop in a
+	// test wants.
+	WorkspaceRules func(dir string) string
+
 	// MemoryDir is this project's auto-memory directory (see
 	// internal/memory) — "" if auto memory is disabled. Backs the
 	// "/memory" local command; the actual read/write of memory files
@@ -238,6 +254,19 @@ func (l *Loop) SessionDir(sessionID string) string {
 		}
 	}
 	return l.GetProjectDir()
+}
+
+// systemPromptFor is the system prompt a turn in sessionID runs with: the
+// daemon-wide one, plus the rules of the project that session is in.
+func (l *Loop) systemPromptFor(sessionID string) string {
+	if l.WorkspaceRules == nil {
+		return l.SystemPrompt
+	}
+	section := l.WorkspaceRules(l.SessionDir(sessionID))
+	if section == "" {
+		return l.SystemPrompt
+	}
+	return l.SystemPrompt + "\n\n" + section
 }
 
 func (l *Loop) appendHistory(sessionID string, msg provider.Message) {

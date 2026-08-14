@@ -87,6 +87,17 @@ func apiByName(name string) (whisperAPI, bool) {
 	return whisperAPI{}, false
 }
 
+// KnownAPI reports whether name is a dialect this package can be told to
+// use, so a settings panel can refuse a value at the point it is typed
+// rather than at the first utterance.
+func KnownAPI(name string) bool {
+	_, ok := apiByName(name)
+	return ok
+}
+
+// APINames lists the dialects, for a picker or an error message.
+func APINames() string { return whisperAPINames() }
+
 // whisperAPINames lists what whisper_api accepts, for the error message
 // when it is set to something else.
 func whisperAPINames() string {

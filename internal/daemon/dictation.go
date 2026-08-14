@@ -41,6 +41,7 @@ func (d *Daemon) handleDictationStatus(w http.ResponseWriter, r *http.Request) {
 		// machine is not something to have to go and look up.
 		"language":    cfg.Language,
 		"whisper_url": cfg.WhisperURL,
+		"whisper_api": cfg.WhisperAPI,
 		"engine":      dictation.Describe(cfg),
 		"remote":      cfg.RemoteHost() != "",
 		// Whether the daemon has a config.json to write to. Without one
@@ -68,6 +69,12 @@ func (d *Daemon) handleSetDictation(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Language   string `json:"language"`
 		WhisperURL string `json:"whisper_url"`
+		// WhisperAPI names the dialect a remote server speaks, or "" to
+		// work it out on the first utterance. It is in the panel because
+		// the discovery costs one refused request per candidate on a
+		// server that answers oddly, and because a server that answers
+		// every path with a 200 cannot be discovered at all.
+		WhisperAPI string `json:"whisper_api"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -77,17 +84,22 @@ func (d *Daemon) handleSetDictation(w http.ResponseWriter, r *http.Request) {
 	cfg := d.Dictation.Config()
 	cfg.Language = strings.TrimSpace(req.Language)
 	cfg.WhisperURL = strings.TrimSpace(req.WhisperURL)
+	cfg.WhisperAPI = strings.TrimSpace(req.WhisperAPI)
 	// Rejected here rather than at the first attempt to dictate: a
 	// settings panel is where someone can still see what they typed.
 	if cfg.WhisperURL != "" && cfg.RemoteHost() == "" {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not an address a speech engine could be at", req.WhisperURL))
 		return
 	}
+	if cfg.WhisperAPI != "" && !dictation.KnownAPI(cfg.WhisperAPI) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not a speech API localcode knows (%s)", cfg.WhisperAPI, dictation.APINames()))
+		return
+	}
 	d.Dictation.SetConfig(cfg)
 
 	var saveErr string
 	if d.ConfigPath != "" {
-		if err := config.SetDictationInFile(d.ConfigPath, cfg.Language, cfg.WhisperURL); err != nil {
+		if err := config.SetDictationInFile(d.ConfigPath, cfg.Language, cfg.WhisperURL, cfg.WhisperAPI); err != nil {
 			saveErr = err.Error()
 		}
 	}
@@ -97,6 +109,7 @@ func (d *Daemon) handleSetDictation(w http.ResponseWriter, r *http.Request) {
 		"detail":      detail,
 		"language":    cfg.Language,
 		"whisper_url": cfg.WhisperURL,
+		"whisper_api": cfg.WhisperAPI,
 		"engine":      dictation.Describe(cfg),
 		"remote":      cfg.RemoteHost() != "",
 		"save_error":  saveErr,

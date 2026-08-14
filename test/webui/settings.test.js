@@ -77,7 +77,7 @@ test('saving sends the daemon settings and keeps the microphone local', async ()
   assert.equal(posts.length, 1);
   assert.equal(posts[0].body.language, 'en');
   assert.equal(posts[0].body.whisper_url, 'http://box:8080');
-  assert.equal(Object.keys(posts[0].body).length, 2);
+  assert.equal(Object.keys(posts[0].body).length, 3);
   // The microphone is this browser's business — it must not travel.
   assert.ok(!('mic' in posts[0].body), JSON.stringify(posts[0].body));
   assert.equal(app.storage.get('localcode.micDeviceId'), 'usb-1234');
@@ -153,4 +153,82 @@ test('Tab does not cycle agents while the settings window is open', async () => 
   app.press('Tab');
   await app.settle();
   assert.equal(app.callsTo('POST', /\/agent$/).length, before, 'Tab switched agents under the modal');
+});
+
+// The engine's address is one string on the daemon and two boxes in the
+// panel: the machine is one decision and the port is another, and a single
+// field invites an address with no port and nothing to say one was wanted.
+test('the address and port boxes are filled from the one setting', async () => {
+  const app = await load({
+    devices: MICS,
+    routes: {
+      ...dictationRoutes(),
+      'GET /api/dictation': {
+        ready: true, detail: '', language: 'ko',
+        whisper_url: 'http://192.168.1.50:9000', whisper_api: 'whisperx',
+        engine: 'whisper at 192.168.1.50:9000 (remote)', remote: true, can_save: true,
+      },
+    },
+  });
+
+  app.el('settings-btn').click();
+  await app.settle();
+
+  assert.equal(app.el('whisper-url-input').value, 'http://192.168.1.50');
+  assert.equal(app.el('whisper-port-input').value, '9000');
+  assert.equal(app.el('whisper-api-select').value, 'whisperx');
+});
+
+test('the address and port boxes are sent as one address', async () => {
+  const app = await load({
+    devices: MICS,
+    routes: {
+      ...dictationRoutes(),
+      'POST /api/dictation/settings': {
+        ready: true, detail: '', language: '', whisper_url: 'http://192.168.1.50:9000',
+        whisper_api: 'openai', engine: 'whisper at 192.168.1.50:9000 (remote)', remote: true, save_error: '',
+      },
+    },
+  });
+
+  app.el('settings-btn').click();
+  await app.settle();
+
+  app.el('whisper-url-input').value = 'http://192.168.1.50';
+  app.el('whisper-port-input').value = '9000';
+  app.el('whisper-api-select').value = 'openai';
+  app.el('settings-save').click();
+  await app.settle();
+
+  const body = app.callsTo('POST', '/api/dictation/settings')[0].body;
+  assert.equal(body.whisper_url, 'http://192.168.1.50:9000');
+  assert.equal(body.whisper_api, 'openai');
+});
+
+// An empty address means "run it here", whatever is in the port box —
+// a leftover port must not turn into an address of its own.
+test('an empty address means the engine runs on this machine', async () => {
+  const app = await load({ devices: MICS, routes: dictationRoutes() });
+  assert.equal(app.joinAddress('', '8080'), '');
+  assert.equal(app.joinAddress('  ', ''), '');
+});
+
+// The forgiving cases: a port pasted into the address box, a bare host, a
+// trailing slash, and an IPv6 literal whose colons are not a port.
+test('splitting and joining an address survives the ways people type one', async () => {
+  const app = await load({ devices: MICS, routes: dictationRoutes() });
+
+  // Compared field by field: these objects are made inside the page's
+  // realm, so they are not deepEqual to a plain object from this one.
+  const split = (s) => { const r = app.splitAddress(s); return [r.host, r.port]; };
+  assert.deepEqual(split('box:8080'), ['box', '8080']);
+  assert.deepEqual(split('https://speech.example.com/'), ['https://speech.example.com', '']);
+  assert.deepEqual(split('[::1]:9000'), ['[::1]', '9000']);
+  assert.deepEqual(split(''), ['', '']);
+
+  // A port in the address box, and the port box left empty: what was
+  // typed is what is meant.
+  assert.equal(app.joinAddress('box:9000', ''), 'box:9000');
+  // Both given: the port box is the one being edited, so it wins.
+  assert.equal(app.joinAddress('box:9000', '8080'), 'box:8080');
 });

@@ -52,10 +52,11 @@ export function renderSessionList() {
     // button made the single most common action the smallest target on
     // the row. The rename/delete buttons below stop propagation so they
     // don't switch as a side effect of being clicked.
-    div.title = `${s.id}\nclick to switch to this session`;
+    div.title = `${s.id}\nclick to switch to this session, drag to move it up or down`;
     div.addEventListener('click', () => {
       if (s.id !== session.sessionID) selectSession(s.id, s.agent, s.workspace);
     });
+    makeDraggable(div, s.id);
 
     const title = document.createElement('div');
     title.className = 'title';
@@ -64,24 +65,25 @@ export function renderSessionList() {
     // conversation, so a turn left running in another one was invisible
     // — including a turn stuck waiting on a permission request, which
     // blocks workspace switching for every session until it is answered.
-    // Three states, one dot:
+    // Three states, one dot, and every session has one:
     //   running        green, blinking  — the model is working
     //   answer unread  green, steady    — it finished while you were elsewhere
-    //   nothing        no dot           — idle, or you have read it
+    //   idle           grey, steady     — nothing is happening here
     //
-    // The steady green is the one that was missing. A turn finishing in
-    // another session used to just stop blinking, which is the same thing
-    // the list shows for a session that has done nothing all day, so the
-    // one moment worth noticing looked exactly like nothing happening.
+    // The idle dot is drawn rather than omitted. A row with no light and a
+    // row whose light has not been noticed look the same, so an absent dot
+    // could mean "idle" or "this panel does not draw lights" — and the two
+    // green states only mean something against a light that is reliably
+    // there when nothing is going on.
     const unread = app.unreadSessions.has(s.id);
-    if (s.busy || unread) {
-      const led = document.createElement('span');
-      led.className = s.busy ? 'session-led running' : 'session-led unread';
-      led.title = s.busy
-        ? 'a turn is running in this session'
-        : 'this session has a reply you have not looked at';
-      title.appendChild(led);
-    }
+    const led = document.createElement('span');
+    led.className = 'session-led ' + (s.busy ? 'running' : unread ? 'unread' : 'idle');
+    led.title = s.busy
+      ? 'a turn is running in this session'
+      : unread
+        ? 'this session has a reply you have not looked at'
+        : 'nothing is running in this session';
+    title.appendChild(led);
     title.appendChild(document.createTextNode(s.title ? s.title : s.id));
     div.appendChild(title);
 
@@ -122,6 +124,100 @@ export function renderSessionList() {
 
     div.appendChild(actions);
     sessionListEl.appendChild(div);
+  }
+}
+
+// Dragging a session card up or down the panel.
+//
+// The panel is ordered newest-first, which is the right default and the
+// wrong permanent arrangement: the conversation someone is living in for a
+// week sinks below every throwaway one started since. So the order is
+// theirs to set, and the daemon remembers it — an arrangement that had to
+// be redone after every restart would not be worth making.
+//
+// draggingID is module state rather than something carried on the event,
+// because the dataTransfer payload is not readable during dragover in every
+// browser, and dragover is where a row has to decide whether it is a
+// possible drop target at all.
+let draggingID = null;
+
+function makeDraggable(div, id) {
+  div.draggable = true;
+  div.setAttribute('draggable', 'true');
+
+  div.addEventListener('dragstart', (e) => {
+    draggingID = id;
+    div.classList.add('dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      // Some browsers start no drag at all without data on the transfer.
+      try { e.dataTransfer.setData('text/plain', id); } catch { /* not fatal */ }
+    }
+  });
+  div.addEventListener('dragend', () => {
+    draggingID = null;
+    div.classList.remove('dragging');
+    clearDropMarkers();
+  });
+  div.addEventListener('dragover', (e) => {
+    if (!draggingID || draggingID === id) return;
+    // preventDefault on dragover is what says "a drop is allowed here";
+    // without it the browser refuses the drop and the card springs back.
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    div.classList.add('drop-target');
+  });
+  div.addEventListener('dragleave', () => div.classList.remove('drop-target'));
+  div.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const from = draggingID;
+    draggingID = null;
+    clearDropMarkers();
+    if (from && from !== id) dropSessionOn(from, id);
+  });
+}
+
+function clearDropMarkers() {
+  for (const el of sessionListEl.childNodes || []) {
+    if (el.classList) {
+      el.classList.remove('drop-target');
+      el.classList.remove('dragging');
+    }
+  }
+}
+
+// reorderList moves fromID to where toID currently sits. Pure, and
+// exported, because this is the part with an answer that can be wrong:
+// dropping a card on the one below it and on the one above it are
+// different moves, and both have to come out as the list looks after the
+// mouse is released.
+export function reorderList(sessions, fromID, toID) {
+  const out = sessions.slice();
+  const from = out.findIndex(s => s.id === fromID);
+  const to = out.findIndex(s => s.id === toID);
+  if (from < 0 || to < 0 || from === to) return sessions;
+  const [moved] = out.splice(from, 1);
+  out.splice(to, 0, moved);
+  return out;
+}
+
+// dropSessionOn applies the move on screen first and tells the daemon
+// after. The drop already happened as far as the person doing it is
+// concerned; waiting a round trip to redraw would show the card snap back
+// to where it was and then move again.
+export async function dropSessionOn(fromID, toID) {
+  const before = app.sessions;
+  app.sessions = reorderList(before, fromID, toID);
+  renderSessionList();
+  try {
+    await apiClient.reorderSessions(app.sessions.map(s => s.id));
+  } catch (err) {
+    appendError(`could not save the session order: ${err}`);
+    // Back to what the daemon actually has, rather than leaving an order
+    // on screen that will not survive the next reload.
+    app.sessions = before;
+    renderSessionList();
   }
 }
 

@@ -20,6 +20,79 @@ import { autoResizeInput } from './composer.js';
 const CHUNK_MS = 250;
 const SAMPLE_RATE = 16000;
 
+// makeDownsampler builds the 48kHz-to-16kHz converter the capture worklet
+// runs on every block of microphone audio.
+//
+// It is a plain function declaration with no references to anything
+// outside itself, because its source is interpolated verbatim into the
+// worklet below — a worklet runs in its own realm and can see nothing from
+// this module. Written this way it is also the exact code a test can call.
+//
+// What it does, and why it is not just "take every third sample": at 48kHz
+// the microphone signal carries energy up to 24kHz, and 16kHz audio can
+// only represent 8kHz. Dropping samples without filtering first does not
+// discard everything above 8kHz — it folds it back down into the speech
+// band as noise that no later stage can tell from speech. Sibilants and
+// plosives are where that energy lives, and running words together packs
+// more of them per second, so the fastest speech is the worst-affected:
+// "it stops recognising anything as soon as I speak a little quickly".
+//
+// So: a 4th-order Butterworth low-pass (two biquads, the Q values that
+// make the pair maximally flat) at 7kHz, then linear interpolation at the
+// fractional sample positions, which also makes a non-integer rate ratio —
+// a 44.1kHz device, say — an ordinary case rather than a broken one.
+export function makeDownsampler(inRate, outRate) {
+  const step = inRate / outRate;
+  const cutoff = Math.min(outRate * 0.44, inRate * 0.45);
+
+  function biquad(q) {
+    const w0 = (2 * Math.PI * cutoff) / inRate;
+    const alpha = Math.sin(w0) / (2 * q);
+    const cw = Math.cos(w0);
+    const a0 = 1 + alpha;
+    return {
+      b0: ((1 - cw) / 2) / a0,
+      b1: (1 - cw) / a0,
+      b2: ((1 - cw) / 2) / a0,
+      a1: (-2 * cw) / a0,
+      a2: (1 - alpha) / a0,
+      x1: 0, x2: 0, y1: 0, y2: 0,
+    };
+  }
+  const stages = [biquad(0.54119610), biquad(1.30656296)];
+
+  function filter(x) {
+    for (const s of stages) {
+      const y = s.b0 * x + s.b1 * s.x1 + s.b2 * s.x2 - s.a1 * s.y1 - s.a2 * s.y2;
+      s.x2 = s.x1; s.x1 = x;
+      s.y2 = s.y1; s.y1 = y;
+      x = y;
+    }
+    return x;
+  }
+
+  // pos is where the next output sample falls, measured in input samples
+  // since the last block's end, and prev is the one input sample before
+  // this block that the interpolation may still need. Keeping both across
+  // calls is what stops a click at every block boundary.
+  let pos = 0;
+  let prev = 0;
+  return function push(input) {
+    const out = [];
+    for (let i = 0; i < input.length; i++) {
+      const cur = filter(input[i]);
+      while (pos <= i) {
+        const frac = i - pos;
+        out.push(cur * (1 - frac) + prev * frac);
+        pos += step;
+      }
+      prev = cur;
+    }
+    pos -= input.length;
+    return out;
+  };
+}
+
 // The AudioWorklet. It lives here as a string because a worklet has to
 // be loaded from its own URL, and a blob: URL keeps it in this file
 // instead of a fifth static asset that has to be found and served.
@@ -28,29 +101,20 @@ const SAMPLE_RATE = 16000;
 // whatever the device prefers (48kHz, usually) and the recognizer only
 // accepts 16kHz, so the conversion happens once, here, rather than in
 // every recognizer implementation.
-const WORKLET_SRC = `
+export const WORKLET_SRC = `
+${makeDownsampler.toString().replace(/^export\s+/, '')}
+
 class Capture extends AudioWorkletProcessor {
   constructor(options) {
     super();
-    this.ratio = sampleRate / options.processorOptions.target;
-    this.pos = 0;
+    this.down = makeDownsampler(sampleRate, options.processorOptions.target);
     this.out = [];
     this.frame = options.processorOptions.frame;
   }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
     if (!ch) return true;
-    // Nearest-sample decimation. Not a great resampler, but the input is
-    // a 48kHz voice band being taken to 16kHz and the recognizer's own
-    // feature extraction low-passes it anyway; a polyphase filter here
-    // would cost more than it buys.
-    for (let i = 0; i < ch.length; i++) {
-      this.pos += 1;
-      if (this.pos >= this.ratio) {
-        this.pos -= this.ratio;
-        this.out.push(ch[i]);
-      }
-    }
+    for (const s of this.down(ch)) this.out.push(s);
     while (this.out.length >= this.frame) {
       const take = this.out.splice(0, this.frame);
       const pcm = new Int16Array(take.length);

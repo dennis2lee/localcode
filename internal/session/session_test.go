@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -690,4 +691,83 @@ func TestTailSinceKeepsAnUnfinishedReply(t *testing.T) {
 	if deltas != 500 {
 		t.Errorf("the tail carries %d of the 500 fragments of the reply in progress", deltas)
 	}
+}
+
+// The panel's order is the user's to set, and it has to survive a restart:
+// an arrangement that had to be redone every time the daemon came back
+// would not be worth making.
+func TestSetOrderPlacesSessionsAndSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	for _, id := range []string{"s-1", "s-2", "s-3"} {
+		if _, err := store.CreateSession(id, "", "general-purpose", true); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+
+	if err := store.SetOrder([]string{"s-3", "s-1", "s-2"}); err != nil {
+		t.Fatalf("SetOrder: %v", err)
+	}
+	if got := listedIDs(store); !reflect.DeepEqual(got, []string{"s-3", "s-1", "s-2"}) {
+		t.Errorf("order = %v, want [s-3 s-1 s-2]", got)
+	}
+
+	restarted, warnings, err := LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatalf("LoadAllFromDisk: %v (%v)", err, warnings)
+	}
+	if got := listedIDs(restarted); !reflect.DeepEqual(got, []string{"s-3", "s-1", "s-2"}) {
+		t.Errorf("order after restart = %v, want [s-3 s-1 s-2]", got)
+	}
+}
+
+// A session created after the panel was arranged belongs at the top, where
+// a new session has always appeared — not at the bottom of an arrangement
+// it was never part of.
+func TestANewSessionSortsAboveAnArrangedList(t *testing.T) {
+	store, err := NewStore("")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	for _, id := range []string{"s-1", "s-2"} {
+		if _, err := store.CreateSession(id, "", "general-purpose", true); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	if err := store.SetOrder([]string{"s-1", "s-2"}); err != nil {
+		t.Fatalf("SetOrder: %v", err)
+	}
+	if _, err := store.CreateSession("s-3", "", "general-purpose", true); err != nil {
+		t.Fatalf("create s-3: %v", err)
+	}
+	if got := listedIDs(store); !reflect.DeepEqual(got, []string{"s-3", "s-1", "s-2"}) {
+		t.Errorf("order = %v, want the new session first", got)
+	}
+}
+
+// An order naming a session that is gone is an order from a client that is
+// out of date, and not one to write down.
+func TestSetOrderRejectsAnUnknownSession(t *testing.T) {
+	store, err := NewStore("")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := store.SetOrder([]string{"s-1", "s-gone"}); err == nil {
+		t.Error("SetOrder accepted an unknown session")
+	}
+}
+
+func listedIDs(s *Store) []string {
+	sessions := s.ListVisible()
+	out := make([]string, len(sessions))
+	for i, sess := range sessions {
+		out[i] = sess.ID
+	}
+	return out
 }

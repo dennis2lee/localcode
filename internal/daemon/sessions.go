@@ -254,6 +254,25 @@ func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleReorderSessions records the order the session panel was dragged
+// into. Cosmetic, and persisted with the rest of a session's metadata, so
+// an arrangement survives a restart — an order that had to be redone every
+// time the daemon came back would not be worth making.
+func (d *Daemon) handleReorderSessions(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := d.Loop.Store.SetOrder(req.IDs); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleSwitchAgent changes which agent a session sends future messages
 // as — mid-conversation history is untouched, only the model/system
 // prompt/tool scope used for the *next* message changes. This is what

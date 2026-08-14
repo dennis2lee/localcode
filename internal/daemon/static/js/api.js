@@ -96,6 +96,7 @@ export const renameSession = (id, title) => api('POST', `/api/sessions/${id}/ren
 export const forkSession = (id) => api('POST', `/api/sessions/${id}/fork`);
 export const deleteSession = (id) => api('DELETE', `/api/sessions/${id}`);
 export const deleteAllSessions = () => api('DELETE', '/api/sessions');
+export const reorderSessions = (ids) => api('POST', '/api/sessions/order', { ids });
 
 export const switchAgent = (sessionID, agent) => api('POST', `/api/sessions/${sessionID}/agent`, { agent });
 export const sendChatMessage = (sessionID, text) => api('POST', `/api/sessions/${sessionID}/messages`, { text });

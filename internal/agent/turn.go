@@ -49,7 +49,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// (agent not found, or found with no Prompt/Tools set) is a no-op:
 	// same behavior as before per-agent config existed.
 	agentCfg := l.Config.Agents[resolveAgent]
-	systemPrompt := l.SystemPrompt
+	systemPrompt := l.systemPromptFor(sessionID)
 	if agentCfg.Prompt != "" {
 		systemPrompt = systemPrompt + "\n\n" + agentCfg.Prompt
 	}
@@ -184,7 +184,21 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			l.appendHistory(sessionID, provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})
 		}
 
-		if stopReason != "tool_use" || len(toolUses) == 0 {
+		// A reply that asked for tools is answered by running them,
+		// whatever the server said about why it stopped.
+		//
+		// The stop reason used to be the gate, and local servers do not
+		// agree on it: several report "stop" on a reply that carries tool
+		// calls, and some send no finish_reason at all. The turn then ended
+		// with the calls sitting in the transcript unrun — the model had
+		// said what it was about to do and then, from the outside, simply
+		// stopped, and the next prompt ("carry on") made it pick up again.
+		//
+		// max_tokens is the one exception: the reply was cut off mid-write,
+		// so a tool call at the end of it has arguments that stop partway
+		// through and running them means acting on a truncated instruction.
+		wantsTools := len(toolUses) > 0 && stopReason != "max_tokens"
+		if !wantsTools {
 			// A reply that ran into its own length cap is not a reply that
 			// finished, and it is indistinguishable from one that did:
 			// providers report it as stop_reason "max_tokens" and this

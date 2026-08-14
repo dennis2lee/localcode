@@ -131,14 +131,31 @@
     </div>
 
     <div class="settings-field">
-      <label class="field" for="whisper-url-input">Speech engine</label>
-      <input type="text" id="whisper-url-input" placeholder="leave empty to run on this machine">
-      <p class="note">A whisper.cpp server elsewhere, e.g.
-        <code>http://192.168.1.50:8080</code>. Set, nothing runs here — no
-        engine or model has to be installed. <strong>Recorded audio then
-        leaves this machine, over plain HTTP with no authentication.</strong>
-        Only point it somewhere you would be willing to send what you say
-        out loud.</p>
+      <label class="field" for="whisper-url-input">Speech engine address</label>
+      <div class="field-row">
+        <input type="text" id="whisper-url-input" placeholder="leave empty to run on this machine">
+        <input type="text" id="whisper-port-input" class="port" placeholder="8080" inputmode="numeric">
+      </div>
+      <p class="note">A speech server elsewhere: its address on the left
+        (<code>192.168.1.50</code>, or <code>https://speech.example.com</code>
+        to use TLS) and its port on the right. Set, nothing runs here — no
+        engine or model has to be installed on this machine, and everything
+        else about dictation works exactly as it does locally.
+        <strong>Recorded audio then leaves this machine, over plain HTTP
+        with no authentication unless you asked for https.</strong> Only
+        point it somewhere you would be willing to send what you say out
+        loud.</p>
+
+      <label class="field" for="whisper-api-select">Speech server API</label>
+      <select id="whisper-api-select">
+        <option value="">Work it out on the first utterance</option>
+        <option value="openai">OpenAI-compatible (/v1/audio/transcriptions)</option>
+        <option value="whispercpp">whisper.cpp (/inference)</option>
+        <option value="whisperx">WhisperX (/asr)</option>
+      </select>
+      <p class="note">"A whisper server" is not one protocol. Left to work
+        it out, localcode tries each until one answers — naming it skips
+        that, and is the answer for a server that replies to every path.</p>
       <p class="note" id="dictation-engine-note"></p>
     </div>
 

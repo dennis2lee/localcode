@@ -16,7 +16,8 @@
 
 import {
   settingsModalEl, settingsBtn, settingsSaveBtn, settingsCloseBtn, settingsSaveNoteEl,
-  micDeviceSelect, dictationLanguageSelect, whisperURLInput, dictationEngineNoteEl,
+  micDeviceSelect, dictationLanguageSelect, whisperURLInput, whisperPortInput,
+  whisperAPISelect, dictationEngineNoteEl,
 } from './dom.js';
 import { Modal } from './modal.js';
 import * as apiClient from './api.js';
@@ -103,11 +104,47 @@ async function listMicrophones() {
   }
 }
 
+// The speech engine's address is one string in config.json ("host:port")
+// and two boxes in the panel, because that is how people hold it: the
+// machine is one decision and the port is another, and a single field
+// invites "192.168.1.50" with no port and no hint that one was wanted.
+//
+// splitAddress and joinAddress are the pair that keeps the two views in
+// step. They are deliberately forgiving in the same way Config.RemoteHost
+// is on the daemon side: a scheme is optional, a port typed into the
+// address box is honoured, and a trailing slash is nobody's mistake worth
+// an error message.
+
+export function splitAddress(url) {
+  const raw = (url || '').trim().replace(/\/+$/, '');
+  if (!raw) return { host: '', port: '' };
+  const scheme = raw.match(/^[a-z][a-z0-9+.-]*:\/\//i);
+  const rest = scheme ? raw.slice(scheme[0].length) : raw;
+  // Only a trailing :digits is a port. An IPv6 literal is full of colons
+  // and none of them are.
+  const m = rest.match(/^(.*?):(\d+)$/);
+  const host = (scheme ? scheme[0] : '') + (m ? m[1] : rest);
+  return { host, port: m ? m[2] : '' };
+}
+
+export function joinAddress(host, port) {
+  const h = (host || '').trim().replace(/\/+$/, '');
+  const p = (port || '').trim();
+  if (!h) return ''; // no address at all means "run it on this machine"
+  // A port typed into the address box wins over an empty port box, so
+  // pasting "box:9000" into one field still works.
+  if (!p) return h;
+  return `${h.replace(/:\d+$/, '')}:${p}`;
+}
+
 // applyDictationStatus puts the daemon's answer on screen. Shared by the
 // open path and the save path so both show the same thing.
 function applyDictationStatus(status) {
   dictationLanguageSelect.value = status.language || '';
-  whisperURLInput.value = status.whisper_url || '';
+  const { host, port } = splitAddress(status.whisper_url);
+  whisperURLInput.value = host;
+  whisperPortInput.value = port;
+  whisperAPISelect.value = status.whisper_api || '';
 
   // Which engine is in force, said plainly — in particular whether audio
   // is leaving the machine, which is not something to have to infer from
@@ -140,7 +177,8 @@ async function saveSettings() {
   try {
     const status = await apiClient.setDictationSettings({
       language: dictationLanguageSelect.value,
-      whisper_url: whisperURLInput.value.trim(),
+      whisper_url: joinAddress(whisperURLInput.value, whisperPortInput.value),
+      whisper_api: whisperAPISelect.value,
     });
     applyDictationStatus(status);
     // A failed write is reported and the change still stands: it is in

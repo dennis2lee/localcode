@@ -62,6 +62,8 @@ The window links a native webview through CGo, which cannot be cross compiled th
 * macOS: `make dist-mac-gui` produces a double-clickable `LocalCode.app` (universal, arm64 + amd64). `make gui-mac` builds just the bare `localcode-gui` binary. macOS always has WKWebView.
 * Windows: built in CI by `.github/workflows/gui-windows.yml` on a Windows runner (CGo cannot cross compile from macOS), which uploads `localcode-gui.exe` as an artifact. It is linked with `-H windowsgui`, so starting it from `cmd` opens the window and **gives the prompt straight back** instead of tying up the console until the window closes (and launching it from Explorer doesn't flash an empty console box). The trade-off is that a GUI-subsystem process has no console of its own, so the console-only subcommands — `version`, `mcp`, `login` — print nowhere useful from `localcode-gui.exe`; run those from `localcode.exe`, which the same MSI installs. The Windows MSI (`make dist-msi VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe`) installs it alongside the TUI binary with its own Start Menu shortcut ("LocalCode (Desktop)"), and runs Microsoft's WebView2 Evergreen Bootstrapper silently during install so the runtime is there even on older Windows 10 systems that do not ship it already. That install step is skipped quietly (not a failed install) if there is no network access at install time, if the runtime is already present, or if the bootstrapper itself isn't being reinstalled (which is the normal case when upgrading over an existing version).
 
+**Title bar.** On macOS there isn't one to speak of: the bar is drawn transparent over the window's own background and the title text is hidden, so the app is one surface from the top down with the close/minimise/zoom buttons floating on it. The bar itself is still there, which is what still lets the window be dragged and closed. On Windows the ordinary caption remains — removing it there means answering `WM_NCCALCSIZE` and `WM_NCHITTEST` by hand and drawing the buttons in the page, or the window cannot be moved, resized from the top, or closed at all.
+
 The macOS `.app` is unsigned, so Gatekeeper needs a right click then Open the first time, same as the TUI app.
 
 A build made without `-tags gui` still accepts `--gui` but returns an error saying so, rather than failing to build (and `--gui` defaults to off on such a build, so the TUI still starts normally with no flags at all). The daemon, TUI, and browser modes are unchanged.
@@ -477,11 +479,13 @@ Run a skill directly by its own name with `/<skill name>`. See [Running a skill]
 
 ### AGENTS.md project rules
 
-The same convention opencode and Claude Code use. Put an `AGENTS.md` at the project root, or any parent directory up to the git repository root, and it is appended to the system prompt at startup.
+The same convention opencode and Claude Code use. Put an `AGENTS.md` at the project root, or any parent directory up to the git repository root, and it is appended to the system prompt.
 
 `CLAUDE.md` is recognized as a fallback in the same places, so an existing Claude Code file is reused as is.
 
-A `~/.localcode/AGENTS.md`, falling back to `~/.claude/CLAUDE.md`, applies your personal rules to every project. Project rules and global rules are combined, not overwritten.
+`~/.localcode/AGENTS.md` and `~/.claude/CLAUDE.md` both apply your personal rules to every project — both are loaded when both exist, so setting localcode up after Claude Code does not silently retire the file you already wrote. Project rules and global rules are combined, not overwritten.
+
+Which project's rules apply is decided per session, from the workspace that session is in, and re-read at the start of every turn. So two sessions in two projects each get their own `AGENTS.md`, moving a session's workspace moves the rules with it, and editing the file takes effect on your next message rather than on the next restart. (Before v0.43.0 they were read once at startup from the directory the daemon happened to be launched in — which for a desktop build opened from Finder or the Start Menu is not a project at all.)
 
 ```markdown
 # AGENTS.md
@@ -771,11 +775,13 @@ Every session on the daemon, newest first. Each card shows:
 
 | Line | Contents |
 |---|---|
-| Title | The session's title, or its ID if it has never been renamed |
+| Title | The session's title, or its ID if it has never been renamed, behind a light: **grey** — nothing is running here; **blinking green** — a turn is running; **steady green** — a reply arrived while you were in another session and you have not opened it since. Every card has one, so an idle session says so rather than looking like a panel that does not draw lights. |
 | Workspace | The directory the session was created in, shortened from the front (the full path is in the tooltip). This is what distinguishes two sessions that would otherwise look identical because they belong to different projects. |
 | Created | Local date and time |
 
 **Clicking anywhere on a card switches to that session** — the transcript, agent, and status bar all follow. The `rename` and `delete` buttons on the card act on that session without switching to it. Above the list is **+ new**, below it **delete all sessions**; both destructive actions confirm first.
+
+**Drag a card up or down to put it where you want it.** The order is saved on the daemon (`POST /api/sessions/order`, and in each session's metadata file), so it survives a restart and is the same in every client. Newest-first is only the starting arrangement: it sinks the conversation you have lived in all week below every throwaway one started since. A session created after you have arranged the panel appears at the top, where a new session has always appeared, rather than at the bottom of an arrangement it was never part of.
 
 The workspace is recorded when the session is created and never rewritten afterwards, so [switching the workspace](#switching-the-workspace-directory) changes where *new* sessions start without relabelling old ones. Sessions created before this field existed show `(workspace not recorded)`.
 
@@ -1102,7 +1108,21 @@ spacing is fixed as of v0.32.13, the accuracy is not. Install it with
 
 The ⚙ button in the status row under the prompt box opens a settings
 window. Dictation's live there: which microphone to record from, the
-spoken language, and the speech engine's address.
+spoken language, the speech engine's address and port, and which API
+that engine speaks.
+
+The address is two boxes because it is two decisions — the machine
+(`192.168.1.50`, or `https://speech.example.com` to use TLS) and the port
+(`8080` if you leave it empty, which is what whisper.cpp's server uses
+when started without `--port`). Leave the address empty to run the engine
+on this machine. Setting it changes nothing else about dictation: the
+same grey-then-committed text, the same pause detection, the same
+errors — only where the audio is transcribed.
+
+The API dropdown names the dialect the server speaks
+(`openai` / `whispercpp` / `whisperx`); left on "work it out on the first
+utterance", localcode tries each in turn, which is right for almost
+everything and cannot succeed against a server that answers every path.
 
 Two kinds of setting sit in it, and the window says which is which
 because they do not behave the same way:
@@ -1110,7 +1130,7 @@ because they do not behave the same way:
 | | Where it lives | Who it applies to |
 |---|---|---|
 | Microphone | this browser (`localStorage`) | you, on this machine |
-| Language, engine address | the daemon's `config.json` | every client attached to it |
+| Language, engine address and port, engine API | the daemon's `config.json` | every client attached to it |
 
 A microphone cannot be a daemon setting: a device id means nothing on
 another machine, and the daemon never sees audio hardware at all, only
@@ -1227,7 +1247,13 @@ The address is read the way people write one: with or without the
 scheme, with or without a trailing slash, and with or without the port
 (8080 is assumed, which is what whisper.cpp's server uses when started
 without `--port`). `whisper_bin` and `whisper_model` are ignored while it
-is set.
+is set. The [settings window](#settings-window) takes the same address as
+two boxes, one for the machine and one for the port, and writes this key.
+
+A remote engine is not a different feature: the recording, the pause
+detection, the grey provisional text and the committed text all work
+exactly as they do locally, and the only difference is which machine runs
+the transcription.
 
 On the other machine, run whisper.cpp's server bound to an address this
 one can reach — its default is loopback only, so it needs telling:
@@ -1247,6 +1273,27 @@ prints which engine is in use and says plainly when it is a remote one.
 A wrong address fails when dictation starts, naming the address, rather
 than as silence the first time you speak — which is indistinguishable
 from a microphone that is not working.
+
+#### If words go missing when you speak quickly
+
+Two things caused this before v0.43.0 and both are fixed; they are worth
+knowing because the symptoms are still what to look for.
+
+The audio was resampled from the microphone's rate (48kHz, usually) to
+the 16kHz whisper takes by keeping every third sample and discarding the
+rest. That does not remove the energy above 8kHz, it folds it back down
+into the middle of the speech band as noise — and fast speech puts more
+energy up there, because sibilants and plosives arrive closer together.
+The conversion now low-passes before it decimates.
+
+The engine was also started with `--no-fallback`, which drops any segment
+whose decode looks unconfident instead of retrying it. Words running
+together is exactly what fails that check, so speaking quickly could
+produce no text at all. Silence is handled on localcode's side instead —
+audio is only sent once the microphone has actually heard speech, and
+whisper's `[BLANK_AUDIO]`-style annotations are stripped from the reply.
+
+If it still struggles, the model is the next thing to change.
 
 #### Choosing a Whisper model
 

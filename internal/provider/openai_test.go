@@ -238,3 +238,129 @@ data: [DONE]
 		t.Errorf("text = %q; the choice on the usage chunk was dropped", text)
 	}
 }
+
+// collect drains a stream into a slice, for the tool-call tests below.
+func collect(t *testing.T, body string) []StreamEvent {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompat(srv.URL, "")
+	ch, err := p.Chat(context.Background(), ChatRequest{
+		Model:    "m",
+		Messages: []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	var out []StreamEvent
+	for ev := range ch {
+		out = append(out, ev)
+	}
+	return out
+}
+
+func stopReasonOf(evs []StreamEvent) string {
+	for _, ev := range evs {
+		if ev.Type == EventMessageStop {
+			return ev.StopReason
+		}
+	}
+	return ""
+}
+
+func toolEnds(evs []StreamEvent) []StreamEvent {
+	var out []StreamEvent
+	for _, ev := range evs {
+		if ev.Type == EventToolUseEnd {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// A local server that streams tool calls and then says finish_reason
+// "stop" is describing a reply that asked for tools. Reported as end_turn,
+// the loop ended the turn with the calls never run: the model said what it
+// was about to do and then stopped for no visible reason.
+func TestToolCallsWithFinishReasonStopAreStillToolUse(t *testing.T) {
+	evs := collect(t, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"read_file","arguments":"{\"path\":\"x\"}"}}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+`)
+	if got := stopReasonOf(evs); got != "tool_use" {
+		t.Errorf("stop reason = %q, want %q", got, "tool_use")
+	}
+	if ends := toolEnds(evs); len(ends) != 1 {
+		t.Fatalf("tool_use_end events = %d, want 1", len(ends))
+	}
+}
+
+// A reply with no tool calls means what it says.
+func TestPlainFinishReasonStopStaysEndTurn(t *testing.T) {
+	evs := collect(t, `data: {"choices":[{"delta":{"content":"done"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+`)
+	if got := stopReasonOf(evs); got != "end_turn" {
+		t.Errorf("stop reason = %q, want %q", got, "end_turn")
+	}
+}
+
+// Some servers close the stream after [DONE] without ever sending a
+// finish_reason. The tool calls they streamed used to be left in the
+// accumulator and dropped with the goroutine.
+func TestToolCallsSurviveAStreamWithNoFinishReason(t *testing.T) {
+	evs := collect(t, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"bash","arguments":"{}"}}]}}]}
+
+data: [DONE]
+
+`)
+	ends := toolEnds(evs)
+	if len(ends) != 1 {
+		t.Fatalf("tool_use_end events = %d, want 1 — the call was dropped", len(ends))
+	}
+	if ends[0].ToolUseID != "call_a" {
+		t.Errorf("tool_use_id = %q, want %q", ends[0].ToolUseID, "call_a")
+	}
+	if got := stopReasonOf(evs); got != "tool_use" {
+		t.Errorf("stop reason = %q, want %q", got, "tool_use")
+	}
+}
+
+// A tool call with no id at all: the start event never fired, so the call
+// was never registered and never ran. One is made up instead, and both
+// halves have to agree on it or the result matches nothing.
+func TestToolCallWithoutAnIDGetsOne(t *testing.T) {
+	evs := collect(t, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"bash","arguments":"{}"}}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+`)
+	var startID, endID, name string
+	for _, ev := range evs {
+		switch ev.Type {
+		case EventToolUseStart:
+			startID, name = ev.ToolUseID, ev.ToolName
+		case EventToolUseEnd:
+			endID = ev.ToolUseID
+		}
+	}
+	if name != "bash" {
+		t.Errorf("tool name = %q, want %q — the call was never started", name, "bash")
+	}
+	if startID == "" || startID != endID {
+		t.Errorf("tool_use ids: start %q, end %q — want one non-empty id used by both", startID, endID)
+	}
+}

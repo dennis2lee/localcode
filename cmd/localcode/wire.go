@@ -150,6 +150,9 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.Commands = cmdList
 	loop.ProjectDir = e.cwd
 	loop.MemoryDir = memDir
+	// Per turn, for the directory that turn is working in — see
+	// Loop.WorkspaceRules. e.home is the only thing fixed at startup here.
+	loop.WorkspaceRules = func(dir string) string { return rules.Load(dir, e.home) }
 	// Ask the server how big a window it is serving, rather than guessing
 	// from the model's name. Only the openai-compatible clients implement
 	// it: a hosted model's name identifies it exactly, while a local
@@ -285,9 +288,9 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (ext
 		return "", nil, nil, "", err
 	}
 
-	if rulesSection := rules.Load(e.cwd, e.home); rulesSection != "" {
-		extra += "\n\n" + rulesSection
-	}
+	// Project rules are deliberately NOT folded in here. They depend on
+	// which directory a turn runs in, and this prompt is built once for the
+	// whole daemon — see Loop.WorkspaceRules.
 
 	if cfg.MemoryEnabled() {
 		memDir = memory.Dir(e.cwd, e.home)

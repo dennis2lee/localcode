@@ -21,38 +21,30 @@ const maxImportDepth = 4
 
 var projectNames = []string{"AGENTS.md", "CLAUDE.md"}
 
-// Load finds the nearest project-level rules file (searching cwd and its
+// Load finds the nearest project-level rules file (searching dir and its
 // parent directories up to and including the git repo root, or the
-// filesystem root if there's no repo) and the global rules file
-// (~/.localcode/AGENTS.md, falling back to ~/.claude/CLAUDE.md), expands
-// any "@path" imports in each, and returns a system-prompt section
-// combining whichever were found. Returns "" if neither exists.
-func Load(cwd, home string) string {
-	project, projectDir := findProjectRules(cwd)
-	global, globalDir := findGlobalRules(home)
-
-	if project == "" && global == "" {
+// filesystem root if there's no repo) and the global rules files
+// (~/.localcode/AGENTS.md and ~/.claude/CLAUDE.md), expands any "@path"
+// imports in each, and returns a system-prompt section combining whichever
+// were found. Returns "" if none exist.
+//
+// dir is the directory the session is working in, not the process's — two
+// sessions in two projects get their own project's rules, and moving a
+// session's workspace moves which AGENTS.md/CLAUDE.md it obeys. It is read
+// per turn rather than cached at startup, so editing the file takes effect
+// on the next message instead of on the next restart.
+func Load(dir, home string) string {
+	var found []string
+	if project, projectDir := findProjectRules(dir); project != "" {
+		found = append(found, expandImports(project, projectDir, home, 1))
+	}
+	for _, g := range findGlobalRules(home) {
+		found = append(found, expandImports(g.content, filepath.Dir(g.path), home, 1))
+	}
+	if len(found) == 0 {
 		return ""
 	}
-
-	if project != "" {
-		project = expandImports(project, projectDir, home, 1)
-	}
-	if global != "" {
-		global = expandImports(global, globalDir, home, 1)
-	}
-
-	var b strings.Builder
-	b.WriteString(sectionHeader + "\n\n")
-	if project != "" {
-		b.WriteString(project)
-		b.WriteString("\n\n")
-	}
-	if global != "" {
-		b.WriteString(global)
-		b.WriteString("\n")
-	}
-	return b.String()
+	return sectionHeader + "\n\n" + strings.Join(found, "\n\n") + "\n"
 }
 
 func findProjectRules(cwd string) (content, dir string) {
@@ -75,16 +67,31 @@ func findProjectRules(cwd string) (content, dir string) {
 	}
 }
 
-func findGlobalRules(home string) (content, dir string) {
+// globalFile is one user-level rules file that exists.
+type globalFile struct {
+	path    string
+	content string
+}
+
+// findGlobalRules reads every global rules file there is, rather than the
+// first of them.
+//
+// ~/.claude/CLAUDE.md used to be a fallback, reached only when
+// ~/.localcode/AGENTS.md did not exist — so anyone who had both (which is
+// anyone who set up localcode after using Claude Code) silently lost the
+// instructions they had already written. They are two files by two names
+// for the same thing, and having one is not a reason to ignore the other.
+func findGlobalRules(home string) []globalFile {
+	var out []globalFile
 	for _, p := range []string{
 		filepath.Join(home, ".localcode", "AGENTS.md"),
 		filepath.Join(home, ".claude", "CLAUDE.md"),
 	} {
 		if data, err := os.ReadFile(p); err == nil {
-			return string(data), filepath.Dir(p)
+			out = append(out, globalFile{path: p, content: string(data)})
 		}
 	}
-	return "", ""
+	return out
 }
 
 var (

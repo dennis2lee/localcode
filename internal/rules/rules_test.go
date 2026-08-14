@@ -79,7 +79,7 @@ func TestFindProjectRulesFallsBackToClaude(t *testing.T) {
 	}
 }
 
-func TestFindGlobalRulesFallsBackToClaudeDir(t *testing.T) {
+func TestFindGlobalRulesReadsTheClaudeDir(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
@@ -87,8 +87,35 @@ func TestFindGlobalRulesFallsBackToClaudeDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".claude", "CLAUDE.md"), []byte("global claude"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := findGlobalRules(home); got != "global claude" {
-		t.Errorf("expected ~/.claude/CLAUDE.md fallback, got %q", got)
+	got := findGlobalRules(home)
+	if len(got) != 1 || got[0].content != "global claude" {
+		t.Errorf("findGlobalRules() = %+v, want just ~/.claude/CLAUDE.md", got)
+	}
+}
+
+// Both global files are read, not the first of them. Anyone who set
+// localcode up after using Claude Code has both, and picking one silently
+// dropped the instructions they had already written in the other.
+func TestBothGlobalRulesFilesAreLoaded(t *testing.T) {
+	home := t.TempDir()
+	for _, f := range []struct{ dir, name, body string }{
+		{".localcode", "AGENTS.md", "localcode global rules"},
+		{".claude", "CLAUDE.md", "claude global rules"},
+	} {
+		if err := os.MkdirAll(filepath.Join(home, f.dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, f.dir, f.name), []byte(f.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := Load(t.TempDir(), home)
+	if !strings.Contains(got, "localcode global rules") {
+		t.Errorf("Load() = %q, want it to contain ~/.localcode/AGENTS.md", got)
+	}
+	if !strings.Contains(got, "claude global rules") {
+		t.Errorf("Load() = %q, want it to contain ~/.claude/CLAUDE.md too", got)
 	}
 }
 

@@ -75,4 +75,6 @@ export const settingsSaveNoteEl = document.getElementById('settings-save-note');
 export const micDeviceSelect = document.getElementById('mic-device-select');
 export const dictationLanguageSelect = document.getElementById('dictation-language-select');
 export const whisperURLInput = document.getElementById('whisper-url-input');
+export const whisperPortInput = document.getElementById('whisper-port-input');
+export const whisperAPISelect = document.getElementById('whisper-api-select');
 export const dictationEngineNoteEl = document.getElementById('dictation-engine-note');

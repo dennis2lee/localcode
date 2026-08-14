@@ -33,7 +33,13 @@ type Session struct {
 	// workspace to. It is set at creation and moved by SetWorkspace
 	// whenever the workspace changes while this session is the open one.
 	// Empty for sessions created before this field existed.
-	Workspace string    `json:"workspace,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+	// Order is where this session sits in the session panel, when someone
+	// has dragged the list into an order of their own. 1-based; zero means
+	// "never placed by hand", which sorts above the placed ones so a new
+	// session still appears at the top rather than at the bottom of a list
+	// that was arranged before it existed.
+	Order     int       `json:"order,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -303,9 +309,73 @@ func (s *Store) ListVisible() []Session {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
+		// Hand-placed sessions keep the position they were dragged to;
+		// everything else stays newest-first. Unplaced sessions sort above
+		// placed ones (Order 0), so a session created after the list was
+		// arranged appears at the top instead of below an arrangement it
+		// was never part of.
+		if out[i].Order != out[j].Order {
+			return out[i].Order < out[j].Order
+		}
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
 	return out
+}
+
+// SetOrder places the given sessions in the panel, in the order given.
+//
+// Every visible session is renumbered, not just the ones named: a partial
+// order is one where two sessions can hold the same position, and the
+// tie-break behind it is creation time, which is the very thing dragging is
+// overriding. Unknown ids are an error rather than a silent skip — a client
+// asking to arrange a session that no longer exists is out of date, and its
+// idea of the order is not one to write down.
+func (s *Store) SetOrder(ids []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	at := make(map[string]int, len(ids))
+	for i, id := range ids {
+		st, ok := s.sessions[id]
+		if !ok {
+			return fmt.Errorf("session %s not found", id)
+		}
+		if !st.meta.Visible {
+			return fmt.Errorf("session %s is not in the session list", id)
+		}
+		at[id] = i + 1
+	}
+
+	// Anything visible the client did not mention keeps its relative place
+	// after the ones it did, rather than jumping to the top: it is a
+	// session that appeared between the drag and this request, and moving
+	// it under the user's hands is the one thing a reorder must not do.
+	var rest []Session
+	for id, st := range s.sessions {
+		if st.meta.Visible && at[id] == 0 {
+			rest = append(rest, st.meta)
+		}
+	}
+	sort.Slice(rest, func(i, j int) bool {
+		if rest[i].Order != rest[j].Order {
+			return rest[i].Order < rest[j].Order
+		}
+		return rest[i].CreatedAt.After(rest[j].CreatedAt)
+	})
+	for i, meta := range rest {
+		at[meta.ID] = len(ids) + i + 1
+	}
+
+	for id, pos := range at {
+		st := s.sessions[id]
+		st.meta.Order = pos
+		if s.dir != "" {
+			if err := writeSessionMeta(s.dir, st.meta); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // AllSessions returns every session regardless of Visible — unlike

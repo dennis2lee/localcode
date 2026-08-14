@@ -368,7 +368,7 @@ func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, d
 		return nil
 	}
 	agentCfg := l.Config.Agents[agentName]
-	systemPrompt := l.SystemPrompt
+	systemPrompt := l.systemPromptFor(sessionID)
 	if agentCfg.Prompt != "" {
 		systemPrompt = systemPrompt + "\n\n" + agentCfg.Prompt
 	}

@@ -203,8 +203,8 @@ export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, can
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
 export { forkSession } from './sessions.js';
-export { toggleDictation, stopDictation, isDictating } from './dictation.js';
+export { toggleDictation, stopDictation, isDictating, makeDownsampler, WORKLET_SRC } from './dictation.js';
 export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
-export { settings, openSettings, selectedMicDeviceId, MIC_DEVICE_KEY } from './settings.js';
-export { renderSessionList, selectSession, deleteSessionConfirm } from './sessions.js';
+export { settings, openSettings, selectedMicDeviceId, MIC_DEVICE_KEY, splitAddress, joinAddress } from './settings.js';
+export { renderSessionList, selectSession, deleteSessionConfirm, reorderList, dropSessionOn } from './sessions.js';

@@ -241,3 +241,50 @@ func TestClearingTheURLIsWritten(t *testing.T) {
 		t.Errorf("the cleared URL was not written: %s", raw)
 	}
 }
+
+// The dialect a remote server speaks is a setting like the others: it is
+// discovered when unset, and naming it is the answer for a server that
+// discovery cannot work out.
+func TestSetDictationPersistsTheAPIDialect(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &Daemon{Dictation: dictation.NewManager(dictation.Config{}), ConfigPath: cfgPath}
+	rec := httptest.NewRecorder()
+	d.handleSetDictation(rec, httptest.NewRequest("POST", "/api/dictation/settings",
+		strings.NewReader(`{"whisper_url":"box:9000","whisper_api":"whisperx"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	if live := d.Dictation.Config(); live.WhisperAPI != "whisperx" {
+		t.Errorf("live whisper_api = %q, want whisperx", live.WhisperAPI)
+	}
+	raw, _ := os.ReadFile(cfgPath)
+	var onDisk struct {
+		Dictation map[string]any `json:"dictation"`
+	}
+	json.Unmarshal(raw, &onDisk)
+	if onDisk.Dictation["whisper_api"] != "whisperx" {
+		t.Errorf("whisper_api not written: %s", raw)
+	}
+}
+
+// A dialect nobody speaks is refused where it was typed, rather than
+// accepted and then failing at the first utterance with an error about
+// something else.
+func TestSetDictationRejectsAnUnknownAPIDialect(t *testing.T) {
+	d := &Daemon{Dictation: dictation.NewManager(dictation.Config{})}
+	rec := httptest.NewRecorder()
+	d.handleSetDictation(rec, httptest.NewRequest("POST", "/api/dictation/settings",
+		strings.NewReader(`{"whisper_url":"box:9000","whisper_api":"nonsense"}`)))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body %s", rec.Code, rec.Body)
+	}
+	if d.Dictation.Config().WhisperAPI != "" {
+		t.Error("the refused dialect was applied anyway")
+	}
+}

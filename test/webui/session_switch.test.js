@@ -71,10 +71,13 @@ test('the session list marks sessions with a turn running', async () => {
   app.renderSessionList();
 
   const html = app.el('session-list').innerHTML;
-  // Exactly one dot, and it belongs to the busy session's row.
-  assert.equal((html.match(/session-led/g) || []).length, 1, html);
+  // Every row has a light; exactly one of them is the working one, and it
+  // belongs to the busy session's row.
+  assert.equal((html.match(/session-led/g) || []).length, 2, html);
+  assert.equal((html.match(/session-led running/g) || []).length, 1, html);
+  assert.equal((html.match(/session-led idle/g) || []).length, 1, html);
   const busyRow = html.slice(html.indexOf('two') - 400, html.indexOf('two'));
-  assert.ok(busyRow.includes('session-led'), `the dot is not on the busy row: ${html}`);
+  assert.ok(busyRow.includes('session-led running'), `the blinking dot is not on the busy row: ${html}`);
   // Both titles still read as titles, dot or no dot.
   assert.match(html, /one/);
   assert.match(html, /two/);
@@ -90,7 +93,7 @@ test('the dot follows a turn from running to unread to read', async () => {
     const m = app.el('session-list').innerHTML.match(/class="session-led ?(\w*)"/);
     return m ? (m[1] || 'plain') : 'none';
   };
-  assert.equal(led(), 'none', 'an idle session should have no dot at all');
+  assert.equal(led(), 'idle', 'an idle session should show a grey dot');
 
   app.sse.emit({ type: 'session.activity', data: { session: 's1', busy: true } });
   assert.equal(led(), 'running', 'a working session should blink');
@@ -106,7 +109,7 @@ test('the dot follows a turn from running to unread to read', async () => {
   app.selectSession('s1', 'general-purpose', '/w');
   await app.settle();
   app.renderSessionList();
-  assert.equal(led(), 'none', 'the dot should clear once the session is opened');
+  assert.equal(led(), 'idle', 'the dot should go back to grey once the session is opened');
 });
 
 // Watching the reply arrive is reading it. Being asked to acknowledge
@@ -116,13 +119,14 @@ test('a turn finishing in the session on screen leaves no unread dot', async () 
   const id = app.state.sessionID;
   app.state.sessions = [{ id, title: 'mine', agent: 'general-purpose', workspace: '/w', busy: false }];
   app.renderSessionList();
-  const dots = () => (app.el('session-list').innerHTML.match(/session-led/g) || []).length;
+  const dots = (kind) => (app.el('session-list').innerHTML.match(new RegExp(`session-led ${kind}`, 'g')) || []).length;
 
   app.sse.emit({ type: 'session.activity', data: { session: id, busy: true } });
-  assert.equal(dots(), 1, 'the session on screen should still blink while it works');
+  assert.equal(dots('running'), 1, 'the session on screen should still blink while it works');
 
   app.sse.emit({ type: 'session.activity', data: { session: id, busy: false } });
-  assert.equal(dots(), 0, 'you watched this reply arrive; it must not ask to be read');
+  assert.equal(dots('unread'), 0, 'you watched this reply arrive; it must not ask to be read');
+  assert.equal(dots('idle'), 1, 'and it goes back to the ordinary grey light');
 });
 
 // Coming back to a conversation has to show the conversation.

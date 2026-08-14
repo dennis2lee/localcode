@@ -312,6 +312,13 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
   overflow: hidden;
 }
 .session-item:hover { border-color: var(--accent); }
+
+/* Dragging a card to a new place in the panel. The card being carried
+   fades, and the row it would land on shows the edge it would land
+   against — a highlight around the whole target row reads as "this row is
+   selected", which is not what is about to happen to it. */
+.session-item.dragging { opacity: 0.45; }
+.session-item.drop-target { border-top: 2px solid var(--accent); }
 .session-item.active { border-color: var(--accent); background: var(--panel); cursor: default; }
 .session-item .title {
   color: var(--text);
@@ -679,6 +686,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    already happened and is waiting for you. */
 .session-led.unread { animation: none; }
 
+/* Idle: grey and steady. Every session now carries a light, because a
+   missing light and a light that has not been noticed look identical —
+   the row simply had nothing where the others had something, and "is
+   this session idle or is the panel not drawing lights?" is not a
+   question a status indicator should leave open. */
+.session-led.idle { background: var(--muted); opacity: 0.5; animation: none; }
+
 @keyframes session-led-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.25; }
@@ -720,6 +734,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #settings-modal .settings-field { margin-bottom: 16px; }
 #settings-modal select,
 #settings-modal input[type="text"] { width: 100%; }
+/* Address and port on one line, because they are one address: the port
+   box is sized to the four digits it holds rather than sharing the width
+   equally, which would read as two unrelated fields. */
+#settings-modal .field-row { display: flex; gap: 8px; }
+#settings-modal .field-row input.port { width: 6.5em; flex: none; }
 /* The one note that has to be noticed rather than merely available:
    audio leaving the machine is a reversal of what dictation otherwise
    promises. */

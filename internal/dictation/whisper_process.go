@@ -242,10 +242,22 @@ func startWhisper(bin, model string, threads int) (*whisperProcess, error) {
 		// No timestamps: this fills a prompt box, and "[00:00.000 -->"
 		// in front of every line is not what anyone dictating wants.
 		"--no-timestamps",
-		// Whisper will otherwise hallucinate a plausible sentence out of
-		// silence, and dictation is mostly silence between phrases.
-		"--no-fallback",
 	}
+	// Deliberately NOT --no-fallback.
+	//
+	// It was passed to stop whisper hallucinating a sentence out of
+	// silence, and it does — by throwing away any segment whose decode
+	// looks unconfident, with no second attempt. Fast speech is exactly
+	// what fails that check: words run together, the compression ratio
+	// rises, the logprob falls, and the segment is dropped. So talking
+	// quickly produced no text at all, which is the opposite of the
+	// failure this was guarding against and a much worse one — a missing
+	// sentence is invisible, a spurious one is deleted in a keystroke.
+	//
+	// Silence is handled on this side instead, and always has been: audio
+	// is only sent once the VAD has heard speech (see vad.go and
+	// whisperRecognizer.Accept), and whisper's own "[BLANK_AUDIO]"-style
+	// annotations are stripped from the reply (see cleanTranscript).
 	cmd := exec.Command(bin, args...)
 	// The engine is a console program and the desktop build has no
 	// console of its own, so on Windows this would otherwise put a black
