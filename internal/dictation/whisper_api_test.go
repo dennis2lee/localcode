@@ -3,11 +3,13 @@ package dictation
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // asrServer imitates the server that produced this bug: a WhisperX ASR
@@ -218,7 +220,7 @@ func TestAFailingServerIsReportedOnce(t *testing.T) {
 	defer rec.Close()
 
 	sess := NewSession(rec)
-	if _, err := sess.Write(pcm16(tone(SampleRate))); err != nil {
+	if _, err := sess.Write(context.Background(), pcm16(tone(SampleRate))); err != nil {
 		t.Fatal(err)
 	}
 	sess.Stop()
@@ -449,5 +451,52 @@ func TestAnHTTPSServerIsReachedWhenConfiguredAsSuch(t *testing.T) {
 	cfg := Config{WhisperURL: srv.URL}
 	if got := cfg.RemoteScheme(); got != "https" {
 		t.Fatalf("RemoteScheme() = %q, want https — the scheme is being thrown away", got)
+	}
+}
+
+// A server that hangs on a path it does not serve, rather than answering
+// 404. The search has to reach the endpoint that works: sharing one
+// deadline let the first candidate spend all of it, the rest failed
+// instantly on an expired context, and every later utterance repeated the
+// same thing — dictation that produced nothing and never said why.
+func TestADialectThatHangsDoesNotHideTheOneThatWorks(t *testing.T) {
+	block := make(chan struct{})
+
+	var mu sync.Mutex
+	tried := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		tried[r.URL.Path]++
+		mu.Unlock()
+		if r.URL.Path == "/inference" {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"text":"안녕하세요"}`)
+			return
+		}
+		select {
+		case <-block:
+		case <-r.Context().Done():
+		}
+	}))
+	// Released before the server is closed: Close waits for handlers that
+	// are still running, and these are the ones deliberately stuck.
+	defer srv.Close()
+	defer close(block)
+
+	p := remoteProcess(t, srv)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	text, err := p.transcribe(ctx, testAudio, "ko")
+	if err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
+	if text != "안녕하세요" {
+		t.Errorf("text = %q, want the answer from the endpoint that works", text)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if tried["/inference"] == 0 {
+		t.Error("the working endpoint was never tried")
 	}
 }

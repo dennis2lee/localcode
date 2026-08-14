@@ -1,6 +1,7 @@
 package dictation
 
 import (
+	"context"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -40,7 +41,7 @@ func TestWriteReportsProvisionalTextUntilAnEndpoint(t *testing.T) {
 	f := &fakeRecognizer{}
 	s := NewSession(f)
 
-	res, err := s.Write(pcm(1, 2, 3, 4))
+	res, err := s.Write(context.Background(), pcm(1, 2, 3, 4))
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestWriteReportsProvisionalTextUntilAnEndpoint(t *testing.T) {
 		t.Errorf("final = %q, want empty — the speaker hasn't stopped", res.Final)
 	}
 
-	res, _ = s.Write(pcm(5, 6))
+	res, _ = s.Write(context.Background(), pcm(5, 6))
 	if res.Provisional != "word word" {
 		t.Errorf("provisional = %q, want it to have grown", res.Provisional)
 	}
@@ -64,10 +65,10 @@ func TestWriteReportsProvisionalTextUntilAnEndpoint(t *testing.T) {
 func TestAnEndpointSettlesTheTextAndStartsFresh(t *testing.T) {
 	f := &fakeRecognizer{}
 	s := NewSession(f)
-	s.Write(pcm(1, 2))
+	s.Write(context.Background(), pcm(1, 2))
 	f.endpointNow = true
 
-	res, err := s.Write(pcm(3, 4))
+	res, err := s.Write(context.Background(), pcm(3, 4))
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestAnEndpointSettlesTheTextAndStartsFresh(t *testing.T) {
 		t.Errorf("provisional = %q, want empty — the utterance just ended and was reported as final", res.Provisional)
 	}
 
-	res, _ = s.Write(pcm(5, 6))
+	res, _ = s.Write(context.Background(), pcm(5, 6))
 	if res.Provisional != "word" {
 		t.Errorf("provisional = %q, want a fresh utterance after the endpoint", res.Provisional)
 	}
@@ -88,7 +89,7 @@ func TestAnEndpointSettlesTheTextAndStartsFresh(t *testing.T) {
 func TestStopReturnsTheUnfinishedSentence(t *testing.T) {
 	f := &fakeRecognizer{}
 	s := NewSession(f)
-	s.Write(pcm(1, 2))
+	s.Write(context.Background(), pcm(1, 2))
 
 	res := s.Stop()
 	if res.Final != "word" {
@@ -97,7 +98,7 @@ func TestStopReturnsTheUnfinishedSentence(t *testing.T) {
 	if !f.closed {
 		t.Error("the recognizer was not closed")
 	}
-	if _, err := s.Write(pcm(3)); err == nil {
+	if _, err := s.Write(context.Background(), pcm(3)); err == nil {
 		t.Error("writing to a stopped session should fail")
 	}
 }
@@ -106,7 +107,7 @@ func TestStopReturnsTheUnfinishedSentence(t *testing.T) {
 // anyway would silently drop or invent half a sample.
 func TestOddLengthAudioIsRejected(t *testing.T) {
 	s := NewSession(&fakeRecognizer{})
-	if _, err := s.Write([]byte{1, 2, 3}); err == nil {
+	if _, err := s.Write(context.Background(), []byte{1, 2, 3}); err == nil {
 		t.Error("expected an error for a partial 16-bit sample")
 	}
 }

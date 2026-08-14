@@ -1255,6 +1255,17 @@ detection, the grey provisional text and the committed text all work
 exactly as they do locally, and the only difference is which machine runs
 the transcription.
 
+Two things about the decode do not travel, because they are command line
+options on an engine localcode starts and a remote one was started by
+somebody else. Both are now handled from this side instead:
+
+| Local engine gets | A remote server gets |
+|---|---|
+| Decoding fallback on (localcode simply does not pass `--no-fallback`) | `temperature_inc=0.2` on every request, which is whisper.cpp's own default and overrides a server started with `--no-fallback`. The OpenAI and WhisperX shapes have no equivalent field; a server behind those that drops unconfident segments has to be restarted without the flag. |
+| `--no-timestamps` | Timestamps are removed from the answer, in both shapes whisper emits them (`[00:00:00.000 --> …]` and `<\|0.00\|>`), so a server configured to include them does not put them in the prompt box. |
+
+`threads` is the remote machine's own business and is not sent.
+
 On the other machine, run whisper.cpp's server bound to an address this
 one can reach — its default is loopback only, so it needs telling:
 
@@ -1274,6 +1285,31 @@ A wrong address fails when dictation starts, naming the address, rather
 than as silence the first time you speak — which is indistinguishable
 from a microphone that is not working.
 
+#### If nothing appears at all and the microphone will not switch off
+
+That shape is a speech server that accepts the connection and then never
+answers, and before v0.43.1 it had no symptom of any kind: every upload
+stayed open, no text arrived, no error arrived, and clicking the pill did
+nothing, because stopping waited for those uploads to finish.
+
+What happens now:
+
+| After | What you see |
+|---|---|
+| 12s on one chunk | The upload is abandoned and the transcript says the engine has not answered, naming the settings window. |
+| 3 such failures | Dictation stops itself and says why. |
+| A click on the pill | The microphone goes off immediately. It waits up to 1.5s for already-recorded audio to finish uploading and no longer. |
+
+The daemon end matches: a transcription can be cancelled, so switching the
+microphone off no longer queues behind a request that will never land, and
+a browser that gives up on a chunk takes that work with it instead of
+leaving the session locked.
+
+If the server answers some paths and hangs on others, the dialect search
+now gives each candidate its own share of the time, so the endpoint that
+works is still reached. `localcode dictation probe` reports which is
+which.
+
 #### If words go missing when you speak quickly
 
 Two things caused this before v0.43.0 and both are fixed; they are worth
@@ -1289,7 +1325,8 @@ The conversion now low-passes before it decimates.
 The engine was also started with `--no-fallback`, which drops any segment
 whose decode looks unconfident instead of retrying it. Words running
 together is exactly what fails that check, so speaking quickly could
-produce no text at all. Silence is handled on localcode's side instead —
+produce no text at all. A remote whisper.cpp server started with that
+flag is covered too, as of v0.43.1 — see the table above. Silence is handled on localcode's side instead —
 audio is only sent once the microphone has actually heard speech, and
 whisper's `[BLANK_AUDIO]`-style annotations are stripped from the reply.
 

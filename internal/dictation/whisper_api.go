@@ -66,7 +66,19 @@ var whisperAPIs = []whisperAPI{
 		name:      "whispercpp",
 		path:      "/inference",
 		fileField: "file",
-		extra:     map[string]string{"response_format": "json", "temperature": "0.0"},
+		// temperature_inc is the decoding fallback, and it is here so that
+		// a remote engine decodes the way the local one does.
+		//
+		// localcode starts its own engine, so its command line is ours to
+		// choose; a server on another machine was started by someone else,
+		// with whatever options they picked, and `--no-fallback` there
+		// reproduces exactly the fault v0.43.0 fixed locally — a segment
+		// whose decode looks unconfident is dropped instead of retried,
+		// which is what fast speech looks like from the inside. Sent per
+		// request, it overrides that: 0.2 is whisper.cpp's own default
+		// increment, so this asks for the standard behaviour rather than
+		// imposing an opinion.
+		extra: map[string]string{"response_format": "json", "temperature": "0.0", "temperature_inc": "0.2"},
 	},
 	{
 		name:      "whisperx",
@@ -74,6 +86,13 @@ var whisperAPIs = []whisperAPI{
 		fileField: "audio_file",
 		extra:     map[string]string{"output_format": "json"},
 	},
+}
+
+// whisperCppAPI is the dialect a locally spawned engine speaks. It is
+// whisper.cpp because startWhisper is what started it.
+func whisperCppAPI() whisperAPI {
+	api, _ := apiByName("whispercpp")
+	return api
 }
 
 // apiByName finds a dialect the user named in config, so a server that

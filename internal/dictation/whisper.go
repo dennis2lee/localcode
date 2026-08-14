@@ -36,6 +36,23 @@ const partialInterval = 900 * time.Millisecond
 // engine had the same idea in sherpa's Rule3MinUtteranceLength.
 const maxUtterance = 30 * SampleRate
 
+// How long one transcription may take before it is abandoned.
+//
+// A partial is worth less than the next one: it is a preview, another is
+// a second behind it, and one that has been running for twenty seconds
+// has already been superseded by the audio recorded since. A final is the
+// text that gets committed, so it is given longer.
+//
+// Neither is a wait a person should have to sit through, which is what
+// these bound. The old figures were 30s and 60s, chosen against a local
+// engine that either answers in a moment or has crashed; a speech server
+// on another machine can also accept the connection and then say nothing
+// at all, and against that the timeout is the entire experience.
+const (
+	partialTimeout = 12 * time.Second
+	finalTimeout   = 25 * time.Second
+)
+
 // whisperRecognizer adapts a window-at-a-time model to the streaming
 // Recognizer interface.
 //
@@ -60,6 +77,11 @@ type whisperRecognizer struct {
 	// forced records that the utterance hit maxUtterance and has to end
 	// even though the speaker has not paused.
 	forced bool
+	// inflight holds the cancel func of every transcription running right
+	// now, so Cancel can end them without waiting for their timeouts. A
+	// map rather than one func because a partial and a final can overlap.
+	inflight map[uint64]context.CancelFunc
+	nextCall uint64
 	// utterance counts utterances, so a transcription that comes back
 	// after its own has ended can tell. Without it, a partial still in
 	// flight when the speaker pauses lands in the *next* utterance: the
@@ -76,6 +98,44 @@ func openWhisper(cfg Config) (Recognizer, error) {
 		return nil, err
 	}
 	return &whisperRecognizer{proc: proc, language: cfg.Language}, nil
+}
+
+// begin derives a cancellable context for one transcription and returns
+// it with the func that both cancels it and forgets it. Keyed by a
+// counter because two CancelFuncs cannot be compared.
+func (w *whisperRecognizer) begin(parent context.Context, timeout time.Duration) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	w.mu.Lock()
+	if w.inflight == nil {
+		w.inflight = map[uint64]context.CancelFunc{}
+	}
+	w.nextCall++
+	id := w.nextCall
+	w.inflight[id] = cancel
+	w.mu.Unlock()
+	return ctx, func() {
+		cancel()
+		w.mu.Lock()
+		delete(w.inflight, id)
+		w.mu.Unlock()
+	}
+}
+
+// Cancel abandons whatever transcription is running.
+//
+// The engine call that commits an utterance is allowed a minute, which is
+// right when the answer is coming and is the entire wait when it is not —
+// a speech server that accepts the connection and never replies. Stop
+// calls this before asking for the session's lock, so switching the
+// microphone off does not queue behind a request that will never land.
+func (w *whisperRecognizer) Cancel() {
+	w.mu.Lock()
+	cancels := w.inflight
+	w.inflight = nil
+	w.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
 
 func (w *whisperRecognizer) Accept(samples []float32) {
@@ -110,8 +170,8 @@ func (w *whisperRecognizer) Accept(samples []float32) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		ctx, done := w.begin(context.Background(), partialTimeout)
+		defer done()
 		text, err := w.proc.transcribe(ctx, window, w.language)
 
 		w.mu.Lock()
@@ -170,7 +230,7 @@ func (w *whisperRecognizer) Endpoint() bool {
 // the text that gets committed: it covers every sample including the
 // ones that arrived after the last background run started, and it is
 // worth blocking a moment to get right.
-func (w *whisperRecognizer) Final() string {
+func (w *whisperRecognizer) Final(parent context.Context) string {
 	w.mu.Lock()
 	if w.closed || !w.detector.spoke() {
 		w.mu.Unlock()
@@ -179,8 +239,8 @@ func (w *whisperRecognizer) Final() string {
 	window := append([]float32(nil), w.audio...)
 	w.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	ctx, done := w.begin(parent, finalTimeout)
+	defer done()
 	text, err := w.proc.transcribe(ctx, window, w.language)
 	if err != nil {
 		// Fall back to the last good partial rather than losing the
@@ -222,6 +282,11 @@ func (w *whisperRecognizer) Close() {
 	w.utterance++
 	w.mu.Unlock()
 
+	// Nothing in flight is worth waiting for once this recognizer is
+	// closed, and waiting is what the wait below would otherwise do for a
+	// server that has stopped answering.
+	w.Cancel()
+
 	// Background partials are waited for rather than abandoned: they hold
 	// a reference to the shared process, and releasing it under them is
 	// how a "use after free" gets written in Go.
@@ -239,7 +304,22 @@ func (w *whisperRecognizer) Close() {
 // 바꿔줘", losing a word with nothing on screen to show it had gone.
 // Leaving a stray annotation in is a visible mistake the speaker can
 // delete; silently dropping their words is not.
+// Timestamps are stripped for the same reason the local engine is started
+// with --no-timestamps: this fills a prompt box, and "[00:00.000 -->" in
+// front of every line is not what anyone dictating wants.
+//
+// The flag only reaches an engine this process started. A server on
+// another machine was started by someone else, with their options, and
+// none of the request formats let a client turn timestamps off — so the
+// only way a remote engine can behave like a local one here is to take
+// them back out of the answer. Both shapes whisper emits are covered: the
+// segment range, with or without its brackets, and the `<|0.00|>` tokens
+// a model can emit inline.
 var (
+	timestamps = regexp.MustCompile(
+		`\[?\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3}\s*-+>\s*\d{1,2}:\d{2}(?::\d{2})?[.,]\d{1,3}\]?` +
+			`|<\|\d+(?:\.\d+)?\|>`)
+
 	bracketed = regexp.MustCompile(`(?s)[\[(（【]([^\])）】]*)[\])）】]`)
 
 	// The annotations Whisper actually emits. Matched case-insensitively
@@ -256,6 +336,10 @@ var (
 
 // cleanTranscript turns one engine reply into text fit for a prompt box.
 func cleanTranscript(s string) string {
+	// Before the bracket pass, which would otherwise see "[00:00:00.000
+	// --> 00:00:02.000]" as an annotation it does not recognise and keep
+	// it verbatim.
+	s = timestamps.ReplaceAllString(s, " ")
 	s = bracketed.ReplaceAllStringFunc(s, func(m string) string {
 		inner := bracketed.FindStringSubmatch(m)[1]
 		key := strings.ToLower(strings.NewReplacer(" ", "", "_", "", "-", "").Replace(inner))

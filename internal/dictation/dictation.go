@@ -11,6 +11,7 @@
 package dictation
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -112,7 +113,12 @@ func (s *Session) touch() { s.lastActivity.Store(time.Now().UnixNano()) }
 // PCM16 rather than float32 on the wire because it halves the bytes for
 // no audible loss at this sample rate, and because it is what an
 // AudioWorklet can produce without a conversion pass of its own.
-func (s *Session) Write(pcm []byte) (Result, error) {
+// ctx is the client's request. Committing an utterance calls into the
+// engine and waits for the answer, so a browser that has given up — or a
+// tab that was closed — must be able to take that work away with it,
+// rather than leaving this session's lock held for as long as the engine
+// feels like taking.
+func (s *Session) Write(ctx context.Context, pcm []byte) (Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done {
@@ -141,7 +147,7 @@ func (s *Session) Write(pcm []byte) (Result, error) {
 	// this before reading Partial is what keeps a finished sentence from
 	// being reported as both final and provisional in the same reply.
 	if s.rec.Endpoint() {
-		res.Final = s.settled()
+		res.Final = s.settled(ctx)
 		s.logUtterance(res.Final)
 		s.rec.Reset()
 	}
@@ -169,13 +175,26 @@ func (s *Session) takeError() string {
 // half-finished sentence isn't silently dropped when someone clicks the
 // microphone off mid-word.
 func (s *Session) Stop() Result {
+	// Before the lock, not after it.
+	//
+	// Write holds s.mu across the engine call that commits an utterance,
+	// and against a speech server that has stopped answering that call is
+	// the whole of its timeout — so a Stop that simply asked for the lock
+	// queued behind it, and the microphone would not switch off. Cancelling
+	// first ends whatever is in flight; the lock is then free almost at
+	// once, and the final transcription below runs on a fresh context of
+	// its own rather than the one just cancelled.
+	if c, ok := s.rec.(canceler); ok {
+		c.Cancel()
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done {
 		return Result{}
 	}
 	s.done = true
-	res := Result{Final: s.settled()}
+	res := Result{Final: s.settled(context.Background())}
 	s.logUtterance(res.Final)
 	s.rec.Close()
 	return res
@@ -213,12 +232,18 @@ type tokenReporter interface{ Tokens() []string }
 // model does: its partials are periodic snapshots, so the audio since
 // the last one is missing from the text, and that audio is the end of
 // the sentence. Final re-reads the whole utterance.
-type finalizer interface{ Final() string }
+type finalizer interface {
+	Final(ctx context.Context) string
+}
+
+// canceler is a recognizer whose in-flight work can be abandoned. Optional:
+// one that cannot is simply waited for.
+type canceler interface{ Cancel() }
 
 // settled returns the text to commit for the utterance just ended.
-func (s *Session) settled() string {
+func (s *Session) settled(ctx context.Context) string {
 	if f, ok := s.rec.(finalizer); ok {
-		return f.Final()
+		return f.Final(ctx)
 	}
 	return s.rec.Partial()
 }

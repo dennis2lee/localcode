@@ -265,6 +265,11 @@ async function load(opts = {}) {
     setTimeout,
     clearTimeout,
     queueMicrotask,
+    // Dictation gives up on an upload that takes too long, and abandoning
+    // it is half of the fix: the daemon holds the session's lock for as
+    // long as the request is open. A browser has this; a bare vm context
+    // does not.
+    AbortController,
   };
   const context = vm.createContext(sandbox);
   // app code reaches for window.prompt / window.confirm; in a browser
@@ -383,6 +388,10 @@ async function load(opts = {}) {
     // transcript() is everything the transcript module has written, as the
     // HTML string a browser would parse.
     transcript: () => document.getElementById('transcript').innerHTML,
+    // wait lets real time pass, for the handful of behaviours that are
+    // about a deadline rather than about an event: dictation gives up on
+    // an upload that takes too long, and the test has to outlast it.
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     // callsTo lists the requests made to one endpoint pattern.
     callsTo: (method, pattern) =>
       harness.calls.filter(

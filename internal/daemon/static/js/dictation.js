@@ -20,6 +20,30 @@ import { autoResizeInput } from './composer.js';
 const CHUNK_MS = 250;
 const SAMPLE_RATE = 16000;
 
+// What dictation is willing to wait for, in milliseconds. A var-like
+// object rather than constants so a test can shorten them; nothing else
+// writes to it.
+//
+// These exist because of one failure that had no symptom at all: a speech
+// server that accepts the connection and then says nothing. Every upload
+// stayed open, the queue behind it grew, no text ever appeared, no error
+// ever appeared — and clicking the microphone off did nothing, because
+// stopping waits for the uploads to finish and they never did. From the
+// outside, dictation was simply hung.
+//
+//   requestMs  how long one chunk's upload may take. Past it the request
+//              is abandoned and said out loud.
+//   flushMs    how long stopping will wait for already-recorded audio to
+//              finish uploading. The tail of a sentence is worth a moment;
+//              it is not worth the microphone appearing not to switch off.
+//   stopMs     how long stopping will wait for the daemon's own answer,
+//              which carries whatever was mid-sentence.
+export const dictationTimeouts = { requestMs: 12000, flushMs: 1500, stopMs: 4000 };
+
+// after resolves once ms have passed, for racing against a wait that may
+// never end.
+const after = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // makeDownsampler builds the 48kHz-to-16kHz converter the capture worklet
 // runs on every block of microphone audio.
 //
@@ -325,6 +349,50 @@ function takeQueued(session) {
 // quarter of a second away.
 const MAX_UPLOAD_FAILURES = 3;
 
+// postChunk uploads one chunk and gives up on it after requestMs.
+//
+// The abort matters as much as the deadline: without it the browser keeps
+// the connection and the daemon keeps the session's lock, so the request
+// that was given up on is still in the way of the next one and of the
+// stop. The controller is kept on the session so stopping can abort
+// whatever is in flight rather than waiting it out.
+async function postChunk(session, chunk) {
+  const controller = new AbortController();
+  session.inFlight = controller;
+  let timer = null;
+  // The deadline rejects on its own rather than relying on the abort to
+  // do it. Aborting is what frees the connection and the daemon's lock,
+  // and it is what a browser turns into a rejected fetch — but a
+  // transport that ignores the signal would otherwise leave this awaiting
+  // a promise that never settles, which is the exact failure being fixed.
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(
+        `the speech engine has not answered in ${Math.round(dictationTimeouts.requestMs / 1000)}s`
+        + ' — check the engine address in settings (the gear under the prompt)'));
+    }, dictationTimeouts.requestMs);
+  });
+  try {
+    return await Promise.race([
+      apiClient.sendDictationAudio(session.id, chunk, controller.signal),
+      deadline,
+    ]);
+  } catch (err) {
+    // Said the first time it happens, not after three of them. The whole
+    // complaint about this failure was that nothing was ever said, and
+    // three deadlines is most of a minute of silence.
+    if (controller.signal.aborted && !session.warnedSlow) {
+      session.warnedSlow = true;
+      appendError(String(err.message || err));
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (session.inFlight === controller) session.inFlight = null;
+  }
+}
+
 async function drain() {
   if (!live || live.sending) return;
   // Pinned rather than re-read through `live` on every line: this loop
@@ -338,7 +406,7 @@ async function drain() {
       const chunk = takeQueued(session);
       let res;
       try {
-        res = await apiClient.sendDictationAudio(session.id, chunk);
+        res = await postChunk(session, chunk);
         session.failures = 0;
       } catch (err) {
         // A chunk still in flight when the session was stopped fails
@@ -417,11 +485,23 @@ async function reopen(session) {
 export async function stopDictation() {
   if (!live) return;
   const session = live;
+  // A second click while the first stop is still finishing is not a
+  // second stop. Without this it re-ran the whole path, including waiting
+  // on the same requests again.
+  if (session.stopping) return;
+  session.stopping = true;
 
   // Capture stops first, so no new audio joins the queue while the tail
   // of it is flushed.
   if (session.node) session.node.port.onmessage = null;
   if (session.stream) session.stream.getTracks().forEach((t) => t.stop());
+
+  // The microphone is genuinely off at this point — the tracks are
+  // stopped — so the pill says so now rather than after the round trips
+  // below. It used to say "on" until the last one came back, which
+  // against an unresponsive engine was forever: the click had worked and
+  // there was nothing on screen that said so.
+  setMicState(false);
 
   // Then let the audio already recorded finish uploading, before the
   // session is closed out from under it. Nulling `live` first — which is
@@ -429,19 +509,30 @@ export async function stopDictation() {
   // in-flight chunk to arrive at a session that no longer existed. That
   // cost the last word or two of every dictated sentence, and announced
   // it as an error.
+  //
+  // Bounded, though. This wait used to have no limit, so an engine that
+  // never answered meant a stop that never finished: `live` stayed set,
+  // every later click hit the guard at the top, and dictation could not
+  // be switched off without reloading the page. The tail of a sentence is
+  // worth a moment; it is not worth that.
   try {
-    await session.draining;
+    await Promise.race([session.draining, after(dictationTimeouts.flushMs)]);
   } catch (err) {
     // drain reports its own failures; there is nothing to add here.
   }
 
   live = null; // now nothing else will touch this session
+  // Anything still in flight is now for a session nobody is listening to,
+  // and on the daemon's side it is holding that session's lock — which
+  // the stop below has to take.
+  if (session.inFlight) session.inFlight.abort();
   if (session.ctx) await session.ctx.close().catch(() => {});
 
-  setMicState(false);
-
   try {
-    const res = await apiClient.stopDictation(session.id);
+    const res = await Promise.race([
+      apiClient.stopDictation(session.id),
+      after(dictationTimeouts.stopMs).then(() => ({})),
+    ]);
     // Whatever was mid-sentence when the button was clicked is text the
     // person said and meant; dropping it because they stopped talking
     // half a second early would be its own small bug.

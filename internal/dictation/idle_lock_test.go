@@ -1,6 +1,8 @@
 package dictation
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -10,12 +12,30 @@ import (
 // call has a 60s timeout, and until it returns the session lock is held.
 type slowFinalizer struct {
 	fakeRecognizer
-	release chan struct{}
+	release   chan struct{}
+	cancelled chan struct{}
+	once      sync.Once
 }
 
-func (s *slowFinalizer) Final() string {
-	<-s.release
-	return "committed"
+func newSlowFinalizer() *slowFinalizer {
+	return &slowFinalizer{release: make(chan struct{}), cancelled: make(chan struct{})}
+}
+
+// Cancel is what a real recognizer does when the microphone is switched
+// off: give up on the request in flight rather than sit out its timeout.
+func (s *slowFinalizer) Cancel() {
+	s.once.Do(func() { close(s.cancelled) })
+}
+
+func (s *slowFinalizer) Final(ctx context.Context) string {
+	select {
+	case <-s.release:
+		return "committed"
+	case <-s.cancelled:
+		return ""
+	case <-ctx.Done():
+		return ""
+	}
 }
 
 // The reaper reads Idle for every session while holding the manager lock,
@@ -24,14 +44,14 @@ func (s *slowFinalizer) Final() string {
 // every client: no new dictation, no audio accepted anywhere, and no way
 // to switch the microphone off.
 func TestIdleDoesNotWaitOnACommitInProgress(t *testing.T) {
-	rec := &slowFinalizer{release: make(chan struct{})}
+	rec := newSlowFinalizer()
 	rec.endpointNow = true
 	s := NewSession(rec)
 
 	committing := make(chan struct{})
 	go func() {
 		close(committing)
-		s.Write(pcm(1, 2, 3, 4)) // blocks in Final, holding the session lock
+		s.Write(context.Background(), pcm(1, 2, 3, 4)) // blocks in Final, holding the session lock
 	}()
 	<-committing
 
@@ -50,7 +70,7 @@ func TestIdleDoesNotWaitOnACommitInProgress(t *testing.T) {
 // it runs under the manager lock.
 func TestReaperIsNotBlockedByACommitInProgress(t *testing.T) {
 	m := NewManager(Config{})
-	rec := &slowFinalizer{release: make(chan struct{})}
+	rec := newSlowFinalizer()
 	rec.endpointNow = true
 
 	m.mu.Lock()
@@ -61,7 +81,7 @@ func TestReaperIsNotBlockedByACommitInProgress(t *testing.T) {
 	committing := make(chan struct{})
 	go func() {
 		close(committing)
-		stuck.Write(pcm(1, 2, 3, 4))
+		stuck.Write(context.Background(), pcm(1, 2, 3, 4))
 	}()
 	<-committing
 
@@ -76,6 +96,68 @@ func TestReaperIsNotBlockedByACommitInProgress(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the manager lock is held across a stuck commit")
+	}
+	close(rec.release)
+}
+
+// Switching the microphone off has to work while a commit is stuck.
+//
+// This is the reported failure with a speech server that accepts the
+// connection and never answers: Write holds the session lock across the
+// engine call, Stop wanted the same lock, and so the stop queued behind a
+// request that would not land for its whole timeout. Nothing appeared,
+// nothing failed, and the button did nothing — dictation was hung.
+func TestStopDoesNotWaitForAWedgedCommit(t *testing.T) {
+	rec := newSlowFinalizer()
+	rec.endpointNow = true
+	s := NewSession(rec)
+
+	committing := make(chan struct{})
+	go func() {
+		close(committing)
+		s.Write(context.Background(), pcm(1, 2, 3, 4)) // blocks in Final, holding the session lock
+	}()
+	<-committing
+
+	stopped := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop queued behind a commit that will never finish; the microphone cannot be switched off")
+	}
+	close(rec.release)
+}
+
+// An abandoned request takes its work with it: a browser that has given up
+// on a chunk must not leave the session's lock held for the rest of the
+// engine's timeout, or the next chunk and the stop both queue behind it.
+func TestAnAbandonedRequestDoesNotHoldTheSession(t *testing.T) {
+	rec := newSlowFinalizer()
+	rec.endpointNow = true
+	s := NewSession(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	writing := make(chan struct{})
+	go func() {
+		close(writing)
+		s.Write(ctx, pcm(1, 2, 3, 4))
+	}()
+	<-writing
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		s.Write(context.Background(), pcm(5, 6))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a request the client gave up on still holds the session lock")
 	}
 	close(rec.release)
 }

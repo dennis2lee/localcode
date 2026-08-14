@@ -275,6 +275,14 @@ func startWhisper(bin, model string, threads int) (*whisperProcess, error) {
 	}
 
 	p := &whisperProcess{cmd: cmd, host: "127.0.0.1:" + strconv.Itoa(port), log: logBuf}
+	// A locally spawned engine is whisper.cpp, because this function is
+	// what spawned it — so the dialect is known and the discovery search
+	// is skipped. It used to run anyway: the comment in transcribe said
+	// there was nothing to discover while the code sent every local
+	// session's first utterance to /v1/audio/transcriptions to find out.
+	// Harmless, and one wasted round trip per engine on the one path that
+	// cannot be wrong.
+	p.api, p.apiSettled = whisperCppAPI(), true
 	p.watch()
 	if err := p.waitReady(); err != nil {
 		p.kill()
@@ -414,9 +422,11 @@ func (p *whisperProcess) transcribe(ctx context.Context, samples []float32, lang
 		language = "auto"
 	}
 
-	// The dialect this server speaks, once it is known. A locally spawned
-	// engine is whisper.cpp and always has been, so there is nothing to
-	// discover; a remote one is whatever someone put on that port.
+	// The dialect this server speaks, once it is known: named in config,
+	// pinned by startWhisper for an engine this process spawned, or
+	// settled by an earlier utterance. Only a remote server nobody has
+	// named reaches the search below — it is whatever someone put on that
+	// port.
 	p.apiMu.Lock()
 	known, settled := p.api, p.apiSettled
 	p.apiMu.Unlock()
@@ -429,10 +439,37 @@ func (p *whisperProcess) transcribe(ctx context.Context, samples []float32, lang
 	// nothing about the audio and everything about the dialect — so it
 	// moves on. Any other outcome, success or failure, is this server
 	// answering the question that was asked, and settles the choice.
+	// Each candidate gets its own share of the time, rather than all of
+	// them sharing one deadline that the first can spend entirely.
+	//
+	// A server that hangs on a path it does not serve — rather than
+	// answering 404 — used to end the search on the spot: the first
+	// candidate ran the whole timeout out, and the two after it failed
+	// instantly on an expired context. Every utterance then did the same
+	// thing, so the endpoint that would have worked was never reached, and
+	// what that looked like from the prompt box was dictation that
+	// produced nothing at all and never said why.
+	var cancels []context.CancelFunc
+	defer func() {
+		for _, cancel := range cancels {
+			cancel()
+		}
+	}()
+	share := func(i int) context.Context {
+		deadline, ok := ctx.Deadline()
+		left := len(whisperAPIs) - i
+		if !ok || left <= 1 {
+			return ctx
+		}
+		cctx, cancel := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(left))
+		cancels = append(cancels, cancel)
+		return cctx
+	}
+
 	var firstErr error
 	transportOnly := true
-	for _, candidate := range whisperAPIs {
-		text, err := p.transcribeVia(ctx, candidate, samples, language)
+	for i, candidate := range whisperAPIs {
+		text, err := p.transcribeVia(share(i), candidate, samples, language)
 
 		// A request that never got an answer says nothing about which
 		// endpoint is there — the connection failed, or the server closed

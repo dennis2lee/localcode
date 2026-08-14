@@ -2,10 +2,14 @@ package dictation
 
 import (
 	"bytes"
+	"context"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Whisper narrates non-speech in brackets, and dictation is mostly
@@ -209,5 +213,86 @@ func TestRemoteHostRejectsWhatCannotNameAMachine(t *testing.T) {
 		if got := (Config{WhisperURL: in}).RemoteHost(); got != "" {
 			t.Errorf("RemoteHost(%q) = %q, want \"\"", in, got)
 		}
+	}
+}
+
+// The real thing this is all about: a speech server that accepts the
+// connection and then says nothing at all.
+//
+// The recognizer's own timeout is the only thing that ends such a request,
+// and until it does the session's lock is held and the microphone cannot
+// be switched off. Cancel is what Stop calls to end it early.
+func TestCancelEndsATranscriptionAgainstASilentServer(t *testing.T) {
+	reached := make(chan struct{}, 1)
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case reached <- struct{}{}:
+		default:
+		}
+		<-block // never answers, which is the whole point
+	}))
+	defer srv.Close()
+	defer close(block)
+
+	rec, err := openWhisper(Config{Engine: EngineWhisper, WhisperURL: srv.URL, WhisperAPI: "whispercpp"})
+	if err != nil {
+		t.Fatalf("openWhisper: %v", err)
+	}
+	w := rec.(*whisperRecognizer)
+	w.Accept(tone(SampleRate)) // a second of speech, so there is something to commit
+
+	done := make(chan string, 1)
+	go func() { done <- w.Final(context.Background()) }()
+
+	select {
+	case <-reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never reached the server")
+	}
+	w.Cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Cancel did not end a transcription that will never be answered")
+	}
+}
+
+// Timestamps come out of the text whatever the server was started with.
+//
+// A local engine is told --no-timestamps because localcode chose its
+// command line. A server on another machine was started by someone else,
+// and none of the upload formats let a client turn them off — so a remote
+// engine can only behave like a local one if they are removed here.
+func TestCleanTranscriptRemovesTimestamps(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"[00:00:00.000 --> 00:00:02.000]  안녕하세요", "안녕하세요"},
+		{"[00:00.000 --> 00:02.000] hello there", "hello there"},
+		{"00:00:00,000 --> 00:00:02,000 hello", "hello"},
+		{"<|0.00|> hello <|2.00|> there", "hello there"},
+		// Not a timestamp: an ordinary parenthesis in speech stays.
+		{"이 함수(비동기)를 async로", "이 함수(비동기)를 async로"},
+		// Nor is a time someone said out loud.
+		{"회의는 10:30에 시작합니다", "회의는 10:30에 시작합니다"},
+	}
+	for _, tt := range tests {
+		if got := cleanTranscript(tt.in); got != tt.want {
+			t.Errorf("cleanTranscript(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// A remote server started with --no-fallback drops exactly the segments
+// fast speech produces, and its command line is not ours to change. The
+// increment is sent per request instead, so the decode has the same
+// second chance a local engine has.
+func TestTheWhisperCppDialectAsksForDecodingFallback(t *testing.T) {
+	api, ok := apiByName("whispercpp")
+	if !ok {
+		t.Fatal("the whispercpp dialect is gone")
+	}
+	if api.extra["temperature_inc"] != "0.2" {
+		t.Errorf("temperature_inc = %q, want whisper.cpp's own default of 0.2", api.extra["temperature_inc"])
 	}
 }

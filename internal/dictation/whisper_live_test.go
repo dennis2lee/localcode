@@ -1,6 +1,7 @@
 package dictation
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -51,7 +52,7 @@ func TestWhisperEndToEnd(t *testing.T) {
 		if end > len(samples) {
 			end = len(samples)
 		}
-		res, err := sess.Write(pcm16(samples[off:end]))
+		res, err := sess.Write(context.Background(), pcm16(samples[off:end]))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -61,7 +62,7 @@ func TestWhisperEndToEnd(t *testing.T) {
 	}
 	// Trailing silence, which is what tells the VAD the speaker stopped.
 	for i := 0; i < 15 && final == ""; i++ {
-		res, err := sess.Write(pcm16(make([]float32, chunk)))
+		res, err := sess.Write(context.Background(), pcm16(make([]float32, chunk)))
 		if err != nil {
 			t.Fatal(err)
 		}

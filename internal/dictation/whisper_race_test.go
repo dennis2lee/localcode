@@ -1,6 +1,7 @@
 package dictation
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -149,7 +150,7 @@ func TestRemoteEngineTranscribesWithNothingInstalledLocally(t *testing.T) {
 	defer rec.Close()
 
 	sess := NewSession(rec)
-	if _, err := sess.Write(pcm16(tone(SampleRate))); err != nil {
+	if _, err := sess.Write(context.Background(), pcm16(tone(SampleRate))); err != nil {
 		t.Fatal(err)
 	}
 	if got := sess.Stop().Final; got != "안녕하세요" {

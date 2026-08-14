@@ -79,11 +79,17 @@ export const startDictation = async () => (await api('POST', '/api/dictation')).
 export const stopDictation = (id) => api('POST', `/api/dictation/${id}/stop`);
 // Raw PCM, not JSON: base64 would cost a third more bytes per chunk on a
 // request that happens four times a second, for nothing.
-export async function sendDictationAudio(id, buffer) {
+//
+// signal is how a caller takes the request back. A speech server that
+// accepts the connection and never answers holds this open indefinitely,
+// and everything dictation does is queued behind it — including switching
+// the microphone off.
+export async function sendDictationAudio(id, buffer, signal) {
   const resp = await fetch(`/api/dictation/${id}/audio`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
     body: buffer,
+    signal,
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new ApiError(resp.status, data.error || `POST /api/dictation/${id}/audio: ${resp.status}`);

@@ -157,7 +157,7 @@ func (d *Daemon) handleDictationAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := sess.Write(pcm)
+	res, err := sess.Write(r.Context(), pcm)
 	if err != nil {
 		// 404 rather than 400, because the only way to get here is a
 		// session that has stopped — usually reaped while the browser
