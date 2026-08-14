@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+* **Fix: LaTeX font commands nested in each other were left on screen whole.** Reported with a screenshot of a Gemma reply: `$\mathbf{\text{ vs }}$` — the word "vs", wrapped twice — came through as itself, dollars, braces and both backslashes. The unwrapper took `\text{...}` and `\mathbf{...}` in a single pass, and a single pass can only reach the innermost pair of braces; the `\mathbf` it left behind then matched the test for "this is real maths, leave it alone", and the whole span was kept as source. It now strips them until nothing changes, and covers the rest of the family (`\boldsymbol`, `\mathcal`, `\texttt` and so on). Gemma's own note has been widened to name `\mathbf` and to ask for `**bold**` instead.
+
 ## v0.45.1
 
 * **The request that delivers audio no longer waits for the speech engine.** This is the shape behind every remote-dictation failure so far. Committing a finished sentence was a blocking call *inside* the POST carrying the next chunk of audio, so the engine's time was time the browser sat on an open request, with the session's lock held and its own audio queueing behind it. On a local engine that is a few hundred milliseconds and invisible; on a server on another machine it is however long that machine takes, and every mechanism layered on top — the client's deadline, the lock, the queue — turned the delay into a failure, most recently as three rounds of `signal is aborted without reason`. The sentence is now transcribed on its own and delivered with a later chunk, a quarter of a second being the wait for one. Switching the microphone off still waits up to 3s for the sentence in progress and no longer.

@@ -28,9 +28,10 @@ var modelQuirks = []struct {
 		match: "gemma",
 		note: "Output formatting: this interface renders Markdown only — there is no LaTeX or MathJax in it. " +
 			"Never wrap text in $...$, $$...$$, \\(...\\) or \\[...\\], and do not use LaTeX commands such as " +
-			"\\rightarrow, \\text{...}, \\times or \\le: they are shown to the user exactly as written, dollars " +
-			"and backslashes included. Write the character itself (-> or →, ×, ≤), plain words, or a fenced code " +
-			"block. Ordinary Markdown — headings, lists, tables, **bold**, `code` — renders correctly and is welcome.",
+			"\\rightarrow, \\text{...}, \\mathbf{...}, \\times or \\le: they are shown to the user exactly as " +
+			"written, dollars and backslashes included. Write the character itself (-> or →, ×, ≤), plain words, " +
+			"or a fenced code block, and use **bold** rather than \\mathbf for emphasis. Ordinary Markdown — " +
+			"headings, lists, tables, **bold**, `code` — renders correctly and is welcome.",
 	},
 }
 

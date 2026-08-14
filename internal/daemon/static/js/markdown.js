@@ -245,13 +245,25 @@ const mathSymbols = {
   quad: ' ', qquad: ' ', thinspace: ' ', space: ' ',
 };
 
+// \text{x}, \mathrm{x}, \mathbf{x}: the braces are the markup and the
+// contents are the words. They nest — \mathbf{\text{ vs }} is one phrase
+// wrapped twice — and a single pass can only take the innermost pair,
+// which leaves a \mathbf behind and makes the whole formula look like real
+// maths to the test at the end. So strip until nothing changes.
+function stripFontCommands(s) {
+  const font = /\\(?:text|textbf|textit|textrm|textsf|texttt|mathrm|mathbf|mathit|mathsf|mathtt|mathcal|boldsymbol|operatorname)\{([^{}]*)\}/g;
+  for (let i = 0; i < 8; i++) {
+    const next = s.replace(font, '$1');
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
 export function unwrapMath(s) {
   return s.replace(/\$\$?([^$\n]+?)\$?\$/g, (whole, body) => {
     if (!body.includes('\\')) return whole; // no LaTeX in it; not ours to touch
-    let out = body
-      // \text{x}, \mathrm{x}, \mathbf{x}: the braces are the markup and
-      // the contents are the words.
-      .replace(/\\(?:text|textbf|textit|mathrm|mathbf|mathit|operatorname)\{([^{}]*)\}/g, '$1')
+    let out = stripFontCommands(body)
       .replace(/\\([a-zA-Z]+)/g, (cmd, name) => (name in mathSymbols ? mathSymbols[name] : cmd))
       // Escaped punctuation, which is only escaped because it was inside
       // maths. Deliberately not & or #: this text has already been through

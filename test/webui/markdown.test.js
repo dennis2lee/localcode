@@ -279,3 +279,19 @@ test('symbols outside the first table are unwrapped too', async () => {
     assert.equal(app.unwrapMath(input), want, input);
   }
 });
+
+// The next one through: `$\mathbf{\text{ vs }}$`, a word wrapped twice.
+// One pass takes the inner \text and leaves the \mathbf, which then reads
+// as real maths — so the whole thing stayed on screen as source.
+test('font commands nested in each other are all unwrapped', async () => {
+  const app = await load();
+  const cases = [
+    ['Retention $\\mathbf{\\text{ vs }}$ Present Invention', 'Retention vs Present Invention'],
+    ['$\\text{\\mathbf{Ring}}$ buffer', 'Ring buffer'],
+    ['$\\boldsymbol{\\mathrm{\\text{Fork}}}$', 'Fork'],
+    ['$\\mathbf{\\text{S1}} \\sim \\mathbf{\\text{S6}}$', 'S1 ∼ S6'],
+  ];
+  for (const [input, want] of cases) {
+    assert.equal(app.unwrapMath(input), want, input);
+  }
+});
