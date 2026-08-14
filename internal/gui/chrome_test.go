@@ -102,3 +102,47 @@ func pxIn(t *testing.T, block, property string) int {
 	}
 	return n
 }
+
+// Every command the page sends has to be one the window knows.
+//
+// The two halves are a string apart: the page calls lcWindowCommand("drag")
+// and the window looks that string up. A name that only one side knows is
+// a control that silently does nothing — which is precisely how v0.44.0
+// shipped a title bar you could not drag, and the kind of failure that
+// cannot be seen from this machine at all.
+func TestEveryWindowCommandThePageSendsIsKnown(t *testing.T) {
+	js, err := os.ReadFile("../daemon/static/js/main.js")
+	if err != nil {
+		t.Fatalf("read main.js: %v", err)
+	}
+	want := map[string]bool{}
+	for _, m := range regexp.MustCompile(`lcWindowCommand\('([a-z:]+)'\)`).FindAllSubmatch(js, -1) {
+		want[string(m[1])] = true
+	}
+	// The resize commands are built from the edge list rather than written
+	// out, so they are read from the same place the page builds them.
+	dom, err := os.ReadFile("../daemon/static/js/dom.js")
+	if err != nil {
+		t.Fatalf("read dom.js: %v", err)
+	}
+	edges := regexp.MustCompile(`windowEdges = \[([^\]]*)\]`).FindSubmatch(dom)
+	if edges == nil {
+		t.Fatal("dom.js no longer lists the window's resize edges")
+	}
+	for _, m := range regexp.MustCompile(`'([a-z]+)'`).FindAllSubmatch(edges[1], -1) {
+		want["resize:"+string(m[1])] = true
+	}
+	if len(want) < 5 {
+		t.Fatalf("only found %d commands in the page; the scan is wrong", len(want))
+	}
+
+	src, err := os.ReadFile("chrome_windows.go")
+	if err != nil {
+		t.Fatalf("read chrome_windows.go: %v", err)
+	}
+	for cmd := range want {
+		if !strings.Contains(string(src), `"`+cmd+`"`) {
+			t.Errorf("the page sends %q and the window does not handle it", cmd)
+		}
+	}
+}

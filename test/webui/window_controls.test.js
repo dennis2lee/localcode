@@ -29,3 +29,43 @@ test('the frameless window gets its buttons, wired to the window', async () => {
 
   assert.deepEqual(commands, ['minimize', 'maximize', 'close']);
 });
+
+// Moving and resizing are asked for, not hit-tested.
+//
+// The page is rendered into a child window of the frameless one, so a
+// press on it never reaches the window's own hit test — which is why
+// v0.44.0's buttons worked and its drag strip and edges did nothing.
+test('pressing the drag strip asks the window to move', async () => {
+  const commands = [];
+  const app = await load({ globals: { lcWindowCommand: (cmd) => commands.push(cmd) } });
+
+  const ev = app.el('window-title').fire('pointerdown', { button: 0 });
+  assert.deepEqual(commands, ['drag']);
+  assert.equal(ev.defaultPrevented, true, 'the press has to be taken from the page');
+
+  // A right-click is the system menu's business, not a drag.
+  app.el('window-title').fire('pointerdown', { button: 2 });
+  assert.deepEqual(commands, ['drag']);
+
+  app.el('window-title').fire('dblclick');
+  assert.deepEqual(commands, ['drag', 'maximize']);
+});
+
+test('each edge asks for its own direction', async () => {
+  const commands = [];
+  const app = await load({ globals: { lcWindowCommand: (cmd) => commands.push(cmd) } });
+
+  assert.equal(app.el('window-edges').hidden, false);
+  for (const edge of ['top', 'bottom', 'left', 'right', 'topleft', 'topright', 'bottomleft', 'bottomright']) {
+    app.el('window-edge-' + edge).fire('pointerdown', { button: 0 });
+  }
+  assert.deepEqual(commands, [
+    'resize:top', 'resize:bottom', 'resize:left', 'resize:right',
+    'resize:topleft', 'resize:topright', 'resize:bottomleft', 'resize:bottomright',
+  ]);
+});
+
+test('a browser tab has no resize edges either', async () => {
+  const app = await load();
+  assert.equal(app.el('window-edges').hidden, true);
+});

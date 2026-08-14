@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.45.1
+
+* **Fix: the frameless Windows window could not be moved or resized.** Reported from the machine that has one: the caption was gone and the page's minimise/maximise/close worked, but dragging the bar did nothing and no edge would pull. The cause is that WebView2 renders the page into a *child* window covering the client area, so a press on the page is that child's message and the top-level window's `WM_NCHITTEST` is never consulted — v0.44.0's hit test was answering a question nobody asked. The buttons worked because they are ordinary page clicks, which is exactly what hid it. The page now reports the press instead: pressing the title strip or one of eight resize edges calls into the window, which releases the capture and hands Windows the same `WM_NCLBUTTONDOWN` its own frame would have, so moving, resizing, edge snapping and double-click-to-maximise all behave as usual. A test pins the command names the two halves share, since a name only one side knows is a control that silently does nothing.
+
 ## v0.45.0
 
 * **Gemma's LaTeX renders as what it meant.** Gemma writes arrows and names as `$\rightarrow$` and `$\text{Bla-Bla}$` — correct in a chat client with MathJax in it, and literal dollars and backslashes in one without. Two halves: a model whose id contains `gemma` is now told, in its system prompt, that this window renders Markdown and nothing else and to write the character itself; and the renderer unwraps the ones that arrive anyway, so replies already in a transcript read properly too. Both are narrow — no other model is told anything, and a `$` span is only touched when it contains a LaTeX command, so `$PATH`, `$5` and real formulas are left exactly as they are. Other models with their own habits can be added to the same table in `internal/agent/quirks.go`.

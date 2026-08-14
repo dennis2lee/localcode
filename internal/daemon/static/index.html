@@ -13,12 +13,27 @@
      with it. The strip left of them is a drag region the OS is told
      about: see internal/gui/chrome_windows.go. -->
 <div id="window-bar" hidden>
-  <span class="title">LocalCode</span>
+  <span class="title" id="window-title">LocalCode</span>
   <div class="window-buttons">
     <button id="window-minimize" title="minimise">&#8722;</button>
     <button id="window-maximize" title="maximise / restore">&#9633;</button>
     <button id="window-close" class="close" title="close">&#10005;</button>
   </div>
+</div>
+<!-- The window's resize edges.
+     WebView2 renders the page into a child window, so a press anywhere
+     here belongs to that child and the top-level window's hit test never
+     sees it — which is why these are drawn by the page and hand the press
+     back to the window. Hidden with the title bar above. -->
+<div id="window-edges" hidden>
+  <div class="edge n" id="window-edge-top"></div>
+  <div class="edge s" id="window-edge-bottom"></div>
+  <div class="edge w" id="window-edge-left"></div>
+  <div class="edge e" id="window-edge-right"></div>
+  <div class="edge nw" id="window-edge-topleft"></div>
+  <div class="edge ne" id="window-edge-topright"></div>
+  <div class="edge sw" id="window-edge-bottomleft"></div>
+  <div class="edge se" id="window-edge-bottomright"></div>
 </div>
 <header>
   <div class="left-group">

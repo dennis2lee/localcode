@@ -75,6 +75,13 @@ export const settingsSaveNoteEl = document.getElementById('settings-save-note');
 export const micDeviceSelect = document.getElementById('mic-device-select');
 export const dictationLanguageSelect = document.getElementById('dictation-language-select');
 export const windowBarEl = document.getElementById('window-bar');
+export const windowEdgesEl = document.getElementById('window-edges');
+// The resize edges, paired with the direction each one means. An array
+// rather than eight exports because nothing ever wants one of them by
+// name — they are handled identically and differ only in what they say.
+export const windowEdges = ['top', 'bottom', 'left', 'right', 'topleft', 'topright', 'bottomleft', 'bottomright']
+  .map(edge => ({ edge, el: document.getElementById('window-edge-' + edge) }));
+export const windowTitleEl = document.getElementById('window-title');
 export const windowMinimizeBtn = document.getElementById('window-minimize');
 export const windowMaximizeBtn = document.getElementById('window-maximize');
 export const windowCloseBtn = document.getElementById('window-close');

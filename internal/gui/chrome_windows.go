@@ -47,19 +47,22 @@ var (
 )
 
 const (
-	wmNCCalcSize  = 0x0083
-	wmNCHitTest   = 0x0084
-	wmNCDestroy   = 0x0082
-	wmClose       = 0x0010
-	wmSysCommand  = 0x0112
-	scMinimize    = 0xF020
-	scMaximize    = 0xF030
-	scRestore     = 0xF120
-	swpFrameChang = 0x0020
-	swpNoMove     = 0x0002
-	swpNoSize     = 0x0001
-	swpNoZOrder   = 0x0004
-	swpNoActivate = 0x0010
+	wmNCCalcSize = 0x0083
+	wmNCHitTest  = 0x0084
+	wmNCDestroy  = 0x0082
+	// WM_NCLBUTTONDOWN with a hit-test code is what starts Windows' own
+	// move and resize loops.
+	wmNCLButtonDown = 0x00A1
+	wmClose         = 0x0010
+	wmSysCommand    = 0x0112
+	scMinimize      = 0xF020
+	scMaximize      = 0xF030
+	scRestore       = 0xF120
+	swpFrameChang   = 0x0020
+	swpNoMove       = 0x0002
+	swpNoSize       = 0x0001
+	swpNoZOrder     = 0x0004
+	swpNoActivate   = 0x0010
 
 	wsCaption     = 0x00C00000
 	wsThickFrame  = 0x00040000
@@ -102,6 +105,8 @@ var (
 	procSetWindowPos     = user32.NewProc("SetWindowPos")
 	procIsZoomed         = user32.NewProc("IsZoomed")
 	procPostMessage      = user32.NewProc("PostMessageW")
+	procSendMessage      = user32.NewProc("SendMessageW")
+	procReleaseCapture   = user32.NewProc("ReleaseCapture")
 	// Windows 10 1607 and later. Absent on older systems, where the
 	// fallback is the system-wide metric and a 100% scale assumption.
 	procGetDpiForWindow = user32.NewProc("GetDpiForWindow")
@@ -382,7 +387,50 @@ func windowCommand(hwnd uintptr, cmd string) {
 		procPostMessage.Call(hwnd, uintptr(wmSysCommand), uintptr(scMaximize), 0)
 	case "close":
 		procPostMessage.Call(hwnd, uintptr(wmClose), 0, 0)
+	default:
+		if where, ok := dragTargets[cmd]; ok {
+			beginDrag(hwnd, where)
+		}
 	}
+}
+
+// dragTargets maps what the page asked for onto the part of a window
+// frame Windows would have been dragged by.
+var dragTargets = map[string]int32{
+	"drag":               htCaption,
+	"resize:left":        htLeft,
+	"resize:right":       htRight,
+	"resize:top":         htTop,
+	"resize:bottom":      htBottom,
+	"resize:topleft":     htTopLeft,
+	"resize:topright":    htTopRight,
+	"resize:bottomleft":  htBottomLeft,
+	"resize:bottomright": htBottomRight,
+}
+
+// beginDrag hands the mouse to Windows' own move/resize loop.
+//
+// This is here because WM_NCHITTEST was not enough, and could not be.
+// WebView2 renders into a *child* window covering the client area, so a
+// press anywhere on the page is that child's message and the top-level
+// window's hit test is never consulted — which is exactly what v0.44.0
+// looked like on Windows: the caption was gone and the page's own buttons
+// worked (they are page clicks), while dragging the strip and pulling an
+// edge did nothing at all, because nothing was ever asked.
+//
+// So the page reports the press instead, and this says the same thing the
+// hit test would have: release the capture the page's window has, then
+// tell the top-level window the button went down on that part of its
+// frame. Windows takes it from there, including the snap-to-edge and
+// double-click behaviour a caption has.
+func beginDrag(hwnd uintptr, where int32) {
+	if zoomed, _, _ := procIsZoomed.Call(hwnd); zoomed != 0 && where != htCaption {
+		return // a maximized window has no edges to pull
+	}
+	procReleaseCapture.Call()
+	// Sent rather than posted: the loop it starts wants the button still
+	// down, and a posted message can arrive after it comes up.
+	procSendMessage.Call(hwnd, uintptr(wmNCLButtonDown), uintptr(where), 0)
 }
 
 // windowControls is the function the page calls to work its own title bar

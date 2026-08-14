@@ -6,7 +6,7 @@ import {
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
   workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, micBtn, stopBtn,
   workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskCloseBtn,
-  windowBarEl, windowMinimizeBtn, windowMaximizeBtn, windowCloseBtn,
+  windowBarEl, windowMinimizeBtn, windowMaximizeBtn, windowCloseBtn, windowEdgesEl, windowTitleEl, windowEdges,
 } from './dom.js';
 import { app, session } from './state.js';
 import { uploadFile, switchAgent } from './api.js';
@@ -170,9 +170,37 @@ workspaceInput.addEventListener('keydown', (e) => {
 function initWindowControls() {
   if (typeof window.lcWindowCommand !== 'function') return;
   windowBarEl.hidden = false;
+  windowEdgesEl.hidden = false;
   windowMinimizeBtn.addEventListener('click', () => window.lcWindowCommand('minimize'));
   windowMaximizeBtn.addEventListener('click', () => window.lcWindowCommand('maximize'));
   windowCloseBtn.addEventListener('click', () => window.lcWindowCommand('close'));
+
+  // Moving and resizing are asked for from here rather than worked out by
+  // the window itself.
+  //
+  // The window has no frame left to hit-test, and the page is rendered
+  // into a child window of it, so a press on the page is that child's
+  // message and the top-level window is never asked what is under the
+  // cursor. v0.44.0 relied on it being asked: the buttons above worked,
+  // because those are ordinary page clicks, and dragging the bar and
+  // pulling an edge did nothing whatsoever.
+  //
+  // pointerdown, not click: this hands the press itself over, and the
+  // window enters the same move or resize loop it would have entered from
+  // its own title bar — including snapping to a screen edge.
+  windowTitleEl.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    window.lcWindowCommand('drag');
+  });
+  windowTitleEl.addEventListener('dblclick', () => window.lcWindowCommand('maximize'));
+  for (const { edge, el } of windowEdges) {
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      window.lcWindowCommand('resize:' + edge);
+    });
+  }
 }
 
 async function init() {
