@@ -84,10 +84,11 @@ type whisperRecognizer struct {
 	// hundred milliseconds and the interval below governs; on a slow one
 	// it is the difference between one queue and an ever-growing one.
 	lastCost time.Duration
-	// inflight holds the cancel func of every transcription running right
-	// now, so Cancel can end them without waiting for their timeouts. A
-	// map rather than one func because a partial and a final can overlap.
-	inflight map[uint64]context.CancelFunc
+	// inflight holds every transcription running right now, so they can be
+	// ended without waiting for their timeouts. A map rather than one func
+	// because a partial and a final can overlap — and they are told apart,
+	// because they are worth very different amounts. See Cancel.
+	inflight map[uint64]inflightCall
 	nextCall uint64
 	// utterance counts utterances, so a transcription that comes back
 	// after its own has ended can tell. Without it, a partial still in
@@ -107,18 +108,28 @@ func openWhisper(cfg Config) (Recognizer, error) {
 	return &whisperRecognizer{proc: proc, language: cfg.Language}, nil
 }
 
+// inflightCall is one transcription in progress, and whether it is
+// producing a sentence or only a preview of one.
+type inflightCall struct {
+	cancel context.CancelFunc
+	// final marks the transcription of a finished utterance — the text that
+	// gets committed. A partial is a preview that another one supersedes a
+	// second later.
+	final bool
+}
+
 // begin derives a cancellable context for one transcription and returns
 // it with the func that both cancels it and forgets it. Keyed by a
 // counter because two CancelFuncs cannot be compared.
-func (w *whisperRecognizer) begin(parent context.Context, timeout time.Duration) (context.Context, func()) {
+func (w *whisperRecognizer) begin(parent context.Context, timeout time.Duration, final bool) (context.Context, func()) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	w.mu.Lock()
 	if w.inflight == nil {
-		w.inflight = map[uint64]context.CancelFunc{}
+		w.inflight = map[uint64]inflightCall{}
 	}
 	w.nextCall++
 	id := w.nextCall
-	w.inflight[id] = cancel
+	w.inflight[id] = inflightCall{cancel: cancel, final: final}
 	w.mu.Unlock()
 	return ctx, func() {
 		cancel()
@@ -128,17 +139,35 @@ func (w *whisperRecognizer) begin(parent context.Context, timeout time.Duration)
 	}
 }
 
-// Cancel abandons whatever transcription is running.
+// Cancel abandons the previews, and only the previews.
 //
-// The engine call that commits an utterance is allowed a minute, which is
-// right when the answer is coming and is the entire wait when it is not —
-// a speech server that accepts the connection and never replies. Stop
-// calls this before asking for the session's lock, so switching the
-// microphone off does not queue behind a request that will never land.
-func (w *whisperRecognizer) Cancel() {
+// Stop calls this before asking for the session's lock, so switching the
+// microphone off does not queue behind engine work — and a partial is the
+// right thing to throw away, because the audio it describes is about to be
+// transcribed properly by the final that Stop then waits for.
+//
+// A *final* is not. It is a sentence someone said, already in flight, and
+// cancelling it is how the last sentence of every dictation went missing
+// against a slow engine: Stop cancelled the transcription and then waited
+// three seconds for the transcription it had just cancelled. On a local
+// engine the commit lands within a chunk or two and this was invisible; on
+// a server on another machine it took seconds, so it was always still
+// running when the microphone went off — no text, and no error either.
+// See Close for the cancel that really does mean everything.
+func (w *whisperRecognizer) Cancel() { w.cancel(false) }
+
+// cancel ends the transcriptions in flight — all of them when all is set,
+// and otherwise only the previews.
+func (w *whisperRecognizer) cancel(all bool) {
 	w.mu.Lock()
-	cancels := w.inflight
-	w.inflight = nil
+	var cancels []context.CancelFunc
+	for id, call := range w.inflight {
+		if !all && call.final {
+			continue
+		}
+		cancels = append(cancels, call.cancel)
+		delete(w.inflight, id)
+	}
 	w.mu.Unlock()
 	for _, cancel := range cancels {
 		cancel()
@@ -181,7 +210,7 @@ func (w *whisperRecognizer) Accept(samples []float32) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		ctx, done := w.begin(context.Background(), partialTimeout)
+		ctx, done := w.begin(context.Background(), partialTimeout, false)
 		defer done()
 		started := time.Now()
 		text, err := w.proc.transcribe(ctx, window, w.language)
@@ -261,7 +290,7 @@ func (w *whisperRecognizer) Transcribe(parent context.Context, window []float32)
 	if len(window) == 0 {
 		return ""
 	}
-	ctx, done := w.begin(parent, finalTimeout)
+	ctx, done := w.begin(parent, finalTimeout, true)
 	defer done()
 	text, err := w.proc.transcribe(ctx, window, w.language)
 	if err != nil {
@@ -288,7 +317,7 @@ func (w *whisperRecognizer) Final(parent context.Context) string {
 	window := append([]float32(nil), w.audio...)
 	w.mu.Unlock()
 
-	ctx, done := w.begin(parent, finalTimeout)
+	ctx, done := w.begin(parent, finalTimeout, true)
 	defer done()
 	text, err := w.proc.transcribe(ctx, window, w.language)
 	if err != nil {
@@ -332,9 +361,10 @@ func (w *whisperRecognizer) Close() {
 	w.mu.Unlock()
 
 	// Nothing in flight is worth waiting for once this recognizer is
-	// closed, and waiting is what the wait below would otherwise do for a
-	// server that has stopped answering.
-	w.Cancel()
+	// closed — a sentence included, since there is no longer anywhere to
+	// deliver it — and waiting is what the wait below would otherwise do
+	// for a server that has stopped answering.
+	w.cancel(true)
 
 	// Background partials are waited for rather than abandoned: they hold
 	// a reference to the shared process, and releasing it under them is

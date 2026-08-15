@@ -127,3 +127,39 @@ test('a backlog is uploaded in pieces the daemon will accept', async () => {
   // And nothing was dropped on the way.
   assert.equal(sizes.reduce((a, b) => a + b, 0), 480 * 8000);
 });
+
+// The last thing said, and the reason there was nothing.
+//
+// The reply to a stop carries both, because after it there is no further
+// request to carry either: the sentence someone was in the middle of when
+// they clicked the microphone off, and — against a remote engine, where
+// transcribing it can fail — why it is not there. The error half used to
+// be dropped on the floor, which is most of what "nothing happens and
+// nothing is said" was.
+test('the stop reply delivers the last sentence and any reason it failed', async () => {
+  const app = await load({
+    routes: {
+      ...ROUTES,
+      'POST /api/dictation/d-1/audio': { provisional: '', final: '' },
+      'POST /api/dictation/d-1/stop': { final: 'the last thing I said', error: 'whisper engine: model not loaded' },
+    },
+  });
+
+  await dictating(app);
+  app.micChunk(new ArrayBuffer(64));
+  await app.settle();
+  await app.stopDictation();
+
+  assert.match(app.el('input').value, /the last thing I said/);
+  assert.match(app.el('transcript').innerHTML, /model not loaded/);
+});
+
+// The client must not give up before the daemon does. The daemon waits for
+// the sentence in progress; a shorter limit here abandoned it a moment
+// before it arrived, which against a slow engine was every time.
+test('stopping waits longer than the daemon does', async () => {
+  const app = await load({ routes: ROUTES });
+  // The daemon's own grace period, in internal/dictation/dictation.go.
+  assert.ok(app.dictationTimeouts.stopMs > 8000,
+    `stopMs is ${app.dictationTimeouts.stopMs}ms, at or below the daemon's 8s wait for the last sentence`);
+});

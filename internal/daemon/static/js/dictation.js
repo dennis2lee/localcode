@@ -42,8 +42,12 @@ const SAMPLE_RATE = 16000;
 //              finish uploading. The tail of a sentence is worth a moment;
 //              it is not worth the microphone appearing not to switch off.
 //   stopMs     how long stopping will wait for the daemon's own answer,
-//              which carries whatever was mid-sentence.
-export const dictationTimeouts = { requestMs: 60000, flushMs: 1500, stopMs: 4000 };
+//              which carries whatever was mid-sentence. Above the daemon's
+//              own grace period, so that limit is the one that decides:
+//              set below it, this gave up on the last sentence a moment
+//              before it arrived. Nothing is waiting on it — the
+//              microphone is already off and the box is already usable.
+export const dictationTimeouts = { requestMs: 60000, flushMs: 1500, stopMs: 10000 };
 
 // after resolves once ms have passed, for racing against a wait that may
 // never end.
@@ -576,6 +580,11 @@ export async function stopDictation() {
     // taken when dictation started. This round trip lands after the user
     // is free to type again, and writing the old snapshot back threw
     // away everything typed in between and moved the caret to the end.
+    // A failure that happened while the last sentence was being
+    // transcribed is reported here or nowhere: there are no more chunks
+    // to carry it, and "nothing appeared" with no reason given is the
+    // complaint this whole path exists to answer.
+    if (res.error) appendError(res.error);
     finishInput(session, res.final || '');
   } catch (err) {
     // Nothing to add to the box, and nothing to take out of it either:

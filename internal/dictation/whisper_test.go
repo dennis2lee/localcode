@@ -222,7 +222,7 @@ func TestRemoteHostRejectsWhatCannotNameAMachine(t *testing.T) {
 // The recognizer's own timeout is the only thing that ends such a request,
 // and until it does the session's lock is held and the microphone cannot
 // be switched off. Cancel is what Stop calls to end it early.
-func TestCancelEndsATranscriptionAgainstASilentServer(t *testing.T) {
+func TestCloseEndsATranscriptionAgainstASilentServer(t *testing.T) {
 	reached := make(chan struct{}, 1)
 	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -250,12 +250,25 @@ func TestCancelEndsATranscriptionAgainstASilentServer(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the request never reached the server")
 	}
-	w.Cancel()
 
+	// Cancel spares it: this is a sentence someone said, and Stop calls
+	// Cancel on its way to waiting for exactly this transcription. Ending
+	// it here is how the last sentence of every dictation went missing.
+	w.Cancel()
+	select {
+	case text := <-done:
+		t.Fatalf("Cancel ended the sentence it was supposed to wait for, returning %q", text)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Close does end it. Once the session is gone there is nowhere to
+	// deliver the text, and waiting on a server that will never answer is
+	// the one thing that must not happen.
+	go w.Close()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("Cancel did not end a transcription that will never be answered")
+		t.Fatal("Close did not end a transcription that will never be answered")
 	}
 }
 

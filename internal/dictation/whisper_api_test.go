@@ -223,13 +223,18 @@ func TestAFailingServerIsReportedOnce(t *testing.T) {
 	if _, err := sess.Write(context.Background(), pcm16(tone(SampleRate))); err != nil {
 		t.Fatal(err)
 	}
-	sess.Stop()
+	// Stopping reports the failure too, so it is taken from there rather
+	// than from the recognizer: the last error of a dictation reaches the
+	// user through the stop reply and nowhere else.
+	msg := sess.Stop().Error
 
 	reporter, ok := rec.(errorReporter)
 	if !ok {
 		t.Fatal("the whisper recognizer cannot report why it produced nothing")
 	}
-	msg := reporter.TakeError()
+	if msg == "" {
+		msg = reporter.TakeError()
+	}
 	if msg == "" {
 		t.Fatal("a server that refused every request reported nothing at all")
 	}

@@ -196,6 +196,11 @@ func (s *Session) commit(ctx context.Context) {
 		return
 	}
 
+	// The last preview of this utterance, kept before the reset clears it.
+	// If the transcription of the finished audio comes back with nothing —
+	// it failed, or it ran out of time — this is still what the person
+	// said, and an imperfect transcript beats silently dropping a sentence.
+	fallback := s.rec.Partial()
 	window := async.TakeUtterance()
 	s.rec.Reset()
 	if len(window) == 0 {
@@ -205,6 +210,9 @@ func (s *Session) commit(ctx context.Context) {
 	go func() {
 		defer s.pending.Done()
 		text := async.Transcribe(context.Background(), window)
+		if text == "" {
+			text = fallback
+		}
 		s.logUtterance(text)
 		s.queueCommitted(text)
 	}()
@@ -300,14 +308,27 @@ func (s *Session) Stop() Result {
 	case <-time.After(stopGrace):
 	}
 
-	res := Result{Final: s.takeCommitted()}
+	// The error too. Every other reply carries one and this one did not, so
+	// a dictation whose only failure happened at the end — which is where a
+	// slow engine's failures land — finished with nothing said at all: no
+	// text, and no reason for there being none.
+	res := Result{Final: s.takeCommitted(), Error: s.takeError()}
 	s.rec.Close()
 	return res
 }
 
 // stopGrace is how long switching the microphone off waits for the
 // sentence in progress to come back from the engine.
-const stopGrace = 3 * time.Second
+//
+// Eight seconds, not three. Three was chosen against a local engine, which
+// answers in a few hundred milliseconds; a speech server on another machine
+// takes as long as that machine takes, and the sentence being waited for is
+// the last thing the person said — usually the whole point of switching the
+// microphone off. Nothing is blocked in the meantime: the client turns the
+// microphone off the moment the capture stops, and this wait only decides
+// how late the final words land in the box. The client's own limit is above
+// this one, so this is what normally decides.
+const stopGrace = 8 * time.Second
 
 // Idle reports how long since this session last received audio.
 func (s *Session) Idle() time.Duration {

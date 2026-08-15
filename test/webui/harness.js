@@ -82,8 +82,11 @@ function defaultRoutes() {
 }
 
 // A route value is either a plain JSON body (answered 200), or a descriptor
-// {status, body, error} for the cases a test needs to force — a 409 busy, a
-// 500, a network failure.
+// {status, body} for the cases a test needs to force — a 409 busy, a 500.
+// {networkError: "..."} makes the fetch itself reject, which is a different
+// thing from a reply that reports a failure: the daemon's own replies carry
+// an "error" field of their own, and a bare `error` used to be read as this
+// — so a route returning what the daemon really sends never arrived.
 function toResponse(value) {
   const desc = value && typeof value === 'object' && !Array.isArray(value) && 'status' in value
     ? value
@@ -242,7 +245,7 @@ async function load(opts = {}) {
       throw new Error(`harness: no route for ${method} ${urlPath} (add one via load({routes}))`);
     }
     const value = typeof route === 'function' ? await route(body, { method, path: urlPath }) : route;
-    if (value && value.error) throw new Error(value.error);
+    if (value && value.networkError) throw new Error(value.networkError);
     return toResponse(value);
   };
 
