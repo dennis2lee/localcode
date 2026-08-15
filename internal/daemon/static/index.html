@@ -187,6 +187,25 @@
       <p class="note" id="dictation-engine-note"></p>
     </div>
 
+    <!--
+      Updates.
+
+      Two buttons rather than one, because the two things they do are not
+      the same kind of thing: checking asks GitHub what the latest release
+      is, and installing replaces the program you are using. Nothing here
+      happens on opening the panel — a check is an outbound request that
+      says which version this machine runs, and that is asked for.
+    -->
+    <h4 class="settings-section">Updates</h4>
+
+    <div class="settings-field">
+      <div class="field-row">
+        <button id="update-check-btn">Check for updates</button>
+        <button id="update-install-btn" hidden>Download and install</button>
+      </div>
+      <p class="note" id="update-note"></p>
+    </div>
+
     <p class="note" id="settings-save-note"></p>
     <div class="close-row">
       <button id="settings-save">Save</button>

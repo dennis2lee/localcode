@@ -1523,6 +1523,56 @@ On Windows the speech runtime is three DLLs that the MSI installs beside
 program's imports before any of its own code runs, so a copy of
 `localcode-gui.exe` moved elsewhere on its own will not start at all.
 
+### Checking for updates
+
+The settings window (⚙ under the prompt) has an **Updates** section with
+two buttons, and neither does anything until it is clicked.
+
+| Button | What it does |
+| --- | --- |
+| Check for updates | Asks GitHub for the latest release of `dennis2lee/localcode` and compares it against this build. |
+| Download and install | Downloads the file for this platform, verifies it, and starts the installer. Appears only when there is a newer release *and* this localcode can install it. |
+
+Nothing checks on a timer or on opening the panel. A check is an outbound
+request that tells GitHub which version this machine is running, which is
+a thing to ask for rather than assume, and an update replaces the program
+while someone is using it.
+
+**Where the install button appears.** Only in the desktop window, where
+the daemon and the person clicking share a machine. Over `--server` the
+check still works and the install does not: it would replace the program
+on the *server*, at the request of a browser somewhere else. The panel
+says so and offers the release page instead. It is the same rule the
+folder picker follows.
+
+**What is downloaded.** The file that matches how localcode was installed:
+
+| Platform | Asset |
+| --- | --- |
+| Windows amd64 | The `.msi`, which upgrades in place |
+| Windows arm64 | The `.zip` (no installer; the panel says where the file is) |
+| macOS, from `LocalCode.app` | `LocalCode-x.y.z-darwin-universal-app.tar.gz` |
+| macOS, command line | `localcode-x.y.z-darwin-universal.tar.gz` |
+
+It is checked against the SHA-256 GitHub records for the asset before
+anything is run, and refused if it does not match or if the size is
+wrong — a connection dropped at 90% otherwise produces an installer that
+opens, fails halfway, and leaves a broken install. Downloads go to the
+user cache directory (`%LOCALAPPDATA%\localcode\updates` on Windows).
+
+**What installing does.** On Windows it runs `msiexec /i` on the
+downloaded package: Windows asks for elevation, shows the installer, and
+localcode has to close for its files to be replaced — the window offers
+to close itself a few seconds after the installer starts. Everywhere else
+localcode does not unpack anything over a running install; it says where
+the file is and leaves it to you. Unpacking an archive over the program
+that is running it is how an update leaves half of two versions on a
+machine.
+
+A build that is not a release — one from a working tree, which reports
+its version as `dev` — is never offered an update, since there is no
+version to compare and every release would look both newer and older.
+
 ## Known limitations
 
 * Opening a session shows the end of it, not all of it. A long conversation loads its last few hundred events rather than replaying the whole log, so switching sessions costs the same whatever their length; there is no "load earlier" control yet, so the beginning of a very long conversation is only in its `.jsonl`.

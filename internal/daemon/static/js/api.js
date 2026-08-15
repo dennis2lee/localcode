@@ -57,6 +57,12 @@ export const getAgents = () => api('GET', '/api/agents');
 export const getCommands = () => api('GET', '/api/commands');
 export const getSettings = () => api('GET', '/api/settings');
 export const getVersion = () => api('GET', '/api/version');
+// Updating. The check is a request to GitHub made through the daemon, so
+// it takes as long as that does; the install downloads tens of megabytes
+// and then starts an installer, which is why it is its own call and not a
+// flag on the first one.
+export const checkUpdate = () => api('GET', '/api/update');
+export const installUpdate = () => api('POST', '/api/update/install');
 // The workspace is per-session, so which session is asking is part of the
 // question. Without it the daemon can only answer with the default a new
 // session would start in, which is not what the header should be showing.

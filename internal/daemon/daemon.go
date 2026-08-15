@@ -39,6 +39,17 @@ type Daemon struct {
 	// desktop one) or none was configured — the handlers answer with an
 	// explanation rather than requiring callers to special-case it.
 	Dictation *dictation.Manager
+	// AllowUpdateInstall lets this daemon download a new release and start
+	// the platform's installer. Set only where the daemon and the person
+	// clicking share a machine — the desktop window — for the same reason
+	// PickDirectory is: over --server, the button would replace the program
+	// on the *server*, at the request of a browser somewhere else. Checking
+	// for a release is not gated; only installing one is.
+	AllowUpdateInstall bool
+	// UpdateAPI overrides GitHub's API address for the update check. Empty
+	// in every real build; set by tests.
+	UpdateAPI string
+
 	// ConfigPath is the config.json settings changes are written to, or
 	// "" when this daemon was started without one. Empty is not an
 	// error: a live setting still applies for as long as the process
@@ -126,6 +137,8 @@ func (d *Daemon) Handler() http.Handler { return d.mux }
 
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
+	d.mux.HandleFunc("GET /api/update", d.handleUpdateCheck)
+	d.mux.HandleFunc("POST /api/update/install", d.handleUpdateInstall)
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
 	d.mux.HandleFunc("POST /api/settings/auto-delegate", d.handleSetAutoDelegate)
 	d.mux.HandleFunc("POST /api/permissions/skip", d.handleSetSkipPermissions)

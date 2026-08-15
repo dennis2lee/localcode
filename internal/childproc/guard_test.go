@@ -27,6 +27,10 @@ var exemptSpawnSites = map[string]string{
 	// above: build-tagged to one OS each, and Hide is a no-op on both.
 	"internal/dialog/reveal_darwin.go:revealDir": "macOS only; Hide is a no-op on darwin",
 	"internal/dialog/reveal_other.go:revealDir":  "non-Windows only; Hide is a no-op there",
+	// The one child that is meant to be seen. msiexec asks for elevation
+	// and then shows the installer, and replacing the program someone is
+	// using is not something to do behind a window they cannot find.
+	"internal/update/install_windows.go:startInstaller": "the MSI installer's own UI is the point",
 }
 
 // TestEverySpawnSiteHidesItsWindow walks the repository's non-test Go source

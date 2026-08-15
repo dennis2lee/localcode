@@ -89,3 +89,6 @@ export const whisperURLInput = document.getElementById('whisper-url-input');
 export const whisperPortInput = document.getElementById('whisper-port-input');
 export const whisperAPISelect = document.getElementById('whisper-api-select');
 export const dictationEngineNoteEl = document.getElementById('dictation-engine-note');
+export const updateCheckBtn = document.getElementById('update-check-btn');
+export const updateInstallBtn = document.getElementById('update-install-btn');
+export const updateNoteEl = document.getElementById('update-note');

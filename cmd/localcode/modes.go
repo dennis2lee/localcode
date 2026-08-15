@@ -54,6 +54,10 @@ func runGUI(configPath string) error {
 			return nil, err
 		}
 		cleanup = done
+		// Same reasoning as the picker below, one step stronger: installing
+		// replaces the program on the machine the daemon runs on, so the
+		// button only exists where that machine is the one being looked at.
+		d.AllowUpdateInstall = true
 		// Only here. The window and the daemon share a machine and a user
 		// in this mode, so a folder picker opens where the person clicking
 		// is sitting. Every other mode leaves d.PickDirectory nil — over
