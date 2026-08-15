@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.46.0
 
 * **The settings window can check for a new release and install it.** Two buttons under a new **Updates** heading, and neither does anything unasked: checking asks GitHub for the latest release of this repository and compares it against the running build, and installing downloads the file that matches how localcode was installed and starts the platform's installer. Nothing runs on a timer, and opening the panel checks nothing — a check is an outbound request that says which version this machine runs. The install button appears only in the desktop window, where the daemon and the person clicking share a machine; over `--server` it would replace the program on the *server* at a remote browser's request, so the check still works there and the install is refused with the release page instead. The download is verified against the SHA-256 GitHub records for the asset and refused if it does not match — a connection dropped at 90% otherwise produces an installer that opens, fails halfway, and leaves a broken install. On Windows the MSI is run through `msiexec /i`, which upgrades in place; on the platforms whose release is an archive, localcode says where the file is rather than unpacking it over the install that is running. See [USAGE.md](USAGE.md#checking-for-updates).
 
