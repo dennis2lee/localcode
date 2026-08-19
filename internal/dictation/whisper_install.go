@@ -64,9 +64,23 @@ func whisperEngineAsset() (url, sum string, err error) {
 			"49dcc16de826f20bd53d44f947a1ae49dfa81f86cad67a64d80820cb192d674a",
 			nil
 	}
+	// Said with whatever way out this machine actually has. "Build
+	// whisper.cpp yourself" is a poor thing to tell someone who has it
+	// installed already — on macOS `brew install whisper-cpp` ships
+	// whisper-server, and pointing at it is one line of config.
+	if path := whisperOnPATH(); path != "" {
+		return "", "", fmt.Errorf(
+			"no prebuilt speech engine is published for %s/%s, but there is one at %s — "+
+				"set dictation.whisper_bin to it (the model has been installed either way)",
+			runtime.GOOS, runtime.GOARCH, path)
+	}
+	hint := ""
+	if runtime.GOOS == "darwin" {
+		hint = " (`brew install whisper-cpp` provides one)"
+	}
 	return "", "", fmt.Errorf(
-		"no prebuilt speech engine is published for %s/%s — build whisper.cpp and put %s beside this binary",
-		runtime.GOOS, runtime.GOARCH, whisperBinName())
+		"no prebuilt speech engine is published for %s/%s — install or build whisper.cpp%s and either put %s beside this binary or set dictation.whisper_bin to it. The model has been installed either way",
+		runtime.GOOS, runtime.GOARCH, hint, whisperBinName())
 }
 
 // whisperEngineFiles are the archive members worth keeping.
@@ -121,6 +135,18 @@ func InstallWhisper(ctx context.Context, parent string, progress func(stage stri
 	// removes them: a few interrupted installs quietly cost gigabytes.
 	sweepPartials(parent)
 
+	// The model first, and the engine after it.
+	//
+	// The order matters on the platforms that have no prebuilt engine.
+	// Doing the engine first meant install stopped at "no prebuilt speech
+	// engine is published for darwin/arm64" having downloaded nothing at
+	// all — and the model is the same 190MB file on every platform, is
+	// half the setup, and is the half that cannot be got from a package
+	// manager. Now the half that can be done, is.
+	if err := installWhisperModel(ctx, parent, progress); err != nil {
+		return err
+	}
+
 	if !fileExists(filepath.Join(parent, whisperBinName())) {
 		url, sum, err := whisperEngineAsset()
 		if err != nil {
@@ -152,25 +178,30 @@ func InstallWhisper(ctx context.Context, parent string, progress func(stage stri
 		}
 	}
 
-	if largestGGML(parent) == "" {
-		model, err := download(ctx, WhisperModelURL, WhisperModelSHA256, parent, func(d, t int64) { progress("model", d, t) })
-		if err != nil {
-			return err
-		}
-		dest := filepath.Join(parent, WhisperModelName)
-		if err := os.Rename(model, dest); err != nil {
-			os.Remove(model)
-			return fmt.Errorf("move model into place: %w", err)
-		}
-		// Renamed out of a temp file created with 0600: it has to be
-		// readable by whatever account runs the program, which on a
-		// machine-wide Windows install is not the account that installed
-		// it.
-		if err := os.Chmod(dest, 0o644); err != nil {
-			return err
-		}
-	}
 	return nil
+}
+
+// installWhisperModel downloads the ggml model into parent if there is
+// none there. Separate from InstallWhisper so it can run before the engine
+// step, which is the step that fails on a platform localcode publishes no
+// engine for.
+func installWhisperModel(ctx context.Context, parent string, progress func(stage string, done, total int64)) error {
+	if largestGGML(parent) != "" {
+		return nil
+	}
+	model, err := download(ctx, WhisperModelURL, WhisperModelSHA256, parent, func(d, t int64) { progress("model", d, t) })
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(parent, WhisperModelName)
+	if err := os.Rename(model, dest); err != nil {
+		os.Remove(model)
+		return fmt.Errorf("move model into place: %w", err)
+	}
+	// Renamed out of a temp file created with 0600: it has to be readable
+	// by whatever account runs the program, which on a machine-wide
+	// Windows install is not the account that installed it.
+	return os.Chmod(dest, 0o644)
 }
 
 // RemoveWhisper deletes the engine and model from parent.

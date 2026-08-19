@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -64,6 +65,33 @@ func findWhisperBin(explicit string) string {
 		}
 	}
 	return ""
+}
+
+// whisperOnPATH returns a whisper-server found on PATH, or "".
+//
+// Never used to *run* one — see findWhisperBin for why a binary that
+// happens to be on PATH is not silently adopted. It is used to say where
+// one is, which is a different question: on macOS and Linux, where
+// localcode publishes no engine of its own, "build whisper.cpp and put it
+// beside this binary" is the wrong thing to tell someone who has already
+// installed it with their package manager. Naming it, and the one line of
+// config that would use it, costs nothing and keeps the choice theirs.
+func whisperOnPATH() string {
+	path, err := exec.LookPath(whisperBinName())
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+// whisperElsewhereHint is the sentence appended to "no engine installed"
+// when there is in fact one on this machine.
+func whisperElsewhereHint() string {
+	path := whisperOnPATH()
+	if path == "" {
+		return ""
+	}
+	return fmt.Sprintf(" — there is one at %s: set dictation.whisper_bin to it to use that build", path)
 }
 
 // findWhisperModel locates a ggml model file.
@@ -196,7 +224,11 @@ func (c Config) whisperPaths() (bin, model string, err error) {
 		if c.WhisperBin != "" {
 			return "", "", fmt.Errorf("no whisper engine at %s", c.WhisperBin)
 		}
-		return "", "", fmt.Errorf("no speech engine installed (found no %s) — run `localcode dictation install`", whisperBinName())
+		hint := whisperElsewhereHint()
+		if hint == "" {
+			hint = " — run `localcode dictation install`"
+		}
+		return "", "", fmt.Errorf("no speech engine installed (found no %s)%s", whisperBinName(), hint)
 	}
 	model = findWhisperModel(c.WhisperModel)
 	if model == "" {

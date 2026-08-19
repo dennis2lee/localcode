@@ -88,34 +88,92 @@ test('the workspace button shows the daemon workspace', async () => {
   assert.equal(app.callsTo('POST', '/api/workspace').length, 0);
 });
 
-// Each session remembers the project it belongs to, so opening one moves the
-// daemon's working directory — which every later tool call resolves from, and
-// is therefore announced in the transcript rather than done silently.
-test('selecting a session switches the daemon to that session\'s workspace', async () => {
+// Each session remembers the project it belongs to, and the header names
+// that project — so opening a conversation about something else has to
+// move the label with it.
+//
+// A read, not a write. The workspace has been per-session since v0.39, so
+// opening a session moves nothing: the daemon already knows which
+// directory that session belongs to. The switch used to POST the
+// session's own path back anyway, purely to update this label.
+test('opening a session shows the directory that session works in', async () => {
+  const dirs = { 'sess-1': '/srv/one', 'sess-2': '/srv/two' };
   const app = await load({
     routes: {
-      'GET /api/workspace': { path: '/srv/other', can_browse: false },
-      'GET /api/sessions': [{ id: 'sess-1', title: 't', agent: 'general-purpose', workspace: '/srv/project' }],
-      'POST /api/workspace': { path: '/srv/project' },
+      'GET /api/workspace': (_body, { query }) => ({ path: dirs[query.get('session')] || '', can_browse: false }),
+      'GET /api/sessions': [
+        { id: 'sess-1', title: 'one', agent: 'general-purpose', workspace: '/srv/one' },
+        { id: 'sess-2', title: 'two', agent: 'general-purpose', workspace: '/srv/two' },
+      ],
     },
   });
-  const calls = app.callsTo('POST', '/api/workspace');
-  assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].body, { path: '/srv/project', session_id: 'sess-1' });
-  assert.equal(app.el('workspace-btn').textContent, '/srv/project');
-  assert.match(app.transcript(), /\[workspace\] \/srv\/project/);
+  assert.equal(app.el('workspace-btn').textContent, '/srv/one');
+
+  app.selectSession('sess-2', 'general-purpose', '/srv/two');
+  await app.settle();
+
+  assert.equal(app.el('workspace-btn').textContent, '/srv/two');
+  assert.equal(app.callsTo('POST', '/api/workspace').length, 0,
+    'opening a session must not ask the daemon to move anything');
 });
 
-test('a refused workspace switch is reported and does not move the button', async () => {
+// The regression, exactly: the daemon refuses a workspace change while
+// that session has a turn in flight — which is the ordinary state of a
+// session you left working and came back to. Switching used to POST the
+// path anyway, get the refusal, leave the header on the *previous*
+// session's project and print an error about a move nobody asked for.
+// That is "the workspace at the top sometimes doesn't switch".
+test('opening a session that is mid-turn still shows its workspace', async () => {
+  const dirs = { 'sess-1': '/srv/one', 'sess-2': '/srv/busy' };
   const app = await load({
     routes: {
-      'GET /api/workspace': { path: '/srv/other', can_browse: false },
-      'GET /api/sessions': [{ id: 'sess-1', title: 't', agent: 'general-purpose', workspace: '/srv/project' }],
-      'POST /api/workspace': { status: 409, body: { error: 'a turn is in progress' } },
+      'GET /api/workspace': (_body, { query }) => ({ path: dirs[query.get('session')] || '', can_browse: false }),
+      'GET /api/sessions': [
+        { id: 'sess-1', title: 'one', agent: 'general-purpose', workspace: '/srv/one' },
+        { id: 'sess-2', title: 'working', agent: 'general-purpose', workspace: '/srv/busy', busy: true },
+      ],
+      'POST /api/workspace': { status: 409, body: { error: 'a turn is in progress in this session' } },
     },
   });
-  assert.equal(app.el('workspace-btn').textContent, '/srv/other');
-  assert.match(app.transcript(), /could not switch the workspace to \/srv\/project/);
+
+  app.selectSession('sess-2', 'general-purpose', '/srv/busy');
+  await app.settle();
+
+  assert.equal(app.el('workspace-btn').textContent, '/srv/busy');
+  assert.doesNotMatch(app.transcript(), /could not switch the workspace/,
+    'opening a session reported a failure to do something it was never asked to do');
+});
+
+// Switching quickly through several sessions starts several of these
+// reads at once, and which one answers last is decided by the network
+// rather than by which session is on screen.
+test('a workspace read that arrives after the next switch is dropped', async () => {
+  let release;
+  const slow = new Promise((resolve) => { release = resolve; });
+  const app = await load({
+    routes: {
+      'GET /api/workspace': async (_body, { query }) => {
+        const dir = { 'sess-1': '/srv/one', 'sess-2': '/srv/stale', 'sess-3': '/srv/current' }[query.get('session')];
+        // The middle session's answer is the one that arrives late.
+        if (dir === '/srv/stale') await slow;
+        return { path: dir || '', can_browse: false };
+      },
+      'GET /api/sessions': [
+        { id: 'sess-1', title: 'one', agent: 'general-purpose', workspace: '/srv/one' },
+        { id: 'sess-2', title: 'two', agent: 'general-purpose', workspace: '/srv/stale' },
+        { id: 'sess-3', title: 'three', agent: 'general-purpose', workspace: '/srv/current' },
+      ],
+    },
+  });
+
+  app.selectSession('sess-2', 'general-purpose', '/srv/stale');
+  app.selectSession('sess-3', 'general-purpose', '/srv/current');
+  await app.settle();
+  release();
+  await app.settle();
+
+  assert.equal(app.el('workspace-btn').textContent, '/srv/current',
+    'the header ended up naming a session that is no longer open');
 });
 
 // A failing settings/agents/workspace call must not stop the page loading:

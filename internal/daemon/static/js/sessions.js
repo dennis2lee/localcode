@@ -3,10 +3,11 @@ import { app, session, resetSession, forgetHistory } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, clearTranscript } from './transcript.js';
 import { formatTime, shortenPath } from './format.js';
-import { renderTasks, renderStatusBar, setCurrentAgent } from './render.js';
+import { renderTasks, renderStatusBar, setCurrentAgent, renderWorkspace } from './render.js';
 import { setWaiting, setInputLocked, renderCommDot } from './composer.js';
 import { connectEvents } from './events.js';
-import { applyWorkspace, permissionRequest } from './modals.js';
+import { loadWorkspace } from './loaders.js';
+import { permissionRequest } from './modals.js';
 
 export async function loadSessions() {
   try {
@@ -303,12 +304,23 @@ export function selectSession(id, agent, workspace) {
   renderStatusBar(); // the new session's agent/model, before any event arrives
   renderSessionList();
   connectEvents();
-  // Deliberately not awaited: the session is already switched and its
-  // transcript already replaying. The workspace change lands a moment
-  // later and announces itself in the transcript, and if it's refused
-  // (another session mid-turn) that's reported without having blocked
-  // the switch the user actually asked for.
-  if (workspace) applyWorkspace(workspace);
+  // The header names the directory this session works in. Painted from
+  // what the listing already says, so it changes with the click rather
+  // than a round trip later, and then confirmed against the daemon —
+  // which is the authority, and which also answers for a session that has
+  // no recorded workspace of its own.
+  //
+  // Confirmed rather than *set*: this used to POST the session's own path
+  // back to the daemon, which is a no-op that can fail. The daemon refuses
+  // a workspace change while that session has a turn running, so opening a
+  // conversation that was working left the header on the previous
+  // session's project, with an error in the transcript about a move nobody
+  // had asked for.
+  if (workspace) {
+    app.workspacePath = workspace;
+    renderWorkspace();
+  }
+  loadWorkspace();
 }
 
 export async function createNewSession() {

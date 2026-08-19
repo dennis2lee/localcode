@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -68,6 +69,9 @@ type whisperProcess struct {
 	apiMu      sync.Mutex
 	api        whisperAPI
 	apiSettled bool
+	// discoverMu serializes the endpoint search, so overlapping
+	// transcriptions do not each run one. See ensureAPI.
+	discoverMu sync.Mutex
 
 	// exited is closed when the process ends.
 	//
@@ -422,95 +426,163 @@ func (p *whisperProcess) transcribe(ctx context.Context, samples []float32, lang
 		language = "auto"
 	}
 
-	// The dialect this server speaks, once it is known: named in config,
-	// pinned by startWhisper for an engine this process spawned, or
-	// settled by an earlier utterance. Only a remote server nobody has
-	// named reaches the search below — it is whatever someone put on that
-	// port.
-	p.apiMu.Lock()
-	known, settled := p.api, p.apiSettled
-	p.apiMu.Unlock()
-	if settled {
-		return p.transcribeVia(ctx, known, samples, language)
+	api, err := p.ensureAPI(ctx, language)
+	if err != nil {
+		return "", err
+	}
+	return p.transcribeVia(ctx, api, samples, language)
+}
+
+// probeTimeout bounds one candidate during the endpoint search.
+//
+// Generous, and it can afford to be, because the search no longer runs
+// against the sentence someone just said — see ensureAPI.
+const probeTimeout = 15 * time.Second
+
+// ensureAPI settles which dialect this server speaks, discovering it if
+// nobody has said.
+//
+// The search is run against half a second of silence rather than against
+// the utterance in hand, and that is the whole point of this function.
+// Sending the real audio meant every candidate had to fit inside the
+// deadline for that utterance, sharing it between them — so a server that
+// was simply slow had the endpoint that would have worked cut off
+// part-way, and the verdict printed in the transcript was "this server has
+// none of the transcription endpoints localcode knows". That sentence sends
+// someone to reconfigure a server that was working; what was actually
+// wrong was that it takes eight seconds to transcribe and was given four.
+//
+// Half a second of silence costs the server almost nothing whatever its
+// speed, so each candidate gets a real chance to answer, and the utterance
+// is then sent once, to the endpoint that answered.
+//
+// A candidate that answers 200 wins outright. One that answers *badly* —
+// a 400 for a missing field, say — is remembered but not chosen while
+// there is still an endpoint that might work: the old search settled on
+// the first server that answered at all, so a path that exists and rejects
+// the request permanently shadowed the path that would have transcribed.
+func (p *whisperProcess) ensureAPI(ctx context.Context, language string) (whisperAPI, error) {
+	if api, ok := p.settledAPI(); ok {
+		return api, nil
 	}
 
-	// Not known yet: try each in turn. A 404 or a 405 means this server
-	// does not have that endpoint, which is the one answer that says
-	// nothing about the audio and everything about the dialect — so it
-	// moves on. Any other outcome, success or failure, is this server
-	// answering the question that was asked, and settles the choice.
-	// Each candidate gets its own share of the time, rather than all of
-	// them sharing one deadline that the first can spend entirely.
-	//
-	// A server that hangs on a path it does not serve — rather than
-	// answering 404 — used to end the search on the spot: the first
-	// candidate ran the whole timeout out, and the two after it failed
-	// instantly on an expired context. Every utterance then did the same
-	// thing, so the endpoint that would have worked was never reached, and
-	// what that looked like from the prompt box was dictation that
-	// produced nothing at all and never said why.
-	var cancels []context.CancelFunc
-	defer func() {
-		for _, cancel := range cancels {
-			cancel()
-		}
-	}()
-	share := func(i int) context.Context {
-		deadline, ok := ctx.Deadline()
-		left := len(whisperAPIs) - i
-		if !ok || left <= 1 {
-			return ctx
-		}
-		cctx, cancel := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(left))
-		cancels = append(cancels, cancel)
-		return cctx
+	// One search at a time. Transcriptions overlap — a preview and a final
+	// are both in flight for most of a sentence — and each of them
+	// discovering separately meant three wasted round trips per utterance
+	// against a server slow enough that the first search had not finished.
+	p.discoverMu.Lock()
+	defer p.discoverMu.Unlock()
+	if api, ok := p.settledAPI(); ok {
+		return api, nil
 	}
 
-	var firstErr error
-	transportOnly := true
+	silence := make([]float32, SampleRate/2)
+	var (
+		firstErr error
+		// noReply is the first candidate that produced no HTTP response at
+		// all. It is kept apart from the refusals because it is the one
+		// outcome that proves nothing: the search did not fail to find an
+		// endpoint, it failed to find out.
+		noReply  error
+		fallback *whisperAPI
+	)
 	for i, candidate := range whisperAPIs {
-		text, err := p.transcribeVia(share(i), candidate, samples, language)
+		// Each candidate gets its own slice of the time rather than all of
+		// them sharing one deadline the first can spend entirely. A server
+		// that hangs on a path it does not serve — rather than answering
+		// 404 — would otherwise end the search on the spot, and the
+		// endpoint that would have worked would never be reached.
+		cctx, cancel := context.WithTimeout(ctx, probeShare(ctx, i))
+		_, err := p.transcribeVia(cctx, candidate, silence, language)
+		cancel()
 
+		if err == nil {
+			return p.settle(candidate), nil
+		}
 		// A request that never got an answer says nothing about which
 		// endpoint is there — the connection failed, or the server closed
-		// it mid-upload, which it does when it means to reject the
-		// request and does not wait for the rest of the body. Settling on
-		// a candidate for that reason is how the first version of this
-		// picked /v1/audio/transcriptions on a server that was resetting
-		// the connection, and then sent every later utterance to the same
-		// place instead of trying the endpoint that worked.
-		if isTransportFailure(err) || isWrongEndpoint(err) {
-			if firstErr == nil {
-				firstErr = err
-			}
-			if !isTransportFailure(err) {
-				transportOnly = false
+		// it mid-upload, which it does when it means to reject the request
+		// and does not wait for the rest of the body. Settling on a
+		// candidate for that reason is how the first version of this picked
+		// /v1/audio/transcriptions on a server that was resetting the
+		// connection, and then sent every later utterance to the same place
+		// instead of trying the endpoint that worked.
+		if isTransportFailure(err) {
+			if noReply == nil {
+				noReply = err
 			}
 			continue
 		}
-
-		// An actual HTTP response, whatever it says. That is the server
-		// answering the question that was asked, and it settles the
-		// choice.
-		p.apiMu.Lock()
-		p.api, p.apiSettled = candidate, true
-		p.apiMu.Unlock()
-		debugf("dictation: %s speaks the %q API (%s)", p.addr(), candidate.name, candidate.path)
-		return text, err
+		if isWrongEndpoint(err) {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		// The endpoint is there and did not like the request. Keep it in
+		// reserve and carry on looking for one that works.
+		if fallback == nil {
+			c := candidate
+			fallback, firstErr = &c, err
+		}
+	}
+	if fallback != nil {
+		return p.settle(*fallback), nil
 	}
 
+	// Something did not answer: say that, rather than "this server has none
+	// of the endpoints". The two are not the same claim and only one of
+	// them is knowable here — a candidate that never replied might be the
+	// endpoint that works. Saying the wrong one sends someone to
+	// reconfigure a server that is fine.
+	//
+	// The dialect is left unsettled either way, so the next utterance tries
+	// again: a network that dropped for a second must not disable dictation
+	// for the rest of the run.
+	if noReply != nil {
+		return whisperAPI{}, fmt.Errorf("could not reach the speech engine at %s: %w", p.addr(), noReply)
+	}
 	if firstErr == nil {
 		firstErr = fmt.Errorf("no endpoint answered")
 	}
-	// Nothing was reachable at all: report it as what it is rather than
-	// as "this server has none of the endpoints", and leave the dialect
-	// unsettled so the next utterance tries again. A network that dropped
-	// for a second must not disable dictation for the rest of the run.
-	if transportOnly {
-		return "", fmt.Errorf("could not reach the speech engine at %s: %w", p.addr(), firstErr)
-	}
-	return "", fmt.Errorf("%s has none of the transcription endpoints localcode knows (%s): %w",
+	return whisperAPI{}, fmt.Errorf("%s has none of the transcription endpoints localcode knows (%s): %w",
 		p.addr(), whisperAPINames(), firstErr)
+}
+
+// probeShare is how long candidate i may take: its share of whatever time
+// is left, capped at probeTimeout.
+//
+// Half a second of silence is cheap on any engine, so the share is
+// generous by construction — the point of the cap is a candidate that
+// never answers at all, not one that is merely slow.
+func probeShare(ctx context.Context, i int) time.Duration {
+	share := probeTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if left := len(whisperAPIs) - i; left > 1 {
+			if slice := time.Until(deadline) / time.Duration(left); slice < share {
+				share = slice
+			}
+		} else if until := time.Until(deadline); until < share {
+			share = until
+		}
+	}
+	return share
+}
+
+// settledAPI reports the dialect if it is known.
+func (p *whisperProcess) settledAPI() (whisperAPI, bool) {
+	p.apiMu.Lock()
+	defer p.apiMu.Unlock()
+	return p.api, p.apiSettled
+}
+
+// settle records the dialect every later request will use.
+func (p *whisperProcess) settle(api whisperAPI) whisperAPI {
+	p.apiMu.Lock()
+	p.api, p.apiSettled = api, true
+	p.apiMu.Unlock()
+	debugf("dictation: %s speaks the %q API (%s)", p.addr(), api.name, api.path)
+	return api
 }
 
 // transcribeVia sends one window of audio to one endpoint.
@@ -528,8 +600,13 @@ func (p *whisperProcess) transcribeVia(ctx context.Context, api whisperAPI, samp
 	if err := writeWAV(part, samples); err != nil {
 		return "", err
 	}
-	if err := w.WriteField("language", language); err != nil {
-		return "", err
+	// The language goes wherever this server reads it from. Sending it in
+	// the wrong place is not an error anyone sees: the server ignores the
+	// field and auto-detects, so the setting simply has no effect.
+	if !api.languageInQuery {
+		if err := w.WriteField("language", language); err != nil {
+			return "", err
+		}
 	}
 	// The OpenAI shape has a required "model" on the real API, and the
 	// servers that imitate it vary in whether they enforce it. Sent only
@@ -550,7 +627,7 @@ func (p *whisperProcess) transcribeVia(ctx context.Context, api whisperAPI, samp
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL()+api.path, &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL()+api.path+queryFor(api, language), &body)
 	if err != nil {
 		return "", err
 	}
@@ -588,6 +665,27 @@ func (p *whisperProcess) transcribeVia(ctx context.Context, api whisperAPI, samp
 		return "", err
 	}
 	return cleanTranscript(text), nil
+}
+
+// queryFor builds the query string one dialect wants, "" for the ones
+// that take everything in the form.
+//
+// "auto" is omitted rather than sent: it is this package's word for "work
+// it out", and a server whose language parameter takes a code reads an
+// unknown one as an error or as a language nobody speaks. Empty is how
+// that server spells auto-detect.
+func queryFor(api whisperAPI, language string) string {
+	q := url.Values{}
+	for k, v := range api.query {
+		q.Set(k, v)
+	}
+	if api.languageInQuery && language != "" && language != "auto" {
+		q.Set("language", language)
+	}
+	if len(q) == 0 {
+		return ""
+	}
+	return "?" + q.Encode()
 }
 
 // transcribeClient is the client transcription requests go through.

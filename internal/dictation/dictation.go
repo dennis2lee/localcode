@@ -87,8 +87,17 @@ type Session struct {
 	// not been handed to the client yet, in the order they were spoken.
 	// Its own lock because the transcriptions that fill it run on their own
 	// goroutines — see commit — while Write is holding mu.
+	//
+	// A slot per sentence, claimed when the utterance ends rather than when
+	// its text comes back, because those are not the same order. Each
+	// transcription is its own request and a shorter sentence overtakes a
+	// longer one that started first — so against an engine slow enough for
+	// two to be in flight, which is any engine on another machine, the
+	// sentences arrived in the prompt box back to front. Claiming the slot
+	// at the point the person stopped speaking is what makes the order the
+	// order they spoke in.
 	committedMu sync.Mutex
-	committed   []string
+	committed   []sentence
 	// pending counts transcriptions still running, so Stop can wait a
 	// moment for the last sentence rather than dropping it.
 	pending sync.WaitGroup
@@ -206,6 +215,7 @@ func (s *Session) commit(ctx context.Context) {
 	if len(window) == 0 {
 		return
 	}
+	at := s.claimSentence()
 	s.pending.Add(1)
 	go func() {
 		defer s.pending.Done()
@@ -214,31 +224,67 @@ func (s *Session) commit(ctx context.Context) {
 			text = fallback
 		}
 		s.logUtterance(text)
-		s.queueCommitted(text)
+		s.settleSentence(at, text)
 	}()
 }
 
-// queueCommitted records a sentence that is ready to be handed over.
-func (s *Session) queueCommitted(text string) {
-	if text == "" {
-		return
-	}
-	s.committedMu.Lock()
-	defer s.committedMu.Unlock()
-	s.committed = append(s.committed, text)
+// sentence is one finished utterance on its way back from the engine.
+type sentence struct {
+	text string
+	// done marks that the transcription has finished — with text, or with
+	// nothing at all, which is still an answer.
+	done bool
 }
 
-// takeCommitted empties the queue into one string, keeping the order the
-// sentences were spoken in.
+// claimSentence reserves this utterance's place in the order before its
+// transcription starts.
+func (s *Session) claimSentence() int {
+	s.committedMu.Lock()
+	defer s.committedMu.Unlock()
+	s.committed = append(s.committed, sentence{})
+	return len(s.committed) - 1
+}
+
+// settleSentence fills in a claimed slot.
+func (s *Session) settleSentence(at int, text string) {
+	s.committedMu.Lock()
+	defer s.committedMu.Unlock()
+	if at < len(s.committed) {
+		s.committed[at] = sentence{text: text, done: true}
+	}
+}
+
+// queueCommitted records a sentence whose text is already known.
+func (s *Session) queueCommitted(text string) {
+	s.committedMu.Lock()
+	defer s.committedMu.Unlock()
+	s.committed = append(s.committed, sentence{text: text, done: true})
+}
+
+// takeCommitted hands over every sentence that is settled *and* has
+// nothing unsettled in front of it, keeping the order they were spoken in.
+//
+// The hold-back is the point. A sentence whose transcription is still
+// running is a gap, not an absence, and emitting the one behind it would
+// put the words in the wrong order permanently — nothing later can move
+// text that is already in the prompt box. Waiting costs a chunk or two of
+// delay and is invisible; getting it wrong is not.
 func (s *Session) takeCommitted() string {
 	s.committedMu.Lock()
 	defer s.committedMu.Unlock()
-	if len(s.committed) == 0 {
-		return ""
+	var ready []string
+	n := 0
+	for _, sent := range s.committed {
+		if !sent.done {
+			break
+		}
+		n++
+		if sent.text != "" {
+			ready = append(ready, sent.text)
+		}
 	}
-	text := strings.Join(s.committed, " ")
-	s.committed = nil
-	return text
+	s.committed = s.committed[n:]
+	return strings.Join(ready, " ")
 }
 
 // asyncFinalizer is a recognizer whose finished utterance can be taken

@@ -114,14 +114,37 @@ export async function loadSettings() {
   renderAutoDelegate();
 }
 
+// loadWorkspace reads the directory the current session works in and puts
+// it in the header.
+//
+// A read, not a write. The workspace has been per-session since v0.39, so
+// opening a conversation does not move anything — the daemon already knows
+// which directory that session belongs to, and this asks it. Switching
+// used to POST the session's own path back to the daemon purely to update
+// this label, which was a no-op that could still fail: the daemon refuses
+// a workspace change while that session has a turn in flight, so opening a
+// conversation that was working left the header naming the *previous*
+// session's project. That is "the workspace at the top sometimes doesn't
+// switch".
+//
+// The reply is dropped if the session moved on while it was in flight.
+// Switching quickly through three sessions starts three of these, and
+// which one paints last is otherwise decided by the network.
 export async function loadWorkspace() {
+  const asked = session.sessionID;
+  let w = null;
   try {
-    const w = await apiClient.getWorkspace(session.sessionID);
+    w = await apiClient.getWorkspace(asked);
+  } catch (err) {
+    // Nothing to add: the header keeps whatever it had, which for a
+    // session switch is the path the listing already carried.
+  }
+  if (asked !== session.sessionID) return;
+  if (w) {
     app.workspacePath = w.path || '';
     app.canBrowseWorkspace = !!w.can_browse;
     app.canRevealWorkspace = !!w.can_reveal;
-  } catch (err) {
-    app.workspacePath = '';
+  } else if (!app.workspacePath) {
     app.canBrowseWorkspace = false;
     app.canRevealWorkspace = false;
   }

@@ -16,7 +16,8 @@
 
 import {
   settingsModalEl, settingsBtn, settingsSaveBtn, settingsCloseBtn, settingsSaveNoteEl,
-  micDeviceSelect, dictationLanguageSelect, whisperURLInput, whisperPortInput,
+  micDeviceSelect, micListBtn, dictationLanguageSelect, dictationLanguageNoteEl,
+  whisperURLInput, whisperPortInput,
   whisperAPISelect, dictationEngineNoteEl,
   updateCheckBtn, updateInstallBtn, updateNoteEl,
 } from './dom.js';
@@ -57,6 +58,13 @@ function rememberMicDevice(id) {
 // access at least once, so before that the list is a set of anonymous
 // entries. Rather than showing "Microphone 1 / Microphone 2 / …", which
 // tells the user nothing they can choose between, that state is named.
+//
+// It is worse than anonymous names, though, and that is what the button
+// below is for: until access has been granted, some browsers and webviews
+// report *one* generic input and nothing else — so a headset or a USB
+// microphone plugged in afterwards is simply not in the list. The device
+// appeared only after dictating once, which is the wrong way round: the
+// panel is where you go to choose the microphone you are about to use.
 async function listMicrophones() {
   const previous = selectedMicDeviceId();
   micDeviceSelect.innerHTML = '';
@@ -81,6 +89,9 @@ async function listMicrophones() {
 
   const mics = devices.filter(d => d.kind === 'audioinput');
   const unnamed = mics.length > 0 && mics.every(d => !d.label);
+  // Offered exactly when it would do something: the names are missing, so
+  // the list cannot be trusted to be complete either.
+  micListBtn.hidden = !unnamed;
   for (const d of mics) {
     const opt = document.createElement('option');
     opt.value = d.deviceId;
@@ -103,6 +114,45 @@ async function listMicrophones() {
     micDeviceSelect.appendChild(missing);
     micDeviceSelect.value = previous;
   }
+}
+
+// grantMicrophoneAccess asks for the microphone and lists the devices
+// again.
+//
+// The permission is what makes the browser hand over the device names —
+// and, in several browsers, the devices themselves. Opening the panel does
+// not ask for it: a permission prompt in front of someone who came to
+// change the spoken language is a prompt they did not invite, and the one
+// they do answer is the one that follows a click on a button that says
+// what it is for.
+//
+// The stream is stopped immediately. This is a question, not a recording,
+// and leaving it open would light the browser's recording indicator over a
+// settings panel.
+async function grantMicrophoneAccess() {
+  micListBtn.disabled = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((t) => t.stop());
+  } catch (err) {
+    micListBtn.textContent = `Microphone access was refused (${err}) — the list stays anonymous`;
+    return;
+  } finally {
+    micListBtn.disabled = false;
+  }
+  await listMicrophones();
+}
+
+// A microphone plugged in or unplugged while the panel is open changes the
+// list under it. Listened for once, for the life of the page, because the
+// event fires on the device list itself rather than on anything the panel
+// owns — and re-listing a hidden panel costs nothing.
+function watchDevices() {
+  const media = navigator.mediaDevices;
+  if (!media || typeof media.addEventListener !== 'function') return;
+  media.addEventListener('devicechange', () => {
+    if (settings.isOpen) listMicrophones();
+  });
 }
 
 // The speech engine's address is one string in config.json ("host:port")
@@ -140,8 +190,22 @@ export function joinAddress(host, port) {
 
 // applyDictationStatus puts the daemon's answer on screen. Shared by the
 // open path and the save path so both show the same thing.
+// applied is the last set of engine settings the daemon confirmed, so
+// changing one control does not carry a half-typed other one with it —
+// see applySpokenLanguage.
+let applied = { whisper_url: '', whisper_api: '' };
+
 function applyDictationStatus(status) {
+  applied = { whisper_url: status.whisper_url || '', whisper_api: status.whisper_api || '' };
   dictationLanguageSelect.value = status.language || '';
+  // An engine that cannot honour this setting says so here, next to the
+  // control it is about. Sherpa is one model per language and the one
+  // localcode installs is Korean, so English dictated into it comes back
+  // transliterated into Hangul — with "English" selected above the whole
+  // time. Nothing on screen connected the two, and the reasonable
+  // conclusion from that is that dictation is broken.
+  dictationLanguageNoteEl.textContent = status.language_note || '';
+  dictationLanguageNoteEl.hidden = !status.language_note;
   const { host, port } = splitAddress(status.whisper_url);
   whisperURLInput.value = host;
   whisperPortInput.value = port;
@@ -174,6 +238,46 @@ export async function openSettings() {
   } catch (err) {
     dictationEngineNoteEl.textContent = `could not read the current settings: ${err}`;
   }
+}
+
+// applySpokenLanguage puts the chosen language in force as soon as it is
+// chosen.
+//
+// Because closing the panel used to throw it away without a word. Pick
+// English, close, dictate — and it is still transcribing as Korean, which
+// for whisper does not mean "worse English": forcing a language the audio
+// is not in makes it write the audio *in that language*, so English
+// spoken with Korean selected comes back as 아이엠어보이. Nothing on the
+// way out said the choice had not been kept.
+//
+// A dropdown is a finished decision the moment it changes — unlike the
+// address boxes, which are half-typed most of the time they are touched,
+// and which is why this sends the engine settings the daemon last
+// confirmed rather than whatever is in those boxes right now.
+async function applySpokenLanguage() {
+  settingsSaveNoteEl.textContent = 'Applying the language…';
+  try {
+    const status = await apiClient.setDictationSettings({
+      language: dictationLanguageSelect.value,
+      whisper_url: applied.whisper_url,
+      whisper_api: applied.whisper_api,
+    });
+    applyDictationStatus(status);
+    settingsSaveNoteEl.textContent = status.save_error
+      ? `Language applied, but not written to config.json: ${status.save_error}`
+      : 'Language applied. It takes effect on the next dictation.';
+  } catch (err) {
+    settingsSaveNoteEl.textContent = `The language was not applied: ${err}`;
+  }
+}
+
+// markUnsaved says that what is on screen is not what is in force.
+//
+// The engine address cannot sensibly be applied as it is typed, so it
+// keeps its Save button — but a panel whose Close button silently discards
+// what you just typed has to say so while you are still looking at it.
+function markUnsaved() {
+  settingsSaveNoteEl.textContent = 'Not saved yet — press Save to apply the engine address.';
 }
 
 async function saveSettings() {
@@ -285,6 +389,13 @@ async function installUpdate() {
 
 export function initSettings() {
   settingsBtn.addEventListener('click', openSettings);
+  micListBtn.addEventListener('click', grantMicrophoneAccess);
+  dictationLanguageSelect.addEventListener('change', applySpokenLanguage);
+  for (const el of [whisperURLInput, whisperPortInput, whisperAPISelect]) {
+    el.addEventListener('input', markUnsaved);
+    el.addEventListener('change', markUnsaved);
+  }
+  watchDevices();
   settingsSaveBtn.addEventListener('click', saveSettings);
   settingsCloseBtn.addEventListener('click', () => settings.close());
   updateCheckBtn.addEventListener('click', checkForUpdate);

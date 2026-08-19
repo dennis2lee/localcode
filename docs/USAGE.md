@@ -1117,6 +1117,21 @@ where localcode looks when nothing is configured. `localcode dictation
 status` reports whether it worked, and `localcode dictation remove`
 deletes it again.
 
+localcode publishes a whisper build for Windows only. On macOS and Linux
+that command still installs the model — the same file everywhere, and the
+larger half of the download — and then tells you where to get the engine.
+If one is already on your PATH it says so and gives you the setting to
+use it:
+
+```json
+{ "dictation": { "whisper_bin": "/opt/homebrew/bin/whisper-server" } }
+```
+
+`brew install whisper-cpp` provides that binary. localcode names an engine
+it finds on PATH but never runs one without being told to: a build it has
+not been tested against is a choice to make deliberately, not one to have
+made quietly on your behalf.
+
 #### Engines
 
 | | whisper | sherpa |
@@ -1171,12 +1186,44 @@ because they do not behave the same way:
 A microphone cannot be a daemon setting: a device id means nothing on
 another machine, and the daemon never sees audio hardware at all, only
 the PCM a page sends it. Device *names* stay hidden until the page has
-been allowed microphone access once, which the window says rather than
-listing anonymous entries.
+been allowed microphone access once — and several browsers go further and
+report a single anonymous input until then, so a headset or USB
+microphone plugged in since is not in the list at all. **Show the
+microphones on this machine** appears when that is the case: it asks for
+access, stops the recording immediately, and lists what is really there.
+Opening the panel asks for nothing on its own. A device plugged in or
+unplugged while the panel is open lands in the list without being asked
+for.
 
 A daemon started without a `config.json` can still be configured — the
 change applies for as long as it runs — and the window says that too,
 rather than appearing to save and forgetting.
+
+The spoken language applies as soon as it is chosen — the dropdown is a
+finished decision the moment it changes, and closing the panel used to
+discard it silently. The engine address keeps the Save button, since a
+half-typed host is not something to apply as it is typed.
+
+Getting the language wrong is not a small loss of accuracy. Whisper
+writes the audio **in the language it is told**, so Korean speech with
+English selected comes back as an English translation, and English speech
+with Korean selected comes back spelled out in Hangul — "I'm a boy" as
+아이엠어보이. If you dictate in more than one language, leave it on
+auto-detect.
+
+**Spoken language applies to whisper only.** Whisper takes it per
+request. Sherpa is one model per language and the model `localcode
+dictation install --engine sherpa` fetches is Korean, so the setting does
+nothing for it — English dictated into that engine is not mistranscribed
+or dropped, it is written out in Hangul: "I'm a boy" as 아이엠어보이. The
+window says so next to the control when that is the engine in force, and
+so does `localcode dictation status`. The fix is to install whisper,
+which is multilingual and is used in preference wherever it is
+installed:
+
+```
+localcode dictation install
+```
 
 #### Configuration
 
@@ -1238,15 +1285,31 @@ remembered:
 | `whispercpp` | `POST /inference` | whisper.cpp's own server, and what localcode runs locally |
 | `whisperx` | `POST /asr` | WhisperX's native API |
 
-Discovery costs two extra requests once per engine and none after that.
-Only a 404 or a 405 moves on to the next candidate: a server that has the
-endpoint and rejects the request is answering, and its error is reported
-rather than buried under two more attempts.
+Discovery costs up to three extra requests once per engine and none after
+that, and it is run against half a second of silence rather than against
+anything you said. That matters on a slow server: the search used to send
+the real utterance to each candidate, sharing that sentence's deadline
+between them, so an engine that takes a few seconds had the endpoint that
+would have worked cut off part-way through and was reported as having none
+of them.
+
+An endpoint that answers a probe wins. One that answers *badly* — a
+missing field, a model it does not have — is remembered but not chosen
+while another might work, since a WhisperX server offers an
+OpenAI-shaped endpoint as well as its own and the first refusing must not
+hide the second. If nothing works, that refusal is what gets reported.
 
 Set `whisper_api` to one of the names above to skip discovery. Only an
 actual HTTP response settles the choice: a connection that fails, or that
 the server closes mid-upload, says nothing about which endpoint is there,
-so the search carries on and nothing is remembered.
+so the search carries on, nothing is remembered, and it is reported as a
+server that did not answer rather than one that lacks the endpoints.
+
+The dialect decides where the spoken language is sent, which is why
+getting it wrong is quiet: `openai` and `whispercpp` take it as a form
+field, and `whisperx` reads it from the query string and ignores form
+fields it does not know — so a language chosen in the panel simply had no
+effect there, and every utterance was auto-detected.
 
 When nothing comes out and the reason is not obvious, ask the server
 directly:

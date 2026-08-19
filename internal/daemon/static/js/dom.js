@@ -73,7 +73,9 @@ export const settingsSaveBtn = document.getElementById('settings-save');
 export const settingsCloseBtn = document.getElementById('settings-close');
 export const settingsSaveNoteEl = document.getElementById('settings-save-note');
 export const micDeviceSelect = document.getElementById('mic-device-select');
+export const micListBtn = document.getElementById('mic-list-btn');
 export const dictationLanguageSelect = document.getElementById('dictation-language-select');
+export const dictationLanguageNoteEl = document.getElementById('dictation-language-note');
 export const windowBarEl = document.getElementById('window-bar');
 export const windowEdgesEl = document.getElementById('window-edges');
 // The resize edges, paired with the direction each one means. An array

@@ -40,6 +40,19 @@ type whisperAPI struct {
 	// extra are form fields to send beyond the audio and the language.
 	// Empty for servers that reject unknown fields.
 	extra map[string]string
+	// query are URL query parameters.
+	//
+	// They exist for one server that does not take its options where the
+	// others do: the whisperX ASR service reads everything except the
+	// audio from the query string and ignores unknown form fields
+	// entirely. Sent as form fields, "output=json" and the spoken
+	// language were dropped without a word — so that server auto-detected
+	// every utterance no matter what the settings panel said, which is
+	// exactly "I chose English and it still comes back in Korean".
+	query map[string]string
+	// languageInQuery sends the spoken language as a query parameter
+	// rather than a form field, for the same reason.
+	languageInQuery bool
 }
 
 // whisperAPIs are tried in this order when the dialect is not configured.
@@ -84,7 +97,14 @@ var whisperAPIs = []whisperAPI{
 		name:      "whisperx",
 		path:      "/asr",
 		fileField: "audio_file",
-		extra:     map[string]string{"output_format": "json"},
+		// "output", not "output_format", and in the query rather than the
+		// form: this service's default output is plain text, which
+		// parseTranscript can only report as unreadable JSON. task is sent
+		// explicitly so a server configured to translate by default still
+		// transcribes — dictation is typing what someone said, never a
+		// translation of it.
+		query:           map[string]string{"output": "json", "task": "transcribe", "encode": "true"},
+		languageInQuery: true,
 	},
 }
 

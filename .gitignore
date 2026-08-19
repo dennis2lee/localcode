@@ -1,4 +1,8 @@
 /localcode
+# Where `localcode dictation install` puts the engine and its model when run
+# from a checkout: beside the binary, which in development is this directory.
+# Hundreds of megabytes, and not ours to track.
+/models/
 /localcode-gui
 /dist/
 *.tar.gz

@@ -111,6 +111,40 @@ func Describe(cfg Config) string {
 	return "whisper (local): " + bin + " with " + model
 }
 
+// SpokenLanguageNote explains why the spoken-language setting is not in
+// force, or "" when it is.
+//
+// Not every engine has a language to be set, and one of them cannot even
+// be asked. Sherpa is one model per language — the model localcode
+// installs is Korean — so English spoken into it does not come back in
+// English or as nothing: it comes back *transliterated*, "I'm a boy" as
+// 아이엠어보이, while the settings panel says Spoken language: English the
+// whole time. Nothing on screen connects the two, and the reasonable
+// conclusion is that dictation is broken.
+//
+// A control that cannot do anything has to say so. This is the sentence
+// that says it.
+func SpokenLanguageNote(cfg Config) string {
+	engine, err := cfg.resolveEngine()
+	if err != nil {
+		return ""
+	}
+	return spokenLanguageNote(engine)
+}
+
+// spokenLanguageNote is the note for a resolved engine, split out because
+// which engine a config resolves to depends on what is installed on the
+// machine the test happens to run on — and this sentence does not.
+func spokenLanguageNote(engine Engine) string {
+	if engine != EngineSherpa {
+		return ""
+	}
+	return "The sherpa engine is one model per language, and the model localcode installs is Korean — " +
+		"the language above does not apply to it. English spoken into it is written out in Hangul " +
+		"rather than in English. Run `localcode dictation install` to add whisper, which is " +
+		"multilingual and is preferred wherever it is installed."
+}
+
 // Available reports whether this process could dictate for *some*
 // configuration. It is a build-and-installation question, not a
 // configuration one: a build with no sherpa compiled in and no whisper

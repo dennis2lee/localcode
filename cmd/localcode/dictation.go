@@ -274,6 +274,19 @@ func runDictationStatus() error {
 		if d := dictation.Describe(cfg); d != "" {
 			fmt.Println("engine:", d)
 		}
+		// Which language the engine is being asked for, and whether it is
+		// an engine that can be asked. "I said it in English and it wrote
+		// Hangul" is not a question anyone can answer without these two
+		// lines: the settings panel shows the language it *set*, which is
+		// not the same as the language in force.
+		if cfg.Language != "" {
+			fmt.Println("spoken language:", cfg.Language)
+		} else {
+			fmt.Println("spoken language: auto-detect")
+		}
+		if note := dictation.SpokenLanguageNote(cfg); note != "" {
+			fmt.Println("note:", note)
+		}
 		return nil
 	}
 	fmt.Println("dictation is not available:", why)

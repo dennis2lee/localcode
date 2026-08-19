@@ -52,7 +52,11 @@ func (d *Daemon) handleDictationStatus(w http.ResponseWriter, r *http.Request) {
 		"whisper_url": cfg.WhisperURL,
 		"whisper_api": cfg.WhisperAPI,
 		"engine":      dictation.Describe(cfg),
-		"remote":      cfg.RemoteHost() != "",
+		// Empty unless the engine in force cannot honour the language
+		// above, which is a thing a settings panel has to say out loud —
+		// see dictation.SpokenLanguageNote.
+		"language_note": dictation.SpokenLanguageNote(cfg),
+		"remote":        cfg.RemoteHost() != "",
 		// Whether the daemon has a config.json to write to. Without one
 		// the panel can still change the live setting, but it will not
 		// survive a restart, and saying so beats a control that silently
@@ -114,14 +118,15 @@ func (d *Daemon) handleSetDictation(w http.ResponseWriter, r *http.Request) {
 	}
 	ready, detail := d.Dictation.Ready()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ready":       ready,
-		"detail":      detail,
-		"language":    cfg.Language,
-		"whisper_url": cfg.WhisperURL,
-		"whisper_api": cfg.WhisperAPI,
-		"engine":      dictation.Describe(cfg),
-		"remote":      cfg.RemoteHost() != "",
-		"save_error":  saveErr,
+		"ready":         ready,
+		"detail":        detail,
+		"language":      cfg.Language,
+		"whisper_url":   cfg.WhisperURL,
+		"whisper_api":   cfg.WhisperAPI,
+		"engine":        dictation.Describe(cfg),
+		"language_note": dictation.SpokenLanguageNote(cfg),
+		"remote":        cfg.RemoteHost() != "",
+		"save_error":    saveErr,
 	})
 }
 

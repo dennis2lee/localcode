@@ -139,9 +139,12 @@
     <div class="settings-field">
       <label class="field" for="mic-device-select">Microphone</label>
       <select id="mic-device-select"></select>
+      <button id="mic-list-btn" hidden>Show the microphones on this machine</button>
       <p class="note">Remembered in this browser only — a microphone is a
         property of the machine you are sitting at, not of the daemon.
-        Device names appear once you have allowed microphone access.</p>
+        A browser hides the device list until it has been allowed to use
+        the microphone once, so a headset or USB microphone plugged in
+        since then may not be here until you ask for it above.</p>
     </div>
 
     <div class="settings-field">
@@ -156,6 +159,7 @@
       <p class="note">Auto-detect is right for mixed speech. Naming the
         language is a little faster and a little more certain when you
         only ever dictate one.</p>
+      <p class="note warn" id="dictation-language-note" hidden></p>
     </div>
 
     <div class="settings-field">

@@ -71,7 +71,24 @@ inputEl.addEventListener('drop', async (e) => {
 micBtn.addEventListener('click', toggleDictation);
 stopBtn.addEventListener('click', cancelTurn);
 
-sendBtn.addEventListener('click', sendMessage);
+// submitPrompt is the one way a prompt leaves the box, whichever control
+// asked for it.
+//
+// Sending finishes the sentence by definition, so the microphone goes off
+// with it rather than leaving grey text arriving into an already-sent
+// prompt — and the stop is awaited, because the last thing said is still
+// being transcribed and belongs in the prompt being sent.
+//
+// Enter did this and the Send button did not, which is the kind of split
+// nobody finds by reading: the two controls do the same thing and one of
+// them left dictation running, still typing into a box the person had just
+// emptied.
+function submitPrompt() {
+  if (isDictating()) return stopDictation().then(sendMessage);
+  return sendMessage();
+}
+
+sendBtn.addEventListener('click', submitPrompt);
 inputEl.addEventListener('input', () => {
   autoResizeInput();
   // Typing ends a history walk: what is in the box is now this person's
@@ -84,11 +101,7 @@ inputEl.addEventListener('input', () => {
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    // Sending finishes the sentence by definition, so the microphone
-    // goes off with it rather than leaving grey text arriving into an
-    // already-sent prompt.
-    if (isDictating()) stopDictation().then(sendMessage);
-    else sendMessage();
+    submitPrompt();
   } else if (e.key === 'Escape') {
     e.preventDefault();
     cancelTurn();

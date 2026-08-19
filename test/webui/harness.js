@@ -237,14 +237,20 @@ async function load(opts = {}) {
 
   const fetchImpl = async (url, init = {}) => {
     const method = (init.method || 'GET').toUpperCase();
-    const urlPath = String(url).split('?')[0];
+    const [urlPath, search = ''] = String(url).split('?');
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : init.body;
-    harness.calls.push({ method, path: urlPath, body });
+    // The query goes to the route as well as into the call log. Some of
+    // what the daemon answers depends on it — /api/workspace is per
+    // session, and the session it is asked about rides in ?session= — and
+    // a route that cannot see it can only answer one thing for every
+    // session, which is precisely the confusion under test.
+    const query = new URLSearchParams(search);
+    harness.calls.push({ method, path: urlPath, body, query });
     const route = matchRoute(routes, method, urlPath);
     if (route === undefined) {
       throw new Error(`harness: no route for ${method} ${urlPath} (add one via load({routes}))`);
     }
-    const value = typeof route === 'function' ? await route(body, { method, path: urlPath }) : route;
+    const value = typeof route === 'function' ? await route(body, { method, path: urlPath, query }) : route;
     if (value && value.networkError) throw new Error(value.networkError);
     return toResponse(value);
   };
@@ -267,6 +273,7 @@ async function load(opts = {}) {
     },
     setTimeout,
     clearTimeout,
+    URLSearchParams,
     queueMicrotask,
     // Dictation gives up on an upload that takes too long, and abandoning
     // it is half of the fix: the daemon holds the session's lock for as
@@ -311,16 +318,31 @@ async function load(opts = {}) {
   // reference to stop it.
   let openMics = 0;
   harness.openMicrophones = () => openMics;
+  // devices may be a list or a function of no arguments, so a test can
+  // model the thing browsers actually do: report one anonymous input until
+  // microphone access has been granted, and the real set afterwards.
+  const deviceList = () => (typeof opts.devices === 'function' ? opts.devices() : (opts.devices || []));
+  const deviceListeners = [];
   sandbox.navigator = {
     mediaDevices: {
       getUserMedia: async (constraints) => {
         harness.mediaConstraints.push(constraints);
         openMics++;
+        if (opts.denyMicrophone) {
+          openMics--;
+          throw new Error(opts.denyMicrophone === true ? 'NotAllowedError' : opts.denyMicrophone);
+        }
         return { getTracks: () => [{ stop() { openMics--; } }] };
       },
-      enumerateDevices: async () => opts.devices || [],
+      enumerateDevices: async () => deviceList(),
+      addEventListener: (name, fn) => {
+        if (name === 'devicechange') deviceListeners.push(fn);
+      },
     },
   };
+  // devicesChanged fires the event a browser sends when something is
+  // plugged in or unplugged.
+  harness.devicesChanged = () => deviceListeners.forEach((fn) => fn());
   sandbox.URL = { createObjectURL: () => 'blob:worklet', revokeObjectURL() {} };
   sandbox.Blob = class Blob {
     constructor(parts) { this.parts = parts; }

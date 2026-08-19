@@ -2,6 +2,7 @@ package dictation
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"sync"
@@ -227,7 +228,7 @@ func (w *whisperRecognizer) Accept(samples []float32) {
 			// surfaced" was the whole of what a misconfigured server
 			// looked like: every request refused and nothing said.
 			if err != nil && !w.closed {
-				w.lastErr = err
+				w.noteErr(err)
 			}
 			return
 		}
@@ -236,6 +237,28 @@ func (w *whisperRecognizer) Accept(samples []float32) {
 		}
 		w.text = text
 	}()
+}
+
+// noteErr records a failure worth telling the user about. Called with the
+// lock held.
+//
+// A cancellation is not one. Switching the microphone off cancels the
+// previews in flight (see Cancel), and closing the recognizer cancels
+// everything — so the ordinary, correct end of every dictation produced a
+// context.Canceled, which was then reported as the session's error. What
+// that looked like was a line of red under a perfectly good transcript
+// saying `whisper engine: Post "http://…/inference": context canceled`,
+// every single time, on the one path where an error message is read
+// closely: the person had already been told dictation was broken and this
+// was the evidence they took to mean it still was.
+//
+// A deadline is different and is kept: nobody asked for it, and an engine
+// that ran out of time is exactly the thing worth saying out loud.
+func (w *whisperRecognizer) noteErr(err error) {
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	w.lastErr = err
 }
 
 // TakeError reports the last transcription failure and forgets it, so a
@@ -295,7 +318,7 @@ func (w *whisperRecognizer) Transcribe(parent context.Context, window []float32)
 	text, err := w.proc.transcribe(ctx, window, w.language)
 	if err != nil {
 		w.mu.Lock()
-		w.lastErr = err
+		w.noteErr(err)
 		w.mu.Unlock()
 		return ""
 	}
@@ -326,7 +349,7 @@ func (w *whisperRecognizer) Final(parent context.Context) string {
 		// what someone just said. Silently is the operative word — the
 		// fallback stays, and the reason is now reportable.
 		w.mu.Lock()
-		w.lastErr = err
+		w.noteErr(err)
 		w.mu.Unlock()
 		return w.Partial()
 	}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -79,8 +80,11 @@ func TestRemoteServerSpeakingOnlyOpenAIIsFound(t *testing.T) {
 	if got != "안녕하세요" {
 		t.Errorf("text = %q", got)
 	}
-	if len(tried()) != 1 {
-		t.Errorf("tried %v, want the OpenAI endpoint first", tried())
+	// Two requests: the probe that settles the dialect and the audio
+	// itself. See ensureAPI for why the search is not run against the
+	// utterance.
+	if got := tried(); len(got) != 2 || got[0] != "/v1/audio/transcriptions" {
+		t.Errorf("tried %v, want the OpenAI endpoint probed and then used", got)
 	}
 }
 
@@ -100,9 +104,10 @@ func TestRemoteServerSpeakingOnlyWhisperXIsFound(t *testing.T) {
 	if got != "hello there" {
 		t.Errorf("text = %q", got)
 	}
-	// It had to walk past the two it does not serve.
-	if n := len(tried()); n != 3 {
-		t.Errorf("tried %v, want all three", tried())
+	// It had to walk past the two it does not serve, and then send the
+	// audio to the one that answered.
+	if got := tried(); len(got) != 4 || got[3] != "/asr" {
+		t.Errorf("tried %v, want all three probed and the audio sent to /asr", got)
 	}
 }
 
@@ -132,18 +137,23 @@ func TestTheDialectIsFoundOnceAndRemembered(t *testing.T) {
 			t.Fatalf("transcribe: %v", err)
 		}
 	}
-	// 3 for the first (two misses plus the hit), then 1 each.
-	if n := len(tried()); n != 5 {
+	// Three probes to find it, once, and then one request per utterance.
+	if n := len(tried()); n != 6 {
 		t.Errorf("%d requests for three utterances (%v); the dialect was re-discovered", n, tried())
 	}
 }
 
 // A server that has the endpoint and rejects the request is answering the
-// question that was asked. Treating that as "wrong endpoint" would send
-// the search on to the next path and turn one clear error into three
-// confusing ones.
-func TestARealRejectionStopsTheSearch(t *testing.T) {
-	srv, tried := asrServer(t, map[string]string{
+// question that was asked — so once the search has looked everywhere, that
+// is the endpoint it settles on and that refusal is what gets reported.
+// Treating it as "wrong endpoint" instead would turn one clear error into
+// "this server has none of the endpoints localcode knows", which is a
+// different and untrue claim.
+//
+// It is not chosen *while another path might work*, though: see
+// TestAnEndpointThatRefusesDoesNotShadowOneThatWorks.
+func TestARealRejectionIsWhatGetsReported(t *testing.T) {
+	srv, _ := asrServer(t, map[string]string{
 		// Present, but wants a field the OpenAI dialect does not send.
 		"/v1/audio/transcriptions": `{"text":"never reached"}`,
 	}, "audio_file")
@@ -153,11 +163,38 @@ func TestARealRejectionStopsTheSearch(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 422 was treated as success")
 	}
-	if len(tried()) != 1 {
-		t.Errorf("tried %v, want to stop at the endpoint that answered", tried())
-	}
 	if !strings.Contains(err.Error(), "422") {
 		t.Errorf("error = %v, want it to carry what the server said", err)
+	}
+	if strings.Contains(err.Error(), "none of the transcription endpoints") {
+		t.Errorf("error = %v, want the server's own refusal rather than a claim about its endpoints", err)
+	}
+}
+
+// The refinement that costs the least and matters most on a WhisperX
+// server, which serves an OpenAI-shaped endpoint *and* its own: if the
+// first one refuses the request permanently — a missing field, a model it
+// does not have — the search must not stop there. It used to, and the
+// endpoint that would have transcribed every utterance was one path
+// further down a list the search had already left.
+func TestAnEndpointThatRefusesDoesNotShadowOneThatWorks(t *testing.T) {
+	srv, tried := asrServer(t, map[string]string{
+		// Both present. The OpenAI one wants a field that dialect does not
+		// send, so it answers 422 forever; /asr works.
+		"/v1/audio/transcriptions": `{"text":"never reached"}`,
+		"/asr":                     `{"text":"hello there"}`,
+	}, "audio_file")
+	p := remoteProcess(t, srv)
+
+	got, err := p.transcribe(context.Background(), testAudio, "en")
+	if err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
+	if got != "hello there" {
+		t.Errorf("text = %q, want the endpoint that works to have been found past the one that refuses", got)
+	}
+	if last := tried()[len(tried())-1]; last != "/asr" {
+		t.Errorf("the audio went to %s, want /asr", last)
 	}
 }
 
@@ -503,5 +540,155 @@ func TestADialectThatHangsDoesNotHideTheOneThatWorks(t *testing.T) {
 	defer mu.Unlock()
 	if tried["/inference"] == 0 {
 		t.Error("the working endpoint was never tried")
+	}
+}
+
+// The endpoint search must not be run against the sentence someone just
+// said.
+//
+// This is the failure that sent someone to reconfigure a server that was
+// working. The search used to send the real utterance to each candidate in
+// turn, sharing that utterance's deadline between them — so on a server
+// that takes a few seconds per utterance, the endpoint that would have
+// transcribed it was cut off part-way through, and what appeared in the
+// transcript was "10.0.0.24:8123 has none of the transcription endpoints
+// localcode knows". The server had the endpoint. It was given a third of
+// the time it needed.
+//
+// The invariant that fixes it: only the endpoint that answered ever
+// receives the audio. Everything else is asked with half a second of
+// silence, which is cheap on any engine whatever its speed.
+func TestTheEndpointSearchNeverSpendsTheUtterance(t *testing.T) {
+	var mu sync.Mutex
+	sizes := map[string][]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(8 << 20); err == nil {
+			for _, files := range r.MultipartForm.File {
+				for _, f := range files {
+					mu.Lock()
+					sizes[r.URL.Path] = append(sizes[r.URL.Path], int(f.Size))
+					mu.Unlock()
+				}
+			}
+		}
+		if r.URL.Path != "/asr" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"text":"the sentence"}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := remoteProcess(t, srv)
+
+	utterance := make([]float32, 5*SampleRate) // five seconds, as a sentence is
+	if _, err := p.transcribe(context.Background(), utterance, "en"); err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
+
+	probeBytes := 44 + 2*(SampleRate/2)
+	mu.Lock()
+	defer mu.Unlock()
+	for path, got := range sizes {
+		for _, size := range got {
+			if path == "/asr" && size > probeBytes {
+				continue // the endpoint that answered, receiving the audio
+			}
+			if size > probeBytes {
+				t.Errorf("%s was sent %d bytes of audio; the search must cost a probe, not the utterance", path, size)
+			}
+		}
+	}
+}
+
+// A candidate that never answers proves nothing, and must not be reported
+// as one that is absent. "This server has none of the endpoints localcode
+// knows" is a different claim from "something did not reply", and only one
+// of them is knowable here.
+func TestACandidateThatNeverAnswersIsNotCalledMissing(t *testing.T) {
+	// Released at the end of the test rather than left to the request's own
+	// context: httptest.Server.Close waits for its handlers, and a handler
+	// parked on a cancellation it may not be told about hangs the suite.
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/audio/transcriptions" {
+			w.WriteHeader(http.StatusNotFound) // this one really is absent
+			return
+		}
+		select { // and these two say nothing at all
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	p := remoteProcess(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	defer cancel()
+	_, err := p.transcribe(ctx, testAudio, "en")
+	if err == nil {
+		t.Fatal("a server that answered nothing was treated as working")
+	}
+	if strings.Contains(err.Error(), "none of the transcription endpoints") {
+		t.Errorf("error = %v, want it to say the server did not answer rather than that it lacks the endpoints", err)
+	}
+	if !strings.Contains(err.Error(), "could not reach") {
+		t.Errorf("error = %v, want it to name what actually happened", err)
+	}
+}
+
+// The whisperX ASR service takes its options in the query string and
+// ignores form fields it does not know. Sending the spoken language as a
+// form field there is not an error anybody sees — the server auto-detects
+// every utterance and the setting simply has no effect, which is exactly
+// "I chose English and the text still comes back in Korean".
+func TestWhisperXIsToldTheLanguageWhereItReadsIt(t *testing.T) {
+	var query url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/asr" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		query = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"text":"hello there"}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := remoteProcess(t, srv)
+
+	if _, err := p.transcribe(context.Background(), testAudio, "en"); err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
+	if got := query.Get("language"); got != "en" {
+		t.Errorf("language=%q in the query, want en", got)
+	}
+	// And the output format, for the same reason: this service's default
+	// output is plain text, which is not something parseTranscript can read.
+	if got := query.Get("output"); got != "json" {
+		t.Errorf("output=%q in the query, want json", got)
+	}
+}
+
+// "auto" is this package's word for "work it out", not a language. Sent to
+// a server whose language parameter takes a code, it is a code for nothing.
+func TestWhisperXIsSentNoLanguageWhenThereIsNone(t *testing.T) {
+	var query url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/asr" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		query = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"text":"hello there"}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := remoteProcess(t, srv)
+
+	if _, err := p.transcribe(context.Background(), testAudio, "auto"); err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
+	if _, ok := query["language"]; ok {
+		t.Errorf("language=%q was sent, want it omitted so the server auto-detects", query.Get("language"))
 	}
 }

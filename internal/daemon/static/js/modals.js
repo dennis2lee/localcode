@@ -9,16 +9,16 @@ import {
 } from './dom.js';
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
-import { appendError, appendTool } from './transcript.js';
+import { appendError } from './transcript.js';
 import { setInputLocked } from './composer.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace } from './render.js';
 import { Modal } from './modal.js';
 import { settings } from './settings.js';
 import { taskView } from './taskview.js';
-// Circular with sessions.js, which imports applyWorkspace from here — safe
-// for the same reason as the events.js/modals.js pair: both references are
-// only ever called from a function body at runtime, never while the module
-// is being evaluated.
+// Circular with sessions.js, which imports permissionRequest from here —
+// safe for the same reason as the events.js/modals.js pair: both
+// references are only ever called from a function body at runtime, never
+// while the module is being evaluated.
 import { renderSessionList } from './sessions.js';
 
 const workspaceNoteDefault = 'Changing this restarts relative-path resolution for every tool from the new directory. Refused while a turn is in progress.';
@@ -341,21 +341,6 @@ async function switchWorkspace(path) {
   } catch (err) {
     return { err };
   }
-}
-
-// applyWorkspace switches the workspace and reports the outcome in the
-// transcript, since this changes where every later tool call and bash
-// command resolves from — too consequential to happen silently. Returns
-// whether it took effect.
-export async function applyWorkspace(path) {
-  if (path === app.workspacePath) return true;
-  const res = await switchWorkspace(path);
-  if (res.err) {
-    appendError(`could not switch the workspace to ${path}: ${res.err}`);
-    return false;
-  }
-  appendTool(`[workspace] ${res.path}`);
-  return true;
 }
 
 export function openWorkspaceModal() {

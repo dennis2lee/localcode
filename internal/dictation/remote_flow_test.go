@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -68,6 +71,16 @@ func slowServer(t *testing.T, delay time.Duration, preview, final string, finalS
 			fmt.Fprintf(w, `{"detail":"bad form: %v"}`, err)
 			return
 		}
+		// The dialect probe is not an utterance: it is half a second of
+		// silence sent to find out which endpoint this server has (see
+		// ensureAPI), and it must not be counted as the preview below or
+		// answered slowly — a real engine's cost is proportional to the
+		// audio, and half a second of it is cheap however slow the machine.
+		if isSilence(r) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"text":""}`)
+			return
+		}
 		mu.Lock()
 		n++
 		first := n == 1
@@ -88,6 +101,32 @@ func slowServer(t *testing.T, delay time.Duration, preview, final string, finalS
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// isSilence recognises the dialect probe: half a second of pure silence,
+// sent to find out which endpoint this server has (see ensureAPI) rather
+// than to transcribe anything.
+//
+// Recognised by its contents rather than its size, because size does not
+// separate them — the first preview of an utterance is a quarter of a
+// second of audio, which is smaller than the probe. Everything this test
+// calls speech is non-zero.
+func isSilence(r *http.Request) bool {
+	f, _, err := r.FormFile("file")
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(f)
+	if err != nil || len(raw) <= 44 {
+		return false
+	}
+	for _, b := range raw[44:] {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func remoteSession(t *testing.T, srv *httptest.Server) *Session {
@@ -189,3 +228,99 @@ func TestAFailedFinalFallsBackToThePreviewOfIt(t *testing.T) {
 		t.Fatalf("dictation produced %q, want the preview it already had", got)
 	}
 }
+
+// Switching the microphone off is not a failure, and must not be reported
+// as one.
+//
+// Stop cancels the previews in flight — that is what makes the button feel
+// immediate — and every one of those cancellations came back as an error
+// the session then reported. So the ordinary, correct end of every remote
+// dictation printed a line of red under a perfectly good transcript:
+//
+//	whisper engine: Post "http://10.0.0.24:8123/inference": context canceled
+//
+// which, to someone who has already been told dictation is broken, is the
+// evidence that it still is.
+func TestSwitchingTheMicrophoneOffIsNotAnError(t *testing.T) {
+	// Slow enough that the preview started at the first chunk is certainly
+	// still in flight when the microphone goes off — which is the whole
+	// point: it is that preview's cancellation that used to be reported.
+	srv := slowServer(t, 3*time.Second, "half a sen", "the whole sentence", http.StatusOK)
+	sess := remoteSession(t, srv)
+
+	// Stopped mid-sentence, with a preview certainly still in flight.
+	if _, errs := speak(t, sess, speech(1200*time.Millisecond)); len(errs) > 0 {
+		t.Fatalf("nothing had failed yet: %q", errs)
+	}
+	if res := sess.Stop(); res.Error != "" {
+		t.Fatalf("stopping reported %q; cancelling our own previews is not a failure", res.Error)
+	}
+}
+
+// Sentences reach the prompt box in the order they were spoken.
+//
+// Each utterance is transcribed by its own request, and the requests
+// overlap on any engine slow enough to matter — which is every engine on
+// another machine. A short second sentence then overtakes a long first
+// one, and what arrived in the box was the two of them back to front, with
+// nothing able to put them right afterwards.
+func TestSentencesArriveInTheOrderTheyWereSpoken(t *testing.T) {
+	// Cost proportional to the audio, the way a real engine's is, and the
+	// text says how long the recording was — so the order is checkable.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/audio/transcriptions" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		f, _, err := r.FormFile("file")
+		if err != nil {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			return
+		}
+		raw, _ := io.ReadAll(f)
+		seconds := float64(len(raw)-44) / (2 * SampleRate)
+		// A long recording costs real time and a short one is quick, which
+		// is what lets the second sentence overtake the first.
+		if seconds > 2 {
+			time.Sleep(3 * time.Second)
+		} else {
+			time.Sleep(200 * time.Millisecond)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"text":"sentence of %.0f"}`, seconds*10)
+	}))
+	t.Cleanup(srv.Close)
+	sess := remoteSession(t, &httptest.Server{URL: srv.URL, Config: srv.Config})
+
+	// A long sentence, then a short one: the short one finishes first.
+	var audio []float32
+	audio = append(audio, speech(1200*time.Millisecond)...)
+	audio = append(audio, quiet(1400*time.Millisecond)...)
+	audio = append(audio, speech(400*time.Millisecond)...)
+	audio = append(audio, quiet(1400*time.Millisecond)...)
+	finals, _ := speak(t, sess, audio)
+	if res := sess.Stop(); res.Final != "" {
+		finals = append(finals, res.Final)
+	}
+
+	// Each sentence names how long its recording was, so the order they
+	// arrived in is readable: the first one spoken is the longer of the two.
+	got := strings.Join(finals, " ")
+	var lengths []int
+	for _, m := range sentenceLength.FindAllStringSubmatch(got, -1) {
+		n, _ := strconv.Atoi(m[1])
+		lengths = append(lengths, n)
+	}
+	if len(lengths) != 2 {
+		t.Fatalf("dictation produced %q, want both sentences", got)
+	}
+	if lengths[0] < lengths[1] {
+		t.Errorf("dictation produced %q; the sentences came back in the order the engine finished them, not the order they were spoken", got)
+	}
+}
+
+var sentenceLength = regexp.MustCompile(`sentence of (\d+)`)
