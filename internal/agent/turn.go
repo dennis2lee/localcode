@@ -97,6 +97,14 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	rescues := 0
 	trimBudget := l.contextWindow(ctx, profile) / 2
 
+	// State for keep_going: whether this turn has actually done anything
+	// yet, whether the last thing it did was refused, and how many times
+	// the model has already been told to carry on. See keepGoing.
+	ranTools := false
+	lastRefused := false
+	nudgedSinceWork := false
+	nudges := 0
+
 	for {
 		history := l.history(sessionID)
 		messages := sendableHistory(history)
@@ -222,6 +230,29 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					"recovered": true,
 				})
 			}
+			if text, ok := l.keepGoing(sessionID, profile, stopReason, assistantBlocks, ranTools, lastRefused, nudgedSinceWork, nudges); ok {
+				nudges++
+				nudgedSinceWork = true
+				l.Store.Append(sessionID, events.TypeError, map[string]any{
+					"error": fmt.Sprintf(
+						"the model ended its turn with the task unfinished, so localcode told it to carry on (%d of %d — keep_going for %q)",
+						nudges, effectiveKeepGoing(profile), profile.Model),
+					"recovered": true,
+				})
+				// Persisted as the user message it is, marked auto so no
+				// client shows it as something the person typed. Without
+				// this event, a daemon restarted mid-session rebuilt the
+				// history with two assistant messages back to back — a
+				// shape Bedrock rejects outright — and a conversation the
+				// model remembered differently from how it happened.
+				l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "auto": true})
+				l.appendHistory(sessionID, provider.Message{
+					Role:    provider.RoleUser,
+					Content: []provider.Block{provider.TextBlock(text)},
+				})
+				continue
+			}
+
 			if len(l.Config.Hooks) > 0 {
 				// Fire-and-forget: a Stop hook is purely a notification
 				// point here (e.g. "ping me when a turn finishes") — its
@@ -233,7 +264,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return nil
 		}
 
-		resultBlocks := l.runTools(ctx, sessionID, toolUses, agentCfg.Tools, l.contextWindow(ctx, profile))
+		resultBlocks, refused := l.runTools(ctx, sessionID, toolUses, agentCfg.Tools, l.contextWindow(ctx, profile))
+		ranTools = true
+		lastRefused = refused
+		nudgedSinceWork = false
 		resultBlocks = append(resultBlocks, l.takeInjected(sessionID)...)
 		l.appendHistory(sessionID, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
 	}
@@ -424,7 +458,11 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 // non-empty, is enforced here too (not just in the specs the model saw) —
 // a belt-and-suspenders check in case a model calls a tool it wasn't
 // offered.
-func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block, allowedTools []string, window int) []provider.Block {
+// runTools executes one batch of tool calls and returns the result blocks,
+// plus whether any of them was refused rather than run — a deny rule, a
+// blocking hook, or the person at the keyboard clicking Deny. See
+// keepGoing for what that second value decides.
+func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block, allowedTools []string, window int) (blocks []provider.Block, refused bool) {
 	ctx = WithSessionID(ctx, sessionID)
 	// Every tool in this turn resolves relative paths, and runs shell
 	// commands, in this session's own directory. This is what replaced
@@ -451,6 +489,7 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 			results = append(results, provider.ToolResultBlock(tu.ToolUseID, res.Content, true))
 			continue
 		}
+
 		if !tools.IsAllowed(allowedTools, tu.ToolName) {
 			res = tools.Result{
 				Content: fmt.Sprintf("tool %q is not available to this agent", tu.ToolName),
@@ -476,8 +515,11 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 			"input": string(tu.ToolInput),
 		})
 		results = append(results, provider.ToolResultBlock(tu.ToolUseID, res.Content, res.IsError))
+		if res.Refused {
+			refused = true
+		}
 	}
-	return results
+	return results, refused
 }
 
 // drainText concatenates every text delta from stream and returns the

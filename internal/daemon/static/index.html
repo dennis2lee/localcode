@@ -181,13 +181,17 @@
       <label class="field" for="whisper-api-select">Speech server API</label>
       <select id="whisper-api-select">
         <option value="">Work it out on the first utterance</option>
+        <option value="whisperlive">WhisperLive (streaming, websocket)</option>
         <option value="openai">OpenAI-compatible (/v1/audio/transcriptions)</option>
         <option value="whispercpp">whisper.cpp (/inference)</option>
         <option value="whisperx">WhisperX (/asr)</option>
       </select>
       <p class="note">"A whisper server" is not one protocol. Left to work
         it out, localcode tries each until one answers — naming it skips
-        that, and is the answer for a server that replies to every path.</p>
+        that, and is the answer for a server that replies to every path.
+        WhisperLive is the streaming one: the audio goes out as it is
+        recorded and the text comes back mid-sentence, instead of the
+        whole utterance being re-sent four times a second.</p>
       <p class="note" id="dictation-engine-note"></p>
     </div>
 

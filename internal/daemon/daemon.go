@@ -108,6 +108,7 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	// still registered as running. Wired at construction so no path can
 	// build a daemon whose loop silently ignores what someone typed.
 	loop.PendingInput = d.turns.takeOne
+	loop.UserWaiting = d.turns.hasPending
 
 	d.routes(webFS)
 	// Every status change becomes one live event carrying the whole list.

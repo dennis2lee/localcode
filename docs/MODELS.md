@@ -234,6 +234,28 @@ There is no need to tell localcode how big the context window is: as of v0.38.0 
 }
 ```
 
+### A local model that stops mid-task
+
+Local models stop in a way the hosted ones mostly do not: a tool comes
+back, the model writes down what still has to happen, and ends the turn.
+Typing "carry on" makes it finish that step, and then it stops again.
+
+localcode carries the turn on for you, up to three times, for the model
+families known to do it. For anything else set `keep_going` on the
+profile:
+
+```json
+{
+  "profiles": {
+    "local-fast": { "provider": "local", "model": "qwen3-30b-a3b", "keep_going": 3 }
+  }
+}
+```
+
+`-1` turns it off for a model that has a default. See
+[USAGE.md](USAGE.md#a-model-that-stops-mid-task) for the cases it
+deliberately leaves alone, such as a model that asked you a question.
+
 ### vLLM and other OpenAI compatible servers, including remote proxies
 
 Any server that exposes `/chat/completions` works the same way once `base_url` points at it. For servers that require authentication, set `providers.<name>.api_key` and it is sent as an `Authorization: Bearer <key>` header. On a corporate network, check that the port is open through any reverse proxy or firewall in between.

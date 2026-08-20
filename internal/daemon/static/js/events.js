@@ -24,6 +24,12 @@ let eventSource = null;
 const handlers = {
   'message.user': (d) => {
     if (typeof d.text !== 'string') return;
+    // A message localcode sent on the user's behalf — keep_going telling a
+    // stalled model to carry on. It is in the log so the model's history
+    // survives a restart, and it is announced by its own note; painting it
+    // as a typed line would put words in the user's mouth, and it has no
+    // business in Up/Down recall.
+    if (d.auto) return;
     // A message this client sent already has a placeholder standing in for
     // it; this is that message finally reaching the model, so the
     // placeholder goes rather than sitting above a duplicate. Unconditional

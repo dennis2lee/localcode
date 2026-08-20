@@ -17,6 +17,13 @@ import (
 type Result struct {
 	Content string
 	IsError bool
+	// Refused marks a call that did not run because someone said no — a
+	// deny rule, a blocking hook, or the person at the keyboard clicking
+	// Deny. It is a different kind of failure from a command that ran and
+	// failed, and the difference matters to anything deciding whether to
+	// carry on: after a refusal, a model that stops has stopped for the
+	// right reason.
+	Refused bool
 }
 
 // Tool is one callable capability exposed to the model.
@@ -160,7 +167,7 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 			"tool_input": json.RawMessage(input),
 		})
 		if blocked {
-			return Result{Content: fmt.Sprintf("blocked by pre_tool_use hook: %s", reason), IsError: true}
+			return Result{Content: fmt.Sprintf("blocked by pre_tool_use hook: %s", reason), IsError: true, Refused: true}
 		}
 	}
 
@@ -179,7 +186,7 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 
 	switch decision {
 	case DecisionDeny:
-		return Result{Content: fmt.Sprintf("tool %q is denied by permission policy", name), IsError: true}
+		return Result{Content: fmt.Sprintf("tool %q is denied by permission policy", name), IsError: true, Refused: true}
 
 	case DecisionAsk:
 		if r.permission == nil {
@@ -193,7 +200,7 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 			return Result{Content: fmt.Sprintf("permission check failed: %v", err), IsError: true}
 		}
 		if !allowed {
-			return Result{Content: "denied by user", IsError: true}
+			return Result{Content: "denied by user", IsError: true, Refused: true}
 		}
 	}
 

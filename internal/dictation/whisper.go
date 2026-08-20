@@ -102,6 +102,18 @@ type whisperRecognizer struct {
 }
 
 func openWhisper(cfg Config) (Recognizer, error) {
+	// A streaming server first, when there is a remote one to ask.
+	//
+	// Everything below this line re-sends the whole utterance every
+	// 900ms because whisper reads a window at a time; a server that can
+	// take the audio as it is recorded makes that unnecessary, and the
+	// text appears while the words are still being said rather than a
+	// beat behind. When the server does not speak it — which is most of
+	// them — ok is false and this falls through to HTTP unchanged.
+	if rec, err, ok := openStream(cfg); ok {
+		return rec, err
+	}
+
 	proc, err := acquireWhisper(cfg)
 	if err != nil {
 		return nil, err

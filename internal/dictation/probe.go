@@ -107,7 +107,16 @@ func Probe(ctx context.Context, cfg Config) (*ProbeResult, error) {
 		res.Steps = append(res.Steps, probeTLS(ctx, addr))
 	}
 
-	// 4. Every endpoint localcode would try, with real audio: half a
+	// 4. The streaming endpoints, which are what dictation uses when a
+	// server has one: the audio goes out as it is recorded and the text
+	// comes back mid-sentence, instead of the whole utterance being
+	// re-sent every 900ms. Asked first because that is the order
+	// dictation asks in.
+	for _, proto := range streamProtos {
+		res.Steps = append(res.Steps, probeStream(ctx, cfg, proto))
+	}
+
+	// 5. Every HTTP endpoint localcode would try, with real audio: half a
 	// second of silence, which is a valid WAV and a legitimate thing to
 	// transcribe.
 	p := &whisperProcess{host: addr, log: &syncBuffer{}, model: strings.TrimSpace(cfg.WhisperModel), scheme: scheme}
@@ -345,9 +354,11 @@ func probeTLS(ctx context.Context, addr string) ProbeStep {
 
 // Summary is the one sentence to read first: what the answers add up to.
 func (r *ProbeResult) Summary() string {
-	var getOK, postOK, postNoReply int
+	var getOK, postOK, postNoReply, wsOK int
 	for _, s := range r.Steps {
 		switch {
+		case strings.HasPrefix(s.What, "WS") && s.OK:
+			wsOK++
 		case strings.HasPrefix(s.What, "GET") && s.OK:
 			getOK++
 		case strings.HasPrefix(s.What, "POST") && s.OK:
@@ -372,6 +383,14 @@ func (r *ProbeResult) Summary() string {
 		}
 	}
 	switch {
+	// The streaming answer comes first because it is the one dictation
+	// would use, and because a server that streams is entitled to have
+	// no HTTP endpoints at all — WhisperLive has none, so every line
+	// below it says "404" and the verdict has to not read that as a
+	// server that cannot transcribe.
+	case wsOK > 0:
+		return "dictation should work, and will stream: the server transcribes as the audio arrives " +
+			"rather than being sent each utterance again every 900ms."
 	case postOK > 0:
 		return "dictation should work: at least one transcription endpoint answered."
 	case getOK > 0 && postNoReply == len(whisperAPIs):

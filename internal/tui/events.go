@@ -22,6 +22,14 @@ func (m *Model) applyEvent(ev events.Event) {
 	rev := m.transcriptRev
 	switch ev.Type {
 	case events.TypeUserMessage:
+		// auto marks a message localcode sent on the user's behalf —
+		// keep_going telling a stalled model to carry on. Logged so the
+		// model's history survives a restart, announced by its own note,
+		// and not something to paint as a line the person typed or to put
+		// in Up/Down recall.
+		if auto, _ := ev.Data["auto"].(bool); auto {
+			break
+		}
 		if text, ok := ev.Data["text"].(string); ok {
 			// Every prompt this session has seen goes into Up/Down recall,
 			// whoever typed it and whenever — which is what gives a session

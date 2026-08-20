@@ -145,7 +145,60 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 | `model` | Model id, as the provider names it |
 | `max_tokens` | Cap on one reply, 4096 if unset. Unlike `context_window` this cannot be discovered: it is a choice about how long an answer you want, not a fact about the server. Reduced automatically when the conversation leaves less room than this in the window, so a generous ceiling is safe, and a reply that runs into it says so rather than just stopping. |
 | `temperature` | Sampling temperature |
+| `keep_going` | How many times one turn may be told to carry on after the model stops with the task unfinished. `0` (default) defers to the model: families known to stall get `3` out of the box, everything else gets none. `-1` forces it off. See [below](#a-model-that-stops-mid-task). |
 | `context_window` | The model's total input+output token limit. Usually unnecessary: an openai-compatible server is asked directly (`GET /v1/models`, or `/props` on llama.cpp), and only when it does not answer is the limit guessed from the model name, falling back to 128k for anything unrecognised. Set it when the server reports nothing and the name gives no clue, or to override both. Guessing high is the harmful direction, since this number is what keeps a request inside the real limit. |
+
+#### A model that stops mid-task
+
+Some models — local ones, mostly — end a turn by writing down what still
+has to happen rather than doing it: a build fails, the model reads the
+error, says "`global_init.cpp` also has to be updated", and stops.
+Typing "carry on" makes it pick up and finish that step, and then it
+stops again. The person is being used as the model's own loop.
+
+Two things address it, and they are separate on purpose.
+
+**A note in the system prompt**, for the models this has been reported
+against, telling them to take the next step in the same turn. It costs a
+paragraph, applies to nothing else, and needs no configuration. It is
+also not a guarantee, which is why there is a second thing.
+
+**`keep_going`**, which is localcode typing "carry on" for you, at most
+N times per turn. Models known to stall get a budget of 3 out of the box
+— installing the release is the whole fix, no config key required. For
+any other model it stays off, and the profile can override either way:
+
+```json
+{
+  "profiles": {
+    "local": { "provider": "local", "model": "some-other-model", "keep_going": 3 },
+    "quiet": { "provider": "local", "model": "muse-glimmer-30b", "keep_going": -1 }
+  }
+}
+```
+
+`0` (or leaving it out) means the model's own default; `-1` means never.
+The default for unrecognised models has to stay zero: a turn that ends
+after tool use looks exactly the same whether the model finished or gave
+up, so on a model that stops when it is done this would spend a turn
+asking "anything else?" after every task.
+
+The rules it carries on under, each of which is a case where stopping
+was right:
+
+| Not carried on when | Because |
+|---|---|
+| No tool ran in this turn | It was a question and its answer, not a task |
+| The last tool call was refused | The model stopped because someone said no |
+| The reply ends in a question | The model is asking, not stalling |
+| The reply hit `max_tokens` | It needs a bigger cap, not another turn — and that is already reported |
+| The last carry-on produced no work | Prose twice over is the model saying it has finished |
+| You have already typed something | Your message reaches the model as soon as this turn ends, and it beats an invented one |
+
+That last rule is what keeps the setting cheap: a finished task costs one
+extra turn, not `keep_going` of them. Each carry-on appears in the
+transcript as a note saying what happened, so a turn that continues by
+itself never looks like one that never stopped.
 
 #### Provider fields
 
@@ -1248,7 +1301,7 @@ what `dictation install` arranged:
 | `whisper_bin` | Path to the engine executable. |
 | `whisper_model` | Path to a `ggml-*.bin`, or a directory holding one. When several are installed the largest is used. |
 | `whisper_url` | A speech server on another machine. Set, nothing runs locally. See [below](#using-a-speech-server-on-another-machine). |
-| `whisper_api` | Which dialect that server speaks: `openai`, `whispercpp` or `whisperx`. Omit to work it out on the first utterance. |
+| `whisper_api` | Which dialect that server speaks: `whisperlive` (streaming), `openai`, `whispercpp` or `whisperx`. Omit to work it out when dictation starts. |
 | `threads` | CPU cap. 0 picks a modest default, since this runs beside a language model doing the actual work. |
 
 `dictation_model_dir` still points sherpa at its model directory, which
@@ -1275,15 +1328,20 @@ Nothing is installed on this side — no engine, no model, no child
 process — and the microphone, the voice detection and the prompt box all
 work exactly as before.
 
-It does not have to be whisper.cpp. Three server dialects are understood,
-and which one is in front of you is worked out on the first utterance and
+It does not have to be whisper.cpp. Four server dialects are understood,
+and which one is in front of you is worked out when dictation starts and
 remembered:
 
 | Dialect | Endpoint | Servers |
 |---|---|---|
+| `whisperlive` | `WS /` | [WhisperLive](https://github.com/collabora/WhisperLive), streaming |
 | `openai` | `POST /v1/audio/transcriptions` | anything OpenAI-compatible, including WhisperX's compatibility layer |
 | `whispercpp` | `POST /inference` | whisper.cpp's own server, and what localcode runs locally |
 | `whisperx` | `POST /asr` | WhisperX's native API |
+
+The first of those is a WebSocket and the other three are uploads, and
+the difference is what the text feels like. See
+[below](#streaming-from-a-server-that-supports-it).
 
 Discovery costs up to three extra requests once per engine and none after
 that, and it is run against half a second of silence rather than against
@@ -1311,6 +1369,53 @@ field, and `whisperx` reads it from the query string and ignores form
 fields it does not know — so a language chosen in the panel simply had no
 effect there, and every utterance was auto-detected.
 
+#### Streaming from a server that supports it
+
+Whisper is not a streaming model: it reads a window of audio and returns
+the whole of it. So the upload dialects show text while someone is still
+talking by re-sending the utterance so far every 900ms and throwing the
+previous answer away — wasted work by construction, and over a network
+wasted upload too, since ten seconds into a sentence every preview ships
+those ten seconds again.
+
+A streaming server removes both halves of that:
+
+| | Upload dialects | `whisperlive` |
+|---|---|---|
+| Audio sent | The whole utterance, again, every 900ms | Once, as it is recorded |
+| Text appears | Up to a second behind the words | As the server produces it |
+| Cost per sentence | Grows with the length of the sentence | Flat |
+
+Nothing else changes. The pause still decides when grey text becomes
+committed text, and it is still decided here from the audio rather than
+by the server, so dictation behaves the same way on every engine.
+
+localcode tries the streaming dialect first whenever `whisper_url` is
+set and `whisper_api` is empty. A server that does not have it answers
+the upgrade with an ordinary HTTP status, which costs one request and is
+not an error: the upload dialects are tried next, exactly as before.
+Setting `whisper_api` to `whisperlive` pins it, and then a server that
+does not answer is reported instead of quietly falling back to the
+slower path. Setting it to any of the other three skips the streaming
+attempt entirely.
+
+Two details of that protocol are worth knowing:
+
+* The spoken language travels in the handshake, not per request. It is
+  sent as `null` when the language is left on auto-detect.
+* The server is asked for the model named in `whisper_model` when that
+  is a plain name (`small`, `large-v3`). A path to a local `ggml-*.bin`
+  is not a name a streaming server can load, so `small` is asked for
+  instead of passing the path along.
+
+On the other machine:
+
+```bash
+python3 run_server.py --port 9090 --backend faster_whisper
+```
+
+Then set `whisper_url` to `192.168.1.50:9090`.
+
 When nothing comes out and the reason is not obvious, ask the server
 directly:
 
@@ -1318,8 +1423,9 @@ directly:
 localcode dictation probe
 ```
 
-It reports whether TCP connects, whether a plain `GET` is answered, and
-what each upload endpoint says. A server that answers `GET` and resets
+It reports whether TCP connects, whether a plain `GET` is answered,
+whether the streaming endpoint is there, and what each upload endpoint
+says. A server that answers `GET` and resets
 every upload is not a wrong endpoint — the address and the paths are
 fine, and something is rejecting the audio itself.
 

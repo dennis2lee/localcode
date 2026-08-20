@@ -24,7 +24,9 @@
       "provider": "local",
       "model": "qwen3-30b-a3b",
       "max_tokens": 4096,
-      "context_window": 32768
+      "context_window": 32768,
+      "//keep_going": "How many times one turn may be told to carry on after the model stops with the task unfinished. 0 (the default) defers to the model: families known to stall get 3 out of the box, everything else none. -1 forces it off. See docs/USAGE.md.",
+      "keep_going": 0
     }
   },
   "agents": {
@@ -86,7 +88,7 @@
   "skip_permissions": false,
   "dictation_model_dir": "",
 
-  "//dictation": "Speech engine settings. All optional: `localcode dictation install` puts an engine and model where localcode already looks, so this block is only for overriding that. engine is whisper (default, works in every build) or sherpa (desktop build only). language is an ISO 639-1 code; empty auto-detects, which is what mixed speech wants. whisper_url points at a speech server on another machine (host:port or http://host:port) and, when set, nothing runs locally — note that recorded audio then leaves this machine over plain HTTP. It need not be whisper.cpp: whisper_api names the dialect (openai, whispercpp, whisperx) and, left empty, the right one is worked out on the first utterance.",
+  "//dictation": "Speech engine settings. All optional: `localcode dictation install` puts an engine and model where localcode already looks, so this block is only for overriding that. engine is whisper (default, works in every build) or sherpa (desktop build only). language is an ISO 639-1 code; empty auto-detects, which is what mixed speech wants. whisper_url points at a speech server on another machine (host:port or http://host:port) and, when set, nothing runs locally — note that recorded audio then leaves this machine over plain HTTP. It need not be whisper.cpp: whisper_api names the dialect (whisperlive, openai, whispercpp, whisperx) and, left empty, the right one is worked out when dictation starts. whisperlive is a WebSocket and streams — the audio goes out as it is recorded and the text comes back mid-sentence — and is tried first.",
   "dictation": {
     "engine": "",
     "language": "",

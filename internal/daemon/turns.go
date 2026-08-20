@@ -113,6 +113,17 @@ func (t *turnTracker) takeOne(id string) (string, bool) {
 	return text, true
 }
 
+// hasPending reports whether anything is queued for id, without taking
+// it. The agent loop asks before deciding to carry a stalled turn on by
+// itself: a message the user has already typed is a better continuation
+// than one localcode invents, and it is delivered the moment this turn
+// ends (see finishOrTake).
+func (t *turnTracker) hasPending(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.pending[id]) > 0
+}
+
 // finishOrTake ends a turn, atomically: either there is still something
 // queued — return it, and stay registered as running so a further message
 // keeps queueing rather than racing a second turn into existence — or

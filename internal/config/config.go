@@ -250,7 +250,31 @@ type Profile struct {
 	// the limit, and a request built against a window larger than the real
 	// one is refused outright by the server.
 	ContextWindow int `json:"context_window,omitempty"`
+
+	// KeepGoing is how many times one turn may be told to carry on after
+	// the model stops with the task unfinished. 0, the default, defers to
+	// the model: families known to stall get a small budget out of the
+	// box (see modelKeepGoing in internal/agent), everything else gets
+	// none. -1 forces it off whatever the model.
+	//
+	// This exists for a habit the strong hosted models do not have and
+	// several local ones do: after a tool result, the model writes down
+	// what still needs doing — "global_init.cpp also has to be updated" —
+	// and ends its turn instead of doing it. Typing "carry on" makes it
+	// pick up again, every time, which is a person acting as the model's
+	// own loop.
+	//
+	// Per profile because it is a property of the model, not of the work:
+	// a turn that ends after tool use looks the same whether the model
+	// finished or gave up, and on a model that stops when it is done a
+	// carry-on spends a turn asking "anything else?" after every task —
+	// which is why the default budget for unrecognised models is zero.
+	KeepGoing int `json:"keep_going,omitempty"`
 }
+
+// maxKeepGoing caps keep_going. Ten is already far past the point where a
+// model that has not finished is going to.
+const maxKeepGoing = 10
 
 // AgentConfig defines one named agent role: which model profile it runs
 // on, and optionally a scoped system prompt and a restricted tool set —
@@ -289,6 +313,13 @@ func (c *Config) Validate() error {
 	for name, profile := range c.Profiles {
 		if _, ok := c.Providers[profile.Provider]; !ok {
 			return fmt.Errorf("profile %q references unknown provider %q", name, profile.Provider)
+		}
+		// Bounded at the point it is read rather than wherever it is used.
+		// This number multiplies turns, and a typo in it — a stray zero —
+		// is a session that keeps prompting itself.
+		if profile.KeepGoing < -1 || profile.KeepGoing > maxKeepGoing {
+			return fmt.Errorf("profile %q: keep_going is %d, which is outside -1..%d (-1 means never, 0 means the model's own default)",
+				name, profile.KeepGoing, maxKeepGoing)
 		}
 	}
 

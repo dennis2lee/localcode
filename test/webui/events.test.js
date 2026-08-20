@@ -40,6 +40,16 @@ test('a user message renders escaped', async () => {
   assert.ok(app.transcript().includes('You: &lt;b&gt;hi&lt;/b&gt;'), app.transcript());
 });
 
+// keep_going: the message localcode sends a stalled model on the user's
+// behalf is in the log so the model's history survives a restart, and it
+// is announced by its own note. Painting it as a typed line would put
+// words in the user's mouth — and it must not enter Up/Down recall.
+test('a keep_going carry-on is not painted as something the user typed', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'message.user', data: { text: 'Continue. You ended your turn early.', auto: true } });
+  assert.ok(!app.transcript().includes('You:'), app.transcript());
+});
+
 // message.part.end means one model message ended, not the turn: a turn with
 // tool calls streams several. Ending the wait here is what used to make a
 // prompt typed during tool execution skip the queue and bounce off the

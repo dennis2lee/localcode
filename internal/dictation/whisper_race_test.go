@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -130,9 +131,15 @@ func TestRemoteEngineTranscribesWithNothingInstalledLocally(t *testing.T) {
 	// once localcode learned to look for more than one — a server that
 	// says yes to everything settles on whichever is tried first, which
 	// says nothing about whether the right one was found.
+	// Under a lock because these no longer all arrive on one connection:
+	// the streaming attempt that now precedes them is a connection of its
+	// own, and net/http serves each on its own goroutine.
+	var askedMu sync.Mutex
 	var asked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		askedMu.Lock()
 		asked = append(asked, r.URL.Path)
+		askedMu.Unlock()
 		if r.URL.Path != "/inference" {
 			http.NotFound(w, r)
 			return
@@ -159,6 +166,8 @@ func TestRemoteEngineTranscribesWithNothingInstalledLocally(t *testing.T) {
 	// And it found the endpoint this server actually serves, rather than
 	// giving up on the first 404 the way it did before.
 	var hit bool
+	askedMu.Lock()
+	defer askedMu.Unlock()
 	for _, path := range asked {
 		if path == "/inference" {
 			hit = true

@@ -103,6 +103,14 @@ type Loop struct {
 	// still registered as running.
 	PendingInput func(sessionID string) (string, bool)
 
+	// UserWaiting, if set, reports whether the user has typed something
+	// that has not reached the model yet. Only keep_going reads it: when
+	// the person has already said what should happen next, saying "carry
+	// on" for them talks over them, and their message is one turn away
+	// anyway. Nil simply means "not known", which is the same answer as
+	// no.
+	UserWaiting func(sessionID string) bool
+
 	// Tasks runs sub-agents in their own sessions. Set by NewTaskManager,
 	// so a Loop built without one (a bare Loop in a test) simply has no
 	// delegation rather than a nil dereference.

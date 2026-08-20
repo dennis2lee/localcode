@@ -129,8 +129,16 @@ func apiByName(name string) (whisperAPI, bool) {
 // KnownAPI reports whether name is a dialect this package can be told to
 // use, so a settings panel can refuse a value at the point it is typed
 // rather than at the first utterance.
+//
+// The streaming dialects count: they are named in the same setting,
+// because from the outside "which protocol does the server speak" is one
+// question and whether the answer happens to be a WebSocket is a detail
+// of the answer.
 func KnownAPI(name string) bool {
-	_, ok := apiByName(name)
+	if _, ok := apiByName(name); ok {
+		return true
+	}
+	_, ok := streamProtoByName(name)
 	return ok
 }
 
@@ -144,7 +152,7 @@ func whisperAPINames() string {
 	for i, a := range whisperAPIs {
 		names[i] = a.name
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(append(names, streamProtoNames()...), ", ")
 }
 
 // parseTranscript pulls the text out of whichever shape came back.
