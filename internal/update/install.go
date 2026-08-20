@@ -51,6 +51,17 @@ func Apply(path string) (Outcome, error) {
 		}, nil
 	}
 
+	// A Debian package. Installing it needs root, and localcode is not
+	// going to ask for root or run a package manager on someone's behalf
+	// — that is a decision with a password attached to it. The command is
+	// one line and it is theirs to run.
+	if strings.EqualFold(filepath.Ext(path), ".deb") {
+		return Outcome{
+			Path:   path,
+			Detail: "downloaded to " + path + " — install it with: sudo apt install " + path,
+		}, nil
+	}
+
 	// An archive. Extracting it over the running install is exactly what
 	// this refuses to do, so the file and the instruction are the answer.
 	return Outcome{

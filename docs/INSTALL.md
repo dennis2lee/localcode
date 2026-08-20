@@ -6,12 +6,14 @@
 
 | Tool | Needed for | Install |
 |---|---|---|
-| Go 1.23 or newer | Everything | `brew install go` |
+| Go 1.26.5 or newer | Everything | `brew install go` |
 | `lipo` | macOS `.app` bundle | Ships with Xcode Command Line Tools |
 | `zip` | Windows zip | Ships with macOS and Linux |
 | `msitools` | Windows `.msi` | `brew install msitools` |
 
-`msitools` builds the `.msi` on macOS or Linux, so you do not need a Windows machine.
+`msitools` builds the `.msi` on macOS or Linux, so you do not need a Windows machine. The Linux `.deb` needs nothing at all: it is written by `./build/deb` (see `internal/debpkg`), not by `dpkg-deb`, so a release can be cut from a Mac.
+
+The version in go.mod is the floor. `go build` refuses an older toolchain rather than producing a binary that misbehaves.
 
 ### Build
 
@@ -30,11 +32,15 @@ Run it right away:
 ## 2. Build distribution packages
 
 ```bash
-make dist            # everything under dist/mac and dist/windows, msi included
-make dist-mac        # macOS only
-make dist-windows    # Windows zip only
-make dist-msi        # Windows msi only
+make dist VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe   # everything
+make dist-mac VERSION=x.y.z        # macOS binary and .app
+make dist-mac-gui VERSION=x.y.z    # macOS desktop-window .app
+make dist-linux VERSION=x.y.z      # Linux tar.gz and .deb
+make dist-windows VERSION=x.y.z    # Windows zips only
+make dist-msi VERSION=x.y.z GUI_EXE=...   # Windows msi only
 ```
+
+`VERSION` is stamped into the binary and into every filename; leaving it out builds everything as `0.1.0`. `make dist` also runs `scripts/release-preflight.sh`, which refuses to build when the docs are stale for that version — see [RELEASING.md](../RELEASING.md). `GUI_EXE` must point at a Windows-built `localcode-gui.exe`, which is CGo and comes from CI (`gui-windows.yml`), not from a Mac.
 
 Output:
 
@@ -42,6 +48,10 @@ Output:
 |---|---|---|
 | macOS | `dist/mac/localcode-<version>-darwin-universal.tar.gz` | Plain binary, universal for Intel and Apple Silicon |
 | macOS | `dist/mac/LocalCode-<version>-darwin-universal-app.tar.gz` | `.app` bundle, double click to launch, opens a terminal |
+| Linux | `dist/linux/localcode-<version>-linux-amd64.deb` | Debian and Ubuntu package, installs `/usr/bin/localcode` |
+| Linux | `dist/linux/localcode-<version>-linux-arm64.deb` | The same for ARM64 |
+| Linux | `dist/linux/localcode-<version>-linux-amd64.tar.gz` | Portable static binary |
+| Linux | `dist/linux/localcode-<version>-linux-arm64.tar.gz` | Portable static binary, ARM64 |
 | Windows | `dist/windows/localcode-<version>-windows-amd64.msi` | Installer for 64 bit Intel and AMD, adds a Start menu shortcut and registers PATH |
 | Windows | `dist/windows/localcode-<version>-windows-amd64.zip` | Portable zip, 64 bit Intel and AMD |
 | Windows | `dist/windows/localcode-<version>-windows-arm64.zip` | Portable zip for ARM64 devices such as Surface |
@@ -58,6 +68,31 @@ The `.app` is not signed or notarized with an Apple Developer ID. If Gatekeeper 
 2. Click Open again in the warning dialog.
 
 To sign it for distribution, run `codesign --sign "Developer ID Application: ..." LocalCode.app` and then notarize with `xcrun notarytool submit`. Both need an Apple Developer account.
+
+### Install on Linux
+
+**Debian package, recommended: Ubuntu, Debian, and anything else with `apt`**
+
+```bash
+sudo apt install ./localcode-<version>-linux-amd64.deb
+```
+
+Tested against Ubuntu 24.04. It installs `/usr/bin/localcode`, so it is on PATH for every user, and upgrades in place when you install a newer one. `sudo apt remove localcode` takes it off.
+
+There is no `Depends:` line and nothing to satisfy: the binary is built with `CGO_ENABLED=0`, so it is static and needs no libc, no runtime, and no Node or Python. On ARM64 machines use the `-linux-arm64.deb`.
+
+The package is unsigned and is not in any apt repository, so `apt` installs it from the file path you give it. `apt update` will never offer an upgrade; localcode checks GitHub itself (see [USAGE.md](USAGE.md#checking-for-updates)).
+
+**Tarball, portable, any distribution**
+
+```bash
+tar xzf localcode-<version>-linux-amd64.tar.gz
+./localcode --agent general-purpose
+```
+
+One static binary. Put it wherever you like — `~/.local/bin` keeps it off the package manager's territory.
+
+The desktop window is not built for Linux. It links a native webview through CGo, and on Linux that means WebKitGTK and a build per distribution; the daemon, the TUI and the Web UI in a browser are all there and are what a Linux install is.
 
 ### Install on Windows
 
@@ -97,6 +132,6 @@ Model access for the Claude models you plan to use must be enabled in the Bedroc
 
 ## 5. MCP servers, optional
 
-Every server listed under `mcp_servers` in the config is launched over stdio using the executable named in its `command`. For example, `npx -y @modelcontextprotocol/server-github` requires Node.js and npm to be installed.
+A server listed under `mcp_servers` with a `command` is launched over stdio using that executable. For example, `npx -y @modelcontextprotocol/server-github` requires Node.js and npm to be installed. A server with a `url` instead is a remote one (`http` or `sse`) and needs nothing installed locally. See [USAGE.md](USAGE.md#managing-mcp-servers-with-localcode-mcp) for `localcode mcp add`, which writes these entries for you.
 
 See [USAGE.md](USAGE.md#config-file-configjson) for the full configuration.

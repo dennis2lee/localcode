@@ -1,5 +1,12 @@
 # Refactoring Plan
 
+> **Finished.** All thirteen steps shipped in v0.31.0 and the commits just
+> after it; the two items deliberately left undone are named in
+> [Completion status](#completion-status) at the bottom. This is kept as the
+> record of why the packages are shaped the way they are — the line counts and
+> "currently" in the text below describe the codebase *before* the work, not
+> now. Nothing here is outstanding.
+
 This is an execution plan for a structural refactoring of the codebase, written
 to be carried out phase by phase by a coding agent. The codebase grew feature
 by feature over many releases; the goal is to restructure it so future changes

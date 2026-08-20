@@ -28,6 +28,7 @@ localcode --agent general-purpose
 | `--listen <host:port>` | `127.0.0.1:4096` | Address the daemon binds. The Web UI is served here too. |
 | `--server <url>` | none | Do not start a local daemon. Attach the TUI to an already running daemon, which may be remote. |
 | `--headless` | `false` | Run the daemon alone with no TUI, exposing the HTTP API and Web UI |
+| `--gui` | on for a `-tags gui` build, off otherwise | Open the native desktop window instead of the TUI. `--gui=false` forces the TUI on a build that has the window. |
 | `-version`, `--version` | `false` | Print the build version and exit |
 
 `localcode version` works the same as `-version`.
@@ -109,7 +110,7 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
     "local":   { "type": "openai-compat", "base_url": "http://localhost:1234/v1" }
   },
   "profiles": {
-    "strong":   { "provider": "bedrock", "model": "us.anthropic.claude-opus-4-5-20251101-v1:0", "max_tokens": 8192 },
+    "strong":   { "provider": "bedrock", "model": "us.anthropic.claude-opus-4-6-v1", "max_tokens": 8192 },
     "balanced": { "provider": "bedrock", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "max_tokens": 8192 },
     "cheap":    { "provider": "local", "model": "qwen3-30b-a3b", "max_tokens": 4096, "context_window": 32768 }
   },
@@ -130,12 +131,20 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 | Field | Meaning |
 |---|---|
 | `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. |
-| `profiles` | A named provider and model pairing. `max_tokens`, `temperature` and `context_window` are optional. |
+| `profiles` | A named provider and model pairing. `max_tokens`, `temperature`, `context_window` and `keep_going` are optional. |
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
-| `max_concurrent_tasks` | Caps how many background tasks run at once |
+| `max_concurrent_tasks` | Caps how many background tasks run at once. Unset means 1, so tasks queue rather than run together. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `dictation` | Speech engine settings. Every field optional; with none set, an installed engine beside the binary is found and used. See [Dictating a prompt](#dictating-a-prompt). |
 | `dictation_model_dir` | Path to an unpacked sherpa-onnx model, for the older sherpa engine only. See [Engines](#engines). |
+| `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
+| `skip_permissions` | Turns every "ask" into "allow". Off unless set; explicit deny rules still deny. See [Skipping confirmations](#skipping-confirmations-entirely). |
+| `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
+| `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
+| `auto_compact_enabled` | Automatic compaction past 80% of the window. On unless set to false; also `/config auto_compact`. |
+| `auto_memory_enabled` | The notes the model keeps for itself across sessions. On unless set to false. See [Auto memory](#auto-memory). |
+| `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
+| `default_profile` | The profile used when an agent name resolves to nothing. |
 
 #### Profile fields
 
@@ -431,7 +440,7 @@ Every change applies immediately (the running daemon's decisions reflect it on t
 
 ### Switching the workspace directory
 
-The workspace is the directory every relative file path and bash command resolves against — set once at startup from wherever you ran `localcode`. It's shown at the top of the GUI window, and in the Web UI's header, and can be changed without restarting by clicking it.
+The workspace is the directory every relative file path and bash command resolves against. A session starts in whichever directory the daemon was given at startup, and from then on the workspace belongs to the session. It is shown at the top of the GUI window and in the Web UI's header, and can be changed without restarting by clicking it.
 
 What that click does depends on where you are:
 
@@ -587,7 +596,13 @@ they are.
 
 So a model whose id contains `gemma` gets one extra paragraph in its
 system prompt: this interface renders Markdown only, write the character
-itself. Nothing is added for any other model.
+itself.
+
+There is a second entry, for a different kind of habit. A model whose id
+contains `glimmer` is asked to finish the task before ending its turn
+rather than writing down what still has to happen and stopping — the
+stall [`keep_going`](#a-model-that-stops-mid-task) recovers from, said in
+words as well. Nothing is added for any other model.
 
 The Web UI also unwraps the ones that arrive anyway, so a reply already in
 a transcript reads properly. It handles symbols (`\rightarrow`, `\sim`,
@@ -599,7 +614,9 @@ touched when it contains a LaTeX command, so `$PATH`, `$5` and a real
 formula are left alone.
 
 The table is `modelQuirks` in `internal/agent/quirks.go`, matched as a
-lowercased substring of the model id.
+lowercased substring of the model id. An entry can also carry a default
+`keep_going` budget, which is how the second note above comes with a
+mechanism rather than only a request.
 
 ### Auto memory
 
@@ -653,7 +670,7 @@ Up to 200 entries per session are kept.
 
 **Messages sent while a turn is still running are queued.** This covers the whole turn, tool execution included, not just while text is streaming. The prompt appears in the transcript immediately (the TUI marks it `[queued] <text>`) and the status line shows `(N queued)`. The first queued message sends automatically the moment the turn actually ends, and several stack up and go out in order. If a send does slip through while the daemon is busy (for example, a turn started from another client on the same session), it is queued and retried rather than shown as an error.
 
-Commands starting with `/`, along with `exit` and `:q`, are not queued. They keep the old behavior of being ignored until the turn finishes, because replaying them later would send them to the model as ordinary text instead of running them.
+Commands starting with `/` are not queued, and since v0.37.0 they are not silently ignored either: both clients refuse them out loud — "can't run while a turn is in progress — wait for it to finish, or press Esc to cancel it." Queueing one would mean replaying it after the turn, by which time a second turn may have started, and it would reach the model as ordinary text instead of running. `exit` and `:q` still work mid-turn in the TUI: quitting is not something to make someone wait for.
 
 ### Running a skill
 
@@ -775,6 +792,10 @@ These are typed into the message box but never reach the event log, so replaying
 |---|---|
 | `/help` | Lists available commands instantly, no model call |
 | `/version` | Shows the version of the **daemon** you are attached to, from `GET /api/version`. With `--server` against a remote daemon this is that daemon's version, which can differ from your local binary. |
+| `/agent` | Lists registered agents; `/agent <name>` switches. See [Switching agents](#switching-agents-with-tab). |
+| `/skill` | Lists registered skills. See [Running a skill](#running-a-skill). |
+| `/commands` | Lists the custom commands registered from `.localcode/commands/*.md`. See [Custom commands](#custom-commands). |
+| `/tasks` | Lists background tasks in this session. See [`/tasks`](#tasks). |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions
@@ -872,7 +893,7 @@ Every session on the daemon, newest first. Each card shows:
 
 **Drag a card up or down to put it where you want it.** The order is saved on the daemon (`POST /api/sessions/order`, and in each session's metadata file), so it survives a restart and is the same in every client. Newest-first is only the starting arrangement: it sinks the conversation you have lived in all week below every throwaway one started since. A session created after you have arranged the panel appears at the top, where a new session has always appeared, rather than at the bottom of an arrangement it was never part of.
 
-The workspace is recorded when the session is created and never rewritten afterwards, so [switching the workspace](#switching-the-workspace-directory) changes where *new* sessions start without relabelling old ones. Sessions created before this field existed show `(workspace not recorded)`.
+The workspace shown on a card is where that session currently is: recorded when it was created, and updated when the workspace is switched while that session is the open one. Switching in one session never relabels another. Sessions created before this field existed show `(workspace not recorded)`.
 
 **Switching to a session also switches the workspace to its directory** — see [Switching the workspace directory](#switching-the-workspace-directory).
 
@@ -944,7 +965,7 @@ Several messages can stack up, and they arrive in the order you typed them. The 
 Two things it is not:
 
 - **Not an interrupt.** A tool already running finishes first; nothing is killed. To stop the work outright, press the stop button or Esc — which also discards anything you had typed while waiting, since the point of stopping is to end the job, not to have it act on your queue afterwards.
-- **Not for commands.** `/compact`, `/agent` and the rest don't go through the message endpoint, so they still wait for the turn to end.
+- **Not for commands.** `/compact`, `/agent` and the rest don't go through the message endpoint. Typing one mid-turn is refused with a line saying so, rather than queued or ignored.
 
 If the turn happens to finish in the instant between your pressing Enter and the daemon accepting the message, it is answered as an ordinary next message instead. Nothing is dropped either way.
 
@@ -1224,9 +1245,11 @@ same grey-then-committed text, the same pause detection, the same
 errors — only where the audio is transcribed.
 
 The API dropdown names the dialect the server speaks
-(`openai` / `whispercpp` / `whisperx`); left on "work it out on the first
-utterance", localcode tries each in turn, which is right for almost
-everything and cannot succeed against a server that answers every path.
+(`whisperlive` / `openai` / `whispercpp` / `whisperx`); left on "work it
+out on the first utterance", localcode tries each in turn, which is right
+for almost everything and cannot succeed against a server that answers
+every path. `whisperlive` is the streaming one — see [Streaming from a
+server that supports it](#streaming-from-a-server-that-supports-it).
 
 Two kinds of setting sit in it, and the window says which is which
 because they do not behave the same way:
@@ -1425,9 +1448,9 @@ localcode dictation probe
 
 It reports whether TCP connects, whether a plain `GET` is answered,
 whether the streaming endpoint is there, and what each upload endpoint
-says. A server that answers `GET` and resets
-every upload is not a wrong endpoint — the address and the paths are
-fine, and something is rejecting the audio itself.
+says. A server that answers `GET` and resets every upload is not a wrong
+endpoint — the address and the paths are fine, and something is rejecting
+the audio itself.
 
 If the server wants an OpenAI-style `model` field, set `whisper_model` —
 it is sent only when configured, since a server hosting a single model
@@ -1722,6 +1745,8 @@ folder picker follows.
 | Windows arm64 | The `.zip` (no installer; the panel says where the file is) |
 | macOS, from `LocalCode.app` | `LocalCode-x.y.z-darwin-universal-app.tar.gz` |
 | macOS, command line | `localcode-x.y.z-darwin-universal.tar.gz` |
+| Linux, installed from the `.deb` (`/usr/bin/localcode`) | `localcode-x.y.z-linux-<arch>.deb`, with the `apt install` line to run |
+| Linux, unpacked from a tarball | `localcode-x.y.z-linux-<arch>.tar.gz` |
 
 It is checked against the SHA-256 GitHub records for the asset before
 anything is run, and refused if it does not match or if the size is
@@ -1732,9 +1757,12 @@ user cache directory (`%LOCALAPPDATA%\localcode\updates` on Windows).
 **What installing does.** On Windows it runs `msiexec /i` on the
 downloaded package: Windows asks for elevation, shows the installer, and
 localcode has to close for its files to be replaced — the window offers
-to close itself a few seconds after the installer starts. Everywhere else
-localcode does not unpack anything over a running install; it says where
-the file is and leaves it to you. Unpacking an archive over the program
+to close itself a few seconds after the installer starts. On Linux a
+`.deb` is downloaded and verified and the panel gives you the one command
+that installs it (`sudo apt install <path>`): installing needs root, and
+localcode does not ask for a password or drive a package manager on your
+behalf. Everywhere else localcode does not unpack anything over a running
+install; it says where the file is and leaves it to you. Unpacking an archive over the program
 that is running it is how an update leaves half of two versions on a
 machine.
 
@@ -1749,4 +1777,5 @@ version to compare and every release would look both newer and older.
 * If an MCP server dies and the reconnect also fails, for example because the executable is gone, its tools return an error on every later call until the daemon restarts.
 * There is no auth token. Anyone who can reach the `--listen` address gets the entire API, shell execution included. Expose it only over loopback plus an SSH tunnel.
 * On Windows, shell execution resolves to `sh` on PATH, then Git for Windows' `bash.exe` at its usual install paths, then `cmd /c`. Under the `cmd` fallback, bash-only syntax does not work; the bash tool tells the model so in its description. Installing Git for Windows gives the full POSIX behavior.
+* There is no desktop window on Linux. It links a native webview through CGo, which on Linux means WebKitGTK and a build per distribution; the daemon, the TUI, and the Web UI in a browser all work there. The `.deb` and the Linux tarballs carry the `localcode` binary only.
 * `/compact` can still overlap a running turn on the same session. Ordinary messages are serialized (the daemon refuses a second turn, and the client queues and retries it), but compaction does not go through that path.

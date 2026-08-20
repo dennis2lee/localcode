@@ -153,12 +153,24 @@ func updateDir() (string, error) {
 	return filepath.Join(base, "localcode", "updates"), nil
 }
 
-// bundledApp reports whether this build is running from a macOS .app,
-// which decides which of the two macOS downloads is the right one.
+// bundledApp reports whether this copy of localcode came from a package
+// rather than from an archive someone unpacked, which decides which of a
+// platform's two downloads is the right one.
+//
+// Two different signals for the two platforms that have two downloads: a
+// macOS .app has the binary inside the bundle, and the Debian package
+// puts it in /usr/bin. Neither is proof — a tarball unpacked into
+// /usr/bin looks packaged, and there is nothing better to go on without
+// asking dpkg, which is a subprocess and a distribution assumption to
+// answer a question this size.
 func bundledApp() bool {
 	exe, err := os.Executable()
 	if err != nil {
 		return false
 	}
-	return strings.Contains(filepath.ToSlash(exe), ".app/Contents/MacOS/")
+	path := filepath.ToSlash(exe)
+	if strings.Contains(path, ".app/Contents/MacOS/") {
+		return true
+	}
+	return runtime.GOOS == "linux" && path == "/usr/bin/localcode"
 }

@@ -86,7 +86,19 @@ gh release create vx.y.z \
   dist/windows/localcode-x.y.z-windows-amd64.msi \
   dist/windows/localcode-x.y.z-windows-amd64.zip \
   dist/windows/localcode-x.y.z-windows-arm64.zip \
-  dist/mac/LocalCode-x.y.z-darwin-universal.tar.gz \
-  --repo dennis2lee/localcode --title "vx.y.z" --notes "..."
+  dist/linux/localcode-x.y.z-linux-amd64.deb \
+  dist/linux/localcode-x.y.z-linux-arm64.deb \
+  dist/linux/localcode-x.y.z-linux-amd64.tar.gz \
+  dist/linux/localcode-x.y.z-linux-arm64.tar.gz \
+  dist/mac/localcode-x.y.z-darwin-universal.tar.gz \
+  dist/mac/LocalCode-x.y.z-darwin-universal-app.tar.gz \
+  --repo dennis2lee/localcode --title "vx.y.z" --notes-file notes.md
 rm -rf dist
 ```
+
+**Publish every asset `AssetFor` knows how to pick.** The update check in
+the settings window asks GitHub for the release's asset list and looks for
+the one matching this platform and install shape — the `.msi`, either macOS
+tarball, and on Linux either the `.deb` or the tarball. An asset left out of
+the upload is not a missing file to the person on that platform: it is
+"release vx.y.z has nothing for linux/amd64", from a release that built it.

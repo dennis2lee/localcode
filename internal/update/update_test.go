@@ -96,11 +96,15 @@ func TestAssetForPicksWhatThisPlatformCanInstall(t *testing.T) {
 			{Name: "localcode-0.46.0-windows-amd64.msi"},
 			{Name: "localcode-0.46.0-windows-amd64.zip"},
 			{Name: "localcode-0.46.0-windows-arm64.zip"},
+			{Name: "localcode-0.46.0-linux-amd64.deb"},
+			{Name: "localcode-0.46.0-linux-amd64.tar.gz"},
+			{Name: "localcode-0.46.0-linux-arm64.deb"},
+			{Name: "localcode-0.46.0-linux-arm64.tar.gz"},
 		},
 	}
 	for _, tt := range []struct {
 		goos, goarch string
-		bundled      bool
+		packaged     bool
 		want         string
 	}{
 		// The installer, not the zip: it upgrades in place rather than
@@ -112,18 +116,25 @@ func TestAssetForPicksWhatThisPlatformCanInstall(t *testing.T) {
 		// way to tell which is running.
 		{"darwin", "arm64", true, "LocalCode-0.46.0-darwin-universal-app.tar.gz"},
 		{"darwin", "amd64", false, "localcode-0.46.0-darwin-universal.tar.gz"},
+		// Linux: the .deb only for a copy dpkg installed. A tarball
+		// unpacked into ~/bin has to stay a tarball, or the update leaves
+		// a second localcode that shadows the first depending on PATH.
+		{"linux", "amd64", true, "localcode-0.46.0-linux-amd64.deb"},
+		{"linux", "amd64", false, "localcode-0.46.0-linux-amd64.tar.gz"},
+		{"linux", "arm64", true, "localcode-0.46.0-linux-arm64.deb"},
+		{"linux", "arm64", false, "localcode-0.46.0-linux-arm64.tar.gz"},
 	} {
-		got, err := rel.AssetFor(tt.goos, tt.goarch, tt.bundled)
+		got, err := rel.AssetFor(tt.goos, tt.goarch, tt.packaged)
 		if err != nil {
 			t.Errorf("%s/%s: %v", tt.goos, tt.goarch, err)
 			continue
 		}
 		if got.Name != tt.want {
-			t.Errorf("%s/%s bundled=%v picked %q, want %q", tt.goos, tt.goarch, tt.bundled, got.Name, tt.want)
+			t.Errorf("%s/%s packaged=%v picked %q, want %q", tt.goos, tt.goarch, tt.packaged, got.Name, tt.want)
 		}
 	}
 
-	if _, err := rel.AssetFor("linux", "amd64", false); err == nil {
+	if _, err := rel.AssetFor("freebsd", "amd64", false); err == nil {
 		t.Error("a platform with no asset was offered one anyway")
 	} else if !strings.Contains(err.Error(), rel.PageURL) {
 		t.Errorf("the error does not say where to get it: %v", err)
@@ -230,5 +241,27 @@ func TestApplyOnlyRunsAnInstallerItHasOne(t *testing.T) {
 func TestApplyReportsAMissingDownload(t *testing.T) {
 	if _, err := Apply(filepath.Join(t.TempDir(), "nothing-here.msi")); err == nil {
 		t.Error("installing a file that is not there succeeded")
+	}
+}
+
+// A .deb is not run either, and for a different reason from the archive:
+// installing it needs root. localcode does not ask for root and does not
+// drive a package manager on someone's behalf, so the answer is the file
+// and the one command that installs it.
+func TestApplyHandsBackTheCommandForADebianPackage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "localcode-0.46.0-linux-amd64.deb")
+	if err := os.WriteFile(path, []byte("package"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Apply(path)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if out.Started {
+		t.Error("localcode tried to install a Debian package itself")
+	}
+	if !strings.Contains(out.Detail, "apt install "+path) {
+		t.Errorf("the answer does not give the install command: %q", out.Detail)
 	}
 }

@@ -4,7 +4,7 @@ VERSION     ?= 0.1.0
 DIST        := dist
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 
-.PHONY: build gui-mac test test-js clean release-check dist dist-mac dist-mac-gui dist-windows dist-msi
+.PHONY: build gui-mac test test-js clean release-check dist dist-mac dist-mac-gui dist-linux dist-windows dist-msi
 
 build:
 	go build -o $(BIN_NAME) ./cmd/localcode
@@ -41,6 +41,12 @@ clean:
 dist-mac:
 	./build/package-mac.sh "$(VERSION)" "$(DIST)"
 
+# --- Linux: amd64 + arm64 static binaries, tar.gz and .deb ---
+# No dpkg needed: the package is written by ./build/deb (see
+# internal/debpkg), so a release can be cut from macOS like the rest.
+dist-linux:
+	./build/package-linux.sh "$(VERSION)" "$(DIST)"
+
 # --- Windows: amd64 + arm64 .exe, zipped ---
 dist-windows:
 	./build/package-windows.sh "$(VERSION)" "$(DIST)"
@@ -63,5 +69,5 @@ release-check:
 # and it clears the zips it is about to replace. Sequenced explicitly so
 # `make -j dist` cannot interleave them.
 .NOTPARALLEL: dist
-dist: release-check dist-mac dist-windows dist-msi
+dist: release-check dist-mac dist-linux dist-windows dist-msi
 	@echo "Packages written to $(DIST)/"

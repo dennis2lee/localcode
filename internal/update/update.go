@@ -210,7 +210,14 @@ func parseVersion(s string) ([3]int, bool) {
 // old files and keep the Start menu entry. The zip is a fallback for the
 // architecture that has no MSI, and it is not something this can install —
 // see Apply.
-func (r Release) AssetFor(goos, goarch string, bundled bool) (Asset, error) {
+//
+// packaged says the running copy came from a package rather than from an
+// archive someone unpacked. It means two different things by platform and
+// answers the same question in both: on macOS, that this is the .app
+// bundle rather than the bare binary; on Linux, that dpkg put it in
+// /usr/bin. Offering the other one leaves a second localcode on the
+// machine and no way to tell which is running.
+func (r Release) AssetFor(goos, goarch string, packaged bool) (Asset, error) {
 	want := func(suffixes ...string) (Asset, bool) {
 		for _, suffix := range suffixes {
 			for _, a := range r.Assets {
@@ -237,12 +244,26 @@ func (r Release) AssetFor(goos, goarch string, bundled bool) (Asset, error) {
 		// a bare binary in a tarball. Installing the wrong one leaves the
 		// person with a second copy of localcode and no idea which is
 		// running.
-		if bundled {
+		if packaged {
 			if a, ok := want("-darwin-universal-app.tar.gz"); ok {
 				return a, nil
 			}
 		}
 		if a, ok := want("-darwin-universal.tar.gz"); ok {
+			return a, nil
+		}
+	case "linux":
+		// The .deb only for a copy that dpkg installed. Handing a .deb to
+		// someone who unpacked a tarball into ~/bin gives them a file
+		// they have to know what to do with; handing a tarball to someone
+		// whose localcode is dpkg-managed invites a second copy that
+		// shadows the packaged one depending on PATH order.
+		if packaged {
+			if a, ok := want("-linux-" + goarch + ".deb"); ok {
+				return a, nil
+			}
+		}
+		if a, ok := want("-linux-" + goarch + ".tar.gz"); ok {
 			return a, nil
 		}
 	}

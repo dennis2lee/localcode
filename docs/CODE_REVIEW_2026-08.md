@@ -7,7 +7,14 @@ found independently by more than one reviewer — those cross-confirmations
 are marked, and carry the most weight.
 
 **Status:** every critical is **fixed** — C1–C4, then C5–C7 (see the FIXED
-markers). Everything else stands as reported.
+markers). Of the majors, only M19 is still open; M18 was fixed in v0.42.0 by
+work that came at it from a different direction (see its entry). The minors
+are settled: 24 fixed, 2 already fixed, 3 deliberately left.
+
+This document is a record of one review, not a live task list. Findings are
+struck through and marked with the version that fixed them rather than
+deleted, so that a thing looked at twice is visibly a thing already answered.
+Open work lives in [IMPROVEMENTS.md](IMPROVEMENTS.md).
 
 ## Coverage
 
@@ -470,7 +477,15 @@ accounting; the reaper runs every 60s and only collects sessions already idle
 for 120s. A loop of `POST /api/dictation` opens recognizers faster than they
 can be reaped. No auth is required.
 
-### M18. Mid-turn text typed during the model's *final* reply leaves a permanent duplicate row
+### M18. ~~Mid-turn text typed during the model's *final* reply leaves a permanent duplicate row~~ FIXED (v0.42.0)
+
+Fixed sideways, by the prompt-echo work rather than by this finding: every
+prompt now gets a placeholder, so the `message.user` handler resolves one
+unconditionally instead of only for `injected: true`
+(`js/events.js`, `resolvePendingUser`). The 409 path in `composer.js` queues
+the text and its placeholder is resolved when the queued send lands. The
+report as written follows.
+
 `internal/daemon/static/js/transcript.js:26-44` + `events.js:29` — *verified directly by the author.*
 
 `resolvePendingUser` only runs when `message.user` carries `injected: true`.
@@ -492,7 +507,12 @@ answer is precisely when there is no next tool call. The 409 fallback in
 placeholder it just created.
 
 ### M19. Cancelling a turn discards injected text but the transcript still says it was delivered
-`internal/daemon/static/js/events.js:130-135` + `internal/daemon/turns.go:120-128`.
+
+**Still open** (re-checked against v0.48.0: `turn.cancelled` in
+`js/events.js` clears `promptQueue`, the running tool and the spinner, and
+touches no placeholder).
+
+`internal/daemon/static/js/events.js` (`turn.cancelled`) + `internal/daemon/turns.go` (`end`).
 
 `turnTracker.cancel` does `delete(t.pending, id)` — the queued text is thrown
 away, by design. The client's `turn.cancelled` handler clears `promptQueue`

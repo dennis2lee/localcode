@@ -69,7 +69,7 @@ inference profile that contains this model.
 
 So `profiles.<name>.model` in config.json needs the full prefixed ID.
 
-### 4. Usable model IDs, as of 2026-07
+### 4. Usable model IDs, checked 2026-08-19
 
 This table reflects the **Bedrock Converse and ConverseStream API**, which is what localcode actually calls through `bedrockruntime.ConverseStream` in [internal/provider/bedrock.go](../internal/provider/bedrock.go). Names here may lag the newest Anthropic model names, because Bedrock manages its own rollout schedule and naming separately.
 
@@ -88,7 +88,14 @@ For Sonnet 4.5 on a US profile the model ID is `us.anthropic.claude-sonnet-4-5-2
 | `global.` | Default choice. No price premium, highest availability. |
 | `us.` `eu.` `jp.` `apac.` | Only when you have a data residency requirement. Roughly 10% price premium. |
 
-> **Important limitation.** Claude Opus 4.7, Opus 4.8, Sonnet 5, and Fable 5 are absent from the table on purpose. Per Anthropic's documentation these models have no ARN style model ID and are served only through Bedrock's newer Messages API gateway (`bedrock-mantle`, `/anthropic/v1/messages`). localcode's Bedrock provider implements the Converse API only, so **these newest models cannot be used through Bedrock right now.** Either pick a model from the table, or use the [Anthropic API directly](#using-the-anthropic-api-directly), which has no such restriction.
+> **Important limitation.** Claude Opus 5, Opus 4.8, Opus 4.7, Sonnet 5, and Fable 5 are absent from the table on purpose. Bedrock now has **two** Claude integrations, and localcode speaks the older one:
+>
+> | | Models | How it is called |
+> |---|---|---|
+> | Legacy, ARN-versioned | Opus 4.6 and earlier (the table above) | `InvokeModel` and `Converse` on `bedrock-runtime` — what localcode's `bedrockruntime.ConverseStream` uses |
+> | Claude in Amazon Bedrock | Opus 4.7 and later | The Messages API at `https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages`, with plain IDs like `anthropic.claude-opus-5` |
+>
+> The newer models have no ARN-versioned model ID, which is why they are missing from Anthropic's own legacy table and from this one. Anthropic's documentation says they are reachable through `InvokeModel` on `bedrock-runtime` (served by the same infrastructure as the Messages endpoint); AWS's own launch post for Opus 4.8 goes further and says the **Converse** API accepts `us.anthropic.claude-opus-4-8`. The two sources disagree, and nothing here has been tested against a real account, so: **treat the newest models on Bedrock as unverified with localcode.** Trying one costs a single failed request, and `ValidationException: ... Your account is not authorized to invoke this API operation` is what a "no" looks like. For a path with no doubt in it, pick a model from the table or use the [Anthropic API directly](#using-the-anthropic-api-directly).
 
 Availability and regions change often. For an authoritative current list:
 
@@ -150,7 +157,7 @@ Recent versions detect this error and append the same advice to the console outp
 
 Credentials resolved correctly, so unlike the IMDS case above this is not an auth chain problem. Either the model ID is not valid, or that account and role has no access to it. Common causes:
 
-* **The model is not supported by the Bedrock Converse API**, for example `claude-opus-4-8`. Anything missing from the model table above usually falls here. Switch to a listed model, or use the [Anthropic API directly](#using-the-anthropic-api-directly).
+* **The model may not be reachable through the Bedrock Converse API**, for example `claude-opus-4-8`. Anything missing from the model table above usually falls here — see the limitation note under the table. Switch to a listed model, or use the [Anthropic API directly](#using-the-anthropic-api-directly).
 * **You added a `[1m]` suffix and still get this.** See the 1M context section below for what is and is not verified.
 * **Model access is off for that specific model.** Recheck Bedrock, then Model access in the console. Having only one model left disabled is common.
 
@@ -162,17 +169,21 @@ From v0.17.0 the field is sent only when a profile explicitly sets a non zero te
 
 ### 1M context with the `[1m]` suffix
 
-Adding `[1m]` to `profiles.<name>.model`, for example `"us.anthropic.claude-sonnet-4-6[1m]"`, makes localcode strip the suffix, request the real model ID, and pass Anthropic's 1M context beta flag (`anthropic_beta: context-1m-2025-08-07`) through `AdditionalModelRequestFields`. This mirrors the "Sonnet 4.6 (1M context)" shorthand shown in Claude Code's own model settings.
+Adding `[1m]` to `profiles.<name>.model`, for example `"us.anthropic.claude-sonnet-4-5-20250929-v1:0[1m]"`, makes localcode strip the suffix, request the real model ID, and pass Anthropic's 1M context beta flag (`anthropic_beta: context-1m-2025-08-07`) through `AdditionalModelRequestFields`. This mirrors the "1M context" shorthand shown in Claude Code's own model settings.
 
-It was built for models that support that beta, such as Sonnet 4, 4.5, and 4.6.
+**Most of the models in the table no longer need it.** Anthropic's Bedrock documentation (checked 2026-08-19) says Opus 4.6 and Sonnet 4.6 already have a 1M-token context window there, as do the newer models localcode cannot reach. What is left on 200k is Sonnet 4.5 and older, which is where the suffix still has a job.
+
+localcode's own context meter agrees without being told: `internal/modelinfo` reads 1M for the Opus 4.6, Sonnet 4.6 and 5-series families and 200k for the rest, and a `context_window` on the profile overrides both.
 
 > **Not verified.** The exact field name and behavior were never confirmed against a real Bedrock account with 1M context access. They are carried over from the Anthropic direct API convention. Bedrock may want a different name, or may not support this beta yet.
 
 If it does not work, confirm 1M context model access is enabled in the console, then try again without `[1m]` to fall back to the default context.
 
+Bedrock also caps a request body at 20 MB whatever the context window, so a very large attachment can be refused while the token count still fits.
+
 ## Using the Anthropic API directly
 
-This provider connects to `api.anthropic.com` without going through Bedrock. It is the way to reach the newest models that the Bedrock Converse API does not carry yet, such as Opus 4.7 and 4.8, Sonnet 5, and Fable 5. See the important limitation note in the Bedrock section above.
+This provider connects to `api.anthropic.com` without going through Bedrock. It is the way to reach the newest models with no doubt about whether the Bedrock Converse path carries them: Opus 5, Opus 4.8, Opus 4.7, Sonnet 5, and Fable 5. See the important limitation note in the Bedrock section above.
 
 Billing is per usage against a key issued at `console.anthropic.com`, entirely separate from a claude.ai Pro or Max subscription.
 

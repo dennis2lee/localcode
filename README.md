@@ -28,6 +28,7 @@ The model calls tools itself for file reads and writes, shell execution, MCP, an
 | Dictation | Talk your prompt instead of typing it, by default entirely on your machine with no network. `localcode dictation install` fetches a whisper.cpp engine and model; the engine runs as a child process, so this works in every build rather than only the desktop one. Grey text while you speak, committed when you pause. Korean and English, or both at once. A settings window (⚙ under the prompt) picks the microphone — asking the browser for the device list, since it hides one until it has been allowed to record — the spoken language, which applies as it is chosen and says so when the engine in force cannot honour it, and — if this machine is the wrong one to run it on — the address and port of a speech server elsewhere, which need not be whisper.cpp: WhisperLive, OpenAI-compatible, whisper.cpp and WhisperX servers are all understood, worked out when dictation starts or named outright in the same window. A WhisperLive server is streamed to over a WebSocket — the audio goes out as it is recorded and the text comes back mid-sentence, instead of the whole utterance being re-sent four times a second. Everything else about dictation is identical wherever the engine runs — including the decoding options localcode would pass to an engine it started, which travel as request fields instead, and timestamps, which are stripped from whatever the server sends. A server that stops answering is given up on and said out loud rather than leaving the microphone stuck on. A transcription that fails says why instead of looking like a dead microphone. See [USAGE.md](docs/USAGE.md#dictating-a-prompt). |
 | Updates | The settings window checks GitHub for a newer release when asked, and — in the desktop window, where the daemon and the person clicking share a machine — downloads it and starts the platform's installer after a confirmation. Nothing runs on a timer and nothing downloads unasked: a check is an outbound request that says which version this machine runs. The download is verified against the release's SHA-256 before anything is run. Over `--server` the check still works and the install button does not, since it would replace the program on the server. |
 | Windows | Shell execution resolves to `sh`, then Git for Windows' `bash.exe`, then `cmd /c`, so the bash tool works without Git Bash on PATH. |
+| Linux | A `.deb` for Ubuntu and Debian (`sudo apt install ./localcode-x.y.z-linux-amd64.deb`, amd64 and arm64), and a portable tarball for everything else. Static: built with `CGO_ENABLED=0`, so there is no `Depends:` line and nothing to install alongside it. The update check offers whichever of the two matches how localcode was installed. No desktop window there — the daemon, the TUI, and the Web UI in a browser are what a Linux install is. |
 | Desktop window | Experimental, opens the Web UI in a native OS window (no browser, no visible server). Built opt in with `-tags gui`; a build made that way opens the window by default (`--gui=false` forces the TUI instead). macOS ships a double-clickable `LocalCode.app` via `make dist-mac-gui`; the Windows MSI installs `localcode-gui.exe` plus a Start Menu shortcut and the WebView2 runtime bootstrapper. Launching it from `cmd` returns the prompt immediately rather than holding the console, and the workspace can be typed, browsed for, or opened in an Explorer window. Neither platform shows a title bar: macOS draws it into the page's own background, Windows replaces the frame outright and the page draws the window buttons (`LOCALCODE_TITLEBAR=1` puts the ordinary frame back). See [USAGE.md](docs/USAGE.md#desktop-window-experimental). |
 
 ## Documentation
@@ -78,10 +79,10 @@ go test ./...
 ```
 
 That includes the Web UI: `internal/daemon` shells out to the JavaScript suite
-in [test/webui/](test/webui/), which loads the shipped `index.html` and
-`app.js` into a hand-written DOM (Node's built-in test runner, no
-dependencies). It skips itself when `node` isn't installed. To run only that
-part while editing the page:
+in [test/webui/](test/webui/), which loads the shipped `index.html` and the
+real `static/js/*.js` ES modules into a hand-written DOM (Node's built-in test
+runner, no dependencies). It skips itself when `node` isn't installed. To run
+only that part while editing the page:
 
 ```bash
 make test-js
@@ -89,7 +90,9 @@ make test-js
 
 ## Not done yet
 
-* macOS code signing and notarization, and Windows MSI code signing. Both install, but neither is signed.
+* macOS code signing and notarization, Windows MSI code signing, and a signed `.deb`. All three install; none of them is signed.
 * Windows arm64 MSI. Only amd64 ships an MSI today, arm64 ships a portable zip.
+* An apt repository. The `.deb` installs from the file, so `apt update` never offers an upgrade; localcode checks GitHub itself.
+* A desktop window on Linux. The daemon, TUI, and Web UI all run there.
 
 See [USAGE.md](docs/USAGE.md#known-limitations) for the full list of limitations.

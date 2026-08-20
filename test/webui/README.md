@@ -23,7 +23,7 @@ written against Node's built-in test runner, a hand-written DOM, and Node's
 
 | file | what it is |
 | --- | --- |
-| `dom.js` | ~300 lines implementing exactly the DOM surface `js/*.js` touches |
+| `dom.js` | the DOM surface `js/*.js` touches, and nothing else |
 | `dom.test.js` | self-tests for `dom.js`, so a harness bug can't make an app test pass |
 | `harness.js` | links and evaluates the real `js/*.js` module graph, fakes the daemon and the SSE stream |
 | `*.test.js` | the tests themselves |
@@ -60,14 +60,37 @@ test('a turn ends on turn.done', async () => {
   readable and writable, so a test can put the page into a condition without
   driving the whole UI to get there
 - `app.el(id)` — an element from `index.html`
+- `app.doc` — the document itself, for the listeners the app attaches there
+  rather than to an element (global keys, a panel drag's pointer events)
 - `app.transcript()` — everything written to the transcript, as HTML
 - `app.sse` — the fake event stream: `.emit(event)`, `.raw(text)`, `.fail()`
+- `app.streamFor(fragment)` — one open stream by a piece of its URL, for a
+  task window's own transcript
 - `app.calls` / `app.callsTo(method, path)` — the requests the page made
+  (`path` may be a string or a RegExp)
 - `app.type(text)` / `app.press(key, props)` — drive the prompt box
+- `app.micChunk(bytes)` — push one buffer of "audio" the way the capture
+  worklet would, for the dictation tests
+- `app.devicesChanged()` — fire the event a browser sends when a microphone
+  is plugged in or removed
 - `app.settle()` — let pending promise chains finish
+- `app.wait(ms)` — let real time pass, for the few behaviours that are about
+  a deadline rather than an event (dictation gives up on a slow upload)
 
-`load({routes: {...}})` overrides the fake daemon per test. A route value is
-either a JSON body (answered `200`) or `{status, body}`:
+`load(opts)` also takes:
+
+| option | what it does |
+| --- | --- |
+| `routes` | overrides the fake daemon per test (see below) |
+| `globals` | extra globals in the page's sandbox |
+| `devices` | the microphone list `enumerateDevices` returns — an array, or a function called per query |
+| `denyMicrophone` | make `getUserMedia` reject, the way a browser does when permission is refused |
+| `localStorage` | the stored values the page starts with |
+| `confirm` / `prompt` | answers for the browser dialogs the page opens |
+| `init` | run before the modules are evaluated, for a page condition that has to exist at load time |
+
+A route value is either a JSON body (answered `200`) or `{status, body}`, and
+a route may be a function taking `{method, path, query}`:
 
 ```js
 await load({ routes: { 'POST /api/sessions/*/messages': { status: 409 } } });
