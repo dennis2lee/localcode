@@ -105,6 +105,15 @@ There is no `Depends:` line and nothing to satisfy: the binary is built with `CG
 
 The package is unsigned and is not in any apt repository, so `apt` installs it from the file path you give it. `apt update` will never offer an upgrade; localcode checks GitHub itself (see [USAGE.md](USAGE.md#checking-for-updates)).
 
+Two ways this goes wrong, both with an unhelpful message:
+
+| What apt says | What happened |
+|---|---|
+| `E: Unable to locate package localcode-0.50.0-linux-amd64.deb` | The `./` is missing. Without a `/` in it, apt reads the argument as a package name to look up in a repository, not as a file. Write `./localcode-...deb`, or an absolute path. |
+| `dpkg: error processing archive ... (--unpack)`, `package architecture (amd64) does not match system (arm64)` | The wrong file for this machine. `dpkg --print-architecture` says which one it wants; ARM machines (including a Linux VM on an Apple Silicon Mac) need the `-linux-arm64.deb`. |
+
+Both are verified against Ubuntu 24.04, as is everything above: the `.deb` installs on amd64 and arm64, `localcode` lands on PATH, and `localcode version` reports the version installed.
+
 **Tarball, portable, any distribution**
 
 ```bash

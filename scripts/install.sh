@@ -127,7 +127,17 @@ else
 	echo "    (this release publishes no checksum, so the download is unverified)"
 fi
 
-tar -xzf "$TMP/$ASSET" -C "$TMP" localcode || die "the archive has no localcode binary in it"
+# Releases up to 0.50.0 were packed on a Mac with macOS extended
+# attributes still in them, and GNU tar prints a line about each one
+# ("Ignoring unknown extended header keyword ...") in the middle of the
+# install, where it reads as a failure. Newer archives do not carry them;
+# this silences that one warning for the older ones. GNU tar only: BSD
+# tar has no --warning and does not complain in the first place.
+TAR_QUIET=""
+if tar --warning=no-unknown-keyword --version >/dev/null 2>&1; then
+	TAR_QUIET="--warning=no-unknown-keyword"
+fi
+tar $TAR_QUIET -xzf "$TMP/$ASSET" -C "$TMP" localcode || die "the archive has no localcode binary in it"
 
 mkdir -p "$DIR" || die "cannot create $DIR"
 # Written beside the target and renamed into place: rename is atomic, so a
