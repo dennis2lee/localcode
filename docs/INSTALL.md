@@ -71,13 +71,35 @@ To sign it for distribution, run `codesign --sign "Developer ID Application: ...
 
 ### Install on Linux
 
-**Debian package, recommended: Ubuntu, Debian, and anything else with `apt`**
+**No root: one command, everything under your home directory**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dennis2lee/localcode/main/scripts/install.sh | sh
+```
+
+This is the right one on a machine where you are not an administrator, which on a managed or shared Ubuntu box is most of them. It downloads the release tarball for your architecture, checks it against the SHA-256 GitHub publishes for that file, and puts one static binary in `~/.local/bin/localcode`. Nothing is written outside `$HOME`, no package manager is involved, and you are never asked for a password.
+
+`~/.local/bin` is the directory Ubuntu's own `~/.profile` puts on PATH when it exists, so a new login finds it. The script prints the line to add to `~/.bashrc` if this shell does not have it yet.
+
+Options go after `-s --`:
+
+```bash
+curl -fsSL .../install.sh | sh -s -- --version 0.49.0   # a specific release
+curl -fsSL .../install.sh | sh -s -- --dir ~/bin        # somewhere else
+curl -fsSL .../install.sh | sh -s -- --uninstall        # remove it again
+```
+
+Installing again over an existing copy is the upgrade: the new binary is renamed into place, so a localcode running at that moment keeps the file it started from. `--uninstall` removes the binary and leaves `~/.localcode` (your config and sessions) alone.
+
+It works on macOS too, for a command-line install with no `.app`.
+
+**Debian package: Ubuntu, Debian, and anything else with `apt`, if you have root**
 
 ```bash
 sudo apt install ./localcode-<version>-linux-amd64.deb
 ```
 
-Tested against Ubuntu 24.04. It installs `/usr/bin/localcode`, so it is on PATH for every user, and upgrades in place when you install a newer one. `sudo apt remove localcode` takes it off.
+Tested against Ubuntu 24.04. It installs `/usr/bin/localcode`, so it is on PATH for every user on the machine, and upgrades in place when you install a newer one. `sudo apt remove localcode` takes it off. Use this when localcode is for everyone on the box; use the script above when it is for you.
 
 There is no `Depends:` line and nothing to satisfy: the binary is built with `CGO_ENABLED=0`, so it is static and needs no libc, no runtime, and no Node or Python. On ARM64 machines use the `-linux-arm64.deb`.
 
@@ -90,7 +112,7 @@ tar xzf localcode-<version>-linux-amd64.tar.gz
 ./localcode --agent general-purpose
 ```
 
-One static binary. Put it wherever you like — `~/.local/bin` keeps it off the package manager's territory.
+One static binary. This is what the install script downloads; unpack it yourself if you would rather not pipe a script into a shell.
 
 The desktop window is not built for Linux. It links a native webview through CGo, and on Linux that means WebKitGTK and a build per distribution; the daemon, the TUI and the Web UI in a browser are all there and are what a Linux install is.
 

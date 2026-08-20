@@ -53,3 +53,22 @@ func TestParseScopeAgreesWithMCPAddOnUnknownFlags(t *testing.T) {
 		t.Error("expected an unknown flag to be rejected, not silently treated as a positional")
 	}
 }
+
+// The update button exists where the daemon and the person clicking share
+// a machine. A daemon someone exposed on purpose is not that, and gets no
+// button — see runEmbedded.
+func TestOnlyALoopbackDaemonOffersToInstallAnUpdate(t *testing.T) {
+	local := []string{"127.0.0.1:4096", "localhost:4096", "[::1]:4096", "127.0.0.53:8080"}
+	remote := []string{"0.0.0.0:4096", ":4096", "192.168.1.10:4096", "[2001:db8::1]:4096", "example.internal:4096"}
+
+	for _, addr := range local {
+		if !loopbackOnly(addr) {
+			t.Errorf("%s is this machine, but the update button was withheld", addr)
+		}
+	}
+	for _, addr := range remote {
+		if loopbackOnly(addr) {
+			t.Errorf("%s is reachable from elsewhere, but the update button was offered", addr)
+		}
+	}
+}

@@ -1730,12 +1730,14 @@ request that tells GitHub which version this machine is running, which is
 a thing to ask for rather than assume, and an update replaces the program
 while someone is using it.
 
-**Where the install button appears.** Only in the desktop window, where
-the daemon and the person clicking share a machine. Over `--server` the
-check still works and the install does not: it would replace the program
-on the *server*, at the request of a browser somewhere else. The panel
-says so and offers the release page instead. It is the same rule the
-folder picker follows.
+**Where the install button appears.** Where the daemon and the person
+clicking share a machine: the desktop window, and a daemon listening on
+loopback — which is the ordinary `localcode` run, TUI and Web UI both.
+Over `--server`, or a daemon deliberately exposed with something like
+`--listen 0.0.0.0:4096`, the check still works and the install does not:
+it would replace the program on the *server*, at the request of a browser
+somewhere else. The panel says so and offers the release page instead. It
+is the same rule the folder picker follows.
 
 **What is downloaded.** The file that matches how localcode was installed:
 
@@ -1746,7 +1748,7 @@ folder picker follows.
 | macOS, from `LocalCode.app` | `LocalCode-x.y.z-darwin-universal-app.tar.gz` |
 | macOS, command line | `localcode-x.y.z-darwin-universal.tar.gz` |
 | Linux, installed from the `.deb` (`/usr/bin/localcode`) | `localcode-x.y.z-linux-<arch>.deb`, with the `apt install` line to run |
-| Linux, unpacked from a tarball | `localcode-x.y.z-linux-<arch>.tar.gz` |
+| Linux, installed under your home directory (`~/.local/bin`, or any tarball copy) | `localcode-x.y.z-linux-<arch>.tar.gz`, installed for you |
 
 It is checked against the SHA-256 GitHub records for the asset before
 anything is run, and refused if it does not match or if the size is
@@ -1754,17 +1756,31 @@ wrong — a connection dropped at 90% otherwise produces an installer that
 opens, fails halfway, and leaves a broken install. Downloads go to the
 user cache directory (`%LOCALAPPDATA%\localcode\updates` on Windows).
 
-**What installing does.** On Windows it runs `msiexec /i` on the
-downloaded package: Windows asks for elevation, shows the installer, and
-localcode has to close for its files to be replaced — the window offers
-to close itself a few seconds after the installer starts. On Linux a
-`.deb` is downloaded and verified and the panel gives you the one command
-that installs it (`sudo apt install <path>`): installing needs root, and
-localcode does not ask for a password or drive a package manager on your
-behalf. Everywhere else localcode does not unpack anything over a running
-install; it says where the file is and leaves it to you. Unpacking an archive over the program
-that is running it is how an update leaves half of two versions on a
-machine.
+**What installing does.** It depends on who owns the copy being replaced.
+
+*An install nobody else manages* — a binary in `~/.local/bin`, or
+anywhere else you can write, which is what
+[the no-root install](INSTALL.md#install-on-linux) produces — is replaced
+by localcode itself. The new binary is unpacked beside the old one, asked
+for its version to prove it runs on this machine at all, and renamed into
+place. Rename is atomic, so the localcode running at that moment keeps
+the file it started from and nothing is ever half-written; restart it to
+be on the new version. That is the whole update on a machine where you
+have no root.
+
+*An install a package manager owns* is left to that package manager. On
+Windows localcode runs `msiexec /i` on the downloaded package: Windows
+asks for elevation, shows the installer, and localcode has to close for
+its files to be replaced — the window offers to close itself a few
+seconds after the installer starts. On Linux a `.deb` is downloaded and
+verified and the panel gives you the one command that installs it
+(`sudo apt install <path>`): installing needs root, and localcode does
+not ask for a password or drive a package manager on your behalf. The
+same for a copy in `/usr/bin` that only root can write, `LocalCode.app`
+(which is signed as a whole bundle, not as the binary inside it), and a
+Windows zip. In each of those the panel says where the file is *and why
+it stopped there*, since "unpack it yourself" with no reason reads like
+localcode never tried.
 
 A build that is not a release — one from a working tree, which reports
 its version as `dev` — is never offered an update, since there is no

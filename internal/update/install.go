@@ -25,13 +25,22 @@ type Outcome struct {
 
 // Apply installs a downloaded release.
 //
-// What it does not do is replace files itself. Unpacking an archive over a
-// running install is how an update leaves a machine with half of two
-// versions on it, and localcode has an installer on the platform where
-// most of this matters — the MSI knows how to upgrade in place, remove
-// what the old version left, and keep the Start menu entry pointing at
-// something real. So: run the installer, or say plainly where the file is.
-func Apply(path string) (Outcome, error) {
+// What it will not do is unpack an archive over an install it does not
+// own. On Windows that is the MSI's job, and it does it properly: upgrade
+// in place, remove what the old version left, keep the Start menu entry
+// pointing at something real. A .deb needs root, which is a password and
+// a decision belonging to the person at the keyboard.
+//
+// What is left is the install with no package manager behind it at all —
+// a binary unpacked into somewhere like ~/.local/bin. That one this user
+// already owns, so localcode replaces it itself, and a root-free install
+// updates with a click like every other one.
+func Apply(path string) (Outcome, error) { return apply(path, currentBinary) }
+
+// apply is Apply with the running binary's location injected, so a test
+// can exercise the replacement without the test binary being the thing
+// that gets replaced.
+func apply(path string, target func() (string, error)) (Outcome, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("the downloaded update is not there: %w", err)
@@ -62,10 +71,29 @@ func Apply(path string) (Outcome, error) {
 		}, nil
 	}
 
-	// An archive. Extracting it over the running install is exactly what
-	// this refuses to do, so the file and the instruction are the answer.
+	// An archive, and this is the install nobody else manages: if the
+	// running binary sits somewhere this user can write, the new one is
+	// unpacked beside it and renamed over it.
+	//
+	// Everything that makes that the wrong move says so instead — a
+	// /usr/bin copy only root can write, a .app bundle that is replaced
+	// whole, a Windows zip — and says why, because "unpack it yourself"
+	// with no reason reads like localcode never tried.
+	exe, err := target()
+	if err != nil {
+		return Outcome{
+			Path:   path,
+			Detail: "downloaded to " + path + " — close localcode and unpack it over the installed copy",
+		}, nil
+	}
+	if err := selfInstall(path, exe); err != nil {
+		return Outcome{
+			Path:   path,
+			Detail: "downloaded to " + path + " — localcode did not replace itself (" + err.Error() + "); unpack it over the installed copy",
+		}, nil
+	}
 	return Outcome{
 		Path:   path,
-		Detail: "downloaded to " + path + " — close localcode and unpack it over the installed copy",
+		Detail: "installed over " + exe + " — restart localcode to run the new version",
 	}, nil
 }

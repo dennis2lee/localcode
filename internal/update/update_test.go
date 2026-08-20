@@ -217,16 +217,21 @@ func TestDownloadRefusesAChecksumItCannotCheck(t *testing.T) {
 	}
 }
 
-// Everything that is not a Windows installer is a file and an instruction.
-// Unpacking an archive over a running install is how an update leaves half
-// of two versions on a machine.
+// An archive that is not one, handed to the platform with no installer:
+// nothing is run, nothing is replaced, and the answer says where the file
+// is. The archive that *is* one, over an install this user owns, is
+// selfinstall_test.go's subject.
 func TestApplyOnlyRunsAnInstallerItHasOne(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "localcode-0.46.0-darwin-universal.tar.gz")
 	if err := os.WriteFile(path, []byte("archive"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, err := Apply(path)
+	exe := filepath.Join(t.TempDir(), "localcode")
+	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := apply(path, func() (string, error) { return exe, nil })
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -235,6 +240,9 @@ func TestApplyOnlyRunsAnInstallerItHasOne(t *testing.T) {
 	}
 	if !strings.Contains(out.Detail, path) {
 		t.Errorf("the answer does not say where the file is: %q", out.Detail)
+	}
+	if body, err := os.ReadFile(exe); err != nil || string(body) != "old" {
+		t.Errorf("the install was touched: %q %v", body, err)
 	}
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -88,6 +90,20 @@ func runEmbedded(configPath, listen, agentName string) error {
 	}
 	defer cleanup()
 
+	// The update button, on the same rule as the desktop window: it
+	// replaces the program on the machine the daemon runs on, so it exists
+	// only where that machine is the one the person clicking is sitting
+	// at. A daemon on loopback was started by this user, on this machine,
+	// with a TUI attached to it in this terminal — that is that machine.
+	// Exposing it deliberately (--listen 0.0.0.0:4096) is the case where
+	// the browser could be anywhere, and there the button goes away.
+	//
+	// This is what makes an install under someone's home directory
+	// self-updating on Linux, where there is no desktop window to click
+	// in: the binary is the user's own, so replacing it needs nobody's
+	// password.
+	d.AllowUpdateInstall = loopbackOnly(listen)
+
 	srv := &http.Server{Addr: listen, Handler: d.Handler()}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -120,4 +136,20 @@ func runTUIClient(serverURL, agentName string) error {
 	p := tea.NewProgram(model)
 	_, err = p.Run()
 	return err
+}
+
+// loopbackOnly reports whether an address is reachable only from this
+// machine. An empty or wildcard host is every interface, which is the
+// answer "no" — and so is anything that does not parse, because a
+// permission granted on a string nobody understood is not one.
+func loopbackOnly(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		host = listen
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
