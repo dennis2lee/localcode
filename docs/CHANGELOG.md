@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.50.2
+
+* **Fix: `--gui` on Linux answered with instructions for two other operating systems.** Reported from an Ubuntu install as "it says the GUI version was not built". What it said was "this build has no GUI support; build with -tags gui on macOS or Windows" — true of the build, useless to the reader: there is no Linux desktop window to build, the webview links WebKitGTK through CGo and would be a build per distribution, and the sentence never mentions the thing that gives them what they asked for. It now says there is no window on Linux and why, and points at the Web UI in a browser, which is the same page the window shows. On macOS and Windows it names the release builds that have one and the command to build it, and says what to do meanwhile. The `--gui` flag's own help text says which platforms it applies to, and USAGE says it up front in the desktop window section rather than only implying it.
+
 ## v0.50.1
 
 * **Fix: unpacking the Linux tarball printed a warning that looked like a failure.** `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'`, once per file, on stderr, in the middle of an install. Releases are built on a Mac, `go build` leaves a `com.apple.provenance` attribute on what it writes, bsdtar copies it into the archive as a pax header, and GNU tar complains about every one on the way out. Harmless, and it reads as the install going wrong. The archives are now written without macOS metadata, and the packaging script checks its own output for it rather than trusting a flag to keep working on a machine that never sees the warning.

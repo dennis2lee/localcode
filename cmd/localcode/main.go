@@ -66,7 +66,7 @@ func run() error {
 	listen := flag.String("listen", "127.0.0.1:4096", "address the daemon listens on (also where the Web UI is served)")
 	server := flag.String("server", "", "connect the TUI to an already-running daemon at this URL instead of starting one locally (e.g. http://localhost:4096, or an SSH-tunneled remote core)")
 	headless := flag.Bool("headless", false, "run only the daemon (HTTP API + Web UI), no TUI — for a remote box you'll attach to over SSH or the network")
-	useGUI := flag.Bool("gui", gui.Available(), "open a native desktop window instead of the TUI (requires a build made with -tags gui; defaults to on for such a build, pass --gui=false to force the TUI instead)")
+	useGUI := flag.Bool("gui", gui.Available(), "open a native desktop window instead of the TUI (macOS and Windows only, and only in a build made with -tags gui; defaults to on for such a build, pass --gui=false to force the TUI instead). There is no desktop window on Linux: run without it and open the Web UI in a browser")
 	showVersion := flag.Bool("version", false, "print version and exit (same as the \"localcode version\" subcommand)")
 	flag.Parse()
 

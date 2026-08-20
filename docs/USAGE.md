@@ -58,6 +58,8 @@ It starts the daemon in-process on a private loopback port and shows the same We
 
 If startup fails, the reason is shown on that screen and the window stays open. `localcode-gui.exe` has no console (see below), so this is the only place a startup error can be read.
 
+**Not on Linux.** There is no desktop window there and none is planned: the webview links WebKitGTK through CGo, which is a build per distribution rather than a build flag. `--gui` on a Linux build says so and stops. What a Linux install has instead is the same interface in a browser tab: run `localcode` and open `http://127.0.0.1:4096` (or whatever `--listen` says). The Web UI and the window are the same page.
+
 The window links a native webview through CGo, which cannot be cross compiled the way the pure Go daemon and TUI are, so it's built per OS:
 
 * macOS: `make dist-mac-gui` produces a double-clickable `LocalCode.app` (universal, arm64 + amd64). `make gui-mac` builds just the bare `localcode-gui` binary. macOS always has WKWebView.
