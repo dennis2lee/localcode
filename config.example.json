@@ -6,7 +6,13 @@
     },
     "local": {
       "type": "openai-compat",
-      "base_url": "http://localhost:1234/v1"
+      "//base_url": "Any string here may be {env:NAME}, taken from the environment when the file is read, or {env:NAME:-fallback} when it is optional. See docs/USAGE.md.",
+      "base_url": "{env:LOCALCODE_LLM_URL:-http://localhost:1234/v1}"
+    },
+    "anthropic": {
+      "type": "anthropic",
+      "//api_key": "Omit this entirely to use the key stored by `localcode login anthropic`. {env:...} is the other way to keep a key out of this file.",
+      "api_key": "{env:ANTHROPIC_API_KEY:-}"
     }
   },
   "profiles": {

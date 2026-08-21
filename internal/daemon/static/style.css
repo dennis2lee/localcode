@@ -134,6 +134,34 @@ main {
   display: flex;
   min-height: 0;
 }
+/* The transcript and the control that jumps back to the bottom of it.
+   The pane exists only to give that button something to be positioned
+   against: #transcript is the scrolling box, so a child of it would
+   scroll away with the content. */
+#transcript-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  position: relative;
+}
+#jump-bottom {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  z-index: 5;
+  background: var(--accent);
+  color: var(--center);
+  border: none;
+  border-radius: 14px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.92;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+#jump-bottom:hover { opacity: 1; }
+#jump-bottom[hidden] { display: none; }
 #transcript {
   flex: 1;
   background: var(--center);

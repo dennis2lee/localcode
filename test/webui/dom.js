@@ -127,8 +127,12 @@ class Element {
     this.placeholder = '';
     this.selectionStart = 0;
     this.selectionEnd = 0;
+    // Layout, such as it is. A test sets these three to describe a view
+    // that is scrolled somewhere, which is the only thing the code under
+    // test asks the layout: am I at the bottom?
     this.scrollTop = 0;
     this.scrollHeight = 0;
+    this.clientHeight = 0;
   }
 
   // Only the generic attribute bag. The handful of attributes the code

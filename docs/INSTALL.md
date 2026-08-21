@@ -1,5 +1,19 @@
 # Installation
 
+Building from source is below, but a release is published for every platform and does not need a Go toolchain.
+
+## 0. Install a published release
+
+**Linux and macOS, without root:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dennis2lee/localcode/main/scripts/install.sh | sh
+```
+
+One static binary into `~/.local/bin/localcode`, nothing written outside `$HOME`, no password asked for. This is the one to use on Ubuntu when you are not an administrator of the machine. Details, options and the upgrade path are under [Install on Linux](#install-on-linux).
+
+Everything else comes off the [releases page](https://github.com/dennis2lee/localcode/releases): a `.deb` for Ubuntu and Debian, an `.msi` for Windows, a `.app` bundle for macOS, and portable archives for the rest. Jump to [Install on Linux](#install-on-linux), [Install on Windows](#install-on-windows), or [Install on macOS](#install-on-macos).
+
 ## 1. Build from source
 
 ### Requirements

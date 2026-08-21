@@ -90,8 +90,15 @@ func loadOptional(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
+	// {env:NAME} first, so every field of every version of this struct
+	// gets it without anything here having to know which fields are
+	// secrets. See env.go.
+	expanded, err := expandEnv(data, osLookup)
+	if err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := json.Unmarshal(expanded, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	return &cfg, nil

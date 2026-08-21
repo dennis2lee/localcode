@@ -1,6 +1,22 @@
-import { transcriptEl } from './dom.js';
+import { transcriptEl, jumpBottomBtn } from './dom.js';
 import { renderMarkdown } from './markdown.js';
+import { createFollower } from './scroll.js';
 import { session } from './state.js';
+
+// The transcript follows the newest output only while the reader is at
+// the bottom of it. See scroll.js: this is the module that owns
+// transcriptEl, so it owns the following too, and every change to the
+// content below goes through follower.keeping() rather than writing
+// scrollTop itself.
+const follower = createFollower(transcriptEl, (following) => {
+  jumpBottomBtn.hidden = following;
+});
+jumpBottomBtn.addEventListener('click', () => follower.force());
+
+// scrollToBottom is the deliberate one: the reader asked to be at the
+// bottom (sent a prompt, opened a session), so following resumes whether
+// or not they had scrolled away.
+export function scrollToBottom() { follower.force(); }
 
 // The only module allowed to touch transcriptEl. Everything goes through
 // createElement/textContent — no call site anywhere else builds an HTML
@@ -10,12 +26,15 @@ function appendDiv(cls, text) {
   const div = document.createElement('div');
   div.className = cls;
   div.textContent = text;
-  transcriptEl.appendChild(div);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  follower.keeping(() => transcriptEl.appendChild(div));
   return div;
 }
 
-export function appendUser(text) { return appendDiv('msg-user', 'You: ' + text); }
+export function appendUser(text) {
+  const div = appendDiv('msg-user', 'You: ' + text);
+  scrollToBottom();
+  return div;
+}
 
 // A prompt shows a placeholder straight away — the wait until the model is
 // handed it can be seconds (a turn starting) or minutes (a turn already
@@ -41,6 +60,10 @@ export function appendPendingUser(text, midTurn = false) {
   const list = sentPlaceholders.get(text) || [];
   list.push(div);
   sentPlaceholders.set(text, list);
+  // Sending is a deliberate act, and the answer is going to arrive at the
+  // bottom. Somebody who had scrolled up to re-read something and then
+  // typed wants to watch the reply, not stay where they were.
+  scrollToBottom();
   return div;
 }
 
@@ -69,8 +92,7 @@ export function appendToolLines(lines) {
     if (i > 0) div.appendChild(document.createElement('br'));
     div.appendChild(document.createTextNode(line));
   });
-  transcriptEl.appendChild(div);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  follower.keeping(() => transcriptEl.appendChild(div));
   return div;
 }
 
@@ -150,8 +172,7 @@ export function appendToolCall(toolUseID, name, inputJSON) {
 
   row.appendChild(head);
   row.appendChild(detail);
-  transcriptEl.appendChild(row);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  follower.keeping(() => transcriptEl.appendChild(row));
   session.toolRows.set(toolUseID, { row, stateEl, marker, detail });
   return row;
 }
@@ -165,9 +186,10 @@ export function finishToolCall(toolUseID, content, isError) {
   row.classList.toggle('failed', !!isError);
   marker.textContent = isError ? '✗' : '✓';
   const text = String(content ?? '');
-  stateEl.textContent = isError ? 'failed' : resultSize(text);
-  detail.textContent = `${detail.textContent}\n\n${text}`;
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  follower.keeping(() => {
+    stateEl.textContent = isError ? 'failed' : resultSize(text);
+    detail.textContent = `${detail.textContent}\n\n${text}`;
+  });
 }
 
 // abandonRunningToolCalls closes out every row still spinning.
@@ -207,9 +229,10 @@ export function appendModelText(text) {
     transcriptEl.appendChild(session.currentModelEl);
     session.currentModelBuffer = '';
   }
-  session.currentModelBuffer += text;
-  session.currentModelEl.innerHTML = renderMarkdown(session.currentModelBuffer);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  follower.keeping(() => {
+    session.currentModelBuffer += text;
+    session.currentModelEl.innerHTML = renderMarkdown(session.currentModelBuffer);
+  });
 }
 
 // endModelText closes off one model message. text is the whole reply, as
@@ -230,6 +253,10 @@ export function endModelText(text) {
 
 export function clearTranscript() {
   transcriptEl.innerHTML = '';
+  // A different conversation, drawn from the bottom up. Carrying the
+  // previous one's scrolled-up state over would open a session showing
+  // its middle.
+  scrollToBottom();
   session.currentModelEl = null;
   session.currentModelBuffer = '';
   // The rows these pointed at are gone with the innerHTML above; holding

@@ -128,6 +128,37 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 }
 ```
 
+#### Values from the environment: `{env:NAME}`
+
+Any string value in config.json may be `{env:NAME}`, and is replaced by that environment variable when the file is read. It is the same spelling opencode uses, so a config written for that works here.
+
+```json
+{
+  "providers": {
+    "anthropic": { "type": "anthropic", "api_key": "{env:ANTHROPIC_API_KEY}" },
+    "local":     { "type": "openai-compat", "base_url": "{env:LLM_URL:-http://localhost:1234/v1}" }
+  },
+  "profiles": { "main": { "provider": "anthropic", "model": "{env:LOCALCODE_MODEL:-claude-opus-4-6-v1}" } },
+  "mcp_servers": {
+    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": { "GITHUB_TOKEN": "{env:GITHUB_TOKEN}" } },
+    "remote": { "url": "https://{env:MCP_HOST}/mcp", "headers": { "Authorization": "Bearer {env:MCP_TOKEN}" } }
+  }
+}
+```
+
+| Form | Meaning |
+|---|---|
+| `{env:NAME}` | Required. The variable must be set and non-empty, or the config does not load. |
+| `{env:NAME:-fallback}` | Optional. The text after `:-` is used when the variable is unset or empty. |
+
+* **Every string, not just keys.** A base_url, a model id, an MCP server's own environment, the address of a speech server: anything that differs between machines can come from the environment instead of being edited per machine.
+* **A placeholder may be part of a value**, and a value may contain several: `"Bearer {env:TOKEN}"`, `"https://{env:HOST}/mcp"`.
+* **A missing variable is an error that names it**, along with the field that asked for it and the file it is in. An empty `api_key` would otherwise fail much later as a 401 that says nothing about config.json.
+* **What is on disk stays a placeholder.** localcode rewrites config.json one key at a time from the file itself, so saving a setting from the UI ("always allow") or running `localcode mcp add` never turns `{env:ANTHROPIC_API_KEY}` into the key it stands for.
+* Only a real variable name counts, so ordinary text with a brace in it (`{envelope}`, `{env: something}`) is left alone.
+
+The point is a config.json that can be committed to a repository, copied between machines, or pasted into an issue without carrying a secret in it. For Anthropic and Bedrock specifically there is also [`localcode login`](#authenticating-with-login), which stores the credential outside config.json entirely.
+
 #### Top level fields
 
 | Field | Meaning |
@@ -659,6 +690,8 @@ Other behavior:
 * The TUI draws a rule above and below the input box, with a status line directly underneath showing `agent: <name>  ·  model: <model id>`. Switching with Tab updates only that line and adds nothing to the transcript.
 * The TUI places the real terminal cursor at the insertion point inside the prompt box, so IME composition for Korean, Japanese, and Chinese renders in the box while you type rather than below it.
 * **Running work shows below the prompt box, not in the conversation.** While a turn is in flight the TUI animates a line naming what it is doing (the running tool's name, or `working`), the queue depth, and how many background tasks are going. It disappears the moment the turn ends. The Web UI shows the same information in its status bar. Tool starts and finishes no longer write `[tool] ...` lines into the transcript.
+
+**Scrolling up stays scrolled up.** Both clients follow the newest output only while the view is already at the bottom of the transcript. Scroll up while a turn is running and the view stays exactly where you put it, however much the model writes underneath; scroll back down and following resumes on its own, since being at the bottom is the whole condition. There is nothing to turn on and nothing to remember. The Web UI shows a **&darr; latest** control in the corner of the transcript while the view is away from the bottom, which jumps back and resumes following. Sending a prompt or opening a session goes to the bottom whatever the view was doing, because that is what you just asked for. A background task's own window behaves the same way.
 
 **Esc cancels whatever is running.** Press it while the model is answering (the status line says "esc to cancel") to stop that turn immediately. Cancelling also clears anything waiting in the prompt queue — the point of cancelling is to stop, so letting a queued message fire right after would defeat it. A `[cancelled]` line marks where it stopped; nothing about it is treated as an error. Pressing Esc with nothing running does nothing.
 

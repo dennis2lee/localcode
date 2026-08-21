@@ -92,7 +92,13 @@
     </div>
   </aside>
   <div class="resizer" id="resize-left" title="drag to resize"></div>
-  <div id="transcript"></div>
+  <div id="transcript-pane">
+    <div id="transcript"></div>
+    <!-- Shown only while the view is away from the bottom, so a turn that
+         is still writing can be left running while something further up is
+         read. -->
+    <button id="jump-bottom" title="jump to the newest output" hidden>&darr; latest</button>
+  </div>
   <div class="resizer" id="resize-right" title="drag to resize"></div>
   <aside id="right-panel">
     <div class="side-section">

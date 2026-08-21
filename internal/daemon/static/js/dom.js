@@ -4,6 +4,7 @@
 // an import returning undefined at a call site instead of a silent re-query
 // scattered through a dozen files.
 export const transcriptEl = document.getElementById('transcript');
+export const jumpBottomBtn = document.getElementById('jump-bottom');
 export const tasksEl = document.getElementById('tasks');
 export const sessionIdEl = document.getElementById('session-id');
 export const inputEl = document.getElementById('input');

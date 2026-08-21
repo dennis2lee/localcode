@@ -128,3 +128,18 @@ test('element instances are Elements, so children filters correctly', () => {
   assert.equal(el.children.length, 1);
   assert.ok(el.children[0] instanceof Element);
 });
+
+// The three layout numbers the app reads, and nothing else about layout:
+// they are plain properties a test sets to describe a scrolled view, and
+// the harness must not invent values for them.
+test('an element carries the scroll geometry a test sets on it', () => {
+  const doc = new Document(FIXTURE);
+  const box = doc.getElementById('box');
+  assert.equal(box.scrollTop, 0);
+  assert.equal(box.scrollHeight, 0);
+  assert.equal(box.clientHeight, 0);
+  box.scrollHeight = 1000;
+  box.clientHeight = 200;
+  box.scrollTop = 800;
+  assert.equal(box.scrollHeight - box.scrollTop - box.clientHeight, 0);
+});

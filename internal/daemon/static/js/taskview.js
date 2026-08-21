@@ -1,6 +1,7 @@
 import {
   taskModal, taskModalTitle, taskModalBody, taskModalNote, taskCancelBtn,
 } from './dom.js';
+import { createFollower } from './scroll.js';
 import { session } from './state.js';
 import * as apiClient from './api.js';
 import { Modal } from './modal.js';
@@ -24,6 +25,13 @@ export const taskView = new Modal(taskModal);
 let stream = null;
 let openTaskID = '';
 
+// A task's own transcript follows the newest output on the same terms as
+// the main one: only while the reader is at the bottom of it. See
+// scroll.js. There is no jump control in the modal — it is a small box
+// with an obvious scrollbar, and the same window is reopened from the
+// task list.
+const follower = createFollower(taskModalBody);
+
 // How much of a long task to load when opening it. Same reasoning as the
 // transcript's own tail, and the same units — the daemon drops the
 // fragments of finished replies, so this counts messages, not characters.
@@ -33,8 +41,7 @@ function line(cls, text) {
   const div = document.createElement('div');
   div.className = cls;
   div.textContent = text;
-  taskModalBody.appendChild(div);
-  taskModalBody.scrollTop = taskModalBody.scrollHeight;
+  follower.keeping(() => taskModalBody.appendChild(div));
   return div;
 }
 
@@ -52,8 +59,7 @@ function applyTaskEvent(ev) {
     case 'message.part.delta':
       if (typeof d.text !== 'string') return;
       if (!currentEl) currentEl = line('msg-model', '');
-      currentEl.textContent += d.text;
-      taskModalBody.scrollTop = taskModalBody.scrollHeight;
+      follower.keeping(() => { currentEl.textContent += d.text; });
       break;
     case 'message.part.end':
       // On replay this carries the whole reply and the fragments are not
@@ -85,6 +91,9 @@ export function openTaskView(taskID) {
   const t = session.tasks.get(taskID);
   taskModalTitle.textContent = t && t.agent ? `${t.agent} — ${taskID}` : taskID;
   taskModalBody.innerHTML = '';
+  // A newly opened task starts at its newest output, whatever the last
+  // one this modal showed was left scrolled to.
+  follower.force();
   taskModalNote.textContent = t ? `status: ${t.status}` : '';
   // Only a task still running has anything to stop.
   taskCancelBtn.style.display = (t && (t.status === 'running' || t.status === 'spawned')) ? '' : 'none';
