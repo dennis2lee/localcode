@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.52.0
+
+* **The Web UI's colours are assigned by role rather than by taste.** One blue used to mean all of "you can act on this", "this is the selected session", "this is a path" and "this is what you said" — so blue told the reader nothing in particular. It is now three tokens: `--interactive` for anything that invites a click, `--select` for whichever thing is current (and never on a control), and `--user` for the user's own prose, which is the longest text on the page and reads better untinted — it is found by weight now, not by colour. Paths go muted, because a workspace identifies a session and is not a link.
+
+* **"Running" is one colour in every panel.** The session list and the light under the prompt said a turn in flight was green; the task panel said it was amber. Amber wins the tie — green is "this finished well", and a turn in flight has not finished — so `--run` is its own token and the two panels stop disagreeing about one fact. Green keeps its single meaning: this is up.
+
+* **Task status carries a glyph as well as a colour.** `✓ completed`, `✕ failed`, `● running` sit in the same place, in the same size, doing the same job, and green-versus-red was the one distinction a red-green viewer could not make between them.
+
+* **Destructive buttons are outlined until pointed at.** A delete button filled solid red on every row made the session panel read as a wall of alarms, and white on the error red is 3.0:1 at 11px, below AA. The fill arrives on hover, when it is about to matter.
+
+* **Fix: the tool-call hover highlight never worked.** `#transcript .msg-toolcall .head:hover` set `color: var(--fg)`, and `--fg` has never been defined in this stylesheet. A `var()` naming a property that does not exist is not an error anywhere — the declaration is dropped and the element keeps what it inherited — so the rule quietly did nothing and the only symptom was a hover that did not highlight. A test now fails on any custom property the stylesheet reads and never defines.
+
+* **Fix: a light colour scheme was declared for a palette that does not exist.** `color-scheme: light dark` promised both, and this stylesheet has only ever had dark values, so anyone whose system is set to light got light scrollbars and light default form controls on a dark page. It says `dark`, and a test holds the two in step.
+
+* **Surfaces are four steps instead of three, and hairlines are visible.** `--panel` held the same value as `--center`, which left every dialog floating on the transcript's own grey with a 1px border as the only evidence it was a separate thing. `--border` at `#333` on `#202020` is 1.35:1 — every card, input and table cell was drawn with a line very nearly not there. Structural lines are now visible and `--border-strong` exists for the ones that have to be seen. The splash screen and the macOS title bar follow the new `--bg`, as their tests require.
+
 ## v0.51.0
 
 * **The one-line install is where it can be found.** It shipped in v0.50.0 and was documented only part-way down INSTALL.md, under a heading somebody looking for "how do I install this on Ubuntu" would reach after being told to build from source first. README now opens with it, and INSTALL.md leads with the published releases rather than with the Go toolchain.

@@ -1,26 +1,53 @@
 :root {
-  color-scheme: light dark;
-  /* Neutral greys, no blue tint: --bg is the side panels and the
-     header/footer chrome (rgb 24,24,24), --center the transcript column
-     (rgb 32,32,32), so the conversation reads as the lit surface and
-     everything around it recedes. --panel is the raised-surface grey used
-     for inputs, code blocks, and modals; it matches --center so a control
-     sitting on the chrome still stands off it. */
-  --bg: #181818;
-  --center: #202020;
-  --panel: #202020;
-  /* One step up from --center, for things that sit *on* a surface and
-     have to read as raised from it: the prompt box, code blocks, the
-     agent dropdown. --panel alone can't do this job any more now that it
-     matches the transcript it would be drawn on. */
-  --raised: #2a2a2a;
-  --border: #333333;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --accent: #58a6ff;
-  --warn: #d29922;
-  --err: #f85149;
-  --ok: #3fb950;
+  /* Dark only. "light dark" claimed a light palette this stylesheet has
+     never had, which left the scrollbars and the default form controls
+     rendering light on a dark page for anyone whose system is set to
+     light. */
+  color-scheme: dark;
+  /* Surfaces, in four steps rather than three. --bg is the side panels
+     and the header/footer chrome, --center the transcript column, so the
+     conversation reads as the lit surface and everything around it
+     recedes. --panel is what a modal is drawn on: it used to hold the
+     same value as --center, which left a dialog floating on the
+     transcript's own grey with a 1px border as the only evidence it was
+     a separate thing. --raised is one step further up again, for what
+     sits *on* a surface — the prompt box, code blocks, table headers. */
+  --bg: #131417;
+  --center: #1b1d21;
+  --panel: #22252a;
+  --raised: #2a2e34;
+  /* Two border tokens, not one. --border is the structural hairline that
+     every card, input and table cell is drawn with, and at #333 on
+     #202020 — 1.35:1 — it was very nearly not there at all. Anything
+     that has to be seen rather than merely inferred, chiefly hover,
+     takes --border-strong. */
+  --border: #383d44;
+  --border-strong: #4e555e;
+  --text: #eef1f5;
+  --muted: #9aa4b0;
+  /* Colour by role rather than by taste. One blue used to mean all of
+     "you can act on this", "this is the selected one", "this is a path"
+     and "this is what you said" at once, which left blue meaning nothing
+     in particular. --interactive is the only one that ever invites a
+     click. --select says which thing is current and never appears on a
+     control. --user is the deliberate absence of colour on the user's
+     own prose: it is the longest text on screen and reads worse tinted.
+     Paths go muted — they identify a session, they are not links. */
+  --interactive: #57a9ff;
+  --select: #a98bff;
+  --user: #d9e3ef;
+  /* Text drawn on --interactive. It exists because there were two
+     answers to the same question: a hard-coded #05131f on buttons and
+     var(--center) on the jump-to-latest pill. */
+  --on-accent: #06121f;
+  /* Status. --run is its own token because "running" was green in the
+     session list and amber in the task panel — one fact in two colours
+     depending on which panel it was in. Amber won the tie: green is
+     "this finished well", and a turn in flight has not finished. */
+  --ok: #4cc38a;
+  --run: #e0a23c;
+  --warn: #e0a23c;
+  --err: #ff6f61;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -108,7 +135,7 @@ header .left-group, header .right { display: flex; align-items: center; gap: 10p
   border-radius: 6px;
   cursor: pointer;
 }
-.panel-toggle:hover { color: var(--text); border-color: var(--accent); }
+.panel-toggle:hover { color: var(--text); border-color: var(--interactive); }
 header h1 { font-size: 15px; margin: 0; font-weight: 600; }
 /* Baseline-aligned and muted: the version is reference material you go
    looking for when filing a bug, not something to read every time. It
@@ -149,8 +176,8 @@ main {
   right: 18px;
   bottom: 14px;
   z-index: 5;
-  background: var(--accent);
-  color: var(--center);
+  background: var(--interactive);
+  color: var(--on-accent);
   border: none;
   border-radius: 14px;
   padding: 5px 12px;
@@ -182,7 +209,10 @@ main {
 #transcript .msg-user, #transcript .msg-tool, #transcript .msg-error {
   white-space: pre-wrap;
 }
-#transcript .msg-user { color: var(--accent); font-weight: 600; }
+/* Weight, not colour. This is the longest text the user reads on the
+   page and it is their own words: it needs to be findable when scrolling
+   back, which weight does, and it does not need to look like a link. */
+#transcript .msg-user { color: var(--user); font-weight: 600; }
 /* A prompt drawn the instant Enter is pressed, before the daemon has
    confirmed it. Same line, dimmed: it says "this is on its way" without
    moving or changing shape when the real one replaces it. */
@@ -202,7 +232,7 @@ main {
   color: var(--muted);
   font-size: 0.92em;
 }
-#transcript .msg-toolcall .head:hover { color: var(--fg); }
+#transcript .msg-toolcall .head:hover { color: var(--text); }
 #transcript .msg-toolcall .marker { flex: none; width: 1em; }
 #transcript .msg-toolcall .name {
   flex: none;
@@ -221,6 +251,7 @@ main {
   opacity: 0.85;
 }
 #transcript .msg-toolcall .state { flex: none; opacity: 0.7; }
+#transcript .msg-toolcall.running .state { color: var(--run); opacity: 1; }
 #transcript .msg-toolcall.running .marker { animation: toolpulse 1s ease-in-out infinite; }
 #transcript .msg-toolcall.failed .marker, #transcript .msg-toolcall.failed .state { color: var(--err); }
 #transcript .msg-toolcall .detail {
@@ -294,7 +325,7 @@ main {
    still wrap, because nowrap plus the scrolling wrapper above would let
    one sentence make the whole table scroll sideways. */
 #transcript .msg-model td code { white-space: nowrap; }
-#transcript .msg-model a { color: var(--accent); }
+#transcript .msg-model a { color: var(--interactive); }
 #transcript .msg-model hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 aside {
   width: 280px;
@@ -338,7 +369,7 @@ aside.collapsed, .resizer.collapsed { display: none; }
   left: -3px;
   right: -3px;
 }
-.resizer:hover, .resizer.dragging { background: var(--accent); }
+.resizer:hover, .resizer.dragging { background: var(--interactive); }
 /* While dragging, the pointer regularly leaves the 4px handle and travels
    over the transcript. Without this the browser starts selecting the text
    it crosses, and the drag ends with half the reply highlighted. */
@@ -366,11 +397,18 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 }
 .task { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; }
 .task .agent { color: var(--muted); }
-.task .status-running { color: var(--warn); }
+/* A glyph as well as a colour. Green and red are the conventional pair
+   and they stay, but on their own they are the one distinction a red-green
+   viewer cannot make — and these three words sit in the same place, in the
+   same size, doing the same job. */
+.task .status-running { color: var(--run); }
+.task .status-running::before { content: '\25CF\00a0'; }
 .task .status-completed { color: var(--ok); }
+.task .status-completed::before { content: '\2713\00a0'; }
 .task .status-failed, .task .status-cancelled { color: var(--err); }
+.task .status-failed::before, .task .status-cancelled::before { content: '\2715\00a0'; }
 .task { cursor: pointer; }
-.task:hover { border-color: var(--muted); }
+.task:hover { border-color: var(--border-strong); }
 /* What the task is doing right now, so the panel itself says something
    about progress without the window having to be opened. */
 .task .doing { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -384,7 +422,7 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 #task-modal #task-modal-body { height: min(60vh, 520px); overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
 #task-modal .note { color: var(--muted); font-size: 11px; margin-top: 8px; }
 #task-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
-#task-modal .danger-btn { background: var(--err); color: #fff; border-color: var(--err); }
+#task-modal .danger-btn { background: transparent; color: var(--err); border-color: var(--err); }
 .session-item {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -393,15 +431,15 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
   cursor: pointer;
   overflow: hidden;
 }
-.session-item:hover { border-color: var(--accent); }
+.session-item:hover { border-color: var(--border-strong); }
 
 /* Dragging a card to a new place in the panel. The card being carried
    fades, and the row it would land on shows the edge it would land
    against — a highlight around the whole target row reads as "this row is
    selected", which is not what is about to happen to it. */
 .session-item.dragging { opacity: 0.45; }
-.session-item.drop-target { border-top: 2px solid var(--accent); }
-.session-item.active { border-color: var(--accent); background: var(--panel); cursor: default; }
+.session-item.drop-target { border-top: 2px solid var(--select); }
+.session-item.active { border-color: var(--select); background: var(--panel); cursor: default; }
 .session-item .title {
   color: var(--text);
   overflow: hidden;
@@ -416,7 +454,7 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 .session-item .workspace {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-  color: var(--accent);
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -427,8 +465,17 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
    behaviour was for them to run out past the panel edge. */
 .session-item .actions { display: flex; gap: 4px; flex-wrap: wrap; }
 .session-item button { padding: 3px 8px; font-size: 11px; }
-.session-item .danger-btn { background: var(--err); color: #fff; }
-.icon-btn.danger-btn { background: var(--err); color: #fff; border-color: var(--err); }
+/* Outlined rather than filled: solid red on every row made the panel
+   read as a wall of alarms, and white on --err is 3.0:1 at this size —
+   below AA. The fill arrives on hover, when it is about to matter. */
+.danger-btn, .session-item .danger-btn, .icon-btn.danger-btn {
+  background: transparent;
+  color: var(--err);
+  border: 1px solid var(--err);
+}
+.danger-btn:hover, .session-item .danger-btn:hover, .icon-btn.danger-btn:hover {
+  background: color-mix(in srgb, var(--err) 22%, transparent);
+}
 .mcp-item {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -456,10 +503,10 @@ footer {
   max-height: 240px;
   line-height: 1.4;
 }
-#input.drag-over { border-color: var(--accent); border-style: dashed; }
+#input.drag-over { border-color: var(--interactive); border-style: dashed; }
 button {
-  background: var(--accent);
-  color: #05131f;
+  background: var(--interactive);
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   padding: 8px 14px;
@@ -486,7 +533,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 #permission-modal h3 { margin-top: 0; color: var(--warn); }
 #permission-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
-#permission-modal .deny { background: var(--err); }
+#permission-modal .deny { background: transparent; color: var(--err); border: 1px solid var(--err); }
 
 #prompt-status {
   padding: 0 16px 10px;
@@ -500,10 +547,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #prompt-status.ctx-warn { color: var(--warn); }
 #prompt-status.ctx-crit { color: var(--err); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
-/* Three states, and only three: gray = no live connection to the model,
-   solid green = connected and idle, blinking green = a turn is running.
-   Blink is the *same* green rather than a second color, so "is it
-   working?" reads as motion and "is it up?" reads as color. */
+/* Three states, and only three: grey = no live connection to the model,
+   solid green = connected and idle, blinking amber = a turn is running.
+   Green answers "is it up?" and never means anything else; amber is
+   "something is in flight" and is the same amber the task panel uses for
+   a running task, so the two panels stop disagreeing about one fact. */
 .comm-dot {
   width: 8px;
   height: 8px;
@@ -513,7 +561,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex-shrink: 0;
 }
 .comm-dot.connected { background: var(--ok); }
-.comm-dot.connected.active { animation: pulse 1s infinite; }
+.comm-dot.connected.active { background: var(--run); animation: pulse 1s infinite; }
 /* The status row's controls: each is a small outlined pill that names
    its own current state, so the row reads as a sentence about the
    session rather than a strip of icons to be decoded. */
@@ -535,7 +583,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #stop-btn ~ #mic { margin-left: 0; }
 #stop-btn { color: var(--err); border-color: var(--err); }
 #stop-btn:hover { background: color-mix(in srgb, var(--err) 18%, transparent); }
-#auto-delegate-btn.on { color: var(--accent); border-color: var(--accent); }
+#auto-delegate-btn.on { color: var(--interactive); border-color: var(--interactive); }
 #permission-status-btn.skip { color: var(--warn); border-color: var(--warn); }
 #permission-settings-modal {
   position: fixed;
@@ -568,7 +616,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom: 1px solid var(--border);
 }
 #permission-settings-modal .rule-row .rule-text { flex: 1; overflow-wrap: anywhere; }
-#permission-settings-modal .rule-row button { padding: 2px 8px; font-size: 11px; background: var(--err); }
+#permission-settings-modal .rule-row button { padding: 2px 8px; font-size: 11px; background: transparent; color: var(--err); border: 1px solid var(--err); }
 #permission-settings-modal .add-rule-row { display: flex; gap: 6px; margin-top: 12px; }
 #permission-settings-modal .add-rule-row input, #permission-settings-modal .add-rule-row select {
   background: var(--bg);
@@ -623,7 +671,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom: 1px solid var(--border);
 }
 #auto-delegate-modal .match-row .match-text { flex: 1; overflow-wrap: anywhere; }
-#auto-delegate-modal .match-row button { padding: 2px 8px; font-size: 11px; background: var(--err); }
+#auto-delegate-modal .match-row button { padding: 2px 8px; font-size: 11px; background: transparent; color: var(--err); border: 1px solid var(--err); }
 #auto-delegate-modal .add-match-row { display: flex; gap: 6px; margin-top: 12px; }
 #auto-delegate-modal .add-match-row input { flex: 1; }
 #auto-delegate-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
@@ -752,16 +800,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   height: 7px;
   margin-right: 6px;
   border-radius: 50%;
-  /* Green, matching the status-bar light under the prompt, which has
-     always been green for "connected and working". The same fact about
-     the same thing should not be two different colours depending on
-     which panel it is in — blue here read as a category of its own. */
+  /* Green is the resting colour here, and it means what it means under
+     the prompt: this session is up. A turn actually in flight overrides
+     it with amber below. The same fact about the same thing should not
+     be two different colours depending on which panel it is in — blue
+     here read as a category of its own. */
   background: var(--ok);
   vertical-align: middle;
 }
 
-/* Working: blinking, the same beat as the status-bar light. */
-.session-led.running { animation: session-led-pulse 1.2s ease-in-out infinite; }
+/* Working: amber and blinking, the same colour and the same beat as the
+   status-bar light under the prompt. */
+.session-led.running { background: var(--run); animation: session-led-pulse 1.2s ease-in-out infinite; }
 
 /* Finished while you were elsewhere: steady, so it reads as a state
    rather than an activity. Blinking means "happening now"; this has
