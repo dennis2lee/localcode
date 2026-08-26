@@ -238,10 +238,9 @@ func (s *Store) SetWorkspace(sessionID, dir string) (*Session, error) {
 	return &metaCopy, nil
 }
 
-// Delete removes a session from the store and, if persisted, deletes its
-// on-disk JSONL log. It does not cascade to child sessions (background
-// tasks spawned from it) — those are simply left as orphaned, invisible
-// entries (Visible:false already keeps them out of any session list).
+// Delete removes one session from the store and, if persisted, deletes its
+// on-disk JSONL log. It does not cascade: see DeleteTree for the operation
+// a user's "delete this conversation" actually means.
 func (s *Store) Delete(sessionID string) error {
 	s.mu.Lock()
 	st, ok := s.sessions[sessionID]
@@ -294,6 +293,62 @@ func (s *Store) DeleteAll() error {
 		}
 	}
 	return nil
+}
+
+// Descendants returns every session below sessionID, deepest first.
+//
+// Deepest first because that is the order they can be removed in: a
+// caller walking the result and deleting as it goes never removes a
+// parent before the children that name it, so a walk interrupted halfway
+// leaves a tree with a root rather than a set of orphans.
+func (s *Store) Descendants(sessionID string) []string {
+	byParent := map[string][]string{}
+	s.mu.Lock()
+	for id, st := range s.sessions {
+		if st.meta.ParentID != "" {
+			byParent[st.meta.ParentID] = append(byParent[st.meta.ParentID], id)
+		}
+	}
+	s.mu.Unlock()
+
+	var out []string
+	var walk func(string)
+	seen := map[string]bool{sessionID: true}
+	walk = func(id string) {
+		for _, child := range byParent[id] {
+			// A cycle cannot happen through CreateSession, which only
+			// ever names an existing parent, but a store rehydrated from
+			// files on disk is only as well-formed as the files.
+			if seen[child] {
+				continue
+			}
+			seen[child] = true
+			walk(child)
+			out = append(out, child)
+		}
+	}
+	walk(sessionID)
+	return out
+}
+
+// DeleteTree removes sessionID and every session below it.
+//
+// This is what deleting a conversation means. A background task runs in a
+// session of its own, invisible and unlisted, and deleting only the one
+// the user can see left every one of those behind: a log file and a
+// metadata entry per task, unreachable through any list, accumulating one
+// per delete. Callers that need to stop the work first must do so before
+// calling this; the store only owns the records.
+//
+// Children go first, so an interruption leaves a reachable tree rather
+// than orphans, and a child that has already gone is not an error.
+func (s *Store) DeleteTree(sessionID string) error {
+	for _, id := range s.Descendants(sessionID) {
+		if err := s.Delete(id); err != nil && !strings.Contains(err.Error(), "not found") {
+			return fmt.Errorf("delete child session %s: %w", id, err)
+		}
+	}
+	return s.Delete(sessionID)
 }
 
 // ListVisible returns all top-level (visible:true) sessions — i.e. the

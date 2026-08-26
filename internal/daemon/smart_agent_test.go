@@ -46,8 +46,19 @@ func TestDaemonSetSmartAgent(t *testing.T) {
 			t.Fatalf("POST smart-agent: %v", err)
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusNoContent {
-			t.Fatalf("POST smart-agent status = %d, want 204", resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST smart-agent status = %d, want 200", resp.StatusCode)
+		}
+		var got struct {
+			SmartAgent bool `json:"smart_agent"`
+			Applied    bool `json:"applied"`
+			Persisted  bool `json:"persisted"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatalf("decode smart-agent response: %v", err)
+		}
+		if got.SmartAgent != enabled || !got.Applied || !got.Persisted {
+			t.Fatalf("POST smart-agent body = %+v, want it applied, persisted and reporting %t", got, enabled)
 		}
 	}
 
@@ -172,5 +183,59 @@ func TestTraceEndpointReportsWhetherItIsRecording(t *testing.T) {
 	}
 	if first := records[0].(map[string]any); first["span"] != trace.SpanTurnStart {
 		t.Errorf("record = %v", first)
+	}
+}
+
+// SA6. Persisting and applying are two different outcomes, and answering
+// with an HTTP error for a failed persist told every client the change had
+// not happened when it had. This switch decides which model answers and
+// which tools an agent may call, so a client showing the wrong one is the
+// worst thing it can do; showing an unsaved one is merely inconvenient.
+func TestDaemonSetSmartAgentReportsAppliedSeparatelyFromPersisted(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	// A directory where the config file should be: writing it fails, and
+	// nothing in the process is left in a strange state.
+	dir := t.TempDir()
+	unwritable := filepath.Join(dir, "config.json")
+	if err := os.Mkdir(unwritable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	d.Broker.ConfigPath = unwritable
+
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	resp, err := http.Post(httpSrv.URL+"/api/settings/smart-agent", "application/json",
+		strings.NewReader(`{"enabled":true}`))
+	if err != nil {
+		t.Fatalf("POST smart-agent: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — the change was applied", resp.StatusCode)
+	}
+	var got struct {
+		SmartAgent bool   `json:"smart_agent"`
+		Applied    bool   `json:"applied"`
+		Persisted  bool   `json:"persisted"`
+		Error      string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.Applied || !got.SmartAgent {
+		t.Errorf("body = %+v, want it to report the change as applied", got)
+	}
+	if got.Persisted {
+		t.Error("body claims the change was persisted, but config.json could not be written")
+	}
+	if got.Error == "" {
+		t.Error("nothing in the body says why it was not saved")
+	}
+	if !d.Loop.SmartAgentEnabled() {
+		t.Error("the daemon is not running the state it just reported as applied")
 	}
 }

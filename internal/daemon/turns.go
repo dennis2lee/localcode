@@ -266,6 +266,22 @@ const sendRetries = 3
 
 func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// A turn started while delete-all is running is a turn whose log is
+	// removed underneath it, and a turn is far too long to make a delete
+	// wait for. So it is refused for the duration, with the same 409 a
+	// busy session already gives.
+	//
+	// The window is held until the turn is registered with the tracker,
+	// not merely until the check has been read. Once it is registered,
+	// delete-all's own busy check can see it; before that it is invisible
+	// to everything, and a delete claiming the daemon in that gap would
+	// close the session log under a turn about to start.
+	release, ok := d.admitTopLevel(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	sess, err := d.Loop.Store.Get(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
@@ -319,6 +335,11 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Committed, or not starting. Either way the window is done with; the
+	// turn itself runs long after this returns and is covered from here on
+	// by the tracker, which is what delete-all checks.
+	release()
+
 	if !started {
 		cancel()
 		// Losing the race this many times in a row means turns are

@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/hooks"
 	"localcode/internal/provider"
+	"localcode/internal/smart"
+	"localcode/internal/trace"
 )
 
 // Falling back to another model when one is not answering.
@@ -35,8 +39,8 @@ import (
 //
 // The chain is flat by design — a fallback's own list is not followed — so
 // it cannot loop and its length is exactly what the config says.
-func (l *Loop) fallbackChain(primary config.Profile) []attempt {
-	if !l.SmartAgentEnabled() {
+func (l *Loop) fallbackChain(ctx context.Context, primary config.Profile) []attempt {
+	if !l.smartOn(ctx) {
 		return nil
 	}
 	out := make([]attempt, 0, len(primary.Fallback))
@@ -80,6 +84,14 @@ func worthFallingBackOver(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
+	// Checked first, and it wins. A message that names a defect in the
+	// request itself is answered the same way by every endpoint, however
+	// much else the message happens to say.
+	for _, p := range deterministicPhrases {
+		if strings.Contains(msg, p) {
+			return false
+		}
+	}
 	for _, p := range fallbackPhrases {
 		if strings.Contains(msg, p) {
 			return true
@@ -88,8 +100,28 @@ func worthFallingBackOver(err error) bool {
 	return false
 }
 
-// fallbackPhrases are what the failures in the paragraph above look like
-// on the wire, across the three backends localcode speaks to.
+// deterministicPhrases are request defects: the shape of what was sent,
+// not the state of what it was sent to.
+//
+// This list exists because an exception class is not a diagnosis. Bedrock
+// raises ValidationException for a model id that does not exist in the
+// region, for an account not entitled to the model, and for a request
+// field the model does not accept — an availability problem, an
+// authorization problem and a request bug under one name. Classifying the
+// class as recoverable, which is what localcode used to do, sent a
+// deprecated "temperature" field to every profile in the chain; this
+// repository's own docs/MODELS.md lists all three under that one heading.
+// So the cause is matched, never the wrapper.
+var deterministicPhrases = []string{
+	"is deprecated for this model", "malformed input request",
+	"unsupported parameter", "unrecognized parameter", "unknown parameter",
+	"unexpected parameter", "extraneous key", "extra inputs are not permitted",
+	"invalid_request_error", "invalid tool", "tool_use_id", "invalid schema",
+	"expected maxlength", "expected minlength", "failed to satisfy constraint",
+}
+
+// fallbackPhrases are what an endpoint that cannot answer looks like on
+// the wire, across the three backends localcode speaks to.
 var fallbackPhrases = []string{
 	// Rate limits and overload.
 	"429", "rate limit", "rate_limit", "too many requests", "quota",
@@ -102,10 +134,182 @@ var fallbackPhrases = []string{
 	"connection refused", "no such host", "connection reset",
 	"i/o timeout", "context deadline exceeded", "eof", "broken pipe",
 	"network is unreachable", "tls handshake",
-	// The model or the credentials are not what this endpoint has.
-	"model not found", "does not exist", "not authorized", "accessdenied",
-	"unauthorized", "401", "403", "404", "expiredtoken", "invalid api key",
-	"validationexception", "unrecognized",
+	// The model or the credentials are not what this endpoint has. Named
+	// by cause rather than by exception class, so a Bedrock
+	// ValidationException reaches this list only when it says the model id
+	// is wrong or the account is not entitled, and not when it says the
+	// request was.
+	"model not found", "model identifier is invalid", "unrecognized model",
+	"not authorized", "accessdenied", "unauthorized", "401", "403", "404",
+	"expiredtoken", "invalid api key", "on-demand throughput isn",
+}
+
+// Same-endpoint retry: the step before the chain.
+//
+// worthFallingBackOver decides whether *another* endpoint could answer.
+// This decides something narrower: whether *this* endpoint could answer
+// if simply asked again in a moment. A single 429 or a 503 during a
+// deploy is that kind of failure, and walking the chain over it is the
+// expensive response — the next profile is a different model, a
+// different cache prefix, and possibly a worse answer, spent on a
+// condition two seconds would have cleared. So a transient failure gets
+// a bounded retry here first, and the chain is kept for the failures
+// that are actually about the endpoint.
+//
+// What does not retry: credential and model-identity failures (a 401
+// will be a 401 in two seconds too — those go straight to the chain),
+// request defects (deterministicPhrases wins here exactly as it does in
+// worthFallingBackOver), and DNS or route failures, which are the
+// network saying this destination does not resolve rather than saying
+// try again.
+
+// maxSameEndpointRetries bounds the retries spent on one endpoint before
+// the chain is consulted. Two, because the condition being covered is a
+// blip: anything a third attempt would fix, the first fallback fixes
+// sooner.
+const maxSameEndpointRetries = 2
+
+// retryBase is the unit of the backoff, in nanoseconds. A variable so
+// tests exercising the retry loop do not sit through real seconds, and
+// atomic because a test resetting it can overlap a goroutine a previous
+// test leaked mid-wait; nothing outside a test changes it.
+var retryBase atomic.Int64
+
+func init() { retryBase.Store(int64(time.Second)) }
+
+// retryBackoff is the wait before same-endpoint retry n (1-based):
+// 1s, then 2s. Doubling, so the second attempt gives a struggling
+// endpoint more room than the first, and bounded, because the turn is
+// interactive and the chain is waiting.
+func retryBackoff(n int) time.Duration {
+	return time.Duration(retryBase.Load()) << (n - 1)
+}
+
+// retryableInPlace reports whether err is worth asking the same endpoint
+// about again, before any fallback is considered.
+func retryableInPlace(err error) bool {
+	if err == nil || isContextOverflow(err) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	// Request defects win, same rule and same reason as in
+	// worthFallingBackOver: a defect in the request is answered the same
+	// way however many times it is sent.
+	for _, p := range deterministicPhrases {
+		if strings.Contains(msg, p) {
+			return false
+		}
+	}
+	for _, p := range retryPhrases {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// retryPhrases are the transient causes: what an endpoint that will be
+// fine in a moment looks like on the wire. Deliberately a subset of
+// fallbackPhrases — anything transient is also worth falling back over
+// when the retries run out — and deliberately without the credential,
+// model-identity and name-resolution causes, which time does not fix.
+var retryPhrases = []string{
+	// Rate limits and overload clear on their own; that is what they are.
+	"429", "rate limit", "rate_limit", "too many requests", "quota",
+	"overloaded", "throttl", "capacity",
+	// A 5xx is the endpoint having a moment, not an identity.
+	"500", "502", "503", "504", "internal server error", "bad gateway",
+	"service unavailable", "gateway timeout", "server error",
+	// A connection that dropped mid-handshake or mid-stream. A local
+	// server restarting is the common case, and it comes back.
+	"connection refused", "connection reset", "i/o timeout",
+	"context deadline exceeded", "eof", "broken pipe", "tls handshake",
+}
+
+// sleepFor waits d unless ctx ends first, and reports whether the wait
+// ran its course. A cancelled turn does not sit out a backoff.
+// retryWaitBarrier, when non-nil, runs after a retry is announced and
+// just before its backoff wait. Nil outside tests; a test sets it to
+// cancel the turn at exactly that point, so the cancelled-mid-backoff
+// path can be exercised without racing a timer.
+var retryWaitBarrier func()
+
+func sleepFor(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// retryOutcome is what maybeRetrySameEndpoint decided. Three outcomes,
+// because "no" means two different things to the caller: not eligible
+// hands the error to the fallback chain, cancelled ends the turn — a
+// cancelled wait must not be spent walking the chain with a context that
+// is already dead, recording model switches that never reach a provider.
+type retryOutcome int
+
+const (
+	// retryNotEligible: the cause is not transient, the retries are
+	// spent, or Smart Agent is off. The fallback chain is next.
+	retryNotEligible retryOutcome = iota
+	// retryReady: the backoff ran its course; ask the same run again.
+	retryReady
+	// retryCancelled: the turn was cancelled during the backoff. Nothing
+	// was attempted and nothing is counted; the turn stops here.
+	retryCancelled
+)
+
+// maybeRetrySameEndpoint spends one bounded retry on the endpoint that
+// just failed, if the failure is the transient kind.
+//
+// The counts describe provider attempts, not scheduled waits (R10N4):
+// the retry is counted and traced only after the backoff completes, at
+// the moment the caller is actually going to ask again. A wait cut short
+// by cancellation leaves the counts untouched and reports
+// retryCancelled, so the record never claims an attempt that no provider
+// ever saw.
+//
+// Only with Smart Agent on, for the same reason the chain itself is: a
+// turn that silently takes three seconds longer than it used to is a
+// behaviour change, and this one arrives as part of the bundle that was
+// opted into rather than happening to everyone.
+func (l *Loop) maybeRetrySameEndpoint(ctx context.Context, traceID, sessionID string, run modelRun, err error, sameTries, retries *int) retryOutcome {
+	if !l.smartOn(ctx) || *sameTries >= maxSameEndpointRetries || !retryableInPlace(err) {
+		return retryNotEligible
+	}
+	attempt := *sameTries + 1
+	wait := retryBackoff(attempt)
+	// In the transcript before the wait, for the same reason a fallback
+	// is announced: the reader of a turn that paused needs to know it
+	// was waiting on purpose.
+	l.Store.Append(sessionID, events.TypeError, map[string]any{
+		"error": fmt.Sprintf("%s did not answer (%v); retrying it in %s (attempt %d of %d) before any fallback",
+			describeRun(run), err, wait, attempt, maxSameEndpointRetries),
+		"recovered": true,
+	})
+	if retryWaitBarrier != nil {
+		retryWaitBarrier()
+	}
+	if !sleepFor(ctx, wait) {
+		// Cancelled mid-backoff. Said in the transcript so the announced
+		// retry does not read as one that happened.
+		l.Store.Append(sessionID, events.TypeError, map[string]any{
+			"error":     fmt.Sprintf("cancelled while waiting to retry %s; the retry was never attempted", describeRun(run)),
+			"recovered": true,
+		})
+		return retryCancelled
+	}
+	*sameTries = attempt
+	*retries++
+	l.traceSpan(ctx, traceID, sessionID, trace.SpanRetry, trace.Record{
+		Profile: run.profileName, Model: run.profile.Model, Provider: run.profile.Provider,
+		Retries: *retries, Error: err.Error(),
+	})
+	return retryReady
 }
 
 // firstOutput reports whether anything from this response has already
@@ -139,7 +343,7 @@ type modelRun struct {
 
 // buildRun derives a request from a profile. Called once for the profile a
 // turn starts on, and again for each fallback it moves to.
-func (l *Loop) buildRun(sessionID, resolveAgent string, agentCfg config.AgentConfig, profileName string, profile config.Profile, modelOverride string) (modelRun, error) {
+func (l *Loop) buildRun(ctx context.Context, sessionID, resolveAgent string, agentCfg config.AgentConfig, profileName string, profile config.Profile, modelOverride string) (modelRun, error) {
 	// A custom command's "model:" frontmatter pins the model for this turn
 	// and travels with the fallback, because the person asked for that
 	// model specifically and a chain is about reaching an endpoint rather
@@ -165,8 +369,15 @@ func (l *Loop) buildRun(sessionID, resolveAgent string, agentCfg config.AgentCon
 	// the orchestrating. Added after the agent's own prompt so a
 	// specialist's instructions are never overridden by it, and before the
 	// per-model note below for the same reason that one is last.
-	if policy := l.orchestrationFor(sessionID, resolveAgent, profile.Model); policy != "" {
+	if policy := l.orchestrationFor(ctx, sessionID, resolveAgent, profile.Model); policy != "" {
 		system = system + "\n\n" + policy
+	}
+	// The trust boundary rides with the bundle, for every agent in it:
+	// the orchestrator above gets it as part of deciding, and a
+	// specialist gets it because the specialist is the one actually
+	// reading the tool output the boundary is about.
+	if l.smartOn(ctx) {
+		system = system + "\n\n" + smart.TrustBoundary
 	}
 	// Last, so a per-model note about how to write for this window is not
 	// buried under the project's rules — and only for the models that need
@@ -184,8 +395,20 @@ func (l *Loop) buildRun(sessionID, resolveAgent string, agentCfg config.AgentCon
 	}, nil
 }
 
-// nextAttempt takes the next link in the chain, advancing the cursor.
-func (l *Loop) nextAttempt(chain []attempt, at *int) (attempt, bool) {
+// nextFallback takes the next link in the chain, if err is a failure
+// worth trying another endpoint over.
+//
+// The classifier lives here rather than at the call sites because there
+// are two of them — a request that failed outright, and a stream that died
+// before saying anything — and they have to agree. They did not: both used
+// to advance the chain on any error at all, so a malformed request was
+// sent to every configured fallback in turn and the documented rule that
+// only rate limits, outages, connectivity and credential failures move to
+// another model was true only of the classifier, which nothing called.
+func (l *Loop) nextFallback(chain []attempt, at *int, err error) (attempt, bool) {
+	if !worthFallingBackOver(err) {
+		return attempt{}, false
+	}
 	if *at >= len(chain) {
 		return attempt{}, false
 	}

@@ -27,28 +27,32 @@ type TaskTool struct {
 	// the roster changes at runtime: turning Smart Agent on adds six
 	// specialists, and a tool holding a startup snapshot would go on
 	// advertising an enum that no longer describes what exists.
-	agents func() map[string]config.AgentConfig
+	agents func(context.Context) map[string]config.AgentConfig
 }
 
-func NewTaskTool(manager *TaskManager, agents func() map[string]config.AgentConfig) TaskTool {
+func NewTaskTool(manager *TaskManager, agents func(context.Context) map[string]config.AgentConfig) TaskTool {
 	return TaskTool{manager: manager, agents: agents}
 }
 
 func (t TaskTool) Name() string { return "Task" }
 
-func (t TaskTool) Description() string {
+// Both halves of the schema name the agents this tool may be pointed at,
+// so both are rendered from the caller's roster rather than the live one.
+// The context-free forms remain for a listing that has no turn behind it,
+// and hand the same job the same answer. See tools.Contextual.
+func (t TaskTool) Description() string { return t.DescriptionFor(context.Background()) }
+
+func (t TaskTool) DescriptionFor(ctx context.Context) string {
 	var b strings.Builder
 	b.WriteString("Delegate a self-contained piece of work to a specialized sub-agent and wait for its final answer. Available agents:\n")
-	writeAgentList(&b, t.agents())
+	writeAgentList(&b, t.agents(ctx))
 	return b.String()
 }
 
-func (t TaskTool) InputSchema() json.RawMessage {
-	names, _ := json.Marshal(agentNamesOf(t.agents()))
-	return json.RawMessage(fmt.Sprintf(
-		`{"type":"object","properties":{"agent":{"type":"string","enum":%s},"prompt":{"type":"string","description":"self-contained instructions for the sub-agent; it has no access to this conversation's history"}},"required":["agent","prompt"]}`,
-		names,
-	))
+func (t TaskTool) InputSchema() json.RawMessage { return t.InputSchemaFor(context.Background()) }
+
+func (t TaskTool) InputSchemaFor(ctx context.Context) json.RawMessage {
+	return delegationSchema(agentNamesOf(t.agents(ctx)))
 }
 
 // RequiresPermission is false: delegating itself has no side effects — any
@@ -65,7 +69,7 @@ func (t TaskTool) Execute(ctx context.Context, input json.RawMessage) tools.Resu
 		return tools.Result{Content: fmt.Sprintf("invalid input: %v", err), IsError: true}
 	}
 
-	agents := t.agents()
+	agents := t.agents(ctx)
 	if _, ok := agents[args.Agent]; !ok {
 		return tools.Result{
 			Content: fmt.Sprintf("unknown agent %q. Available: %s", args.Agent, strings.Join(agentNamesOf(agents), ", ")),

@@ -33,7 +33,16 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// does every tool call and every delegation that comes out of it.
 	ctx, traceID := traceCtx(ctx)
 
-	profileName, profile, err := l.profileFor(resolveAgent)
+	// One Smart Agent answer for this whole turn, taken here and pinned to
+	// the context every part of it runs under. A turn admitted with the
+	// specialists' tool allowlist keeps it even if the switch is flipped
+	// while it is in a tool loop, and so do its cache markers, its
+	// credential guards and its trace records. A delegation arrives with
+	// its parent's snapshot already set and keeps that instead. See
+	// config.WithSmartAgent.
+	ctx = l.pinSmart(ctx)
+
+	profileName, profile, err := l.profileFor(ctx, resolveAgent)
 	if err != nil {
 		return fmt.Errorf("resolve profile for agent %q: %w", resolveAgent, err)
 	}
@@ -42,19 +51,19 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// makes agentName more than just a model choice. An empty AgentConfig
 	// (agent not found, or found with no Prompt/Tools set) is a no-op:
 	// same behavior as before per-agent config existed.
-	agentCfg := l.agentConfig(resolveAgent)
+	agentCfg := l.agentConfig(ctx, resolveAgent)
 
-	run, err := l.buildRun(sessionID, resolveAgent, agentCfg, profileName, profile, modelOverride)
+	run, err := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, profileName, profile, modelOverride)
 	if err != nil {
 		return err
 	}
 	// Where to go if this model will not answer. Empty unless Smart Agent
 	// is on and the profile names somewhere. See fallback.go.
-	chain := l.fallbackChain(run.profile)
+	chain := l.fallbackChain(ctx, run.profile)
 	chainAt := 0
 
 	turnStarted := time.Now()
-	l.traceSpan(traceID, sessionID, trace.SpanTurnStart, trace.Record{
+	l.traceSpan(ctx, traceID, sessionID, trace.SpanTurnStart, trace.Record{
 		Agent: resolveAgent, Profile: run.profileName, Model: run.profile.Model, Provider: run.profile.Provider,
 	})
 
@@ -65,7 +74,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	compactions := 0
 	if l.maybeAutoCompact(ctx, sessionID, run.client, run.profile, run.system) {
 		compactions++
-		l.traceSpan(traceID, sessionID, trace.SpanCompact, trace.Record{Detail: "automatic, past the context threshold"})
+		l.traceSpan(ctx, traceID, sessionID, trace.SpanCompact, trace.Record{Detail: "automatic, past the context threshold"})
 		l.runCompactHook(ctx, sessionID, "automatic")
 	}
 
@@ -103,6 +112,13 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// quietly answering on the third model in the chain is a fact about
 	// what the answers cost and how good they are.
 	fallbacks := 0
+	// Same-endpoint retries: how many this turn has spent in total, and
+	// how many against the endpoint currently being asked. The second
+	// resets when a fallback moves the turn elsewhere and when an answer
+	// arrives, so each endpoint gets its own bounded allowance rather
+	// than the first one spending everyone's.
+	retries := 0
+	sameTries := 0
 	trimBudget := l.contextWindow(ctx, run.profile) / 2
 
 	// State for keep_going: whether this turn has actually done anything
@@ -124,7 +140,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// Read once here rather than per step, so flipping Smart Agent off
 	// mid-turn cannot leave the model holding a tool_use for a tool the
 	// next request no longer advertises.
-	allowedTools := l.toolsForTurn(agentCfg)
+	allowedTools := l.toolsForTurn(ctx, agentCfg)
 
 	for {
 		history := l.history(sessionID)
@@ -134,7 +150,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			Model:    run.profile.Model,
 			System:   run.system,
 			Messages: messages,
-			Tools:    l.Tools.SpecsFor(allowedTools),
+			Tools:    l.Tools.SpecsFor(ctx, allowedTools),
 			// Sized against what is left of the window rather than taken
 			// from config as-is. A max_tokens larger than the room
 			// remaining is refused by the server as one total that does
@@ -150,7 +166,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// breakpoint the provider does not honour is harmless, and it
 			// is still not a change to make to everyone's requests
 			// silently. See provider.ChatRequest.CachePrefix.
-			CachePrefix: l.SmartAgentEnabled(),
+			CachePrefix: l.smartOn(ctx),
 		}
 
 		// The last chance to say no, and the point where a policy can add
@@ -183,7 +199,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		callStarted := time.Now()
 		stream, err := run.client.Chat(ctx, req)
 		if err != nil {
-			l.traceModel(traceID, sessionID, run, streamUsage{}, "", time.Since(callStarted), err)
+			l.traceModel(ctx, traceID, sessionID, run, streamUsage{}, "", time.Since(callStarted), err)
 			// Too long is a recoverable condition, not an error to hand
 			// back: compacting is exactly what the session needs and what
 			// the user would have to do by hand anyway. Reported in the
@@ -198,7 +214,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					})
 					if cerr := l.compactHistory(ctx, sessionID, run.client, run.profile, run.system, "", false); cerr == nil {
 						compactions++
-						l.traceSpan(traceID, sessionID, trace.SpanCompact, trace.Record{Detail: "recovering from a refused request"})
+						l.traceSpan(ctx, traceID, sessionID, trace.SpanCompact, trace.Record{Detail: "recovering from a refused request"})
 						l.runCompactHook(ctx, sessionID, "overflow")
 						continue
 					} else {
@@ -240,16 +256,40 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// included: a fallback on another family gets the policy and
 			// the quirk note written for it, not the ones written for the
 			// model that just failed.
-			if next, ok := l.nextAttempt(chain, &chainAt); ok {
-				if newRun, berr := l.buildRun(sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride); berr == nil {
+			//
+			// worthFallingBackOver is what makes "somewhere else" mean
+			// anything. A request another endpoint would refuse in exactly
+			// the same way — a bad parameter, a tool schema the API will
+			// not take — is not a reason to ask three more models the same
+			// broken question, and walking the chain over it buries the
+			// configuration error that actually needs fixing under
+			// whatever the last model in the chain said.
+			// A transient failure is asked about again here first, so a
+			// single 429 does not move the conversation to a different
+			// model and a different cache prefix. Only when the bounded
+			// retries are spent, or the cause is not the transient kind,
+			// does the chain get consulted. A turn cancelled during the
+			// backoff stops here instead: walking the chain with a dead
+			// context would record fallbacks no provider ever saw.
+			switch l.maybeRetrySameEndpoint(ctx, traceID, sessionID, run, err, &sameTries, &retries) {
+			case retryReady:
+				continue
+			case retryCancelled:
+				l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
+				return fmt.Errorf("chat request: %w", err)
+			}
+			if next, ok := l.nextFallback(chain, &chainAt, err); ok {
+				if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride); berr == nil {
 					l.reportFallback(sessionID, run, newRun, err)
 					fallbacks++
-					l.traceSpan(traceID, sessionID, trace.SpanFallback, trace.Record{
+					l.traceSpan(ctx, traceID, sessionID, trace.SpanFallback, trace.Record{
 						Profile: newRun.profileName, Model: newRun.profile.Model, Provider: newRun.profile.Provider,
 						Fallbacks: fallbacks, Error: err.Error(),
 					})
 					l.runRetryHook(ctx, sessionID, run, newRun, err)
 					run = newRun
+					// A new endpoint gets its own retry allowance.
+					sameTries = 0
 					// The trim budget belongs to the old window.
 					trimBudget = l.contextWindow(ctx, run.profile) / 2
 					continue
@@ -260,7 +300,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		}
 
 		assistantBlocks, toolUses, stopReason, usage, err := l.consumeStream(sessionID, stream)
-		l.traceModel(traceID, sessionID, run, usage, stopReason, time.Since(callStarted), err)
+		l.traceModel(ctx, traceID, sessionID, run, usage, stopReason, time.Since(callStarted), err)
 		if len(l.Config.Hooks) > 0 {
 			// Fire and forget: the reply is already here, so there is
 			// nothing left to block. This is the point for logging what a
@@ -281,16 +321,28 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// transcript cannot: the conversation would end up carrying a
 			// partial answer followed by a whole one.
 			if !firstOutput(assistantBlocks) {
-				if next, ok := l.nextAttempt(chain, &chainAt); ok {
-					if newRun, berr := l.buildRun(sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride); berr == nil {
+				// Same order as a request that failed outright: a
+				// stream that died of a transient cause is re-asked
+				// here before the chain is spent on it, and a turn
+				// cancelled during the backoff ends rather than
+				// consulting the chain.
+				switch l.maybeRetrySameEndpoint(ctx, traceID, sessionID, run, err, &sameTries, &retries) {
+				case retryReady:
+					continue
+				case retryCancelled:
+					return err
+				}
+				if next, ok := l.nextFallback(chain, &chainAt, err); ok {
+					if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride); berr == nil {
 						l.reportFallback(sessionID, run, newRun, err)
 						fallbacks++
-						l.traceSpan(traceID, sessionID, trace.SpanFallback, trace.Record{
+						l.traceSpan(ctx, traceID, sessionID, trace.SpanFallback, trace.Record{
 							Profile: newRun.profileName, Model: newRun.profile.Model, Provider: newRun.profile.Provider,
 							Fallbacks: fallbacks, Error: err.Error(),
 						})
 						l.runRetryHook(ctx, sessionID, run, newRun, err)
 						run = newRun
+						sameTries = 0
 						trimBudget = l.contextWindow(ctx, run.profile) / 2
 						continue
 					}
@@ -298,6 +350,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			}
 			return err
 		}
+		// The endpoint answered, so the next failure is a new incident
+		// with its own retry allowance rather than a continuation of the
+		// last one.
+		sameTries = 0
 		if usage.hasUsage {
 			l.recordUsage(sessionID, run.profile.Model, l.contextWindow(ctx, run.profile), usage)
 		}
@@ -370,10 +426,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				continue
 			}
 
-			l.traceSpan(traceID, sessionID, trace.SpanTurnEnd, trace.Record{
+			l.traceSpan(ctx, traceID, sessionID, trace.SpanTurnEnd, trace.Record{
 				Agent: resolveAgent, Profile: run.profileName, Model: run.profile.Model,
 				DurationMS: time.Since(turnStarted).Milliseconds(),
-				Fallbacks:  fallbacks, Compactions: compactions, FinishReason: stopReason,
+				Fallbacks:  fallbacks, Retries: retries, Compactions: compactions, FinishReason: stopReason,
 			})
 
 			if len(l.Config.Hooks) > 0 {
@@ -644,7 +700,7 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		// Timed around the call rather than around the execution, so a
 		// tool that spent four minutes waiting on a permission prompt
 		// reads as four minutes. That is where the time went.
-		l.traceTool(trace.ID(ctx), sessionID, tu.ToolName, time.Since(started), res.IsError, firstLine(res.Content))
+		l.traceTool(ctx, trace.ID(ctx), sessionID, tu.ToolName, time.Since(started), res.IsError, firstLine(res.Content))
 		// Capped here, before it becomes either a stored event or a
 		// message — a tool result is the one part of a conversation whose
 		// size nobody chose, and one `cat` of a log file could exceed the

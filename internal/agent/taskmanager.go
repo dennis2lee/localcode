@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/session"
 	"localcode/internal/trace"
@@ -33,6 +34,14 @@ type TaskManager struct {
 	waiters map[string]chan struct{}
 	results map[string]taskOutcome
 	pending map[string][]string
+
+	// done is closed when a task's goroutine has unwound, for every task
+	// rather than only the collectable ones. Deleting a session has to
+	// wait for its background work to actually stop before the session's
+	// files go away, and "the cancel func is gone" is not that signal:
+	// the cancel is removed on the way out, while the turn may still be
+	// finishing a tool call and appending to the log.
+	done map[string]chan struct{}
 }
 
 func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *TaskManager {
@@ -47,6 +56,7 @@ func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *Tas
 		waiters: map[string]chan struct{}{},
 		results: map[string]taskOutcome{},
 		pending: map[string][]string{},
+		done:    map[string]chan struct{}{},
 	}
 	// Back-reference so the loop can delegate a turn on its own (see
 	// Loop.delegatePrompt) rather than only when the model calls the Task
@@ -67,14 +77,49 @@ func (tm *TaskManager) nextTaskID() string {
 // new session's id; progress is reported via task.status events appended to
 // the parent session.
 func (tm *TaskManager) Spawn(parentSessionID, agentName, prompt string) (string, error) {
-	return tm.spawn(parentSessionID, agentName, prompt, "")
+	if !tm.loop.lifecycle.admit(parentSessionID) {
+		return "", errSessionClosing(parentSessionID)
+	}
+	defer tm.loop.lifecycle.admitted(parentSessionID)
+	return tm.spawn(context.Background(), parentSessionID, agentName, prompt, "", false)
 }
 
-// spawn is Spawn with the caller's trace id, which a background task
-// cannot take from a context: it deliberately outlives the turn that
-// launched it, so the id travels as a value instead. Empty means "start a
-// new trace", which is what a client-initiated task is.
-func (tm *TaskManager) spawn(parentSessionID, agentName, prompt, traceID string) (string, error) {
+// spawn is Spawn for a launch that came from inside a turn.
+//
+// launchCtx is the launching turn's context. The child does not run under
+// it — a background task deliberately outlives the turn that started it,
+// and inheriting its cancellation would end the task the moment the turn
+// did — so what the child gets is a fresh context off rootCtx carrying the
+// two things that must survive the handover:
+//
+//   - The delegation depth. It used to be left behind, which made
+//     background delegation the way around the depth limit: every
+//     generation started at zero, so an agent with unrestricted tools
+//     could launch a child that launched a child, without bound. The
+//     eight-task ceiling is per parent session and does not bound a tree.
+//   - The Smart Agent snapshot, taken here at admission rather than when
+//     the task is dequeued. A task waiting on the semaphore used to
+//     resolve its agent again on the way in, so an "explore" specialist
+//     admitted as read-only started with the full tool set if the switch
+//     had gone off in between.
+//
+// traceID travels as a value for the same handover reason. Empty means
+// "start a new trace", which is what a client-initiated task is.
+// The caller must already hold an admission window for parentSessionID
+// (lifecycle.admit). Everything from the parent check to registering the
+// goroutine happens inside it, which is what makes a delete either see
+// this child or refuse it, and never neither.
+func (tm *TaskManager) spawn(launchCtx context.Context, parentSessionID, agentName, prompt, traceID string, collectable bool) (string, error) {
+	childCtx := tm.childContext(launchCtx, traceID)
+
+	// A hook for the tests that force the interleaving this admission
+	// window exists to close: a spawn that has passed the parent check but
+	// has not yet registered its goroutine. Nil in every build that is not
+	// running those tests.
+	if spawnBarrier != nil {
+		spawnBarrier()
+	}
+
 	// Checked before anything is created. The child session used to be
 	// created first, so spawning against a parent that does not exist
 	// failed at the append and left the child behind — invisible (tasks
@@ -83,7 +128,7 @@ func (tm *TaskManager) spawn(parentSessionID, agentName, prompt, traceID string)
 		return "", fmt.Errorf("spawn task: %w", err)
 	}
 
-	if blocked, reason := tm.loop.delegateBlocked(tm.rootCtx, parentSessionID, agentName, prompt); blocked {
+	if blocked, reason := tm.loop.delegateBlocked(childCtx, parentSessionID, agentName, prompt); blocked {
 		return "", fmt.Errorf("delegation to %q was refused: %s", agentName, reason)
 	}
 
@@ -101,14 +146,22 @@ func (tm *TaskManager) spawn(parentSessionID, agentName, prompt, traceID string)
 		tm.loop.Store.Delete(taskID)
 		return "", fmt.Errorf("append task.spawned: %w", err)
 	}
-	tm.loop.traceSpan(traceID, parentSessionID, trace.SpanDelegate, trace.Record{
+	tm.loop.traceSpan(childCtx, traceID, parentSessionID, trace.SpanDelegate, trace.Record{
 		Agent: agentName, Detail: "background -> " + taskID,
 	})
 
-	ctx, cancel := context.WithCancel(trace.WithID(tm.rootCtx, traceID))
+	ctx, cancel := context.WithCancel(childCtx)
 	tm.mu.Lock()
+	tm.done[taskID] = make(chan struct{})
 	tm.cancels[taskID] = cancel
-	tm.waiters[taskID] = make(chan struct{})
+	// Only a task somebody can come back for gets result bookkeeping. A
+	// client-spawned task reads its answer out of the child session's own
+	// durable log and never calls Wait, so keeping a second copy in memory
+	// was a copy with no reader and no deletion: a long-running daemon
+	// grew one per task it had ever run.
+	if collectable {
+		tm.waiters[taskID] = make(chan struct{})
+	}
 	tm.mu.Unlock()
 
 	go tm.run(ctx, taskID, parentSessionID, agentName, prompt)
@@ -116,7 +169,48 @@ func (tm *TaskManager) spawn(parentSessionID, agentName, prompt, traceID string)
 	return taskID, nil
 }
 
+// childContext is what a background child runs under: rooted in the
+// manager's own context rather than in the launching turn's, and carrying
+// forward the two things that must survive that handover.
+//
+// Separate from spawn so the handover can be asserted directly. What it
+// carries is easy to state and was easy to lose.
+// spawnBarrier is test-only. See spawn.
+var spawnBarrier func()
+
+func (tm *TaskManager) childContext(launchCtx context.Context, traceID string) context.Context {
+	ctx := trace.WithID(tm.rootCtx, traceID)
+	ctx = withTaskDepth(ctx, taskDepthFromContext(launchCtx)+1)
+	return config.WithSmartAgent(ctx, tm.loop.Config.SmartAgentFor(launchCtx))
+}
+
 func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentName, prompt string) {
+	// Registered first so it runs last: everything below has finished,
+	// including the terminal outcome, by the time this closes. That is
+	// what StopSession waits on before a session's files are removed, so
+	// it has to mean the goroutine is done writing, not merely done
+	// running. "The cancel func is gone" would not mean that.
+	defer func() {
+		tm.mu.Lock()
+		if ch, ok := tm.done[taskID]; ok {
+			close(ch)
+			delete(tm.done, taskID)
+		}
+		tm.mu.Unlock()
+	}()
+
+	// Every way out of this function is terminal for the task, so every
+	// way out has to wake whoever is waiting for it. finish is
+	// first-call-wins (it takes the waiter with it), so the normal path's
+	// own call still decides the outcome and this only covers the exits
+	// that had none.
+	//
+	// The exit that had none was cancellation before a semaphore slot came
+	// free: the parent's log said "cancelled", the panel showed the task
+	// as finished, and TaskCollect went on blocking on a channel nothing
+	// would ever close.
+	defer tm.finish(taskID, "", nil, context.Canceled)
+
 	defer func() {
 		tm.mu.Lock()
 		cancel := tm.cancels[taskID]
@@ -239,13 +333,45 @@ func taskDepthFromContext(ctx context.Context) int {
 // the delegating agent's own turn needs the sub-agent's answer before it
 // can continue.
 func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName, prompt string) (string, error) {
+	// Pinned here rather than relying on the caller, because the callers
+	// are not all turns: the Task tool arrives with its parent's pin and
+	// keeps it, but a direct SpawnSync from the API or from an embedding
+	// program does not have one, and this call can wait on the semaphore
+	// for as long as the queue takes before the child reads the setting.
+	// Admission is when the delegation was accepted, so admission is what
+	// it runs under.
+	ctx = tm.loop.pinSmart(ctx)
+
 	if blocked, reason := tm.loop.delegateBlocked(ctx, parentSessionID, agentName, prompt); blocked {
 		return "", fmt.Errorf("delegation to %q was refused: %s", agentName, reason)
+	}
+
+	// Admission, the same window the background path takes, for the same
+	// reason and one more. The same: a parent being deleted must not
+	// acquire a new child. The one more: this path is reachable directly
+	// from the API and from an embedding program, so unlike the Task tool
+	// it has no turn holding the session for it.
+	if !tm.loop.lifecycle.admit(parentSessionID) {
+		return "", errSessionClosing(parentSessionID)
+	}
+
+	// Checked before anything is created, and rolled back if the parent
+	// stops accepting between the two. The background path has done this
+	// since the same bug was found there: creating the child first meant a
+	// spawn against a parent that does not exist failed at the append and
+	// left the child behind, invisible (tasks are not listed) and
+	// permanent, once per attempt. The synchronous path had neither half,
+	// and "the Task tool always has a valid parent" is not an invariant
+	// this function can rely on.
+	if _, err := tm.loop.Store.Get(parentSessionID); err != nil {
+		tm.loop.lifecycle.admitted(parentSessionID)
+		return "", fmt.Errorf("spawn task: %w", err)
 	}
 
 	taskID := tm.nextTaskID()
 
 	if _, err := tm.loop.Store.CreateSession(taskID, parentSessionID, agentName, false); err != nil {
+		tm.loop.lifecycle.admitted(parentSessionID)
 		return "", fmt.Errorf("create task session: %w", err)
 	}
 	if _, err := tm.loop.Store.Append(parentSessionID, events.TypeTaskSpawned, map[string]any{
@@ -253,18 +379,58 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 		"agent":   agentName,
 		"prompt":  prompt,
 	}); err != nil {
+		// Nothing is watching this child and nothing ever will be.
+		tm.loop.Store.Delete(taskID)
+		tm.loop.lifecycle.admitted(parentSessionID)
 		return "", fmt.Errorf("append task.spawned: %w", err)
 	}
-	tm.loop.traceSpan(trace.ID(ctx), parentSessionID, trace.SpanDelegate, trace.Record{
+	tm.loop.traceSpan(ctx, trace.ID(ctx), parentSessionID, trace.SpanDelegate, trace.Record{
 		Agent: agentName, Detail: "synchronous -> " + taskID,
 	})
 
-	select {
-	case tm.sem <- struct{}{}:
-		defer func() { <-tm.sem }()
-	case <-ctx.Done():
+	// Registered like a background task, even though this one runs on the
+	// caller's own goroutine, so a deletion can cancel it and wait for it
+	// rather than only knowing about the tasks it launched itself. The
+	// registration is the last thing inside the admission window: after
+	// this the child is visible to a claim.
+	ctx, cancel := context.WithCancel(ctx)
+	syncDone := make(chan struct{})
+	tm.mu.Lock()
+	tm.cancels[taskID] = cancel
+	tm.done[taskID] = syncDone
+	tm.mu.Unlock()
+	tm.loop.lifecycle.admitted(parentSessionID)
+
+	defer func() {
+		tm.mu.Lock()
+		delete(tm.cancels, taskID)
+		delete(tm.done, taskID)
+		tm.mu.Unlock()
+		cancel()
+		close(syncDone)
+	}()
+
+	// No semaphore here, deliberately.
+	//
+	// It used to take a slot and hold it for the whole child turn, which
+	// deadlocks the moment that child delegates synchronously again: the
+	// grandchild waits for a slot its own ancestor is holding while that
+	// ancestor waits for the grandchild. At the documented default of one
+	// slot this is not a race, it is certain, and the depth limit does not
+	// help — it permits three levels and the semaphore stops at two.
+	//
+	// The right fix is not a bigger default. What the semaphore bounds is
+	// a burst of spawns overrunning a provider's rate limit, and a
+	// synchronous delegation cannot burst: its caller is blocked at the
+	// tool boundary, so one turn has at most one synchronous child at a
+	// time and a chain is at most maxTaskDepth deep, with only the
+	// deepest link actually calling a model. The concurrency that reaches
+	// the provider is therefore the number of concurrent top-level turns,
+	// which was never gated by this semaphore either. Background
+	// delegation is the one that fans out, and it still queues here.
+	if err := ctx.Err(); err != nil {
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "cancelled"})
-		return "", ctx.Err()
+		return "", err
 	}
 
 	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "running"})

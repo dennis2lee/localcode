@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // An escaped quote must not open a quoted region, because bash does not
 // treat it as one. Getting this wrong hid a whole chained command inside
@@ -68,11 +71,11 @@ func TestSplitShellSegmentsHonorsBackslashOutsideQuotes(t *testing.T) {
 // plus an escaped quote must not auto-allow whatever follows.
 func TestEscapedQuoteCannotSmuggleACommandPastAnAllowRule(t *testing.T) {
 	c := &Config{}
-	if got := c.resolveShellCommand(`git status \" && rm -rf ~`, true); got == DecisionAllow {
+	if got := c.resolveShellCommand(context.Background(), `git status \" && rm -rf ~`, true); got == DecisionAllow {
 		t.Errorf("resolveShellCommand auto-allowed a chained rm behind an escaped quote")
 	}
 	// The allowed command on its own is unaffected.
-	if got := c.resolveShellCommand(`git status`, true); got != DecisionAllow {
+	if got := c.resolveShellCommand(context.Background(), `git status`, true); got != DecisionAllow {
 		t.Errorf("plain `git status` = %v, want allow", got)
 	}
 }

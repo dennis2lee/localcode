@@ -166,6 +166,18 @@ func toAnthropicMessages(msgs []Message) []anthMessage {
 	return out
 }
 
+// markConversationCache sets a cache breakpoint on the last block of
+// each of the last two messages. See the CachePrefix comment in Chat.
+func markConversationCache(msgs []anthMessage) {
+	marked := 0
+	for i := len(msgs) - 1; i >= 0 && marked < 2; i-- {
+		if n := len(msgs[i].Content); n > 0 {
+			msgs[i].Content[n-1].CacheControl = ephemeral()
+			marked++
+		}
+	}
+}
+
 func toAnthropicTools(tools []Tool) []anthTool {
 	out := make([]anthTool, 0, len(tools))
 	for _, t := range tools {
@@ -195,10 +207,6 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		// session, and together they are the bulk of every request's fixed
 		// cost.
 		//
-		// Not on the conversation itself. A breakpoint there would have to
-		// move every turn, which means writing the whole history into the
-		// cache again at the write premium on each one, and getting that
-		// wrong costs more than not doing it.
 		if n := len(tools); n > 0 {
 			tools[n-1].CacheControl = ephemeral()
 		}
@@ -206,10 +214,25 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 			system = []anthContentBlock{{Type: "text", Text: req.System, CacheControl: ephemeral()}}
 		}
 	}
+	messages := toAnthropicMessages(req.Messages)
+	if req.CachePrefix {
+		// The conversation's own breakpoints: the last block of the last
+		// two messages. In an agent session the history is append-only,
+		// so the previous request's marked prefix is a prefix of this
+		// one, the lookup reads it at the cache rate, and only the new
+		// suffix is written at the premium — incremental, not a rewrite.
+		// Two marks rather than one because a lookup only checks a
+		// bounded distance behind each breakpoint, and one long tool
+		// round can outrun it; the older mark is the fallback that keeps
+		// the miss from reaching back to the start of the conversation.
+		// With the two on tools and system above, that is four, which is
+		// the API's limit.
+		markConversationCache(messages)
+	}
 	body := anthRequest{
 		Model:       req.Model,
 		System:      system,
-		Messages:    toAnthropicMessages(req.Messages),
+		Messages:    messages,
 		Tools:       tools,
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,

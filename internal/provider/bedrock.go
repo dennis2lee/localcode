@@ -211,6 +211,24 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	if err != nil {
 		return nil, err
 	}
+	if req.CachePrefix {
+		// The conversation's own cache points, mirroring the Anthropic
+		// client: the end of each of the last two messages. Bedrock
+		// spells a breakpoint as a content block of its own rather than
+		// a field on one, and ignores cache points on models without
+		// prompt caching, which is the same "request, not guarantee"
+		// contract CachePrefix already documents.
+		marked := 0
+		for i := len(messages) - 1; i >= 0 && marked < 2; i-- {
+			if len(messages[i].Content) == 0 {
+				continue
+			}
+			messages[i].Content = append(messages[i].Content, &types.ContentBlockMemberCachePoint{
+				Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
+			})
+			marked++
+		}
+	}
 	toolConfig, err := toBedrockTools(req.Tools, req.CachePrefix)
 	if err != nil {
 		return nil, err

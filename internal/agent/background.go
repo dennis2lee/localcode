@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -51,6 +52,25 @@ type taskOutcome struct {
 	err  error
 }
 
+// errTaskDetached is the outcome of a task whose parent session was
+// deleted out from under it.
+//
+// It exists because a waiter can be woken by two different things and the
+// caller has to be able to tell them apart. Cleanup used to close the
+// channel without recording anything, and Wait read the missing map entry
+// as a zero value: empty text, no error, collected. A collection could
+// therefore report "finished without an answer" for a task that was never
+// asked and never ran, which reads as a task that had nothing to say.
+var errTaskDetached = errors.New("the session that launched this task was deleted")
+
+// errSessionClosing is what an admission gets when the tree it is trying
+// to join is being deleted. A refusal rather than a wait: the caller asked
+// to start work in a conversation that is going away, and there is nothing
+// for it to wait for.
+func errSessionClosing(sessionID string) error {
+	return fmt.Errorf("session %s is being deleted", sessionID)
+}
+
 // finish records a task's result and wakes anything waiting on it. Safe
 // to call for a task nobody is waiting on, which is the common case: most
 // tasks are spawned by a client, not by the model.
@@ -64,50 +84,71 @@ func (tm *TaskManager) finish(taskID, text string, runErr, ctxErr error) {
 	case runErr != nil:
 		out.err = runErr
 	}
-	tm.results[taskID] = out
-	if ch, ok := tm.waiters[taskID]; ok {
-		close(ch)
-		delete(tm.waiters, taskID)
+	// A waiter is registered at spawn time for exactly the tasks that can
+	// be collected. Recording an outcome for the others would keep a
+	// second copy of every client-spawned answer, in memory, with nothing
+	// that ever reads or deletes it.
+	ch, collectable := tm.waiters[taskID]
+	if !collectable {
+		return
 	}
+	tm.results[taskID] = out
+	close(ch)
+	delete(tm.waiters, taskID)
 }
 
-// Wait blocks until taskID finishes and returns its final answer.
+// Wait blocks until taskID finishes and returns its final answer. The
+// third value reports whether a terminal outcome was actually obtained:
+// false means the caller gave up, not that the task failed.
+//
+// That distinction is what keeps a cancelled collection recoverable. The
+// task keeps running — it belongs to the session, not to the turn that
+// went away — so its answer is still coming, and the caller has to be able
+// to tell "this task failed" from "I stopped waiting" in order to leave
+// the id outstanding rather than consuming it. See TaskCollectTool.
 //
 // A task that has already finished returns immediately, which is what
 // makes "launch three, collect three" work regardless of the order they
 // happen to complete in.
-func (tm *TaskManager) Wait(ctx context.Context, taskID string) (string, error) {
+func (tm *TaskManager) Wait(ctx context.Context, taskID string) (string, error, bool) {
 	tm.mu.Lock()
 	if out, done := tm.results[taskID]; done {
 		delete(tm.results, taskID)
 		tm.mu.Unlock()
-		return out.text, out.err
+		return out.text, out.err, true
 	}
 	ch, running := tm.waiters[taskID]
 	tm.mu.Unlock()
 	if !running {
-		return "", fmt.Errorf("no such background task %q", taskID)
+		return "", fmt.Errorf("no such background task %q", taskID), true
 	}
 
 	select {
 	case <-ch:
 	case <-ctx.Done():
-		// The turn was cancelled, not the task. Leaving the task running
-		// is correct — it belongs to the session, not to this turn — and
-		// its result stays recorded for whoever asks next.
-		return "", ctx.Err()
+		return "", ctx.Err(), false
 	}
 
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
-	out := tm.results[taskID]
+	out, recorded := tm.results[taskID]
 	delete(tm.results, taskID)
-	return out.text, out.err
+	if !recorded {
+		// Woken with nothing recorded means the wake was cleanup, not
+		// completion. Reported as terminal, because it is — the task is
+		// gone and nothing more is coming — but never as an answer.
+		return "", errTaskDetached, true
+	}
+	return out.text, out.err, true
 }
 
 // SpawnBackground launches a task and remembers it as one this session
 // still owes itself a collection for.
-func (tm *TaskManager) SpawnBackground(parentSessionID, agentName, prompt, traceID string) (string, error) {
+// One admission window covers the spawn and the pending entry both. They
+// used to be separate, so a deletion could complete in between and the
+// late append would put an entry back into a session's books after they
+// had been closed.
+func (tm *TaskManager) SpawnBackground(launchCtx context.Context, parentSessionID, agentName, prompt, traceID string) (string, error) {
 	tm.mu.Lock()
 	outstanding := len(tm.pending[parentSessionID])
 	tm.mu.Unlock()
@@ -115,7 +156,12 @@ func (tm *TaskManager) SpawnBackground(parentSessionID, agentName, prompt, trace
 		return "", fmt.Errorf("this session already has %d background tasks running and uncollected; collect them before launching more", outstanding)
 	}
 
-	taskID, err := tm.spawn(parentSessionID, agentName, prompt, traceID)
+	if !tm.loop.lifecycle.admit(parentSessionID) {
+		return "", errSessionClosing(parentSessionID)
+	}
+	defer tm.loop.lifecycle.admitted(parentSessionID)
+
+	taskID, err := tm.spawn(launchCtx, parentSessionID, agentName, prompt, traceID, true)
 	if err != nil {
 		return "", err
 	}
@@ -125,33 +171,139 @@ func (tm *TaskManager) SpawnBackground(parentSessionID, agentName, prompt, trace
 	return taskID, nil
 }
 
-// takePending removes and returns the background tasks a session is
-// waiting on: all of them, or just the one named.
-func (tm *TaskManager) takePending(parentSessionID, taskID string) []string {
+// peekPending returns the background tasks a session is waiting on: all of
+// them, or just the one named. Nothing is removed.
+//
+// Removal is dropPending's job, and it happens per task, after that task
+// has actually been collected. Taking the ids out up front lost them: a
+// cancelled collection left the tasks running and their answers recorded,
+// with no id outstanding to ask for them by, so the work was done and
+// permanently unreachable.
+func (tm *TaskManager) peekPending(parentSessionID, taskID string) []string {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	all := tm.pending[parentSessionID]
 	if taskID == "" {
-		delete(tm.pending, parentSessionID)
-		return all
+		return append([]string(nil), all...)
 	}
-	for i, id := range all {
+	for _, id := range all {
 		if id == taskID {
-			tm.pending[parentSessionID] = append(append([]string(nil), all[:i]...), all[i+1:]...)
 			return []string{id}
 		}
 	}
 	return nil
 }
 
+// dropPending forgets one collected task.
+func (tm *TaskManager) dropPending(parentSessionID, taskID string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	all := tm.pending[parentSessionID]
+	for i, id := range all {
+		if id == taskID {
+			rest := append(append([]string(nil), all[:i]...), all[i+1:]...)
+			if len(rest) == 0 {
+				delete(tm.pending, parentSessionID)
+			} else {
+				tm.pending[parentSessionID] = rest
+			}
+			return
+		}
+	}
+}
+
+// StopSession ends every background task in ids and waits for the work to
+// unwind. ids is a claimed tree: nothing can be admitted into it for as
+// long as the caller holds the claim, which is what makes stopping the
+// set it names the same as stopping the set that exists. See
+// Loop.claimSessionTree.
+//
+// This is the half of deleting a conversation that is not about records.
+// A background task runs in a session of its own, rooted in the manager's
+// context rather than the launching turn's, precisely so it survives the
+// turn that started it; the cost of that is that it also survived the
+// user deleting the conversation. An `implement` task could go on editing
+// files, for an instruction given in a conversation that no longer
+// exists, with its final status appended to a session that is not there
+// to receive it.
+//
+// Recursive, because a task can delegate: stopping the children a session
+// launched is not enough if one of those launched more. The recursion is
+// in the claim rather than here.
+//
+// Blocking, because the caller is about to remove the session logs these
+// goroutines are writing to. Returning while a turn is mid tool call
+// would trade an orphan process for a torn file.
+func (tm *TaskManager) StopSession(ids []string) {
+	tm.mu.Lock()
+	var cancels []context.CancelFunc
+	var waits []chan struct{}
+	for _, id := range ids {
+		if c, ok := tm.cancels[id]; ok {
+			cancels = append(cancels, c)
+		}
+		if ch, ok := tm.done[id]; ok {
+			waits = append(waits, ch)
+		}
+	}
+	tm.mu.Unlock()
+
+	for _, cancel := range cancels {
+		cancel()
+	}
+	for _, ch := range waits {
+		<-ch
+	}
+
+	// Only once nothing is running: a task that was mid flight until a
+	// moment ago may have recorded an outcome on its way out, and the
+	// point of this ordering is that there is nothing left to record one
+	// after the books are closed.
+	for _, id := range ids {
+		tm.forgetSession(id)
+		tm.forgetTask(id)
+	}
+}
+
+// forgetTask drops what is remembered about one task by its own id, as
+// opposed to by the session that launched it. A descendant being removed
+// with its ancestor is not in anybody's pending list any more, but it can
+// still hold a waiter and a result of its own.
+func (tm *TaskManager) forgetTask(taskID string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	delete(tm.results, taskID)
+	if ch, ok := tm.waiters[taskID]; ok {
+		close(ch)
+		delete(tm.waiters, taskID)
+	}
+}
+
 // forgetSession drops everything remembered about a parent session's
 // background tasks — called when the session is deleted, so a task
 // launched and never collected does not keep its answer forever.
+//
+// The waiter goes with the result, and that is the part that is easy to
+// miss. Deleting only the recorded results left a waiter behind for any
+// child still running, and finish stores an outcome whenever it finds a
+// waiter: the task finished after its parent was deleted, wrote its answer
+// into the map, and left it there with no pending id to collect it by and
+// no later cleanup that would look for it. Taking the waiter first is what
+// makes cleanup final, because finish under the same lock then sees no
+// waiter and records nothing.
+//
+// Closing rather than dropping the channel matters for the same reason:
+// anything still blocked in Wait is woken instead of held until its own
+// context expires.
 func (tm *TaskManager) forgetSession(parentSessionID string) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	for _, id := range tm.pending[parentSessionID] {
 		delete(tm.results, id)
+		if ch, ok := tm.waiters[id]; ok {
+			close(ch)
+			delete(tm.waiters, id)
+		}
 	}
 	delete(tm.pending, parentSessionID)
 }
@@ -159,31 +311,33 @@ func (tm *TaskManager) forgetSession(parentSessionID string) {
 // TaskBackgroundTool launches a sub-agent and returns immediately.
 type TaskBackgroundTool struct {
 	manager *TaskManager
-	agents  func() map[string]config.AgentConfig
+	agents  func(context.Context) map[string]config.AgentConfig
 }
 
-func NewTaskBackgroundTool(manager *TaskManager, agents func() map[string]config.AgentConfig) TaskBackgroundTool {
+func NewTaskBackgroundTool(manager *TaskManager, agents func(context.Context) map[string]config.AgentConfig) TaskBackgroundTool {
 	return TaskBackgroundTool{manager: manager, agents: agents}
 }
 
 func (t TaskBackgroundTool) Name() string { return "TaskBackground" }
 
-func (t TaskBackgroundTool) Description() string {
+func (t TaskBackgroundTool) Description() string { return t.DescriptionFor(context.Background()) }
+
+func (t TaskBackgroundTool) DescriptionFor(ctx context.Context) string {
 	var b strings.Builder
 	b.WriteString("Start a sub-agent working in the background and return straight away with its task id. " +
 		"Use this to run two or more independent pieces of investigation at once, then call TaskCollect to " +
 		"get the answers. For a single question, use Task instead: it is the same thing without the " +
 		"bookkeeping. Available agents:\n")
-	writeAgentList(&b, t.agents())
+	writeAgentList(&b, t.agents(ctx))
 	return b.String()
 }
 
 func (t TaskBackgroundTool) InputSchema() json.RawMessage {
-	names, _ := json.Marshal(agentNamesOf(t.agents()))
-	return json.RawMessage(fmt.Sprintf(
-		`{"type":"object","properties":{"agent":{"type":"string","enum":%s},"prompt":{"type":"string","description":"self-contained instructions for the sub-agent; it has no access to this conversation's history"}},"required":["agent","prompt"]}`,
-		names,
-	))
+	return t.InputSchemaFor(context.Background())
+}
+
+func (t TaskBackgroundTool) InputSchemaFor(ctx context.Context) json.RawMessage {
+	return delegationSchema(agentNamesOf(t.agents(ctx)))
 }
 
 // RequiresPermission is false for the same reason Task's is: starting a
@@ -199,7 +353,7 @@ func (t TaskBackgroundTool) Execute(ctx context.Context, input json.RawMessage) 
 	if err := json.Unmarshal(input, &args); err != nil {
 		return tools.Result{Content: fmt.Sprintf("invalid input: %v", err), IsError: true}
 	}
-	agents := t.agents()
+	agents := t.agents(ctx)
 	if _, ok := agents[args.Agent]; !ok {
 		return tools.Result{
 			Content: fmt.Sprintf("unknown agent %q. Available: %s", args.Agent, strings.Join(agentNamesOf(agents), ", ")),
@@ -223,7 +377,7 @@ func (t TaskBackgroundTool) Execute(ctx context.Context, input json.RawMessage) 
 
 	// The trace id travels with the launch so the background work shows
 	// up under the turn that started it rather than as an orphan.
-	taskID, err := t.manager.SpawnBackground(parentSessionID, args.Agent, args.Prompt, trace.ID(ctx))
+	taskID, err := t.manager.SpawnBackground(ctx, parentSessionID, args.Agent, args.Prompt, trace.ID(ctx))
 	if err != nil {
 		return tools.Result{Content: fmt.Sprintf("could not start %q in the background: %v", args.Agent, err), IsError: true}
 	}
@@ -271,7 +425,7 @@ func (t TaskCollectTool) Execute(ctx context.Context, input json.RawMessage) too
 		return tools.Result{Content: "TaskCollect has no session context", IsError: true}
 	}
 
-	ids := t.manager.takePending(parentSessionID, args.TaskID)
+	ids := t.manager.peekPending(parentSessionID, args.TaskID)
 	if len(ids) == 0 {
 		if args.TaskID != "" {
 			return tools.Result{Content: fmt.Sprintf("no outstanding background task %q in this session", args.TaskID), IsError: true}
@@ -283,8 +437,17 @@ func (t TaskCollectTool) Execute(ctx context.Context, input json.RawMessage) too
 	// three launches read the same way every time and the model can match
 	// answers to what it asked for.
 	var b strings.Builder
+	uncollected := 0
 	for _, id := range ids {
-		text, err := t.manager.Wait(ctx, id)
+		text, err, collected := t.manager.Wait(ctx, id)
+		if !collected {
+			// The caller stopped waiting. The task did not stop, so its
+			// id stays outstanding and the next TaskCollect can pick the
+			// answer up.
+			uncollected++
+			continue
+		}
+		t.manager.dropPending(parentSessionID, id)
 		if err != nil {
 			fmt.Fprintf(&b, "## %s\nfailed: %v\n\n", id, err)
 			continue
@@ -295,7 +458,22 @@ func (t TaskCollectTool) Execute(ctx context.Context, input json.RawMessage) too
 		}
 		fmt.Fprintf(&b, "## %s\n%s\n\n", id, text)
 	}
+	if uncollected > 0 {
+		fmt.Fprintf(&b, "## still running\n%d task(s) had not finished when this collection stopped; they are still going and can be collected again.\n", uncollected)
+	}
 	return tools.Result{Content: strings.TrimSpace(b.String())}
+}
+
+// delegationSchema is the input schema both delegation tools share: which
+// agent, and what to tell it. One function because the two schemas were
+// identical and drifting apart would mean the model learning two shapes
+// for the same argument.
+func delegationSchema(names []string) json.RawMessage {
+	enum, _ := json.Marshal(names)
+	return json.RawMessage(fmt.Sprintf(
+		`{"type":"object","properties":{"agent":{"type":"string","enum":%s},"prompt":{"type":"string","description":"self-contained instructions for the sub-agent; it has no access to this conversation's history"}},"required":["agent","prompt"]}`,
+		enum,
+	))
 }
 
 // writeAgentList renders the name/description list both delegation tools

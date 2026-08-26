@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -42,6 +44,9 @@ const (
 	SpanDelegate = "delegate"
 	// SpanFallback is the turn moving down the fallback chain.
 	SpanFallback = "fallback"
+	// SpanRetry is the turn asking the same endpoint again after a
+	// transient failure, before any fallback is considered.
+	SpanRetry = "retry"
 	// SpanCompact is the history being summarized or trimmed.
 	SpanCompact = "compact"
 )
@@ -77,10 +82,11 @@ type Record struct {
 	DurationMS   int64  `json:"duration_ms,omitempty"`
 	FinishReason string `json:"finish_reason,omitempty"`
 
-	// Fallbacks and Compactions are counts for the turn so far, so a
-	// turn.end record answers "did this turn have a bad time?" without
-	// reading the lines before it.
+	// Fallbacks, Retries and Compactions are counts for the turn so far,
+	// so a turn.end record answers "did this turn have a bad time?"
+	// without reading the lines before it.
 	Fallbacks   int `json:"fallbacks,omitempty"`
+	Retries     int `json:"retries,omitempty"`
 	Compactions int `json:"compactions,omitempty"`
 
 	Error  string `json:"error,omitempty"`
@@ -101,6 +107,12 @@ const recentSize = 500
 type Writer struct {
 	dir string
 
+	// Retention. Age is in days and bounds how long a day's file is
+	// kept; size is in bytes and bounds the directory as a whole. Zero
+	// size means no size cap. See prune.
+	maxAgeDays   int
+	maxTotalSize int64
+
 	mu     sync.Mutex
 	day    string
 	file   *os.File
@@ -109,9 +121,22 @@ type Writer struct {
 	filled bool
 }
 
+// DefaultMaxAgeDays is how long a day's trace file is kept when nothing
+// says otherwise. A month covers "why was last week slow" and every
+// debugging conversation these files have actually been used in, and it
+// bounds a daemon left running for a year at roughly thirty files.
+const DefaultMaxAgeDays = 30
+
 // Open prepares a writer over dir, creating it if needed. The file itself
 // is opened lazily, on the first record, so turning tracing on in a
 // session that then writes nothing leaves nothing behind.
+//
+// Open deletes nothing. Pruning is destructive and irreversible, so it
+// runs only after the effective bounds are known: at SetRetention, which
+// the daemon calls with the configured values right after Open, and at
+// each day rotation. Pruning here under the default would delete files a
+// longer configured retention was about to protect, before that
+// configuration had any chance to say so.
 func Open(dir string) (*Writer, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("trace: no directory")
@@ -119,7 +144,26 @@ func Open(dir string) (*Writer, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("trace: create %s: %w", dir, err)
 	}
-	return &Writer{dir: dir, recent: make([]Record, recentSize)}, nil
+	return &Writer{dir: dir, recent: make([]Record, recentSize), maxAgeDays: DefaultMaxAgeDays}, nil
+}
+
+// SetRetention bounds the trace directory: files older than maxAgeDays
+// are removed, and when maxTotalMB is nonzero the oldest files go until
+// the directory fits under it. maxAgeDays <= 0 restores the default age
+// rather than keeping forever, because "forever" is the bug this exists
+// to fix; a caller that truly wants that can not call Open.
+func (w *Writer) SetRetention(maxAgeDays, maxTotalMB int) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if maxAgeDays <= 0 {
+		maxAgeDays = DefaultMaxAgeDays
+	}
+	w.maxAgeDays = maxAgeDays
+	w.maxTotalSize = int64(maxTotalMB) * 1024 * 1024
+	w.pruneLocked(time.Now())
 }
 
 // Write appends one record. Failures are dropped rather than returned: a
@@ -167,7 +211,82 @@ func (w *Writer) rotate(at time.Time) error {
 		return err
 	}
 	w.file, w.day = f, day
+	// The day changed, so yesterday's file just became prunable history.
+	// Once per day is the right cadence: retention is measured in days,
+	// and checking per record would be all cost and no new answer.
+	w.pruneLocked(at)
 	return nil
+}
+
+// pruneLocked removes trace files past the retention bounds; called
+// under the lock. Age goes first, read from the date in the file's own
+// name rather than from mtime, because the name is what rotation wrote
+// and mtime is whatever the filesystem or a backup tool made of it.
+// Then, if a size cap is set, the oldest survivors go until the
+// directory fits. Today's file is never removed: it is the one being
+// written.
+//
+// Failures are ignored file by file, for the same reason Write drops
+// its own: retention must never be the reason a turn fails, and a file
+// that cannot be removed today will be older tomorrow.
+func (w *Writer) pruneLocked(now time.Time) {
+	entries, err := os.ReadDir(w.dir)
+	if err != nil {
+		return
+	}
+	today := now.Format("2006-01-02")
+	cutoff := now.AddDate(0, 0, -w.maxAgeDays).Format("2006-01-02")
+
+	// The files this writer owns, oldest first. The date-named form
+	// sorts chronologically as text, so the names are the order.
+	type traceFile struct {
+		name string
+		day  string
+		size int64
+	}
+	var files []traceFile
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "localcode-") || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		day := strings.TrimSuffix(strings.TrimPrefix(name, "localcode-"), ".jsonl")
+		if _, perr := time.Parse("2006-01-02", day); perr != nil {
+			// Not a rotation-named file. Somebody else's; leave it.
+			continue
+		}
+		info, ierr := e.Info()
+		var size int64
+		if ierr == nil {
+			size = info.Size()
+		}
+		files = append(files, traceFile{name: name, day: day, size: size})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].day < files[j].day })
+
+	var kept []traceFile
+	for _, f := range files {
+		if f.day < cutoff && f.day != today {
+			os.Remove(filepath.Join(w.dir, f.name))
+			continue
+		}
+		kept = append(kept, f)
+	}
+
+	if w.maxTotalSize <= 0 {
+		return
+	}
+	var total int64
+	for _, f := range kept {
+		total += f.size
+	}
+	for _, f := range kept {
+		if total <= w.maxTotalSize || f.day == today {
+			break
+		}
+		os.Remove(filepath.Join(w.dir, f.name))
+		total -= f.size
+	}
 }
 
 // Recent returns up to n of the most recent records, oldest first,

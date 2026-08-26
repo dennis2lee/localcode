@@ -108,7 +108,8 @@ func TestADelegateHookCanRefuseASubAgent(t *testing.T) {
 // written. It fires after the decision, because the decision is not a
 // hook's to make: a model it does not want is a pre_model matter.
 func TestARetryHookSeesTheModelSwitch(t *testing.T) {
-	srv, _ := failingServer(t, 503, "service unavailable", 1)
+	quickRetries(t)
+	srv, _ := failingServer(t, 503, "service unavailable", 3)
 	defer srv.Close()
 	loop := newFallbackLoop(t, srv.URL)
 	loop.SetSmartAgentEnabled(true)

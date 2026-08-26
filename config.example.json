@@ -96,6 +96,10 @@
       "grep *"
     ]
   },
+  "//trace_max_age_days": "How long a day of Smart Agent's turn log in ~/.localcode/trace/ is kept. 30 when unset; zero or below means that default, not \"keep forever\". See docs/USAGE.md.",
+  "trace_max_age_days": 30,
+  "//trace_max_total_mb": "Optional cap on the whole trace directory. When set, the oldest files go until it fits; today's file is never removed. Unset (0) means no size cap. See docs/USAGE.md.",
+  "trace_max_total_mb": 0,
   "//smart_agent": "Off by default. On, the session's own model becomes an orchestrator with six built-in specialist sub-agents (explore, librarian, oracle, plan, implement, verify), each routed to whichever profile above suits it. Name a profile smart-quick, smart-balanced or smart-deep to pin that routing by hand. Also togglable from the settings window and with /config smart_agent on|off. See docs/USAGE.md.",
   "smart_agent": false,
   "skip_permissions": false

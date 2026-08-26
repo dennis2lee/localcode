@@ -166,7 +166,7 @@ The point is a config.json that can be committed to a repository, copied between
 | `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. |
 | `profiles` | A named provider and model pairing. `max_tokens`, `temperature`, `context_window` and `keep_going` are optional. |
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
-| `max_concurrent_tasks` | Caps how many background tasks run at once. Unset means 1, so tasks queue rather than run together. |
+| `max_concurrent_tasks` | Caps how many **background** tasks run at once. Unset means 1, so background tasks queue rather than run together. Synchronous `Task` delegation is not counted against it, because a caller that is blocked cannot start a second one and holding a slot while waiting for a nested child would deadlock against itself. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
 | `skip_permissions` | Turns every "ask" into "allow". Off unless set; explicit deny rules still deny. See [Skipping confirmations](#skipping-confirmations-entirely). |
@@ -176,6 +176,8 @@ The point is a config.json that can be committed to a repository, copied between
 | `auto_compact_enabled` | Automatic compaction past 80% of the window. On unless set to false; also `/config auto_compact`. |
 | `auto_memory_enabled` | The notes the model keeps for itself across sessions. On unless set to false. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
+| `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
+| `trace_max_total_mb` | Optional cap on the whole trace directory. When set, the oldest files go until it fits; today's file is never removed. See [What it did](#the-turn-log). |
 | `default_profile` | The profile used when an agent name resolves to nothing. |
 
 #### Profile fields
@@ -877,8 +879,11 @@ Sessions are identified and resumed by ID, so a `title` is purely for display.
 * A rename records a `session.renamed` event.
 * Deleting removes the session and its JSONL and metadata files permanently. It cannot be undone.
 * Deleting is refused with 409 if that session has a turn in progress.
-* Deleting a parent does not cascade to child sessions created by background tasks. They stay, invisible in the list.
-* Delete all is refused with 409 if **any** session has a turn running, and nothing is deleted, so a partial delete never leaves things in an unclear state.
+* **Deleting cascades to everything the session started.** A background task runs in a child session of its own, invisible and unlisted, and a task can delegate again, so the tree can be several levels deep. Deleting the conversation stops every running descendant, waits for it to unwind, and then removes all of their logs and metadata along with the parent's. Nothing is left running and nothing is left on disk.
+* A task that was stopped this way reports a stopped outcome rather than an empty answer, so a collection in flight can tell "the session went away" from "the task had nothing to say".
+* A new background task cannot be launched under a session while it is being deleted. Deletion and delegation share one claim: a delegation already under way is waited for and included in the stop, and one that starts afterwards is refused with an error saying the session is going away. There is no order in which a delete and a delegation can interleave that leaves work running or a session behind.
+* Delete all is refused with 409 if **any** session has a turn running, and nothing is deleted, so a partial delete never leaves things in an unclear state. It stops running background work first, the same way a single delete does.
+* While delete all is running, starting a turn, creating a session and forking one are all refused with 409. The refusal is decided and registered in one step rather than checked and then acted on, so a request that was already past its check when delete all began is waited for and included, rather than committing into a store that is being emptied. For a fork the window opens before the source conversation is read, not just before the copy is created, because a fork depends on state: a copy made from a snapshot taken outside the window would let a deleted conversation reappear. There is no order in which the two can interleave that leaves a session behind, removes a log from under a turn, or recreates a conversation from one that was just deleted.
 
 ### Context window management
 
@@ -1073,15 +1078,28 @@ The idea comes from opencode's subagent and model matching, such as `oh-my-openc
 
 **The `Task` tool** registers automatically once `agents` has 2 or more entries. When the model calls `Task({"agent":"explore","prompt":"..."})`:
 
-1. A new `explore` session is created, recording `task.spawned` on the parent, and waits on the `max_concurrent_tasks` semaphore.
+1. A new `explore` session is created, recording `task.spawned` on the parent. It does not queue: `max_concurrent_tasks` bounds background fan out, and a synchronous delegation cannot fan out.
 2. One turn runs **synchronously** with `explore`'s profile, prompt, and tools. Unlike [background tasks](#background-tasks), the delegating agent's turn waits for this.
 3. `explore`'s final answer text is returned as the tool result, and the delegating agent continues from it.
 
-Delegation deeper than 3 levels is refused automatically, so agents cannot recurse into each other forever.
+Delegation deeper than 3 levels is refused automatically, so agents cannot recurse into each other forever. The depth travels with the delegation, including into a background task, so no mixture of `Task` and `TaskBackground` gets a fresh allowance.
 
 ### Smart Agent
 
-Off by default. One switch, in the settings window (the gear pill under the prompt), with `/config smart_agent on|off` and `"smart_agent": true` in config.json as the other two ways to set it. The change applies to the next message, on every session on the daemon, and is saved to config.json so it survives a restart.
+Off by default. One switch, in the settings window (the gear pill under the prompt), with `/config smart_agent on|off` and `"smart_agent": true` in config.json as the other two ways to set it. The change applies on every session on the daemon, and is saved to config.json so it survives a restart.
+
+**When the change takes effect.** Work already admitted keeps the setting it was admitted under, all the way through:
+
+| Unit of work | Sees the change |
+|---|---|
+| A message not yet sent | Yes, immediately |
+| A turn already running | No. Its agent roster, tool allowlist, the delegation roster its `Task` and `TaskBackground` schemas advertise, fallback chain, cache markers, credential guards and turn log all stay as they were when it started, even if it is in a long tool loop |
+| A sub agent started by `Task` | No. It runs under the state its parent turn was admitted with |
+| A background task launched with `TaskBackground` | No, including while it is waiting for a free slot. A specialist admitted with a read only tool list starts with that list whenever it eventually runs |
+
+The alternative was rereading the switch at every point that consults it, which let a single turn run half enabled.
+
+If the settings window cannot write config.json it says so beside the switch: the change is applied to the running daemon either way, and the warning is only about whether it will survive a restart.
 
 What it turns on is a way of working rather than a preference, which is why it is opt in: one request can become several model calls against several contexts. That is the point of it and it is also a bill nobody agreed to by installing an update.
 
@@ -1092,10 +1110,11 @@ What it turns on is a way of working rather than a preference, which is why it i
 | Six specialist agents | `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. They exist without being configured, and disappear again when the switch is turned off. |
 | An orchestration prompt | Appended to the system prompt of top level sessions only. It tells the model to work out what is being asked, send wide reading to a sub agent, do the narrow work itself, verify before reporting, and say what it checked. |
 | `TaskBackground` and `TaskCollect` | Launch several specialists at once and pick up the answers together, instead of waiting for each in turn. |
-| [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by moving to the next profile, re-deriving the prompt for the model it moved to. |
+| [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by retrying the same endpoint with a bounded backoff, then moving to the next profile, re-deriving the prompt for the model it moved to. |
 | [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
-| [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas and system prompt are marked as the stable prefix, so the provider can serve them from cache. |
-| [Two guards](#secrets-and-the-workspace-boundary) | Credential files are refused, and paths outside the session's workspace are asked about. |
+| [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas, the system prompt and the tail of the conversation are marked, so the provider can serve the unchanged part of every request from cache. |
+| [Two guards](#secrets-and-the-workspace-boundary) | Credential files are refused, and paths outside the session's workspace — symlinks resolved — are asked about. |
+| [A trust boundary](#the-trust-boundary) | The system prompt states which sources are instructions and which are data, and MCP output arrives framed as data. |
 
 #### The specialists
 
@@ -1145,6 +1164,8 @@ To settle it by hand, name a profile `smart-quick`, `smart-balanced` or `smart-d
 1. `TaskBackground({"agent":"explore","prompt":"..."})` three times. Each returns a task id straight away and the orchestrator keeps working.
 2. `TaskCollect({})` once. It waits for all of them and returns the answers in the order they were launched, so the model can match each answer to what it asked. `TaskCollect({"task_id":"..."})` takes just one and leaves the rest outstanding.
 
+Stopping a turn stops the collection, not the tasks. Anything that had not finished stays outstanding and can be collected again; the answer is not lost because the turn that asked for it went away. `TaskCollect` says how many were left running.
+
 A session may have 8 launched and uncollected tasks at once. The ninth is refused, and says to collect first. It is a ceiling rather than a queue on purpose: every outstanding task is a model spending tokens in a session nobody is reading, so hitting it is a signal.
 
 Background tasks appear in the Web UI's right panel while they run, the same as tasks started through the API.
@@ -1165,10 +1186,13 @@ Name the somewhere else on the profile.
 
 | Detail | Behaviour |
 |---|---|
-| When it fires | Rate limits and quota, 5xx and gateway errors, a connection that is refused or times out, a model or credential the endpoint does not have |
-| When it does not | A conversation too long for the window, which is summarized and retried on the same model instead, and a stream that had already written part of an answer, since falling back there would leave the conversation carrying both halves |
+| Before it fires | A transient failure — a rate limit, a 5xx, a dropped connection — is retried on the same endpoint first: up to two attempts with a 1s then 2s backoff. The common rate limit is a blip, and the fallback is a different model with a different cache prefix, so the chain is spent only when waiting did not help. Credential and model-identity failures skip the retry, because a 401 will be a 401 in two seconds too. The retry is counted only when it is actually attempted: a turn cancelled during the backoff ends there, recording the cancellation rather than a retry or a fallback that never reached a provider |
+| When it fires | Rate limits and quota that outlast the retries, 5xx and gateway errors, a connection that is refused or times out, a model or credential the endpoint does not have |
+| When it does not | A conversation too long for the window, which is summarized and retried on the same model instead; a request another endpoint would refuse the same way, such as a bad parameter or a tool schema the API will not take; and a stream that had already written part of an answer, since falling back there would leave the conversation carrying both halves |
+| How it decides | On what the error says the cause was, not on which exception class carried it. Bedrock raises `ValidationException` for a model id that does not exist in the region, for an account not entitled to the model, and for a request field the model will not accept: the first two move to the next profile and the third does not |
+| What a refusal costs | Nothing. An error the chain does not cover ends the turn without contacting a fallback and without consuming a link, so a rate limit arriving later still gets the first fallback rather than the second |
 | Order | The primary profile's own list, in order. The list is flat: a fallback's own `fallback` is not followed, so a chain cannot loop and its length is what it says |
-| Visibility | Each switch is recorded in the transcript, naming what failed and what took over. A session that quietly got worse is the failure mode this avoids |
+| Visibility | Each retry and each switch is recorded in the transcript, naming what failed and what happens next. A session that quietly got worse, or quietly paused, is the failure mode this avoids |
 | Validation | Names are checked when the config loads, not when something breaks. A chain is read exactly when something has already gone wrong |
 
 **The model is not the only thing that changes.** Both the orchestration prompt and the per-model formatting note are written per model family, so falling back re-derives the whole request rather than resending the failed one with a different model id. A local open weight model that catches an overflow from a hosted flagship gets the prompt written for it. This is the reason `fallback` is part of Smart Agent rather than a standalone setting.
@@ -1182,12 +1206,12 @@ A multi agent turn cannot be debugged from a transcript. The transcript shows wh
 | Field | Meaning |
 |---|---|
 | `trace_id` | One per top level turn, inherited by every sub agent it spawns. This is what makes a fan out to three specialists one story rather than four unrelated logs |
-| `span` | `turn.start`, `model`, `tool`, `delegate`, `fallback`, `compact`, `turn.end` |
+| `span` | `turn.start`, `model`, `tool`, `delegate`, `retry`, `fallback`, `compact`, `turn.end` |
 | `session_id`, `parent_session_id` | Which session, and whose child it is |
 | `agent`, `profile`, `model`, `provider` | Who answered, on what |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | What it cost. The read count is how you tell a working cache breakpoint from one that is doing nothing |
 | `tool`, `duration_ms` | Which tool and how long it took, timed around the whole call so a wait on a permission prompt reads as a wait |
-| `finish_reason`, `fallbacks`, `compactions` | On `turn.end`: did this turn have a bad time |
+| `finish_reason`, `fallbacks`, `retries`, `compactions` | On `turn.end`: did this turn have a bad time |
 
 ```bash
 jq -c 'select(.trace_id=="a1b2c3d4e5f6a7b8")' ~/.localcode/trace/localcode-2026-08-25.jsonl
@@ -1195,17 +1219,21 @@ jq -c 'select(.trace_id=="a1b2c3d4e5f6a7b8")' ~/.localcode/trace/localcode-2026-
 
 `GET /api/trace` returns the last records held in memory, for the question asked while a session is still open. `?limit=`, `?session=` and `?trace=` narrow it. Nothing is written with Smart Agent off, and the file is not created until the first record.
 
+**Retention.** Files older than 30 days are removed, so a daemon left running for months does not accumulate one file per day forever. The removal happens once the configured bounds are installed at startup, and again at each day rotation — never before the configuration is read, so a longer configured retention protects its own files from the very first prune. Two config keys adjust it: `trace_max_age_days` changes the age (values at or below zero mean the default, not "keep forever"), and `trace_max_total_mb`, when set, additionally removes the oldest files until the directory fits under it. The file being written today is never removed.
+
 #### Prompt cache breakpoints
 
 The stable half of an agent request is the tool schemas and the system prompt, and in a long session it is the same bytes every turn. Smart Agent marks the end of it so the provider can serve it from cache, at roughly a tenth of the price of reading it again.
 
 | Backend | What is marked |
 |---|---|
-| Anthropic API | `cache_control` on the last tool and on the system prompt |
-| Bedrock | A `cachePoint` after the tools and after the system prompt |
+| Anthropic API | `cache_control` on the last tool, on the system prompt, and on the last block of each of the last two messages |
+| Bedrock | A `cachePoint` after the tools, after the system prompt, and after each of the last two messages |
 | openai-compatible | Nothing. Local servers do their own prefix caching with nothing to declare |
 
-A breakpoint the provider does not honour is harmless: prefixes below the provider's minimum (about 1024 tokens on most Claude models) are ignored and the request is priced as it was before. The conversation itself is deliberately not marked, since a breakpoint there would have to move every turn and rewrite the whole history into the cache at the write premium each time.
+The conversation marks move with the history, and that is cheaper than it sounds: the history is append-only, so each request's marked prefix contains the previous one's, the provider serves the shared part at the cache rate, and only the new suffix is written at the premium. Two moving marks rather than one because a cache lookup only checks a bounded distance behind each breakpoint, and one long tool round can outrun it; the older mark keeps that miss from reaching back to the start of the conversation. Four marks total, which is the Anthropic API's limit.
+
+A breakpoint the provider does not honour is harmless: prefixes below the provider's minimum (about 1024 tokens on most Claude models) are ignored and the request is priced as it was before.
 
 Because each specialist runs in its own session, each has its own stable prefix and its own cache. That is a reason to delegate rather than a cost of it.
 
@@ -1223,7 +1251,20 @@ Denied rather than asked, because "may I read your SSH private key?" has one rig
 
 `bash` is deliberately not covered. A shell command is not a path, and matching `cat .env` out of an arbitrary command line catches the honest case and misses every other one. The shell has its own rules.
 
-**Paths outside the workspace are asked about.** A tool call on an absolute path outside the session's own directory turns an `allow` into an `ask`. Not a refusal: reading a system header or a file in another checkout is ordinary work. It is the difference between an agent that stays where it was pointed and one that is discovered to have been somewhere else. A `deny` stays a `deny`, and an `ask` is already asking.
+**Paths outside the workspace are asked about.** A tool call on a path that lands outside the session's own directory turns an `allow` into an `ask`. Not a refusal: reading a system header or a file in another checkout is ordinary work. It is the difference between an agent that stays where it was pointed and one that is discovered to have been somewhere else. A `deny` stays a `deny`, and an `ask` is already asking.
+
+The comparison is between physical paths: symlinks are resolved on both sides before the question is decided, so a link inside the workspace pointing at `~/.aws` is outside, which is where it actually leads, and a workspace that is itself reached through a link (macOS's `/tmp`) still contains its own files. A path that cannot be resolved at all — a link loop, a permission failure — is treated as outside, which costs one question rather than one blind allow. A file about to be created is judged by its closest existing ancestor, so a new file under a link is judged by where the link leads — and a dangling symlink, whose own target does not exist yet, is followed to that target rather than judged by where it sits, because writing through it is what creates the file there.
+
+#### The trust boundary
+
+Everything a turn reads arrives as text, and not all of it deserves the same standing. With Smart Agent on, two things say so:
+
+* **The system prompt states the ranking**, for the orchestrator and every specialist: instructions come from the user, the system prompt and the project's own rule files; tool results — file contents, command output, fetched pages, MCP output — are data, to be used but not obeyed. A tool result containing text addressed to the model is content to surface, not an instruction to follow.
+* **MCP output is framed as data on arrival.** An MCP server's output is the least trusted text a turn reads — another process, possibly another machine, its words going straight into the model — so it is wrapped in a marker naming the server and saying not to follow instructions inside it, rather than handed over bare. Error results are wrapped too — the server controls both its text and its error flag, so an unlabelled error path would just be a way around the label.
+
+This is labelling, not enforcement, and it is not claimed as more: a model can still be talked into something by a sufficiently crafted input. What it changes is the default — the model has been told which sources rank where before the crafted input arrives. The permission system stays the enforcement layer: every MCP tool call still asks, whatever its description says.
+
+**MCP servers are pinned on first use.** Tool descriptions steer the model, and a server whose descriptions change between runs changes what the model is told it can do, silently. Each server's advertised surface — every tool's name, description and schema — is fingerprinted into `~/.localcode/mcp-pins.json` on first connect, and a change since the last run is reported as a startup warning naming the server. Warn once, not refuse: tools also change because somebody upgraded the server, and the person who did not upgrade it is the one the warning is for. The pin file works with Smart Agent on or off, since it guards startup rather than a turn.
 
 #### The prompt is written for the model
 
@@ -1360,7 +1401,7 @@ curl -X POST http://127.0.0.1:4096/api/sessions/<parent-id>/tasks \
   -d '{"agent":"explore","prompt":"find every TODO under src/"}'
 ```
 
-`task.spawned` and `task.status` events, carrying running, completed, failed, or cancelled, flow into the parent session's stream and appear live in the Web UI sidebar and the TUI transcript. Concurrency is capped by `max_concurrent_tasks`.
+`task.spawned` and `task.status` events, carrying running, completed, failed, or cancelled, flow into the parent session's stream and appear live in the Web UI sidebar and the TUI transcript. Background concurrency is capped by `max_concurrent_tasks`; a task cancelled while it is still queued reaches a terminal status like any other, and collecting it returns the cancellation rather than waiting.
 
 ### Switching models
 

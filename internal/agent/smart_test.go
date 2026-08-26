@@ -169,7 +169,7 @@ func TestTurningItOnAddsTheRosterAndTheOrchestrationPrompt(t *testing.T) {
 	// The roster reaches the model through the Task tool's description, so
 	// a specialist that is not named there cannot be delegated to.
 	spec := ""
-	for _, tl := range loop.Tools.SpecsFor(nil) {
+	for _, tl := range loop.Tools.SpecsFor(context.Background(), nil) {
 		if tl.Name == "Task" {
 			spec = tl.Description + string(tl.InputSchema)
 		}
@@ -287,7 +287,8 @@ func TestASpecialistThatCallsADelegationToolIsRefused(t *testing.T) {
 	if _, err := loop.Store.CreateSession("child", "", "explore", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	allowed := loop.toolsForTurn(loop.agentConfig("explore"))
+	ctx := context.Background()
+	allowed := loop.toolsForTurn(ctx, loop.agentConfig(ctx, "explore"))
 	for _, name := range []string{"Task", "TaskBackground", "TaskCollect", "bash"} {
 		if tools.IsAllowed(allowed, name) {
 			t.Errorf("%s would be allowed to run for the explore agent", name)
@@ -363,4 +364,39 @@ type cacheRecordingProvider struct {
 func (p *cacheRecordingProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
 	*p.seen = append(*p.seen, req.CachePrefix)
 	return p.inner.Chat(ctx, req)
+}
+
+// Item 28, the labelling half. Which sources are instructions and which
+// are data is stated in the system prompt of every turn run under Smart
+// Agent — and not for anyone else, because changing every request's
+// prompt is a behaviour change the bundle boundary exists to contain.
+func TestTheTrustBoundaryRidesWithTheBundle(t *testing.T) {
+	srv, recordedReqs := failingServer(t, 200, "", 0)
+	defer srv.Close()
+
+	loop := newFallbackLoop(t, srv.URL)
+	loop.SetSmartAgentEnabled(true)
+	if _, err := loop.Store.CreateSession("on", "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), "on", "general-purpose", "hello"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	reqs := recordedReqs()
+	if len(reqs) == 0 || !strings.Contains(reqs[0].system, "Instruction sources are not equal") {
+		t.Error("a Smart Agent turn's system prompt does not state the trust boundary")
+	}
+
+	loop2 := newFallbackLoop(t, srv.URL)
+	if _, err := loop2.Store.CreateSession("off", "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := loop2.SendMessage(context.Background(), "off", "general-purpose", "hello"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	reqs = recordedReqs()
+	last := reqs[len(reqs)-1]
+	if strings.Contains(last.system, "Instruction sources are not equal") {
+		t.Error("the trust boundary leaked into a turn with Smart Agent off")
+	}
 }

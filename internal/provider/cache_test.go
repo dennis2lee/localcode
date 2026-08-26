@@ -147,3 +147,99 @@ func TestBedrockAddsACachePointWhenAsked(t *testing.T) {
 		t.Errorf("got %d entries without asking, want just the tool", len(plain.Tools))
 	}
 }
+
+// Item 25. The conversation is the bigger half of a long session, and it
+// used to carry no breakpoint at all. The strategy is the last block of
+// each of the last two messages: the history is append-only, so the
+// previous request's marked prefix is a prefix of this one and reads at
+// the cache rate, with only the new suffix written at the premium.
+func TestAnthropicMarksTheConversationTailWhenAsked(t *testing.T) {
+	body := captureAnthropicRequest(t, ChatRequest{
+		Model:  "claude-opus-5",
+		System: "you are helpful",
+		Messages: []Message{
+			{Role: RoleUser, Content: []Block{TextBlock("first")}},
+			{Role: RoleAssistant, Content: []Block{TextBlock("reply")}},
+			{Role: RoleUser, Content: []Block{TextBlock("second")}},
+		},
+		MaxTokens:   100,
+		CachePrefix: true,
+	})
+
+	msgs := body["messages"].([]any)
+	if len(msgs) != 3 {
+		t.Fatalf("got %d messages", len(msgs))
+	}
+	control := func(i int) any {
+		blocks := msgs[i].(map[string]any)["content"].([]any)
+		return blocks[len(blocks)-1].(map[string]any)["cache_control"]
+	}
+	if control(0) != nil {
+		t.Error("a breakpoint reached past the last two messages")
+	}
+	if control(1) == nil || control(2) == nil {
+		t.Error("the last two messages carry no cache breakpoints")
+	}
+}
+
+// Unasked, the conversation stays untouched — the moving breakpoints are
+// part of the same opt-in as the stable ones.
+func TestAnthropicLeavesTheConversationAloneWhenNotAsked(t *testing.T) {
+	body := captureAnthropicRequest(t, ChatRequest{
+		Model:  "claude-opus-5",
+		System: "you are helpful",
+		Messages: []Message{
+			{Role: RoleUser, Content: []Block{TextBlock("first")}},
+			{Role: RoleUser, Content: []Block{TextBlock("second")}},
+		},
+		MaxTokens: 100,
+	})
+	for i, m := range body["messages"].([]any) {
+		for _, b := range m.(map[string]any)["content"].([]any) {
+			if b.(map[string]any)["cache_control"] != nil {
+				t.Errorf("message %d carries a breakpoint without CachePrefix", i)
+			}
+		}
+	}
+}
+
+// Four is the API's limit, and the request must stay inside it however
+// the conversation is shaped: two stable marks plus at most two moving
+// ones.
+func TestAnthropicNeverExceedsFourBreakpoints(t *testing.T) {
+	msgs := []Message{}
+	for i := 0; i < 6; i++ {
+		msgs = append(msgs, Message{Role: RoleUser, Content: []Block{TextBlock(fmt.Sprintf("m%d", i))}})
+	}
+	body := captureAnthropicRequest(t, ChatRequest{
+		Model:       "claude-opus-5",
+		System:      "you are helpful",
+		Messages:    msgs,
+		Tools:       []Tool{{Name: "a", InputSchema: json.RawMessage(`{}`)}},
+		MaxTokens:   100,
+		CachePrefix: true,
+	})
+	count := 0
+	if sys, ok := body["system"].([]any); ok {
+		for _, b := range sys {
+			if b.(map[string]any)["cache_control"] != nil {
+				count++
+			}
+		}
+	}
+	for _, tl := range body["tools"].([]any) {
+		if tl.(map[string]any)["cache_control"] != nil {
+			count++
+		}
+	}
+	for _, m := range body["messages"].([]any) {
+		for _, b := range m.(map[string]any)["content"].([]any) {
+			if b.(map[string]any)["cache_control"] != nil {
+				count++
+			}
+		}
+	}
+	if count > 4 {
+		t.Errorf("%d breakpoints on one request; the API allows 4", count)
+	}
+}

@@ -39,6 +39,26 @@ type Tool interface {
 	Execute(ctx context.Context, input json.RawMessage) Result
 }
 
+// Contextual is implemented by a tool whose description or input schema
+// depends on the turn it is being offered to, rather than being the same
+// for the life of the process.
+//
+// The delegation tools are the case this exists for. Their schema carries
+// an enum of the agents that may be delegated to, and that roster depends
+// on whether Smart Agent was on when the turn was admitted. Rendering it
+// from the live setting instead let a turn advertise one roster to the
+// model and accept a different one at execution: the switch flipped
+// mid-turn, the next round's schema lost six names the running turn would
+// still have honoured, and the tool-schema half of the cached prefix
+// changed underneath a turn that was marking it as stable.
+//
+// A tool that does not implement this is asked through Description and
+// InputSchema as before, which is nearly all of them.
+type Contextual interface {
+	DescriptionFor(ctx context.Context) string
+	InputSchemaFor(ctx context.Context) json.RawMessage
+}
+
 // PermissionFunc is asked to approve a side-effecting tool call before it
 // runs. subject is the same pattern-matchable string PermissionSubject
 // exposes ("" if the tool has none) — passed through so an "always allow"
@@ -111,15 +131,17 @@ func (r *Registry) Register(t Tool) {
 
 // Specs returns provider-facing tool specs in registration order, for
 // inclusion in a ChatRequest.
-func (r *Registry) Specs() []provider.Tool {
-	return r.SpecsFor(nil)
+func (r *Registry) Specs(ctx context.Context) []provider.Tool {
+	return r.SpecsFor(ctx, nil)
 }
 
 // SpecsFor is like Specs but restricted to the named tools, preserving
 // registration order. A nil/empty allowed list means no restriction (same
 // as Specs). Unknown names are silently skipped — an agent config
 // referencing a typo'd tool name just gets fewer tools, not a crash.
-func (r *Registry) SpecsFor(allowed []string) []provider.Tool {
+// ctx is the turn's, so a Contextual tool renders the same schema for
+// every round of one turn.
+func (r *Registry) SpecsFor(ctx context.Context, allowed []string) []provider.Tool {
 	allowSet := toSet(allowed)
 	out := make([]provider.Tool, 0, len(r.order))
 	for _, name := range r.order {
@@ -127,11 +149,15 @@ func (r *Registry) SpecsFor(allowed []string) []provider.Tool {
 			continue
 		}
 		t := r.tools[name]
-		out = append(out, provider.Tool{
-			Name:        t.Name(),
-			Description: t.Description(),
-			InputSchema: t.InputSchema(),
-		})
+		spec := provider.Tool{Name: t.Name()}
+		if c, ok := t.(Contextual); ok {
+			spec.Description = c.DescriptionFor(ctx)
+			spec.InputSchema = c.InputSchemaFor(ctx)
+		} else {
+			spec.Description = t.Description()
+			spec.InputSchema = t.InputSchema()
+		}
+		out = append(out, spec)
 	}
 	return out
 }

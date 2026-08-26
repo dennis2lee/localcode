@@ -159,6 +159,12 @@ func (c *Config) merge(other *Config) {
 	if other.SmartAgent != nil {
 		c.SmartAgent = other.SmartAgent
 	}
+	if other.TraceMaxAgeDays != 0 {
+		c.TraceMaxAgeDays = other.TraceMaxAgeDays
+	}
+	if other.TraceMaxTotalMB != 0 {
+		c.TraceMaxTotalMB = other.TraceMaxTotalMB
+	}
 	for event, list := range other.Hooks {
 		if c.Hooks == nil {
 			c.Hooks = hooks.Config{}

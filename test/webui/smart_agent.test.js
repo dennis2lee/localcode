@@ -50,7 +50,11 @@ test('a daemon with it already on opens with the box ticked', async () => {
 });
 
 test('ticking it tells the daemon', async () => {
-  const app = await load({ routes: { 'POST /api/settings/smart-agent': { status: 204 } } });
+  const app = await load({
+    routes: {
+      'POST /api/settings/smart-agent': { smart_agent: true, applied: true, persisted: true },
+    },
+  });
   await openSettings(app);
 
   app.el('smart-agent-checkbox').checked = true;
@@ -72,7 +76,7 @@ test('unticking it tells the daemon too', async () => {
         smart_agent: true, smart_agent_roster: ['explore'],
         skip_permissions: false, permission_rules: {}, can_edit_permissions: true,
       },
-      'POST /api/settings/smart-agent': { status: 204 },
+      'POST /api/settings/smart-agent': { smart_agent: false, applied: true, persisted: true },
     },
   });
   await openSettings(app);
@@ -113,4 +117,55 @@ test('the switch follows a change made somewhere else', async () => {
   await app.settle();
 
   assert.equal(app.el('smart-agent-checkbox').checked, true);
+});
+
+// SA6. Applied and persisted are two different things, and only one of
+// them decides what the box says. A change the daemon is running has to
+// show as on even when config.json could not be written, because the
+// switch governs which model answers and which tools an agent may call;
+// the unsaved part is a warning beside it, not a reason to lie about the
+// state.
+test('a change that applied but was not saved shows as on, with a warning', async () => {
+  const app = await load({
+    routes: {
+      'POST /api/settings/smart-agent': {
+        smart_agent: true, applied: true, persisted: false,
+        error: 'applied for this run, but failed to persist to config.json: disk is full',
+      },
+    },
+  });
+  await openSettings(app);
+
+  app.el('smart-agent-checkbox').checked = true;
+  app.el('smart-agent-checkbox').fire('change');
+  await app.settle();
+
+  assert.equal(app.el('smart-agent-checkbox').checked, true,
+    'the daemon is running with Smart Agent on, so the box must say so');
+  assert.match(app.el('smart-agent-note').textContent, /^On\./);
+  assert.equal(app.el('smart-agent-warn').hidden, false);
+  assert.match(app.el('smart-agent-warn').textContent, /not saved to config\.json/i);
+  assert.match(app.el('smart-agent-warn').textContent, /disk is full/);
+});
+
+// And the warning does not stick around once a later change saves.
+test('the persistence warning clears on the next successful change', async () => {
+  const app = await load({
+    routes: {
+      'POST /api/settings/smart-agent': { smart_agent: true, applied: true, persisted: false, error: 'disk is full' },
+    },
+  });
+  await openSettings(app);
+  app.el('smart-agent-checkbox').checked = true;
+  app.el('smart-agent-checkbox').fire('change');
+  await app.settle();
+  assert.equal(app.el('smart-agent-warn').hidden, false);
+
+  app.routes['POST /api/settings/smart-agent'] = { smart_agent: false, applied: true, persisted: true };
+  app.el('smart-agent-checkbox').checked = false;
+  app.el('smart-agent-checkbox').fire('change');
+  await app.settle();
+
+  assert.equal(app.el('smart-agent-warn').hidden, true);
+  assert.equal(app.el('smart-agent-warn').textContent, '');
 });

@@ -113,10 +113,23 @@ func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
 
 // handleSetSmartAgent turns the Smart Agent bundle on or off live and,
 // when a config.json path is known, persists it so the choice survives a
-// restart. Same shape as the other settings handlers: the runtime change
-// lands first and is never rolled back by a persistence failure, so a
-// caller that asked for it to apply now gets that, and the error says
-// only the saving part failed.
+// restart. The runtime change lands first and is never rolled back by a
+// persistence failure, so a caller that asked for it to apply now gets
+// that.
+//
+// Which is why this one answers with a body rather than 204-or-500. The
+// two outcomes are not success and failure, they are "applied and saved"
+// and "applied but not saved", and an HTTP error for the second told the
+// client the opposite of what had happened: every caller treats a failed
+// request as a change that did not occur, so the settings panel put the
+// checkbox back and the daemon went on running the state the box now
+// denied. The switch decides which model answers and which tools an agent
+// may call, so a client showing the wrong one is worse than a client
+// showing an unsaved one.
+//
+// applied is therefore always true here, and persisted is the part that
+// can fail. A client should render the switch from applied and the
+// warning from persisted.
 //
 // Nothing is validated here because there is nothing to validate. Turning
 // it on with no profiles configured is legal and inert — no profile means
@@ -132,13 +145,18 @@ func (d *Daemon) handleSetSmartAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Loop.SetSmartAgentEnabled(req.Enabled)
+	resp := map[string]any{
+		"smart_agent": req.Enabled,
+		"applied":     true,
+		"persisted":   true,
+	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetSmartAgentInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
-			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
-			return
+			resp["persisted"] = false
+			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
 		}
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleSetSkipPermissions toggles skip_permissions at runtime and, when a

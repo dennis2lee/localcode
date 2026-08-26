@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +14,40 @@ import (
 	"localcode/internal/session"
 )
 
+// admitTopLevel is the one door every top-level admission goes through:
+// starting a turn, creating a conversation, forking one. It decides and
+// registers in a single step, so delete-all cannot slip between the
+// decision and the commit.
+//
+// One helper rather than the same flag read in each endpoint, because the
+// endpoints are where this gets forgotten. Fork is the proof: it creates a
+// user-visible conversation and had no check at all.
+//
+// Returns a release the caller must call, and false when the request was
+// already answered with a 409.
+func (d *Daemon) admitTopLevel(w http.ResponseWriter) (func(), bool) {
+	release, ok := d.Loop.AdmitTopLevel()
+	if !ok {
+		writeError(w, http.StatusConflict, fmt.Errorf("every session is being deleted; try again in a moment"))
+		return nil, false
+	}
+	// A hook for the tests that force the gap this window closes: the
+	// moment after admission succeeds and before the thing being admitted
+	// has committed. Nil in every build not running those tests.
+	if topAdmitBarrier != nil {
+		topAdmitBarrier()
+	}
+	return release, true
+}
+
+// topAdmitBarrier is test-only. See admitTopLevel.
+var topAdmitBarrier func()
+
+// forkSnapshotBarrier is test-only. It fires inside a fork's admission
+// window, after the source snapshot has been read and before the
+// destination is created. See handleForkSession.
+var forkSnapshotBarrier func()
+
 func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Agent string `json:"agent"`
@@ -24,6 +59,14 @@ func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if req.Agent == "" {
 		req.Agent = "general-purpose"
 	}
+	// Delete-all is removing every session there is. Held open across the
+	// creation rather than checked before it, so a delete cannot claim the
+	// daemon in between and hand back an id it is about to remove.
+	release, ok := d.admitTopLevel(w)
+	if !ok {
+		return
+	}
+	defer release()
 
 	id := fmt.Sprintf("s-%d", time.Now().UnixNano())
 	// Stamped with the workspace live at creation time. Switching the
@@ -63,6 +106,23 @@ func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 // is one the provider rejects outright on the fork's very first message.
 func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	// A fork is a top-level conversation like any other, so it goes
+	// through the same door — and it goes through *before* reading the
+	// source, not just before creating the destination. The fork depends
+	// on state: a window opened after the snapshot would let delete-all
+	// run to completion against the source and then watch a conversation
+	// reappear, copied from a log that no longer exists. Admission-first
+	// gives the whole fork one linearization point: either it reads the
+	// source inside the window and delete-all waits (and then removes the
+	// fork too), or delete-all wins and the fork is refused before it has
+	// read anything.
+	release, ok := d.admitTopLevel(w)
+	if !ok {
+		return
+	}
+	defer release()
+
 	src, err := d.Loop.Store.Get(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
@@ -85,6 +145,13 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+
+	// A hook for the test that forces the state-dependence gap: the
+	// snapshot is captured, the destination does not exist yet. Nil in
+	// every build not running that test.
+	if forkSnapshotBarrier != nil {
+		forkSnapshotBarrier()
 	}
 
 	// ParentID is deliberately left empty rather than pointing at the
@@ -200,29 +267,63 @@ func (d *Daemon) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
-// handleDeleteSession removes a session (and its persisted log, if any)
-// entirely. Refuses to delete a session with an in-flight turn (the same
-// busy guard handleSendMessage uses) so a running turn never writes to a
-// session whose file handle was just closed out from under it.
+// handleDeleteSession removes a session, everything it launched, and all
+// of their persisted logs.
+//
+// The contract is the whole tree, and it is the tree because that is what
+// the user is pointing at. A background task runs in a session of its
+// own, invisible and unlisted, and deleting only the conversation left
+// every one of those behind: still running, still able to edit files, and
+// still on disk, one log per task per delete, unreachable through any
+// list. "Delete this conversation" now means the conversation and the work
+// it started.
+//
+// The order matters and is the reverse of what it was. Stop first, wait
+// for it, and only then remove the records, so nothing is still writing
+// to a log that has just been closed.
+//
+// Two guards, because they cover different things. Claiming the session
+// as busy refuses a delete while a turn is in flight, and stops one from
+// starting during the delete; that covers the visible session's own turn
+// and any synchronous delegation underneath it, which runs inside that
+// same turn. StopSessionTree covers the background children, which outlive
+// turns by design and which no turn registry knows about.
+//
+// The session is claimed rather than held under the tracker's mutex,
+// because stopping a background task means waiting for a model turn to
+// unwind. Holding that mutex for the length of a provider call would
+// freeze every other session's turn on the daemon.
 func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	// Deleting under the lock, rather than after a check: a turn that
-	// began in between would be writing to a session whose file has just
-	// been closed and removed.
-	busy, err := d.turns.whileSessionIdle(id, func() error {
-		return d.Loop.Store.Delete(id)
-	})
-	if busy {
+	// Nothing is going to run under this cancel func; it is here because
+	// claiming the session is what the tracker's turn slot means, and a
+	// claim nobody can cancel would strand the session if this handler
+	// died. The deferred end releases it either way.
+	_, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	if !d.turns.begin(id, cancel) {
 		writeError(w, http.StatusConflict, fmt.Errorf("session %s has a turn in progress", id))
 		return
 	}
-	if err != nil {
+	defer d.turns.end(id)
+
+	// Claim the tree, stop the work, wait for it, and only then remove
+	// what it was writing to. The claim is released last, after the
+	// records are gone: releasing it between the last task stopping and
+	// the sessions being deleted would reopen admission into a tree that
+	// is half deleted.
+	ids, release := d.Loop.StopSessionTree(id)
+	defer release()
+
+	if err := d.Loop.Store.DeleteTree(id); err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	d.Loop.ClearSessionState(id)
-	d.Broker.ForgetSession(id)
+	// A child session can have unanswered permission prompts of its own.
+	for _, sid := range ids {
+		d.Broker.ForgetSession(sid)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -238,21 +339,57 @@ func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request)
 	for i, s := range sessions {
 		ids[i] = s.ID
 	}
+	// The barrier goes up before the busy check, not after.
+	//
+	// It used to be the other way round: check nothing is busy, release
+	// the tracker lock, then spend however long it takes to stop the
+	// background work, then delete. A message arriving in that interval
+	// started a turn the check had already passed, and DeleteAll closed
+	// its log while it was still writing to it. Claiming first means the
+	// check answers a question that stays answered: nothing new can start
+	// anywhere until this returns.
+	release := d.Loop.StopEverything(nil)
+	defer release()
+
+	// A hook for the test that pins the ordering above: it runs at the
+	// moment the busy check is evaluated and asserts the barrier is
+	// already up. Nil in every build that is not running that test.
+	if deleteAllProbe != nil {
+		deleteAllProbe()
+	}
+
 	if busyIDs := d.turns.anyBusy(ids); len(busyIDs) > 0 {
 		writeError(w, http.StatusConflict, fmt.Errorf("sessions with a turn in progress: %v", busyIDs))
 		return
+	}
+
+	// Re-read under the claim rather than trusting the snapshot taken
+	// before it: a session created between the two is one DeleteAll would
+	// remove and this cleanup would miss.
+	current := d.Loop.Store.AllSessions()
+	currentIDs := make([]string, len(current))
+	for i, s := range current {
+		currentIDs[i] = s.ID
+	}
+	if d.Tasks != nil {
+		d.Tasks.StopSession(currentIDs)
+	}
+	for _, sid := range currentIDs {
+		d.Loop.ClearSessionState(sid)
 	}
 
 	if err := d.Loop.Store.DeleteAll(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	for _, s := range sessions {
-		d.Loop.ClearSessionState(s.ID)
-		d.Broker.ForgetSession(s.ID)
+	for _, sid := range currentIDs {
+		d.Broker.ForgetSession(sid)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// deleteAllProbe is test-only. See handleDeleteAllSessions.
+var deleteAllProbe func()
 
 // handleReorderSessions records the order the session panel was dragged
 // into. Cosmetic, and persisted with the rest of a session's metadata, so

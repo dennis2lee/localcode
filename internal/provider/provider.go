@@ -68,12 +68,14 @@ type ChatRequest struct {
 	MaxTokens   int
 	Temperature float64
 
-	// CachePrefix asks the backend to mark a prompt-cache breakpoint at
-	// the end of the stable part of this request, where it has one to
-	// mark. The stable part is the tool schemas and the system prompt:
-	// they are byte-identical from turn to turn, they are the largest
-	// fixed cost in an agent request, and a cache read is about a tenth
-	// the price of reading them again.
+	// CachePrefix asks the backend to mark prompt-cache breakpoints,
+	// where it has them to mark. Two go at the end of the stable part —
+	// the tool schemas and the system prompt, byte-identical from turn
+	// to turn and the largest fixed cost in an agent request — and up to
+	// two more move with the conversation, on the last blocks of the
+	// last two messages. The history is append-only, so each request
+	// reads the previous one's marked prefix at the cache rate and
+	// writes only its own new suffix at the premium.
 	//
 	// A request rather than a guarantee. Providers ignore a breakpoint on
 	// a prefix shorter than their minimum (1024 tokens on most Claude

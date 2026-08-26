@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // resolveShellCommand resolves a whole bash command line by resolving
 // every command in it separately and taking the most cautious answer.
@@ -17,13 +20,13 @@ import "strings"
 // files (output redirection) are never auto-allowed; they downgrade to
 // ask. A deny still wins over them, so an explicit deny rule cannot be
 // escaped by adding a redirect.
-func (c *Config) resolveShellCommand(command string, staticRequiresPermission bool) Decision {
+func (c *Config) resolveShellCommand(ctx context.Context, command string, staticRequiresPermission bool) Decision {
 	worst := DecisionAllow
 	for _, segment := range splitShellSegments(command) {
 		if segment == "" {
 			continue
 		}
-		switch c.resolveSegment(segment, staticRequiresPermission) {
+		switch c.resolveSegment(ctx, segment, staticRequiresPermission) {
 		case DecisionDeny:
 			return DecisionDeny
 		case DecisionAsk:
@@ -76,13 +79,13 @@ var unsafeShellConstructs = []string{"$(", "`", "<(", ">(", ">"}
 // no spelling escapes a prohibition; allow needs both, so unquoting can
 // never widen a permission — a rule the user did not write to cover the
 // literal text cannot start matching it now.
-func (c *Config) resolveSegment(segment string, staticRequiresPermission bool) Decision {
-	raw := c.resolveOne(BashToolName, segment, staticRequiresPermission)
+func (c *Config) resolveSegment(ctx context.Context, segment string, staticRequiresPermission bool) Decision {
+	raw := c.resolveOne(ctx, BashToolName, segment, staticRequiresPermission)
 	unquoted := unquoteShellText(segment)
 	if unquoted == segment {
 		return raw
 	}
-	norm := c.resolveOne(BashToolName, unquoted, staticRequiresPermission)
+	norm := c.resolveOne(ctx, BashToolName, unquoted, staticRequiresPermission)
 	if raw == DecisionDeny || norm == DecisionDeny {
 		return DecisionDeny
 	}

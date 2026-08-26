@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+
 	"localcode/internal/config"
 	"localcode/internal/smart"
 )
@@ -25,6 +27,31 @@ import (
 // one place, read under one lock.
 func (l *Loop) SmartAgentEnabled() bool { return l.Config.SmartAgentLive() }
 
+// smartOn is the setting this unit of work runs under: the value pinned
+// when the turn or the delegation was admitted, and only failing back to
+// the live switch for callers that have no turn behind them.
+//
+// Everything inside a turn goes through this rather than through
+// SmartAgentEnabled, so a turn cannot be half enabled: the roster it
+// resolved, the tools it was offered, the fallback chain it holds, the
+// cache markers on its requests, the guards on its tool calls and the
+// records in its trace are all one answer. See config.WithSmartAgent.
+func (l *Loop) smartOn(ctx context.Context) bool { return l.Config.SmartAgentFor(ctx) }
+
+// pinSmart pins the current setting to ctx if nothing has pinned it yet.
+//
+// "If nothing has" is the load-bearing half. A sub-agent's turn and a
+// background task both arrive with their parent's snapshot already on the
+// context, and re-reading the switch there is exactly the bug: work that
+// was admitted as a read-only specialist would resolve again, minutes
+// later, against a roster that no longer contains it.
+func (l *Loop) pinSmart(ctx context.Context) context.Context {
+	if _, pinned := config.SmartAgentPinned(ctx); pinned {
+		return ctx
+	}
+	return config.WithSmartAgent(ctx, l.Config.SmartAgentLive())
+}
+
 // SetSmartAgentEnabled changes the live Smart Agent setting. It takes
 // effect on the next turn: the specialists, the orchestration prompt and
 // the background delegation tools all appear and disappear together.
@@ -33,8 +60,8 @@ func (l *Loop) SetSmartAgentEnabled(v bool) { l.Config.SetSmartAgentRuntime(v) }
 // smartAgents is the built-in roster as it stands right now — empty when
 // Smart Agent is off, and never containing a name the user's own config
 // already defines.
-func (l *Loop) smartAgents() map[string]config.AgentConfig {
-	if !l.SmartAgentEnabled() {
+func (l *Loop) smartAgents(ctx context.Context) map[string]config.AgentConfig {
+	if !l.smartOn(ctx) {
 		return nil
 	}
 	return smart.Agents(l.Config)
@@ -47,8 +74,18 @@ func (l *Loop) smartAgents() map[string]config.AgentConfig {
 // being handed a snapshot at startup — that snapshot is exactly what
 // would go stale the moment the setting is flipped, leaving the tool
 // advertising an enum of agents that no longer exist.
-func (l *Loop) DelegatableAgents() map[string]config.AgentConfig {
-	smartOnes := l.smartAgents()
+// The context decides which answer it gives: inside a turn or a
+// delegation that is the setting pinned when the work was admitted, and
+// everywhere else the live one. A tool rendering its own description for a
+// listing has no turn behind it and wants the live roster; the same tool
+// validating a call has the caller's context and must use the roster that
+// call was admitted under.
+func (l *Loop) DelegatableAgents(ctx context.Context) map[string]config.AgentConfig {
+	return l.delegatableAgents(ctx)
+}
+
+func (l *Loop) delegatableAgents(ctx context.Context) map[string]config.AgentConfig {
+	smartOnes := l.smartAgents(ctx)
 	if len(smartOnes) == 0 {
 		return l.Config.Agents
 	}
@@ -65,11 +102,11 @@ func (l *Loop) DelegatableAgents() map[string]config.AgentConfig {
 // agentConfig is the config for a named agent, user-defined first. A name
 // that is neither returns the zero value, which is the no-op it has
 // always been: no extra prompt, no tool restriction.
-func (l *Loop) agentConfig(agentName string) config.AgentConfig {
+func (l *Loop) agentConfig(ctx context.Context, agentName string) config.AgentConfig {
 	if a, ok := l.Config.Agents[agentName]; ok {
 		return a
 	}
-	return l.smartAgents()[agentName]
+	return l.smartAgents(ctx)[agentName]
 }
 
 // profileFor resolves the model profile a turn running as agentName uses.
@@ -81,9 +118,9 @@ func (l *Loop) agentConfig(agentName string) config.AgentConfig {
 // The profile's name comes back with it because a fallback chain is
 // looked up by name (see fallback.go), and because the trace records
 // which profile answered rather than only which model.
-func (l *Loop) profileFor(agentName string) (string, config.Profile, error) {
+func (l *Loop) profileFor(ctx context.Context, agentName string) (string, config.Profile, error) {
 	if _, mine := l.Config.Agents[agentName]; !mine {
-		if sa, ok := l.smartAgents()[agentName]; ok {
+		if sa, ok := l.smartAgents(ctx)[agentName]; ok {
 			if p, ok := l.Config.Profiles[sa.Profile]; ok {
 				return sa.Profile, p, nil
 			}
@@ -112,11 +149,11 @@ func (l *Loop) profileName(agentName string) string {
 // mechanism instead of two — the specs the model is shown and the check
 // in runTools both already speak allowlist, and both get this same slice,
 // so a tool hidden from the model is also refused if it is called anyway.
-func (l *Loop) toolsForTurn(agentCfg config.AgentConfig) []string {
+func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []string {
 	if len(agentCfg.Tools) > 0 {
 		return agentCfg.Tools
 	}
-	hidden := l.hiddenDelegationTools()
+	hidden := l.hiddenDelegationTools(ctx)
 	if len(hidden) == 0 || l.Tools == nil {
 		return nil
 	}
@@ -142,13 +179,13 @@ func (l *Loop) toolsForTurn(agentCfg config.AgentConfig) []string {
 //   - Smart Agent off. Background delegation is part of the bundle rather
 //     than a general capability: launching work that runs unattended, in
 //     a session nobody is looking at, is the thing a user opts into.
-func (l *Loop) hiddenDelegationTools() map[string]bool {
+func (l *Loop) hiddenDelegationTools(ctx context.Context) map[string]bool {
 	hidden := map[string]bool{}
-	if !l.SmartAgentEnabled() {
+	if !l.smartOn(ctx) {
 		hidden[smart.ToolSpawn] = true
 		hidden[smart.ToolCollect] = true
 	}
-	if len(l.DelegatableAgents()) < 2 {
+	if len(l.delegatableAgents(ctx)) < 2 {
 		for _, name := range smart.DelegationTools {
 			hidden[name] = true
 		}
@@ -171,11 +208,11 @@ func (l *Loop) hiddenDelegationTools() map[string]bool {
 //     else's sub-agent, which the check above cannot see.
 //   - There is nobody to delegate to. Without a second agent the prompt
 //     describes a Task tool the model has not been given.
-func (l *Loop) orchestrationFor(sessionID, agentName, model string) string {
-	if !l.SmartAgentEnabled() {
+func (l *Loop) orchestrationFor(ctx context.Context, sessionID, agentName, model string) string {
+	if !l.smartOn(ctx) {
 		return ""
 	}
-	if _, specialist := l.smartAgents()[agentName]; specialist {
+	if _, specialist := l.smartAgents(ctx)[agentName]; specialist {
 		return ""
 	}
 	if l.Store != nil {
@@ -183,7 +220,7 @@ func (l *Loop) orchestrationFor(sessionID, agentName, model string) string {
 			return ""
 		}
 	}
-	if len(l.DelegatableAgents()) < 2 {
+	if len(l.delegatableAgents(ctx)) < 2 {
 		return ""
 	}
 	return smart.OrchestrationPrompt(model)

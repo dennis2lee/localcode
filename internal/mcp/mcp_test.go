@@ -37,7 +37,7 @@ func TestConnectAndCallTool(t *testing.T) {
 		"echo": {Command: bin},
 	}
 
-	m, tools, warnings := Connect(ctx, servers, nil)
+	m, tools, warnings := Connect(ctx, servers, "", nil)
 	defer m.Close()
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
@@ -78,7 +78,7 @@ func TestServersListsConnectedNames(t *testing.T) {
 		"broken":   {Command: "this-binary-does-not-exist-anywhere"},
 	}
 
-	m, _, warnings := Connect(ctx, servers, nil)
+	m, _, warnings := Connect(ctx, servers, "", nil)
 	defer m.Close()
 	if len(warnings) != 1 {
 		t.Fatalf("expected exactly 1 warning for the broken server, got %d: %v", len(warnings), warnings)
@@ -97,7 +97,7 @@ func TestServersListsConnectedNames(t *testing.T) {
 }
 
 func TestServersEmptyWhenNoneConfigured(t *testing.T) {
-	m, _, _ := Connect(context.Background(), nil, nil)
+	m, _, _ := Connect(context.Background(), nil, "", nil)
 	defer m.Close()
 	if got := m.Servers(); len(got) != 0 {
 		t.Errorf("Servers() = %v, want empty", got)
@@ -117,7 +117,7 @@ func TestConnectPartialFailure(t *testing.T) {
 		"broken": {Command: "this-binary-does-not-exist-anywhere"},
 	}
 
-	m, tools, warnings := Connect(ctx, servers, nil)
+	m, tools, warnings := Connect(ctx, servers, "", nil)
 	defer m.Close()
 
 	if len(warnings) != 1 {
@@ -133,7 +133,7 @@ func TestConnectUnknownCommand(t *testing.T) {
 	servers := map[string]config.MCPServerConfig{
 		"broken": {Command: "this-binary-does-not-exist-anywhere"},
 	}
-	m, tools, warnings := Connect(ctx, servers, nil)
+	m, tools, warnings := Connect(ctx, servers, "", nil)
 	defer m.Close()
 
 	if len(warnings) != 1 {
@@ -154,7 +154,7 @@ func TestReconnectOnClosedConnection(t *testing.T) {
 	servers := map[string]config.MCPServerConfig{
 		"echo": {Command: bin},
 	}
-	m, tools, warnings := Connect(ctx, servers, nil)
+	m, tools, warnings := Connect(ctx, servers, "", nil)
 	defer m.Close()
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
@@ -194,7 +194,7 @@ func TestReconnectOnClosedConnection(t *testing.T) {
 func TestStatesIncludeServersThatNeverConnected(t *testing.T) {
 	m, tools, warnings := Connect(context.Background(), map[string]config.MCPServerConfig{
 		"broken": {Command: "definitely-not-a-real-command-localcode-test"},
-	}, nil)
+	}, "", nil)
 	defer m.Close()
 
 	if len(tools) != 0 {
@@ -226,7 +226,7 @@ func TestStatesIncludeServersThatNeverConnected(t *testing.T) {
 func TestStatusChangeCallbackFiresOnlyOnRealChanges(t *testing.T) {
 	m, _, _ := Connect(context.Background(), map[string]config.MCPServerConfig{
 		"broken": {Command: "definitely-not-a-real-command-localcode-test"},
-	}, nil)
+	}, "", nil)
 	defer m.Close()
 
 	var mu sync.Mutex

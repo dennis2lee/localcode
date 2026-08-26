@@ -7,7 +7,7 @@
 
 import {
   settingsModalEl, settingsBtn, settingsCloseBtn,
-  smartAgentCheckbox, smartAgentNoteEl,
+  smartAgentCheckbox, smartAgentNoteEl, smartAgentWarnEl,
   updateCheckBtn, updateInstallBtn, updateNoteEl,
 } from './dom.js';
 import { Modal } from './modal.js';
@@ -37,8 +37,10 @@ export function openSettings() {
 // page, because it depends on the daemon's build and on which profiles
 // this config has: which specialists exist, and that they cost money.
 
-function renderSmartAgent() {
+function renderSmartAgent(warning) {
   smartAgentCheckbox.checked = !!app.smartAgent;
+  smartAgentWarnEl.textContent = warning || '';
+  smartAgentWarnEl.hidden = !warning;
   if (!app.smartAgent) {
     smartAgentNoteEl.textContent =
       'Off. Every request is answered by this session\u2019s own model, in this session\u2019s context.';
@@ -64,13 +66,20 @@ async function toggleSmartAgent() {
   const enabled = smartAgentCheckbox.checked;
   smartAgentCheckbox.disabled = true;
   try {
-    await apiClient.setSmartAgent(enabled);
-    app.smartAgent = enabled;
-    renderSmartAgent();
+    // The daemon answers with what it did, in two parts. "applied" is
+    // whether the running daemon changed, and it is what the box has to
+    // show; "persisted" is only whether config.json was written. Treating
+    // an unsaved change as a refused one used to leave the box saying the
+    // opposite of the state the daemon was actually in, which is the one
+    // thing this switch must never do: it decides which model answers and
+    // which tools an agent may call.
+    const res = await apiClient.setSmartAgent(enabled);
+    app.smartAgent = res && 'smart_agent' in res ? !!res.smart_agent : enabled;
+    renderSmartAgent(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
   } catch (err) {
-    // Put back where it was: the daemon is the one that decides, and a
-    // box left checked after a refused request says the opposite of what
-    // is true.
+    // Nothing was applied. Put the box back where it was.
     smartAgentCheckbox.checked = !enabled;
     smartAgentNoteEl.textContent = `Not changed: ${err}`;
   } finally {

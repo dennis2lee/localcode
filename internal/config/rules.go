@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -183,14 +184,26 @@ const BashToolName = "bash"
 // the raw string against a glob would let anything ride along behind an
 // allowed prefix. See resolveShellCommand.
 func (c *Config) ResolvePermission(toolName, subject string, staticRequiresPermission bool) Decision {
-	if toolName == BashToolName && subject != "" {
-		return c.resolveShellCommand(subject, staticRequiresPermission)
-	}
-	return c.resolveOne(toolName, subject, staticRequiresPermission)
+	return c.ResolvePermissionFor(context.Background(), toolName, subject, staticRequiresPermission)
 }
 
-func (c *Config) resolveOne(toolName, subject string, staticRequiresPermission bool) Decision {
-	d := c.resolveOneStrict(toolName, subject, staticRequiresPermission)
+// ResolvePermissionFor is ResolvePermission for a call that belongs to a
+// unit of work. It is the same decision, taken against that work's pinned
+// Smart Agent setting rather than against whatever the switch says at the
+// moment the tool happens to run. See config.WithSmartAgent.
+//
+// Every tool call has a context, so this is the one the running agent
+// uses. ResolvePermission remains for the callers that have no unit of
+// work to speak of.
+func (c *Config) ResolvePermissionFor(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
+	if toolName == BashToolName && subject != "" {
+		return c.resolveShellCommand(ctx, subject, staticRequiresPermission)
+	}
+	return c.resolveOne(ctx, toolName, subject, staticRequiresPermission)
+}
+
+func (c *Config) resolveOne(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
+	d := c.resolveOneStrict(ctx, toolName, subject, staticRequiresPermission)
 	// skip_permissions downgrades "ask" to "allow" but never touches
 	// "deny": a rule written specifically to forbid something keeps
 	// forbidding it. Skipping confirmations is a convenience; overriding
@@ -201,7 +214,7 @@ func (c *Config) resolveOne(toolName, subject string, staticRequiresPermission b
 	return d
 }
 
-func (c *Config) resolveOneStrict(toolName, subject string, staticRequiresPermission bool) Decision {
+func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
 	c.permMu.RLock()
 	tp, ok := c.Permissions[toolName]
 	fallback, hasFallback := c.Permissions["*"]
@@ -219,7 +232,7 @@ func (c *Config) resolveOneStrict(toolName, subject string, staticRequiresPermis
 	// Smart Agent's shipped guards, after the user's own rules so any of
 	// them can be turned off by writing a rule for the same tool, and
 	// before the ordinary builtins because they are the stricter answer.
-	if c.SmartAgentLive() {
+	if c.SmartAgentFor(ctx) {
 		if d, matched := secretGuard(toolName, subject); matched {
 			return d
 		}

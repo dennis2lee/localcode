@@ -151,6 +151,12 @@
         <label for="smart-agent-checkbox">Work as an orchestrator: hand investigation, review and verification to specialist sub-agents running in their own contexts, survive a model that will not answer, cache the stable half of every request, and keep a log of what each turn did</label>
       </div>
       <p class="note" id="smart-agent-note"></p>
+      <!-- Whether the change reached config.json, which is a different
+           question from whether it took effect. Separate from the note
+           above so the switch's own description does not turn into a
+           warning, and empty (and hidden) whenever there is nothing
+           wrong. -->
+      <p class="note warn" id="smart-agent-warn" hidden></p>
     </div>
 
     <!--

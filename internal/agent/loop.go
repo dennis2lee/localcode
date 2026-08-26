@@ -152,6 +152,10 @@ type Loop struct {
 	// without one simply records nothing.
 	Trace *trace.Writer
 
+	// lifecycle is the boundary between admitting work into a session
+	// tree and deleting one. See lifecycle.go.
+	lifecycle *lifecycle
+
 	// MemoryDir is this project's auto-memory directory (see
 	// internal/memory) — "" if auto memory is disabled. Backs the
 	// "/memory" local command; the actual read/write of memory files
@@ -194,6 +198,7 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 		cumulativeUsage: map[string]map[string]modelTotals{},
 		turnRate:        map[string]turnRate{},
 		probedWindows:   map[string]int{},
+		lifecycle:       newLifecycle(),
 	}
 }
 
@@ -213,6 +218,137 @@ func (l *Loop) ClearSessionState(sessionID string) {
 		// session is going away, so nobody is coming for them.
 		l.Tasks.forgetSession(sessionID)
 	}
+}
+
+// claimSessionTree takes the deletion claim on sessionID and everything
+// below it, and returns the ids it claimed plus the release.
+//
+// Two things happen here that the caller cannot do afterwards. The claim
+// closes admission into the tree, and it waits for admissions already in
+// flight, so the tree read after it is one nothing is still being added
+// to. The loop is what covers the second level: a descendant that was not
+// claimed yet could admit a child of its own between the read and the
+// claim, so the set is re-read until it stops growing. It always does,
+// because every pass claims strictly more and nothing can be added under
+// what is already claimed.
+//
+// The claim is released by the caller, after the sessions are gone.
+// Releasing it any earlier reopens admission into a tree that is
+// half-deleted, which is the same defect one step later.
+func (l *Loop) claimSessionTree(sessionID string) ([]string, func()) {
+	lc := l.lifecycle
+	if lc == nil {
+		// A Loop built without the constructor. Nothing to claim, and no
+		// reason to fail a delete over it.
+		ids := []string{sessionID}
+		if l.Store != nil {
+			ids = append(l.Store.Descendants(sessionID), sessionID)
+		}
+		return ids, func() {}
+	}
+
+	claimed := map[string]bool{sessionID: true}
+	order := []string{sessionID}
+	lc.claim(order)
+
+	for l.Store != nil {
+		var fresh []string
+		for _, id := range l.Store.Descendants(sessionID) {
+			if !claimed[id] {
+				claimed[id] = true
+				fresh = append(fresh, id)
+			}
+		}
+		if len(fresh) == 0 {
+			break
+		}
+		lc.claim(fresh)
+		order = append(order, fresh...)
+	}
+
+	return order, func() { lc.release(order) }
+}
+
+// StopSessionTree claims sessionID and its descendants, stops every
+// background task in that tree, waits for each to unwind, and clears the
+// loop state each of those sessions was holding.
+//
+// It returns the claimed ids and the release. The caller deletes the
+// sessions and then releases: the claim has to outlive the removal, or an
+// admission slips into the window between the last task stopping and the
+// records going away.
+//
+// Deleting a conversation used to remove one record and leave the work:
+// the tasks it had launched kept running, in sessions nothing lists,
+// writing to a parent that no longer existed. See TaskManager.StopSession.
+func (l *Loop) StopSessionTree(sessionID string) ([]string, func()) {
+	ids, release := l.claimSessionTree(sessionID)
+	if l.Tasks != nil {
+		l.Tasks.StopSession(ids)
+	}
+	for _, id := range ids {
+		l.ClearSessionState(id)
+	}
+	return ids, release
+}
+
+// StopEverything is StopSessionTree for the whole daemon: it refuses every
+// admission anywhere, including new sessions and new top-level turns,
+// stops all background work, and returns the release.
+//
+// Delete-all needs the barrier up before it checks whether anything is
+// busy, not after. Checking first and stopping second left the interval
+// between them open, and a turn that started in it had its session log
+// removed while it was still writing to it.
+func (l *Loop) StopEverything(ids []string) func() {
+	if l.lifecycle == nil {
+		if l.Tasks != nil {
+			l.Tasks.StopSession(ids)
+		}
+		return func() {}
+	}
+	l.lifecycle.claimAll()
+	if l.Tasks != nil {
+		l.Tasks.StopSession(ids)
+	}
+	for _, id := range ids {
+		l.ClearSessionState(id)
+	}
+	return l.lifecycle.releaseAll
+}
+
+// SessionsClosing reports whether a delete-all is in progress.
+//
+// Kept for reporting, not for deciding. Reading it and then acting is the
+// check-then-act this whole boundary exists to remove: the answer can stop
+// being true between the two. Anything that is about to start a top-level
+// turn or create a conversation calls AdmitTopLevel instead, which decides
+// and registers in one step.
+func (l *Loop) SessionsClosing() bool {
+	return l.lifecycle != nil && l.lifecycle.closingAll()
+}
+
+// AdmitTopLevel opens an admission window for starting a top-level turn or
+// creating a conversation, or reports false if delete-all holds the
+// daemon. The caller must call the returned release, and must hold the
+// window until the thing it is admitting has committed: a turn until it is
+// registered with the turn tracker, a session until it and its first log
+// writes exist.
+//
+// The point is that delete-all cannot pass its busy check or take its
+// cleanup snapshot while one of these is open. It either drains the
+// admission and sees what it committed, or the admission is refused before
+// it can commit. A read of SessionsClosing followed by a commit gives
+// neither, because delete-all can claim the daemon in between.
+func (l *Loop) AdmitTopLevel() (func(), bool) {
+	if l.lifecycle == nil {
+		return func() {}, true
+	}
+	if !l.lifecycle.admitTop() {
+		return func() {}, false
+	}
+	var once sync.Once
+	return func() { once.Do(l.lifecycle.admittedTop) }, true
 }
 
 // AutoCompactEnabled reports whether auto-compaction is currently on —

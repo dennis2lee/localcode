@@ -24,6 +24,16 @@ const initPrompt = `Scan this repository (file listing, README, package/build ma
 // the model produces a final answer. agentName selects which model profile
 // to use, per the config's agents map.
 func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text string) error {
+	// The admission boundary for a top-level message, and therefore where
+	// the Smart Agent setting is pinned. Not in sendWithModelText, which
+	// is reached only after command routing and auto-delegation have had
+	// their turn: auto-delegation hands the work to SpawnSync, which can
+	// sit on the task semaphore, and a switch flipped while it waited used
+	// to reach the child. Pinning here covers every route out of this
+	// function. A delegated turn arrives with its parent's pin and keeps
+	// it. See config.WithSmartAgent.
+	ctx = l.pinSmart(ctx)
+
 	if len(l.Config.Hooks) > 0 {
 		blocked, reason, _ := hooks.Run(ctx, l.Config.Hooks, hooks.EventUserPromptSubmit, map[string]any{
 			"session_id": sessionID,
@@ -294,10 +304,10 @@ func (l *Loop) handleConfigCommand(sessionID, displayText, arg string) error {
 			// Turning it on with nothing to route to is legal and inert:
 			// the specialists need a profile to run on, and without one
 			// there is no roster and no orchestration prompt.
-			if enabled && len(l.smartAgents()) == 0 {
+			if enabled && len(l.smartAgents(context.Background())) == 0 {
 				text += "\n(no profiles configured, so no specialist agents could be created — see docs/USAGE.md)"
 			} else if enabled {
-				text += "\n(available: " + strings.Join(agentNamesOf(l.smartAgents()), ", ") + ")"
+				text += "\n(available: " + strings.Join(agentNamesOf(l.smartAgents(context.Background())), ", ") + ")"
 			}
 		default:
 			text = fmt.Sprintf("unknown setting %q. usage: /config, /config auto_compact on|off, /config show_tps on|off, /config auto_delegate on|off, /config smart_agent on|off", fields[0])
@@ -340,7 +350,7 @@ func (l *Loop) configSummary() string {
 	// say what it turned on, and the answer depends on the profiles this
 	// config happens to have.
 	smartLine := onOff(l.SmartAgentEnabled())
-	if names := agentNamesOf(l.smartAgents()); len(names) > 0 {
+	if names := agentNamesOf(l.smartAgents(context.Background())); len(names) > 0 {
 		smartLine += " (" + strings.Join(names, ", ") + ")"
 	} else if l.SmartAgentEnabled() {
 		smartLine += " (no profiles to run specialists on)"

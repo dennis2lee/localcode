@@ -124,7 +124,7 @@ func TestRecentIsBounded(t *testing.T) {
 	for i := 0; i < recentSize*2; i++ {
 		w.Write(Record{TraceID: "t", Span: SpanTool, SessionID: "s"})
 	}
-	if got := w.Recent(recentSize * 2, "", ""); len(got) != recentSize {
+	if got := w.Recent(recentSize*2, "", ""); len(got) != recentSize {
 		t.Errorf("kept %d records in memory, want the ring's %d", len(got), recentSize)
 	}
 }
@@ -194,5 +194,147 @@ func TestNewIDsAreDistinctAndReadable(t *testing.T) {
 			t.Fatalf("id %q came up twice", id)
 		}
 		seen[id] = true
+	}
+}
+
+// Item 26. The turn log used to grow without bound: one file per day,
+// nothing ever removed, on a daemon that can run for months. Retention is
+// by the date in the file's own name, because mtime is whatever the
+// filesystem or a backup tool made of it.
+func TestOldTraceFilesArePrunedByAge(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "localcode-2020-01-01.jsonl")
+	recent := filepath.Join(dir, "localcode-"+time.Now().Format("2006-01-02")+".jsonl")
+	foreign := filepath.Join(dir, "notes.jsonl")
+	for _, p := range []string{old, recent, foreign} {
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+
+	w, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w.Close()
+	// Open itself deletes nothing (R10N2); the first prune runs when the
+	// effective bounds are installed, which the daemon does right after.
+	if _, err := os.Stat(old); err != nil {
+		t.Error("open pruned before any retention was configured")
+	}
+	w.SetRetention(0, 0)
+
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Error("a file far past the retention age survived open")
+	}
+	if _, err := os.Stat(recent); err != nil {
+		t.Error("today's file was pruned")
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Error("a file the writer does not own was pruned")
+	}
+}
+
+// The size cap removes oldest first and never touches today's file, which
+// is the one being written.
+func TestTraceFilesArePrunedOldestFirstUnderTheSizeCap(t *testing.T) {
+	dir := t.TempDir()
+	day := func(daysAgo int) string {
+		return filepath.Join(dir, "localcode-"+time.Now().AddDate(0, 0, -daysAgo).Format("2006-01-02")+".jsonl")
+	}
+	big := make([]byte, 2*1024*1024)
+	for _, p := range []string{day(2), day(1), day(0)} {
+		if err := os.WriteFile(p, big, 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	w, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w.Close()
+	w.SetRetention(30, 4) // three 2MB files against a 4MB cap
+
+	if _, err := os.Stat(day(2)); !os.IsNotExist(err) {
+		t.Error("the oldest file survived a size cap it does not fit under")
+	}
+	if _, err := os.Stat(day(1)); err != nil {
+		t.Error("a file that fits under the cap was pruned")
+	}
+	if _, err := os.Stat(day(0)); err != nil {
+		t.Error("today's file was pruned by the size cap")
+	}
+}
+
+// A nil writer and a zero configuration stay safe: the default age
+// applies rather than "keep forever", and nil is a no-op like every
+// other method.
+func TestRetentionDefaultsAndNilSafety(t *testing.T) {
+	var w *Writer
+	w.SetRetention(0, 0) // must not panic
+
+	dir := t.TempDir()
+	old := filepath.Join(dir, "localcode-2020-01-01.jsonl")
+	if err := os.WriteFile(old, []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	real, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer real.Close()
+	real.SetRetention(0, 0)
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Error("SetRetention(0, 0) kept a file forever; zero must mean the default age, not off")
+	}
+}
+
+// R10N2. The first prune used to run inside Open under the default 30
+// days, before the daemon had any chance to install the configured
+// bounds — so trace_max_age_days: 90 could not protect a 40-day file
+// from a deletion that had already happened. Open deletes nothing now;
+// the configured retention is what prunes.
+func TestConfiguredRetentionIsAppliedBeforeAnythingIsDeleted(t *testing.T) {
+	dir := t.TempDir()
+	day := func(daysAgo int) string {
+		return filepath.Join(dir, "localcode-"+time.Now().AddDate(0, 0, -daysAgo).Format("2006-01-02")+".jsonl")
+	}
+	for _, p := range []string{day(40), day(100)} {
+		if err := os.WriteFile(p, []byte("x\n"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	w, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w.Close()
+	w.SetRetention(90, 0)
+
+	if _, err := os.Stat(day(40)); err != nil {
+		t.Error("a 40-day trace was deleted under a configured 90-day retention")
+	}
+	if _, err := os.Stat(day(100)); !os.IsNotExist(err) {
+		t.Error("a 100-day trace survived a 90-day retention")
+	}
+
+	// And a record written before any SetRetention still prunes at
+	// rotation under the default, so a caller that never configures
+	// anything is not "keep forever" either.
+	w2dir := t.TempDir()
+	oldFile := filepath.Join(w2dir, "localcode-2020-01-01.jsonl")
+	if err := os.WriteFile(oldFile, []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	w2, err := Open(w2dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w2.Close()
+	w2.Write(Record{TraceID: "t", Span: SpanTurnStart})
+	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+		t.Error("an unconfigured writer never pruned: the default stopped applying")
 	}
 }

@@ -124,7 +124,10 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		// that is slow or dead is what the whole startup is stuck behind,
 		// and its name is the useful thing to be showing while that
 		// happens.
-		mcpManager, mcpTools, warnings = mcpclient.Connect(ctx, cfg.MCPServers, func(name string) {
+		// The pin file is the trust audit: each server's advertised tool
+		// surface is fingerprinted, and a change since the last run is a
+		// warning naming the server. See internal/mcp/pins.go.
+		mcpManager, mcpTools, warnings = mcpclient.Connect(ctx, cfg.MCPServers, filepath.Join(e.home, ".localcode", "mcp-pins.json"), func(name string) {
 			progress("connecting to MCP server " + name)
 		})
 		for _, w := range warnings {
@@ -158,6 +161,10 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	if tw, err := trace.Open(filepath.Join(e.home, ".localcode", "trace")); err != nil {
 		log.Printf("trace: %v (turn tracing is off for this run)", err)
 	} else {
+		// Retention is applied at open and at each day rotation, so a
+		// daemon left running for months does not accumulate a file per
+		// day forever. See trace.SetRetention for the defaults.
+		tw.SetRetention(cfg.TraceMaxAgeDays, cfg.TraceMaxTotalMB)
 		loop.Trace = tw
 	}
 	// Per turn, for the directory that turn is working in — see
@@ -230,7 +237,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker) (*tools.Registry, error) {
 	registry := tools.NewRegistry(broker.Func())
 	registry.Resolver = func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) tools.Decision {
-		d := tools.Decision(cfg.ResolvePermission(toolName, subject, staticRequiresPermission))
+		d := tools.Decision(cfg.ResolvePermissionFor(ctx, toolName, subject, staticRequiresPermission))
 		// The workspace boundary, and only while Smart Agent is on. A
 		// path outside the project this session belongs to is not
 		// forbidden — reading a system header or a file in another
@@ -242,7 +249,12 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker) (*tools.R
 		// Escalates allow to ask and nothing else: a deny stays a deny,
 		// an ask is already an ask, and skip_permissions has already had
 		// its say by the time this runs.
-		return tools.BoundaryDecision(ctx, d, subject, cfg.SmartAgentLive())
+		//
+		// Both this and the credential guard above it read the setting
+		// off ctx, so a tool call is judged by the rules its own turn
+		// was admitted under rather than by whatever the switch says at
+		// the moment it runs.
+		return tools.BoundaryDecision(ctx, d, subject, cfg.SmartAgentFor(ctx))
 	}
 	registry.Hooks = cfg.Hooks
 	registry.Register(tools.ReadFile{})

@@ -21,8 +21,12 @@ import (
 // writes a file, under the user's home directory, recording which models
 // answered and what they cost. That is useful and it is also a thing to
 // opt into rather than to discover.
-func (l *Loop) tracer() *trace.Writer {
-	if !l.SmartAgentEnabled() {
+// The setting is read from ctx rather than live, so a turn that started
+// while Smart Agent was on is written down from beginning to end. Reading
+// the switch per record produced traces with a start and no end, and
+// records belonging to no start at all.
+func (l *Loop) tracer(ctx context.Context) *trace.Writer {
+	if !l.smartOn(ctx) {
 		return nil
 	}
 	return l.Trace
@@ -59,8 +63,8 @@ func (l *Loop) stamp(sessionID string, r trace.Record) trace.Record {
 
 // traceModel records one provider call: what answered, what it cost, and
 // what the cache did.
-func (l *Loop) traceModel(traceID, sessionID string, run modelRun, usage streamUsage, stopReason string, took time.Duration, err error) {
-	w := l.tracer()
+func (l *Loop) traceModel(ctx context.Context, traceID, sessionID string, run modelRun, usage streamUsage, stopReason string, took time.Duration, err error) {
+	w := l.tracer(ctx)
 	if w == nil {
 		return
 	}
@@ -85,8 +89,8 @@ func (l *Loop) traceModel(traceID, sessionID string, run modelRun, usage streamU
 
 // traceTool records one tool execution. Where the time goes in a
 // multi-agent turn is almost always here, and almost always in one call.
-func (l *Loop) traceTool(traceID, sessionID, name string, took time.Duration, isError bool, detail string) {
-	w := l.tracer()
+func (l *Loop) traceTool(ctx context.Context, traceID, sessionID, name string, took time.Duration, isError bool, detail string) {
+	w := l.tracer(ctx)
 	if w == nil {
 		return
 	}
@@ -106,8 +110,8 @@ func (l *Loop) traceTool(traceID, sessionID, name string, took time.Duration, is
 
 // traceSpan records the one-line events: a turn beginning or ending, a
 // fallback, a compaction, a delegation.
-func (l *Loop) traceSpan(traceID, sessionID, span string, r trace.Record) {
-	w := l.tracer()
+func (l *Loop) traceSpan(ctx context.Context, traceID, sessionID, span string, r trace.Record) {
+	w := l.tracer(ctx)
 	if w == nil {
 		return
 	}

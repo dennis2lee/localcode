@@ -2,7 +2,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"localcode/internal/trace"
@@ -115,7 +120,8 @@ func TestASubAgentRecordsUnderTheSameTrace(t *testing.T) {
 // A fallback is the fact a reader most needs and the transcript is worst
 // at carrying: the answer arrived, and it came from somewhere else.
 func TestAFallbackIsRecordedWithTheTurn(t *testing.T) {
-	srv, _ := failingServer(t, 429, "rate limit exceeded", 1)
+	quickRetries(t)
+	srv, _ := failingServer(t, 429, "rate limit exceeded", 3)
 	defer srv.Close()
 	loop := newFallbackLoop(t, srv.URL)
 	loop.SetSmartAgentEnabled(true)
@@ -130,11 +136,13 @@ func TestAFallbackIsRecordedWithTheTurn(t *testing.T) {
 	}
 
 	records := w.Recent(50, sid, "")
-	var fallback, end *trace.Record
+	var fallback, retry, end *trace.Record
 	for i := range records {
 		switch records[i].Span {
 		case trace.SpanFallback:
 			fallback = &records[i]
+		case trace.SpanRetry:
+			retry = &records[i]
 		case trace.SpanTurnEnd:
 			end = &records[i]
 		}
@@ -145,7 +153,121 @@ func TestAFallbackIsRecordedWithTheTurn(t *testing.T) {
 	if fallback.Model != "qwen3-coder-30b" || fallback.Error == "" {
 		t.Errorf("fallback record = %+v", *fallback)
 	}
-	if end == nil || end.Fallbacks != 1 {
-		t.Errorf("the turn did not end reporting one fallback: %+v", end)
+	// The retries that preceded the switch are part of the same story: a
+	// turn that paused twice and then moved is not a turn that moved at
+	// the first refusal.
+	if retry == nil {
+		t.Fatalf("no retry recorded: %v", spans(records))
+	}
+	if retry.Model != "claude-opus-5" || retry.Error == "" {
+		t.Errorf("retry record = %+v", *retry)
+	}
+	if end == nil || end.Fallbacks != 1 || end.Retries != 2 {
+		t.Errorf("the turn did not end reporting one fallback and two retries: %+v", end)
+	}
+}
+
+// SA3, the turn half. The switch used to be read again at every provider
+// round, every tool call and every trace record, so flipping it during a
+// tool loop split one turn between two sets of rules: a trace with a start
+// and no end, cache markers that stopped mid-turn, credential guards that
+// appeared or vanished under a turn already running.
+//
+// The turn is admitted under one answer and keeps it. Flipping still takes
+// effect, on the next turn.
+func TestATurnKeepsTheSmartAgentStateItStartedUnder(t *testing.T) {
+	var loop *Loop
+	var mu sync.Mutex
+	round := 0
+
+	var enums [][]string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The delegation enum this round actually advertised. Read off the
+		// wire rather than from a helper, because "what the model was
+		// told" is the thing that has to stay put.
+		var body struct {
+			Tools []struct {
+				Function struct {
+					Name       string `json:"name"`
+					Parameters struct {
+						Properties struct {
+							Agent struct {
+								Enum []string `json:"enum"`
+							} `json:"agent"`
+						} `json:"properties"`
+					} `json:"parameters"`
+				} `json:"function"`
+			} `json:"tools"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		for _, tl := range body.Tools {
+			if tl.Function.Name == "Task" {
+				enums = append(enums, tl.Function.Parameters.Properties.Agent.Enum)
+			}
+		}
+		n := round
+		round++
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n == 0 {
+			// The first round asks for a tool, which is what puts the
+			// turn into the loop where the switch used to be re-read.
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"glob","arguments":"{\"pattern\":\"*.go\"}"}}]}}]}`+"\n\n")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			w.(http.Flusher).Flush()
+			// Off, while the turn is still running.
+			loop.SetSmartAgentEnabled(false)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	defer srv.Close()
+
+	loop = newSmartLoop(t, srv.URL)
+	loop.SetSmartAgentEnabled(true)
+	tw := withTracing(t, loop)
+
+	sendOne(t, loop, "s1", "general-purpose")
+
+	got := spans(tw.Recent(50, "s1", ""))
+	joined := strings.Join(got, ",")
+	if !strings.HasPrefix(joined, "turn.start") {
+		t.Fatalf("spans were %v, want the turn recorded at all", got)
+	}
+	if !strings.HasSuffix(joined, "turn.end") {
+		t.Fatalf("spans were %v, want a turn.end — the switch went off mid-loop and the turn stopped being written down", got)
+	}
+	if !strings.Contains(joined, "tool") {
+		t.Errorf("spans were %v, want the tool call recorded under the same turn", got)
+	}
+	// SA3, round 2. The tool schema is half of the stable prefix this turn
+	// is marking as cacheable, and it is what the model is told it may
+	// delegate to. Both rounds have to advertise the same roster, and the
+	// runtime accepted that roster: a turn that advertises one capability
+	// and executes another is worse than one that does neither.
+	mu.Lock()
+	advertised := append([][]string(nil), enums...)
+	mu.Unlock()
+	if len(advertised) != 2 {
+		t.Fatalf("captured %d Task schemas, want one per provider round", len(advertised))
+	}
+	if len(advertised[0]) == 0 {
+		t.Fatal("the first round advertised no delegation roster at all")
+	}
+	if strings.Join(advertised[0], ",") != strings.Join(advertised[1], ",") {
+		t.Errorf("the delegation enum changed mid-turn: %v then %v", advertised[0], advertised[1])
+	}
+
+	// The next turn is the one that sees the change.
+	sendOne(t, loop, "s2", "general-purpose")
+	if after := tw.Recent(200, "s2", ""); len(after) != 0 {
+		t.Errorf("a turn started after Smart Agent went off wrote %d records, want none", len(after))
 	}
 }

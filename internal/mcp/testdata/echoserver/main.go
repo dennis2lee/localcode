@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"log"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -21,6 +22,15 @@ func main() {
 		Name:        "echo",
 		Description: "Echo back the given text",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, args echoArgs) (*mcp.CallToolResult, any, error) {
+		// A text starting with "error:" comes back as a tool-level error
+		// (isError true) carrying the rest verbatim, so tests can exercise
+		// the error path of a real server rather than a mock's.
+		if rest, ok := strings.CutPrefix(args.Text, "error:"); ok {
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: rest}},
+			}, nil, nil
+		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: "echo: " + args.Text}},
 		}, nil, nil

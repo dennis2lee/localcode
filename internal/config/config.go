@@ -66,6 +66,13 @@ type Config struct {
 	// settings panel.
 	SmartAgent *bool `json:"smart_agent,omitempty"`
 
+	// TraceMaxAgeDays and TraceMaxTotalMB bound the structured turn log
+	// under ~/.localcode/trace/. Unset means the default age (30 days)
+	// and no size cap; the age cannot be turned off, because a log that
+	// grows forever is the defect the bound exists to fix.
+	TraceMaxAgeDays int `json:"trace_max_age_days,omitempty"`
+	TraceMaxTotalMB int `json:"trace_max_total_mb,omitempty"`
+
 	// SkipPermissions turns every "ask" decision into "allow" — the
 	// equivalent of Claude Code's --dangerously-skip-permissions. A nil
 	// pointer means unset, which defaults to OFF: it has to be opted into

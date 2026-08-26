@@ -323,7 +323,7 @@ func TestRegistrySpecsPreservesRegistrationOrder(t *testing.T) {
 	r.Register(&fakeTool{name: "a"})
 	r.Register(&fakeTool{name: "c"})
 
-	specs := r.Specs()
+	specs := r.Specs(context.Background())
 	if len(specs) != 3 {
 		t.Fatalf("expected 3 specs, got %d", len(specs))
 	}
@@ -343,8 +343,8 @@ func TestRegistryReRegisterReplacesButKeepsOrder(t *testing.T) {
 	r.Register(first)
 	r.Register(second)
 
-	if len(r.Specs()) != 1 {
-		t.Fatalf("expected re-registering the same name to not duplicate it, got %d specs", len(r.Specs()))
+	if len(r.Specs(context.Background())) != 1 {
+		t.Fatalf("expected re-registering the same name to not duplicate it, got %d specs", len(r.Specs(context.Background())))
 	}
 
 	r.Call(context.Background(), "a", nil, "")
@@ -362,7 +362,7 @@ func TestSpecsForRestrictsAndPreservesOrder(t *testing.T) {
 	r.Register(&fakeTool{name: "write_file"})
 	r.Register(&fakeTool{name: "bash"})
 
-	got := r.SpecsFor([]string{"bash", "read_file"})
+	got := r.SpecsFor(context.Background(), []string{"bash", "read_file"})
 	if len(got) != 2 {
 		t.Fatalf("expected 2 specs, got %d: %+v", len(got), got)
 	}
@@ -377,10 +377,10 @@ func TestSpecsForEmptyAllowedMeansUnrestricted(t *testing.T) {
 	r.Register(&fakeTool{name: "a"})
 	r.Register(&fakeTool{name: "b"})
 
-	if got := len(r.SpecsFor(nil)); got != 2 {
+	if got := len(r.SpecsFor(context.Background(), nil)); got != 2 {
 		t.Errorf("SpecsFor(nil) = %d specs, want 2 (unrestricted)", got)
 	}
-	if got := len(r.SpecsFor([]string{})); got != 2 {
+	if got := len(r.SpecsFor(context.Background(), []string{})); got != 2 {
 		t.Errorf("SpecsFor([]string{}) = %d specs, want 2 (unrestricted)", got)
 	}
 }
@@ -389,7 +389,7 @@ func TestSpecsForUnknownNameSkipped(t *testing.T) {
 	r := NewRegistry(nil)
 	r.Register(&fakeTool{name: "a"})
 
-	got := r.SpecsFor([]string{"a", "typo_name"})
+	got := r.SpecsFor(context.Background(), []string{"a", "typo_name"})
 	if len(got) != 1 || got[0].Name != "a" {
 		t.Errorf("expected only the known tool, got %+v", got)
 	}
