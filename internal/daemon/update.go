@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"localcode/internal/update"
 )
@@ -135,12 +136,58 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// The binary on disk is the new one and this process is still the old
+	// one, so something has to bring it back. Nothing did: the reply said
+	// "restart localcode to run the new version" and left it there, which
+	// is how an update that worked reads as an update that did nothing —
+	// the version in the header does not change, and the next thing the
+	// user does is run the same old build.
+	detail, restarting := restartPlan(out, d.Restart != nil)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": rel.Version,
-		"started": out.Started,
-		"path":    out.Path,
-		"detail":  out.Detail,
+		"version":    rel.Version,
+		"started":    out.Started,
+		"replaced":   out.Replaced,
+		"restarting": restarting,
+		"path":       out.Path,
+		"detail":     detail,
 	})
+	if restarting {
+		// After the response, and after enough of a pause for it to reach
+		// the browser: the restart takes the HTTP server with it, and a
+		// client that never sees the answer cannot say what happened.
+		go func() {
+			time.Sleep(restartDelay)
+			d.Restart()
+		}()
+	}
+}
+
+// restartDelay is how long the reply is given to reach the client before
+// the process that sent it goes away. A variable so a test does not have
+// to wait it out.
+var restartDelay = 400 * time.Millisecond
+
+// restartPlan decides what the install reply says, and whether this
+// process is about to be replaced by the version it just installed.
+//
+// Separate from the handler because it is the part worth pinning: the
+// handler around it downloads a release and writes over this program's
+// own binary, which is not something a test can be asked to do to itself.
+func restartPlan(out update.Outcome, canRestart bool) (detail string, restarting bool) {
+	if !out.Replaced {
+		// Either nothing was replaced (a .deb, a Windows zip, a bundle) or
+		// an installer is running and will do it. Both already say what
+		// happens next in their own words.
+		return out.Detail, false
+	}
+	if canRestart {
+		return out.Detail + " — restarting localcode now", true
+	}
+	// Replaced, and nobody here can bring it back: a daemon reached over
+	// the network, whose restart is not a browser's to order. Saying so is
+	// the whole of what is left, and it has to be said — an update that
+	// worked and changes nothing on screen reads as one that did not.
+	return out.Detail + " — restart localcode to run the new version", false
 }
 
 // updateDir is where downloads are kept: the user's cache directory, since

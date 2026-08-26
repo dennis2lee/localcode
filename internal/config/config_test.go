@@ -224,8 +224,6 @@ func TestMergeFieldsGuard(t *testing.T) {
 	// field to one of these two sets, not around this test, when Config
 	// grows).
 	mergedFields := map[string]bool{
-		"DictationModelDir":  true,
-		"Dictation":          true,
 		"Providers":          true,
 		"Profiles":           true,
 		"Agents":             true,

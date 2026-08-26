@@ -153,15 +153,6 @@ func (c *Config) merge(other *Config) {
 	if other.AutoDelegate != nil {
 		c.AutoDelegate = other.AutoDelegate
 	}
-	// Project-wins-if-set, like the scalars above: a project that ships
-	// its own speech model (or wants dictation off) should not have to
-	// restate the global config to get it.
-	if other.DictationModelDir != "" {
-		c.DictationModelDir = other.DictationModelDir
-	}
-	if other.Dictation != nil {
-		c.Dictation = other.Dictation
-	}
 	if other.SkipPermissions != nil {
 		c.SkipPermissions = other.SkipPermissions
 	}

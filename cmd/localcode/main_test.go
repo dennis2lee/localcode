@@ -11,7 +11,7 @@ import (
 // as if nothing had been typed: flag.Parse ignores leftovers, so a typo —
 // or a subcommand this build is too old to have — brought up the TUI with
 // nothing on screen to say the command had not run. Someone waiting for
-// the output of "localcode dictation probe" instead got a chat prompt.
+// the output of "localcode mcp list" instead got a chat prompt.
 func TestAnUnknownCommandIsRefusedRatherThanStartingTheAgent(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("needs the go tool to build the binary under test")
@@ -21,17 +21,17 @@ func TestAnUnknownCommandIsRefusedRatherThanStartingTheAgent(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 
-	out, err := exec.Command(bin, "dictaton", "probe").CombinedOutput()
+	out, err := exec.Command(bin, "mpc", "list").CombinedOutput()
 	if err == nil {
 		t.Errorf("a typo exited 0; it must not be mistaken for success:\n%s", out)
 	}
 	got := string(out)
-	if !strings.Contains(got, `unknown command "dictaton"`) {
+	if !strings.Contains(got, `unknown command "mpc"`) {
 		t.Errorf("does not name what was not understood:\n%s", got)
 	}
 	// And it points at what does exist, since the reason someone is here
 	// is that they do not know which word was wrong.
-	for _, name := range []string{"dictation", "mcp", "version"} {
+	for _, name := range []string{"login", "mcp", "version"} {
 		if !strings.Contains(got, name) {
 			t.Errorf("the list of subcommands omits %q:\n%s", name, got)
 		}

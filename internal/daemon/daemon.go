@@ -18,7 +18,6 @@ import (
 	"net/http"
 
 	"localcode/internal/agent"
-	"localcode/internal/dictation"
 	"localcode/internal/events"
 	"localcode/internal/mcp"
 )
@@ -34,11 +33,6 @@ type Daemon struct {
 	// special-case it.
 	MCP *mcp.Manager
 
-	// Dictation turns microphone audio into text for the prompt box. Nil
-	// when this build has no speech recognizer (every build but the
-	// desktop one) or none was configured — the handlers answer with an
-	// explanation rather than requiring callers to special-case it.
-	Dictation *dictation.Manager
 	// AllowUpdateInstall lets this daemon download a new release and start
 	// the platform's installer. Set only where the daemon and the person
 	// clicking share a machine — the desktop window — for the same reason
@@ -46,6 +40,16 @@ type Daemon struct {
 	// on the *server*, at the request of a browser somewhere else. Checking
 	// for a release is not gated; only installing one is.
 	AllowUpdateInstall bool
+	// Restart brings this program back up on the binary that has just
+	// replaced it. Nil where that cannot be done — a daemon someone
+	// reached over the network is not one to restart from a browser, and
+	// on Windows the installer owns the replacement — and where it is nil
+	// the update is reported as installed with a restart left to the user,
+	// which is what every install did before this existed.
+	//
+	// It is called after the response has gone out, because on Unix it
+	// replaces this process image and nothing after it runs.
+	Restart func()
 	// UpdateAPI overrides GitHub's API address for the update check. Empty
 	// in every real build; set by tests.
 	UpdateAPI string
@@ -150,11 +154,6 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/workspace/browse", d.handleBrowseWorkspace)
 	d.mux.HandleFunc("POST /api/workspace/reveal", d.handleRevealWorkspace)
 	d.mux.HandleFunc("GET /api/mcp-servers", d.handleListMCPServers)
-	d.mux.HandleFunc("GET /api/dictation", d.handleDictationStatus)
-	d.mux.HandleFunc("POST /api/dictation/settings", d.handleSetDictation)
-	d.mux.HandleFunc("POST /api/dictation", d.handleDictationStart)
-	d.mux.HandleFunc("POST /api/dictation/{id}/audio", d.handleDictationAudio)
-	d.mux.HandleFunc("POST /api/dictation/{id}/stop", d.handleDictationStop)
 	d.mux.HandleFunc("GET /api/agents", d.handleListAgents)
 	d.mux.HandleFunc("GET /api/commands", d.handleListCommands)
 	d.mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
@@ -233,8 +232,8 @@ func WebFS() fs.FS {
 // The cap matters because `--listen` can bind something other than
 // loopback: without it, `POST /api/sessions/{id}/messages` with a
 // multi-gigabyte "text" is allocated in full before the empty check, and
-// on success it is written into the session log. dictation.go and
-// uploads.go already capped theirs, so this was an inconsistency rather
+// on success it is written into the session log. uploads.go already
+// capped its own, so this was an inconsistency rather
 // than a decision.
 const maxJSONBody = 1 << 20
 

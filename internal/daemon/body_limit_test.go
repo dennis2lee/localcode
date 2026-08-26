@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// Every JSON handler decoded the body with no size limit, while dictation
-// and uploads capped theirs — an inconsistency rather than a decision.
+// Every JSON handler decoded the body with no size limit, while uploads
+// capped theirs — an inconsistency rather than a decision.
 // It matters because --listen can bind something other than loopback: a
 // message with a huge "text" was allocated in full before the empty check
 // and, on success, written into the session log.

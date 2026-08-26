@@ -22,10 +22,9 @@ var version = "dev"
 // "git <subcommand>" or "go <subcommand>" works — each owns its own
 // argument syntax rather than sharing run()'s flag.FlagSet.
 var subcommands = map[string]func(args []string) error{
-	"dictation": runDictation,
-	"login":     runLogin,
-	"mcp":       runMCP,
-	"version":   runVersionCommand,
+	"login":   runLogin,
+	"mcp":     runMCP,
+	"version": runVersionCommand,
 }
 
 // subcommandNames lists what main dispatches on, for the error above.
@@ -72,7 +71,7 @@ func run() error {
 
 	// A word that is not a flag and not a subcommand is a mistake, and it
 	// used to be an invisible one: flag.Parse ignores leftovers, so
-	// "localcode dictaton probe" — or any subcommand this build is too
+	// "localcode mpc add" — or any subcommand this build is too
 	// old to have — started the agent exactly as if nothing had been
 	// typed. The TUI comes up, the command never runs, and there is
 	// nothing on screen to say why.
@@ -94,7 +93,9 @@ func run() error {
 	}
 	printBanner()
 	if *server != "" {
-		return runTUIClient(*server, *agentName)
+		// No restart hook: this TUI is attached to a daemon somewhere else,
+		// and that daemon is not ours to replace.
+		return runTUIClient(*server, *agentName, nil)
 	}
 	return runEmbedded(*configPath, *listen, *agentName)
 }

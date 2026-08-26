@@ -52,18 +52,6 @@ type Config struct {
 	// via "/config auto_delegate on|off".
 	AutoDelegate *AutoDelegateConfig `json:"auto_delegate,omitempty"`
 
-	// DictationModelDir points at an unpacked sherpa-onnx streaming
-	// speech model, enabling the desktop window's microphone button.
-	// Empty disables dictation, which is the default: there is no
-	// sensible model to guess, and guessing one would mean a silent
-	// several-hundred-megabyte download the first time someone clicked.
-	DictationModelDir string `json:"dictation_model_dir,omitempty"`
-
-	// Dictation configures the speech engine. Every field is optional:
-	// with none set, an installed engine beside the binary is found and
-	// used. See docs/USAGE.md.
-	Dictation *DictationConfig `json:"dictation,omitempty"`
-
 	// SkipPermissions turns every "ask" decision into "allow" — the
 	// equivalent of Claude Code's --dangerously-skip-permissions. A nil
 	// pointer means unset, which defaults to OFF: it has to be opted into
@@ -106,52 +94,6 @@ type Config struct {
 // Delegating sidesteps that: the sub-agent's model runs against its own
 // separate session, so the main session's model and prefix never change
 // and its cache survives intact.
-// DictationConfig selects and locates the speech engine.
-//
-// Everything here is an override. The engine and its model are found
-// beside the binary, which is where the installer puts them, so a
-// working setup needs none of these fields.
-type DictationConfig struct {
-	// Engine is "whisper" or "sherpa". Empty prefers whisper, which is
-	// the one that works in every build; sherpa needs a desktop build
-	// because it is linked in rather than run as a child process.
-	Engine string `json:"engine,omitempty"`
-	// WhisperBin is the path to whisper.cpp's server executable.
-	WhisperBin string `json:"whisper_bin,omitempty"`
-	// WhisperModel is the path to a ggml model file, or to a directory
-	// holding one. When several are installed the largest is used.
-	WhisperModel string `json:"whisper_model,omitempty"`
-	// WhisperURL points dictation at a whisper.cpp server on another
-	// machine, as "host:port" or "http://host:port". Set, it wins over
-	// everything local: no engine or model needs to be installed here and
-	// no child process is started, which is the point — it puts the work
-	// on a box that has the CPU or GPU for it.
-	//
-	// It also reverses this feature's main property, so it is worth being
-	// blunt about: recorded audio then leaves this machine, over plain
-	// HTTP. Only point it somewhere you would be willing to send what you
-	// say out loud.
-	WhisperURL string `json:"whisper_url,omitempty"`
-
-	// WhisperAPI names the dialect the remote server speaks, when it
-	// should not be discovered: "openai" (POST /v1/audio/transcriptions),
-	// "whispercpp" (POST /inference) or "whisperx" (POST /asr).
-	//
-	// Empty means find out, which is the right default — the first
-	// transcription tries each in turn and remembers which one answered.
-	// Worth setting only to skip that, or when a server answers a path it
-	// does not really implement.
-	WhisperAPI string `json:"whisper_api,omitempty"`
-	// Language is the spoken language as an ISO 639-1 code, "ko" or
-	// "en". Empty auto-detects, which is what mixed speech wants and a
-	// little slower and less certain for speech that is only ever one
-	// language.
-	Language string `json:"language,omitempty"`
-	// Threads caps the CPU the engine may use. 0 picks a modest default:
-	// this runs beside a language model doing the actual work.
-	Threads int `json:"threads,omitempty"`
-}
-
 type AutoDelegateConfig struct {
 	// Enabled is the configured default. Runtime toggling goes through
 	// the loop's live setting, not this field.

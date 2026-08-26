@@ -65,18 +65,11 @@ export const stopBtn = document.getElementById('stop-btn');
 export const toggleLeftBtn = document.getElementById('toggle-left');
 export const toggleRightBtn = document.getElementById('toggle-right');
 export const appVersionEl = document.getElementById('app-version');
-export const micBtn = document.getElementById('mic');
 
 // The settings window.
 export const settingsModalEl = document.getElementById('settings-modal');
 export const settingsBtn = document.getElementById('settings-btn');
-export const settingsSaveBtn = document.getElementById('settings-save');
 export const settingsCloseBtn = document.getElementById('settings-close');
-export const settingsSaveNoteEl = document.getElementById('settings-save-note');
-export const micDeviceSelect = document.getElementById('mic-device-select');
-export const micListBtn = document.getElementById('mic-list-btn');
-export const dictationLanguageSelect = document.getElementById('dictation-language-select');
-export const dictationLanguageNoteEl = document.getElementById('dictation-language-note');
 export const windowBarEl = document.getElementById('window-bar');
 export const windowEdgesEl = document.getElementById('window-edges');
 // The resize edges, paired with the direction each one means. An array
@@ -88,10 +81,6 @@ export const windowTitleEl = document.getElementById('window-title');
 export const windowMinimizeBtn = document.getElementById('window-minimize');
 export const windowMaximizeBtn = document.getElementById('window-maximize');
 export const windowCloseBtn = document.getElementById('window-close');
-export const whisperURLInput = document.getElementById('whisper-url-input');
-export const whisperPortInput = document.getElementById('whisper-port-input');
-export const whisperAPISelect = document.getElementById('whisper-api-select');
-export const dictationEngineNoteEl = document.getElementById('dictation-engine-note');
 export const updateCheckBtn = document.getElementById('update-check-btn');
 export const updateInstallBtn = document.getElementById('update-install-btn');
 export const updateNoteEl = document.getElementById('update-note');

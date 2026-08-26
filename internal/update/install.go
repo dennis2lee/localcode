@@ -16,6 +16,12 @@ type Outcome struct {
 	// caller has to let localcode exit, since a running program's files
 	// cannot be replaced while it holds them.
 	Started bool `json:"started"`
+	// Replaced reports that this program's own binary has been written
+	// over, so the version now on disk is not the one running. Nothing
+	// about that is visible from inside the process — the old image stays
+	// mapped until it exits — which is why it is said here: whoever asked
+	// for the update is the one who can act on it.
+	Replaced bool `json:"replaced"`
 	// Path is where the downloaded file is, which is the whole answer on a
 	// platform where localcode cannot install for you.
 	Path string `json:"path"`
@@ -93,7 +99,8 @@ func apply(path string, target func() (string, error)) (Outcome, error) {
 		}, nil
 	}
 	return Outcome{
-		Path:   path,
-		Detail: "installed over " + exe + " — restart localcode to run the new version",
+		Replaced: true,
+		Path:     path,
+		Detail:   "installed over " + exe,
 	}, nil
 }

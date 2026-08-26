@@ -41,21 +41,6 @@ if [ -z "$GUI_EXE_PATH" ] || [ ! -f "$GUI_EXE_PATH" ]; then
 	exit 1
 fi
 
-# The sherpa-onnx DLLs the GUI needs at run time ship in the same CI
-# artifact as localcode-gui.exe, so they are looked for beside it. Missing
-# them is fatal rather than a warning: the MSI would install a GUI that
-# cannot start, and the failure would surface as a bare Windows error box
-# on a user's machine instead of here.
-SHERPA_DIR="$(cd "$(dirname "$GUI_EXE_PATH")" && pwd)"
-for dll in sherpa-onnx-c-api.dll sherpa-onnx-cxx-api.dll onnxruntime.dll; do
-	if [ ! -f "$SHERPA_DIR/$dll" ]; then
-		echo "error: $dll not found beside $GUI_EXE_PATH" >&2
-		echo "       localcode-gui.exe cannot start without it. Download the whole" >&2
-		echo "       gui-windows CI artifact, not just the .exe." >&2
-		exit 1
-	fi
-done
-
 
 OUT="$DIST/windows"
 mkdir -p "$OUT"
@@ -125,33 +110,8 @@ wixl -a x64 \
 	-D "GuiExePath=$GUI_EXE_PATH" \
 	-D "WebView2BootstrapperPath=$WORK/MicrosoftEdgeWebview2Setup.exe" \
 	-D "IconPath=$ROOT/build/icon/localcode.ico" \
-	-D "SherpaDir=$SHERPA_DIR" \
 	-o "$MSI" \
 	build/localcode.wxs
-
-# Let DICTATION cross to the elevated half of the install.
-#
-# Declaring the property is not enough. Windows Installer drops a
-# command-line public property before the deferred actions unless it is
-# listed in SecureCustomProperties, and InstallDictationModel's condition
-# is evaluated there — so `msiexec /i ... DICTATION=0` was silently
-# ignored on any install that went through UAC, and the ~200MB download it
-# was told to skip happened anyway.
-#
-# Done here rather than in the .wxs because wixl writes that row itself
-# from MajorUpgrade, and a second Property element with the same id makes
-# it fail the build outright. So the generated value is read and DICTATION
-# appended to it, keeping whatever wixl put there.
-echo "==> allowing DICTATION through to the elevated install"
-# Edited with a query rather than by re-importing the table: msibuild's
-# .idt import wants a schema header msiinfo does not produce, and an
-# UPDATE says exactly what is changing.
-current="$(msiinfo export "$MSI" Property | awk -F'\t' '$1=="SecureCustomProperties"{print $2}')"
-case "$current" in
-*DICTATION*) ;;
-"") msibuild "$MSI" -q "INSERT INTO \`Property\` (\`Property\`, \`Value\`) VALUES ('SecureCustomProperties', 'DICTATION')" ;;
-*) msibuild "$MSI" -q "UPDATE \`Property\` SET \`Value\`='$current;DICTATION' WHERE \`Property\`='SecureCustomProperties'" ;;
-esac
 
 # Verify what actually landed in the MSI database rather than trusting that
 # wixl did what the .wxs said. Two things have silently gone wrong here
@@ -193,43 +153,6 @@ verify_msi InstallExecuteSequence '$WebView2BootstrapperFile=3' 'the WebView2 cu
 verify_msi File 'localcode.exe' 'localcode.exe is missing from the File table'
 verify_msi File 'localcode-gui.exe' 'localcode-gui.exe is missing from the File table'
 
-# The dictation model actions. These are checked because wixl drops a
-# custom action it does not understand *without failing*: an earlier
-# version of these used Directory=, which wixl has no property for, and
-# it emitted the sequence rows while writing no CustomAction rows at all.
-# The MSI built, installed, and did nothing.
-#
-# Type 3186 = EXE named by a property, deferred, no-impersonate,
-# continue-on-failure. Property-sourced rather than FileKey-sourced on
-# purpose: a FileKey action fails with error 2753 when the file's
-# component is not part of the transaction, which on uninstall it never
-# is.
-verify_msi CustomAction 'SetDictationExe	51	DICTATIONEXE	[INSTALLDIR]localcode.exe' 'the property that points the dictation actions at localcode.exe is missing'
-verify_msi CustomAction 'InstallDictationModel	3186	DICTATIONEXE' 'the dictation model install action is missing or has the wrong type'
-verify_msi CustomAction 'RemoveDictationModel	3186	DICTATIONEXE' 'the dictation model removal action is missing or has the wrong type'
-# Skippable, and skipped only when asked: DICTATION defaults to 1.
-verify_msi Property 'DICTATION	1' 'the DICTATION property is missing, so the model install cannot be turned off with DICTATION=0'
-# And that it is allowed to cross to the elevated half of the install.
-# Declaring the property is not enough: without this row Windows Installer
-# drops a command-line DICTATION=0 before the deferred action that reads
-# it, so the download happens anyway and the check above passes while the
-# switch does nothing. That is what the previous release shipped.
-# Checked against that row specifically, not as a substring of the whole
-# table: the table also contains a DICTATION row of its own, so a
-# substring match would pass while the switch stayed broken — which is the
-# same shape as the fault being fixed.
-secure="$(msiinfo export "$MSI" Property | awk -F'\t' '$1=="SecureCustomProperties"{print $2}')"
-case "$secure" in
-*DICTATION*) ;;
-*)
-	echo "MSI verification failed: DICTATION is not in SecureCustomProperties, so DICTATION=0 is silently ignored on an elevated install" >&2
-	echo "  SecureCustomProperties = $secure" >&2
-	exit 1
-	;;
-esac
-# An upgrade must not delete the model and download it again. See the
-# comment on this condition in localcode.wxs.
-verify_msi InstallExecuteSequence 'RemoveDictationModel	REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE' 'the model removal is not guarded against upgrades, so every upgrade would re-download 400MB'
 # The desktop shortcut, and that it resolves to DesktopFolder rather than
 # some directory wixl invented. A shortcut silently landing nowhere is
 # exactly the kind of breakage this file exists to catch — it cannot be
@@ -238,8 +161,6 @@ verify_msi Shortcut 'LocalCodeDesktopShortcut	DesktopFolder' 'the desktop shortc
 # The icon has to be embedded and referenced, or every shortcut falls back
 # to the exe's default (which, for a Go binary with no resource section,
 # is the blank Windows one).
-verify_msi File 'sherpa-onnx-c-api.dll' 'the sherpa-onnx runtime is missing — localcode-gui.exe will not start'
-verify_msi File 'onnxruntime.dll' 'onnxruntime.dll is missing — localcode-gui.exe will not start'
 verify_msi Icon 'LocalCodeIcon' 'the application icon is missing from the Icon table'
 verify_msi Property 'ARPPRODUCTICON	LocalCodeIcon' 'Add/Remove Programs is not pointed at the application icon'
 

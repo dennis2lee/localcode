@@ -134,3 +134,58 @@ test('a check that fails says why', async () => {
   assert.match(app.el('update-note').textContent, /no route to host/);
   assert.equal(app.el('update-install-btn').hidden, true);
 });
+
+// The install that replaces localcode's own binary and brings it back.
+//
+// Before this the daemon replaced the binary, said "restart localcode to
+// run the new version", and nothing did — so the version in the header
+// stayed where it was and the update read as one that had not happened.
+// The page's job is only to say what is going on: the connection is about
+// to go away, and the browser reconnects to the new daemon on the same
+// address by itself.
+test('a restart is reported and no second install is offered', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': AVAILABLE,
+      'POST /api/update/install': {
+        version: '0.46.0', replaced: true, restarting: true, started: false,
+        path: '/home/u/.cache/localcode/updates/localcode-0.46.0-linux-amd64.tar.gz',
+        detail: 'installed over /home/u/.local/bin/localcode — restarting localcode now',
+      },
+    },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.match(app.el('update-note').textContent, /restarting localcode now/);
+  // Gone, not merely disabled: the daemon behind it is on its way out, and
+  // a second click would post to a server that is no longer there.
+  assert.equal(app.el('update-install-btn').hidden, true);
+});
+
+// A daemon reached from another machine replaces its own binary and stays
+// running, because restarting it is not a browser's to order. The sentence
+// is then the whole of what the user gets, so it has to arrive intact.
+test('an install with no restart tells the user to restart', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': AVAILABLE,
+      'POST /api/update/install': {
+        version: '0.46.0', replaced: true, restarting: false, started: false,
+        detail: 'installed over /home/u/.local/bin/localcode — restart localcode to run the new version',
+      },
+    },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.match(app.el('update-note').textContent, /restart localcode to run the new version/);
+});

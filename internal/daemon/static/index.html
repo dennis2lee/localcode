@@ -119,7 +119,6 @@
   <span class="comm-dot" id="comm-dot"></span>
   <span id="status-text"></span>
   <button class="pill stop" id="stop-btn" title="stop the running turn" hidden>&#9632; stop</button>
-  <button class="pill" id="mic" title="dictate a prompt">&#127908; dictation: off</button>
   <button class="pill" id="auto-delegate-btn" title="click to toggle auto-delegation"></button>
   <button class="pill" id="permission-status-btn" title="click to view or change permission settings"></button>
   <button class="pill" id="settings-btn" title="settings">&#9881; settings</button>
@@ -129,77 +128,11 @@
   Settings.
 
   One section per subject, each self-contained: adding a setting later is
-  adding a block here and a line in settings.js, not a redesign. The two
-  kinds of setting are kept visibly apart because they behave differently
-  and there is no way to hide that honestly — the microphone belongs to
-  this browser and cannot be anything else, while the language and the
-  engine address belong to the daemon and are shared by every client
-  attached to it.
+  adding a block here and a line in settings.js, not a redesign.
 -->
 <div id="settings-modal">
   <div class="box">
     <h3>Settings</h3>
-
-    <h4 class="settings-section">Dictation</h4>
-
-    <div class="settings-field">
-      <label class="field" for="mic-device-select">Microphone</label>
-      <select id="mic-device-select"></select>
-      <button id="mic-list-btn" hidden>Show the microphones on this machine</button>
-      <p class="note">Remembered in this browser only — a microphone is a
-        property of the machine you are sitting at, not of the daemon.
-        A browser hides the device list until it has been allowed to use
-        the microphone once, so a headset or USB microphone plugged in
-        since then may not be here until you ask for it above.</p>
-    </div>
-
-    <div class="settings-field">
-      <label class="field" for="dictation-language-select">Spoken language</label>
-      <select id="dictation-language-select">
-        <option value="">Detect automatically</option>
-        <option value="ko">Korean</option>
-        <option value="en">English</option>
-        <option value="ja">Japanese</option>
-        <option value="zh">Chinese</option>
-      </select>
-      <p class="note">Auto-detect is right for mixed speech. Naming the
-        language is a little faster and a little more certain when you
-        only ever dictate one.</p>
-      <p class="note warn" id="dictation-language-note" hidden></p>
-    </div>
-
-    <div class="settings-field">
-      <label class="field" for="whisper-url-input">Speech engine address</label>
-      <div class="field-row">
-        <input type="text" id="whisper-url-input" placeholder="leave empty to run on this machine">
-        <input type="text" id="whisper-port-input" class="port" placeholder="8080" inputmode="numeric">
-      </div>
-      <p class="note">A speech server elsewhere: its address on the left
-        (<code>192.168.1.50</code>, or <code>https://speech.example.com</code>
-        to use TLS) and its port on the right. Set, nothing runs here — no
-        engine or model has to be installed on this machine, and everything
-        else about dictation works exactly as it does locally.
-        <strong>Recorded audio then leaves this machine, over plain HTTP
-        with no authentication unless you asked for https.</strong> Only
-        point it somewhere you would be willing to send what you say out
-        loud.</p>
-
-      <label class="field" for="whisper-api-select">Speech server API</label>
-      <select id="whisper-api-select">
-        <option value="">Work it out on the first utterance</option>
-        <option value="whisperlive">WhisperLive (streaming, websocket)</option>
-        <option value="openai">OpenAI-compatible (/v1/audio/transcriptions)</option>
-        <option value="whispercpp">whisper.cpp (/inference)</option>
-        <option value="whisperx">WhisperX (/asr)</option>
-      </select>
-      <p class="note">"A whisper server" is not one protocol. Left to work
-        it out, localcode tries each until one answers — naming it skips
-        that, and is the answer for a server that replies to every path.
-        WhisperLive is the streaming one: the audio goes out as it is
-        recorded and the text comes back mid-sentence, instead of the
-        whole utterance being re-sent four times a second.</p>
-      <p class="note" id="dictation-engine-note"></p>
-    </div>
 
     <!--
       Updates.
@@ -220,9 +153,7 @@
       <p class="note" id="update-note"></p>
     </div>
 
-    <p class="note" id="settings-save-note"></p>
     <div class="close-row">
-      <button id="settings-save">Save</button>
       <button id="settings-close">Close</button>
     </div>
   </div>

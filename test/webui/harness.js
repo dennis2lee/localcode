@@ -59,7 +59,6 @@ function defaultRoutes() {
     },
     'GET /api/workspace': { path: '/tmp/workspace', can_browse: false },
     'GET /api/mcp-servers': [],
-    'GET /api/dictation': { ready: false, detail: 'no speech recognizer in this build' },
     'GET /api/sessions': [
       {
         id: 'sess-1',
@@ -232,6 +231,9 @@ async function load(opts = {}) {
     calls: [],
     consoleErrors: [],
     sse: null,
+    // Every SSE stream the page opens, in the order it opened them: the
+    // conversation's, and one per background-task window.
+    streams: [],
     settle,
   };
 
@@ -275,10 +277,6 @@ async function load(opts = {}) {
     clearTimeout,
     URLSearchParams,
     queueMicrotask,
-    // Dictation gives up on an upload that takes too long, and abandoning
-    // it is half of the fix: the daemon holds the session's lock for as
-    // long as the request is open. A browser has this; a bare vm context
-    // does not.
     AbortController,
   };
   // Globals the page finds in a particular host rather than in a browser:
@@ -299,74 +297,6 @@ async function load(opts = {}) {
     removeItem: (k) => stored.delete(k),
   };
   harness.storage = stored;
-  // The Web Audio side of dictation, stubbed just enough that the real
-  // capture path runs: get a microphone, load a worklet, and hand PCM
-  // chunks to the callback. Nothing here models audio — the test drives
-  // the chunks itself through harness.micChunk(). It exists because the
-  // dictation start path had no coverage at all, and the bug that hid
-  // there (the session id posted as "[object Object]") was one no
-  // button-visibility test could ever have seen.
-  // getUserMedia records its constraints so a test can assert which
-  // microphone was actually asked for, and enumerateDevices is
-  // overridable so the "labels are hidden until access is granted" case
-  // can be exercised.
-  harness.streams = [];
-  harness.mediaConstraints = [];
-  // Tracks how many microphones are open right now, so a test can catch
-  // one that was opened and then lost track of — the browser keeps
-  // recording, and its indicator stays lit, with nothing left holding a
-  // reference to stop it.
-  let openMics = 0;
-  harness.openMicrophones = () => openMics;
-  // devices may be a list or a function of no arguments, so a test can
-  // model the thing browsers actually do: report one anonymous input until
-  // microphone access has been granted, and the real set afterwards.
-  const deviceList = () => (typeof opts.devices === 'function' ? opts.devices() : (opts.devices || []));
-  const deviceListeners = [];
-  sandbox.navigator = {
-    mediaDevices: {
-      getUserMedia: async (constraints) => {
-        harness.mediaConstraints.push(constraints);
-        openMics++;
-        if (opts.denyMicrophone) {
-          openMics--;
-          throw new Error(opts.denyMicrophone === true ? 'NotAllowedError' : opts.denyMicrophone);
-        }
-        return { getTracks: () => [{ stop() { openMics--; } }] };
-      },
-      enumerateDevices: async () => deviceList(),
-      addEventListener: (name, fn) => {
-        if (name === 'devicechange') deviceListeners.push(fn);
-      },
-    },
-  };
-  // devicesChanged fires the event a browser sends when something is
-  // plugged in or unplugged.
-  harness.devicesChanged = () => deviceListeners.forEach((fn) => fn());
-  sandbox.URL = { createObjectURL: () => 'blob:worklet', revokeObjectURL() {} };
-  sandbox.Blob = class Blob {
-    constructor(parts) { this.parts = parts; }
-  };
-  sandbox.AudioWorkletNode = class AudioWorkletNode {
-    constructor() {
-      this.port = { onmessage: null };
-      harness.micNode = this;
-    }
-  };
-  sandbox.AudioContext = class AudioContext {
-    constructor() {
-      this.audioWorklet = { addModule: async () => {} };
-    }
-    createMediaStreamSource() { return { connect() {} }; }
-    async close() {}
-  };
-  // micChunk pushes one buffer of "audio" the way the worklet would.
-  harness.micChunk = (bytes = new Uint8Array(8).buffer) => {
-    if (harness.micNode && harness.micNode.port.onmessage) {
-      harness.micNode.port.onmessage({ data: bytes });
-    }
-  };
-
   sandbox.confirm = () => (opts.confirm === undefined ? true : opts.confirm);
   sandbox.prompt = () => (opts.prompt === undefined ? null : opts.prompt);
 
@@ -418,8 +348,7 @@ async function load(opts = {}) {
     // HTML string a browser would parse.
     transcript: () => document.getElementById('transcript').innerHTML,
     // wait lets real time pass, for the handful of behaviours that are
-    // about a deadline rather than about an event: dictation gives up on
-    // an upload that takes too long, and the test has to outlast it.
+    // about a deadline rather than about an event.
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     // callsTo lists the requests made to one endpoint pattern.
     callsTo: (method, pattern) =>

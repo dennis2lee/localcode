@@ -53,19 +53,6 @@
             <File Id='LocalCodeGuiEXE' Name='localcode-gui.exe' Source='$(var.GuiExePath)' KeyPath='yes' />
           </Component>
           <!--
-            Speech dictation links sherpa-onnx, which on Windows is three
-            DLLs loaded at run time. localcode-gui.exe will not start at
-            all without them — Windows resolves imports before any of our
-            code runs — so they are not optional extras but part of the
-            executable's contract. They come from the same CI artifact as
-            the exe, built against the same version.
-          -->
-          <Component Id='SherpaRuntime' Guid='*'>
-            <File Id='SherpaCAPIDLL' Name='sherpa-onnx-c-api.dll' Source='$(var.SherpaDir)/sherpa-onnx-c-api.dll' KeyPath='yes' />
-            <File Id='SherpaCXXAPIDLL' Name='sherpa-onnx-cxx-api.dll' Source='$(var.SherpaDir)/sherpa-onnx-cxx-api.dll' />
-            <File Id='OnnxRuntimeDLL' Name='onnxruntime.dll' Source='$(var.SherpaDir)/onnxruntime.dll' />
-          </Component>
-          <!--
             The GUI window needs the WebView2 runtime. Windows 11 and
             recent Windows 10 ship it already; older systems do not.
             Install Microsoft's official Evergreen Bootstrapper (a ~2MB
@@ -179,84 +166,6 @@
                   Impersonate='no' />
 
     <!--
-      Fetch the speech engine and model dictation needs, unless
-      DICTATION=0 was passed. Without them the microphone control is
-      inert, and the alternative is a manual routine (find the release,
-      download two archives, unpack them into the right directory, put
-      the paths in config.json with every backslash doubled) that most
-      people will simply not do.
-
-      It is localcode.exe doing the work rather than a script: the
-      download, checksum check and extraction are Go code with tests, and
-      the same command is what a user runs by hand if this step is
-      skipped or fails. Into [INSTALLDIR]models because that is where
-      localcode looks when nothing is configured — so nothing has to edit
-      a config file afterwards — and because a per-machine location means
-      one download serves every account rather than one per user.
-
-      The engine lands in that same directory rather than beside
-      localcode.exe. Windows resolves a program's imports from its own
-      directory, and the program doing the loading here is
-      whisper-server.exe, so engine and DLLs travel together and
-      everything downloaded stays under models\.
-
-      Two consequences worth knowing, both accepted rather than overlooked:
-
-      * The install takes as long as a ~200MB download. MSI waits for a
-        deferred action even with Return='ignore', and there is no progress
-        text. DICTATION=0 skips it:
-            msiexec /i localcode-x.y.z-windows-amd64.msi DICTATION=0
-      * Return='ignore' means a machine with no internet, a proxy in the
-        way, or a full disk still gets a working install — just without
-        dictation, which it would not have had anyway. The failure is not
-        silent to the user: the microphone pill says dictation is
-        unavailable and names the reason.
-
-      Re-running is cheap. `dictation install` returns immediately if a
-      usable engine and model are already in place, which is what makes
-      this safe to leave unconditional across upgrades.
-    -->
-    <!--
-      Both dictation actions run localcode.exe named by a property rather
-      than by a File table key.
-
-      A FileKey action (what InstallWebView2Runtime uses) fails with MSI
-      error 2753 whenever the referenced file's component is not part of
-      the current transaction — and on uninstall it never is, since the
-      whole point is that the file is going away. A property-sourced EXE
-      action has no such tie. DICTATIONEXE is filled in below, after
-      CostFinalize has resolved INSTALLDIR to a real path and before
-      either action is scheduled.
-    -->
-    <CustomAction Id='SetDictationExe'
-                  Property='DICTATIONEXE'
-                  Value='[INSTALLDIR]localcode.exe'
-                  Execute='immediate' />
-
-    <CustomAction Id='InstallDictationModel'
-                  Property='DICTATIONEXE'
-                  ExeCommand='dictation install --dir "[INSTALLDIR]models"'
-                  Execute='deferred'
-                  Return='ignore'
-                  Impersonate='no' />
-
-    <!--
-      The engine and model are downloaded, not installed as components,
-      so Windows Installer does not know about the files and will not
-      remove them. Without this, uninstalling leaves ~200MB behind
-      forever.
-
-      Sequenced before RemoveFiles, since it is localcode.exe that does the
-      deleting and RemoveFiles is what takes localcode.exe away.
-    -->
-    <CustomAction Id='RemoveDictationModel'
-                  Property='DICTATIONEXE'
-                  ExeCommand='dictation remove --dir "[INSTALLDIR]models"'
-                  Execute='deferred'
-                  Return='ignore'
-                  Impersonate='no' />
-
-    <!--
       Point the desktop shortcut at the installing user's own Desktop
       instead of the all-users one (see the DesktopFolder comment above).
 
@@ -308,29 +217,6 @@
       false and disabling the custom action without a word. package-msi.sh
       checks the built MSI for the resolved condition to catch that.
     -->
-    <!--
-      Whether to fetch the speech model during install. Overridable on the
-      command line for an offline or bandwidth-constrained machine:
-
-          msiexec /i localcode-x.y.z-windows-amd64.msi DICTATION=0
-
-      Public (all upper case) so it CAN be passed to the elevated half of
-      the install — necessary but not sufficient. Windows Installer only
-      forwards a public property from the command line to the server side
-      if it is listed in SecureCustomProperties, and this one was not. The
-      condition on InstallDictationModel is evaluated in
-      InstallExecuteSequence, which is the server side: a standard user
-      running with DICTATION=0 and consenting to UAC therefore got the
-      default of 1, and the install performed the download it had been
-      told to skip, with no progress UI since the action is deferred.
-
-      The row cannot be declared here: wixl generates SecureCustomProperties
-      itself from MajorUpgrade, and a second Property element with the same
-      id makes it fail outright. package-msi.sh appends DICTATION to the
-      generated row after the build, and verifies the result.
-    -->
-    <Property Id='DICTATION' Value='1' />
-
     <InstallExecuteSequence>
       <!--
         Unconditional on purpose. Uninstall has to resolve DesktopFolder
@@ -338,46 +224,13 @@
         shortcut on the public desktop and leave the real one behind.
       -->
       <Custom Action='SetPersonalDesktop' Before='CostFinalize' />
-      <!--
-        After CostFinalize, which is what turns INSTALLDIR into a path,
-        and before both actions that read it — including the uninstall
-        one, which runs far earlier than the install one.
-      -->
-      <Custom Action='SetDictationExe' After='CostFinalize' />
       <Custom Action='InstallWebView2Runtime' After='InstallFiles'>NOT REMOVE AND $$WebView2BootstrapperFile=3</Custom>
-      <!--
-        After InstallFiles, because it runs localcode.exe and that is the
-        action that puts localcode.exe on disk. DICTATION is declared with
-        a default of 1 below, so the only way to land here with anything
-        else is to have asked for it on the command line.
-      -->
-      <Custom Action='InstallDictationModel' After='InstallFiles'>NOT REMOVE AND DICTATION="1"</Custom>
-      <!--
-        Before RemoveFiles, which is what deletes the localcode.exe this
-        needs to run. REMOVE="ALL" rather than plain REMOVE so that
-        removing a single feature does not take the model with it.
-
-        "NOT UPGRADINGPRODUCTCODE" is what keeps an upgrade from throwing
-        the model away and downloading it again.
-
-        A major upgrade uninstalls the old product first — wixl hardcodes
-        RemoveExistingProducts right after InstallValidate — and that
-        uninstall runs the old package's own sequence, this action
-        included. So without the guard the order is: delete the 400MB
-        model, install the new files, notice no model is present,
-        download it again. Every upgrade, for a file that had not
-        changed. Windows Installer sets UPGRADINGPRODUCTCODE only in that
-        case, which is exactly the removal that should leave the model
-        alone.
-      -->
-      <Custom Action='RemoveDictationModel' Before='RemoveFiles'>REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
     </InstallExecuteSequence>
 
     <Feature Id='Complete' Level='1'>
       <ComponentRef Id='MainExecutable' />
       <ComponentRef Id='StartMenuShortcut' />
       <ComponentRef Id='GuiExecutable' />
-      <ComponentRef Id='SherpaRuntime' />
       <ComponentRef Id='GuiStartMenuShortcut' />
       <ComponentRef Id='DesktopShortcut' />
       <ComponentRef Id='WebView2BootstrapperFile' />

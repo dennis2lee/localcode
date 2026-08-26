@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -60,6 +61,15 @@ func runGUI(configPath string) error {
 		// replaces the program on the machine the daemon runs on, so the
 		// button only exists where that machine is the one being looked at.
 		d.AllowUpdateInstall = true
+		// No d.Restart here, and it is not an omission. The restart exists
+		// for the install that replaces localcode's own binary, and the
+		// desktop window is never that install: macOS ships it as a .app
+		// bundle, which selfInstall refuses to write into piece by piece,
+		// and Windows ships an MSI, which msiexec applies after localcode
+		// has exited. Both report Replaced=false, so the reply says what
+		// it always said. Wiring a hook that could only fire on a window
+		// closing would mean a window closed an hour later reopening
+		// itself, which is a worse fault than the one being fixed.
 		// Only here. The window and the daemon share a machine and a user
 		// in this mode, so a folder picker opens where the person clicking
 		// is sitting. Every other mode leaves d.PickDirectory nil — over
@@ -104,6 +114,28 @@ func runEmbedded(configPath, listen, agentName string) error {
 	// password.
 	d.AllowUpdateInstall = loopbackOnly(listen)
 
+	// Coming back up on the new binary once an update has replaced it.
+	//
+	// Quit first, exec after. The TUI owns the terminal — raw mode, the
+	// alternate screen — and exec'ing out from under it would leave the
+	// new program to inherit a terminal the old one never put back. So
+	// the update asks the program to stop, p.Run returns the way it does
+	// for any other exit, and the exec happens on a terminal that is
+	// already the user's again.
+	restart := make(chan struct{}, 1)
+	var prog atomic.Pointer[tea.Program]
+	if d.AllowUpdateInstall {
+		d.Restart = func() {
+			select {
+			case restart <- struct{}{}:
+			default:
+			}
+			if p := prog.Load(); p != nil {
+				p.Quit()
+			}
+		}
+	}
+
 	srv := &http.Server{Addr: listen, Handler: d.Handler()}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -115,10 +147,23 @@ func runEmbedded(configPath, listen, agentName string) error {
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	return runTUIClient("http://"+listen, agentName)
+	err = runTUIClient("http://"+listen, agentName, &prog)
+	select {
+	case <-restart:
+		// Everything this process owns goes with the exec, so the daemon's
+		// cleanup runs here rather than from the deferred call above,
+		// which the exec would never reach.
+		cleanup()
+		return execSelf()
+	default:
+		return err
+	}
 }
 
-func runTUIClient(serverURL, agentName string) error {
+// runTUIClient attaches a TUI to a daemon. prog, when not nil, is handed
+// the running program so something outside this function can end it — the
+// update path, which has to bring the terminal back before it restarts.
+func runTUIClient(serverURL, agentName string, prog *atomic.Pointer[tea.Program]) error {
 	c := client.New(serverURL)
 
 	ctx := context.Background()
@@ -134,6 +179,9 @@ func runTUIClient(serverURL, agentName string) error {
 
 	model := tui.New(c, sess.ID, sess.Agent, eventCh)
 	p := tea.NewProgram(model)
+	if prog != nil {
+		prog.Store(p)
+	}
 	_, err = p.Run()
 	return err
 }

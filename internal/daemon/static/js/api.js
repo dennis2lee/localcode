@@ -75,32 +75,6 @@ export const setWorkspace = (path, sessionID) => api('POST', '/api/workspace', {
 export const browseWorkspace = (start) => api('POST', '/api/workspace/browse', { start });
 export const getMCPServers = () => api('GET', '/api/mcp-servers');
 
-export const getDictationStatus = () => api('GET', '/api/dictation');
-// Returns the id itself, not the {id} envelope the daemon sends. The
-// caller only ever puts this straight back into a URL, and handing it an
-// object meant every later request went to /api/dictation/[object
-// Object]/... — which the daemon answered with "no dictation session",
-// so dictation never started once.
-export const startDictation = async () => (await api('POST', '/api/dictation')).id;
-export const stopDictation = (id) => api('POST', `/api/dictation/${id}/stop`);
-// Raw PCM, not JSON: base64 would cost a third more bytes per chunk on a
-// request that happens four times a second, for nothing.
-//
-// signal is how a caller takes the request back. A speech server that
-// accepts the connection and never answers holds this open indefinitely,
-// and everything dictation does is queued behind it — including switching
-// the microphone off.
-export async function sendDictationAudio(id, buffer, signal) {
-  const resp = await fetch(`/api/dictation/${id}/audio`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/octet-stream' },
-    body: buffer,
-    signal,
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new ApiError(resp.status, data.error || `POST /api/dictation/${id}/audio: ${resp.status}`);
-  return data;
-}
 
 export const getSessions = () => api('GET', '/api/sessions');
 export const createSession = (agent) => api('POST', '/api/sessions', { agent });
@@ -125,13 +99,3 @@ export const addPermissionRule = (tool, match, decision) =>
   api('POST', '/api/permissions/rules', { tool, match, decision });
 export const removePermissionRule = (tool, match, decision) =>
   api('POST', '/api/permissions/rules/remove', { tool, match, decision });
-
-// dictationStatus reports whether dictation can run, and the settings in
-// force — the settings panel needs both and one request answers it.
-export async function dictationStatus() {
-  return api('GET', '/api/dictation');
-}
-
-export async function setDictationSettings(body) {
-  return api('POST', '/api/dictation/settings', body);
-}

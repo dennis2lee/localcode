@@ -46,14 +46,29 @@ func effectiveKeepGoing(profile config.Profile) int {
 // keepGoingPrompt is what the model is told. It is a user message,
 // because that is the only thing a model answers.
 //
-// It says what happened rather than just "continue": the failure is the
-// model treating a description of the next step as an acceptable end to a
-// turn, and naming that is what stops the next reply being another
-// description.
-const keepGoingPrompt = "Continue. You ended your turn with the task unfinished — you described the next step " +
-	"instead of taking it. Take it now, using the tools, and keep going until the work is actually done. " +
-	"End your turn only when the task is complete, or when you need a decision that only the user can make " +
-	"— and if you need one, ask for it plainly."
+// It says what may have happened rather than just "continue": the failure
+// is the model treating a description of the next step as an acceptable
+// end to a turn, and naming that is what stops the next reply being
+// another description.
+//
+// What it must not do is assert that the work is unfinished. localcode
+// cannot tell a stall from a finished task — that is stated plainly at
+// the top of this file — so a prompt that says "you did not finish" is a
+// claim it has no evidence for, aimed at a model whose whole training is
+// to comply with the last instruction. A finished model told it has not
+// finished goes and finds something to do: it re-reads a file, re-runs
+// the build, redoes the work it just did. That is the "it keeps repeating
+// a task it already completed" report, and it comes from this sentence
+// rather than from the budget.
+//
+// So the question is put as a question, and "it is already done" is named
+// as an acceptable answer. A model that genuinely stalled still has its
+// next step to take; one that finished now has somewhere to go that is
+// not more work.
+const keepGoingPrompt = "Check whether the task you were given is actually complete. " +
+	"If it is, say so in one line and stop — do not re-run, re-check or redo work you have already done. " +
+	"If it is not, take the next step now using the tools instead of describing it, and keep going until the " +
+	"work is done. If you need a decision only the user can make, ask for it plainly."
 
 // keepGoing decides whether this turn should carry on by itself, and with
 // what.
@@ -79,11 +94,22 @@ func (l *Loop) keepGoing(sessionID string, profile config.Profile, stopReason st
 	if !ranTools || refused || stopReason == "max_tokens" {
 		return "", false
 	}
-	// Told to carry on once already, and it answered with more prose. A
-	// model that has genuinely finished says so twice; one that has
-	// stalled picks up a tool the moment it is prodded. Taking the second
-	// paragraph as the answer is what keeps a finished task from costing
-	// the whole keep_going budget in turns that say "anything else?".
+	// Told to carry on once already, and nothing new came of it.
+	//
+	// "Nothing new" is the important part, and it is what this guard got
+	// wrong. It used to clear on any tool call at all, on the reasoning
+	// that a stalled model picks up a tool the moment it is prodded and a
+	// finished one answers with more prose. A finished model does not
+	// answer with prose: told it has not finished, it goes and does
+	// something — reads a file it has already read, re-runs the build it
+	// has already run — and every one of those cleared the guard and
+	// bought another nudge. A completed task was re-executed for the whole
+	// budget, which is the fault this reads as from the outside.
+	//
+	// So work now means a call this turn has not already made. Re-running
+	// the same build after fixing the file that broke it is still work,
+	// because the fix is a call of its own; re-running it to admire the
+	// result is not.
 	if nudgedSinceWork {
 		return "", false
 	}
@@ -126,4 +152,27 @@ func endsWithQuestion(text string) bool {
 		return strings.HasSuffix(line, "?") || strings.HasSuffix(line, "？")
 	}
 	return false
+}
+
+// newWork records this step's tool calls and reports whether any of them
+// is one this turn has not made before.
+//
+// The key is the tool's name and its arguments exactly as the model sent
+// them, so "the same call" means the same call and not merely the same
+// tool: editing two files is two pieces of work, and reading one file
+// twice is one.
+//
+// Called for its side effect as much as its answer — every step's calls
+// are recorded, whether or not a nudge is in play, because the comparison
+// a nudge needs is against the whole turn rather than the step before it.
+func newWork(seen map[string]bool, toolUses []provider.Block) bool {
+	fresh := false
+	for _, tu := range toolUses {
+		key := tu.ToolName + "\x00" + string(tu.ToolInput)
+		if !seen[key] {
+			seen[key] = true
+			fresh = true
+		}
+	}
+	return fresh
 }

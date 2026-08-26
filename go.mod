@@ -11,7 +11,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.55.1
 	github.com/aws/aws-sdk-go-v2/service/sso v1.32.1
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.37.1
-	github.com/k2-fsa/sherpa-onnx-go v1.13.4
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/webview/webview_go v0.0.0-20240831120633-6173450d4dd6
 	golang.org/x/sys v0.47.0
@@ -41,9 +40,6 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-linux v1.13.4 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4 // indirect
-	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect

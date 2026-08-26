@@ -45,16 +45,16 @@ func TestAPlaceholderTakesItsValueFromTheEnvironment(t *testing.T) {
 
 // Anywhere in the document, not just in the fields this version happens
 // to think of as secrets — a base_url, a model id, an MCP server's own
-// environment, the address of a speech server.
+// environment, an MCP server's own credentials.
 func TestEveryStringInTheFileCanUseOne(t *testing.T) {
 	t.Parallel()
 	doc := `{
 	  "profiles": {"main": {"provider": "p", "model": "{env:LC_MODEL}", "max_tokens": 8000}},
 	  "mcp_servers": {"gh": {"command": "npx", "args": ["-y", "{env:LC_PKG}"], "env": {"TOKEN": "{env:LC_TOKEN}"}}},
-	  "dictation": {"whisper_url": "http://{env:LC_HOST}:9090"}
+	  "providers": {"p": {"base_url": "http://{env:LC_HOST}:9090/v1"}}
 	}`
 	got := expand(t, doc, env("LC_MODEL", "claude-opus-5", "LC_PKG", "@modelcontextprotocol/server-github", "LC_TOKEN", "ghp_x", "LC_HOST", "speech.local"))
-	for _, want := range []string{"claude-opus-5", "@modelcontextprotocol/server-github", "ghp_x", "http://speech.local:9090"} {
+	for _, want := range []string{"claude-opus-5", "@modelcontextprotocol/server-github", "ghp_x", "http://speech.local:9090/v1"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q is missing from %s", want, got)
 		}

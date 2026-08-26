@@ -69,13 +69,9 @@ test('a turn ends on turn.done', async () => {
 - `app.calls` / `app.callsTo(method, path)` — the requests the page made
   (`path` may be a string or a RegExp)
 - `app.type(text)` / `app.press(key, props)` — drive the prompt box
-- `app.micChunk(bytes)` — push one buffer of "audio" the way the capture
-  worklet would, for the dictation tests
-- `app.devicesChanged()` — fire the event a browser sends when a microphone
-  is plugged in or removed
 - `app.settle()` — let pending promise chains finish
 - `app.wait(ms)` — let real time pass, for the few behaviours that are about
-  a deadline rather than an event (dictation gives up on a slow upload)
+  a deadline rather than an event
 
 `load(opts)` also takes:
 
@@ -83,8 +79,6 @@ test('a turn ends on turn.done', async () => {
 | --- | --- |
 | `routes` | overrides the fake daemon per test (see below) |
 | `globals` | extra globals in the page's sandbox |
-| `devices` | the microphone list `enumerateDevices` returns — an array, or a function called per query |
-| `denyMicrophone` | make `getUserMedia` reject, the way a browser does when permission is refused |
 | `localStorage` | the stored values the page starts with |
 | `confirm` / `prompt` | answers for the browser dialogs the page opens |
 | `init` | run before the modules are evaluated, for a page condition that has to exist at load time |

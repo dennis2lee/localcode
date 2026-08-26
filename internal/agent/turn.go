@@ -104,6 +104,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	lastRefused := false
 	nudgedSinceWork := false
 	nudges := 0
+	// Every tool call this turn has already made, so a carry-on that only
+	// repeats them can be told from one that does something. A model told
+	// to continue when it had in fact finished does not argue: it re-reads
+	// a file or re-runs the build, and that used to count as work and buy
+	// another nudge. See keepGoing.
+	madeCalls := map[string]bool{}
 
 	for {
 		history := l.history(sessionID)
@@ -264,10 +270,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return nil
 		}
 
+		if newWork(madeCalls, toolUses) {
+			nudgedSinceWork = false
+		}
 		resultBlocks, refused := l.runTools(ctx, sessionID, toolUses, agentCfg.Tools, l.contextWindow(ctx, profile))
 		ranTools = true
 		lastRefused = refused
-		nudgedSinceWork = false
 		resultBlocks = append(resultBlocks, l.takeInjected(sessionID)...)
 		l.appendHistory(sessionID, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
 	}

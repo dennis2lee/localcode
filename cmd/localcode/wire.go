@@ -12,7 +12,6 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/credentials"
 	"localcode/internal/daemon"
-	"localcode/internal/dictation"
 	mcpclient "localcode/internal/mcp"
 	"localcode/internal/memory"
 	"localcode/internal/provider"
@@ -189,66 +188,13 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
 
-	// The Manager is always built, including with no model directory
-	// configured — that is the case it exists to explain.
-	//
-	// It used to be created only when DictationModelDir was set, which
-	// meant an unconfigured desktop build left d.Dictation nil, and the
-	// status endpoint's nil branch answers with one fixed string: "this
-	// build has no speech recognizer". On a desktop build that is simply
-	// false, and it points whoever reads it at the one thing they cannot
-	// fix instead of the config key they can. Manager.Ready checks
-	// Available() before it looks at the model, so it distinguishes the
-	// two correctly; letting it answer is the whole fix.
-	//
-	// Which engine that turns out to be is decided at run time, not
-	// build time: the whisper engine is a file beside the binary, so
-	// every build can dictate if one is installed. Sherpa remains
-	// desktop-only, being linked in rather than run.
 	// The same path "always allow" persists to, and for the same reason:
 	// a settings change the user makes should still be there next time.
 	if path, err := resolvedConfigPath(configPath); err == nil {
 		d.ConfigPath = path
 	}
-	dm := dictation.NewManager(dictationConfig(cfg))
-	dm.StartReaper()
-	d.Dictation = dm
-	prevCleanup := cleanup
-	cleanup = func() { dm.Close(); prevCleanup() }
 
 	return d, cleanup, nil
-}
-
-// dictationConfig turns the file's settings into the package's, keeping
-// the two vocabularies apart: config.json is a user-facing document and
-// dictation.Config is an argument.
-func dictationConfig(cfg *config.Config) dictation.Config {
-	out := dictation.Config{ModelDir: resolveDictationModelDir(cfg.DictationModelDir)}
-	if d := cfg.Dictation; d != nil {
-		out.Engine = dictation.Engine(d.Engine)
-		out.WhisperBin = d.WhisperBin
-		out.WhisperModel = d.WhisperModel
-		out.WhisperURL = d.WhisperURL
-		out.WhisperAPI = d.WhisperAPI
-		out.Language = d.Language
-		out.Threads = d.Threads
-	}
-	return out
-}
-
-// resolveDictationModelDir lets an explicit dictation_model_dir win, and
-// otherwise looks where `localcode dictation install` puts a model.
-//
-// The fallback is what makes installing a model the entire setup. Without
-// it the Windows installer would have to edit a config file it does not
-// own — or, worse, print instructions telling each user to add a JSON
-// path by hand, on the one platform where writing that path correctly
-// means knowing to double every backslash.
-func resolveDictationModelDir(configured string) string {
-	if configured != "" {
-		return configured
-	}
-	return dictation.DefaultModelDir()
 }
 
 // buildRegistry constructs the tool registry and registers every built-in

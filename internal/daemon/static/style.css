@@ -575,12 +575,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
 }
 .pill:disabled { cursor: not-allowed; opacity: 0.6; }
-/* On the first pill only, so the whole group rides the right edge. */
-/* Whichever of these is first rides the right edge with the rest of the
-   group behind it. The stop button only exists while a turn is running,
-   so both need the rule. */
-#stop-btn, #mic { margin-left: auto; }
-#stop-btn ~ #mic { margin-left: 0; }
+/* The first pill rides the right edge and the rest of the group follows
+   it. The stop button only exists while a turn is running, so the rule
+   has to name whichever pill can come first. */
+#stop-btn, #auto-delegate-btn { margin-left: auto; }
+#stop-btn ~ #auto-delegate-btn { margin-left: 0; }
 #stop-btn { color: var(--err); border-color: var(--err); }
 #stop-btn:hover { background: color-mix(in srgb, var(--err) 18%, transparent); }
 #auto-delegate-btn.on { color: var(--interactive); border-color: var(--interactive); }
@@ -763,32 +762,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .led-degraded { animation: none; opacity: 0.55; }
 }
 
-/* Dictation. The provisional tail of the prompt cannot be styled on its
-   own — a textarea holds no markup — so the whole box goes grey while a
-   sentence is in progress and returns to normal when it settles. Less
-   precise than colouring only the tail, but a contenteditable would cost
-   the IME behaviour a Korean or Japanese typist depends on, which is a
-   far worse trade. */
-#input.has-provisional { color: var(--muted); }
-#mic.recording {
-  color: var(--err);
-  border-color: var(--err);
-}
-#mic.recording::after {
-  content: '';
-  display: inline-block;
-  width: 6px; height: 6px;
-  margin-left: 6px;
-  border-radius: 50%;
-  background: var(--err);
-  animation: mic-pulse 1.4s ease-in-out infinite;
-  vertical-align: middle;
-}
-@keyframes mic-pulse { 50% { opacity: .25; } }
-@media (prefers-reduced-motion: reduce) {
-  #mic.recording::after { animation: none; }
-}
-
 /* The per-session activity dot in the left panel. Same idea as the
    status-bar light, one per conversation: the status line under the
    prompt only ever spoke for the session on screen, so a turn still
@@ -866,12 +839,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #settings-modal .settings-field { margin-bottom: 16px; }
 #settings-modal select,
 #settings-modal input[type="text"] { width: 100%; }
-/* Address and port on one line, because they are one address: the port
-   box is sized to the four digits it holds rather than sharing the width
-   equally, which would read as two unrelated fields. */
+/* Two controls that belong together on one line — the update panel's
+   check and install buttons. */
 #settings-modal .field-row { display: flex; gap: 8px; }
-#settings-modal .field-row input.port { width: 6.5em; flex: none; }
-/* The one note that has to be noticed rather than merely available:
-   audio leaving the machine is a reversal of what dictation otherwise
-   promises. */
+/* A note that has to be noticed rather than merely available. */
 #settings-modal .note.warn { color: var(--warn); }

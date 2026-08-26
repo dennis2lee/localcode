@@ -95,8 +95,12 @@ func TestApplyReplacesAnInstallThisUserOwns(t *testing.T) {
 	if !strings.Contains(out.Detail, "installed over "+exe) {
 		t.Errorf("the answer does not say it installed: %q", out.Detail)
 	}
-	if !strings.Contains(out.Detail, "restart") {
-		t.Errorf("the answer does not say a restart is needed: %q", out.Detail)
+	// Reported as a fact rather than as a sentence about restarting: what
+	// to do about the running copy is the caller's to decide, and the two
+	// callers decide differently — the daemon restarts itself where it
+	// can, and says so where it cannot.
+	if !out.Replaced {
+		t.Error("replacing the installed binary was not reported as such, so nothing downstream can restart")
 	}
 	if out.Started {
 		t.Error("an installer was reported as running when nothing was started")

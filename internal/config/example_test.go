@@ -27,9 +27,6 @@ func TestExampleConfigStillMatchesTheStruct(t *testing.T) {
 	// Spot-check the blocks that are easy to leave behind when a
 	// feature moves: an example that silently stops mentioning a
 	// setting is how a setting becomes undiscoverable.
-	if cfg.Dictation == nil {
-		t.Error("no dictation block; the example no longer shows how to configure speech")
-	}
 	if len(cfg.Providers) == 0 {
 		t.Error("no providers in the example")
 	}

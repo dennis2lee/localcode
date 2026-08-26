@@ -4,7 +4,7 @@ import {
   autoDelegateBtn, delegateCloseBtn, delegateEnabledCheckbox, delegateAgentSelect,
   delegateMatchAddBtn, delegateMatchInput,
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
-  workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, micBtn, stopBtn,
+  workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, stopBtn,
   workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskCloseBtn,
   windowBarEl, windowMinimizeBtn, windowMaximizeBtn, windowCloseBtn, windowEdgesEl, windowTitleEl, windowEdges,
 } from './dom.js';
@@ -17,8 +17,7 @@ import {
   atInputStart, atInputEnd, historyPrev, historyNext,
   navigatingHistory, endHistoryNavigation,
 } from './composer.js';
-import { loadAgents, loadCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, loadDictation, cycleAgent } from './loaders.js';
-import { toggleDictation, stopDictation, isDictating } from './dictation.js';
+import { loadAgents, loadCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
 import { loadSessions, selectSession, createNewSession, deleteAllSessions } from './sessions.js';
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
@@ -68,23 +67,12 @@ inputEl.addEventListener('drop', async (e) => {
   autoResizeInput();
 });
 
-micBtn.addEventListener('click', toggleDictation);
 stopBtn.addEventListener('click', cancelTurn);
 
 // submitPrompt is the one way a prompt leaves the box, whichever control
-// asked for it.
-//
-// Sending finishes the sentence by definition, so the microphone goes off
-// with it rather than leaving grey text arriving into an already-sent
-// prompt — and the stop is awaited, because the last thing said is still
-// being transcribed and belongs in the prompt being sent.
-//
-// Enter did this and the Send button did not, which is the kind of split
-// nobody finds by reading: the two controls do the same thing and one of
-// them left dictation running, still typing into a box the person had just
-// emptied.
+// asked for it. Enter and the Send button have to stay the same thing:
+// a split between them is the kind nobody finds by reading.
 function submitPrompt() {
-  if (isDictating()) return stopDictation().then(sendMessage);
   return sendMessage();
 }
 
@@ -232,7 +220,6 @@ async function init() {
     loadWorkspace(),
     loadMCPServers(),
     loadVersion(),
-    loadDictation(),
     loadSessions(),
   ]);
   // One deterministic status-bar render after the race settles: the bar
@@ -262,8 +249,7 @@ export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, can
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
 export { forkSession } from './sessions.js';
-export { toggleDictation, stopDictation, isDictating, makeDownsampler, WORKLET_SRC, dictationTimeouts } from './dictation.js';
 export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
-export { settings, openSettings, selectedMicDeviceId, MIC_DEVICE_KEY, splitAddress, joinAddress } from './settings.js';
+export { settings, openSettings } from './settings.js';
 export { renderSessionList, selectSession, deleteSessionConfirm, reorderList, dropSessionOn } from './sessions.js';

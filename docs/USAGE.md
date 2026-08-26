@@ -151,7 +151,7 @@ Any string value in config.json may be `{env:NAME}`, and is replaced by that env
 | `{env:NAME}` | Required. The variable must be set and non-empty, or the config does not load. |
 | `{env:NAME:-fallback}` | Optional. The text after `:-` is used when the variable is unset or empty. |
 
-* **Every string, not just keys.** A base_url, a model id, an MCP server's own environment, the address of a speech server: anything that differs between machines can come from the environment instead of being edited per machine.
+* **Every string, not just keys.** A base_url, a model id, an MCP server's own environment, an `Authorization` header: anything that differs between machines can come from the environment instead of being edited per machine.
 * **A placeholder may be part of a value**, and a value may contain several: `"Bearer {env:TOKEN}"`, `"https://{env:HOST}/mcp"`.
 * **A missing variable is an error that names it**, along with the field that asked for it and the file it is in. An empty `api_key` would otherwise fail much later as a 401 that says nothing about config.json.
 * **What is on disk stays a placeholder.** localcode rewrites config.json one key at a time from the file itself, so saving a setting from the UI ("always allow") or running `localcode mcp add` never turns `{env:ANTHROPIC_API_KEY}` into the key it stands for.
@@ -168,8 +168,6 @@ The point is a config.json that can be committed to a repository, copied between
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
 | `max_concurrent_tasks` | Caps how many background tasks run at once. Unset means 1, so tasks queue rather than run together. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
-| `dictation` | Speech engine settings. Every field optional; with none set, an installed engine beside the binary is found and used. See [Dictating a prompt](#dictating-a-prompt). |
-| `dictation_model_dir` | Path to an unpacked sherpa-onnx model, for the older sherpa engine only. See [Engines](#engines). |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
 | `skip_permissions` | Turns every "ask" into "allow". Off unless set; explicit deny rules still deny. See [Skipping confirmations](#skipping-confirmations-entirely). |
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
@@ -234,13 +232,26 @@ was right:
 | The last tool call was refused | The model stopped because someone said no |
 | The reply ends in a question | The model is asking, not stalling |
 | The reply hit `max_tokens` | It needs a bigger cap, not another turn — and that is already reported |
-| The last carry-on produced no work | Prose twice over is the model saying it has finished |
+| The last carry-on produced no *new* work | The model is going over what it has already done, which is it saying it has finished |
 | You have already typed something | Your message reaches the model as soon as this turn ends, and it beats an invented one |
 
 That last rule is what keeps the setting cheap: a finished task costs one
 extra turn, not `keep_going` of them. Each carry-on appears in the
 transcript as a note saying what happened, so a turn that continues by
 itself never looks like one that never stopped.
+
+**"New" is doing real work in that rule**, and it was the fault reported
+in v0.52.0: with muse, a task that was already finished got run again and
+again. The rule used to count *any* tool call as work. But a model told it
+has not finished does not argue — it goes and finds something to do,
+re-reading the file it just wrote or re-running the build it just ran, and
+every one of those bought another carry-on until the budget ran out. A
+call now counts only if this turn has not already made it, arguments and
+all: re-running a build after fixing the file that broke it is work,
+because the fix is a call of its own; re-running it to admire the result
+is not. The prompt was the other half — it used to open by telling the
+model it had not finished, which localcode has no way of knowing. It now
+asks, and names "it is already complete" as an answer.
 
 #### Provider fields
 
@@ -958,7 +969,6 @@ One line directly below the input box:
 | TPS | Shown when `show_tps` is on. It is a **generation** rate: the clock runs from the first token to the last, so the wait before a model starts answering (prefill, and on a shared local server the queue in front of you) is not divided into the output. It covers the whole turn, not the last model call — a turn that uses tools is several calls, and the last is often a handful of tokens. A `~` prefix marks a live estimate made while the model is still talking, counted from stream chunks because the real token count only arrives when the stream ends; it is replaced by the exact figure at that point. A reply that arrives in a single chunk shows nothing at all: there is no interval to measure across. |
 | Activity light | Three states: **grey** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking amber** — a turn is running in this session. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. "Running" is the daemon's own answer, not this page's memory of having sent something, so it agrees with the light on the session's row in the left panel however the turn started — from another client, or before this page was loaded. |
 | Stop button | Appears while a turn is running, whoever started it. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
-| Dictation pill | `dictation: off`. Click to talk your prompt instead of typing it; the pill turns red and blinks while it listens. Reads `dictation: unavailable`, disabled with the reason in its tooltip, when no speech model is configured or the build has no recognizer. See [Dictating a prompt](#dictating-a-prompt). |
 | Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
 
@@ -1199,557 +1209,6 @@ localcode --agent quick-search
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
-### Dictating a prompt
-
-localcode can take a prompt by voice, in the desktop window and in the
-Web UI. Click the `dictation: off` pill in the status row under the
-prompt box and talk; the text appears as you speak, grey while a
-sentence is still in progress and ordinary text once you pause. Click
-the pill again to stop. By default everything runs on your machine: no
-audio leaves it, and it works with no network at all. Pointing it at
-[another machine](#using-a-speech-server-on-another-machine) is the one
-thing that changes that, and it says so where you set it.
-
-It is off until an engine and a model are on disk, because there is no
-sensible one to guess and guessing would mean a silent several-hundred-
-megabyte download the first time anyone clicked the button.
-
-```bash
-localcode dictation install
-```
-
-On Windows the installer already ran this unless you passed
-`DICTATION=0`. It downloads the engine and a Whisper model, checks both
-against pinned checksums, and puts them in a `models` directory beside
-the binary. About 200MB. No config change is needed: that directory is
-where localcode looks when nothing is configured. `localcode dictation
-status` reports whether it worked, and `localcode dictation remove`
-deletes it again.
-
-localcode publishes a whisper build for Windows only. On macOS and Linux
-that command still installs the model — the same file everywhere, and the
-larger half of the download — and then tells you where to get the engine.
-If one is already on your PATH it says so and gives you the setting to
-use it:
-
-```json
-{ "dictation": { "whisper_bin": "/opt/homebrew/bin/whisper-server" } }
-```
-
-`brew install whisper-cpp` provides that binary. localcode names an engine
-it finds on PATH but never runs one without being told to: a build it has
-not been tested against is a choice to make deliberately, not one to have
-made quietly on your behalf.
-
-#### Engines
-
-| | whisper | sherpa |
-|---|---|---|
-| Runs as | a child process | linked into localcode |
-| Available in | every build | the desktop build only |
-| Korean accuracy | good, correctly spaced | poor, and see the note below |
-| Text while you speak | re-read about once a second | word by word |
-| Download | ~200MB | ~400MB, ~130MB kept |
-
-**whisper is the default and the one to use.** It is
-[whisper.cpp](https://github.com/ggml-org/whisper.cpp) running as a
-separate program that localcode feeds audio to, which is what makes it
-work everywhere: the recognizer is a file beside the binary rather than
-something compiled in, so the TUI and the headless daemon can dictate
-too.
-
-sherpa is the original engine, kept because it still works where it is
-already installed. It is not being developed further. On the Korean
-model it ships with, transcripts came out unspaced and inaccurate; the
-spacing is fixed as of v0.32.13, the accuracy is not. Install it with
-`localcode dictation install --engine sherpa`.
-
-#### Settings window
-
-The ⚙ button in the status row under the prompt box opens a settings
-window. Dictation's live there: which microphone to record from, the
-spoken language, the speech engine's address and port, and which API
-that engine speaks.
-
-The address is two boxes because it is two decisions — the machine
-(`192.168.1.50`, or `https://speech.example.com` to use TLS) and the port
-(`8080` if you leave it empty, which is what whisper.cpp's server uses
-when started without `--port`). Leave the address empty to run the engine
-on this machine. Setting it changes nothing else about dictation: the
-same grey-then-committed text, the same pause detection, the same
-errors — only where the audio is transcribed.
-
-The API dropdown names the dialect the server speaks
-(`whisperlive` / `openai` / `whispercpp` / `whisperx`); left on "work it
-out on the first utterance", localcode tries each in turn, which is right
-for almost everything and cannot succeed against a server that answers
-every path. `whisperlive` is the streaming one — see [Streaming from a
-server that supports it](#streaming-from-a-server-that-supports-it).
-
-Two kinds of setting sit in it, and the window says which is which
-because they do not behave the same way:
-
-| | Where it lives | Who it applies to |
-|---|---|---|
-| Microphone | this browser (`localStorage`) | you, on this machine |
-| Language, engine address and port, engine API | the daemon's `config.json` | every client attached to it |
-
-A microphone cannot be a daemon setting: a device id means nothing on
-another machine, and the daemon never sees audio hardware at all, only
-the PCM a page sends it. Device *names* stay hidden until the page has
-been allowed microphone access once — and several browsers go further and
-report a single anonymous input until then, so a headset or USB
-microphone plugged in since is not in the list at all. **Show the
-microphones on this machine** appears when that is the case: it asks for
-access, stops the recording immediately, and lists what is really there.
-Opening the panel asks for nothing on its own. A device plugged in or
-unplugged while the panel is open lands in the list without being asked
-for.
-
-A daemon started without a `config.json` can still be configured — the
-change applies for as long as it runs — and the window says that too,
-rather than appearing to save and forgetting.
-
-The spoken language applies as soon as it is chosen — the dropdown is a
-finished decision the moment it changes, and closing the panel used to
-discard it silently. The engine address keeps the Save button, since a
-half-typed host is not something to apply as it is typed.
-
-Getting the language wrong is not a small loss of accuracy. Whisper
-writes the audio **in the language it is told**, so Korean speech with
-English selected comes back as an English translation, and English speech
-with Korean selected comes back spelled out in Hangul — "I'm a boy" as
-아이엠어보이. If you dictate in more than one language, leave it on
-auto-detect.
-
-**Spoken language applies to whisper only.** Whisper takes it per
-request. Sherpa is one model per language and the model `localcode
-dictation install --engine sherpa` fetches is Korean, so the setting does
-nothing for it — English dictated into that engine is not mistranscribed
-or dropped, it is written out in Hangul: "I'm a boy" as 아이엠어보이. The
-window says so next to the control when that is the engine in force, and
-so does `localcode dictation status`. The fix is to install whisper,
-which is multilingual and is used in preference wherever it is
-installed:
-
-```
-localcode dictation install
-```
-
-#### Configuration
-
-The settings window covers the common cases; everything below is the
-same thing in the file. None of it is required — set it only to override
-what `dictation install` arranged:
-
-```json
-{
-  "dictation": {
-    "engine": "whisper",
-    "language": "ko",
-    "whisper_model": "/Users/you/.localcode/models/ggml-medium-q5_0.bin"
-  }
-}
-```
-
-| Key | Meaning |
-|---|---|
-| `engine` | `whisper` or `sherpa`. Empty prefers whisper. |
-| `language` | ISO 639-1 code, `ko` or `en`. Empty auto-detects, which is what mixed speech wants and slightly slower for speech that is only ever one language. |
-| `whisper_bin` | Path to the engine executable. |
-| `whisper_model` | Path to a `ggml-*.bin`, or a directory holding one. When several are installed the largest is used. |
-| `whisper_url` | A speech server on another machine. Set, nothing runs locally. See [below](#using-a-speech-server-on-another-machine). |
-| `whisper_api` | Which dialect that server speaks: `whisperlive` (streaming), `openai`, `whispercpp` or `whisperx`. Omit to work it out when dictation starts. |
-| `threads` | CPU cap. 0 picks a modest default, since this runs beside a language model doing the actual work. |
-
-`dictation_model_dir` still points sherpa at its model directory, which
-has to hold the unpacked archive contents — `encoder-*.onnx`,
-`decoder-*.onnx`, `joiner-*.onnx`, `tokens.txt` — not the archive.
-
-On Windows **every backslash in a JSON path has to be doubled**, because
-a single one starts an escape. `"C:\Users\..."` is not a valid string
-at all: the config fails to parse with
-
-```
-invalid character 'U' in string escape code
-```
-
-and localcode refuses to start, which reads as a broken install rather
-than a mistyped path. Forward slashes work on Windows too and avoid the
-whole problem.
-
-#### Using a speech server on another machine
-
-A laptop with no GPU and a workstation with one is the usual reason:
-point the laptop at the workstation and the transcription happens there.
-Nothing is installed on this side — no engine, no model, no child
-process — and the microphone, the voice detection and the prompt box all
-work exactly as before.
-
-It does not have to be whisper.cpp. Four server dialects are understood,
-and which one is in front of you is worked out when dictation starts and
-remembered:
-
-| Dialect | Endpoint | Servers |
-|---|---|---|
-| `whisperlive` | `WS /` | [WhisperLive](https://github.com/collabora/WhisperLive), streaming |
-| `openai` | `POST /v1/audio/transcriptions` | anything OpenAI-compatible, including WhisperX's compatibility layer |
-| `whispercpp` | `POST /inference` | whisper.cpp's own server, and what localcode runs locally |
-| `whisperx` | `POST /asr` | WhisperX's native API |
-
-The first of those is a WebSocket and the other three are uploads, and
-the difference is what the text feels like. See
-[below](#streaming-from-a-server-that-supports-it).
-
-Discovery costs up to three extra requests once per engine and none after
-that, and it is run against half a second of silence rather than against
-anything you said. That matters on a slow server: the search used to send
-the real utterance to each candidate, sharing that sentence's deadline
-between them, so an engine that takes a few seconds had the endpoint that
-would have worked cut off part-way through and was reported as having none
-of them.
-
-An endpoint that answers a probe wins. One that answers *badly* — a
-missing field, a model it does not have — is remembered but not chosen
-while another might work, since a WhisperX server offers an
-OpenAI-shaped endpoint as well as its own and the first refusing must not
-hide the second. If nothing works, that refusal is what gets reported.
-
-Set `whisper_api` to one of the names above to skip discovery. Only an
-actual HTTP response settles the choice: a connection that fails, or that
-the server closes mid-upload, says nothing about which endpoint is there,
-so the search carries on, nothing is remembered, and it is reported as a
-server that did not answer rather than one that lacks the endpoints.
-
-The dialect decides where the spoken language is sent, which is why
-getting it wrong is quiet: `openai` and `whispercpp` take it as a form
-field, and `whisperx` reads it from the query string and ignores form
-fields it does not know — so a language chosen in the panel simply had no
-effect there, and every utterance was auto-detected.
-
-#### Streaming from a server that supports it
-
-Whisper is not a streaming model: it reads a window of audio and returns
-the whole of it. So the upload dialects show text while someone is still
-talking by re-sending the utterance so far every 900ms and throwing the
-previous answer away — wasted work by construction, and over a network
-wasted upload too, since ten seconds into a sentence every preview ships
-those ten seconds again.
-
-A streaming server removes both halves of that:
-
-| | Upload dialects | `whisperlive` |
-|---|---|---|
-| Audio sent | The whole utterance, again, every 900ms | Once, as it is recorded |
-| Text appears | Up to a second behind the words | As the server produces it |
-| Cost per sentence | Grows with the length of the sentence | Flat |
-
-Nothing else changes. The pause still decides when grey text becomes
-committed text, and it is still decided here from the audio rather than
-by the server, so dictation behaves the same way on every engine.
-
-localcode tries the streaming dialect first whenever `whisper_url` is
-set and `whisper_api` is empty. A server that does not have it answers
-the upgrade with an ordinary HTTP status, which costs one request and is
-not an error: the upload dialects are tried next, exactly as before.
-Setting `whisper_api` to `whisperlive` pins it, and then a server that
-does not answer is reported instead of quietly falling back to the
-slower path. Setting it to any of the other three skips the streaming
-attempt entirely.
-
-Two details of that protocol are worth knowing:
-
-* The spoken language travels in the handshake, not per request. It is
-  sent as `null` when the language is left on auto-detect.
-* The server is asked for the model named in `whisper_model` when that
-  is a plain name (`small`, `large-v3`). A path to a local `ggml-*.bin`
-  is not a name a streaming server can load, so `small` is asked for
-  instead of passing the path along.
-
-On the other machine:
-
-```bash
-python3 run_server.py --port 9090 --backend faster_whisper
-```
-
-Then set `whisper_url` to `192.168.1.50:9090`.
-
-When nothing comes out and the reason is not obvious, ask the server
-directly:
-
-```
-localcode dictation probe
-```
-
-It reports whether TCP connects, whether a plain `GET` is answered,
-whether the streaming endpoint is there, and what each upload endpoint
-says. A server that answers `GET` and resets every upload is not a wrong
-endpoint — the address and the paths are fine, and something is rejecting
-the audio itself.
-
-If the server wants an OpenAI-style `model` field, set `whisper_model` —
-it is sent only when configured, since a server hosting a single model
-rejects a name it does not recognise.
-
-```json
-{
-  "dictation": {
-    "whisper_url": "http://192.168.1.50:8080",
-    "language": "ko"
-  }
-}
-```
-
-`https://` is honoured. A TLS port answers a plaintext request by closing
-the connection with no status and no message, which looks exactly like a
-server refusing the request, so an https address quietly downgraded is a
-failure with no evidence in it. `localcode dictation probe` detects that
-case and says so.
-
-The address is read the way people write one: with or without the
-scheme, with or without a trailing slash, and with or without the port
-(8080 is assumed, which is what whisper.cpp's server uses when started
-without `--port`). `whisper_bin` and `whisper_model` are ignored while it
-is set. The [settings window](#settings-window) takes the same address as
-two boxes, one for the machine and one for the port, and writes this key.
-
-A remote engine is not a different feature: the recording, the pause
-detection, the grey provisional text and the committed text all work
-exactly as they do locally, and the only difference is which machine runs
-the transcription.
-
-Two things about the decode do not travel, because they are command line
-options on an engine localcode starts and a remote one was started by
-somebody else. Both are now handled from this side instead:
-
-| Local engine gets | A remote server gets |
-|---|---|
-| Decoding fallback on (localcode simply does not pass `--no-fallback`) | `temperature_inc=0.2` on every request, which is whisper.cpp's own default and overrides a server started with `--no-fallback`. The OpenAI and WhisperX shapes have no equivalent field; a server behind those that drops unconfident segments has to be restarted without the flag. |
-| `--no-timestamps` | Timestamps are removed from the answer, in both shapes whisper emits them (`[00:00:00.000 --> …]` and `<\|0.00\|>`), so a server configured to include them does not put them in the prompt box. |
-
-`threads` is the remote machine's own business and is not sent.
-
-On the other machine, run whisper.cpp's server bound to an address this
-one can reach — its default is loopback only, so it needs telling:
-
-```bash
-whisper-server --model ggml-small-q5_1.bin --host 0.0.0.0 --port 8080
-```
-
-**Recorded audio leaves this machine when you set this.** That is the
-point of it, but it reverses what dictation otherwise guarantees, and
-the wire is plain HTTP with no authentication — whisper.cpp's server has
-none to offer. Treat the address as you would any other unauthenticated
-service on your network, and only point it somewhere you would be
-willing to send what you say out loud. `localcode dictation status`
-prints which engine is in use and says plainly when it is a remote one.
-
-A wrong address fails when dictation starts, naming the address, rather
-than as silence the first time you speak — which is indistinguishable
-from a microphone that is not working.
-
-#### If nothing appears at all and the microphone will not switch off
-
-That shape is a speech server that accepts the connection and then never
-answers, and before v0.43.1 it had no symptom of any kind: every upload
-stayed open, no text arrived, no error arrived, and clicking the pill did
-nothing, because stopping waited for those uploads to finish.
-
-What happens now:
-
-| After | What you see |
-|---|---|
-| 20s on one preview, 45s on one committed sentence | The daemon gives up on that transcription and the transcript says so. These are the limits that normally fire. |
-| 60s on one upload | The browser gives up on the request itself. A backstop above the daemon's own limits, not the usual path — set below them, it used to abort commits that were about to succeed. |
-| 3 failures in a row | Dictation stops itself and says why. |
-| A click on the pill | The microphone goes off immediately. It waits up to 1.5s for already-recorded audio to finish uploading and no longer. |
-
-A slow engine is also not asked for a new preview until at least as long as the last one took, and audio queued behind it is uploaded in pieces of at most 512KB rather than as one ever-growing body — which the daemon used to refuse outright (`request body too large`), stopping dictation a few seconds into every attempt.
-
-As of v0.45.1 the request carrying audio never waits for the engine at all: a finished sentence is transcribed on its own and arrives with a later chunk. That is what makes a slow engine slow rather than broken — before it, the engine's time was time the browser spent holding an open request, and everything else followed from that.
-
-When dictation still produces nothing, ask the server directly rather than guessing:
-
-```
-localcode dictation probe
-```
-
-Run it from `localcode.exe` on Windows — `localcode-gui.exe` has no console to print to. It reports whether TCP connects, whether a plain `GET` is answered, and what each upload endpoint says, which separates a wrong address from a wrong endpoint from a server that takes the audio and never replies.
-
-The daemon end matches: a transcription can be cancelled, so switching the
-microphone off no longer queues behind a request that will never land, and
-a browser that gives up on a chunk takes that work with it instead of
-leaving the session locked.
-
-If the server answers some paths and hangs on others, the dialect search
-now gives each candidate its own share of the time, so the endpoint that
-works is still reached. `localcode dictation probe` reports which is
-which.
-
-#### If words go missing when you speak quickly
-
-Two things caused this before v0.43.0 and both are fixed; they are worth
-knowing because the symptoms are still what to look for.
-
-The audio was resampled from the microphone's rate (48kHz, usually) to
-the 16kHz whisper takes by keeping every third sample and discarding the
-rest. That does not remove the energy above 8kHz, it folds it back down
-into the middle of the speech band as noise — and fast speech puts more
-energy up there, because sibilants and plosives arrive closer together.
-The conversion now low-passes before it decimates.
-
-The engine was also started with `--no-fallback`, which drops any segment
-whose decode looks unconfident instead of retrying it. Words running
-together is exactly what fails that check, so speaking quickly could
-produce no text at all. A remote whisper.cpp server started with that
-flag is covered too, as of v0.43.1 — see the table above. Silence is handled on localcode's side instead —
-audio is only sent once the microphone has actually heard speech, and
-whisper's `[BLANK_AUDIO]`-style annotations are stripped from the reply.
-
-If it still struggles, the model is the next thing to change.
-
-#### Choosing a Whisper model
-
-`dictation install` fetches `ggml-small-q5_1.bin` (190MB). Quantised, so
-it holds a correspondingly smaller amount of memory while resident. On
-the Korean reference set it transcribed every sentence with correct
-spacing, and one 6.6s recording took about 290ms on Apple Silicon.
-
-To use a different one, download it from
-<https://huggingface.co/ggerganov/whisper.cpp> into the same `models`
-directory. The largest installed file wins, so no config change is
-needed. `medium` is more accurate on unclear or noisy speech at roughly
-twice the compute; `large-v3-turbo` is a similar size to medium but
-optimised for inference and worth benchmarking if small ever struggles.
-For a real-time feature, latency is felt far more than the last two
-points of accuracy, which is why the default is the small one.
-
-#### macOS and Linux
-
-Upstream publishes a ready-made engine for Windows only, so `dictation
-install` can fetch it there and not elsewhere. On macOS and Linux it
-says so, and the engine has to be put in place by hand. The model still
-downloads normally either way.
-
-For macOS, the `whisper-macos` workflow builds a universal
-`whisper-server` and uploads it as an artifact:
-
-```bash
-gh workflow run whisper-macos.yml --ref main
-gh run download <run-id> -n whisper-server-darwin-universal -D models
-```
-
-To build it yourself, on either platform:
-
-```bash
-git clone --depth 1 https://github.com/ggml-org/whisper.cpp
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF whisper.cpp
-cmake --build build --config Release --target whisper-server
-```
-
-`GGML_NATIVE=OFF` matters if the binary will run anywhere but the
-machine that built it: ggml otherwise tunes for the local processor and
-the result dies with an illegal instruction on an older one.
-
-Put the resulting `whisper-server` in the `models` directory beside the
-localcode binary, or name it with `whisper_bin`.
-
-#### Two things worth knowing
-
-- **Text you have already seen can change.** Whisper reads a window of
-  audio as a unit and re-reads the whole utterance about once a second,
-  so a word can be revised as later words give it context. That is what
-  the grey means: it is not settled yet. It stops changing when you
-  pause.
-- **Mixed Korean and English is the hard case.** Whisper is multilingual
-  and handles it far better than a Korean-only model, but
-  "useState 훅을 async 함수로 바꿔줘" is still where you will see the
-  limits. Leave `language` unset for mixed speech; set it when you only
-  ever dictate one language.
-- **An utterance commits itself after 30 seconds.** Normally a pause of
-  about a second ends one. In a room with no quiet in it — a fan, a
-  conversation nearby — that pause never arrives, so a 30 second cap
-  ends the utterance anyway rather than letting it grow for as long as
-  the session lives.
-
-When dictation cannot run, the pill reads `dictation: unavailable` and
-is disabled, with the daemon's own explanation in its tooltip. It stays
-on screen rather than disappearing: the usual reason is that nothing has
-been installed yet, which is worth knowing about.
-
-#### When a transcript comes out wrong
-
-"The transcript is wrong" is two different faults that need opposite
-fixes, and in the finished sentence they look identical:
-
-* The model misheard.
-* The model heard correctly and the text was assembled wrongly.
-
-Only the tokens behind the text tell them apart:
-
-```bash
-localcode dictation test recording.wav
-```
-
-Record a 16 kHz mono 16-bit WAV of a sentence you know, and run it. The
-command prints the text, the raw token list, how many tokens mark the
-start of a word, how many decoded to nothing, and a one-paragraph reading
-of what that combination means. When the text had to be rebuilt from the
-tokens to recover its spacing, it says so and shows what the recognizer
-itself returned. Desktop build only; on Windows that is
-`localcode-gui.exe dictation test`.
-
-Correct tokens with no spaces in the text is a joining fault. Tokens that
-decoded to nothing mean pieces are being lost between the model and the
-text. Tokens that do not match what you said is the model, and no
-decoding change will help.
-
-Without producing a WAV at all, start the desktop window with
-`LC_DICTATION_DEBUG=1` and dictate as usual. Every finished sentence is
-logged with the same token detail. On Windows:
-
-```bash
-cmd /c "set LC_DICTATION_DEBUG=1 && localcode-gui.exe > dictation.log 2>&1"
-```
-
-Off by default, because each line contains what was just said out loud.
-
-#### Word boundaries
-
-Spacing is taken from the tokens, not from the recognizer's finished
-string. Where the tokens mark word boundaries and the string does not,
-localcode reassembles the text from the tokens.
-
-That indirection is there because the two disagree. Measured on Windows
-with the Korean model above:
-
-| | |
-|---|---|
-| tokens | `["는" " 구" "체" "적인" " 돈을" " 남" "겼" "어" "."]` |
-| recognizer text | `는구체적인돈을남겼어.` |
-| what localcode types | `는 구체적인 돈을 남겼어.` |
-
-The model had the spacing right. Only the joining step lost it, so the
-tokens are the better source. Both spellings of a boundary are honoured:
-the sentencepiece `▁` prefix, and a plain leading space.
-
-A rebuild only happens when the tokens carry boundaries and the text has
-none, which is the exact shape of that fault. A recognizer that spaced
-its own text is left alone, and a vocabulary with no boundary marks at
-all does not gain spaces between every character.
-
-Two related settings, both about how the model is loaded rather than how
-its output is joined. A model whose archive contains a `bpe.model` is
-decoded as sentencepiece BPE; one without keeps sherpa's default.
-`LC_SHERPA_MODELING_UNIT` forces either way, taking one of sherpa's own
-values (`cjkchar`, `bpe`, `cjkchar+bpe`). `LC_SHERPA_DEBUG=1` makes
-sherpa print what it loaded and which unit it settled on, on stderr.
-
-On Windows the speech runtime is three DLLs that the MSI installs beside
-`localcode-gui.exe`. They are not optional extras: Windows resolves a
-program's imports before any of its own code runs, so a copy of
-`localcode-gui.exe` moved elsewhere on its own will not start at all.
-
 ### Checking for updates
 
 The settings window (⚙ under the prompt) has an **Updates** section with
@@ -1799,9 +1258,23 @@ anywhere else you can write, which is what
 by localcode itself. The new binary is unpacked beside the old one, asked
 for its version to prove it runs on this machine at all, and renamed into
 place. Rename is atomic, so the localcode running at that moment keeps
-the file it started from and nothing is ever half-written; restart it to
-be on the new version. That is the whole update on a machine where you
-have no root.
+the file it started from and nothing is ever half-written.
+
+**It then restarts itself onto the new binary**, which is the point: the
+program in memory is still the old one until something replaces it, and
+until v0.53.0 nothing did — the panel said "restart localcode to run the
+new version" and left it there, so an update that had worked perfectly
+showed the same version in the header afterwards and read as one that had
+not happened. The restart is an `exec`, not a new process beside this one,
+so it keeps the process id, the terminal, the standard streams and the
+arguments it was started with: a TUI comes back in the terminal it was in
+with the flags it was given, and the Web UI's browser tab reconnects on
+its own once the new daemon has the address. That is the whole update on a
+machine where you have no root.
+
+The exception is a daemon you reached from somewhere else. It installs and
+does not restart — that is not a browser's to order — and the panel says
+to restart it instead.
 
 *An install a package manager owns* is left to that package manager. On
 Windows localcode runs `msiexec /i` on the downloaded package: Windows

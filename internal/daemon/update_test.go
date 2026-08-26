@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"localcode/internal/update"
 )
 
 // A GitHub that answers with one release, so the check can be exercised
@@ -159,5 +161,50 @@ func TestInstallingWhatIsAlreadyInstalledIsRefused(t *testing.T) {
 	d.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/update/install", nil))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("POST /api/update/install = %d, want 409: %s", rec.Code, rec.Body)
+	}
+}
+
+// Replacing the binary and then leaving the old one running is the fault
+// this pins: the install worked, the reply said so, and the version in
+// the header never changed because nothing restarted. Whoever read that
+// reasonably concluded the update had done nothing.
+func TestAReplacedBinaryIsRestartedWhereItCanBe(t *testing.T) {
+	replaced := update.Outcome{Replaced: true, Detail: "installed over /home/u/.local/bin/localcode"}
+
+	detail, restarting := restartPlan(replaced, true)
+	if !restarting {
+		t.Error("a daemon that can restart itself did not, so the old binary keeps running")
+	}
+	if !strings.Contains(detail, "restarting") {
+		t.Errorf("the reply does not say a restart is coming: %q", detail)
+	}
+
+	// The same install on a daemon reached from another machine. Restarting
+	// it is not a browser's to order, so the sentence has to carry the
+	// instruction instead of the process carrying it out.
+	detail, restarting = restartPlan(replaced, false)
+	if restarting {
+		t.Error("a daemon with no restart hook reported a restart it cannot perform")
+	}
+	if !strings.Contains(detail, "restart localcode") {
+		t.Errorf("the reply does not tell the user to restart: %q", detail)
+	}
+}
+
+// An installer that is running replaces the files itself once localcode
+// exits, and a .deb was only downloaded. Neither is this process being
+// replaced, so neither gets a restart — nor a sentence about one.
+func TestAnInstallThatReplacedNothingIsNotRestarted(t *testing.T) {
+	for _, out := range []update.Outcome{
+		{Started: true, Detail: "the installer is running"},
+		{Detail: "downloaded to /tmp/x.deb — install it with: sudo apt install /tmp/x.deb"},
+	} {
+		detail, restarting := restartPlan(out, true)
+		if restarting {
+			t.Errorf("%q was treated as a replacement of the running binary", out.Detail)
+		}
+		if detail != out.Detail {
+			t.Errorf("the answer was rewritten: %q became %q", out.Detail, detail)
+		}
 	}
 }

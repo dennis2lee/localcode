@@ -31,6 +31,19 @@ func textStream(text string) []provider.StreamEvent {
 	}
 }
 
+// distinctToolCall is toolCallStream with arguments of its own, so a
+// script can tell "the model did something else" from "the model did the
+// same thing again". keep_going counts only the first as work — see
+// newWork.
+func distinctToolCall(arg string) []provider.StreamEvent {
+	return []provider.StreamEvent{
+		{Type: provider.EventTextDelta, TextDelta: "running the command now"},
+		{Type: provider.EventToolUseStart, ToolUseID: "call_" + arg, ToolName: "echo"},
+		{Type: provider.EventToolUseEnd, ToolUseID: "call_" + arg, ToolInput: json.RawMessage(`{"step":"` + arg + `"}`)},
+		{Type: provider.EventMessageStop, StopReason: "tool_calls"},
+	}
+}
+
 // keepGoingLoop is scriptedLoop with keep_going set on the profile.
 func keepGoingLoop(t *testing.T, p provider.Provider, reg *tools.Registry, n int) (*Loop, string) {
 	t.Helper()
@@ -45,9 +58,9 @@ func TestAStalledTurnCarriesOnWhenTheProfileAsksForIt(t *testing.T) {
 	reg.Register(countingTool{runs: &runs})
 
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
-		toolCallStream("tool_calls"),
+		distinctToolCall("edit-main"),
 		textStream("global_init.cpp also has to be updated."),
-		toolCallStream("tool_calls"),
+		distinctToolCall("edit-global-init"),
 		textStream("done — the build passes."),
 	}}
 	loop, sessionID := keepGoingLoop(t, p, reg, 1)
@@ -139,15 +152,17 @@ func TestCarryingOnIsBounded(t *testing.T) {
 	reg.Register(countingTool{runs: &runs})
 
 	// Work, stall, work, stall, work, stall: a model that would keep this
-	// up for as long as it is asked to.
+	// up for as long as it is asked to. Each step is a *different* call,
+	// which is what makes it progress rather than the same thing done
+	// three times — see TestACarryOnThatOnlyRepeatsItselfEndsTheTurn.
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
-		toolCallStream("tool_calls"),
+		distinctToolCall("one"),
 		textStream("one more thing to do."),
-		toolCallStream("tool_calls"),
+		distinctToolCall("two"),
 		textStream("one more thing to do."),
-		toolCallStream("tool_calls"),
+		distinctToolCall("three"),
 		textStream("one more thing to do."),
-		toolCallStream("tool_calls"),
+		distinctToolCall("four"),
 	}}
 	loop, sessionID := keepGoingLoop(t, p, reg, 2)
 
@@ -265,9 +280,9 @@ func TestTheReportedModelCarriesOnWithNoConfigAtAll(t *testing.T) {
 	reg.Register(countingTool{runs: &runs})
 
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
-		toolCallStream("tool_calls"),
+		distinctToolCall("edit-main"),
 		textStream("global_init.cpp also has to be updated."),
-		toolCallStream("tool_calls"),
+		distinctToolCall("edit-global-init"),
 		textStream("done — the build passes."),
 	}}
 	loop, sessionID := scriptedLoop(t, p, reg)
@@ -314,9 +329,9 @@ func TestACarriedOnTurnSurvivesARestart(t *testing.T) {
 	reg.Register(countingTool{runs: &runs})
 
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
-		toolCallStream("tool_calls"),
+		distinctToolCall("edit-main"),
 		textStream("global_init.cpp also has to be updated."),
-		toolCallStream("tool_calls"),
+		distinctToolCall("edit-global-init"),
 		textStream("done — the build passes."),
 	}}
 	loop, sessionID := keepGoingLoop(t, p, reg, 1)
@@ -341,7 +356,10 @@ func TestACarriedOnTurnSurvivesARestart(t *testing.T) {
 	}
 	var nudge bool
 	for _, m := range got {
-		if m.Role == provider.RoleUser && strings.Contains(replyText(m.Content), "ended your turn") {
+		// Matched against the prompt itself, not a phrase copied out of
+		// it: the wording is tuned from time to time and a test that
+		// pins a sentence would fail for that instead of for this.
+		if m.Role == provider.RoleUser && strings.Contains(replyText(m.Content), keepGoingPrompt) {
 			nudge = true
 		}
 	}
@@ -403,5 +421,70 @@ func TestAWaitingUserIsNotTalkedOver(t *testing.T) {
 	}
 	if p.sent != 2 {
 		t.Errorf("provider turns = %d, want 2 — the turn carried on over a message the user had already sent", p.sent)
+	}
+}
+
+// The report this fixes: with muse, "the task is already finished and it
+// runs it all over again".
+//
+// A model told "you did not finish" does not argue. It goes and does
+// something — re-reads the file it just wrote, re-runs the build it just
+// ran — and the old guard cleared on any tool call at all, so every one
+// of those bought another carry-on. A completed task was re-executed for
+// the whole budget, and from the outside that is a model repeating itself
+// until it is told to stop.
+//
+// The script is the finished case exactly: work, a summary, and then
+// nothing but the same call again each time it is prodded.
+func TestACarryOnThatOnlyRepeatsItselfEndsTheTurn(t *testing.T) {
+	runs := 0
+	reg := tools.NewRegistry(nil)
+	reg.Register(countingTool{runs: &runs})
+
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{
+		distinctToolCall("build"),
+		textStream("done — the build passes."),
+		distinctToolCall("build"), // the same call, to check its own work
+		textStream("still done."),
+		distinctToolCall("build"), // and again
+		textStream("still done."),
+		distinctToolCall("build"),
+	}}
+	loop, sessionID := keepGoingLoop(t, p, reg, 3)
+
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	// One carry-on, the repeat it produced, and the reply that ends the
+	// turn: four requests, not the eight a budget of three would allow.
+	if p.sent != 4 {
+		t.Errorf("provider turns = %d, want 4 — a finished task was carried on %d times", p.sent, p.sent-2)
+	}
+	// Twice: the real work, and the one repeat the single carry-on bought.
+	if runs != 2 {
+		t.Errorf("the tool ran %d times, want 2 — finished work was re-executed", runs)
+	}
+}
+
+// The carry-on prompt must not assert that the work is unfinished.
+//
+// localcode cannot tell a stall from a finished task — that is the whole
+// premise of this file — so a sentence claiming the task is incomplete is
+// a claim with no evidence behind it, put to a model that complies with
+// the last thing it was told. Naming "it is already done" as an allowed
+// answer is what gives a finished model somewhere to go that is not more
+// work.
+func TestTheCarryOnPromptLetsTheModelSayItIsDone(t *testing.T) {
+	for _, claim := range []string{"you ended your turn with the task unfinished", "you described the next step"} {
+		if strings.Contains(strings.ToLower(keepGoingPrompt), claim) {
+			t.Errorf("the prompt asserts the task is unfinished (%q), which is what makes a finished model redo its work", claim)
+		}
+	}
+	lower := strings.ToLower(keepGoingPrompt)
+	if !strings.Contains(lower, "complete") && !strings.Contains(lower, "done") {
+		t.Error("the prompt never offers 'it is already complete' as an answer")
+	}
+	if !strings.Contains(lower, "redo") && !strings.Contains(lower, "re-run") {
+		t.Error("the prompt does not tell the model to leave finished work alone")
 	}
 }
