@@ -971,6 +971,7 @@ One line directly below the input box:
 | Stop button | Appears while a turn is running, whoever started it. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
 | Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
+| Settings pill | `⚙ settings`. Opens the settings window, which holds the update controls — see [Checking for updates](#checking-for-updates). |
 
 ### Switching agents with Tab
 
@@ -1211,13 +1212,13 @@ See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for mor
 
 ### Checking for updates
 
-The settings window (⚙ under the prompt) has an **Updates** section with
-two buttons, and neither does anything until it is clicked.
+The settings window (⚙ under the prompt) has one section, **Updates**,
+with two buttons, and neither does anything until it is clicked.
 
 | Button | What it does |
 | --- | --- |
 | Check for updates | Asks GitHub for the latest release of `dennis2lee/localcode` and compares it against this build. |
-| Download and install | Downloads the file for this platform, verifies it, and starts the installer. Appears only when there is a newer release *and* this localcode can install it. |
+| Download and install | Downloads the file for this platform, verifies it, and either installs it and restarts localcode or starts the platform's installer — see [What installing does](#checking-for-updates) below. Appears only when there is a newer release *and* this localcode can install it. |
 
 Nothing checks on a timer or on opening the panel. A check is an outbound
 request that tells GitHub which version this machine is running, which is
