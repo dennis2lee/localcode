@@ -119,7 +119,7 @@ func toBedrockMessages(msgs []Message) ([]types.Message, error) {
 	return out, nil
 }
 
-func toBedrockTools(tools []Tool) (*types.ToolConfiguration, error) {
+func toBedrockTools(tools []Tool, cachePrefix bool) (*types.ToolConfiguration, error) {
 	if len(tools) == 0 {
 		return nil, nil
 	}
@@ -138,6 +138,12 @@ func toBedrockTools(tools []Tool) (*types.ToolConfiguration, error) {
 			Description: aws.String(t.Description),
 			InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(schema)},
 		}})
+	}
+	if cachePrefix {
+		// A cache point is its own entry in the list rather than a field
+		// on the last tool, which is how Converse spells it: everything
+		// before the marker is the cacheable prefix.
+		specs = append(specs, &types.ToolMemberCachePoint{Value: types.CachePointBlock{Type: types.CachePointTypeDefault}})
 	}
 	return &types.ToolConfiguration{Tools: specs}, nil
 }
@@ -205,7 +211,7 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	if err != nil {
 		return nil, err
 	}
-	toolConfig, err := toBedrockTools(req.Tools)
+	toolConfig, err := toBedrockTools(req.Tools, req.CachePrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -220,6 +226,11 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	}
 	if req.System != "" {
 		input.System = []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: req.System}}
+		if req.CachePrefix {
+			input.System = append(input.System, &types.SystemContentBlockMemberCachePoint{
+				Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
+			})
+		}
 	}
 	if oneMillionContext {
 		input.AdditionalModelRequestFields = document.NewLazyDocument(map[string]any{
@@ -302,7 +313,13 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 
 			case *types.ConverseStreamOutputMemberMetadata:
 				if u := e.Value.Usage; u != nil {
-					if !send(StreamEvent{Type: EventUsage, InputTokens: int(aws.ToInt32(u.InputTokens)), OutputTokens: int(aws.ToInt32(u.OutputTokens))}) {
+					if !send(StreamEvent{
+						Type:             EventUsage,
+						InputTokens:      int(aws.ToInt32(u.InputTokens)),
+						OutputTokens:     int(aws.ToInt32(u.OutputTokens)),
+						CacheReadTokens:  int(aws.ToInt32(u.CacheReadInputTokens)),
+						CacheWriteTokens: int(aws.ToInt32(u.CacheWriteInputTokens)),
+					}) {
 						return
 					}
 				}

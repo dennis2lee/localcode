@@ -153,7 +153,7 @@ func newMultiAgentLoop(t *testing.T, modelURL string) *Loop {
 	loop := New(store, registry, providers, cfg)
 
 	tasks := NewTaskManager(context.Background(), loop, 5)
-	registry.Register(NewTaskTool(tasks, cfg.Agents))
+	registry.Register(NewTaskTool(tasks, loop.DelegatableAgents))
 
 	return loop
 }
@@ -305,7 +305,7 @@ func TestTaskToolDepthGuard(t *testing.T) {
 	providers := map[string]provider.Provider{"local": provider.NewOpenAICompat(srv.URL, "")}
 	loop := New(store, registry, providers, cfg)
 	tasks := NewTaskManager(context.Background(), loop, 10)
-	registry.Register(NewTaskTool(tasks, cfg.Agents))
+	registry.Register(NewTaskTool(tasks, loop.DelegatableAgents))
 
 	if _, err := store.CreateSession("s1", "", "loopy", true); err != nil {
 		t.Fatalf("create session: %v", err)

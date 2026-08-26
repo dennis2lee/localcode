@@ -7,9 +7,11 @@
 
 import {
   settingsModalEl, settingsBtn, settingsCloseBtn,
+  smartAgentCheckbox, smartAgentNoteEl,
   updateCheckBtn, updateInstallBtn, updateNoteEl,
 } from './dom.js';
 import { Modal } from './modal.js';
+import { app } from './state.js';
 import * as apiClient from './api.js';
 
 export const settings = new Modal(settingsModalEl);
@@ -19,7 +21,61 @@ export function openSettings() {
   // anything, and a stale answer from ten minutes ago would look like one.
   updateNoteEl.textContent = '';
   updateInstallBtn.hidden = true;
+  renderSmartAgent();
   settings.open();
+}
+
+// Smart Agent.
+//
+// The switch is the whole control. What it turns on — the specialist
+// roster, the orchestration prompt, the background delegation tools — is
+// not configurable from here on purpose: the point of the feature is that
+// it works without anyone writing six agent blocks by hand, and a panel
+// full of knobs would put that back.
+//
+// The note below it carries the part that cannot be written into the
+// page, because it depends on the daemon's build and on which profiles
+// this config has: which specialists exist, and that they cost money.
+
+function renderSmartAgent() {
+  smartAgentCheckbox.checked = !!app.smartAgent;
+  if (!app.smartAgent) {
+    smartAgentNoteEl.textContent =
+      'Off. Every request is answered by this session\u2019s own model, in this session\u2019s context.';
+    return;
+  }
+  const roster = (app.smartAgentRoster || []).join(', ');
+  const agents = roster ? `Adds the ${roster} agents, each on whichever configured profile suits it. ` : '';
+  smartAgentNoteEl.textContent =
+    `On. ${agents}Also turns on fallback to another model when one will not answer, prompt cache breakpoints, `
+    + 'the turn log under ~/.localcode/trace, and guards on credential files and paths outside the workspace. '
+    + 'Expect more model calls per request.';
+}
+
+// refreshSmartAgentIfOpen redraws the switch when the setting was changed
+// somewhere else — another browser, or "/config smart_agent on" typed in
+// the TUI. Only while the panel is open: there is no status bar pill for
+// this one, so there is nothing else on screen to keep in step.
+export function refreshSmartAgentIfOpen() {
+  if (settings.isOpen) renderSmartAgent();
+}
+
+async function toggleSmartAgent() {
+  const enabled = smartAgentCheckbox.checked;
+  smartAgentCheckbox.disabled = true;
+  try {
+    await apiClient.setSmartAgent(enabled);
+    app.smartAgent = enabled;
+    renderSmartAgent();
+  } catch (err) {
+    // Put back where it was: the daemon is the one that decides, and a
+    // box left checked after a refused request says the opposite of what
+    // is true.
+    smartAgentCheckbox.checked = !enabled;
+    smartAgentNoteEl.textContent = `Not changed: ${err}`;
+  } finally {
+    smartAgentCheckbox.disabled = false;
+  }
 }
 
 // Updates.
@@ -120,6 +176,7 @@ async function installUpdate() {
 export function initSettings() {
   settingsBtn.addEventListener('click', openSettings);
   settingsCloseBtn.addEventListener('click', () => settings.close());
+  smartAgentCheckbox.addEventListener('change', toggleSmartAgent);
   updateCheckBtn.addEventListener('click', checkForUpdate);
   updateInstallBtn.addEventListener('click', installUpdate);
 }

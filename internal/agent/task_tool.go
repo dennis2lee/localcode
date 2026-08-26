@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"localcode/internal/config"
@@ -24,10 +23,14 @@ import (
 // agent to avoid a cycle back the other way.
 type TaskTool struct {
 	manager *TaskManager
-	agents  map[string]config.AgentConfig
+	// agents is asked on every call rather than captured once, because
+	// the roster changes at runtime: turning Smart Agent on adds six
+	// specialists, and a tool holding a startup snapshot would go on
+	// advertising an enum that no longer describes what exists.
+	agents func() map[string]config.AgentConfig
 }
 
-func NewTaskTool(manager *TaskManager, agents map[string]config.AgentConfig) TaskTool {
+func NewTaskTool(manager *TaskManager, agents func() map[string]config.AgentConfig) TaskTool {
 	return TaskTool{manager: manager, agents: agents}
 }
 
@@ -36,18 +39,12 @@ func (t TaskTool) Name() string { return "Task" }
 func (t TaskTool) Description() string {
 	var b strings.Builder
 	b.WriteString("Delegate a self-contained piece of work to a specialized sub-agent and wait for its final answer. Available agents:\n")
-	for _, name := range t.agentNames() {
-		desc := t.agents[name].Description
-		if desc == "" {
-			desc = "(no description)"
-		}
-		fmt.Fprintf(&b, "- %s: %s\n", name, desc)
-	}
+	writeAgentList(&b, t.agents())
 	return b.String()
 }
 
 func (t TaskTool) InputSchema() json.RawMessage {
-	names, _ := json.Marshal(t.agentNames())
+	names, _ := json.Marshal(agentNamesOf(t.agents()))
 	return json.RawMessage(fmt.Sprintf(
 		`{"type":"object","properties":{"agent":{"type":"string","enum":%s},"prompt":{"type":"string","description":"self-contained instructions for the sub-agent; it has no access to this conversation's history"}},"required":["agent","prompt"]}`,
 		names,
@@ -68,9 +65,10 @@ func (t TaskTool) Execute(ctx context.Context, input json.RawMessage) tools.Resu
 		return tools.Result{Content: fmt.Sprintf("invalid input: %v", err), IsError: true}
 	}
 
-	if _, ok := t.agents[args.Agent]; !ok {
+	agents := t.agents()
+	if _, ok := agents[args.Agent]; !ok {
 		return tools.Result{
-			Content: fmt.Sprintf("unknown agent %q. Available: %s", args.Agent, strings.Join(t.agentNames(), ", ")),
+			Content: fmt.Sprintf("unknown agent %q. Available: %s", args.Agent, strings.Join(agentNamesOf(agents), ", ")),
 			IsError: true,
 		}
 	}
@@ -93,13 +91,4 @@ func (t TaskTool) Execute(ctx context.Context, input json.RawMessage) tools.Resu
 		return tools.Result{Content: fmt.Sprintf("sub-agent %q failed: %v", args.Agent, err), IsError: true}
 	}
 	return tools.Result{Content: text}
-}
-
-func (t TaskTool) agentNames() []string {
-	names := make([]string, 0, len(t.agents))
-	for name := range t.agents {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }

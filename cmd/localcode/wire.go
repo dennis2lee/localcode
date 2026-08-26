@@ -19,6 +19,7 @@ import (
 	"localcode/internal/session"
 	"localcode/internal/skills"
 	"localcode/internal/tools"
+	"localcode/internal/trace"
 )
 
 // env is the ambient machine state every builder below needs, resolved
@@ -149,6 +150,16 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.Commands = cmdList
 	loop.ProjectDir = e.cwd
 	loop.MemoryDir = memDir
+	// The structured turn log. Opened whatever the setting says, because
+	// the setting is live and a daemon started with Smart Agent off can
+	// have it turned on ten minutes later; nothing is written until then
+	// (see Loop.tracer), and the file itself is not created until the
+	// first record.
+	if tw, err := trace.Open(filepath.Join(e.home, ".localcode", "trace")); err != nil {
+		log.Printf("trace: %v (turn tracing is off for this run)", err)
+	} else {
+		loop.Trace = tw
+	}
 	// Per turn, for the directory that turn is working in — see
 	// Loop.WorkspaceRules. e.home is the only thing fixed at startup here.
 	loop.WorkspaceRules = func(dir string) string { return rules.Load(dir, e.home) }
@@ -177,13 +188,29 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.RehydrateAll()
 	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
 
-	// The Task tool only makes sense once there's more than one agent role
-	// to delegate to — with a single agent it'd just be a slower way to
-	// call yourself. Registered after the TaskManager exists (it needs
-	// one), but registry is a live pointer already shared with loop, so
-	// this still takes effect before any SendMessage call.
-	if len(cfg.Agents) > 1 {
-		registry.Register(agent.NewTaskTool(tasks, cfg.Agents))
+	// The delegation tools. Registered unconditionally, and hidden per
+	// turn instead — see Loop.hiddenDelegationTools. They used to be
+	// registered only when the config had more than one agent, which was
+	// the same rule read at the only moment it could not change; Smart
+	// Agent moves that rule to turn time, because turning it on adds six
+	// agents to a config that has none and has to take effect on the next
+	// message rather than the next restart.
+	//
+	// Registered after the TaskManager exists (they need one), but registry
+	// is a live pointer already shared with loop, so this still takes
+	// effect before any SendMessage call.
+	registry.Register(agent.NewTaskTool(tasks, loop.DelegatableAgents))
+	registry.Register(agent.NewTaskBackgroundTool(tasks, loop.DelegatableAgents))
+	registry.Register(agent.NewTaskCollectTool(tasks))
+
+	// The trace file is closed with everything else. Wrapped rather than
+	// assigned, because cleanup may already be the MCP manager's.
+	if loop.Trace != nil {
+		mcpCleanup := cleanup
+		cleanup = func() {
+			mcpCleanup()
+			loop.Trace.Close()
+		}
 	}
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
@@ -202,8 +229,20 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 // cfg.
 func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker) (*tools.Registry, error) {
 	registry := tools.NewRegistry(broker.Func())
-	registry.Resolver = func(toolName, subject string, staticRequiresPermission bool) tools.Decision {
-		return tools.Decision(cfg.ResolvePermission(toolName, subject, staticRequiresPermission))
+	registry.Resolver = func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) tools.Decision {
+		d := tools.Decision(cfg.ResolvePermission(toolName, subject, staticRequiresPermission))
+		// The workspace boundary, and only while Smart Agent is on. A
+		// path outside the project this session belongs to is not
+		// forbidden — reading a system header or a file in another
+		// checkout is ordinary work — but it is worth being asked about
+		// once, which is the difference between an agent that stays where
+		// it was pointed and one that is discovered to have been
+		// somewhere else.
+		//
+		// Escalates allow to ask and nothing else: a deny stays a deny,
+		// an ask is already an ask, and skip_permissions has already had
+		// its say by the time this runs.
+		return tools.BoundaryDecision(ctx, d, subject, cfg.SmartAgentLive())
 	}
 	registry.Hooks = cfg.Hooks
 	registry.Register(tools.ReadFile{})

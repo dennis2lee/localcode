@@ -67,6 +67,21 @@ type ChatRequest struct {
 	Tools       []Tool
 	MaxTokens   int
 	Temperature float64
+
+	// CachePrefix asks the backend to mark a prompt-cache breakpoint at
+	// the end of the stable part of this request, where it has one to
+	// mark. The stable part is the tool schemas and the system prompt:
+	// they are byte-identical from turn to turn, they are the largest
+	// fixed cost in an agent request, and a cache read is about a tenth
+	// the price of reading them again.
+	//
+	// A request rather than a guarantee. Providers ignore a breakpoint on
+	// a prefix shorter than their minimum (1024 tokens on most Claude
+	// models), a local OpenAI-compatible server does its own prefix
+	// caching with nothing to declare, and Bedrock only honours it on
+	// some models. Nothing fails when it is not honoured; the request is
+	// simply priced as it was before.
+	CachePrefix bool
 }
 
 // StreamEvent is one item from a streamed model response. Exactly one field
@@ -85,6 +100,15 @@ type StreamEvent struct {
 
 	InputTokens  int // EventUsage: size of this request's system+history+tools
 	OutputTokens int // EventUsage: tokens generated so far this response
+	// Cache accounting, where the provider reports it. Read tokens were
+	// served from a previous request's cached prefix and are billed at a
+	// fraction of the input rate; write tokens were put into the cache by
+	// this request and are billed at a premium. Both are zero on a
+	// provider that says nothing, which is not the same as "no caching
+	// happened" and is why they are reported separately from InputTokens
+	// rather than folded into it.
+	CacheReadTokens  int // EventUsage
+	CacheWriteTokens int // EventUsage
 
 	Err error // EventError
 }

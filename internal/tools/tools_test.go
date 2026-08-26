@@ -133,7 +133,7 @@ func TestRegistryCallResolverAllowSkipsPermissionFunc(t *testing.T) {
 		permCalled = true
 		return true, nil
 	})
-	r.Resolver = func(toolName, subject string, static bool) Decision { return DecisionAllow }
+	r.Resolver = func(_ context.Context, toolName, subject string, static bool) Decision { return DecisionAllow }
 
 	ft := &fakeTool{name: "bash", needsPerm: true}
 	r.Register(ft)
@@ -156,7 +156,7 @@ func TestRegistryCallResolverDenyBlocksWithoutAsking(t *testing.T) {
 		permCalled = true
 		return true, nil
 	})
-	r.Resolver = func(toolName, subject string, static bool) Decision { return DecisionDeny }
+	r.Resolver = func(_ context.Context, toolName, subject string, static bool) Decision { return DecisionDeny }
 
 	// Even a tool whose static default is "no permission needed" can be
 	// blocked outright by the resolver.
@@ -177,7 +177,7 @@ func TestRegistryCallResolverDenyBlocksWithoutAsking(t *testing.T) {
 
 func TestRegistryCallResolverAskStillGoesThroughPermissionFunc(t *testing.T) {
 	r := NewRegistry(func(context.Context, string, string, string) (bool, error) { return true, nil })
-	r.Resolver = func(toolName, subject string, static bool) Decision { return DecisionAsk }
+	r.Resolver = func(_ context.Context, toolName, subject string, static bool) Decision { return DecisionAsk }
 
 	ft := &fakeTool{name: "safe", needsPerm: false} // static says no permission needed...
 	r.Register(ft)
@@ -195,7 +195,7 @@ func TestRegistryCallResolverReceivesSubjectFromPermissionSubjectTool(t *testing
 	var gotName, gotSubject string
 	var gotStatic bool
 	r := NewRegistry(nil)
-	r.Resolver = func(toolName, subject string, static bool) Decision {
+	r.Resolver = func(_ context.Context, toolName, subject string, static bool) Decision {
 		gotName, gotSubject, gotStatic = toolName, subject, static
 		return DecisionAllow
 	}
@@ -219,7 +219,7 @@ func TestRegistryCallResolverReceivesSubjectFromPermissionSubjectTool(t *testing
 func TestRegistryCallResolverSubjectEmptyForNonPermissionSubjectTool(t *testing.T) {
 	var gotSubject string
 	r := NewRegistry(nil)
-	r.Resolver = func(toolName, subject string, static bool) Decision {
+	r.Resolver = func(_ context.Context, toolName, subject string, static bool) Decision {
 		gotSubject = subject
 		return DecisionAllow
 	}

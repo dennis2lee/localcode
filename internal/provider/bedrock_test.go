@@ -179,7 +179,7 @@ func TestToBedrockTools(t *testing.T) {
 		},
 	}
 
-	cfg, err := toBedrockTools(tools)
+	cfg, err := toBedrockTools(tools, false)
 	if err != nil {
 		t.Fatalf("toBedrockTools: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestToBedrockTools(t *testing.T) {
 }
 
 func TestToBedrockToolsEmpty(t *testing.T) {
-	cfg, err := toBedrockTools(nil)
+	cfg, err := toBedrockTools(nil, false)
 	if err != nil {
 		t.Fatalf("toBedrockTools(nil): %v", err)
 	}

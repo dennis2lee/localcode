@@ -8,6 +8,7 @@ import (
 
 	"localcode/internal/events"
 	"localcode/internal/session"
+	"localcode/internal/trace"
 )
 
 // TaskManager spawns and tracks background agent sessions ("tasks") on
@@ -24,6 +25,14 @@ type TaskManager struct {
 	mu      sync.Mutex
 	counter int
 	cancels map[string]context.CancelFunc
+
+	// Background bookkeeping — see background.go. A task spawned by the
+	// model rather than by a client is one somebody intends to come back
+	// for, so its answer has to still be there when they do: the parent's
+	// event log records that it finished, not what it said.
+	waiters map[string]chan struct{}
+	results map[string]taskOutcome
+	pending map[string][]string
 }
 
 func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *TaskManager {
@@ -35,6 +44,9 @@ func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *Tas
 		sem:     make(chan struct{}, maxConcurrent),
 		rootCtx: rootCtx,
 		cancels: map[string]context.CancelFunc{},
+		waiters: map[string]chan struct{}{},
+		results: map[string]taskOutcome{},
+		pending: map[string][]string{},
 	}
 	// Back-reference so the loop can delegate a turn on its own (see
 	// Loop.delegatePrompt) rather than only when the model calls the Task
@@ -55,12 +67,24 @@ func (tm *TaskManager) nextTaskID() string {
 // new session's id; progress is reported via task.status events appended to
 // the parent session.
 func (tm *TaskManager) Spawn(parentSessionID, agentName, prompt string) (string, error) {
+	return tm.spawn(parentSessionID, agentName, prompt, "")
+}
+
+// spawn is Spawn with the caller's trace id, which a background task
+// cannot take from a context: it deliberately outlives the turn that
+// launched it, so the id travels as a value instead. Empty means "start a
+// new trace", which is what a client-initiated task is.
+func (tm *TaskManager) spawn(parentSessionID, agentName, prompt, traceID string) (string, error) {
 	// Checked before anything is created. The child session used to be
 	// created first, so spawning against a parent that does not exist
 	// failed at the append and left the child behind — invisible (tasks
 	// are not listed) and permanent, once per attempt.
 	if _, err := tm.loop.Store.Get(parentSessionID); err != nil {
 		return "", fmt.Errorf("spawn task: %w", err)
+	}
+
+	if blocked, reason := tm.loop.delegateBlocked(tm.rootCtx, parentSessionID, agentName, prompt); blocked {
+		return "", fmt.Errorf("delegation to %q was refused: %s", agentName, reason)
 	}
 
 	taskID := tm.nextTaskID()
@@ -77,10 +101,14 @@ func (tm *TaskManager) Spawn(parentSessionID, agentName, prompt string) (string,
 		tm.loop.Store.Delete(taskID)
 		return "", fmt.Errorf("append task.spawned: %w", err)
 	}
+	tm.loop.traceSpan(traceID, parentSessionID, trace.SpanDelegate, trace.Record{
+		Agent: agentName, Detail: "background -> " + taskID,
+	})
 
-	ctx, cancel := context.WithCancel(tm.rootCtx)
+	ctx, cancel := context.WithCancel(trace.WithID(tm.rootCtx, traceID))
 	tm.mu.Lock()
 	tm.cancels[taskID] = cancel
+	tm.waiters[taskID] = make(chan struct{})
 	tm.mu.Unlock()
 
 	go tm.run(ctx, taskID, parentSessionID, agentName, prompt)
@@ -121,6 +149,10 @@ func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentNa
 	stopMirror := tm.mirrorProgress(taskID, parentSessionID)
 	err := tm.loop.SendMessage(ctx, taskID, agentName, prompt)
 	stopMirror()
+
+	// Recorded before the status event goes out, so anything woken by that
+	// event finds the answer already there rather than racing it.
+	tm.finish(taskID, lastAssistantText(tm.loop.Store, taskID), err, ctx.Err())
 
 	data := map[string]any{"task_id": taskID, "status": "completed"}
 	switch {
@@ -207,6 +239,10 @@ func taskDepthFromContext(ctx context.Context) int {
 // the delegating agent's own turn needs the sub-agent's answer before it
 // can continue.
 func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName, prompt string) (string, error) {
+	if blocked, reason := tm.loop.delegateBlocked(ctx, parentSessionID, agentName, prompt); blocked {
+		return "", fmt.Errorf("delegation to %q was refused: %s", agentName, reason)
+	}
+
 	taskID := tm.nextTaskID()
 
 	if _, err := tm.loop.Store.CreateSession(taskID, parentSessionID, agentName, false); err != nil {
@@ -219,6 +255,9 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 	}); err != nil {
 		return "", fmt.Errorf("append task.spawned: %w", err)
 	}
+	tm.loop.traceSpan(trace.ID(ctx), parentSessionID, trace.SpanDelegate, trace.Record{
+		Agent: agentName, Detail: "synchronous -> " + taskID,
+	})
 
 	select {
 	case tm.sem <- struct{}{}:

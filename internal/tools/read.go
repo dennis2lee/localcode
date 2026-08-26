@@ -19,6 +19,23 @@ func (ReadFile) InputSchema() json.RawMessage {
 }
 func (ReadFile) RequiresPermission(json.RawMessage) bool { return false }
 
+// Subject is the path being read, so a permission rule can match on it.
+//
+// Reading needs no permission by default and still needs to be
+// rule-matchable: the file that must not be read is a real category
+// (a private key, a credential store, a .env), and without a subject
+// there was no pattern for a rule to match and no way to write the rule
+// at all.
+func (ReadFile) Subject(input json.RawMessage) string {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return ""
+	}
+	return args.Path
+}
+
 func (ReadFile) Execute(ctx context.Context, input json.RawMessage) Result {
 	var args struct {
 		Path string `json:"path"`

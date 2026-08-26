@@ -24,6 +24,8 @@ export const app = {
   autoDelegate: false,
   autoDelegateAgent: '',      // '' when config.json has no auto_delegate block
   autoDelegateMatch: [],      // glob patterns that qualify a prompt for delegation
+  smartAgent: false,
+  smartAgentRoster: [],       // the specialist names the daemon build ships
   skipPermissions: false,
   permissionRules: {},        // tool -> [{match, decision}]
   canEditPermissions: false,  // false when the daemon has no config.json path to persist to

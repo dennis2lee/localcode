@@ -212,7 +212,7 @@ func TestARefusedToolEndsTheTurnForGood(t *testing.T) {
 	runs := 0
 	reg := tools.NewRegistry(nil)
 	reg.Register(countingTool{runs: &runs})
-	reg.Resolver = func(string, string, bool) tools.Decision { return tools.DecisionDeny }
+	reg.Resolver = func(context.Context, string, string, bool) tools.Decision { return tools.DecisionDeny }
 
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
 		toolCallStream("tool_calls"),

@@ -10,7 +10,7 @@
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
-| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
+| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
 ## Part 1. Getting started
@@ -172,6 +172,7 @@ The point is a config.json that can be committed to a repository, copied between
 | `skip_permissions` | Turns every "ask" into "allow". Off unless set; explicit deny rules still deny. See [Skipping confirmations](#skipping-confirmations-entirely). |
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
+| `smart_agent` | Turns on the built-in specialist roster and the orchestration prompt. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
 | `auto_compact_enabled` | Automatic compaction past 80% of the window. On unless set to false; also `/config auto_compact`. |
 | `auto_memory_enabled` | The notes the model keeps for itself across sessions. On unless set to false. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
@@ -186,6 +187,7 @@ The point is a config.json that can be committed to a repository, copied between
 | `max_tokens` | Cap on one reply, 4096 if unset. Unlike `context_window` this cannot be discovered: it is a choice about how long an answer you want, not a fact about the server. Reduced automatically when the conversation leaves less room than this in the window, so a generous ceiling is safe, and a reply that runs into it says so rather than just stopping. |
 | `temperature` | Sampling temperature |
 | `keep_going` | How many times one turn may be told to carry on after the model stops with the task unfinished. `0` (default) defers to the model: families known to stall get `3` out of the box, everything else gets none. `-1` forces it off. See [below](#a-model-that-stops-mid-task). |
+| `fallback` | Other profile names to try, in order, when a request to this one fails for a reason another model could survive. Read only with [Smart Agent](#smart-agent) on. See [Fallback chains](#fallback-chains-when-a-model-will-not-answer). |
 | `context_window` | The model's total input+output token limit. Usually unnecessary: an openai-compatible server is asked directly (`GET /v1/models`, or `/props` on llama.cpp), and only when it does not answer is the limit guessed from the model name, falling back to 128k for anything unrecognised. Set it when the server reports nothing and the name gives no clue, or to override both. Guessing high is the harmful direction, since this number is what keeps a request inside the real limit. |
 
 #### A model that stops mid-task
@@ -534,9 +536,15 @@ With both enabled, `pre_tool_use` runs first, and if it does not block, the `per
 | `user_prompt_submit` | `session_id`, `prompt` | Yes, the message reaches neither a command nor the model, and an error event is recorded |
 | `stop` | `session_id` | No |
 | `session_start` | `session_id`, `agent` | No |
+| `pre_model` | `session_id`, `agent`, `model`, `provider` | Yes, the request is never sent and the turn ends with an error |
+| `post_model` | `session_id`, `agent`, `model`, `stop_reason`, `input_tokens`, `output_tokens`, `cache_read` | No, the reply has already arrived |
+| `delegate` | `session_id`, `agent`, `prompt` | Yes, the sub agent is never created and the calling model gets a failed tool call |
+| `compact` | `session_id`, `reason` (`automatic` or `overflow`) | No |
+| `retry` | `session_id`, `from_model`, `to_model`, `error` | No, the switch has already been decided |
 
 Other details:
 
+* **`pre_model` can inject context.** Print `{"context":"..."}` on stdout and that text is appended to the system prompt for that one call. Useful for facts the model cannot look up: an incident in progress, a freeze window, who is on call. It costs the session its system prompt cache for every call the hook injects on, since the cached prefix is exactly the part being changed.
 * **matcher** only means something for `pre_tool_use` and `post_tool_use`. It is a regex against the tool name, **anchored to the whole name**, so `"bash"` hits only the `bash` tool. Alternation such as `"bash|edit"` and patterns such as `"mcp__github__.*"` both work. Omit it to run on every tool call.
 * **To block**, print `{"decision":"block","reason":"..."}` on stdout, or exit with code **2**, in which case stderr becomes the reason. Any other non zero exit is treated as a warning and execution continues.
 * Each hook has a 30 second timeout. Multiple hooks on one event run in registration order and stop at the first block.
@@ -808,6 +816,7 @@ Settings that can be toggled while running. They apply daemon wide rather than p
 | `/config auto_compact on\|off` | Automatic compaction past 80% context |
 | `/config show_tps on\|off` | The tokens per second reading under the prompt |
 | `/config auto_delegate on\|off` | Sending matching prompts to a cheaper sub agent, see [Auto delegation](#auto-delegation) |
+| `/config smart_agent on\|off` | The built-in specialist roster and the orchestration prompt, see [Smart Agent](#smart-agent). Reports the roster it turned on, or says why it is empty. |
 
 Each change records a `config.changed` event on that session and the Web UI updates its status bar right away. A newly opened client reads current values from `GET /api/settings`.
 
@@ -971,7 +980,7 @@ One line directly below the input box:
 | Stop button | Appears while a turn is running, whoever started it. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
 | Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
-| Settings pill | `⚙ settings`. Opens the settings window, which holds the update controls — see [Checking for updates](#checking-for-updates). |
+| Settings pill | `⚙ settings`. Opens the settings window, which holds the [Smart Agent](#smart-agent) switch and the update controls. See [Checking for updates](#checking-for-updates). |
 
 ### Switching agents with Tab
 
@@ -1029,7 +1038,9 @@ If the turn happens to finish in the instant between your pressing Enter and the
 | `bash` | Yes | Run a shell command, 2 minute default timeout |
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server |
-| `Task` | No | Delegate to another named agent and wait for its result. Registered only when 2 or more agents are configured. |
+| `Task` | No | Delegate to another named agent and wait for its result. Offered only when there are 2 or more agents to delegate to, which [Smart Agent](#smart-agent) is one way to arrange. |
+| `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [Smart Agent](#smart-agent) on. |
+| `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [Smart Agent](#smart-agent) on. |
 
 ### Combining agents
 
@@ -1067,6 +1078,170 @@ The idea comes from opencode's subagent and model matching, such as `oh-my-openc
 3. `explore`'s final answer text is returned as the tool result, and the delegating agent continues from it.
 
 Delegation deeper than 3 levels is refused automatically, so agents cannot recurse into each other forever.
+
+### Smart Agent
+
+Off by default. One switch, in the settings window (the gear pill under the prompt), with `/config smart_agent on|off` and `"smart_agent": true` in config.json as the other two ways to set it. The change applies to the next message, on every session on the daemon, and is saved to config.json so it survives a restart.
+
+What it turns on is a way of working rather than a preference, which is why it is opt in: one request can become several model calls against several contexts. That is the point of it and it is also a bill nobody agreed to by installing an update.
+
+#### What it adds
+
+| Added | Detail |
+|---|---|
+| Six specialist agents | `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. They exist without being configured, and disappear again when the switch is turned off. |
+| An orchestration prompt | Appended to the system prompt of top level sessions only. It tells the model to work out what is being asked, send wide reading to a sub agent, do the narrow work itself, verify before reporting, and say what it checked. |
+| `TaskBackground` and `TaskCollect` | Launch several specialists at once and pick up the answers together, instead of waiting for each in turn. |
+| [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by moving to the next profile, re-deriving the prompt for the model it moved to. |
+| [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
+| [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas and system prompt are marked as the stable prefix, so the provider can serve them from cache. |
+| [Two guards](#secrets-and-the-workspace-boundary) | Credential files are refused, and paths outside the session's workspace are asked about. |
+
+#### The specialists
+
+| Agent | Runs on | Tools | For |
+|---|---|---|---|
+| `explore` | the quick profile | `read_file`, `glob`, `grep`, `Skill` | Finding where something lives. Paths and line numbers, not explanations. |
+| `librarian` | the deep profile | `read_file`, `glob`, `grep`, `Skill` | Working through documentation, a long file, or an unfamiliar subsystem. |
+| `oracle` | the deep profile | `read_file`, `glob`, `grep`, `Skill` | Reviewing a change or a design for what is actually wrong with it. |
+| `plan` | the deep profile | `read_file`, `glob`, `grep`, `Skill` | Turning a large request into ordered, concrete steps. |
+| `implement` | the balanced profile | `read_file`, `write_file`, `edit`, `bash`, `glob`, `grep`, `Skill` | One self contained change, carried out and checked. |
+| `verify` | the quick profile | `read_file`, `bash`, `glob`, `grep` | Running the build or the tests and reporting what happened. |
+
+Two properties of that table are enforced rather than requested:
+
+* **No specialist has the delegation tools.** A sub agent that can delegate can spawn sub agents that can delegate. "Do not delegate" in a prompt is a request; leaving `Task` out of the allowlist is the answer. Delegation deeper than 3 levels is refused as well, background launches included.
+* **The four investigating agents have no shell.** A read only agent with `bash` is not read only, and the value of sending investigation elsewhere is that its answer can be trusted not to have changed anything on the way.
+
+Every specialist is also told to answer in under 300 words, with paths and line numbers rather than pasted output. That is the whole economy of the feature: a sub agent can read fifty thousand tokens in a context the main session never pays for, and hand back two hundred.
+
+An agent you have defined yourself under one of those names is left alone completely, prompt, model and tools. The roster is a starting point, not something that overwrites a deliberate choice.
+
+#### Which model each specialist runs on
+
+Not named in the build, because the models named there would be the models on one developer's machine. Each specialist asks for a capability class instead, and the class is resolved against the profiles already in your config.json.
+
+| Class | Wants | Matched from the model id by |
+|---|---|---|
+| `quick` | The cheap fast one | `haiku`, `mini`, `flash`, `nano`, `lite`, `small`, `turbo`, and small parameter counts such as `-8b` |
+| `balanced` | Good enough to be trusted with an edit | `sonnet`, `coder`, `medium`, `gpt-4`, and mid parameter counts such as `-30b` |
+| `deep` | The strongest one | `opus`, `gpt-5`, `pro`, `ultra`, `thinking`, `-r1`, and large parameter counts such as `-70b` |
+
+The lightest class a model id matches wins, so `gpt-5-mini` is quick and not deep: the size qualifier is the specific half of the name and the family is the general one. A class with no match falls back to the nearest class, then to `default_profile`. With one profile configured every specialist runs on it, which is correct: the separate context is the benefit, and a different model is a bonus.
+
+To settle it by hand, name a profile `smart-quick`, `smart-balanced` or `smart-deep`. That beats every heuristic outright.
+
+```json
+"profiles": {
+  "smart-quick": { "provider": "local", "model": "whatever-my-server-loaded" },
+  "smart-deep":  { "provider": "bedrock", "model": "us.anthropic.claude-opus-4-6-v1" }
+}
+```
+
+#### Running several at once
+
+`Task` waits. For one question that is right. For three independent questions it means waiting three times, so:
+
+1. `TaskBackground({"agent":"explore","prompt":"..."})` three times. Each returns a task id straight away and the orchestrator keeps working.
+2. `TaskCollect({})` once. It waits for all of them and returns the answers in the order they were launched, so the model can match each answer to what it asked. `TaskCollect({"task_id":"..."})` takes just one and leaves the rest outstanding.
+
+A session may have 8 launched and uncollected tasks at once. The ninth is refused, and says to collect first. It is a ceiling rather than a queue on purpose: every outstanding task is a model spending tokens in a session nobody is reading, so hitting it is a signal.
+
+Background tasks appear in the Web UI's right panel while they run, the same as tasks started through the API.
+
+#### Fallback chains: when a model will not answer
+
+In a long agent session a model failure is an ordinary condition rather than an exception: a rate limit at the wrong moment, a provider having a bad hour, a local server that was restarted, a credential that expired overnight. Without somewhere else to go, every one of those ends the turn and loses whatever it was in the middle of.
+
+Name the somewhere else on the profile.
+
+```json
+"profiles": {
+  "strong":  { "provider": "bedrock", "model": "us.anthropic.claude-opus-4-6-v1", "fallback": ["balanced", "local"] },
+  "balanced":{ "provider": "bedrock", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0" },
+  "local":   { "provider": "local", "model": "qwen3-30b-a3b" }
+}
+```
+
+| Detail | Behaviour |
+|---|---|
+| When it fires | Rate limits and quota, 5xx and gateway errors, a connection that is refused or times out, a model or credential the endpoint does not have |
+| When it does not | A conversation too long for the window, which is summarized and retried on the same model instead, and a stream that had already written part of an answer, since falling back there would leave the conversation carrying both halves |
+| Order | The primary profile's own list, in order. The list is flat: a fallback's own `fallback` is not followed, so a chain cannot loop and its length is what it says |
+| Visibility | Each switch is recorded in the transcript, naming what failed and what took over. A session that quietly got worse is the failure mode this avoids |
+| Validation | Names are checked when the config loads, not when something breaks. A chain is read exactly when something has already gone wrong |
+
+**The model is not the only thing that changes.** Both the orchestration prompt and the per-model formatting note are written per model family, so falling back re-derives the whole request rather than resending the failed one with a different model id. A local open weight model that catches an overflow from a hosted flagship gets the prompt written for it. This is the reason `fallback` is part of Smart Agent rather than a standalone setting.
+
+#### The turn log
+
+Smart Agent writes a structured record of what each turn did to `~/.localcode/trace/localcode-<date>.jsonl`, one JSON object per line.
+
+A multi agent turn cannot be debugged from a transcript. The transcript shows what the main conversation said. It does not show that the answer came from the second model in a fallback chain, that four fifths of the input was served from cache, that a sub agent spent ninety seconds in one grep, or that the turn compacted twice on the way.
+
+| Field | Meaning |
+|---|---|
+| `trace_id` | One per top level turn, inherited by every sub agent it spawns. This is what makes a fan out to three specialists one story rather than four unrelated logs |
+| `span` | `turn.start`, `model`, `tool`, `delegate`, `fallback`, `compact`, `turn.end` |
+| `session_id`, `parent_session_id` | Which session, and whose child it is |
+| `agent`, `profile`, `model`, `provider` | Who answered, on what |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | What it cost. The read count is how you tell a working cache breakpoint from one that is doing nothing |
+| `tool`, `duration_ms` | Which tool and how long it took, timed around the whole call so a wait on a permission prompt reads as a wait |
+| `finish_reason`, `fallbacks`, `compactions` | On `turn.end`: did this turn have a bad time |
+
+```bash
+jq -c 'select(.trace_id=="a1b2c3d4e5f6a7b8")' ~/.localcode/trace/localcode-2026-08-25.jsonl
+```
+
+`GET /api/trace` returns the last records held in memory, for the question asked while a session is still open. `?limit=`, `?session=` and `?trace=` narrow it. Nothing is written with Smart Agent off, and the file is not created until the first record.
+
+#### Prompt cache breakpoints
+
+The stable half of an agent request is the tool schemas and the system prompt, and in a long session it is the same bytes every turn. Smart Agent marks the end of it so the provider can serve it from cache, at roughly a tenth of the price of reading it again.
+
+| Backend | What is marked |
+|---|---|
+| Anthropic API | `cache_control` on the last tool and on the system prompt |
+| Bedrock | A `cachePoint` after the tools and after the system prompt |
+| openai-compatible | Nothing. Local servers do their own prefix caching with nothing to declare |
+
+A breakpoint the provider does not honour is harmless: prefixes below the provider's minimum (about 1024 tokens on most Claude models) are ignored and the request is priced as it was before. The conversation itself is deliberately not marked, since a breakpoint there would have to move every turn and rewrite the whole history into the cache at the write premium each time.
+
+Because each specialist runs in its own session, each has its own stable prefix and its own cache. That is a reason to delegate rather than a cost of it.
+
+#### Secrets and the workspace boundary
+
+Two shipped guards, both on only with Smart Agent on, both overridable.
+
+**Secrets are refused outright.** `read_file`, `write_file` and `edit` are denied for paths that look like a credential store: `.env` and `.env.*`, private keys (`*.pem`, `*.key`, `id_rsa` and friends), `~/.ssh`, `~/.aws/credentials`, `~/.kube/config`, `~/.npmrc`, `*credentials.json`, `.netrc`. The threat does not need a malicious model: a summarized repository or a "what is in this directory" is enough, and once a credential is in a context it has been sent to a provider.
+
+Denied rather than asked, because "may I read your SSH private key?" has one right answer and asking it teaches people to click yes. `skip_permissions` does not unlock them: it downgrades ask to allow and never touches deny. To allow one, write the rule:
+
+```json
+"permission": { "read_file": [{ "match": "*.env", "decision": "allow" }] }
+```
+
+`bash` is deliberately not covered. A shell command is not a path, and matching `cat .env` out of an arbitrary command line catches the honest case and misses every other one. The shell has its own rules.
+
+**Paths outside the workspace are asked about.** A tool call on an absolute path outside the session's own directory turns an `allow` into an `ask`. Not a refusal: reading a system header or a file in another checkout is ordinary work. It is the difference between an agent that stays where it was pointed and one that is discovered to have been somewhere else. A `deny` stays a `deny`, and an `ask` is already asking.
+
+#### The prompt is written for the model
+
+Role stays constant, prompt does not. A policy that reads as a helpful summary to one model reads as a checklist to be performed by another, and the failure modes are opposite: one delegates nothing, the other delegates its own reasoning.
+
+| Model family | Difference |
+|---|---|
+| Default | The full policy, for models that follow one stated once |
+| GPT and o series | The same, plus a stopping rule: delegate a question once, and never delegate your own reasoning |
+| Gemini | The same, plus a concrete threshold, since a long context model left alone reads everything itself |
+| Local open weight models (qwen, glm, kimi, llama, mistral, gemma, deepseek and similar) | Shorter and flat, one rule per line. Background delegation is left out entirely: launching work and never collecting it is worse than not launching it. |
+
+#### What it does not do
+
+* Nothing is added to a session that is already a sub agent, so a specialist is never told to orchestrate.
+* Nothing is added when there is nowhere to delegate to, which is the case when config.json has no profiles at all.
+* It does not change permissions. Every tool a specialist calls goes through the same allow/ask/deny rules and the same prompt as any other tool call, asked in the session that spawned it.
+* The specialists do not appear in the agent picker. They are delegation targets rather than conversation modes, so `Tab`, `/agent` and the header dropdown still cycle only the agents in config.json.
 
 ### Plan mode
 

@@ -31,6 +31,32 @@ const (
 	EventUserPromptSubmit = "user_prompt_submit"
 	EventStop             = "stop"
 	EventSessionStart     = "session_start"
+
+	// The points a turn passes through that are not a tool call. A tool
+	// hook can see everything a tool does and nothing else, which leaves
+	// the expensive half of an agent session unobservable and
+	// ungovernable: the model call itself, the decision to hand work to a
+	// sub-agent, the history being summarized, the switch to another model
+	// when one will not answer.
+	//
+	// EventPreModel runs before each provider call. Blocking it refuses
+	// the request, which is the one place a policy can stop a turn before
+	// anything is sent anywhere. It is also the injection point: a hook
+	// that prints {"context":"..."} has that text appended to the system
+	// prompt for that call.
+	EventPreModel = "pre_model"
+	// EventPostModel runs after each response. Fire and forget: the reply
+	// has already arrived, so there is nothing left to block.
+	EventPostModel = "post_model"
+	// EventDelegate runs before a sub-agent is started. Blocking it
+	// refuses the delegation, which is a real control: "no agent of mine
+	// spawns another" is enforceable here in a way a prompt cannot be.
+	EventDelegate = "delegate"
+	// EventCompact runs after the history has been summarized or trimmed.
+	EventCompact = "compact"
+	// EventRetry runs when a turn moves to another model after one would
+	// not answer.
+	EventRetry = "retry"
 )
 
 // KnownEvents lists every event name Run recognizes, for config
@@ -41,6 +67,11 @@ var KnownEvents = map[string]bool{
 	EventUserPromptSubmit: true,
 	EventStop:             true,
 	EventSessionStart:     true,
+	EventPreModel:         true,
+	EventPostModel:        true,
+	EventDelegate:         true,
+	EventCompact:          true,
+	EventRetry:            true,
 }
 
 // Hook is one shell command registered against an event. Matcher, if set,
@@ -73,15 +104,36 @@ const defaultTimeout = 30 * time.Second
 // not treated as an implicit block, so a broken hook script can't lock
 // the user out of their own tools.
 func Run(ctx context.Context, cfg Config, event string, payload map[string]any) (blocked bool, reason string, warnings []error) {
+	out := RunOutcome(ctx, cfg, event, payload)
+	return out.Blocked, out.Reason, out.Warnings
+}
+
+// Outcome is everything running a hook list produced.
+//
+// Run above is the older, narrower view of the same thing, kept because
+// most call sites only ever ask "was this blocked?". Context is the part
+// that needs the wider one: a hook can hand text back to be added to the
+// request, which is what makes pre_model an injection point rather than
+// only a veto.
+type Outcome struct {
+	Blocked  bool
+	Reason   string
+	Context  []string
+	Warnings []error
+}
+
+// RunOutcome is Run with the hooks' own output returned as well.
+func RunOutcome(ctx context.Context, cfg Config, event string, payload map[string]any) (out Outcome) {
 	list := cfg[event]
 	if len(list) == 0 {
-		return false, "", nil
+		return out
 	}
 
 	toolName, _ := payload["tool_name"].(string)
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return false, "", []error{fmt.Errorf("marshal hook payload: %w", err)}
+		out.Warnings = []error{fmt.Errorf("marshal hook payload: %w", err)}
+		return out
 	}
 
 	for _, h := range list {
@@ -92,7 +144,7 @@ func Run(ctx context.Context, cfg Config, event string, payload map[string]any) 
 			// patterns ("mcp__github__.*") still work as expected.
 			matched, err := regexp.MatchString("^(?:"+h.Matcher+")$", toolName)
 			if err != nil {
-				warnings = append(warnings, fmt.Errorf("hook %q: invalid matcher %q: %w", h.Command, h.Matcher, err))
+				out.Warnings = append(out.Warnings, fmt.Errorf("hook %q: invalid matcher %q: %w", h.Command, h.Matcher, err))
 				continue
 			}
 			if !matched {
@@ -112,10 +164,15 @@ func Run(ctx context.Context, cfg Config, event string, payload map[string]any) 
 		var resp struct {
 			Decision string `json:"decision"`
 			Reason   string `json:"reason"`
+			Context  string `json:"context"`
 		}
 		_ = json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp)
+		if resp.Context != "" {
+			out.Context = append(out.Context, resp.Context)
+		}
 		if resp.Decision == "block" {
-			return true, resp.Reason, warnings
+			out.Blocked, out.Reason = true, resp.Reason
+			return out
 		}
 
 		if runErr != nil {
@@ -125,11 +182,12 @@ func Run(ctx context.Context, cfg Config, event string, payload map[string]any) 
 				if r == "" {
 					r = fmt.Sprintf("hook %q exited with status 2", h.Command)
 				}
-				return true, r, warnings
+				out.Blocked, out.Reason = true, r
+				return out
 			}
-			warnings = append(warnings, fmt.Errorf("hook %q: %w (stderr: %s)", h.Command, runErr, strings.TrimSpace(stderr.String())))
+			out.Warnings = append(out.Warnings, fmt.Errorf("hook %q: %w (stderr: %s)", h.Command, runErr, strings.TrimSpace(stderr.String())))
 		}
 	}
 
-	return false, "", warnings
+	return out
 }

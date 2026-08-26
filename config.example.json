@@ -19,7 +19,12 @@
     "strong": {
       "provider": "bedrock",
       "model": "us.anthropic.claude-opus-4-6-v1",
-      "max_tokens": 8192
+      "max_tokens": 8192,
+      "//fallback": "Other profiles to try, in order, when this one will not answer: a rate limit, an outage, a credential that expired. Read only with smart_agent on, because falling back also re-derives the prompt for the model it falls back to. See docs/USAGE.md.",
+      "fallback": [
+        "balanced",
+        "cheap"
+      ]
     },
     "balanced": {
       "provider": "bedrock",
@@ -91,5 +96,7 @@
       "grep *"
     ]
   },
+  "//smart_agent": "Off by default. On, the session's own model becomes an orchestrator with six built-in specialist sub-agents (explore, librarian, oracle, plan, implement, verify), each routed to whichever profile above suits it. Name a profile smart-quick, smart-balanced or smart-deep to pin that routing by hand. Also togglable from the settings window and with /config smart_agent on|off. See docs/USAGE.md.",
+  "smart_agent": false,
   "skip_permissions": false
 }

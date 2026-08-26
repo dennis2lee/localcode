@@ -38,19 +38,21 @@ const compactionPrompt = "Summarize our conversation so far concisely, preservin
 // user turn is appended. Best-effort: any failure (including the
 // summarization call itself erroring) just leaves the full history intact
 // rather than blocking the real turn.
-func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt string) {
+// It reports whether it actually compacted, which is what the caller
+// needs to count compactions for the turn's trace record.
+func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt string) bool {
 	if !l.AutoCompactEnabled() {
-		return
+		return false
 	}
 	u, ok := l.getUsage(sessionID)
 	if !ok || u.MaxContext <= 0 {
-		return
+		return false
 	}
 	percent := float64(u.InputTokens+u.OutputTokens) / float64(u.MaxContext) * 100
 	if percent < compactThresholdPercent {
-		return
+		return false
 	}
-	_ = l.compactHistory(ctx, sessionID, p, profile, systemPrompt, "", false)
+	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, "", false) == nil
 }
 
 // compactHistory summarizes sessionID's history via the model and, on

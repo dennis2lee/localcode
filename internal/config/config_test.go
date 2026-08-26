@@ -237,6 +237,7 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"Hooks":              true,
 		"AutoDelegate":       true,
 		"SkipPermissions":    true,
+		"SmartAgent":         true,
 	}
 	intentionallyNotMerged := map[string]bool{}
 

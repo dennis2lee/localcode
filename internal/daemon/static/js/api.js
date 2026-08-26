@@ -94,6 +94,7 @@ export const resolvePermissionRequest = (sessionID, id, allow, scope) =>
   api('POST', `/api/sessions/${sessionID}/permissions/${id}`, { allow, scope });
 
 export const setAutoDelegate = (patch) => api('POST', '/api/settings/auto-delegate', patch);
+export const setSmartAgent = (enabled) => api('POST', '/api/settings/smart-agent', { enabled });
 export const setSkipPermissions = (enabled) => api('POST', '/api/permissions/skip', { enabled });
 export const addPermissionRule = (tool, match, decision) =>
   api('POST', '/api/permissions/rules', { tool, match, decision });

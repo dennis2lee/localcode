@@ -842,5 +842,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Two controls that belong together on one line — the update panel's
    check and install buttons. */
 #settings-modal .field-row { display: flex; gap: 8px; }
+/* A checkbox and its label on one line, the label wrapping under itself
+   rather than under the box. */
+#settings-modal .check-row { display: flex; align-items: flex-start; gap: 8px; }
+#settings-modal .check-row input[type="checkbox"] { margin-top: 3px; flex: 0 0 auto; }
 /* A note that has to be noticed rather than merely available. */
 #settings-modal .note.warn { color: var(--warn); }

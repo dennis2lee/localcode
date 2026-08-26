@@ -89,3 +89,52 @@ func relativeTo(base string, paths []string) []string {
 	}
 	return out
 }
+
+// OutsideWorkspace reports whether path lands outside the directory this
+// turn belongs to.
+//
+// The boundary a coding agent is expected to respect. Every relative path
+// is inside it by construction (resolve joins it on), so what this is
+// really asking about is an absolute path, or one that climbs out with
+// "..": /etc/passwd, ~/.aws, the other project in the next directory
+// along. Those are not always wrong — reading a system header or a config
+// somewhere else is ordinary work — which is why the answer this feeds is
+// "ask", not "refuse".
+//
+// False when the context carries no directory, because then there is no
+// boundary to be outside of, and false for an empty path, which is a tool
+// with nothing to say rather than a path at the filesystem root.
+func OutsideWorkspace(ctx context.Context, path string) bool {
+	dir := WorkingDir(ctx)
+	if dir == "" || path == "" {
+		return false
+	}
+	full := path
+	if !filepath.IsAbs(full) {
+		full = filepath.Join(dir, full)
+	}
+	rel, err := filepath.Rel(dir, filepath.Clean(full))
+	if err != nil {
+		// Different volumes on Windows, which is as outside as it gets.
+		return true
+	}
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// BoundaryDecision applies the workspace boundary to a resolved
+// permission decision.
+//
+// It escalates allow to ask and does nothing else. A deny stays a deny —
+// a rule written to forbid something is not softened by where the file is
+// — and an ask is already asking. enforce is the caller's switch, so the
+// boundary can be part of a feature that is opted into rather than
+// something that starts happening to everyone.
+func BoundaryDecision(ctx context.Context, d Decision, subject string, enforce bool) Decision {
+	if !enforce || d != DecisionAllow {
+		return d
+	}
+	if OutsideWorkspace(ctx, subject) {
+		return DecisionAsk
+	}
+	return d
+}

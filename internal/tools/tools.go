@@ -64,7 +64,12 @@ const (
 // with no Resolver set falls back to exactly that static default (ask iff
 // RequiresPermission, else allow) — today's pre-permission-config
 // behavior.
-type PermissionResolver func(toolName, subject string, staticRequiresPermission bool) Decision
+//
+// ctx is passed because a decision can depend on where the call is
+// happening as well as what it is: the workspace this turn belongs to
+// rides on the context (see workdir.go), and "is this path outside the
+// project?" is not answerable without it.
+type PermissionResolver func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision
 
 // PermissionSubject is implemented by tools whose input has a natural
 // pattern-matchable "subject" — a shell command for Bash, a file path for
@@ -131,6 +136,17 @@ func (r *Registry) SpecsFor(allowed []string) []provider.Tool {
 	return out
 }
 
+// Names lists every registered tool, in registration order.
+//
+// Used to turn "everything except these" into a concrete allowlist, which
+// is the only shape the rest of the code understands: an agent's Tools
+// field, the specs the model is shown, and the check in runTools are all
+// allowlists, and a single subtractive case is not worth a second
+// mechanism running beside them.
+func (r *Registry) Names() []string {
+	return append([]string(nil), r.order...)
+}
+
 // IsAllowed reports whether name is permitted under an allowed list from
 // an agent's Tools restriction. A nil/empty list means unrestricted.
 func IsAllowed(allowed []string, name string) bool {
@@ -181,7 +197,7 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		decision = DecisionAllow
 	}
 	if r.Resolver != nil {
-		decision = r.Resolver(name, subject, t.RequiresPermission(input))
+		decision = r.Resolver(ctx, name, subject, t.RequiresPermission(input))
 	}
 
 	switch decision {

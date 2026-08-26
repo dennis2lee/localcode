@@ -52,6 +52,20 @@ type Config struct {
 	// via "/config auto_delegate on|off".
 	AutoDelegate *AutoDelegateConfig `json:"auto_delegate,omitempty"`
 
+	// SmartAgent turns on the Smart Agent bundle: a roster of built-in
+	// specialist sub-agents (explore, librarian, oracle, plan, implement,
+	// verify), the orchestration prompt that tells the session's own model
+	// when to hand work to them, and the background delegation tools that
+	// let it run several at once. See internal/smart.
+	//
+	// A nil pointer means unset, which defaults to OFF, and that default
+	// is deliberate rather than cautious. With it on, one request can
+	// become half a dozen model calls against half a dozen contexts, which
+	// is the point of it and is also a bill nobody agreed to. Also
+	// runtime-toggleable via "/config smart_agent on|off" and from the
+	// settings panel.
+	SmartAgent *bool `json:"smart_agent,omitempty"`
+
 	// SkipPermissions turns every "ask" decision into "allow" — the
 	// equivalent of Claude Code's --dangerously-skip-permissions. A nil
 	// pointer means unset, which defaults to OFF: it has to be opted into
@@ -151,6 +165,12 @@ func (c *Config) TPSEnabled() bool {
 	return c.ShowTPS == nil || *c.ShowTPS
 }
 
+// SmartAgentEnabled reports the configured default for Smart Agent. Unset
+// is off, so adding the feature changes nothing for an existing config.
+func (c *Config) SmartAgentEnabled() bool {
+	return c.SmartAgent != nil && *c.SmartAgent
+}
+
 // ProviderConfig describes how to reach a model backend.
 // Type selects which concrete client to construct (see provider.Provider).
 type ProviderConfig struct {
@@ -192,6 +212,27 @@ type Profile struct {
 	// the limit, and a request built against a window larger than the real
 	// one is refused outright by the server.
 	ContextWindow int `json:"context_window,omitempty"`
+
+	// Fallback names other profiles to try, in order, when a request to
+	// this one fails for a reason another model could survive: a rate
+	// limit, a provider outage, a model that is not there, an expired
+	// credential. Empty, the default, means a failure is a failure.
+	//
+	// Model failure is an ordinary condition in a long agent session
+	// rather than an exception, and the failures worth naming here are the
+	// ones that are about the endpoint rather than about the request: a
+	// conversation too long for the window is not one of them (it is
+	// summarized and retried on the same model, which is the right
+	// answer), and neither is a refused tool call.
+	//
+	// The chain is flat. A fallback's own Fallback list is not followed,
+	// so a chain cannot loop and its length is what it says it is.
+	//
+	// Read only when Smart Agent is on. Switching models mid-session is a
+	// visible change in who is answering, and it is part of the bundle
+	// that a user opts into rather than something that starts happening
+	// after an update.
+	Fallback []string `json:"fallback,omitempty"`
 
 	// KeepGoing is how many times one turn may be told to carry on after
 	// the model stops with the task unfinished. 0, the default, defers to
@@ -262,6 +303,18 @@ func (c *Config) Validate() error {
 		if profile.KeepGoing < -1 || profile.KeepGoing > maxKeepGoing {
 			return fmt.Errorf("profile %q: keep_going is %d, which is outside -1..%d (-1 means never, 0 means the model's own default)",
 				name, profile.KeepGoing, maxKeepGoing)
+		}
+		// Checked at load rather than at the moment of a failure. A
+		// fallback chain is read exactly when something has already gone
+		// wrong, which is the worst possible time to discover a typo in
+		// it.
+		for _, fb := range profile.Fallback {
+			if fb == name {
+				return fmt.Errorf("profile %q lists itself in fallback, which would retry the endpoint that just failed", name)
+			}
+			if _, ok := c.Profiles[fb]; !ok {
+				return fmt.Errorf("profile %q has fallback %q, which is not a profile", name, fb)
+			}
 		}
 	}
 

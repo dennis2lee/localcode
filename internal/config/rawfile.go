@@ -236,3 +236,15 @@ func updateAutoDelegateInFile(path string, update func(block map[string]json.Raw
 	return updateRawSection(path, "auto_delegate", update)
 }
 
+// SetSmartAgentInFile writes the top-level "smart_agent" key, leaving
+// every other key untouched. See Config.SmartAgent.
+func SetSmartAgentInFile(path string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal smart_agent: %w", err)
+		}
+		raw["smart_agent"] = encoded
+		return nil
+	})
+}

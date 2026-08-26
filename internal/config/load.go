@@ -156,6 +156,9 @@ func (c *Config) merge(other *Config) {
 	if other.SkipPermissions != nil {
 		c.SkipPermissions = other.SkipPermissions
 	}
+	if other.SmartAgent != nil {
+		c.SmartAgent = other.SmartAgent
+	}
 	for event, list := range other.Hooks {
 		if c.Hooks == nil {
 			c.Hooks = hooks.Config{}

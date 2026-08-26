@@ -70,6 +70,8 @@ export async function loadSettings() {
     app.autoDelegate = !!s.auto_delegate;
     app.autoDelegateAgent = s.auto_delegate_agent || '';
     app.autoDelegateMatch = s.auto_delegate_match || [];
+    app.smartAgent = !!s.smart_agent;
+    app.smartAgentRoster = s.smart_agent_roster || [];
     app.skipPermissions = !!s.skip_permissions;
     app.permissionRules = s.permission_rules || {};
     app.canEditPermissions = !!s.can_edit_permissions;

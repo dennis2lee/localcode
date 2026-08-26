@@ -7,6 +7,7 @@ import {
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
 import { refreshDelegatePanelIfOpen, permissionRequest } from './modals.js';
+import { refreshSmartAgentIfOpen } from './settings.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
@@ -137,6 +138,14 @@ const handlers = {
       app.autoDelegate = d.auto_delegate;
       renderAutoDelegate();
       refreshDelegatePanelIfOpen();
+    }
+    // "/config smart_agent on" from another client, or from the TUI. The
+    // panel is only redrawn if it happens to be open — there is no status
+    // bar pill for this one, deliberately: it is a way of working that is
+    // chosen once, not a thing to flip between messages.
+    if (typeof d.smart_agent === 'boolean') {
+      app.smartAgent = d.smart_agent;
+      refreshSmartAgentIfOpen();
     }
   },
   // A fork is a verbatim copy of a conversation, so its transcript is

@@ -13,6 +13,7 @@ import (
 	"localcode/internal/session"
 	"localcode/internal/skills"
 	"localcode/internal/tools"
+	"localcode/internal/trace"
 )
 
 const defaultSystemPrompt = "You are a helpful coding assistant with access to file and shell tools. Use them when needed; otherwise answer directly."
@@ -145,6 +146,12 @@ type Loop struct {
 	// test wants.
 	WorkspaceRules func(dir string) string
 
+	// Trace, if set, is where the structured record of what each turn did
+	// is written — see internal/trace. Only written to while Smart Agent
+	// is on (see Loop.tracer), and every call is nil-safe, so a Loop built
+	// without one simply records nothing.
+	Trace *trace.Writer
+
 	// MemoryDir is this project's auto-memory directory (see
 	// internal/memory) — "" if auto memory is disabled. Backs the
 	// "/memory" local command; the actual read/write of memory files
@@ -200,6 +207,12 @@ func (l *Loop) ClearSessionState(sessionID string) {
 	delete(l.usage, sessionID)
 	delete(l.cumulativeUsage, sessionID)
 	delete(l.turnRate, sessionID)
+	if l.Tasks != nil {
+		// Background tasks launched from this session and never collected
+		// hold their answers in the manager, not in the session log. The
+		// session is going away, so nobody is coming for them.
+		l.Tasks.forgetSession(sessionID)
+	}
 }
 
 // AutoCompactEnabled reports whether auto-compaction is currently on —

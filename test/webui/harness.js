@@ -53,6 +53,8 @@ function defaultRoutes() {
       auto_delegate: false,
       auto_delegate_agent: '',
       auto_delegate_match: [],
+      smart_agent: false,
+      smart_agent_roster: ['explore', 'implement', 'librarian', 'oracle', 'plan', 'verify'],
       skip_permissions: false,
       permission_rules: {},
       can_edit_permissions: true,

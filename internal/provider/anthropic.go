@@ -48,6 +48,11 @@ type anthContentBlock struct {
 
 	Text string `json:"text,omitempty"` // text
 
+	// CacheControl marks this block as the end of a cacheable prefix.
+	// Everything before it, this block included, is stored and served
+	// from cache on a later request whose prefix matches byte for byte.
+	CacheControl *anthCacheControl `json:"cache_control,omitempty"`
+
 	ID    string          `json:"id,omitempty"`    // tool_use
 	Name  string          `json:"name,omitempty"`  // tool_use
 	Input json.RawMessage `json:"input,omitempty"` // tool_use
@@ -58,14 +63,29 @@ type anthContentBlock struct {
 }
 
 type anthTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description,omitempty"`
+	InputSchema  json.RawMessage   `json:"input_schema"`
+	CacheControl *anthCacheControl `json:"cache_control,omitempty"`
 }
 
+// anthCacheControl is the only kind there is. "ephemeral" means the
+// five-minute TTL, which is the right one here: an agent turn is followed
+// by another agent turn within seconds, and the one-hour TTL costs twice
+// as much to write for a prefix that will be rewritten anyway.
+type anthCacheControl struct {
+	Type string `json:"type"`
+}
+
+func ephemeral() *anthCacheControl { return &anthCacheControl{Type: "ephemeral"} }
+
 type anthRequest struct {
-	Model       string        `json:"model"`
-	System      string        `json:"system,omitempty"`
+	Model string `json:"model"`
+	// A string ordinarily, and an array of one text block when a cache
+	// breakpoint has to be attached to it — the API accepts both, and the
+	// plain string is kept for the uncached case so the request on the
+	// wire is exactly what it has always been.
+	System      any           `json:"system,omitempty"`
 	Messages    []anthMessage `json:"messages"`
 	Tools       []anthTool    `json:"tools,omitempty"`
 	MaxTokens   int           `json:"max_tokens"`
@@ -115,6 +135,12 @@ type anthStreamEvent struct {
 type anthUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// What the prompt cache did for this request. Reported separately
+	// from input_tokens by the API, and kept separate here: they are
+	// priced differently, and "1200 read from cache" is the number that
+	// says whether the breakpoint is working.
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
 func toAnthropicMessages(msgs []Message) []anthMessage {
@@ -160,11 +186,31 @@ func mapAnthropicStopReason(r string) string {
 }
 
 func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	tools := toAnthropicTools(req.Tools)
+	var system any = req.System
+	if req.CachePrefix {
+		// Two breakpoints, at the two places the request stops being the
+		// same as last time: after the tool schemas and after the system
+		// prompt. Both are byte-identical from turn to turn in an agent
+		// session, and together they are the bulk of every request's fixed
+		// cost.
+		//
+		// Not on the conversation itself. A breakpoint there would have to
+		// move every turn, which means writing the whole history into the
+		// cache again at the write premium on each one, and getting that
+		// wrong costs more than not doing it.
+		if n := len(tools); n > 0 {
+			tools[n-1].CacheControl = ephemeral()
+		}
+		if req.System != "" {
+			system = []anthContentBlock{{Type: "text", Text: req.System, CacheControl: ephemeral()}}
+		}
+	}
 	body := anthRequest{
 		Model:       req.Model,
-		System:      req.System,
+		System:      system,
 		Messages:    toAnthropicMessages(req.Messages),
-		Tools:       toAnthropicTools(req.Tools),
+		Tools:       tools,
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		Stream:      true,
@@ -218,7 +264,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		// inputTokens is captured once from message_start (Anthropic
 		// doesn't repeat it in message_delta's usage, which only reports
 		// cumulative output_tokens).
-		var inputTokens int
+		var inputTokens, cacheRead, cacheWrite int
 
 		send := func(ev StreamEvent) bool {
 			select {
@@ -248,7 +294,12 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 			case "message_start":
 				if ev.Message != nil && ev.Message.Usage != nil {
 					inputTokens = ev.Message.Usage.InputTokens
-					if !send(StreamEvent{Type: EventUsage, InputTokens: inputTokens, OutputTokens: ev.Message.Usage.OutputTokens}) {
+					cacheRead = ev.Message.Usage.CacheReadInputTokens
+					cacheWrite = ev.Message.Usage.CacheCreationInputTokens
+					if !send(StreamEvent{
+						Type: EventUsage, InputTokens: inputTokens, OutputTokens: ev.Message.Usage.OutputTokens,
+						CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite,
+					}) {
 						return
 					}
 				}
@@ -293,7 +344,13 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 
 			case "message_delta":
 				if ev.Usage != nil {
-					if !send(StreamEvent{Type: EventUsage, InputTokens: inputTokens, OutputTokens: ev.Usage.OutputTokens}) {
+					// message_delta repeats neither the input count nor
+					// the cache counts, so the ones from message_start are
+					// carried forward rather than reported as zero.
+					if !send(StreamEvent{
+						Type: EventUsage, InputTokens: inputTokens, OutputTokens: ev.Usage.OutputTokens,
+						CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite,
+					}) {
 						return
 					}
 				}

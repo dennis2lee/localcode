@@ -94,3 +94,24 @@ func (c *Config) SetAutoDelegateRuntime(agent string, match []string) {
 	c.AutoDelegate.Agent = agent
 	c.AutoDelegate.Match = append([]string(nil), match...)
 }
+
+// SmartAgentLive reports whether Smart Agent is on right now.
+//
+// The live view rather than the file's, because the switch is flipped at
+// runtime and read from three places that cannot share a copy: the agent
+// loop deciding what a turn looks like, the daemon answering a settings
+// request, and permission resolution, which runs on a tool call's own
+// goroutine while any of the others might be writing.
+func (c *Config) SmartAgentLive() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.SmartAgent != nil && *c.SmartAgent
+}
+
+// SetSmartAgentRuntime changes the live Smart Agent setting. The in-memory
+// counterpart to SetSmartAgentInFile, which persists it.
+func (c *Config) SetSmartAgentRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.SmartAgent = &v
+}

@@ -216,6 +216,14 @@ func (c *Config) resolveOneStrict(toolName, subject string, staticRequiresPermis
 			return d
 		}
 	}
+	// Smart Agent's shipped guards, after the user's own rules so any of
+	// them can be turned off by writing a rule for the same tool, and
+	// before the ordinary builtins because they are the stricter answer.
+	if c.SmartAgentLive() {
+		if d, matched := secretGuard(toolName, subject); matched {
+			return d
+		}
+	}
 	if d, matched := builtinDefault(toolName, subject); matched {
 		return d
 	}
@@ -241,6 +249,56 @@ var builtinRules = map[string][]PermissionRule{
 		{Match: "git", Decision: DecisionAllow},
 		{Match: "git *", Decision: DecisionAllow},
 	},
+}
+
+// secretPatterns are the paths an agent has no business reading or
+// writing on its own.
+//
+// The threat is the ordinary one and it does not need a malicious model to
+// happen: a summarised repository, a pasted stack trace, a "what is in
+// this directory" that walks into ~/.aws. Once a credential is in a
+// context it has been sent to a provider, and there is no taking it back.
+//
+// Deny rather than ask, because "may I read your SSH private key?" is a
+// question with one right answer and asking it teaches people to click
+// yes. Any rule in config.json for the same tool overrides these, which is
+// how somebody who genuinely needs the agent to edit a .env says so.
+//
+// Matched against the path as the model wrote it, with "*" matching any
+// run of characters including "/" — so "*.env" catches ".env",
+// "config/.env" and "/home/u/app/.env" alike.
+var secretPatterns = []string{
+	"*.env", "*.env.*", ".env", ".env.*",
+	"*id_rsa*", "*id_ed25519*", "*id_ecdsa*", "*id_dsa*",
+	"*.pem", "*.key", "*.p12", "*.pfx", "*.keystore",
+	"*/.ssh/*", "*/.aws/credentials", "*/.aws/config",
+	"*/.gnupg/*", "*/.kube/config", "*/.docker/config.json",
+	"*credentials.json", "*/.netrc", ".netrc", "*.htpasswd",
+	"*/.npmrc", "*/.pypirc", "*service-account*.json",
+}
+
+// secretGuardedTools are the tools that take a path and can therefore be
+// checked. bash is deliberately not one of them: a shell command is not a
+// path, and pattern-matching "cat .env" out of an arbitrary command line
+// is the kind of guard that catches the honest case and misses every other
+// one. The shell is governed by its own rules, which is what
+// resolveShellCommand is for.
+var secretGuardedTools = map[string]bool{
+	"read_file": true, "write_file": true, "edit": true,
+}
+
+// secretGuard reports a shipped deny for a path that looks like a secret.
+func secretGuard(toolName, subject string) (Decision, bool) {
+	if subject == "" || !secretGuardedTools[toolName] {
+		return "", false
+	}
+	lowered := strings.ToLower(subject)
+	for _, pattern := range secretPatterns {
+		if globMatch(pattern, lowered) {
+			return DecisionDeny, true
+		}
+	}
+	return "", false
 }
 
 func builtinDefault(toolName, subject string) (Decision, bool) {

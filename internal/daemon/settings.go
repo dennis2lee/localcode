@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"localcode/internal/config"
+	"localcode/internal/smart"
 )
 
 // handleGetSettings reports the daemon's current live "/config" settings
@@ -27,6 +28,8 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
+		"smart_agent":          d.Loop.SmartAgentEnabled(),
+		"smart_agent_roster":   smart.Names(),
 		"show_tps":             d.Loop.ShowTPS(),
 		"auto_delegate":        d.Loop.AutoDelegateEnabled(),
 		"auto_delegate_agent":  delegateAgent,
@@ -103,6 +106,36 @@ func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
 				return
 			}
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSetSmartAgent turns the Smart Agent bundle on or off live and,
+// when a config.json path is known, persists it so the choice survives a
+// restart. Same shape as the other settings handlers: the runtime change
+// lands first and is never rolled back by a persistence failure, so a
+// caller that asked for it to apply now gets that, and the error says
+// only the saving part failed.
+//
+// Nothing is validated here because there is nothing to validate. Turning
+// it on with no profiles configured is legal and inert — no profile means
+// no specialist can be given a model to run on, so the roster comes out
+// empty and the orchestration prompt is not added. GET /api/settings
+// reports the roster alongside the switch so a client can say so.
+func (d *Daemon) handleSetSmartAgent(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	d.Loop.SetSmartAgentEnabled(req.Enabled)
+	if d.Broker.ConfigPath != "" {
+		if err := config.SetSmartAgentInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
+			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
+			return
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
