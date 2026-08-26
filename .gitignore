@@ -1,8 +1,4 @@
 /localcode
-# Where `localcode dictation install` puts the engine and its model when run
-# from a checkout: beside the binary, which in development is this directory.
-# Hundreds of megabytes, and not ours to track.
-/models/
 /localcode-gui
 /dist/
 *.tar.gz
@@ -11,3 +7,9 @@
 
 # session logs (local runtime state, not source)
 .localcode/
+
+# macOS writes one of these into every directory a Finder window has
+# opened, including checkouts nobody browsed on purpose. Untracked, they
+# turn up in `git status` and get swept into a `git add -A` — which is how
+# one nearly reached a release commit.
+.DS_Store

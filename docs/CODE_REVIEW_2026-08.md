@@ -1,5 +1,12 @@
 # Code review — August 2026
 
+> **The dictation subsystem this reviewed no longer exists.** It was
+> removed in v0.53.0, along with the speech engine, the sherpa-onnx
+> dependency and the model download the Windows installer performed. The
+> findings below that name `internal/dictation/...` are kept as the record
+> of a review that happened, not as a map of the code: those paths are
+> gone, and so is `whisper-macos.yml`. Nothing here is outstanding work.
+
 A full-repository bug hunt across the Go backend, the Web UI, and the
 build/CI surface. Six reviewers worked in parallel, one per subsystem;
 findings below are consolidated and de-duplicated. Several defects were
