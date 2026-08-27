@@ -271,3 +271,42 @@ func TestATurnKeepsTheSmartAgentStateItStartedUnder(t *testing.T) {
 		t.Errorf("a turn started after Smart Agent went off wrote %d records, want none", len(after))
 	}
 }
+
+// OB-01: the compaction call is a model call and carries a manifest like
+// any other, on its own span — a utility call nobody could ask about
+// would be the one exception to "every call names its assembly".
+func TestTheCompactionCallCarriesAManifest(t *testing.T) {
+	srv, _ := smartServer(t)
+	defer srv.Close()
+	loop := newSmartLoop(t, srv.URL)
+	loop.SetSmartAgentEnabled(true)
+	w := withTracing(t, loop)
+
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	sendOne(t, loop, sid, "general-purpose")
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/compact"); err != nil {
+		t.Fatalf("/compact: %v", err)
+	}
+
+	var found bool
+	for _, rec := range w.Recent(100, sid, "") {
+		if rec.Span == trace.SpanCompact && rec.PromptManifest != "" {
+			found = true
+			var hasUtility bool
+			for _, id := range rec.PromptAssets {
+				if id == AssetCompactPrompt {
+					hasUtility = true
+				}
+			}
+			if !hasUtility {
+				t.Errorf("the compaction span's assets %v do not include its own instruction", rec.PromptAssets)
+			}
+		}
+	}
+	if !found {
+		t.Error("no compaction span carried a manifest id")
+	}
+}

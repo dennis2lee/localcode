@@ -60,13 +60,41 @@ type Tool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+// SystemBlock is one source-distinct piece of the system prompt: the
+// rendering of one prompt asset, still knowing which one.
+//
+// It exists so the distinction between sources survives to the adapter
+// instead of dying in a fold. The Anthropic API takes system as an array
+// of blocks and Bedrock takes a list of SystemContentBlocks, so on those
+// backends the request on the wire keeps the same seams the assembly
+// had; an adapter whose protocol takes one string folds at the last
+// possible moment, and that fold is recorded as a lowering in the
+// assembly manifest rather than happening invisibly here.
+type SystemBlock struct {
+	Text string
+	// Asset is the prompt-asset ID this block rendered from. Wire
+	// formats do not carry it; the manifest is where it joins the
+	// request, and this field is what keeps adapter tests able to say
+	// which block was which.
+	Asset string
+}
+
 type ChatRequest struct {
-	Model       string
-	System      string
-	Messages    []Message
-	Tools       []Tool
-	MaxTokens   int
-	Temperature float64
+	Model string
+	// System is the folded system prompt: every block joined in order.
+	// The compatibility form, and also what sizing arithmetic measures.
+	System string
+	// SystemBlocks is the same content with its seams intact, one block
+	// per prompt asset in assembly order. When non-empty, an adapter
+	// with a native multi-block system field sends these as separate
+	// blocks; an adapter without one uses System and the fold is on the
+	// record. Invariant: System equals the blocks joined with blank
+	// lines, so the two forms cannot disagree about content.
+	SystemBlocks []SystemBlock
+	Messages     []Message
+	Tools        []Tool
+	MaxTokens    int
+	Temperature  float64
 
 	// CachePrefix asks the backend to mark prompt-cache breakpoints,
 	// where it has them to mark. Two go at the end of the stable part —

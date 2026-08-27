@@ -242,13 +242,22 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 		ToolConfig:      toolConfig,
 		InferenceConfig: buildInferenceConfig(req.MaxTokens, req.Temperature),
 	}
-	if req.System != "" {
-		input.System = []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: req.System}}
-		if req.CachePrefix {
-			input.System = append(input.System, &types.SystemContentBlockMemberCachePoint{
-				Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
-			})
+	// One SystemContentBlock per prompt asset when the blocks arrived
+	// with their seams; the folded string only when they did not. The
+	// cache point goes after the last block either way and caches
+	// everything before it.
+	switch {
+	case len(req.SystemBlocks) > 0:
+		for _, b := range req.SystemBlocks {
+			input.System = append(input.System, &types.SystemContentBlockMemberText{Value: b.Text})
 		}
+	case req.System != "":
+		input.System = []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: req.System}}
+	}
+	if len(input.System) > 0 && req.CachePrefix {
+		input.System = append(input.System, &types.SystemContentBlockMemberCachePoint{
+			Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
+		})
 	}
 	if oneMillionContext {
 		input.AdditionalModelRequestFields = document.NewLazyDocument(map[string]any{

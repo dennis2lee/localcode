@@ -243,3 +243,41 @@ func TestAnthropicNeverExceedsFourBreakpoints(t *testing.T) {
 		t.Errorf("%d breakpoints on one request; the API allows 4", count)
 	}
 }
+
+// The assembly's seams survive to the wire: a request that arrives with
+// system blocks is sent as an array of system blocks, one per prompt
+// asset in order, with the cache mark on the last — one breakpoint that
+// caches the whole stable prefix. The fold to one string is only for a
+// request that never had blocks.
+func TestAnthropicSendsSystemBlocksAsThemselves(t *testing.T) {
+	body := captureAnthropicRequest(t, ChatRequest{
+		Model:  "claude-opus-5",
+		System: "BASE\n\nRULES",
+		SystemBlocks: []SystemBlock{
+			{Text: "BASE", Asset: "system.base"},
+			{Text: "RULES", Asset: "project.rules"},
+		},
+		Messages:    []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}},
+		MaxTokens:   64,
+		CachePrefix: true,
+	})
+
+	sys, ok := body["system"].([]any)
+	if !ok {
+		t.Fatalf("system = %T, want an array of blocks", body["system"])
+	}
+	if len(sys) != 2 {
+		t.Fatalf("system has %d blocks, want the assembly's 2", len(sys))
+	}
+	first := sys[0].(map[string]any)
+	last := sys[1].(map[string]any)
+	if first["text"] != "BASE" || last["text"] != "RULES" {
+		t.Errorf("blocks arrived as %v then %v, want BASE then RULES", first["text"], last["text"])
+	}
+	if _, marked := first["cache_control"]; marked {
+		t.Error("the cache mark is not on the last block")
+	}
+	if _, marked := last["cache_control"]; !marked {
+		t.Error("the last system block carries no cache mark, so the stable prefix is not cached")
+	}
+}

@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,4 +141,65 @@ func Notice() string {
 		return ""
 	}
 	return " Commands run under cmd.exe (no POSIX sh was found on this Windows system); use cmd syntax, not bash."
+}
+
+// Windows ships "python.exe" and "python3.exe" as Microsoft Store
+// app-execution-alias stubs: running one does not run Python, it opens
+// the Store to offer an install. On a machine where policy blocks the
+// Store that is the worst possible failure shape — the command exits
+// with no output and no explanation, a Store window the user may not
+// even see is left asking for an install that cannot happen, and the
+// model, told nothing, tries python again three different ways before
+// giving up. Seen in the field exactly like that: four failed python3
+// calls and a popup security had silently swallowed.
+//
+// So the stub is detected before anything is launched, and the answer is
+// an error that tells the model the truth: Python is not installed here,
+// and what to do instead.
+
+// StoreStub reports whether command would launch a Store alias stub
+// rather than a real program, with the message to return in place of
+// running it. Always false off Windows.
+func StoreStub(command string) (string, bool) {
+	return storeStub(runtime.GOOS, command, exec.LookPath)
+}
+
+func storeStub(goos, command string, lookPath func(string) (string, error)) (string, bool) {
+	if goos != "windows" {
+		return "", false
+	}
+	for _, segment := range splitSegments(command) {
+		fields := strings.Fields(segment)
+		if len(fields) == 0 {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSuffix(filepath.Base(fields[0]), ".exe"))
+		if name != "python" && name != "python3" {
+			continue
+		}
+		path, err := lookPath(fields[0])
+		if err != nil {
+			continue
+		}
+		if strings.Contains(strings.ToLower(path), `\microsoft\windowsapps\`) {
+			return fields[0] + " is not installed on this machine: it resolves to a Microsoft Store " +
+				"app-execution-alias stub, which opens the Store instead of running Python, and a Store " +
+				"blocked by policy makes every such call fail with no output. Do not retry python; use " +
+				"node, awk, or another available tool for this task. To fix permanently: install real " +
+				"Python, or disable the aliases under Settings > Apps > Advanced app settings > App " +
+				"execution aliases.", true
+		}
+	}
+	return "", false
+}
+
+// splitSegments breaks a command line at the operators that start a new
+// command (|, &&, ||, ;), so only the leading word of each command is
+// considered. "grep python3 notes.txt" must not trip the detector.
+func splitSegments(command string) []string {
+	replaced := command
+	for _, op := range []string{"&&", "||", "|", ";", "\n"} {
+		replaced = strings.ReplaceAll(replaced, op, "\x00")
+	}
+	return strings.Split(replaced, "\x00")
 }

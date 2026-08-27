@@ -155,10 +155,20 @@ func OutsideWorkspace(ctx context.Context, path string) bool {
 func resolvePhysical(path string) (string, error) {
 	p := filepath.Clean(path)
 	tail := ""
-	// Bounded like the kernel bounds it: a chain of dangling links that
-	// never converges is a loop in everything but name, and a loop is
-	// unresolvable, which the caller treats as outside.
-	for hops := 0; hops < 64; hops++ {
+	// Only followed links are bounded, and the bound is the kernel's
+	// reason: a chain of dangling links that never converges is a loop
+	// in everything but name, and a loop is unresolvable, which the
+	// caller treats as outside.
+	//
+	// Peeling an ordinary missing component is not a hop and is not
+	// counted. The two operations shared a counter once, and the result
+	// was that a path more than 64 components deep exhausted a *link*
+	// budget without following a single link: an ordinary new directory
+	// tree, entirely inside the workspace, classified as outside and
+	// escalated to a question. Peeling terminates on its own at the
+	// filesystem root, so it needs no bound of its own.
+	links := 0
+	for {
 		resolved, err := filepath.EvalSymlinks(p)
 		if err == nil {
 			return filepath.Join(resolved, tail), nil
@@ -172,6 +182,9 @@ func resolvePhysical(path string) (string, error) {
 			// The component exists and is a symlink — its *target* is
 			// what's missing. Follow it; the target is where a write
 			// through this path would land.
+			if links++; links > maxDanglingLinkHops {
+				return "", errors.New("too many links")
+			}
 			dest, rerr := os.Readlink(p)
 			if rerr != nil {
 				return "", rerr
@@ -189,8 +202,13 @@ func resolvePhysical(path string) (string, error) {
 		tail = filepath.Join(filepath.Base(p), tail)
 		p = parent
 	}
-	return "", errors.New("too many links")
 }
+
+// maxDanglingLinkHops bounds how many dangling symlinks resolution will
+// follow before calling the chain a loop. The same order as the kernel's
+// own ELOOP limit, and for the same reason: past this depth, a chain that
+// has not converged is not going to.
+const maxDanglingLinkHops = 64
 
 // BoundaryDecision applies the workspace boundary to a resolved
 // permission decision.
@@ -208,4 +226,34 @@ func BoundaryDecision(ctx context.Context, d Decision, subject string, enforce b
 		return DecisionAsk
 	}
 	return d
+}
+
+// ComposeResolver is the whole permission pipeline in its required
+// order: the user's rules and the shipped guards first, then the
+// workspace boundary, then skip_permissions' downgrade of whatever
+// "ask" is left standing.
+//
+// The order is the contract, and it exists because it was once wrong.
+// The boundary used to run after the skip downgrade, so its escalation
+// produced asks that skip_permissions could not reach — a person who
+// had said "ask me nothing" was asked about every path outside the
+// workspace, which contradicts the one promise skip_permissions makes:
+// every ask becomes an allow, and only an explicit deny still denies.
+// The boundary is an ask-class guard, so under skip it is silent by
+// design; the deny-class guards (the credential patterns) are the ones
+// skip never touches, and they are unaffected by this ordering because
+// a deny passes through both steps unchanged.
+func ComposeResolver(
+	resolve func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision,
+	smartOn func(context.Context) bool,
+	skipOn func() bool,
+) func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
+	return func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
+		d := resolve(ctx, toolName, subject, staticRequiresPermission)
+		d = BoundaryDecision(ctx, d, subject, smartOn(ctx))
+		if d == DecisionAsk && skipOn() {
+			return DecisionAllow
+		}
+		return d
+	}
 }

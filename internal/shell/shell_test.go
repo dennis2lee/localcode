@@ -99,3 +99,44 @@ func TestNoticeQuietOnPosixHosts(t *testing.T) {
 		t.Errorf("Notice() = %q on a POSIX host, want empty", Notice())
 	}
 }
+
+// The Store alias stub, caught before launch. The message replaces four
+// blind python retries and a popup nobody can act on with one error the
+// model can act on.
+func TestStoreStubIsDetectedBeforeLaunch(t *testing.T) {
+	stub := func(name string) (string, error) {
+		return `C:\Users\u\AppData\Local\Microsoft\WindowsApps\` + name + `.exe`, nil
+	}
+	real := func(name string) (string, error) {
+		return `C:\Python312\` + name + `.exe`, nil
+	}
+
+	if msg, is := storeStub("windows", `python3 -c "print(1)"`, stub); !is {
+		t.Error("the python3 alias stub was not detected")
+	} else if !strings.Contains(msg, "node, awk") || !strings.Contains(msg, "App") {
+		t.Errorf("the message does not say what to do instead: %q", msg)
+	}
+	// A real installation is not a stub.
+	if _, is := storeStub("windows", `python3 -c "print(1)"`, real); is {
+		t.Error("a real python install was called a stub")
+	}
+	// python as an argument is not python as a command.
+	if _, is := storeStub("windows", `grep python3 notes.txt`, stub); is {
+		t.Error("python3 as an argument tripped the detector")
+	}
+	// But the second command of a pipeline or chain is a command.
+	if _, is := storeStub("windows", `echo hi && python3 x.py`, stub); !is {
+		t.Error("python3 after && was not detected")
+	}
+	// Off Windows the aliases do not exist.
+	if _, is := storeStub("darwin", `python3 -c "print(1)"`, stub); is {
+		t.Error("the detector fired off Windows")
+	}
+	// A command that is not python is not looked up at all.
+	if _, is := storeStub("windows", `node -e "1"`, func(string) (string, error) {
+		t.Error("lookPath was called for a non-python command")
+		return "", nil
+	}); is {
+		t.Error("node was called a stub")
+	}
+}

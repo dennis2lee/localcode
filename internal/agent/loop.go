@@ -9,6 +9,7 @@ import (
 
 	"localcode/internal/commands"
 	"localcode/internal/config"
+	"localcode/internal/prompt"
 	"localcode/internal/provider"
 	"localcode/internal/session"
 	"localcode/internal/skills"
@@ -177,6 +178,22 @@ type Loop struct {
 	// it did not say" — recorded so a server that has no answer is not
 	// asked again on every turn.
 	probedWindows map[string]int
+
+	// SkillsSection and MemorySection are the startup-loaded halves of
+	// the prompt that used to be folded into SystemPrompt before the
+	// Loop ever saw them. Separate fields because they are separate
+	// assets: a skill index is user-installed procedure, a memory index
+	// is text the model wrote for itself, and an inventory that lists
+	// them as "the base prompt" cannot answer questions about either.
+	SkillsSection string
+	MemorySection string
+
+	// promptReg is the declared prompt surface (see prompt_assets.go),
+	// built on first use and immutable after. Shared across turns on
+	// purpose: an asset ID has to mean the same thing in every request
+	// or the manifests cannot be compared.
+	promptOnce sync.Once
+	promptReg  *prompt.Registry
 
 	settings liveSettings
 }

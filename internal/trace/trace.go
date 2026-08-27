@@ -82,6 +82,23 @@ type Record struct {
 	DurationMS   int64  `json:"duration_ms,omitempty"`
 	FinishReason string `json:"finish_reason,omitempty"`
 
+	// PromptManifest identifies the prompt assembly this call was built
+	// from, and PromptAssets lists the assets it selected. Identities
+	// and nothing else: the bodies include the project's own
+	// instructions and whatever a hook injected, and a turn log is not
+	// where those belong.
+	//
+	// The manifest id is what makes a fallback checkable. A second
+	// attempt on a different model family that carries the *same* id
+	// reused a prompt rendering written for the model that just failed,
+	// which is a bug the id makes visible without diffing two prompts.
+	PromptManifest string   `json:"prompt_manifest,omitempty"`
+	PromptAssets   []string `json:"prompt_assets,omitempty"`
+	// PromptUntrusted names the selected assets carrying external
+	// content, so "did this request contain text nobody in the
+	// conversation wrote" is one field rather than an investigation.
+	PromptUntrusted []string `json:"prompt_untrusted,omitempty"`
+
 	// Fallbacks, Retries and Compactions are counts for the turn so far,
 	// so a turn.end record answers "did this turn have a bad time?"
 	// without reading the lines before it.

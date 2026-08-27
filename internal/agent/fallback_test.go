@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"localcode/internal/hooks"
+	"localcode/internal/trace"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -591,5 +594,73 @@ func TestCancellationDuringTheBackoffEndsTheTurnWithoutFallback(t *testing.T) {
 	}
 	if !sawScheduled || !sawCancelled {
 		t.Errorf("the transcript should show the scheduled wait and its cancellation: %v", msgs)
+	}
+}
+
+// R11N2. The retry used to be counted and traced the moment its backoff
+// finished, which is not the moment a provider is asked: a pre_model
+// hook still stands between the two and can block the turn outright. A
+// trace that then says a retry happened describes an attempt no provider
+// ever received. The count is committed at the call now, so a blocked
+// retry leaves the record saying what actually occurred: one request,
+// no retry.
+func TestARetryBlockedByAHookIsNotCounted(t *testing.T) {
+	quickRetries(t)
+
+	// A hook that allows the first request and blocks every one after
+	// it. The marker file is how it tells them apart, since a hook is a
+	// shell command with no memory of its own.
+	marker := filepath.Join(t.TempDir(), "seen")
+	loop := newFallbackLoop(t, "")
+	loop.Config.Hooks = hooks.Config{
+		hooks.EventPreModel: {{Command: fmt.Sprintf(
+			`if [ -e %q ]; then echo '{"decision":"block","reason":"the retry is not allowed"}'; else touch %q; fi`,
+			marker, marker)}},
+	}
+
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	loop.Providers["local"] = provider.NewOpenAICompat(srv.URL, "")
+	loop.Config.Providers["local"] = config.ProviderConfig{Type: config.ProviderOpenAICompat, BaseURL: srv.URL}
+	loop.SetSmartAgentEnabled(true)
+	w := withTracing(t, loop)
+
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	err := loop.SendMessage(context.Background(), sid, "general-purpose", "hello")
+	if err == nil || !strings.Contains(err.Error(), "the retry is not allowed") {
+		t.Fatalf("the blocked retry did not end the turn with the hook's reason: %v", err)
+	}
+
+	mu.Lock()
+	n := requests
+	mu.Unlock()
+	if n != 1 {
+		t.Errorf("the provider received %d requests, want only the original", n)
+	}
+	for _, rec := range w.Recent(100, sid, "") {
+		if rec.Span == trace.SpanRetry {
+			t.Errorf("a retry span was written although the retry never reached the provider: %+v", rec)
+		}
+	}
+	// The transcript still says the retry was scheduled, because it was:
+	// the turn genuinely waited. What must not appear is a count.
+	var announced bool
+	for _, m := range recovered(t, loop, sid) {
+		if strings.Contains(m, "retrying it in") {
+			announced = true
+		}
+	}
+	if !announced {
+		t.Error("the scheduled retry was not in the transcript at all")
 	}
 }

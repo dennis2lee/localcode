@@ -53,6 +53,14 @@ func (b Bash) Execute(ctx context.Context, input json.RawMessage) Result {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// A command that would only launch a Microsoft Store install stub is
+	// answered instead of run: the stub's failure shape (no output, a
+	// popup, possibly a policy block) teaches the model nothing, and it
+	// retries python in every spelling before trying anything else.
+	if msg, stub := shell.StoreStub(args.Command); stub {
+		return Result{Content: msg, IsError: true}
+	}
+
 	cmd := shell.Command(ctx, args.Command)
 	// The session's directory, not the daemon's. Leaving this unset is
 	// what made the workspace process-wide: every shell command ran

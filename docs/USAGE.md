@@ -169,7 +169,7 @@ The point is a config.json that can be committed to a repository, copied between
 | `max_concurrent_tasks` | Caps how many **background** tasks run at once. Unset means 1, so background tasks queue rather than run together. Synchronous `Task` delegation is not counted against it, because a caller that is blocked cannot start a second one and holding a slot while waiting for a nested child would deadlock against itself. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
-| `skip_permissions` | Turns every "ask" into "allow". Off unless set; explicit deny rules still deny. See [Skipping confirmations](#skipping-confirmations-entirely). |
+| `skip_permissions` | Turns every "ask" into "allow", including the workspace-boundary escalation, which is applied before the downgrade so it cannot outlive it. Off unless set; explicit deny rules still deny. See [Skipping confirmations](#skipping-confirmations-entirely). |
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `smart_agent` | Turns on the built-in specialist roster and the orchestration prompt. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
@@ -841,6 +841,26 @@ Unlike the context percentage in the status bar, which is a snapshot of the most
 
 With no calls yet, it just says so.
 
+### `/context`
+
+Shows what is actually in the request this session would send next, and what is not, with no model call.
+
+The prompt a turn sends is assembled from a declared inventory rather than concatenated: every piece has a stable id, a source, a trust class, a place in the request, and a condition saying when it applies. `/context` reports the assembly for the next turn, which is the one you are deciding whether to send:
+
+* which assets are included, with the size of each and the reason it applies,
+* a per category total, because "the prompt is 4,000 tokens" is not actionable and "the project's rules are 3,200 of it" is,
+* whether the request carries external content, which is data and never instruction,
+* warnings, such as an unstable asset sitting ahead of a stable one and spoiling the cache prefix behind it,
+* and the rest of what fills a window: the tool definitions, the conversation so far, and the room reserved for the answer, against the window itself.
+
+`/context all` also lists what was left out and why, which is the form that answers "why are my project's rules not in there".
+
+Identities, sizes and reasons only: the bodies are never printed. The assets include the workspace's own instructions and anything a hook injected, and the transcript is a durable log.
+
+Token figures are estimated from character counts. About right for English, and a floor for Korean and Japanese, which run several times denser.
+
+The same assembly is recorded in the turn log as `prompt_manifest`, `prompt_assets` and `prompt_untrusted`, so the request that was actually sent can be checked after the fact. A fallback that reports the same manifest id on a different model family reused a prompt written for the model that failed, which is what the id makes visible.
+
 ### Other local commands
 
 These are typed into the message box but never reach the event log, so replaying a session does not bring them back.
@@ -1212,6 +1232,7 @@ A multi agent turn cannot be debugged from a transcript. The transcript shows wh
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | What it cost. The read count is how you tell a working cache breakpoint from one that is doing nothing |
 | `tool`, `duration_ms` | Which tool and how long it took, timed around the whole call so a wait on a permission prompt reads as a wait |
 | `finish_reason`, `fallbacks`, `retries`, `compactions` | On `turn.end`: did this turn have a bad time |
+| `prompt_manifest`, `prompt_assets`, `prompt_untrusted` | Which prompt assembly this call was built from, which assets it selected, and which of them carried external content. Identities only, never the bodies. See [`/context`](#context) |
 
 ```bash
 jq -c 'select(.trace_id=="a1b2c3d4e5f6a7b8")' ~/.localcode/trace/localcode-2026-08-25.jsonl

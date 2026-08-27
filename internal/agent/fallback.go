@@ -10,8 +10,8 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/hooks"
+	"localcode/internal/prompt"
 	"localcode/internal/provider"
-	"localcode/internal/smart"
 	"localcode/internal/trace"
 )
 
@@ -266,18 +266,19 @@ const (
 // maybeRetrySameEndpoint spends one bounded retry on the endpoint that
 // just failed, if the failure is the transient kind.
 //
-// The counts describe provider attempts, not scheduled waits (R10N4):
-// the retry is counted and traced only after the backoff completes, at
-// the moment the caller is actually going to ask again. A wait cut short
-// by cancellation leaves the counts untouched and reports
-// retryCancelled, so the record never claims an attempt that no provider
-// ever saw.
+// The counts describe provider attempts, not scheduled waits and not
+// intentions. This function classifies, announces and waits; it does not
+// count. Committing the count is commitRetry's job, at the moment the
+// request is actually going out, because between the end of the backoff
+// and the call there is still a pre_model hook that can block the turn
+// outright. A retry counted before that hook describes an attempt no
+// provider ever received.
 //
 // Only with Smart Agent on, for the same reason the chain itself is: a
 // turn that silently takes three seconds longer than it used to is a
 // behaviour change, and this one arrives as part of the bundle that was
 // opted into rather than happening to everyone.
-func (l *Loop) maybeRetrySameEndpoint(ctx context.Context, traceID, sessionID string, run modelRun, err error, sameTries, retries *int) retryOutcome {
+func (l *Loop) maybeRetrySameEndpoint(ctx context.Context, sessionID string, run modelRun, err error, sameTries *int, pending *pendingRetry) retryOutcome {
 	if !l.smartOn(ctx) || *sameTries >= maxSameEndpointRetries || !retryableInPlace(err) {
 		return retryNotEligible
 	}
@@ -303,13 +304,52 @@ func (l *Loop) maybeRetrySameEndpoint(ctx context.Context, traceID, sessionID st
 		})
 		return retryCancelled
 	}
-	*sameTries = attempt
+	// The wait completed, and that is all this function knows. Counting
+	// happens at the provider call, not here: between this point and the
+	// request there is still a pre_model hook that can block the turn
+	// outright, and a retry counted here would describe an attempt no
+	// provider ever received. So the intent is handed to the caller and
+	// committed by commitRetry when the request is actually going out.
+	*pending = pendingRetry{active: true, attempt: attempt, cause: err}
+	return retryReady
+}
+
+// pendingRetry is a retry that has served its backoff and is waiting for
+// the request to actually leave.
+//
+// It exists because "the wait finished" and "the provider was asked
+// again" are different events with a hook in between, and the retry count
+// is documented to mean the second one. Carrying the intent rather than
+// recording it is what keeps that true: a turn blocked after the backoff
+// discards this and counts nothing.
+type pendingRetry struct {
+	active  bool
+	attempt int
+	cause   error
+}
+
+// commitRetry records a pending retry at the moment the request is going
+// to the provider: after the hooks have allowed it, before the call.
+//
+// Returns whether the caller should proceed. A context that ended between
+// the backoff and here means the request is not going out after all, so
+// nothing is counted and the turn stops.
+func (l *Loop) commitRetry(ctx context.Context, traceID, sessionID string, run modelRun, pending *pendingRetry, sameTries, retries *int) bool {
+	if !pending.active {
+		return true
+	}
+	if ctx.Err() != nil {
+		*pending = pendingRetry{}
+		return false
+	}
+	*sameTries = pending.attempt
 	*retries++
 	l.traceSpan(ctx, traceID, sessionID, trace.SpanRetry, trace.Record{
 		Profile: run.profileName, Model: run.profile.Model, Provider: run.profile.Provider,
-		Retries: *retries, Error: err.Error(),
+		Retries: *retries, Error: pending.cause.Error(),
 	})
-	return retryReady
+	*pending = pendingRetry{}
+	return true
 }
 
 // firstOutput reports whether anything from this response has already
@@ -338,7 +378,16 @@ type modelRun struct {
 	profile     config.Profile
 	client      provider.Provider
 	system      string
-	maxTokens   int
+	// systemBlocks is the same system prompt with its per-asset seams
+	// intact, for adapters whose wire format can keep them.
+	systemBlocks []provider.SystemBlock
+	maxTokens    int
+	// manifest is the record of how system was assembled: which prompt
+	// assets are in this request, which are not and why. Carried on the
+	// run rather than recomputed, because a fallback builds a new run
+	// and the two manifests are how you tell that it actually
+	// re-derived the prompt rather than reusing the old rendering.
+	manifest prompt.Manifest
 }
 
 // buildRun derives a request from a profile. Called once for the profile a
@@ -361,38 +410,109 @@ func (l *Loop) buildRun(ctx context.Context, sessionID, resolveAgent string, age
 		maxTokens = defaultMaxTokens
 	}
 
-	system := l.systemPromptFor(sessionID)
-	if agentCfg.Prompt != "" {
-		system = system + "\n\n" + agentCfg.Prompt
+	// The prompt is assembled from the declared inventory rather than
+	// concatenated here. Same text and same order as the six appends
+	// this replaced; the difference is that the request now arrives with
+	// a record of which assets are in it and why, and which are not.
+	//
+	// buildRun is also where a fallback re-derives everything, so the
+	// assembly happens per attempt by construction: the note written for
+	// the family that just failed cannot survive into the request that
+	// goes to a different one.
+	actx := l.activationFor(ctx, sessionID, resolveAgent, agentCfg, profileName, profile)
+	env := prompt.Assemble(l.promptAssets(), actx)
+	// The request carries both forms of the system prompt: the blocks,
+	// one per asset with the seams the assembly had, and the folded
+	// string. An adapter with a native multi-block system field (the
+	// Anthropic API, Bedrock) sends the blocks as themselves; one whose
+	// protocol takes a single string (openai-compat) uses the fold, and
+	// that lowering is on the record rather than silent (PR-06). The
+	// folded string is also what all the sizing arithmetic measures,
+	// which is correct either way: the bytes are the same.
+	blocks := make([]provider.SystemBlock, 0, len(env.System))
+	for _, b := range env.System {
+		blocks = append(blocks, provider.SystemBlock{Text: b.Text, Asset: b.AssetID})
 	}
-	// Smart Agent's orchestration policy, when this turn is the one doing
-	// the orchestrating. Added after the agent's own prompt so a
-	// specialist's instructions are never overridden by it, and before the
-	// per-model note below for the same reason that one is last.
-	if policy := l.orchestrationFor(ctx, sessionID, resolveAgent, profile.Model); policy != "" {
-		system = system + "\n\n" + policy
-	}
-	// The trust boundary rides with the bundle, for every agent in it:
-	// the orchestrator above gets it as part of deciding, and a
-	// specialist gets it because the specialist is the one actually
-	// reading the tool output the boundary is about.
-	if l.smartOn(ctx) {
-		system = system + "\n\n" + smart.TrustBoundary
-	}
-	// Last, so a per-model note about how to write for this window is not
-	// buried under the project's rules — and only for the models that need
-	// one. See quirks.go.
-	if note := quirkNote(profile.Model); note != "" {
-		system = system + "\n\n" + note
+	if len(env.System) > 1 && l.Config.Providers[profile.Provider].Type == config.ProviderOpenAICompat {
+		env.Manifest.Lowering = append(env.Manifest.Lowering,
+			fmt.Sprintf("%d system blocks folded into one system string for an openai-compatible endpoint", len(env.System)))
 	}
 
 	return modelRun{
-		profileName: profileName,
-		profile:     profile,
-		client:      client,
-		system:      system,
-		maxTokens:   maxTokens,
+		profileName:  profileName,
+		profile:      profile,
+		client:       client,
+		system:       env.SystemText(),
+		systemBlocks: blocks,
+		maxTokens:    maxTokens,
+		manifest:     env.Manifest,
 	}, nil
+}
+
+// activationFor snapshots everything one request knows about itself, so
+// an asset's activation condition is a pure function of it.
+//
+// The Smart Agent state read here is the pinned one, not the live
+// setting: a turn admitted with the bundle on keeps it for every round
+// including the ones after somebody flipped the switch, and the prompt
+// has to agree with the tools that were chosen under the same pin.
+func (l *Loop) activationFor(ctx context.Context, sessionID, resolveAgent string, agentCfg config.AgentConfig, profileName string, profile config.Profile) prompt.ActivationContext {
+	smartOn := l.smartOn(ctx)
+
+	role := prompt.RoleOrchestrator
+	if _, specialist := l.smartAgents(ctx)[resolveAgent]; specialist {
+		role = prompt.RoleSpecialist
+	} else if l.Store != nil {
+		// A session with a parent is somebody's child, whatever its
+		// agent is called, and a child does not orchestrate.
+		if sess, err := l.Store.Get(sessionID); err == nil && sess.ParentID != "" {
+			role = prompt.RoleSpecialist
+		}
+	}
+
+	dir := l.SessionDir(sessionID)
+	rules := ""
+	if l.WorkspaceRules != nil && dir != "" {
+		rules = l.WorkspaceRules(dir)
+	}
+	wsClass := prompt.WorkspaceNone
+	switch {
+	case dir == "":
+	case rules != "":
+		wsClass = prompt.WorkspaceProject
+	default:
+		wsClass = prompt.WorkspacePlain
+	}
+
+	return prompt.ActivationContext{
+		SmartAgent:     smartOn,
+		Agent:          resolveAgent,
+		Role:           role,
+		Profile:        profileName,
+		Model:          profile.Model,
+		Provider:       profile.Provider,
+		Family:         modelFamily(profile.Model),
+		Workspace:      dir,
+		WorkspaceClass: wsClass,
+		Lifecycle:      prompt.LifecycleTurn,
+		Values: map[string]string{
+			valBaseSystem:   l.SystemPrompt,
+			valSkillsIndex:  l.SkillsSection,
+			valMemoryIndex:  l.MemorySection,
+			valProjectRules: rules,
+			valAgentPrompt:  agentCfg.Prompt,
+			valOrchestrator: l.orchestrationFor(ctx, sessionID, resolveAgent, profile.Model),
+			valModelQuirk:   quirkNote(profile.Model),
+		},
+	}
+}
+
+// promptAssets returns the inventory, built once per Loop. The registry
+// is immutable after construction, so sharing it across turns is safe and
+// is what makes the asset IDs mean the same thing in every request.
+func (l *Loop) promptAssets() *prompt.Registry {
+	l.promptOnce.Do(func() { l.promptReg = promptRegistry() })
+	return l.promptReg
 }
 
 // nextFallback takes the next link in the chain, if err is a failure

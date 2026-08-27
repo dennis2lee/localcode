@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.56.0
+
+Two bugs reported from a v0.55.0 install, an eleventh review round answered,
+and the supplementary prompt-architecture whitepaper implemented in full.
+
+
+* **skip_permissions was still asking.** Reported from a v0.55.0 install: "skip ALL" on, and localcode kept prompting. The permission pipeline ran the workspace boundary *after* skip's downgrade, so the boundary's escalation of any path outside the project produced asks that skip could no longer reach — which breaks the one promise the setting makes, that every ask becomes an allow and only an explicit deny still denies. The order is now a stated contract in one place with its own test: rules and shipped guards, then the boundary, then skip over whatever ask is left. Deny is untouched at every step, which is the whole of what skip was never allowed to override.
+
+* **`python3` on Windows no longer fails four times in a row.** Windows ships `python.exe` and `python3.exe` as Microsoft Store app-execution-alias stubs: running one does not run Python, it opens the Store. Where policy blocks the Store — a managed work machine — the command exits with no output and no explanation, and the model, told nothing, tries python in three more spellings before finding something else. The stub is detected before launch now, by where the executable resolves, and the tool answers with what is actually true: Python is not installed here, do not retry it, use node or awk instead, and here is the settings page that disables the aliases.
+
+* **Round 11: two residues from the round 10 fixes, fixed.** An eleventh review round. Both were the same shape: a mechanism at the right kind of moment and the wrong exact one. The symlink resolver's 64-hop bound also counted ordinary missing path components, so a generated directory tree deeper than 64 levels — no link anywhere in it — was classified outside the workspace and asked about; only followed links count now, and peeling terminates on its own at the root. And the retry count, moved past the backoff in round 10, was still one step short of the provider: a `pre_model` hook standing between the completed wait and the call could block the turn after the retry had been recorded. The count is committed at the provider call now, after the hooks — a blocked retry leaves the trace saying what happened, one request and no retry.
+
+* **The supplementary prompt-architecture whitepaper, implemented and answered in full.** All 104 checklist IDs classified with evidence: 103 Implemented or Existing, one Not applicable. Beyond the registry work below: the skills index and the auto-memory index are assets of their own rather than text folded into the base prompt at startup; the compaction call carries its own manifest and its instruction lives in the inventory as a utility asset; the compaction summary re-enters the conversation — and survives a restart — behind a header stating it is machine-written and that quoted content keeps the authority it originally had; the fold of system blocks into one provider string is recorded as a lowering in the manifest; and `/context` reports the tool-definition, conversation and reserved-output budgets against the window alongside the prompt assets.
+
+* **The prompt is assembled from a declared inventory rather than concatenated, and a request can now say what is in it.** The supplementary whitepaper's prompt architecture, begun. A turn's system prompt used to be six string appends in `buildRun`, in an order fixed by the order the lines were written in and with the conditions spread across three packages. That works until somebody asks a question about it: which of those was in the request that just went out, why did a specialist get the orchestration policy, did the fallback re-derive the per-model note or reuse the one written for the model that failed, is `AGENTS.md` being treated as instruction or as data. Every one of those had an answer and none could be read off a string.
+
+  The unit is no longer the text. Each piece of prompt is an asset with a stable id, a kind, a declared source, a trust class that is its own axis rather than something inferred from the message role it lands in, a placement, a cache class, and a condition saying when it applies. Assembling a request selects against a snapshot of what the call knows about itself and records the result: which assets went in and why, which did not and why not, the size and a digest of each, and warnings such as an unstable asset sitting ahead of a stable one and spoiling the cache prefix behind it. Identities, sizes and digests only. The bodies include the workspace's own instructions and whatever a hook injected, and a turn log is not where those belong.
+
+  The text and the order are unchanged, which is the point and is what a test pins: this is a change to how the prompt is decided, not to what the model is told.
+
+  **`/context`** reports the assembly for the next turn, locally and with no model call: what is included with the reason for each, a per category total, whether the request carries external content, and any warnings. `/context all` also lists what was left out and why, which is the form that answers "why are my project's rules not in there".
+
+  **The turn log carries it too**, as `prompt_manifest`, `prompt_assets` and `prompt_untrusted`. The manifest id is content-derived, which is what makes a fallback checkable: a second attempt on a different model family reporting the *same* id reused a prompt rendering written for the model that just failed.
+
+  Still to come from the supplement: the provider-neutral envelope reaching the adapters rather than being lowered to one system string at the boundary, tool descriptions and MCP assets moved into the inventory, and the child and utility calls assembling through the same pipeline.
+
 ## v0.55.0
 
 Ten rounds of external review against the Smart Agent whitepaper, answered in

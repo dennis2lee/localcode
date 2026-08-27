@@ -73,6 +73,25 @@ func quirkNote(model string) string {
 	return ""
 }
 
+// modelFamily names the family a model id belongs to, using the same
+// matching the quirk notes use, so "the note written for this family" and
+// "this family" cannot drift apart.
+//
+// A family rather than the full id because that is the granularity the
+// per-model prompts are written at, and because it is what a manifest
+// wants to record: two requests to different snapshots of the same family
+// got the same prompt, and saying so is more useful than printing two
+// version strings that differ in a date.
+func modelFamily(model string) string {
+	id := strings.ToLower(model)
+	for _, q := range modelQuirks {
+		if strings.Contains(id, q.match) {
+			return q.match
+		}
+	}
+	return "default"
+}
+
 // modelKeepGoing is the default carry-on budget for a model, keyed the
 // same way as the notes. Zero for a model with no known stalling habit.
 func modelKeepGoing(model string) int {

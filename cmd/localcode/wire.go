@@ -104,7 +104,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	}
 
 	progress("loading skills and commands")
-	systemPromptExtra, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e)
+	skillsSection, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -148,7 +148,8 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	}
 
 	loop := agent.New(store, registry, providers, cfg)
-	loop.SystemPrompt += systemPromptExtra
+	loop.SkillsSection = skillsSection
+	loop.MemorySection = memorySection
 	loop.Skills = skillList
 	loop.Commands = cmdList
 	loop.ProjectDir = e.cwd
@@ -236,26 +237,19 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 // cfg.
 func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker) (*tools.Registry, error) {
 	registry := tools.NewRegistry(broker.Func())
-	registry.Resolver = func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) tools.Decision {
-		d := tools.Decision(cfg.ResolvePermissionFor(ctx, toolName, subject, staticRequiresPermission))
-		// The workspace boundary, and only while Smart Agent is on. A
-		// path outside the project this session belongs to is not
-		// forbidden — reading a system header or a file in another
-		// checkout is ordinary work — but it is worth being asked about
-		// once, which is the difference between an agent that stays where
-		// it was pointed and one that is discovered to have been
-		// somewhere else.
-		//
-		// Escalates allow to ask and nothing else: a deny stays a deny,
-		// an ask is already an ask, and skip_permissions has already had
-		// its say by the time this runs.
-		//
-		// Both this and the credential guard above it read the setting
-		// off ctx, so a tool call is judged by the rules its own turn
-		// was admitted under rather than by whatever the switch says at
-		// the moment it runs.
-		return tools.BoundaryDecision(ctx, d, subject, cfg.SmartAgentFor(ctx))
-	}
+	// The pipeline's order lives in ComposeResolver, where it is a
+	// stated contract with its own test: rules and guards, then the
+	// workspace boundary, then skip_permissions over whatever ask is
+	// left. The boundary reads Smart Agent off ctx, so a tool call is
+	// judged by the rules its own turn was admitted under rather than
+	// by whatever the switch says at the moment it runs.
+	registry.Resolver = tools.ComposeResolver(
+		func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) tools.Decision {
+			return tools.Decision(cfg.ResolvePermissionFor(ctx, toolName, subject, staticRequiresPermission))
+		},
+		cfg.SmartAgentFor,
+		cfg.PermissionsSkipped,
+	)
 	registry.Hooks = cfg.Hooks
 	registry.Register(tools.ReadFile{})
 	registry.Register(tools.WriteFile{})
@@ -270,19 +264,19 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker) (*tools.R
 // auto-memory section, registers the Skill tool if any skills were found,
 // and returns the combined text to append to Loop.SystemPrompt alongside
 // the loaded skills/commands/memory-dir Loop needs directly.
-func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (extra string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
+func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (skillsSection, memorySection string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
 	skillList, err = loadSkills(e)
 	if err != nil {
-		return "", nil, nil, "", err
+		return "", "", nil, nil, "", err
 	}
 	if len(skillList) > 0 {
 		registry.Register(tools.NewSkillTool(skillList))
-		extra += "\n\n" + skills.SystemPromptSection(skillList)
+		skillsSection = skills.SystemPromptSection(skillList)
 	}
 
 	cmdList, err = commands.LoadAll(filepath.Join(e.cwd, ".localcode", "commands"), filepath.Join(e.home, ".localcode", "commands"))
 	if err != nil {
-		return "", nil, nil, "", err
+		return "", "", nil, nil, "", err
 	}
 
 	// Project rules are deliberately NOT folded in here. They depend on
@@ -292,12 +286,12 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (ext
 	if cfg.MemoryEnabled() {
 		memDir = memory.Dir(e.cwd, e.home)
 		if err := os.MkdirAll(memDir, 0o755); err != nil {
-			return "", nil, nil, "", fmt.Errorf("create memory dir: %w", err)
+			return "", "", nil, nil, "", fmt.Errorf("create memory dir: %w", err)
 		}
-		extra += "\n\n" + memory.SystemPromptSection(memDir, memory.LoadIndex(memDir))
+		memorySection = memory.SystemPromptSection(memDir, memory.LoadIndex(memDir))
 	}
 
-	return extra, skillList, cmdList, memDir, nil
+	return skillsSection, memorySection, skillList, cmdList, memDir, nil
 }
 
 // loadSkills scans the project-local skills dir before the global one, so a

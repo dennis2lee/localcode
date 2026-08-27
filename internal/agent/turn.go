@@ -9,6 +9,7 @@ import (
 
 	"localcode/internal/events"
 	"localcode/internal/hooks"
+	"localcode/internal/prompt"
 	"localcode/internal/provider"
 	"localcode/internal/tools"
 	"localcode/internal/trace"
@@ -118,6 +119,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// arrives, so each endpoint gets its own bounded allowance rather
 	// than the first one spending everyone's.
 	retries := 0
+	// A retry that has served its backoff and is waiting for the request
+	// to actually leave. Committed at the provider call, so a turn
+	// blocked by a hook in between counts nothing. See pendingRetry.
+	var pending pendingRetry
 	sameTries := 0
 	trimBudget := l.contextWindow(ctx, run.profile) / 2
 
@@ -147,10 +152,11 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		messages := sendableHistory(history)
 
 		req := provider.ChatRequest{
-			Model:    run.profile.Model,
-			System:   run.system,
-			Messages: messages,
-			Tools:    l.Tools.SpecsFor(ctx, allowedTools),
+			Model:        run.profile.Model,
+			System:       run.system,
+			SystemBlocks: run.systemBlocks,
+			Messages:     messages,
+			Tools:        l.Tools.SpecsFor(ctx, allowedTools),
 			// Sized against what is left of the window rather than taken
 			// from config as-is. A max_tokens larger than the room
 			// remaining is refused by the server as one total that does
@@ -175,6 +181,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// injects on every call gives up system-prompt caching for that
 		// session — a trade the person who wrote the hook is making
 		// deliberately.
+		// The request this iteration actually sends, described. Usually
+		// the run's own manifest; a hook that injects context makes it a
+		// different request, and the record says so with a different id.
+		iterManifest := run.manifest
 		if len(l.Config.Hooks) > 0 {
 			out := hooks.RunOutcome(ctx, l.Config.Hooks, hooks.EventPreModel, map[string]any{
 				"session_id": sessionID,
@@ -190,16 +200,43 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				l.Store.Append(sessionID, events.TypeError, map[string]any{"error": reason})
 				return fmt.Errorf("pre_model hook: %s", reason)
 			}
-			for _, extra := range out.Context {
+			var hookEntries []prompt.Entry
+			for i, extra := range out.Context {
 				req.System = req.System + "\n\n" + extra
+				req.SystemBlocks = append(req.SystemBlocks, provider.SystemBlock{Text: extra, Asset: "hook.pre_model"})
 				req.CachePrefix = false
+				id := "hook.pre_model"
+				if i > 0 {
+					id = fmt.Sprintf("hook.pre_model#%d", i+1)
+				}
+				// On the record as a runtime asset: hook text joins the
+				// request after assembly by nature (a hook runs per
+				// request), and the manifest carrying its identity, hash
+				// and size is what keeps the one part of the prompt no
+				// inventory can pre-declare from also being the one part
+				// nobody can see.
+				hookEntries = append(hookEntries, prompt.RuntimeEntry(
+					id, prompt.KindRuntimeReminder, prompt.FromHook, prompt.TrustUser,
+					prompt.PlaceSystem, extra, "injected by a pre_model hook for this request"))
 			}
+			iterManifest = run.manifest.WithRuntimeEntries(hookEntries...)
 		}
+
+		// The hooks have allowed this request and it is going out, which
+		// is the moment a retry becomes an attempt rather than an
+		// intention. A context that ended in between means it is not
+		// going out after all: nothing is counted and the turn stops.
+		if !l.commitRetry(ctx, traceID, sessionID, run, &pending, &sameTries, &retries) {
+			return ctx.Err()
+		}
+
+		trRun := run
+		trRun.manifest = iterManifest
 
 		callStarted := time.Now()
 		stream, err := run.client.Chat(ctx, req)
 		if err != nil {
-			l.traceModel(ctx, traceID, sessionID, run, streamUsage{}, "", time.Since(callStarted), err)
+			l.traceModel(ctx, traceID, sessionID, trRun, streamUsage{}, "", time.Since(callStarted), err)
 			// Too long is a recoverable condition, not an error to hand
 			// back: compacting is exactly what the session needs and what
 			// the user would have to do by hand anyway. Reported in the
@@ -271,7 +308,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// does the chain get consulted. A turn cancelled during the
 			// backoff stops here instead: walking the chain with a dead
 			// context would record fallbacks no provider ever saw.
-			switch l.maybeRetrySameEndpoint(ctx, traceID, sessionID, run, err, &sameTries, &retries) {
+			switch l.maybeRetrySameEndpoint(ctx, sessionID, run, err, &sameTries, &pending) {
 			case retryReady:
 				continue
 			case retryCancelled:
@@ -288,8 +325,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					})
 					l.runRetryHook(ctx, sessionID, run, newRun, err)
 					run = newRun
-					// A new endpoint gets its own retry allowance.
+					// A new endpoint gets its own retry allowance, and
+					// any retry still pending belonged to the old one.
 					sameTries = 0
+					pending = pendingRetry{}
 					// The trim budget belongs to the old window.
 					trimBudget = l.contextWindow(ctx, run.profile) / 2
 					continue
@@ -300,7 +339,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		}
 
 		assistantBlocks, toolUses, stopReason, usage, err := l.consumeStream(sessionID, stream)
-		l.traceModel(ctx, traceID, sessionID, run, usage, stopReason, time.Since(callStarted), err)
+		l.traceModel(ctx, traceID, sessionID, trRun, usage, stopReason, time.Since(callStarted), err)
 		if len(l.Config.Hooks) > 0 {
 			// Fire and forget: the reply is already here, so there is
 			// nothing left to block. This is the point for logging what a
@@ -326,7 +365,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				// here before the chain is spent on it, and a turn
 				// cancelled during the backoff ends rather than
 				// consulting the chain.
-				switch l.maybeRetrySameEndpoint(ctx, traceID, sessionID, run, err, &sameTries, &retries) {
+				switch l.maybeRetrySameEndpoint(ctx, sessionID, run, err, &sameTries, &pending) {
 				case retryReady:
 					continue
 				case retryCancelled:

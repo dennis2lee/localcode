@@ -199,19 +199,39 @@ func mapAnthropicStopReason(r string) string {
 
 func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	tools := toAnthropicTools(req.Tools)
-	var system any = req.System
+	// The API takes system as an array of blocks, so the assembly's
+	// source-distinct blocks travel as themselves: one API block per
+	// prompt asset, in order. The fold to one string is the fallback for
+	// a request that arrived without blocks, not the preferred shape.
+	var system any
+	switch {
+	case len(req.SystemBlocks) > 0:
+		blocks := make([]anthContentBlock, len(req.SystemBlocks))
+		for i, b := range req.SystemBlocks {
+			blocks[i] = anthContentBlock{Type: "text", Text: b.Text}
+		}
+		system = blocks
+	case req.System != "":
+		system = req.System
+	}
 	if req.CachePrefix {
 		// Two breakpoints, at the two places the request stops being the
 		// same as last time: after the tool schemas and after the system
 		// prompt. Both are byte-identical from turn to turn in an agent
 		// session, and together they are the bulk of every request's fixed
-		// cost.
-		//
+		// cost. On a multi-block system the mark goes on the last block,
+		// which caches everything before it: one breakpoint, the whole
+		// stable prefix.
 		if n := len(tools); n > 0 {
 			tools[n-1].CacheControl = ephemeral()
 		}
-		if req.System != "" {
-			system = []anthContentBlock{{Type: "text", Text: req.System, CacheControl: ephemeral()}}
+		switch sys := system.(type) {
+		case []anthContentBlock:
+			sys[len(sys)-1].CacheControl = ephemeral()
+		case string:
+			if sys != "" {
+				system = []anthContentBlock{{Type: "text", Text: sys, CacheControl: ephemeral()}}
+			}
 		}
 	}
 	messages := toAnthropicMessages(req.Messages)

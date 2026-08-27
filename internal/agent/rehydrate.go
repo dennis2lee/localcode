@@ -144,8 +144,11 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 		case events.TypeCompacted:
 			if summary := dataString(ev.Data, "summary"); summary != "" {
 				out = []provider.Message{{
-					Role:    provider.RoleUser,
-					Content: []provider.Block{provider.TextBlock("[Previous conversation was summarized]\n\n" + summary)},
+					Role: provider.RoleUser,
+					// The same header compactHistory writes, so a restart
+					// rehydrates the summary with its provenance rather
+					// than as bare user text.
+					Content: []provider.Block{provider.TextBlock(summaryHeader + summary)},
 				}}
 				resetPending()
 			}

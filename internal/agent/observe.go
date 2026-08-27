@@ -80,6 +80,9 @@ func (l *Loop) traceModel(ctx context.Context, traceID, sessionID string, run mo
 		CacheWriteTokens: usage.cacheWrite,
 		FinishReason:     stopReason,
 		DurationMS:       took.Milliseconds(),
+		PromptManifest:   run.manifest.ID,
+		PromptAssets:     run.manifest.SelectedIDs(),
+		PromptUntrusted:  run.manifest.UntrustedIDs(),
 	}
 	if err != nil {
 		rec.Error = err.Error()
