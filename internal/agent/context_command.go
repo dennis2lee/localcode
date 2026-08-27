@@ -119,7 +119,7 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 	// request missing every tool result the conversation is carrying.
 	history := sendableHistory(l.history(sessionID))
 	env.Manifest = env.Manifest.WithRuntimeEntries(
-		append(toolEntries(specs), historyEntries(history)...)...)
+		append(toolEntries(specs), historyEntries(history, l.isDelegatedSession(sessionID))...)...)
 	// The same adapter lowering the real request records, through the
 	// same function. Computing it here separately is what made the
 	// preview report an id no request would carry.

@@ -91,7 +91,7 @@ func toolEntries(specs []provider.Tool) []prompt.Entry {
 // three times in one turn is three sources, and "result.bash" three
 // times over cannot be told apart by Explain, which answers with the
 // first match and stops.
-func historyEntries(msgs []provider.Message) []prompt.Entry {
+func historyEntries(msgs []provider.Message, delegated bool) []prompt.Entry {
 	names := map[string]string{}
 	inputs := map[string]json.RawMessage{}
 	var out []prompt.Entry
@@ -170,7 +170,7 @@ func historyEntries(msgs []provider.Message) []prompt.Entry {
 				// person's words promoted whatever a spliced file or
 				// shell command happened to say.
 				for _, src := range b.Sources {
-					if e, ok := entryForSource(src.ID, spanOf(b.Text, src)); ok {
+					if e, ok := entryForSource(src.ID, spanOf(b.Text, src), delegated); ok {
 						out = append(out, e)
 					}
 				}
@@ -185,7 +185,7 @@ func historyEntries(msgs []provider.Message) []prompt.Entry {
 				if len(b.Sources) > 0 {
 					text = outsideSpans(b.Text, b.Sources)
 				}
-				if e, ok := entryForSource(b.Source, text); ok {
+				if e, ok := entryForSource(b.Source, text, delegated); ok {
 					out = append(out, e)
 				}
 			}
@@ -287,7 +287,13 @@ func hashOfText(s string) string {
 // entry into the event log would put a second copy of the classification
 // beside the one the constructors already own, and the two would drift;
 // the constructors are the definition, and this is a lookup into them.
-func entryForSource(id, text string) (prompt.Entry, bool) {
+//
+// delegated says whether the request being described belongs to a
+// sub-agent. It is the one thing an id cannot carry: the same tag means
+// "your assignment" in the session it was delegated to and "a model
+// wrote this earlier" anywhere else, and a persisted string has no way
+// to know which it is looking at.
+func entryForSource(id, text string, delegated bool) (prompt.Entry, bool) {
 	switch {
 	case strings.HasPrefix(id, "skill.frame."):
 		return skillFrameEntry(strings.TrimPrefix(id, "skill.frame."), text), true
@@ -306,7 +312,22 @@ func entryForSource(id, text string) (prompt.Entry, bool) {
 	case strings.HasPrefix(id, "reminder."):
 		return reminderEntry(strings.TrimPrefix(id, "reminder."), text), true
 	case strings.HasPrefix(id, "child.input."):
-		return childInputEntry(strings.TrimPrefix(id, "child.input."), text), true
+		// Only where the session actually is a sub-agent. The tag says
+		// this message was somebody's delegated task; whether it still
+		// instructs is a fact about the request being built, not about
+		// the string.
+		//
+		// Forking is what makes the difference visible. A fork copies a
+		// session's event log into a new top-level session with no
+		// parent, so a forked sub-agent is a session a person drives
+		// directly, whose opening message still carries the tag. The
+		// task was written by a model, and outside the child context it
+		// created it is that model's earlier output like any other.
+		name := strings.TrimPrefix(id, "child.input.")
+		if !delegated {
+			return parentDelegationEntry(name, text), true
+		}
+		return childInputEntry(name, text), true
 	}
 	return prompt.Entry{}, false
 }
@@ -348,6 +369,22 @@ func commandEntry(name, body string) prompt.Entry {
 	return prompt.RuntimeEntry(
 		"command."+name, prompt.KindUtilityPrompt, prompt.FromUser, prompt.TrustUser,
 		prompt.PlaceMessage, body, "the expansion of the "+name+" command")
+}
+
+// isDelegatedSession reports whether a session is a sub-agent's, which
+// is what decides whether a delegated task still instructs.
+//
+// The session's parent, not the tag on its opening message. A fork
+// copies a child's event log into a new top-level session with no
+// parent, and from then on a person drives it directly; the task that
+// created the original child is, in that session, a model's earlier
+// output like any other.
+func (l *Loop) isDelegatedSession(sessionID string) bool {
+	if l.Store == nil {
+		return false
+	}
+	s, err := l.Store.Get(sessionID)
+	return err == nil && s.ParentID != ""
 }
 
 // messageOrigin says where an opening message came from when it is not

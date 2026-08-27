@@ -395,7 +395,7 @@ func TestTheTruncationNoteIsTheProductsNotTheUsers(t *testing.T) {
 	profile := loop.Config.Profiles["primary"]
 
 	// Automatic compaction: no user instruction, but messages dropped.
-	auto := loop.compactManifest(context.Background(), profile, nil, "", 2, 0, nil)
+	auto := loop.compactManifest(context.Background(), "s1", profile, nil, "", 2, 0, nil)
 	var sawNote, sawInstruction bool
 	for _, e := range auto.Selected {
 		switch e.ID {
@@ -417,7 +417,7 @@ func TestTheTruncationNoteIsTheProductsNotTheUsers(t *testing.T) {
 
 	// Manual compaction: the override is the user's, and it is separate
 	// from the note.
-	manual := loop.compactManifest(context.Background(), profile, nil, "keep only file paths", 2, 0, nil)
+	manual := loop.compactManifest(context.Background(), "s1", profile, nil, "keep only file paths", 2, 0, nil)
 	var userEntry, noteEntry bool
 	for _, e := range manual.Selected {
 		if e.ID == "compact.instruction" {
@@ -456,14 +456,14 @@ func TestCompactionDoesNotLaunderGeneratedMemory(t *testing.T) {
 		t.Fatal("the turn's own manifest did not classify generated memory as non-instruction")
 	}
 
-	m := loop.compactManifest(ctx, run.profile, run.systemBlocks, "", 0, 0, nil)
+	m := loop.compactManifest(ctx, "s1", run.profile, run.systemBlocks, "", 0, 0, nil)
 	if len(m.UntrustedIDs()) == 0 {
 		t.Fatalf("the compaction manifest laundered the carried prompt to trusted text: %+v", m.Selected)
 	}
 
 	// A caller with only a folded string cannot tell its sources apart,
 	// and must not claim it can.
-	folded := loop.compactManifest(ctx, run.profile, compactSystemBlocks(run.system), "", 0, 0, nil)
+	folded := loop.compactManifest(ctx, "s1", run.profile, compactSystemBlocks(run.system), "", 0, 0, nil)
 	for _, e := range folded.Selected {
 		if e.ID == "compact.carried_system" && e.Trust.Instruction() {
 			t.Error("an unattributed folded prompt claimed instruction authority")
@@ -562,7 +562,7 @@ func TestAnAutomaticCompactionWritesOneLifecycleRecord(t *testing.T) {
 func TestACompactionRetryIsNotAFallbackPosition(t *testing.T) {
 	loop := newSmartLoop(t, "http://127.0.0.1:1")
 	profile := config.Profile{Provider: "local", Model: "claude-opus-5"}
-	m := loop.compactManifest(context.Background(), profile, nil, "", 0, 2, nil)
+	m := loop.compactManifest(context.Background(), "s1", profile, nil, "", 0, 2, nil)
 	if m.FallbackIndex != 0 {
 		t.Errorf("a compaction retry reported fallback position %d", m.FallbackIndex)
 	}
@@ -571,7 +571,7 @@ func TestACompactionRetryIsNotAFallbackPosition(t *testing.T) {
 	}
 	// And two attempts of one compaction are still two requests, which
 	// is what stops them sharing a record.
-	first := loop.compactManifest(context.Background(), profile, nil, "", 0, 0, nil)
+	first := loop.compactManifest(context.Background(), "s1", profile, nil, "", 0, 0, nil)
 	if first.ID == m.ID {
 		t.Error("two attempts of the same compaction share one manifest id")
 	}

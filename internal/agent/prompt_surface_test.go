@@ -255,13 +255,13 @@ func TestAChildsAnswerIsNamedWhenTheToolDeclaresIt(t *testing.T) {
 		{Role: provider.RoleUser, Content: []provider.Block{block}},
 	}
 	var child prompt.Entry
-	for _, e := range historyEntries(msgs) {
+	for _, e := range historyEntries(msgs, false) {
 		if e.ID == "child.result.explore" {
 			child = e
 		}
 	}
 	if child.ID == "" {
-		t.Fatalf("a declared child answer was not named: %v", entryIDs(historyEntries(msgs)))
+		t.Fatalf("a declared child answer was not named: %v", entryIDs(historyEntries(msgs, false)))
 	}
 	if child.Provenance != prompt.FromChildResult {
 		t.Errorf("a child's answer is recorded as %s", child.Provenance)
@@ -480,7 +480,7 @@ func TestTheContextPreviewIDIsTheIDTheNextRequestCarries(t *testing.T) {
 			actx := loop.activationFor(ctx, sid, "general-purpose", agentCfg, profileName, profile, 0, advertised)
 			env := prompt.Assemble(loop.promptAssets(), actx)
 			env.Manifest = env.Manifest.WithRuntimeEntries(
-				append(toolEntries(specs), historyEntries(sendableHistory(loop.history(sid)))...)...)
+				append(toolEntries(specs), historyEntries(sendableHistory(loop.history(sid)), false)...)...)
 			preview := loop.lowerForProvider(env.Manifest, profile, len(env.System))
 
 			// And the request the next turn would build.
@@ -489,7 +489,7 @@ func TestTheContextPreviewIDIsTheIDTheNextRequestCarries(t *testing.T) {
 				t.Fatalf("buildRun: %v", err)
 			}
 			actual := run.manifest.WithRuntimeEntries(
-				append(toolEntries(specs), historyEntries(sendableHistory(loop.history(sid)))...)...)
+				append(toolEntries(specs), historyEntries(sendableHistory(loop.history(sid)), false)...)...)
 
 			if preview.ID != actual.ID {
 				t.Errorf("preview id %s differs from the id the request carries %s\npreview lowering %v\nactual lowering  %v",
@@ -566,7 +566,7 @@ func TestALaterTurnStillNamesTheToolResultItIsSending(t *testing.T) {
 	restarted.SetSmartAgentEnabled(true)
 	restarted.Store = loop.Store
 	restarted.RehydrateSession(sid)
-	rebuilt := historyEntries(sendableHistory(restarted.history(sid)))
+	rebuilt := historyEntries(sendableHistory(restarted.history(sid)), false)
 	var rebuiltResult bool
 	for _, e := range rebuilt {
 		if strings.HasPrefix(e.ID, "result.") && !e.Trust.Instruction() {
@@ -592,7 +592,7 @@ func TestRepeatedToolCallsGetDistinctOccurrenceIDs(t *testing.T) {
 			provider.ToolResultBlock("a2", "second output", false),
 		}},
 	}
-	got := entryIDs(sourceEntries(historyEntries(msgs)))
+	got := entryIDs(sourceEntries(historyEntries(msgs, false)))
 	if len(got) != 2 || got[0] == got[1] {
 		t.Errorf("two runs of one tool produced %v, want two distinct ids", got)
 	}
@@ -619,7 +619,7 @@ func TestACollectionNamesEveryChildInIt(t *testing.T) {
 		}},
 		{Role: provider.RoleUser, Content: []provider.Block{result}},
 	}
-	entries := sourceEntries(historyEntries(msgs))
+	entries := sourceEntries(historyEntries(msgs, false))
 	got := entryIDs(entries)
 	want := []string{"child.result.explore#t-1", "child.result.librarian#t-2"}
 	if len(got) < 2 || got[0] != want[0] || got[1] != want[1] {
@@ -664,7 +664,7 @@ func TestALaunchAcknowledgementIsNotAChildsAnswer(t *testing.T) {
 		}},
 		{Role: provider.RoleUser, Content: []provider.Block{ack}},
 	}
-	for _, e := range historyEntries(msgs) {
+	for _, e := range historyEntries(msgs, false) {
 		if strings.HasPrefix(e.ID, "child.result") {
 			t.Errorf("a launch acknowledgement is recorded as a child's answer: %s", e.ID)
 		}
@@ -683,7 +683,7 @@ func TestALaunchAcknowledgementIsNotAChildsAnswer(t *testing.T) {
 		}},
 		{Role: provider.RoleUser, Content: []provider.Block{failure}},
 	}
-	for _, e := range historyEntries(msgs) {
+	for _, e := range historyEntries(msgs, false) {
 		if strings.HasPrefix(e.ID, "child.result") {
 			t.Errorf("a delegation failure is recorded as a child's answer: %s", e.ID)
 		}
@@ -722,7 +722,7 @@ func TestADelegatedTaskIsNamedInBothRequestsThatCarryIt(t *testing.T) {
 			{Type: provider.BlockToolUse, ToolUseID: "d1", ToolName: "Task",
 				ToolInput: []byte(`{"agent":"explore","prompt":"Find the parser."}`)},
 		}},
-	})
+	}, false)
 	var sawInput bool
 	for _, e := range parent {
 		if strings.HasPrefix(e.ID, "delegation.explore") {
@@ -747,16 +747,35 @@ func TestADelegatedTaskIsNamedInBothRequestsThatCarryIt(t *testing.T) {
 
 	// The child side: the same text arriving as the child's first
 	// message, tagged so it is not mistaken for something a person typed.
+	// In the sub-agent's own session, which is what makes it an
+	// assignment rather than a record of one.
 	child := sourceEntries(historyEntries([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Block{
 			{Type: provider.BlockText, Text: "Find the parser.", Source: "child.input.explore"},
 		}},
-	}))
+	}, true))
 	if len(child) != 1 || child[0].ID != "child.input.explore" {
 		t.Fatalf("the child's opening message is described as %v", entryIDs(child))
 	}
 	if child[0].Trust != prompt.TrustDelegated {
 		t.Errorf("the child's task has trust %s, want delegated", child[0].Trust)
+	}
+
+	// R14N1, the fork case. Forking a sub-agent copies its event log
+	// into a new top-level session with no parent, so a person drives
+	// it directly from then on. The tag on that opening message says
+	// what it once was; whether it still instructs is a fact about the
+	// session, not about the string.
+	forked := sourceEntries(historyEntries([]provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Block{
+			{Type: provider.BlockText, Text: "Find the parser.", Source: "child.input.explore"},
+		}},
+	}, false))
+	if len(forked) != 1 {
+		t.Fatalf("the forked session's opening message is described as %v", entryIDs(forked))
+	}
+	if forked[0].Trust.Instruction() {
+		t.Errorf("a delegated task still instructs in a session with no parent (trust %s)", forked[0].Trust)
 	}
 	// It has to instruct: it is the entire reason the child context
 	// exists, and a child that treated its own assignment as data would
@@ -886,7 +905,7 @@ func TestACommandExpansionKeepsItsSourcesApart(t *testing.T) {
 			Type: provider.BlockText, Text: text,
 			Source: "command." + cmd.Name, Sources: spans,
 		}},
-	}})
+	}}, false)
 
 	byID := map[string]prompt.Entry{}
 	for _, e := range entries {
@@ -949,7 +968,7 @@ func TestASkillInvocationKeepsItsThreeAuthorsApart(t *testing.T) {
 			Type: provider.BlockText, Text: text,
 			Source: "skill.frame.pdf-tools", Sources: spans,
 		}},
-	}})
+	}}, false)
 	byID := map[string]prompt.Entry{}
 	for _, e := range entries {
 		byID[e.ID] = e
@@ -985,11 +1004,11 @@ func TestTwoDifferentConversationsAreTwoDifferentRequests(t *testing.T) {
 	first := base.WithRuntimeEntries(historyEntries([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("rename the parser")}},
 		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock("done")}},
-	})...)
+	}, false)...)
 	second := base.WithRuntimeEntries(historyEntries([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("delete the database")}},
 		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock("done")}},
-	})...)
+	}, false)...)
 
 	if first.ID == second.ID {
 		t.Error("two different conversations produced one manifest id, so the record does not identify the request")
@@ -998,7 +1017,7 @@ func TestTwoDifferentConversationsAreTwoDifferentRequests(t *testing.T) {
 	again := base.WithRuntimeEntries(historyEntries([]provider.Message{
 		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("rename the parser")}},
 		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock("done")}},
-	})...)
+	}, false)...)
 	if first.ID != again.ID {
 		t.Error("the same conversation produced two manifest ids")
 	}
@@ -1022,13 +1041,13 @@ func TestMidTurnTypingIsNamedAsThePersonsOwnWords(t *testing.T) {
 			Sources: []provider.BlockSource{{ID: "injected.user", From: len(injectedPreface), To: len(body)}}},
 	}}}
 	var injected prompt.Entry
-	for _, e := range sourceEntries(historyEntries(msgs)) {
+	for _, e := range sourceEntries(historyEntries(msgs, false)) {
 		if e.ID == "injected.user" {
 			injected = e
 		}
 	}
 	if injected.ID == "" {
-		t.Fatalf("text typed mid-turn is not named: %v", entryIDs(historyEntries(msgs)))
+		t.Fatalf("text typed mid-turn is not named: %v", entryIDs(historyEntries(msgs, false)))
 	}
 	if injected.Provenance != prompt.FromUser || !injected.Trust.Instruction() {
 		t.Errorf("the person's own mid-turn words are recorded as %s/%s", injected.Provenance, injected.Trust)

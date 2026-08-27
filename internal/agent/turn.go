@@ -241,7 +241,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// only on the request that first carried it made every manifest
 		// after that one say the request contained no external content.
 		iterManifest := run.manifest.WithRuntimeEntries(
-			append(toolEntries(req.Tools), historyEntries(messages)...)...)
+			append(toolEntries(req.Tools), historyEntries(messages, l.isDelegatedSession(sessionID))...)...)
 		if len(l.Config.Hooks) > 0 {
 			out := hooks.RunOutcome(ctx, l.Config.Hooks, hooks.EventPreModel, map[string]any{
 				"session_id": sessionID,

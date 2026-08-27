@@ -167,7 +167,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		// for this call, the other is computed per attempt from what
 		// fitted. Their hashes are what make two different compaction
 		// requests two different manifests.
-		am := l.compactManifest(ctx, profile, carried, userInstruction, dropped, attempt, summaryMessages)
+		am := l.compactManifest(ctx, sessionID, profile, carried, userInstruction, dropped, attempt, summaryMessages)
 		am.At = time.Now()
 		// Persisted before the call and traced after it, which is not
 		// an inconsistency but the point of each half. The manifest has
@@ -274,7 +274,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 // along so the model summarizes under the same ground rules. Their
 // hashes are what make two different compaction requests two different
 // manifests, which is the property the round 12 review found missing.
-func (l *Loop) compactManifest(ctx context.Context, profile config.Profile, carried []provider.SystemBlock, userInstruction string, dropped, attempt int, sent []provider.Message) prompt.Manifest {
+func (l *Loop) compactManifest(ctx context.Context, sessionID string, profile config.Profile, carried []provider.SystemBlock, userInstruction string, dropped, attempt int, sent []provider.Message) prompt.Manifest {
 	m := prompt.Assemble(l.promptAssets(), prompt.ActivationContext{
 		SmartAgent: l.smartOn(ctx),
 		Role:       prompt.RoleUtility,
@@ -323,7 +323,7 @@ func (l *Loop) compactManifest(ctx context.Context, profile config.Profile, carr
 	// manifest has to name them for the same reason a turn's does: it
 	// is the request with the most external content in it, and the one
 	// whose output becomes the session's new memory.
-	runtime = append(runtime, historyEntries(sendableHistory(sent))...)
+	runtime = append(runtime, historyEntries(sendableHistory(sent), l.isDelegatedSession(sessionID))...)
 	return m.WithRuntimeEntries(runtime...)
 }
 
