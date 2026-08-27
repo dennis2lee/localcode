@@ -661,3 +661,81 @@ func TestADelegatedTaskIsNamedInBothRequestsThatCarryIt(t *testing.T) {
 		t.Error("a task the parent model wrote claims to be the user's")
 	}
 }
+
+// R13N2, end to end. The parent's request and the child's request both
+// carry the task, and both manifests have to name it. The review asked
+// for this comparison across the synchronous and the background paths,
+// which is the check the constructor-level tests cannot make: the entry
+// has to survive the trip through the task manager into a different
+// session's turn.
+func TestBothDelegationPathsNameTheTaskInTheChildsOwnManifest(t *testing.T) {
+	for _, path := range []string{"synchronous", "background"} {
+		t.Run(path, func(t *testing.T) {
+			srv := plainServer(t)
+			loop, tasks := newBackgroundLoop(t, srv.URL)
+			store, err := prompt.OpenStore(t.TempDir())
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			loop.Manifests = store
+			w := withTracing(t, loop)
+
+			const parent = "p1"
+			if _, err := loop.Store.CreateSession(parent, "", "general-purpose", true); err != nil {
+				t.Fatalf("create parent: %v", err)
+			}
+			ctx := WithSessionID(context.Background(), parent)
+
+			const task = "Find where the parser lives."
+			var childID string
+			switch path {
+			case "synchronous":
+				if _, err := tasks.SpawnSync(ctx, parent, "explore", task); err != nil {
+					t.Fatalf("SpawnSync: %v", err)
+				}
+			default:
+				res := launch(t, loop.Tools, ctx, "explore", task)
+				if res.IsError {
+					t.Fatalf("TaskBackground: %s", res.Content)
+				}
+				if got := loop.Tools.Call(ctx, "TaskCollect", nil, ""); got.IsError {
+					t.Fatalf("TaskCollect: %s", got.Content)
+				}
+			}
+			for _, s := range loop.Store.AllSessions() {
+				if s.ParentID == parent {
+					childID = s.ID
+				}
+			}
+			if childID == "" {
+				t.Fatal("the delegation created no child session")
+			}
+
+			m, ok := lastManifest(t, w, store, childID)
+			if !ok {
+				t.Fatal("the child's turn recorded no manifest")
+			}
+			e, found := entryByID(m, "child.input.explore")
+			if !found {
+				t.Fatalf("the child's request carries its task and its manifest does not name it: %v", m.SelectedIDs())
+			}
+			if e.Provenance != prompt.FromParentAgent || e.Trust != prompt.TrustDelegated {
+				t.Errorf("the child's task is recorded as %s/%s", e.Provenance, e.Trust)
+			}
+			// And the parent's own record of what it handed over: on the
+			// delegate span, by hash and size, never as text.
+			var delegated bool
+			for _, rec := range w.Recent(200, parent, "") {
+				if rec.Span == trace.SpanDelegate && strings.Contains(rec.Detail, "task ") {
+					delegated = true
+					if strings.Contains(rec.Detail, task) {
+						t.Error("the delegate span wrote the task text into the trace")
+					}
+				}
+			}
+			if !delegated {
+				t.Error("the parent recorded no description of what it delegated")
+			}
+		})
+	}
+}
