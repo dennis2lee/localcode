@@ -92,7 +92,13 @@ func (t TaskTool) Execute(ctx context.Context, input json.RawMessage) tools.Resu
 
 	text, err := t.manager.SpawnSync(withTaskDepth(ctx, depth+1), parentSessionID, args.Agent, args.Prompt)
 	if err != nil {
+		// localcode's sentence about a delegation that did not work.
+		// The child said nothing, so nothing here is the child's.
 		return tools.Result{Content: fmt.Sprintf("sub-agent %q failed: %v", args.Agent, err), IsError: true}
 	}
-	return tools.Result{Content: text}
+	// All of it is the child's answer, which is what the span says.
+	return tools.Result{
+		Content: text,
+		Sources: []tools.ResultSource{{ID: args.Agent, From: 0, To: len(text)}},
+	}
 }

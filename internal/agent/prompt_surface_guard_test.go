@@ -4,9 +4,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -132,90 +134,142 @@ func calleeNames(fn *ast.FuncDecl) []string {
 	return out
 }
 
-// The other direction: an inventory row describing an entry the code
-// does not build. The document is the thing a reviewer reads, so a row
-// with nothing behind it is worse than a missing row.
-func TestTheInventoryDescribesEntriesThatExist(t *testing.T) {
-	path := filepath.Join("..", "..", "docs", "PROMPT_ASSET_INVENTORY.md")
-	doc, err := os.ReadFile(path)
+// The other direction: the inventory and the code must name the same
+// set of runtime entries, in both directions.
+//
+// The first version of this checked one direction with a substring
+// search, and it was weak in three ways the round 14 review and its
+// auditors between them found all of: a documented prefix was satisfied
+// by the same characters appearing inside a comment, an emitted id with
+// no row was invisible because nothing looked that way, and it read
+// only this package while prompt.RuntimeEntry is exported.
+//
+// So the ids are taken from the syntax rather than from the text: the
+// first argument of every prompt.RuntimeEntry call in every non-test
+// file of the repository, reduced to the literal prefix the call can
+// produce. A comment cannot be a call, and a caller in another package
+// cannot hide.
+func TestTheInventoryAndTheCodeNameTheSameEntries(t *testing.T) {
+	documented := map[string]bool{}
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "PROMPT_ASSET_INVENTORY.md"))
 	if err != nil {
 		t.Fatalf("read the inventory: %v", err)
 	}
-	source := packageSource(t)
-
-	var checked int
 	for _, line := range runtimeEntryRows(string(doc)) {
 		id := strings.Trim(strings.TrimSpace(strings.Split(line, "|")[1]), "`")
 		if id == "" {
 			continue
 		}
-		checked++
-		// The literal the code writes is the part before the first
-		// placeholder: "tool.mcp." for "tool.mcp.<name>".
-		prefix := id
-		if i := strings.IndexAny(prefix, "<["); i >= 0 {
-			prefix = prefix[:i]
-		}
-		if !strings.Contains(source, `"`+prefix) {
-			t.Errorf("the inventory documents %q and no non-test source builds an id starting %q", id, prefix)
+		documented[idPrefix(id)] = true
+	}
+
+	emitted := emittedEntryPrefixes(t)
+
+	for prefix := range documented {
+		if !emitted[prefix] {
+			t.Errorf("the inventory documents %q and no non-test code builds an id starting that way", prefix)
 		}
 	}
-	if checked < 10 {
-		t.Fatalf("recognised only %d runtime entry rows in the inventory, so this test is checking almost nothing", checked)
+	for prefix := range emitted {
+		if !documented[prefix] {
+			t.Errorf("non-test code builds ids starting %q and the inventory has no row for them", prefix)
+		}
+	}
+	if len(documented) != len(emitted) {
+		t.Errorf("%d documented runtime patterns against %d emitted", len(documented), len(emitted))
+	}
+	if len(emitted) < 10 {
+		t.Fatalf("found only %d emitted entry ids, so this test is checking almost nothing", len(emitted))
 	}
 }
 
-// runtimeEntryRows returns the body rows of the runtime entry table.
+// idPrefix reduces a documented id pattern to the literal part the code
+// can produce: "tool.mcp." for "tool.mcp.<name>", "conversation" for a
+// pattern with no placeholder at all.
+func idPrefix(id string) string {
+	if i := strings.IndexAny(id, "<[#"); i >= 0 {
+		return id[:i]
+	}
+	return id
+}
+
+// emittedEntryPrefixes finds the id literal of every prompt.RuntimeEntry
+// call in the repository's non-test files.
 //
-// Taken by section rather than by matching known id prefixes, which was
-// the first version and was wrong in the way that matters: a row in a
-// namespace the test had not been told about would have been skipped
-// silently, so the one case this exists to catch, somebody documenting
-// an entry nothing builds, would have passed.
-func runtimeEntryRows(doc string) []string {
-	var out []string
-	inSection, inTable := false, false
-	for _, line := range strings.Split(doc, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "## ") {
-			inSection = trimmed == "## Runtime entries"
-			inTable = false
-			continue
+// Syntax, not text. A call's first argument is either a string literal
+// or a concatenation starting with one, and that leading literal is the
+// prefix every id it produces begins with.
+func emittedEntryPrefixes(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
 		}
-		if !inSection || !strings.HasPrefix(trimmed, "|") {
-			continue
+		if d.IsDir() {
+			if name := d.Name(); name == ".git" || name == "node_modules" || name == "dist" {
+				return filepath.SkipDir
+			}
+			return nil
 		}
-		// The header row, then the alignment row, then the body.
-		if strings.HasPrefix(trimmed, "|---") {
-			inTable = true
-			continue
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
 		}
-		if inTable {
-			out = append(out, trimmed)
+		fset := token.NewFileSet()
+		file, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return nil
 		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 || !isRuntimeEntryCall(call.Fun) {
+				return true
+			}
+			if lit, ok := leadingStringLiteral(call.Args[0]); ok {
+				out[idPrefix(lit)] = true
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the repository: %v", err)
 	}
 	return out
 }
 
-func packageSource(t *testing.T) string {
-	t.Helper()
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read the package directory: %v", err)
+// isRuntimeEntryCall reports whether an expression is prompt.RuntimeEntry
+// or, inside the prompt package itself, RuntimeEntry.
+func isRuntimeEntryCall(fun ast.Expr) bool {
+	switch f := fun.(type) {
+	case *ast.SelectorExpr:
+		id, ok := f.X.(*ast.Ident)
+		return ok && id.Name == "prompt" && f.Sel.Name == "RuntimeEntry"
+	case *ast.Ident:
+		return f.Name == "RuntimeEntry"
 	}
-	var b strings.Builder
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
+	return false
+}
+
+// leadingStringLiteral returns the literal an id expression starts with,
+// which for "prefix."+name is "prefix." and for a plain literal is the
+// whole of it.
+func leadingStringLiteral(e ast.Expr) (string, bool) {
+	for {
+		switch v := e.(type) {
+		case *ast.BasicLit:
+			if v.Kind != token.STRING {
+				return "", false
+			}
+			s, err := strconv.Unquote(v.Value)
+			return s, err == nil
+		case *ast.BinaryExpr:
+			e = v.X
+		default:
+			return "", false
 		}
-		data, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		b.Write(data)
 	}
-	return b.String()
 }
 
 // And the third direction: a row citing a test that does not exist.
@@ -258,6 +312,58 @@ func testSource(t *testing.T) string {
 		data, err := os.ReadFile(e.Name())
 		if err != nil {
 			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		b.Write(data)
+	}
+	return b.String()
+}
+
+// runtimeEntryRows returns the body rows of the runtime entry table.
+//
+// Taken by section rather than by matching known id prefixes, which was
+// an earlier version and was wrong in the way that matters: a row in a
+// namespace the test had not been told about would have been skipped
+// silently, so the one case this exists to catch would have passed.
+func runtimeEntryRows(doc string) []string {
+	var out []string
+	inSection, inTable := false, false
+	for _, line := range strings.Split(doc, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## ") {
+			inSection = trimmed == "## Runtime entries"
+			inTable = false
+			continue
+		}
+		if !inSection || !strings.HasPrefix(trimmed, "|") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "|---") {
+			inTable = true
+			continue
+		}
+		if inTable {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// packageSource concatenates this package's non-test files.
+func packageSource(t *testing.T) string {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the package directory: %v", err)
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
 		}
 		b.Write(data)
 	}

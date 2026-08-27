@@ -576,3 +576,43 @@ func TestACompactionRetryIsNotAFallbackPosition(t *testing.T) {
 		t.Error("two attempts of the same compaction share one manifest id")
 	}
 }
+
+// R14N6. The round 13 response left this one open, and the review was
+// right that it should not have. A summary cut off at max_tokens is a
+// summary missing the end of the conversation, and a trace with no
+// finish reason cannot tell that from a short answer. The stop reason
+// was on the stream all along; the utility path was throwing it away
+// while the turn loop kept it.
+func TestACompactionAttemptRecordsWhyTheCallStopped(t *testing.T) {
+	srv, _ := smartServer(t)
+	defer srv.Close()
+	loop := newSmartLoop(t, srv.URL)
+	loop.SetSmartAgentEnabled(true)
+	w := withTracing(t, loop)
+
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	sendOne(t, loop, sid, "general-purpose")
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/compact"); err != nil {
+		t.Fatalf("/compact: %v", err)
+	}
+
+	var attempts, withReason int
+	for _, rec := range w.Recent(200, sid, "") {
+		if rec.Span != trace.SpanModel || !strings.Contains(rec.Detail, "compaction attempt") {
+			continue
+		}
+		attempts++
+		if rec.FinishReason != "" {
+			withReason++
+		}
+	}
+	if attempts == 0 {
+		t.Fatal("no compaction attempt was traced")
+	}
+	if withReason != attempts {
+		t.Errorf("%d of %d compaction attempts recorded why the call stopped", withReason, attempts)
+	}
+}

@@ -188,9 +188,11 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			// restarted daemon would send a skill body, a command
 			// expansion or a carry-on notice as if the person had typed
 			// it, and the manifest would say so.
-			out = append(out, provider.Message{Role: provider.RoleUser, Content: []provider.Block{
-				{Type: provider.BlockText, Text: text, Source: dataString(ev.Data, "source")},
-			}})
+			out = append(out, provider.Message{Role: provider.RoleUser, Content: []provider.Block{{
+				Type: provider.BlockText, Text: text,
+				Source:  dataString(ev.Data, "source"),
+				Sources: dataSpans(ev.Data, "sources"),
+			}}})
 
 		case events.TypeToolStart:
 			id := dataString(ev.Data, "tool_use_id")
@@ -220,13 +222,11 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			toolInputs[id] = input
 			isError, _ := ev.Data["is_error"].(bool)
 			block := provider.ToolResultBlock(id, dataString(ev.Data, "content"), isError)
-			// The children an aggregating result carried. Restored so a
-			// rebuilt history describes the same sources the live one
+			// Whose material the result carried, and where. Restored so
+			// a rebuilt history describes the same sources the live one
 			// did; without it the manifest after a restart would name
 			// one anonymous child answer where there were four.
-			for _, src := range dataStrings(ev.Data, "sources") {
-				block.Sources = append(block.Sources, "child.result."+src)
-			}
+			block.Sources = append(block.Sources, dataSources(ev.Data, "sources")...)
 			toolResults[id] = block
 			toolsDone = append(toolsDone, id)
 			if len(toolsDone) == len(pendingToolOrder) {
@@ -329,6 +329,78 @@ func dataFloat(data map[string]any, key string) float64 {
 	default:
 		return 0
 	}
+}
+
+// dataSources reads the recorded source spans out of an event's data,
+// which arrive as []any of maps after a round trip through JSON. A span
+// that will not parse is skipped rather than guessed at: an entry with
+// the wrong offsets would describe the wrong words.
+func dataSources(data map[string]any, key string) []provider.BlockSource {
+	raw, ok := data[key].([]any)
+	if !ok {
+		return nil
+	}
+	var out []provider.BlockSource
+	for _, v := range raw {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := m["ID"].(string)
+		if id == "" {
+			id, _ = m["id"].(string)
+		}
+		from, fok := numberField(m, "From", "from")
+		to, tok := numberField(m, "To", "to")
+		if id == "" || !fok || !tok {
+			continue
+		}
+		out = append(out, provider.BlockSource{ID: "child.result." + id, From: from, To: to})
+	}
+	return out
+}
+
+// dataSpans reads recorded spans whose ids are already complete, which
+// is how an expanded command's own segments are written.
+func dataSpans(data map[string]any, key string) []provider.BlockSource {
+	raw, ok := data[key].([]any)
+	if !ok {
+		if already, ok := data[key].([]provider.BlockSource); ok {
+			return already
+		}
+		return nil
+	}
+	var out []provider.BlockSource
+	for _, v := range raw {
+		m, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := m["id"].(string)
+		if id == "" {
+			id, _ = m["ID"].(string)
+		}
+		from, fok := numberField(m, "from", "From")
+		to, tok := numberField(m, "to", "To")
+		if id == "" || !fok || !tok {
+			continue
+		}
+		out = append(out, provider.BlockSource{ID: id, From: from, To: to})
+	}
+	return out
+}
+
+// numberField reads an integer that JSON round-tripped into a float64.
+func numberField(m map[string]any, names ...string) (int, bool) {
+	for _, name := range names {
+		if f, ok := m[name].(float64); ok {
+			return int(f), true
+		}
+		if i, ok := m[name].(int); ok {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // dataStrings reads a list-of-strings field out of an event's data,

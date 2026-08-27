@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.58.0
+
+* **Round 14: six findings, and the third appearance of one shape.** A task written for a sub-agent reaches two requests: the child's, where it is that child's assignment, and the parent's, where it sits in the arguments of the tool call that asked for it. Both were declared with the authority the child's needs, which made a model's own earlier words an instruction to itself. That is auto memory's laundering path again with a sub-agent in the middle instead of a restart, and a parent that has read a hostile tool result is how text gets in either way. Two records now, one per side, so a caller has to choose which request it is describing.
+
+  A custom command can splice a file off the disk and the output of a shell command into the middle of its own text, and all of it arrived declared as the person's own instruction. A file in the repository saying "ignore your previous instructions" was therefore a direct instruction from the person, by being named in a command they installed months ago. An expansion now keeps its seams: the template and the arguments are theirs, the file and the shell output are data, and the text on the wire is unchanged. Skill invocation had the same shape with three authors instead of four.
+
+  `TaskBackground` answers with a sentence localcode writes saying the work has started, and it was recorded as a report from a sub-agent that had not said anything yet, along with every refusal and failure the delegation tools return. A result now says what it carries and which part of it is whose, so a collected batch of four answers is four records over four spans rather than four copies of all four.
+
+  Two different conversations produced the same assembly id, so a record claiming to identify a request identified everything about it except the conversation. The conversation is on the record now as one entry with a digest over every message block, which is a deliberate boundary rather than a full transcript index: an entry exists where there is a question about a source's authority, and ordinary talk has none. Text typed while a turn is already running does have one, because it is the person speaking from inside a message otherwise made of tool results.
+
+  Manifest deduplication now survives a restart, a failed write is retried rather than remembered, and a compaction attempt records why the provider stopped, which had been left unimplemented on the grounds that the utility path could not reach it. It could.
+
 ## v0.57.0
 
 * **Round 12, and a preliminary note toward round 13: five findings and three more, all real.** Model-written auto memory used to arrive in a system block declared as project instruction, which is a laundering path exactly one restart long, since a tool result or a hostile repository can influence what an earlier session saved. It is now a separate asset from the product's auto-memory policy, classified as generated content that cannot instruct, and wrapped in a boundary saying so. `Trust.Instruction()` became an allowlist while fixing it, so a trust class nobody has reviewed yet is data rather than instruction by default.

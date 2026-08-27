@@ -258,3 +258,67 @@ func TestChangedTrustMetadataChangesTheManifestID(t *testing.T) {
 		t.Error("a warning left the manifest id unchanged")
 	}
 }
+
+// R14N5. A dedup set that only knows what this process wrote is not
+// deduplication, it is deduplication until the next restart. The first
+// version started empty at Open and said so in a comment, which is not
+// the same as the matrix saying an assembly is written once per day.
+func TestRestartDoesNotWriteTheSameManifestAgain(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "manifests-"+time.Now().Format("2006-01-02")+".jsonl")
+
+	first, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	first.Put(storedManifest("survives", "the project's private instructions"))
+
+	// A different process, over the same directory, recording the
+	// assembly its own session assembled to the same bytes.
+	second, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	second.Put(storedManifest("survives", "the project's private instructions"))
+
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if n := len(strings.Split(strings.TrimSpace(string(raw)), "\n")); n != 1 {
+		t.Errorf("the same manifest was persisted %d times across a restart, want 1", n)
+	}
+}
+
+// An id is marked written only once its line is on disk. Marking on the
+// attempt meant one failed write suppressed every later one for the life
+// of the process, which is the opposite of best effort.
+func TestAFailedWriteIsRetriedRatherThanRemembered(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// A directory where the day's file cannot be created, which is what
+	// a full disk or a read-only mount looks like from here.
+	day := "manifests-" + time.Now().Format("2006-01-02") + ".jsonl"
+	if err := os.Mkdir(filepath.Join(dir, day), 0o755); err != nil {
+		t.Fatalf("stage the failure: %v", err)
+	}
+	s.Put(storedManifest("retried", "x"))
+
+	// Storage recovers.
+	if err := os.Remove(filepath.Join(dir, day)); err != nil {
+		t.Fatalf("clear the failure: %v", err)
+	}
+	s.Put(storedManifest("retried", "x"))
+
+	raw, err := os.ReadFile(filepath.Join(dir, day))
+	if err != nil {
+		t.Fatalf("the retry did not write: %v", err)
+	}
+	if !strings.Contains(string(raw), "retried") {
+		t.Error("the manifest was suppressed by the record of a failed attempt")
+	}
+}

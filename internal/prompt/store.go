@@ -42,13 +42,16 @@ type Store struct {
 	recent map[string]Manifest
 	order  []string
 	day    string
-	// written is the set of ids already on today's file, so the same
-	// assembly recorded on every turn of a long session costs one line
-	// rather than one line per turn. Reset at each day rotation, and
-	// empty after a restart, which can append one more copy of an id
-	// the previous process already wrote. That is the cost of not
-	// reading the day's file back at startup, and it is bounded at one
-	// per id per process.
+	// written is the set of ids already on the current day's file, so
+	// the same assembly recorded on every turn of a long session costs
+	// one line rather than one line per turn.
+	//
+	// Loaded from the file rather than started empty, because a set
+	// that only knows what this process wrote is not deduplication, it
+	// is deduplication until the next restart. An id is added only
+	// after its line is actually on disk, so a write that failed is
+	// retried by the next call rather than suppressed by the record of
+	// an attempt.
 	written map[string]bool
 }
 
@@ -128,11 +131,17 @@ func (s *Store) Put(m Manifest) {
 	if m.At.IsZero() {
 		day = time.Now().Format("2006-01-02")
 	}
-	if s.day != "" && s.day != day {
-		s.pruneLocked(time.Now())
-		s.written = map[string]bool{}
+	if s.day != day {
+		if s.day != "" {
+			s.pruneLocked(time.Now())
+		}
+		// The ids already on this day's file, including the ones a
+		// previous process wrote. Read once per day rather than per
+		// call, and never at Open, so starting a daemon does not wait
+		// on a file it may not write to at all.
+		s.written = s.idsOnFile(day)
+		s.day = day
 	}
-	s.day = day
 
 	// A manifest is immutable content addressed by its own ID: the same
 	// assembly recorded twice is the same record twice. Writing it once
@@ -144,7 +153,6 @@ func (s *Store) Put(m Manifest) {
 	if s.written[m.ID] {
 		return
 	}
-	s.written[m.ID] = true
 
 	line, err := json.Marshal(m)
 	if err != nil {
@@ -154,8 +162,48 @@ func (s *Store) Put(m Manifest) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	f.Write(append(line, '\n'))
+	line = append(line, '\n')
+	n, werr := f.Write(line)
+	if werr == nil && n < len(line) {
+		// A fragment with no newline on the end would be glued to the
+		// next record appended, costing two records instead of one. The
+		// terminator is best effort like everything else here: if it
+		// cannot be written, the reader drops one unparseable line,
+		// which is the same outcome as before and no worse.
+		f.Write([]byte("\n"))
+	}
+	cerr := f.Close()
+	// Marked only once the line is on disk, whole. A short write leaves
+	// a truncated record behind, which the reader skips as unparseable
+	// JSON, and the next Put appends a complete one; marking before the
+	// write meant a full disk suppressed every later attempt for the
+	// life of the process.
+	if werr == nil && cerr == nil && n == len(line) {
+		s.written[m.ID] = true
+	}
+}
+
+// idsOnFile reads back the ids already recorded for a day.
+//
+// A day's file is bounded by the same size retention the directory is,
+// and it is read once when the day changes rather than per call, so the
+// cost is one sequential pass over at most that bound. Anything that
+// will not parse is skipped: a truncated line from a failed write is
+// not an id, and treating it as one would suppress the record that
+// replaces it.
+func (s *Store) idsOnFile(day string) map[string]bool {
+	out := map[string]bool{}
+	data, err := os.ReadFile(filepath.Join(s.dir, "manifests-"+day+".jsonl"))
+	if err != nil {
+		return out
+	}
+	for _, line := range splitLines(data) {
+		var m Manifest
+		if json.Unmarshal(line, &m) == nil && m.ID != "" {
+			out[m.ID] = true
+		}
+	}
+	return out
 }
 
 // Get returns the manifest recorded under id: from memory when it is

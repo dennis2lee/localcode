@@ -115,36 +115,109 @@ func parseCommandFile(path string) (Command, error) {
 // would too.
 var expandPattern = regexp.MustCompile("\\$ARGUMENTS|\\$[1-9]|!`[^`]*`|@\\S+")
 
+// SegmentKind says where a piece of an expanded command came from.
+//
+// The kinds exist because an expansion is not one thing. A command body
+// can splice a file off the disk and the output of a shell command into
+// the middle of its own text, and the result used to leave here as one
+// string with nothing to say about which half the person wrote. What
+// reads that string is a model, and a model deciding whether to follow
+// an instruction needs to know that this sentence came from the command
+// and that one came out of a file.
+type SegmentKind string
+
+const (
+	// SegmentTemplate is the command's own body: what the person who
+	// installed the command wrote.
+	SegmentTemplate SegmentKind = "template"
+	// SegmentArguments is what the person typed after the command name.
+	SegmentArguments SegmentKind = "arguments"
+	// SegmentFile is the contents of an @path reference.
+	SegmentFile SegmentKind = "file"
+	// SegmentShell is the stdout of a !`cmd` reference.
+	SegmentShell SegmentKind = "shell"
+)
+
+// Segment is one piece of an expanded command, with where it came from
+// and, for a file or a shell command, what it was.
+type Segment struct {
+	Kind SegmentKind
+	// Ref is the path for a file segment and the command line for a
+	// shell segment. Empty for the template and for arguments.
+	Ref  string
+	Text string
+}
+
 // Expand renders cmd's body against the given raw argument string and
-// working directory in a single pass: $ARGUMENTS is replaced with args
-// verbatim, $1-$9 with whitespace-split positional fields (empty string if
-// not supplied), !`cmd` with the stdout of running cmd via the shell
+// working directory, returning the text the model receives. See
+// ExpandSegments for the same expansion with its seams intact.
+func Expand(cmd Command, args, cwd string) (string, error) {
+	segs, err := ExpandSegments(cmd, args, cwd)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, seg := range segs {
+		b.WriteString(seg.Text)
+	}
+	return b.String(), nil
+}
+
+// ExpandSegments renders cmd's body in a single pass and returns it as
+// the pieces it was made of: $ARGUMENTS is replaced with args verbatim,
+// $1-$9 with whitespace-split positional fields (empty string if not
+// supplied), !`cmd` with the stdout of running cmd via the shell
 // (cwd-relative, with $ARGUMENTS/$N substituted into the command first),
 // and @path with the contents of the file at path (resolved against cwd).
-func Expand(cmd Command, args, cwd string) (string, error) {
+//
+// Concatenating the segments reproduces exactly what Expand returns, so
+// the wire format is unchanged and the seams are additional information
+// rather than a different request.
+func ExpandSegments(cmd Command, args, cwd string) ([]Segment, error) {
 	fields := strings.Fields(args)
 	var expandErr error
+	var segs []Segment
 
-	out := expandPattern.ReplaceAllStringFunc(cmd.Body, func(tok string) string {
-		if expandErr != nil {
-			return tok
+	// The template text between matches, accumulated so consecutive
+	// literal stretches are one segment rather than one per gap.
+	var pending strings.Builder
+	flush := func() {
+		if pending.Len() > 0 {
+			segs = append(segs, Segment{Kind: SegmentTemplate, Text: pending.String()})
+			pending.Reset()
 		}
+	}
+	add := func(kind SegmentKind, ref, text string) {
+		flush()
+		segs = append(segs, Segment{Kind: kind, Ref: ref, Text: text})
+	}
+
+	body := cmd.Body
+	last := 0
+	for _, loc := range expandPattern.FindAllStringIndex(body, -1) {
+		if expandErr != nil {
+			break
+		}
+		pending.WriteString(body[last:loc[0]])
+		last = loc[1]
+		tok := body[loc[0]:loc[1]]
 		switch {
 		case tok == "$ARGUMENTS":
-			return args
+			add(SegmentArguments, "", args)
 		case len(tok) == 2 && tok[0] == '$': // $1-$9
+			value := ""
 			if i := int(tok[1] - '0'); i >= 1 && i <= len(fields) {
-				return fields[i-1]
+				value = fields[i-1]
 			}
-			return ""
+			add(SegmentArguments, tok, value)
 		case strings.HasPrefix(tok, "!`"):
 			cmdStr := substituteArgs(tok[2:len(tok)-1], args, fields)
 			out, err := runShell(cmdStr, cwd)
 			if err != nil {
 				expandErr = err
-				return tok
+				break
 			}
-			return out
+			add(SegmentShell, cmdStr, out)
 		case strings.HasPrefix(tok, "@"):
 			ref := tok[1:]
 			path := ref
@@ -154,17 +227,21 @@ func Expand(cmd Command, args, cwd string) (string, error) {
 			data, err := os.ReadFile(path)
 			if err != nil {
 				expandErr = fmt.Errorf("read @%s: %w", ref, err)
-				return tok
+				break
 			}
-			return fmt.Sprintf("\n--- %s ---\n%s\n---\n", ref, string(data))
+			// The framing is localcode's; only the file's own bytes are
+			// the file's, which is what the segment boundary says.
+			pending.WriteString("\n--- " + ref + " ---\n")
+			add(SegmentFile, ref, string(data))
+			pending.WriteString("\n---\n")
 		}
-		return tok
-	})
-
-	if expandErr != nil {
-		return "", expandErr
 	}
-	return out, nil
+	if expandErr != nil {
+		return nil, expandErr
+	}
+	pending.WriteString(body[last:])
+	flush()
+	return segs, nil
 }
 
 // substituteArgs replaces $ARGUMENTS and $1-$9 in a shell command string,

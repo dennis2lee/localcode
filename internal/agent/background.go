@@ -438,10 +438,12 @@ func (t TaskCollectTool) Execute(ctx context.Context, input json.RawMessage) too
 	// answers to what it asked for.
 	var b strings.Builder
 	uncollected := 0
-	// Which children's answers this one result carries. A tool result
-	// is one block and this one aggregates several, so the identities
-	// travel beside it rather than being recoverable from the text.
-	var sources []string
+	// Which children's answers this one result carries, and where each
+	// one is in it. A tool result is one block and this one aggregates
+	// several, so the identities travel beside it; the spans are what
+	// make a per-child record cover that child's words rather than the
+	// whole collection over again.
+	var sources []tools.ResultSource
 	for _, id := range ids {
 		text, err, collected := t.manager.Wait(ctx, id)
 		if !collected {
@@ -452,8 +454,9 @@ func (t TaskCollectTool) Execute(ctx context.Context, input json.RawMessage) too
 			continue
 		}
 		t.manager.dropPending(parentSessionID, id)
-		sources = append(sources, t.manager.childAgent(id)+"#"+id)
 		if err != nil {
+			// localcode's own sentence about a child that failed, not
+			// the child's words. No source: nobody else wrote this.
 			fmt.Fprintf(&b, "## %s\nfailed: %v\n\n", id, err)
 			continue
 		}
@@ -461,12 +464,22 @@ func (t TaskCollectTool) Execute(ctx context.Context, input json.RawMessage) too
 			fmt.Fprintf(&b, "## %s\nfinished without an answer.\n\n", id)
 			continue
 		}
-		fmt.Fprintf(&b, "## %s\n%s\n\n", id, text)
+		fmt.Fprintf(&b, "## %s\n", id)
+		from := b.Len()
+		b.WriteString(text)
+		sources = append(sources, tools.ResultSource{
+			ID: t.manager.childAgent(id) + "#" + id, From: from, To: b.Len(),
+		})
+		b.WriteString("\n\n")
 	}
 	if uncollected > 0 {
 		fmt.Fprintf(&b, "## still running\n%d task(s) had not finished when this collection stopped; they are still going and can be collected again.\n", uncollected)
 	}
-	return tools.Result{Content: strings.TrimSpace(b.String()), Sources: sources}
+	// TrimSpace would move every span, so the leading trim is done by
+	// construction (nothing is written before the first header) and the
+	// trailing one by cutting only the blank lines this loop added.
+	content := strings.TrimRight(b.String(), "\n")
+	return tools.Result{Content: content, Sources: sources}
 }
 
 // delegationSchema is the input schema both delegation tools share: which

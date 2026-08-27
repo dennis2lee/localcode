@@ -47,10 +47,19 @@ type Block struct {
 	//
 	// Tool results need no Source: their author is derivable from the
 	// tool_use block they answer, which is in the same history. The one
-	// exception is a result that aggregates several sources, which
-	// Sources names, because no pairing can recover them.
-	Source  string   `json:"source,omitempty"`
-	Sources []string `json:"sources,omitempty"`
+	// exception is a result carrying material somebody else wrote,
+	// which Sources names, because no pairing can recover it.
+	Source  string        `json:"source,omitempty"`
+	Sources []BlockSource `json:"sources,omitempty"`
+}
+
+// BlockSource is one contributor's material inside a block's text: the
+// prompt-entry ID it belongs to, and the span of the text it occupies.
+// Wire formats do not carry it, exactly as Source is not carried.
+type BlockSource struct {
+	ID   string `json:"id"`
+	From int    `json:"from"`
+	To   int    `json:"to"`
 }
 
 type BlockType string

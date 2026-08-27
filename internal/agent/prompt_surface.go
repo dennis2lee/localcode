@@ -2,7 +2,12 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+
+	"localcode/internal/commands"
 	"strconv"
 	"strings"
 
@@ -90,6 +95,9 @@ func historyEntries(msgs []provider.Message) []prompt.Entry {
 	names := map[string]string{}
 	inputs := map[string]json.RawMessage{}
 	var out []prompt.Entry
+	if len(msgs) > 0 {
+		out = append(out, conversationEntry(msgs))
+	}
 	for _, m := range msgs {
 		for _, b := range m.Content {
 			switch b.Type {
@@ -99,26 +107,48 @@ func historyEntries(msgs []provider.Message) []prompt.Entry {
 				// A delegation's task text is in this request and stays
 				// in it: the tool_use block carries its arguments
 				// verbatim to every adapter, and history re-sends the
-				// block on every later call. The parent naming its own
-				// words is right; what was wrong was the class they
-				// were named under, and that the child's own request
-				// named nothing at all.
+				// block on every later call.
+				//
+				// It is a different entry from the child's, though, and
+				// that is the whole point of having two. Here it is the
+				// parent model's own earlier output; in the child it is
+				// that child's assignment. Same words, same author, two
+				// authorities, and one constructor returning one trust
+				// class for both made a model's own prior words an
+				// instruction to itself.
 				if task, agent, ok := delegatedTaskOf(b.ToolName, b.ToolInput); ok {
-					e := childInputEntry(agent, task)
+					e := parentDelegationEntry(agent, task)
 					e.ID += "#" + b.ToolUseID
 					out = append(out, e)
 				}
 			case provider.BlockToolResult:
-				// A result that names its sources aggregates several,
-				// and one entry for the lump would lose which agents
-				// are in it.
+				// A result that names its sources is carrying somebody
+				// else's words, and each one is described over its own
+				// span. Hashing the whole block once per source was the
+				// first version: four children counted the same text
+				// four times, and every child's record changed when any
+				// sibling answered differently.
 				if len(b.Sources) > 0 {
 					for _, src := range b.Sources {
-						e := childResultEntry(strings.TrimPrefix(src, "child.result."), b.ToolResultContent)
-						e.ID = src
-						e.Reason = "one of " + strconv.Itoa(len(b.Sources)) +
-							" sub-agent answers this collection carries"
+						text := spanOf(b.ToolResultContent, src)
+						e := childResultEntry(strings.TrimPrefix(src.ID, "child.result."), text)
+						e.ID = src.ID
+						if len(b.Sources) > 1 {
+							e.Reason = "one of " + strconv.Itoa(len(b.Sources)) +
+								" sub-agent answers this collection carries"
+						}
 						out = append(out, e)
+					}
+					// The rest of the block is localcode's own framing
+					// around them: the section headers, and its
+					// sentences about children that failed or are still
+					// running. Described as what it is rather than
+					// folded into somebody's answer.
+					if framing := outsideSpans(b.ToolResultContent, b.Sources); framing != "" {
+						f := reminderEntry("collection_framing", framing)
+						f.ID += "#" + b.ToolUseID
+						f.Reason = "localcode's own framing around the collected answers"
+						out = append(out, f)
 					}
 					continue
 				}
@@ -135,16 +165,119 @@ func historyEntries(msgs []provider.Message) []prompt.Entry {
 				e.ID += "#" + b.ToolUseID
 				out = append(out, e)
 			case provider.BlockText:
+				// Spans first: a command expansion is several sources in
+				// one message, and declaring the whole of it as the
+				// person's words promoted whatever a spliced file or
+				// shell command happened to say.
+				for _, src := range b.Sources {
+					if e, ok := entryForSource(src.ID, spanOf(b.Text, src)); ok {
+						out = append(out, e)
+					}
+				}
 				if b.Source == "" {
 					continue
 				}
-				if e, ok := entryForSource(b.Source, b.Text); ok {
+				// What no span covers is the block's own source: the
+				// command's template, or a skill's framing. Hashed over
+				// exactly that rather than over the whole message,
+				// because the rest of the message is somebody else's.
+				text := b.Text
+				if len(b.Sources) > 0 {
+					text = outsideSpans(b.Text, b.Sources)
+				}
+				if e, ok := entryForSource(b.Source, text); ok {
 					out = append(out, e)
 				}
 			}
 		}
 	}
 	return out
+}
+
+// spanOf returns the part of text a source covers, bounded so a record
+// written by an older build, or one whose text was capped after the
+// spans were taken, cannot slice out of range.
+func spanOf(text string, src provider.BlockSource) string {
+	from, to := src.From, src.To
+	if from < 0 || from > len(text) {
+		return ""
+	}
+	if to > len(text) {
+		to = len(text)
+	}
+	if to <= from {
+		return ""
+	}
+	return text[from:to]
+}
+
+// outsideSpans returns everything in text that no source covers, which
+// is the framing the tool wrote around the material it collected.
+func outsideSpans(text string, srcs []provider.BlockSource) string {
+	covered := make([]bool, len(text))
+	for _, src := range srcs {
+		for i := src.From; i < src.To && i >= 0 && i < len(text); i++ {
+			covered[i] = true
+		}
+	}
+	var b strings.Builder
+	for i, r := range []byte(text) {
+		if !covered[i] {
+			b.WriteByte(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// conversationEntry describes the conversation a request carries as one
+// record: how much of it there is, and a digest that changes when the
+// messages do.
+//
+// One entry rather than one per message, and the reason is what the
+// entries are for. A manifest names a source when there is a question
+// about its authority: a tool result may not instruct, a spliced file
+// may not, a delegated task may in one request and not in another.
+// Ordinary conversation has no such question. The person's own message
+// is the person, and the model's own reply is the model, and neither
+// needs a declaration to say so.
+//
+// What it does need is identity. Without this, two sessions with the
+// same assets and tools and entirely different conversations produced
+// the same manifest id, so a record claiming to identify a request
+// identified only the part of it that was not the conversation. The
+// digest is over each block's role, kind and content hash, never over
+// the text, which is the same rule every other entry follows.
+//
+// This is a deliberate boundary and it is stated in the inventory as
+// one: the conversation is described in aggregate, not message by
+// message.
+func conversationEntry(msgs []provider.Message) prompt.Entry {
+	h := sha256.New()
+	blocks := 0
+	runes := 0
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			blocks++
+			body := b.Text + b.ToolResultContent + string(b.ToolInput)
+			runes += len([]rune(body))
+			fmt.Fprintf(h, "%s|%s|%s|%s\n", m.Role, b.Type, b.ToolName, hashOfText(body))
+		}
+	}
+	sum := h.Sum(nil)
+	e := prompt.RuntimeEntry(
+		"conversation", prompt.KindExternalContent, prompt.FromToolResult, prompt.TrustExternal,
+		prompt.PlaceMessage, "", fmt.Sprintf("the %d message blocks this request carries", blocks))
+	e.Hash = hex.EncodeToString(sum[:8])
+	e.Tokens = runes / 4
+	return e
+}
+
+// hashOfText is the same digest the prompt package takes of a rendered
+// body, kept here so a conversation digest is built from block hashes
+// rather than from block text.
+func hashOfText(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:8])
 }
 
 // entryForSource rebuilds the entry for a tagged message block from its
@@ -156,10 +289,20 @@ func historyEntries(msgs []provider.Message) []prompt.Entry {
 // the constructors are the definition, and this is a lookup into them.
 func entryForSource(id, text string) (prompt.Entry, bool) {
 	switch {
+	case strings.HasPrefix(id, "skill.frame."):
+		return skillFrameEntry(strings.TrimPrefix(id, "skill.frame."), text), true
 	case strings.HasPrefix(id, "skill.body."):
 		return skillBodyEntry(strings.TrimPrefix(id, "skill.body."), text), true
 	case strings.HasPrefix(id, "command."):
 		return commandEntry(strings.TrimPrefix(id, "command."), text), true
+	case id == "injected.user":
+		return injectedEntry(text), true
+	case strings.HasPrefix(id, "argument."):
+		return argumentEntry(strings.TrimPrefix(id, "argument."), text), true
+	case strings.HasPrefix(id, "file."):
+		return splicedFileEntry(strings.TrimPrefix(id, "file."), text), true
+	case strings.HasPrefix(id, "shell."):
+		return splicedShellEntry(strings.TrimPrefix(id, "shell."), text), true
 	case strings.HasPrefix(id, "reminder."):
 		return reminderEntry(strings.TrimPrefix(id, "reminder."), text), true
 	case strings.HasPrefix(id, "child.input."):
@@ -207,6 +350,109 @@ func commandEntry(name, body string) prompt.Entry {
 		prompt.PlaceMessage, body, "the expansion of the "+name+" command")
 }
 
+// messageOrigin says where an opening message came from when it is not
+// simply what the person typed.
+//
+// source names the entry the message as a whole belongs to; spans name
+// the pieces of it that came from somewhere else, with the part of the
+// text each one occupies. A command expansion needs both, because it is
+// the command's own words with a file and a shell command's output
+// spliced into the middle, and one classification over the lot was
+// exactly the promotion this exists to stop.
+type messageOrigin struct {
+	source string
+	spans  []provider.BlockSource
+}
+
+// expansionSpans turns a command's expanded segments into the text that
+// goes on the wire and the spans that describe it.
+//
+// The text is the segments joined, which is what the expansion always
+// produced; nothing about the request changes. What is new is that the
+// pieces are still identifiable afterwards.
+func expansionSpans(name string, segs []commands.Segment) (string, []provider.BlockSource) {
+	var b strings.Builder
+	var spans []provider.BlockSource
+	shell := 0
+	for _, seg := range segs {
+		from := b.Len()
+		b.WriteString(seg.Text)
+		if seg.Text == "" {
+			continue
+		}
+		switch seg.Kind {
+		case commands.SegmentArguments:
+			spans = append(spans, provider.BlockSource{ID: "argument." + name, From: from, To: b.Len()})
+		case commands.SegmentFile:
+			spans = append(spans, provider.BlockSource{ID: "file." + seg.Ref, From: from, To: b.Len()})
+		case commands.SegmentShell:
+			shell++
+			ref := seg.Ref
+			if ref == "" {
+				ref = strconv.Itoa(shell)
+			}
+			spans = append(spans, provider.BlockSource{ID: "shell." + ref, From: from, To: b.Len()})
+		}
+	}
+	return b.String(), spans
+}
+
+// skillFrameEntry describes the sentence localcode writes around an
+// invoked skill: "follow this skill's instructions". Product text, and
+// the smallest of the three authors in that one message.
+func skillFrameEntry(name, text string) prompt.Entry {
+	return prompt.RuntimeEntry(
+		"skill.frame."+name, prompt.KindRuntimeReminder, prompt.FromProduct, prompt.TrustSystem,
+		prompt.PlaceMessage, text, "localcode's framing around the "+name+" skill")
+}
+
+// injectedEntry describes something the person typed while the turn was
+// already running.
+//
+// It is their own instruction, and it arrives inside a user-role message
+// made of tool results, because two user messages in a row is a shape
+// some providers reject. So the position says "tool output" and the
+// author is the person: exactly the case the role cannot express, and
+// the reason trust is a field rather than something read off the role.
+func injectedEntry(text string) prompt.Entry {
+	return prompt.RuntimeEntry(
+		"injected.user", prompt.KindUserInstruction, prompt.FromUser, prompt.TrustUser,
+		prompt.PlaceMessage, text, "typed by the person while the turn was running")
+}
+
+// argumentEntry describes what the person typed after a command name.
+// The one part of an expansion that is unambiguously theirs.
+func argumentEntry(name, text string) prompt.Entry {
+	return prompt.RuntimeEntry(
+		"argument."+name, prompt.KindUtilityPrompt, prompt.FromUser, prompt.TrustUser,
+		prompt.PlaceMessage, text, "what the person typed after "+name)
+}
+
+// splicedFileEntry describes a file a command pasted into its own text
+// with an @path reference.
+//
+// External, and that is the finding it comes from. The person chose to
+// include the file; they did not write what is in it, and what is in it
+// can change without the command changing. A dependency's README, a
+// generated report, a file something downloaded: an expansion that
+// declared all of it as the person's instruction promoted whatever the
+// file happened to say. The instruction is the command's own text
+// saying what to do with the file; the file is the material.
+func splicedFileEntry(ref, text string) prompt.Entry {
+	return prompt.RuntimeEntry(
+		"file."+ref, prompt.KindExternalContent, prompt.FromWorkspace, prompt.TrustExternal,
+		prompt.PlaceMessage, text, "the contents of "+ref+", spliced in by a command")
+}
+
+// splicedShellEntry describes the output of a shell command a command
+// template ran. The same class as any other tool output, because that is
+// what it is.
+func splicedShellEntry(ref, text string) prompt.Entry {
+	return prompt.RuntimeEntry(
+		"shell."+ref, prompt.KindExternalContent, prompt.FromToolResult, prompt.TrustExternal,
+		prompt.PlaceMessage, text, "the output of "+ref+", spliced in by a command")
+}
+
 // childInputEntry describes the task text handed to a sub-agent, and
 // childResultEntry what it handed back.
 //
@@ -226,6 +472,27 @@ func commandEntry(name, body string) prompt.Entry {
 // nor the person's, and its authority is its own class: it instructs the
 // child, because it is the child's whole purpose, without claiming to be
 // anybody else's words. See prompt.TrustDelegated.
+// parentDelegationEntry is the same text seen from the other side: the
+// task as it sits in the parent's own history, in the arguments of the
+// tool_use block that asked for the delegation.
+//
+// Generated, not delegated. The parent model wrote it, so in the
+// parent's request it is that model's own earlier output, and a model's
+// own words must not instruct it by having been addressed to somebody
+// else. A parent that read a hostile tool result and put the influence
+// into a task would otherwise be reading it back with instruction
+// authority on every later request of the turn.
+//
+// Two constructors rather than one with a flag, so a caller has to
+// choose the side it is describing and cannot get the authority by
+// default.
+func parentDelegationEntry(agent, task string) prompt.Entry {
+	return prompt.RuntimeEntry(
+		"delegation."+agent, prompt.KindExternalContent, prompt.FromParentAgent,
+		prompt.TrustGenerated, prompt.PlaceMessage, task,
+		"the task this session's own model wrote for the "+agent+" sub-agent")
+}
+
 func childInputEntry(agent, task string) prompt.Entry {
 	return prompt.RuntimeEntry(
 		"child.input."+agent, prompt.KindAgentPrompt, prompt.FromParentAgent, prompt.TrustDelegated,
@@ -243,13 +510,17 @@ func childResultEntry(agent, result string) prompt.Entry {
 // conversation. The least trusted text a turn reads, and the one most
 // likely to contain something shaped like an instruction.
 func toolResultEntry(tool, content string, input json.RawMessage) prompt.Entry {
-	// A delegation's result is a child's answer, which is a rendering of
-	// everything that child read. It arrives through the same tool-result
-	// channel as any other tool, and the provenance is what keeps the two
-	// apart: both are external, and only one of them is a sub-agent.
-	if isDelegationTool(tool) {
-		return childResultEntry(delegatedAgent(tool, input), content)
-	}
+	// Not "which tool ran" but "who wrote these words". The two are
+	// different questions and answering the first was wrong: all three
+	// delegation tools went through here, and one of them,
+	// TaskBackground, returns a sentence localcode wrote saying the
+	// work has started. That was recorded as a report from a child
+	// which had at that moment said nothing at all. The same held for
+	// every refusal and every failure the delegation tools return.
+	//
+	// A result that carries somebody else's material declares it, with
+	// spans, and historyEntries describes those separately. Anything
+	// left here is the tool answering for itself.
 	prov := prompt.FromToolResult
 	reason := "output of the " + tool + " tool"
 	if server, ok := mcpServerOf(tool); ok {
@@ -262,8 +533,9 @@ func toolResultEntry(tool, content string, input json.RawMessage) prompt.Entry {
 }
 
 // isDelegationTool reports whether a tool name is one of the ones that
-// runs a sub-agent, so its result can be attributed to the child rather
-// than to the tool call that fetched it.
+// runs a sub-agent. It answers "which tool is this", which is the right
+// question for reading a task out of a call's arguments and the wrong
+// one for deciding who wrote a result; see toolResultEntry.
 func isDelegationTool(name string) bool {
 	switch name {
 	case "Task", "TaskBackground", "TaskCollect":
@@ -289,12 +561,12 @@ func delegatedTaskOf(tool string, input json.RawMessage) (task, agent string, ok
 	return args.Prompt, delegatedAgent(tool, input), true
 }
 
-// delegatedAgent names the sub-agent a delegation call ran, so a child's
-// input and answer are recorded under the agent that produced them
-// rather than under the tool that fetched them. Every delegation tool
-// takes the agent by name; a call whose arguments will not parse falls
-// back to the tool name, because a manifest entry with a slightly worse
-// name is better than a manifest missing the entry.
+// delegatedAgent names the sub-agent a delegation call ran, so a task
+// is recorded under the agent it was written for rather than under the
+// tool that carried it. Every delegation tool takes the agent by name;
+// a call whose arguments will not parse falls back to the tool name,
+// because a manifest entry with a slightly worse name is better than a
+// manifest missing the entry.
 func delegatedAgent(tool string, input json.RawMessage) string {
 	var args struct {
 		Agent string `json:"agent"`

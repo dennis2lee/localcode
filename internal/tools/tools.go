@@ -24,17 +24,36 @@ type Result struct {
 	// carry on: after a refusal, a model that stops has stopped for the
 	// right reason.
 	Refused bool
-	// Sources names the identities whose material this result carries,
-	// for a tool that aggregates several. TaskCollect is the only one:
-	// it returns the answers of every finished background child in one
-	// tool result, and without this the whole aggregate would be
-	// recorded as one anonymous child answer, losing which agents
-	// actually contributed to it.
+	// Sources names the material inside Content that came from
+	// somewhere other than this tool, with the span of Content each one
+	// occupies.
+	//
+	// It exists because "who wrote this result" cannot be answered from
+	// the tool's name. Two of the delegation tools return a sub-agent's
+	// own words and one returns a sentence localcode wrote saying the
+	// work has started; classifying by tool name made that
+	// acknowledgement a report from a child that had not said anything
+	// yet. A tool that carries somebody else's material says so here,
+	// and a tool that does not say so is answering for itself.
+	//
+	// Spans rather than copies, so a collection of four answers is
+	// described by four spans of one string instead of four copies of
+	// all four. That is also what makes a per-child hash cover that
+	// child's words and nothing else.
 	//
 	// Free-form identities, interpreted by whoever recorded them. The
 	// tools package does not know what a sub-agent is and does not need
 	// to.
-	Sources []string
+	Sources []ResultSource
+}
+
+// ResultSource is one contributor's material inside a Result's Content:
+// who it came from, and where in Content it is. From and To are byte
+// offsets, half-open, as a slice expression takes them.
+type ResultSource struct {
+	ID   string
+	From int
+	To   int
 }
 
 // Tool is one callable capability exposed to the model.

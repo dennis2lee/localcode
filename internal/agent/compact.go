@@ -194,8 +194,9 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 			Messages:     sendableHistory(summaryMessages),
 			MaxTokens:    defaultMaxTokens, // a long session's summary can easily overflow a smaller cap
 		})
+		finishReason := ""
 		if err == nil {
-			summary, usage, err = drainText(ctx, stream)
+			summary, usage, finishReason, err = drainText(ctx, stream)
 		}
 		// One model span per provider attempt, written after the call
 		// and carrying what came back. It used to be written before,
@@ -209,6 +210,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 			Model: profile.Model, Provider: profile.Provider,
 			InputTokens: usage.inputTokens, OutputTokens: usage.outputTokens,
 			DurationMS: time.Since(callStarted).Milliseconds(), Attempt: attempt,
+			FinishReason:   finishReason,
 			PromptManifest: am.ID, PromptAssets: am.SelectedIDs(), PromptUntrusted: am.UntrustedIDs(),
 			Detail: "compaction attempt",
 		}

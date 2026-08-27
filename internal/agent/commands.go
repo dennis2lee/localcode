@@ -114,8 +114,9 @@ func (l *Loop) routeSkillCommand(ctx context.Context, sessionID, agentName, text
 		})
 		return true, nil
 	}
-	return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillModelText(sk, args), "", "",
-		skillBodyEntry(sk.Name, sk.Body))
+	skillText, skillSpans := skillModelText(sk, args)
+	return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillText, "", "",
+		messageOrigin{source: "skill.frame." + sk.Name, spans: skillSpans})
 }
 
 func (l *Loop) routeInit(ctx context.Context, sessionID, agentName, text string) (bool, error) {
@@ -123,7 +124,7 @@ func (l *Loop) routeInit(ctx context.Context, sessionID, agentName, text string)
 		return false, nil
 	}
 	return true, l.sendWithModelText(ctx, sessionID, agentName, text, initPrompt, "", "",
-		commandEntry("init", initPrompt))
+		messageOrigin{source: "command.init"})
 }
 
 func (l *Loop) routeMemory(sessionID, text string) (bool, error) {
@@ -161,14 +162,15 @@ func (l *Loop) routeCustomCommand(ctx context.Context, sessionID, agentName, tex
 	if !ok {
 		return false, nil
 	}
-	modelText, err := commands.Expand(cmd, args, l.GetProjectDir())
+	segs, err := commands.ExpandSegments(cmd, args, l.GetProjectDir())
 	if err != nil {
 		l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
 		return true, nil
 	}
+	modelText, spans := expansionSpans(cmd.Name, segs)
 	return true, l.sendWithModelText(ctx, sessionID, agentName, text, modelText, cmd.Agent, cmd.Model,
-		commandEntry(cmd.Name, modelText))
+		messageOrigin{source: "command." + cmd.Name, spans: spans})
 }
 
 // routeSkillName recognizes "/<skill-name>" and "/<skill-name> <args>",
@@ -180,8 +182,9 @@ func (l *Loop) routeSkillName(ctx context.Context, sessionID, agentName, text st
 	if !ok {
 		return false, nil
 	}
-	return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillModelText(sk, args), "", "",
-		skillBodyEntry(sk.Name, sk.Body))
+	skillText, skillSpans := skillModelText(sk, args)
+	return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillText, "", "",
+		messageOrigin{source: "skill.frame." + sk.Name, spans: skillSpans})
 }
 
 // replyLocal records a command the user typed and the locally computed
@@ -512,12 +515,27 @@ func (l *Loop) matchSkillName(text string) (skills.Skill, string, bool) {
 // invoked: the skill's whole body, plus whatever the user typed after the
 // command name, if anything. The transcript keeps only the short
 // "/<name> ..." line the user typed.
-func skillModelText(sk skills.Skill, args string) string {
-	text := fmt.Sprintf("Follow the %q skill's instructions below to help with my request.\n\n---\n%s\n---", sk.Name, sk.Body)
+// skillModelText returns the text and the spans that say which part of
+// it is whose. Three authors in one message: localcode wrote the
+// framing, whoever installed the skill wrote the body, and the person
+// typed the arguments. Hashing the lot as one skill entry attributed
+// all three to the skill.
+func skillModelText(sk skills.Skill, args string) (string, []provider.BlockSource) {
+	head := fmt.Sprintf("Follow the %q skill's instructions below to help with my request.\n\n---\n", sk.Name)
+	var b strings.Builder
+	var spans []provider.BlockSource
+	b.WriteString(head)
+	from := b.Len()
+	b.WriteString(sk.Body)
+	spans = append(spans, provider.BlockSource{ID: "skill.body." + sk.Name, From: from, To: b.Len()})
+	b.WriteString("\n---")
 	if args != "" {
-		text += "\n\nMy request: " + args
+		b.WriteString("\n\nMy request: ")
+		from = b.Len()
+		b.WriteString(args)
+		spans = append(spans, provider.BlockSource{ID: "argument." + sk.Name, From: from, To: b.Len()})
 	}
-	return text
+	return b.String(), spans
 }
 
 // matchCustomCommand recognizes "/<name>" or "/<name> <args>" against a

@@ -73,6 +73,9 @@ const (
 	KindExternalContent Kind = "external_content"
 	// KindSkill is a packaged procedure the model may follow.
 	KindSkill Kind = "skill"
+	// KindUserInstruction is the person speaking directly: what they
+	// typed, wherever it ends up sitting in the request.
+	KindUserInstruction Kind = "user_instruction"
 )
 
 // Provenance is who wrote it. The distinction that matters most is the
@@ -161,15 +164,25 @@ const (
 	// in order to ask where an instruction came from.
 	//
 	// It is instruction-authoritative only where it belongs, which is
-	// the child's own request. It is never selected into the parent's,
-	// where the text does not appear at all.
+	// the child's own request, and it is scoped there by having two
+	// entries rather than by hoping one is read carefully. The same
+	// text is also in the parent, as the arguments of the tool_use
+	// block that requested the delegation, and there it is the parent
+	// model's own earlier output: generated, and TrustGenerated, which
+	// cannot instruct. A model's own prior words must not become an
+	// instruction to it by having been addressed to somebody else.
 	//
-	// The exposure this carries is stated rather than implied: a parent
-	// that has read a hostile tool result can put that influence into a
-	// task, and this class does not stop that. What stops it is the
-	// child's own tool gating and the permission gate, which are
-	// runtime controls; a trust label is a declaration, and declaring
-	// this one honestly is what it can do.
+	// That was the second finding of this shape. The first was auto
+	// memory, where a model's note came back as project instruction one
+	// restart later; this is the same laundering with a sub-agent in
+	// the middle instead of a restart, and a parent that has read a
+	// hostile tool result is how text gets in either way.
+	//
+	// The exposure that remains is stated rather than implied: a task
+	// influenced by a hostile tool result still instructs the child.
+	// What stops that is the child's own tool gating and the permission
+	// gate, which are runtime controls; a trust label is a declaration,
+	// and declaring this one honestly is what it can do.
 	TrustDelegated Trust = "delegated"
 	// TrustExternal is data. It may be read, quoted and reasoned about,
 	// and it may never be followed as an instruction, however it is

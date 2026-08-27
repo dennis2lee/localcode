@@ -24,11 +24,12 @@ import (
 // command's "agent"/"model" frontmatter) without changing the session's
 // standing agent.
 //
-// entries describe model-visible text this turn's first request carries
-// that the user's own typing does not account for: a skill body, a
-// command expansion. They start the turn's pending set, so the request
-// that actually sends them is the one whose manifest names them.
-func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, displayText, modelText, agentOverride, modelOverride string, entries ...prompt.Entry) error {
+// origin describes the opening message when it is not simply what the
+// person typed: which entry the message as a whole belongs to, and
+// which parts of it came from somewhere else. A command expansion is
+// the case that needs both, since it can splice a file and the output
+// of a shell command into the middle of its own text.
+func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, displayText, modelText, agentOverride, modelOverride string, origin ...messageOrigin) error {
 	resolveAgent := agentName
 	if agentOverride != "" {
 		resolveAgent = agentOverride
@@ -39,11 +40,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// It travels on the message block rather than in a slice here,
 	// because the message outlives this call and the slice does not.
 	openingSource := ""
-	for _, e := range entries {
-		if e.Placement == prompt.PlaceMessage {
-			openingSource = e.ID
-			break
-		}
+	var openingSpans []provider.BlockSource
+	if len(origin) > 0 {
+		openingSource, openingSpans = origin[0].source, origin[0].spans
 	}
 	// A sub-agent's first message is the task its parent wrote. The
 	// parent's own manifest names it too, from the tool_use block that
@@ -135,11 +134,17 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	if openingSource != "" {
 		userMsgData["source"] = openingSource
 	}
+	if len(openingSpans) > 0 {
+		userMsgData["sources"] = openingSpans
+	}
 	l.Store.Append(sessionID, events.TypeUserMessage, userMsgData)
 
 	l.appendHistory(sessionID, provider.Message{
-		Role:    provider.RoleUser,
-		Content: []provider.Block{{Type: provider.BlockText, Text: modelText, Source: openingSource}},
+		Role: provider.RoleUser,
+		Content: []provider.Block{{
+			Type: provider.BlockText, Text: modelText,
+			Source: openingSource, Sources: openingSpans,
+		}},
 	})
 
 	// Rescues come in two kinds, in order.
@@ -257,9 +262,14 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				req.System = req.System + "\n\n" + extra
 				req.SystemBlocks = append(req.SystemBlocks, provider.SystemBlock{Text: extra, Asset: "hook.pre_model"})
 				req.CachePrefix = false
-				id := "hook.pre_model"
+				// The occurrence suffix rather than a separate literal,
+				// so the id every call can produce starts with the same
+				// text a reader can find. See
+				// TestTheInventoryAndTheCodeNameTheSameEntries, which
+				// takes the emitted ids from the syntax.
+				suffix := ""
 				if i > 0 {
-					id = fmt.Sprintf("hook.pre_model#%d", i+1)
+					suffix = fmt.Sprintf("#%d", i+1)
 				}
 				// On the record as a runtime asset: hook text joins the
 				// request after assembly by nature (a hook runs per
@@ -268,7 +278,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				// inventory can pre-declare from also being the one part
 				// nobody can see.
 				hookEntries = append(hookEntries, prompt.RuntimeEntry(
-					id, prompt.KindRuntimeReminder, prompt.FromHook, prompt.TrustUser,
+					"hook.pre_model"+suffix, prompt.KindRuntimeReminder, prompt.FromHook, prompt.TrustUser,
 					prompt.PlaceSystem, extra, "injected by a pre_model hook for this request"))
 			}
 			iterManifest = iterManifest.WithRuntimeEntries(hookEntries...)
@@ -599,8 +609,23 @@ func (l *Loop) takeInjected(sessionID string) []provider.Block {
 		// that the model had not yet been told about — and if the turn
 		// ended before the next tool call, it would be answered as an
 		// ordinary next message and recorded a second time.
-		l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "injected": true})
-		out = append(out, provider.TextBlock(injectedPreface+text))
+		l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{
+			"text": text, "injected": true, "source": "injected.user",
+		})
+		// Tagged, because of where it lands. This is the person typing,
+		// which is the most instruction-authoritative thing a request
+		// carries, and it travels inside a user-role message otherwise
+		// made entirely of tool results, which is the least. The role
+		// says the same word for both; the tag is what tells them
+		// apart, and the preface is localcode's own framing rather than
+		// the person's, so only what they typed is inside the span.
+		body := injectedPreface + text
+		out = append(out, provider.Block{
+			Type: provider.BlockText, Text: body, Source: "injected.user",
+			Sources: []provider.BlockSource{{
+				ID: "injected.user", From: len(injectedPreface), To: len(body),
+			}},
+		})
 	}
 }
 
@@ -823,9 +848,9 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 			// reconstruct the exact message sent to the model after a
 			// restart. See rehydrateHistory in loop_rehydrate.go.
 			"input": string(tu.ToolInput),
-			// And which children an aggregating result carries, so the
-			// rebuilt history describes the same sources the live one
-			// did rather than one anonymous answer.
+			// And whose material the result carries, with the spans, so
+			// the rebuilt history describes the same sources the live
+			// one did rather than one anonymous answer.
 			"sources": res.Sources,
 		})
 		// The result is part of what every later request says, and it
@@ -834,11 +859,14 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		// answers, which is in the history the request carries, so the
 		// description lasts exactly as long as the text does.
 		block := provider.ToolResultBlock(tu.ToolUseID, res.Content, res.IsError)
-		// A result that aggregates several children names them, because
-		// no pairing with the tool_use block can recover which agents
-		// contributed to one lump of text.
+		// A result carrying somebody else's material says whose and
+		// where. No pairing with the tool_use block can recover that:
+		// the tool's name says which tool ran, not who wrote the words
+		// it came back with.
 		for _, src := range res.Sources {
-			block.Sources = append(block.Sources, "child.result."+src)
+			block.Sources = append(block.Sources, provider.BlockSource{
+				ID: "child.result." + src.ID, From: src.From, To: src.To,
+			})
 		}
 		results = append(results, block)
 		if res.Refused {
@@ -867,14 +895,22 @@ func firstLine(s string) string {
 // would write message.part.delta/end events into the visible transcript,
 // making an internal summarization call look like a normal assistant
 // reply).
-func drainText(ctx context.Context, stream <-chan provider.StreamEvent) (string, streamUsage, error) {
+func drainText(ctx context.Context, stream <-chan provider.StreamEvent) (string, streamUsage, string, error) {
 	var text strings.Builder
 	var usage streamUsage
+	// Kept, because a utility call ends for the same reasons a
+	// conversational one does and the difference matters most here: a
+	// summary cut off at max_tokens is a summary that lost the end of
+	// the conversation, and a trace that did not record why the call
+	// stopped could not tell that from a short answer. It was dropped
+	// on this path while the turn loop kept it, which made the one
+	// call whose truncation is silent also the one nobody could see.
+	var stop string
 	for {
 		select {
 		case ev, ok := <-stream:
 			if !ok {
-				return text.String(), usage, nil
+				return text.String(), usage, stop, nil
 			}
 			switch ev.Type {
 			case provider.EventTextDelta:
@@ -883,11 +919,15 @@ func drainText(ctx context.Context, stream <-chan provider.StreamEvent) (string,
 				usage.hasUsage = true
 				usage.inputTokens = ev.InputTokens
 				usage.outputTokens = ev.OutputTokens
+			case provider.EventMessageStop:
+				if ev.StopReason != "" {
+					stop = ev.StopReason
+				}
 			case provider.EventError:
-				return "", usage, ev.Err
+				return "", usage, stop, ev.Err
 			}
 		case <-ctx.Done():
-			return "", usage, ctx.Err()
+			return "", usage, stop, ctx.Err()
 		}
 	}
 }
