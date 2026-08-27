@@ -1,14 +1,71 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
+
+type failingBedrockClient struct{}
+
+func (failingBedrockClient) ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
+	return nil, errors.New("test request stopped")
+}
+
+func minimalBedrockRequest() ChatRequest {
+	return ChatRequest{
+		Model:     "anthropic.test",
+		MaxTokens: 32,
+		Messages:  []Message{{Role: RoleUser, Content: []Block{TextBlock("hello")}}},
+	}
+}
+
+func TestBedrockDefersAWSConfigUntilFirstRequest(t *testing.T) {
+	loads := 0
+	p := NewBedrock("us-west-2", "missing-on-this-machine")
+	p.load = func(context.Context, string, string) (bedrockClient, error) {
+		loads++
+		return nil, errors.New("load AWS config: missing profile")
+	}
+
+	if loads != 0 {
+		t.Fatalf("constructing an unused Bedrock provider loaded AWS config %d times", loads)
+	}
+	if _, err := p.Chat(context.Background(), minimalBedrockRequest()); err == nil || !strings.Contains(err.Error(), "load AWS config") {
+		t.Fatalf("first Bedrock request error = %v, want the deferred AWS config error", err)
+	}
+	if loads != 1 {
+		t.Fatalf("first request loaded AWS config %d times, want 1", loads)
+	}
+}
+
+func TestBedrockRetriesAConfigLoadThatFailed(t *testing.T) {
+	loads := 0
+	p := NewBedrock("us-west-2", "profile")
+	p.load = func(context.Context, string, string) (bedrockClient, error) {
+		loads++
+		if loads == 1 {
+			return nil, errors.New("temporary config error")
+		}
+		return failingBedrockClient{}, nil
+	}
+
+	if _, err := p.Chat(context.Background(), minimalBedrockRequest()); err == nil || err.Error() != "temporary config error" {
+		t.Fatalf("first request error = %v, want temporary config error", err)
+	}
+	if _, err := p.Chat(context.Background(), minimalBedrockRequest()); err == nil || !strings.Contains(err.Error(), "test request stopped") {
+		t.Fatalf("second request error = %v, want the fake client error", err)
+	}
+	if loads != 2 {
+		t.Fatalf("AWS config loader called %d times, want one retry after failure", loads)
+	}
+}
 
 func TestWrapCredentialErrorAddsHintForIMDSFallback(t *testing.T) {
 	original := errors.New("bedrock ConverseStream: operation error Bedrock Runtime: ConverseStream, exceeded maximum number of attempts, 3, get identity: get credentials: failed to refresh cached credentials, no EC2 IMDS role found, operation error ec2imds: GetMetadata, exceeded maximum number of attempts, 3, request send failed")

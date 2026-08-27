@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.58.1
+
+* **An unused Bedrock entry no longer makes local-only startup load AWS configuration.** Global and project config files are merged, so a Bedrock declaration can survive in one scope after the active profiles have moved to a local model. Startup previously constructed every AWS SDK client immediately and could stop at `load AWS config` even though no Bedrock request would ever be made. Bedrock setup is now lazy: the daemon records the region and profile at startup, then opens the AWS config and credential chain only on the first request through that provider. A failed load is retried on the next Bedrock request, so correcting the AWS profile does not require restarting localcode.
+
 ## v0.58.0
 
 * **Round 14: six findings, and the third appearance of one shape.** A task written for a sub-agent reaches two requests: the child's, where it is that child's assignment, and the parent's, where it sits in the arguments of the tool call that asked for it. Both were declared with the authority the child's needs, which made a model's own earlier words an instruction to itself. That is auto memory's laundering path again with a sub-agent in the middle instead of a restart, and a parent that has read a hostile tool result is how text gets in either way. Two records now, one per side, so a caller has to choose which request it is describing. And the authority is decided by whether the session has a parent rather than by the tag on the message: forking a sub-agent copies its log into a session a person drives directly, where the task that created it is a record of what was once asked rather than a standing instruction.

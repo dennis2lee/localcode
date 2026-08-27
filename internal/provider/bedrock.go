@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -18,14 +19,31 @@ import (
 // whatever the default AWS credential chain resolves (env vars, SSO cache,
 // instance role, etc.) — no credentials are handled directly here.
 type Bedrock struct {
-	client *bedrockruntime.Client
+	mu      sync.Mutex
+	client  bedrockClient
+	region  string
+	profile string
+	load    bedrockClientLoader
 }
 
-// NewBedrock builds a Bedrock client for region. profile, if non-empty,
-// selects a named AWS profile (e.g. one `localcode login bedrock` set up)
-// via the shared config/credentials files instead of the default
-// credential chain's usual resolution order.
-func NewBedrock(ctx context.Context, region, profile string) (*Bedrock, error) {
+type bedrockClient interface {
+	ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
+}
+
+type bedrockClientLoader func(context.Context, string, string) (bedrockClient, error)
+
+// NewBedrock records how to reach Bedrock without reading AWS configuration.
+// The SDK config and credential chain are opened on the first Chat call. A
+// configured but unused Bedrock provider must not prevent a local-only daemon
+// from starting, especially when global and project config files are merged.
+func NewBedrock(region, profile string) *Bedrock {
+	return &Bedrock{region: region, profile: profile, load: loadBedrockClient}
+}
+
+// loadBedrockClient selects a named AWS profile, when configured, via the
+// shared config and credential files instead of the default chain's usual
+// resolution order.
+func loadBedrockClient(ctx context.Context, region, profile string) (bedrockClient, error) {
 	opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
 	if profile != "" {
 		opts = append(opts, awsconfig.WithSharedConfigProfile(profile))
@@ -34,7 +52,24 @@ func NewBedrock(ctx context.Context, region, profile string) (*Bedrock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
-	return &Bedrock{client: bedrockruntime.NewFromConfig(cfg)}, nil
+	return bedrockruntime.NewFromConfig(cfg), nil
+}
+
+// clientFor initializes the SDK client once it is actually needed. A failed
+// load is deliberately not cached, so fixing an AWS profile while the daemon
+// is running lets the next request retry without a restart.
+func (p *Bedrock) clientFor(ctx context.Context) (bedrockClient, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.client != nil {
+		return p.client, nil
+	}
+	client, err := p.load(ctx, p.region, p.profile)
+	if err != nil {
+		return nil, err
+	}
+	p.client = client
+	return client, nil
 }
 
 // credentialHintSubstrings are fragments the AWS SDK's error text contains
@@ -265,7 +300,11 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 		})
 	}
 
-	resp, err := p.client.ConverseStream(ctx, input)
+	client, err := p.clientFor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.ConverseStream(ctx, input)
 	if err != nil {
 		return nil, wrapCredentialError(fmt.Errorf("bedrock ConverseStream: %w", err))
 	}

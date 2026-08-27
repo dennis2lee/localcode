@@ -8,7 +8,7 @@ The model calls tools itself for file reads and writes, shell execution, MCP, an
 
 | Area | What you get |
 |---|---|
-| Providers | Bedrock, Anthropic API, OpenAI-compatible. Switch with one config file. |
+| Providers | Bedrock, Anthropic API, OpenAI-compatible. Switch with one config file. Bedrock reads AWS configuration only when it is first used, so an unused entry cannot break local-only startup. |
 | Auth | `localcode login bedrock` (AWS SSO device flow, no AWS CLI needed), `localcode login anthropic` (stores an API key) |
 | Permissions | opencode style allow/deny/ask rules, plus allow once, allow for session, or always allow at the prompt. `git` runs without asking by default; a bash line is checked per command, so an allowed prefix cannot carry `&& rm -rf ~` along with it, and each command is matched both as written and unquoted so a deny rule is not escaped by spelling it `"curl"`. `skip_permissions` turns every confirmation off, and is off by default. Current status shows under the prompt; click it to toggle `skip_permissions` or add/remove rules, in the Web UI and the GUI window alike. |
 | Hooks | Claude Code style shell hooks on `pre_tool_use`, `post_tool_use`, `user_prompt_submit`, `stop`, `session_start` |

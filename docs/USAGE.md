@@ -54,7 +54,7 @@ A `-tags gui` build defaults `--gui` to on, so no flag is needed — running the
 
 It starts the daemon in-process on a private loopback port and shows the same Web UI in an OS native window (WKWebView on macOS, WebView2 on Windows). Nothing is exposed off the machine and there is no fixed port to collide with.
 
-**Startup screen.** The window opens immediately, before the daemon exists, showing the app icon and a status line naming the step in progress — reading config, opening providers, loading sessions, connecting to each MCP server by name, restoring history. Starting up takes a few seconds with several MCP servers configured, and one that is slow or dead holds up everything behind it, so the line names the server being waited on rather than a generic "loading". The screen is replaced by the app as soon as it is ready.
+**Startup screen.** The window opens immediately, before the daemon exists, showing the app icon and a status line naming the step in progress: reading config, opening providers, loading sessions, connecting to each MCP server by name, restoring history. Starting up takes a few seconds with several MCP servers configured, and one that is slow or dead holds up everything behind it, so the line names the server being waited on rather than a generic "loading". Opening providers does not read AWS configuration. Bedrock opens the AWS config and credential chain only when the first request actually uses that provider, so a stale or unused Bedrock entry cannot stop a local-only daemon. The screen is replaced by the app as soon as it is ready.
 
 If startup fails, the reason is shown on that screen and the window stays open. `localcode-gui.exe` has no console (see below), so this is the only place a startup error can be read.
 
@@ -163,7 +163,7 @@ The point is a config.json that can be committed to a repository, copied between
 
 | Field | Meaning |
 |---|---|
-| `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. |
+| `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. Bedrock AWS configuration is loaded lazily on its first request. |
 | `profiles` | A named provider and model pairing. `max_tokens`, `temperature`, `context_window` and `keep_going` are optional. |
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
 | `max_concurrent_tasks` | Caps how many **background** tasks run at once. Unset means 1, so background tasks queue rather than run together. Synchronous `Task` delegation is not counted against it, because a caller that is blocked cannot start a second one and holding a slot while waiting for a nested child would deadlock against itself. |

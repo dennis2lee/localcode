@@ -24,7 +24,7 @@ Signing in with a claude.ai Pro or Max subscription is not supported. That flow 
 
 ### 2. Set up credentials
 
-localcode uses the standard AWS credential chain with no extra configuration. `internal/provider/bedrock.go` calls `config.LoadDefaultConfig`. Any one of these is enough.
+localcode uses the standard AWS credential chain with no extra configuration. `internal/provider/bedrock.go` calls `config.LoadDefaultConfig` on the first request that actually uses a Bedrock provider. Startup does not read AWS configuration, so a local-only configuration can run on a machine with no AWS files or Claude installation even if an unused Bedrock declaration survives a global plus project config merge. Any one of these is enough when Bedrock is used.
 
 ```bash
 # Option 1: access keys

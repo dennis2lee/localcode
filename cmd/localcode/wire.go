@@ -342,11 +342,11 @@ func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]
 	for name, pc := range cfg.Providers {
 		switch pc.Type {
 		case config.ProviderBedrock:
-			b, err := provider.NewBedrock(ctx, pc.Region, pc.Profile)
-			if err != nil {
-				return nil, fmt.Errorf("init bedrock provider %q: %w", name, err)
-			}
-			out[name] = b
+			// AWS configuration is intentionally deferred until the first
+			// request through this provider. Config files are merged, so an
+			// unused Bedrock entry inherited from the other scope must not
+			// make a local-only daemon depend on ~/.aws or an AWS profile.
+			out[name] = provider.NewBedrock(pc.Region, pc.Profile)
 		case config.ProviderOpenAICompat:
 			out[name] = provider.NewOpenAICompat(pc.BaseURL, pc.APIKey)
 		case config.ProviderAnthropic:
