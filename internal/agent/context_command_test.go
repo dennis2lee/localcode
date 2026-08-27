@@ -74,20 +74,29 @@ func TestContextAllExplainsWhatWasLeftOut(t *testing.T) {
 func TestContextCommandParsing(t *testing.T) {
 	for _, tc := range []struct {
 		text string
+		id   string
 		all  bool
 		ok   bool
 	}{
-		{"/context", false, true},
-		{"  /context  ", false, true},
-		{"/context all", true, true},
-		{"/context excluded", true, true},
-		{"/contextual switching", false, false},
-		{"what does /context do", false, false},
-		{"", false, false},
+		{text: "/context", ok: true},
+		{text: "  /context  ", ok: true},
+		{text: "/context all", all: true, ok: true},
+		{text: "/context excluded", all: true, ok: true},
+		// A manifest id, as a trace line spells it.
+		{text: "/context 36ba18de13f7ad28", id: "36ba18de13f7ad28", ok: true},
+		{text: "/context 36BA18DE", id: "36ba18de", ok: true},
+		// Anything that is not hex is not an id, and must not be
+		// swallowed as one: it is an ordinary message to the model.
+		{text: "/context please explain"},
+		{text: "/context zzzz"},
+		{text: "/contextual switching"},
+		{text: "what does /context do"},
+		{text: ""},
 	} {
-		all, ok := parseContextCommand(tc.text)
-		if ok != tc.ok || all != tc.all {
-			t.Errorf("parseContextCommand(%q) = (%v, %v), want (%v, %v)", tc.text, all, ok, tc.all, tc.ok)
+		id, all, ok := parseContextCommand(tc.text)
+		if ok != tc.ok || all != tc.all || id != tc.id {
+			t.Errorf("parseContextCommand(%q) = (%q, %v, %v), want (%q, %v, %v)",
+				tc.text, id, all, ok, tc.id, tc.all, tc.ok)
 		}
 	}
 }

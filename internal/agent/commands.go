@@ -10,6 +10,8 @@ import (
 	"localcode/internal/events"
 	"localcode/internal/hooks"
 	"localcode/internal/memory"
+	"localcode/internal/prompt"
+	"localcode/internal/provider"
 	"localcode/internal/skills"
 )
 
@@ -112,14 +114,16 @@ func (l *Loop) routeSkillCommand(ctx context.Context, sessionID, agentName, text
 		})
 		return true, nil
 	}
-	return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillModelText(sk, args), "", "")
+	return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillModelText(sk, args), "", "",
+		skillBodyEntry(sk.Name, sk.Body))
 }
 
 func (l *Loop) routeInit(ctx context.Context, sessionID, agentName, text string) (bool, error) {
 	if strings.TrimSpace(text) != "/init" {
 		return false, nil
 	}
-	return true, l.sendWithModelText(ctx, sessionID, agentName, text, initPrompt, "", "")
+	return true, l.sendWithModelText(ctx, sessionID, agentName, text, initPrompt, "", "",
+		commandEntry("init", initPrompt))
 }
 
 func (l *Loop) routeMemory(sessionID, text string) (bool, error) {
@@ -163,7 +167,8 @@ func (l *Loop) routeCustomCommand(ctx context.Context, sessionID, agentName, tex
 		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
 		return true, nil
 	}
-	return true, l.sendWithModelText(ctx, sessionID, agentName, text, modelText, cmd.Agent, cmd.Model)
+	return true, l.sendWithModelText(ctx, sessionID, agentName, text, modelText, cmd.Agent, cmd.Model,
+		commandEntry(cmd.Name, modelText))
 }
 
 // routeSkillName recognizes "/<skill-name>" and "/<skill-name> <args>",
@@ -175,7 +180,8 @@ func (l *Loop) routeSkillName(ctx context.Context, sessionID, agentName, text st
 	if !ok {
 		return false, nil
 	}
-	return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillModelText(sk, args), "", "")
+	return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillModelText(sk, args), "", "",
+		skillBodyEntry(sk.Name, sk.Body))
 }
 
 // replyLocal records a command the user typed and the locally computed
@@ -400,13 +406,21 @@ func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, d
 		})
 		return nil
 	}
-	agentCfg := l.Config.Agents[agentName]
-	systemPrompt := l.systemPromptFor(sessionID)
-	if agentCfg.Prompt != "" {
-		systemPrompt = systemPrompt + "\n\n" + agentCfg.Prompt
+	// Assembled, not rebuilt by hand. This used to concatenate the
+	// session prompt and the agent's own text itself, which meant the
+	// one call that most needs to know what it is carrying was the one
+	// call that could not say: no manifest, no per-block trust, and a
+	// second definition of the prompt to keep in step with buildRun.
+	agentCfg := l.agentConfig(ctx, agentName)
+	actx := l.activationFor(ctx, sessionID, agentName, agentCfg, l.profileName(agentName), profile, 0,
+		l.Tools.NamesFor(ctx, l.toolsForTurn(ctx, agentCfg)))
+	env := prompt.Assemble(l.promptAssets(), actx)
+	carried := make([]provider.SystemBlock, 0, len(env.System))
+	for _, b := range env.System {
+		carried = append(carried, provider.SystemBlock{Text: b.Text, Asset: b.AssetID})
 	}
 
-	if err := l.compactHistory(ctx, sessionID, p, profile, systemPrompt, instructions, true); err != nil {
+	if err := l.compactHistory(ctx, sessionID, p, profile, env.SystemText(), carried, instructions, CompactManual); err != nil {
 		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": fmt.Sprintf("compaction failed: %v", err)})
 		return nil
 	}

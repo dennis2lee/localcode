@@ -3,8 +3,10 @@ package prompt
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Block is one rendered asset on its way to a provider, with the facts
@@ -64,59 +66,69 @@ func (e Envelope) SystemText() string {
 // copying that content anywhere it was not already.
 type Manifest struct {
 	// ID identifies this assembly, so a trace record and a diagnostic
-	// can refer to the same one. Derived from the content, so two
-	// identical assemblies get the same ID and a changed one does not.
-	ID string
+	// can refer to the same one. Derived from the content and from the
+	// activation facts that change what was sent, so two identical
+	// assemblies get the same ID and a changed one does not.
+	ID string `json:"id"`
+
+	// At is when this assembly was recorded, for retention and for
+	// reading a stored manifest back beside its trace line.
+	At time.Time `json:"at,omitempty"`
 
 	// Activation is the description of the call this was built for.
-	Agent         string
-	Role          Role
-	Profile       string
-	Model         string
-	Provider      string
-	Family        string
-	FallbackIndex int
-	SmartAgent    bool
-	Lifecycle     Lifecycle
+	Agent         string `json:"agent,omitempty"`
+	Role          Role   `json:"role,omitempty"`
+	Profile       string `json:"profile,omitempty"`
+	Model         string `json:"model,omitempty"`
+	Provider      string `json:"provider,omitempty"`
+	Family        string `json:"family,omitempty"`
+	FallbackIndex int    `json:"fallback_index,omitempty"`
+	// UtilityAttempt is which try of a utility operation this was. See
+	// ActivationContext.UtilityAttempt: a compaction retry is not a
+	// fallback position, and conflating them made a diagnostic say the
+	// session had moved down a chain it never touched.
+	UtilityAttempt int       `json:"utility_attempt,omitempty"`
+	SmartAgent     bool      `json:"smart_agent,omitempty"`
+	Lifecycle      Lifecycle `json:"lifecycle,omitempty"`
 
-	Selected []Entry
-	Excluded []Exclusion
+	Selected []Entry     `json:"selected,omitempty"`
+	Excluded []Exclusion `json:"excluded,omitempty"`
 
 	// Lowering records compatibility decisions an adapter made, such as
-	// folding system blocks into a message.
-	Lowering []string
+	// folding system blocks into one system string.
+	Lowering []string `json:"lowering,omitempty"`
 
 	// Warnings are assembly problems that did not stop the request:
 	// a cache class out of order, a duplicate that was dropped.
-	Warnings []string
+	Warnings []string `json:"warnings,omitempty"`
 
 	// TotalTokens is the estimate over everything selected.
-	TotalTokens int
+	TotalTokens int `json:"total_tokens,omitempty"`
 }
 
 // Entry is one asset that made it into the request.
 type Entry struct {
-	ID         string
-	Kind       Kind
-	Provenance Provenance
-	Trust      Trust
-	Placement  Placement
-	Cache      CacheClass
-	Order      int
-	Version    string
+	ID         string     `json:"id"`
+	Kind       Kind       `json:"kind,omitempty"`
+	Provenance Provenance `json:"provenance,omitempty"`
+	Trust      Trust      `json:"trust,omitempty"`
+	Placement  Placement  `json:"placement,omitempty"`
+	Cache      CacheClass `json:"cache,omitempty"`
+	Order      int        `json:"order,omitempty"`
+	Version    string     `json:"version,omitempty"`
 	// Reason is why it was included, from the asset's own Active.
-	Reason string
+	Reason string `json:"reason,omitempty"`
 	// Hash is of the rendered text; Tokens is the estimate.
-	Hash   string
-	Tokens int
+	Hash   string `json:"hash,omitempty"`
+	Tokens int    `json:"tokens,omitempty"`
 }
 
 // Exclusion is one asset that did not, and why not. This half is the
 // point: "the project's rules were not in that request" is only useful
 // with the reason attached.
 type Exclusion struct {
-	ID     string
-	Reason string
+	ID     string `json:"id"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // Assemble selects the assets that apply to actx, renders them, and
@@ -133,8 +145,8 @@ func Assemble(r *Registry, actx ActivationContext) Envelope {
 	env := Envelope{Manifest: Manifest{
 		Agent: actx.Agent, Role: actx.Role, Profile: actx.Profile,
 		Model: actx.Model, Provider: actx.Provider, Family: actx.Family,
-		FallbackIndex: actx.FallbackIndex, SmartAgent: actx.SmartAgent,
-		Lifecycle: actx.Lifecycle,
+		FallbackIndex: actx.FallbackIndex, UtilityAttempt: actx.UtilityAttempt,
+		SmartAgent: actx.SmartAgent, Lifecycle: actx.Lifecycle,
 	}}
 
 	// 1. Select. Every registered asset is asked, so the ones left out
@@ -237,13 +249,51 @@ func Assemble(r *Registry, actx ActivationContext) Envelope {
 // ID on the second attempt matches the first, the prompt was not
 // re-derived for the new model, which is a bug this makes visible.
 func manifestID(m Manifest) string {
-	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%s|%v|%s\n", m.Agent, m.Role, m.Family, m.SmartAgent, m.Lifecycle)
-	for _, e := range m.Selected {
-		fmt.Fprintf(h, "%s:%s:%s\n", e.ID, e.Placement, e.Hash)
+	// The whole record, minus the two fields that are not facts about
+	// the request: the ID itself, and when it happened to be recorded.
+	//
+	// Hashing an enumerated list of fields was the first version, and
+	// the trouble with an enumeration is that it is a second definition
+	// of what a manifest is. It said identity, placement and body hash,
+	// which left two records with the same bytes and different declared
+	// trust sharing an id, so "/context <id>" could answer with the
+	// classification the other call had. Widening the list would have
+	// fixed that case and left the next one.
+	//
+	// Hashing the record makes the invariant total instead: the stored
+	// manifest is a pure function of its id. That is what makes the
+	// disk dedup lossless rather than merely tidy, because two records
+	// under one id cannot differ, and it means a field added later is
+	// covered on the day it is added rather than the day somebody
+	// remembers this function.
+	//
+	// At is excluded deliberately. An id names an assembly, not a call:
+	// the same prompt sent on every turn of a session is one record,
+	// and when each call happened is the trace's question, answered by
+	// the line that carries this id.
+	copy := m
+	copy.ID = ""
+	copy.At = time.Time{}
+	body, err := json.Marshal(copy)
+	if err != nil {
+		// Unreachable for this struct, and a manifest with no id is
+		// simply not recorded, which is better than a panic in a
+		// diagnostic.
+		return ""
 	}
-	sum := h.Sum(nil)
+	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:8])
+}
+
+// WithLowering records an adapter compatibility decision and recomputes
+// the ID, because a lowering changes the request. Appending to Lowering
+// without this leaves the ID describing an assembly that was not what
+// went out.
+func (m Manifest) WithLowering(what string) Manifest {
+	out := m
+	out.Lowering = append(append([]string{}, m.Lowering...), what)
+	out.ID = manifestID(out)
+	return out
 }
 
 // Explain answers "why was this asset present, absent, or dropped" for

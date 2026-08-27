@@ -177,7 +177,7 @@ The point is a config.json that can be committed to a repository, copied between
 | `auto_memory_enabled` | The notes the model keeps for itself across sessions. On unless set to false. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
 | `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
-| `trace_max_total_mb` | Optional cap on the whole trace directory. When set, the oldest files go until it fits; today's file is never removed. See [What it did](#the-turn-log). |
+| `trace_max_total_mb` | Optional cap on the trace directory, and separately on the prompt-manifest directory beside it. When set, each is bounded on its own: the oldest files go until it fits, and today's file is never removed. See [What it did](#the-turn-log). |
 | `default_profile` | The profile used when an agent name resolves to nothing. |
 
 #### Profile fields
@@ -851,7 +851,7 @@ The prompt a turn sends is assembled from a declared inventory rather than conca
 * a per category total, because "the prompt is 4,000 tokens" is not actionable and "the project's rules are 3,200 of it" is,
 * whether the request carries external content, which is data and never instruction,
 * warnings, such as an unstable asset sitting ahead of a stable one and spoiling the cache prefix behind it,
-* and the rest of what fills a window: the tool definitions, the conversation so far, and the room reserved for the answer, against the window itself.
+* and the rest of what fills a window: the tool definitions, counted separately for built-in tools and for each MCP server, the conversation so far, and the room reserved for the answer, against the window itself.
 
 `/context all` also lists what was left out and why, which is the form that answers "why are my project's rules not in there".
 
@@ -859,7 +859,9 @@ Identities, sizes and reasons only: the bodies are never printed. The assets inc
 
 Token figures are estimated from character counts. About right for English, and a floor for Korean and Japanese, which run several times denser.
 
-The same assembly is recorded in the turn log as `prompt_manifest`, `prompt_assets` and `prompt_untrusted`, so the request that was actually sent can be checked after the fact. A fallback that reports the same manifest id on a different model family reused a prompt written for the model that failed, which is what the id makes visible.
+The same assembly is recorded in the turn log as `prompt_manifest`, `prompt_assets` and `prompt_untrusted`, and the full record is kept beside the trace under `~/.localcode/manifests/`, aged by the same retention. `/context <id>` reads one back: the request that actually went out, with its inclusion and exclusion reasons, hashes, warnings and any provider lowering. That is the difference between the two forms, and it is worth stating plainly: bare `/context` describes the hypothetical next turn, `/context <id>` describes a call that happened.
+
+A fallback that reports the same manifest id on a different model family reused a prompt written for the model that failed, which is what the id makes visible.
 
 ### Other local commands
 
@@ -1241,6 +1243,8 @@ jq -c 'select(.trace_id=="a1b2c3d4e5f6a7b8")' ~/.localcode/trace/localcode-2026-
 `GET /api/trace` returns the last records held in memory, for the question asked while a session is still open. `?limit=`, `?session=` and `?trace=` narrow it. Nothing is written with Smart Agent off, and the file is not created until the first record.
 
 **Retention.** Files older than 30 days are removed, so a daemon left running for months does not accumulate one file per day forever. The removal happens once the configured bounds are installed at startup, and again at each day rotation — never before the configuration is read, so a longer configured retention protects its own files from the very first prune. Two config keys adjust it: `trace_max_age_days` changes the age (values at or below zero mean the default, not "keep forever"), and `trace_max_total_mb`, when set, additionally removes the oldest files until the directory fits under it. The file being written today is never removed.
+
+Both keys bound the prompt-manifest directory too, which sits beside the trace and holds the assemblies its `prompt_manifest` ids refer to. The two are bounded separately rather than together, so a busy manifest directory cannot evict trace files or the other way round; the consequence worth knowing is that a trace line can outlive its manifest if the two fill at different rates, and `/context <id>` says so when it cannot resolve one. Each assembly is written once per day however many calls share it, since a manifest is immutable content addressed by its own id.
 
 #### Prompt cache breakpoints
 

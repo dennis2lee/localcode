@@ -14,6 +14,7 @@ import (
 	"localcode/internal/daemon"
 	mcpclient "localcode/internal/mcp"
 	"localcode/internal/memory"
+	"localcode/internal/prompt"
 	"localcode/internal/provider"
 	"localcode/internal/rules"
 	"localcode/internal/session"
@@ -104,7 +105,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	}
 
 	progress("loading skills and commands")
-	skillsSection, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e)
+	skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -149,6 +150,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 
 	loop := agent.New(store, registry, providers, cfg)
 	loop.SkillsSection = skillsSection
+	loop.MemoryPolicy = memoryPolicy
 	loop.MemorySection = memorySection
 	loop.Skills = skillList
 	loop.Commands = cmdList
@@ -166,6 +168,17 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		// daemon left running for months does not accumulate a file per
 		// day forever. See trace.SetRetention for the defaults.
 		tw.SetRetention(cfg.TraceMaxAgeDays, cfg.TraceMaxTotalMB)
+		// The manifest store sits beside the trace and is bounded by the
+		// same two settings: a manifest whose trace line has been
+		// pruned is not worth keeping, and one whose trace line
+		// survives has to be resolvable or the id in that line is
+		// decoration. It used to take the age bound only, which left
+		// the size bound applying to one of the two files a diagnostic
+		// reads together.
+		if ms, merr := prompt.OpenStore(filepath.Join(e.home, ".localcode", "manifests")); merr == nil {
+			ms.SetRetention(cfg.TraceMaxAgeDays, cfg.TraceMaxTotalMB)
+			loop.Manifests = ms
+		}
 		loop.Trace = tw
 	}
 	// Per turn, for the directory that turn is working in — see
@@ -264,10 +277,10 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker) (*tools.R
 // auto-memory section, registers the Skill tool if any skills were found,
 // and returns the combined text to append to Loop.SystemPrompt alongside
 // the loaded skills/commands/memory-dir Loop needs directly.
-func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (skillsSection, memorySection string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
+func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (skillsSection, memoryPolicy, memorySection string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
 	skillList, err = loadSkills(e)
 	if err != nil {
-		return "", "", nil, nil, "", err
+		return "", "", "", nil, nil, "", err
 	}
 	if len(skillList) > 0 {
 		registry.Register(tools.NewSkillTool(skillList))
@@ -276,7 +289,7 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (ski
 
 	cmdList, err = commands.LoadAll(filepath.Join(e.cwd, ".localcode", "commands"), filepath.Join(e.home, ".localcode", "commands"))
 	if err != nil {
-		return "", "", nil, nil, "", err
+		return "", "", "", nil, nil, "", err
 	}
 
 	// Project rules are deliberately NOT folded in here. They depend on
@@ -286,12 +299,13 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (ski
 	if cfg.MemoryEnabled() {
 		memDir = memory.Dir(e.cwd, e.home)
 		if err := os.MkdirAll(memDir, 0o755); err != nil {
-			return "", "", nil, nil, "", fmt.Errorf("create memory dir: %w", err)
+			return "", "", "", nil, nil, "", fmt.Errorf("create memory dir: %w", err)
 		}
-		memorySection = memory.SystemPromptSection(memDir, memory.LoadIndex(memDir))
+		memoryPolicy = memory.PolicySection(memDir)
+		memorySection = memory.IndexSection(memory.LoadIndex(memDir))
 	}
 
-	return skillsSection, memorySection, skillList, cmdList, memDir, nil
+	return skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, nil
 }
 
 // loadSkills scans the project-local skills dir before the global one, so a

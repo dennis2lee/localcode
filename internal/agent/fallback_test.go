@@ -664,3 +664,63 @@ func TestARetryBlockedByAHookIsNotCounted(t *testing.T) {
 		t.Error("the scheduled retry was not in the transcript at all")
 	}
 }
+
+// R12N4. The activation snapshot declared FallbackIndex, Tools and Flags
+// and nothing ever set them, so every runtime manifest claimed fallback
+// index zero and an empty tool list. The review was explicit that a test
+// constructing a synthetic context proves nothing about the wiring, so
+// this one drives a real turn through a real fallback and reads the
+// manifests the trace actually recorded.
+func TestARealFallbackRecordsItsChainPositionAndTools(t *testing.T) {
+	quickRetries(t)
+	// The primary always fails; the first fallback answers.
+	srv, _ := failingServer(t, http.StatusInternalServerError, "internal server error", 3)
+	defer srv.Close()
+
+	loop := newFallbackLoop(t, srv.URL)
+	loop.Tools.Register(tools.ReadFile{})
+	loop.Tools.Register(tools.Glob{})
+	loop.SetSmartAgentEnabled(true)
+	w := withTracing(t, loop)
+
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "hello"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	// The manifests, in the order the calls were made.
+	var manifests []string
+	for _, rec := range w.Recent(200, sid, "") {
+		if rec.Span == trace.SpanModel && rec.PromptManifest != "" {
+			manifests = append(manifests, rec.PromptManifest)
+		}
+	}
+	if len(manifests) < 2 {
+		t.Fatalf("got %d model manifests, want the primary's and the fallback's", len(manifests))
+	}
+	if manifests[0] == manifests[len(manifests)-1] {
+		t.Error("the fallback reused the primary's manifest, so the chain position is not in the assembly")
+	}
+
+	// And the activation the loop builds carries the real advertised
+	// tools and the real chain position, read from the loop rather than
+	// constructed by hand.
+	advertised := loop.Tools.NamesFor(context.Background(), nil)
+	if len(advertised) < 2 {
+		t.Fatalf("NamesFor returned %v, want the registered tools", advertised)
+	}
+	actx := loop.activationFor(context.Background(), sid, "general-purpose",
+		loop.Config.Agents["general-purpose"], "backup", loop.Config.Profiles["backup"], 1, advertised)
+	if actx.FallbackIndex != 1 {
+		t.Errorf("FallbackIndex = %d, want the chain position it was given", actx.FallbackIndex)
+	}
+	if !actx.HasTool("read_file") || !actx.HasTool("glob") {
+		t.Errorf("Tools = %v, want the advertised set", actx.Tools)
+	}
+	if len(actx.Flags) == 0 {
+		t.Error("no feature flags reached the activation snapshot")
+	}
+}

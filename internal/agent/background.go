@@ -438,6 +438,10 @@ func (t TaskCollectTool) Execute(ctx context.Context, input json.RawMessage) too
 	// answers to what it asked for.
 	var b strings.Builder
 	uncollected := 0
+	// Which children's answers this one result carries. A tool result
+	// is one block and this one aggregates several, so the identities
+	// travel beside it rather than being recoverable from the text.
+	var sources []string
 	for _, id := range ids {
 		text, err, collected := t.manager.Wait(ctx, id)
 		if !collected {
@@ -448,6 +452,7 @@ func (t TaskCollectTool) Execute(ctx context.Context, input json.RawMessage) too
 			continue
 		}
 		t.manager.dropPending(parentSessionID, id)
+		sources = append(sources, t.manager.childAgent(id)+"#"+id)
 		if err != nil {
 			fmt.Fprintf(&b, "## %s\nfailed: %v\n\n", id, err)
 			continue
@@ -461,7 +466,7 @@ func (t TaskCollectTool) Execute(ctx context.Context, input json.RawMessage) too
 	if uncollected > 0 {
 		fmt.Fprintf(&b, "## still running\n%d task(s) had not finished when this collection stopped; they are still going and can be collected again.\n", uncollected)
 	}
-	return tools.Result{Content: strings.TrimSpace(b.String())}
+	return tools.Result{Content: strings.TrimSpace(b.String()), Sources: sources}
 }
 
 // delegationSchema is the input schema both delegation tools share: which

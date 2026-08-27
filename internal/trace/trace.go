@@ -82,6 +82,15 @@ type Record struct {
 	DurationMS   int64  `json:"duration_ms,omitempty"`
 	FinishReason string `json:"finish_reason,omitempty"`
 
+	// Attempt numbers the tries a utility operation made, starting at
+	// zero. A compaction that has to shrink its budget and ask again is
+	// on its second attempt, which is not the same thing as being at
+	// position one of a fallback chain: the model has not changed, the
+	// request has. The two used to share Fallbacks' meaning through the
+	// activation context, so a third compaction retry of a session that
+	// never fell back was displayed as "fallback position 2".
+	Attempt int `json:"attempt,omitempty"`
+
 	// PromptManifest identifies the prompt assembly this call was built
 	// from, and PromptAssets lists the assets it selected. Identities
 	// and nothing else: the bodies include the project's own

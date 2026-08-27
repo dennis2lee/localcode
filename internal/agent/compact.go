@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"localcode/internal/config"
 	"localcode/internal/events"
@@ -52,7 +53,7 @@ const compactionPrompt = "Summarize our conversation so far concisely, preservin
 // rather than blocking the real turn.
 // It reports whether it actually compacted, which is what the caller
 // needs to count compactions for the turn's trace record.
-func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt string) bool {
+func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt string, carried []provider.SystemBlock) bool {
 	if !l.AutoCompactEnabled() {
 		return false
 	}
@@ -64,21 +65,40 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 	if percent < compactThresholdPercent {
 		return false
 	}
-	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, "", false) == nil
+	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic) == nil
 }
+
+// CompactTrigger names why a compaction ran. It is on the one lifecycle
+// record rather than on a second record written by the caller: an
+// automatic compaction used to produce two compact spans where a manual
+// one produced a single span, so the same event had two shapes
+// depending on what started it.
+type CompactTrigger string
+
+const (
+	CompactManual    CompactTrigger = "manual"
+	CompactAutomatic CompactTrigger = "automatic, past the context threshold"
+	CompactRescue    CompactTrigger = "recovering from a refused request"
+)
 
 // compactHistory summarizes sessionID's history via the model and, on
 // success, replaces the in-memory history with just that summary.
 // instructions overrides the default summarization prompt (used by the
 // manual "/compact <instructions>" command); empty means use
-// compactionPrompt. manual marks the resulting "compacted" event so
-// clients/logs can distinguish a user-triggered compaction from an
-// automatic one.
-func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt, instructions string, manual bool) error {
+// compactionPrompt. trigger says why this compaction is running: it
+// marks the resulting "compacted" event so clients and logs can tell a
+// user-triggered compaction from an automatic one, and it is what the
+// single lifecycle trace record reports.
+func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt string, carried []provider.SystemBlock, instructions string, trigger CompactTrigger) error {
+	manual := trigger == CompactManual
 	history := l.history(sessionID)
 	if len(history) == 0 {
 		return fmt.Errorf("no conversation history to compact")
 	}
+	// What the user actually asked for, kept apart from what is sent:
+	// the request is the instruction plus any truncation note, and the
+	// manifest has to be able to say which half was whose.
+	userInstruction := instructions
 	if instructions == "" {
 		instructions = compactionPrompt
 	}
@@ -122,19 +142,39 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 
 		// Built fresh each attempt: appending to instructions in place
 		// would stack a note per retry.
-		prompt := instructions
+		instr := instructions
 		if dropped > 0 {
-			prompt = fmt.Sprintf(
-				"%s\n\n(Note: the earliest %d messages of this conversation were too long to include here and are not shown. Summarize what you can see, and say that earlier context was dropped.)",
-				instructions, dropped)
+			instr = instructions + "\n\n" + truncationNote(dropped)
 		}
 
 		summaryMessages := make([]provider.Message, len(kept), len(kept)+1)
 		copy(summaryMessages, kept)
 		summaryMessages = append(summaryMessages, provider.Message{
 			Role:    provider.RoleUser,
-			Content: []provider.Block{provider.TextBlock(prompt)},
+			Content: []provider.Block{provider.TextBlock(instr)},
 		})
+
+		// The manifest for the request that is about to go out, built
+		// before it goes rather than after it succeeds. Assembling
+		// afterwards described a request nobody sent: it always hashed
+		// the built-in instruction, so a "/compact <instructions>" run
+		// was traced as if the default had been used and two different
+		// manual compactions shared an id; and an attempt that failed
+		// was a provider call with no manifest at all.
+		//
+		// The instruction and the dropped-message note are runtime
+		// entries because that is what they are: one is the user's text
+		// for this call, the other is computed per attempt from what
+		// fitted. Their hashes are what make two different compaction
+		// requests two different manifests.
+		am := l.compactManifest(ctx, profile, carried, userInstruction, dropped, attempt, summaryMessages)
+		am.At = time.Now()
+		// Persisted before the call and traced after it, which is not
+		// an inconsistency but the point of each half. The manifest has
+		// to be written first or a crash loses the identity of the
+		// request that caused it; the span has to be written last or it
+		// describes an intention rather than a call.
+		l.Manifests.Put(am)
 
 		// Normalized like any other request: history routinely ends with a
 		// user-role message (tool results are one), and appending the
@@ -142,15 +182,40 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		// compaction call itself failed, which is the one call that must
 		// not, since it is what rescues a session that has run out of
 		// context.
+		//
+		// SystemBlocks carries the session's system prompt as one block
+		// so the adapters that keep blocks keep this call's too, rather
+		// than the utility path being the one that always folds.
+		callStarted := time.Now()
 		stream, err := p.Chat(ctx, provider.ChatRequest{
-			Model:     profile.Model,
-			System:    systemPrompt,
-			Messages:  sendableHistory(summaryMessages),
-			MaxTokens: defaultMaxTokens, // a long session's summary can easily overflow a smaller cap
+			Model:        profile.Model,
+			System:       systemPrompt,
+			SystemBlocks: carried,
+			Messages:     sendableHistory(summaryMessages),
+			MaxTokens:    defaultMaxTokens, // a long session's summary can easily overflow a smaller cap
 		})
 		if err == nil {
 			summary, usage, err = drainText(ctx, stream)
 		}
+		// One model span per provider attempt, written after the call
+		// and carrying what came back. It used to be written before,
+		// which made every compaction attempt a record with no
+		// duration, no usage and no error: a refused attempt and a
+		// successful one were indistinguishable, and both read as
+		// instant. SpanModel is defined as the request and what came
+		// back, and this is the only place that was recording the
+		// first half alone.
+		attemptRecord := trace.Record{
+			Model: profile.Model, Provider: profile.Provider,
+			InputTokens: usage.inputTokens, OutputTokens: usage.outputTokens,
+			DurationMS: time.Since(callStarted).Milliseconds(), Attempt: attempt,
+			PromptManifest: am.ID, PromptAssets: am.SelectedIDs(), PromptUntrusted: am.UntrustedIDs(),
+			Detail: "compaction attempt",
+		}
+		if err != nil {
+			attemptRecord.Error = err.Error()
+		}
+		l.traceSpan(ctx, trace.ID(ctx), sessionID, trace.SpanModel, attemptRecord)
 		if err == nil {
 			break
 		}
@@ -168,34 +233,14 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		return fmt.Errorf("model returned an empty summary")
 	}
 
-	// The compaction call is a model call, so it carries a manifest like
-	// any other (OB-01): the record of which prompt asset drove it. Its
-	// assembly is small — the utility instruction — but the point is
-	// uniformity: every model call in a trace names the assembly it was
-	// built from, and a utility call that did not would be the one kind
-	// of call nobody could ask about.
-	cm := prompt.Assemble(l.promptAssets(), prompt.ActivationContext{
-		SmartAgent: l.smartOn(ctx),
-		Profile:    profile.Model,
-		Model:      profile.Model,
-		Family:     modelFamily(profile.Model),
-		Lifecycle:  prompt.LifecycleCompaction,
-	}).Manifest
-	// The call also carries the session's own system prompt, already
-	// folded, so the model summarizes with the same ground rules the
-	// conversation ran under. On the record as a runtime entry: a
-	// manifest that listed only the instruction would describe a smaller
-	// request than the one that went out.
-	if systemPrompt != "" {
-		cm = cm.WithRuntimeEntries(prompt.RuntimeEntry(
-			"compact.carried_system", prompt.KindBaseSystem, prompt.FromProduct, prompt.TrustSystem,
-			prompt.PlaceSystem, systemPrompt, "the session's system prompt, carried into the summarizing call"))
-	}
+	// The lifecycle notice: the history was replaced. Distinct from the
+	// per-attempt model spans above, which are the provider calls, and
+	// labelled so the two can be told apart in a trace rather than
+	// appearing as indistinguishable duplicate compact records.
 	l.traceSpan(ctx, trace.ID(ctx), sessionID, trace.SpanCompact, trace.Record{
 		Model: profile.Model, Provider: profile.Provider,
 		InputTokens: usage.inputTokens, OutputTokens: usage.outputTokens,
-		PromptManifest: cm.ID, PromptAssets: cm.SelectedIDs(),
-		Detail: "summarized in place",
+		Detail: "lifecycle: history replaced by the summary, " + string(trigger),
 	})
 
 	l.setHistory(sessionID, []provider.Message{{
@@ -214,4 +259,117 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	}
 	l.Store.Append(sessionID, events.TypeCompacted, compactedData)
 	return nil
+}
+
+// compactManifest describes one compaction attempt: the request that is
+// about to be sent, not a generic description of compaction.
+//
+// The registered utility asset supplies the identity and the default
+// text. Everything that varies per call is a runtime entry, because
+// that is exactly what it is: the user's own instruction when
+// "/compact <instructions>" was used, the dropped-message note computed
+// from what fitted this attempt, and the session's system prompt carried
+// along so the model summarizes under the same ground rules. Their
+// hashes are what make two different compaction requests two different
+// manifests, which is the property the round 12 review found missing.
+func (l *Loop) compactManifest(ctx context.Context, profile config.Profile, carried []provider.SystemBlock, userInstruction string, dropped, attempt int, sent []provider.Message) prompt.Manifest {
+	m := prompt.Assemble(l.promptAssets(), prompt.ActivationContext{
+		SmartAgent: l.smartOn(ctx),
+		Role:       prompt.RoleUtility,
+		Profile:    profile.Model,
+		Model:      profile.Model,
+		Provider:   profile.Provider,
+		Family:     modelFamily(profile.Model),
+		// The attempt number, in the field that means a retry rather
+		// than the one that means a fallback position. A compaction
+		// that shrinks its budget and asks again is still talking to
+		// the same model.
+		UtilityAttempt: attempt,
+		Lifecycle:      prompt.LifecycleCompaction,
+	}).Manifest
+
+	var runtime []prompt.Entry
+	// Two different authors, so two different entries.
+	//
+	// A "/compact <text>" override is the person's own instruction. The
+	// truncation note is the product's, computed from what fitted this
+	// attempt. They used to be one entry recorded as the user's, which
+	// meant an *automatic* compaction that had to drop messages
+	// attributed product text to the person who was not there.
+	if userInstruction != "" {
+		runtime = append(runtime, prompt.RuntimeEntry(
+			"compact.instruction", prompt.KindUtilityPrompt, prompt.FromUser, prompt.TrustUser,
+			prompt.PlaceUtilityCall, userInstruction, "the instruction the user gave this compaction"))
+	}
+	if dropped > 0 {
+		runtime = append(runtime, prompt.RuntimeEntry(
+			"compact.truncation_note", prompt.KindRuntimeReminder, prompt.FromProduct, prompt.TrustSystem,
+			prompt.PlaceUtilityCall, truncationNote(dropped),
+			fmt.Sprintf("the note that %d early messages did not fit this attempt", dropped)))
+	}
+	// The session's prompt travels block by block, each keeping the
+	// trust it was assembled with. Recording it as one product-trusted
+	// string was the R12N1 laundering path reappearing one layer down:
+	// the fold contains the auto-memory index, and a fold that claims
+	// system trust promotes it right back.
+	for _, b := range carried {
+		e := carriedBlockEntry(b)
+		runtime = append(runtime, e)
+	}
+	// And the conversation this attempt is summarizing. A compaction
+	// call sends the whole history, tool results included, so its
+	// manifest has to name them for the same reason a turn's does: it
+	// is the request with the most external content in it, and the one
+	// whose output becomes the session's new memory.
+	runtime = append(runtime, historyEntries(sendableHistory(sent))...)
+	return m.WithRuntimeEntries(runtime...)
+}
+
+// compactSystemBlocks is the fallback for a caller that has only the
+// folded string. One block with no asset id, which carriedBlockEntry
+// records as exactly that: a fold whose sources cannot be told apart,
+// and therefore not assertable as the product's own words.
+func compactSystemBlocks(systemPrompt string) []provider.SystemBlock {
+	if systemPrompt == "" {
+		return nil
+	}
+	return []provider.SystemBlock{{Text: systemPrompt}}
+}
+
+// truncationNote is what the model is told when the history did not fit
+// this attempt. One definition, used by the request and by the manifest
+// that describes it, so the two cannot drift into disagreeing about what
+// was sent.
+func truncationNote(dropped int) string {
+	return fmt.Sprintf(
+		"(Note: the earliest %d messages of this conversation were too long to include here and are not shown. Summarize what you can see, and say that earlier context was dropped.)",
+		dropped)
+}
+
+// carriedBlockEntry describes one block of the session prompt as it
+// travels into the summarizing call, keeping the trust it was assembled
+// with rather than acquiring the call's.
+//
+// The Asset field is the id the assembly gave it, which is what lets a
+// compaction manifest name the same sources the turn's manifest did. A
+// block that arrived without one (a folded string from a caller that had
+// nothing better) is recorded as exactly that, and as generated rather
+// than product-trusted: a fold whose contents are unknown cannot be
+// asserted to be the product's own words.
+func carriedBlockEntry(b provider.SystemBlock) prompt.Entry {
+	if b.Asset == "" {
+		return prompt.RuntimeEntry(
+			"compact.carried_system", prompt.KindExternalContent, prompt.FromGeneratedSummary,
+			prompt.TrustGenerated, prompt.PlaceSystem, b.Text,
+			"the session's system prompt, carried in already folded, so its sources cannot be told apart")
+	}
+	if a, ok := promptRegistry().Get(b.Asset); ok {
+		return prompt.RuntimeEntry(
+			"compact.carried."+b.Asset, a.Kind, a.Provenance, a.Trust,
+			prompt.PlaceSystem, b.Text, "carried into the summarizing call from "+b.Asset)
+	}
+	return prompt.RuntimeEntry(
+		"compact.carried."+b.Asset, prompt.KindExternalContent, prompt.FromGeneratedSummary,
+		prompt.TrustGenerated, prompt.PlaceSystem, b.Text,
+		"carried into the summarizing call from an unregistered source")
 }

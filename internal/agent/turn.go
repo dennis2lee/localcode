@@ -23,10 +23,36 @@ import (
 // modelOverride, if non-empty, apply for this turn only (a custom
 // command's "agent"/"model" frontmatter) without changing the session's
 // standing agent.
-func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, displayText, modelText, agentOverride, modelOverride string) error {
+//
+// entries describe model-visible text this turn's first request carries
+// that the user's own typing does not account for: a skill body, a
+// command expansion. They start the turn's pending set, so the request
+// that actually sends them is the one whose manifest names them.
+func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, displayText, modelText, agentOverride, modelOverride string, entries ...prompt.Entry) error {
 	resolveAgent := agentName
 	if agentOverride != "" {
 		resolveAgent = agentOverride
+	}
+
+	// The source tag for the user message this turn opens with, when it
+	// is not the user's own typing: a skill body, a command expansion.
+	// It travels on the message block rather than in a slice here,
+	// because the message outlives this call and the slice does not.
+	openingSource := ""
+	for _, e := range entries {
+		if e.Placement == prompt.PlaceMessage {
+			openingSource = e.ID
+			break
+		}
+	}
+	// A sub-agent's first message is the task its parent wrote. The
+	// parent's own manifest names it too, from the tool_use block that
+	// carries it, but the child's request is the one nobody was
+	// describing: the same text arrives here as the turn's opening
+	// message and used to be indistinguishable from something a person
+	// typed.
+	if d, ok := delegatedTaskFrom(ctx); ok && d.task == modelText && openingSource == "" {
+		openingSource = childInputEntry(d.agent, d.task).ID
 	}
 
 	// One trace id per turn, inherited rather than minted when this turn
@@ -54,7 +80,16 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// same behavior as before per-agent config existed.
 	agentCfg := l.agentConfig(ctx, resolveAgent)
 
-	run, err := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, profileName, profile, modelOverride)
+	// The tool allowlist for this turn, resolved before the prompt is
+	// assembled rather than after, so the assembly can condition on the
+	// tools the model will actually be offered. Read once here for the
+	// same reason it always was: flipping Smart Agent off mid-turn must
+	// not leave the model holding a tool_use for a tool the next
+	// request no longer advertises.
+	allowedTools := l.toolsForTurn(ctx, agentCfg)
+	advertised := l.Tools.NamesFor(ctx, allowedTools)
+
+	run, err := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, profileName, profile, modelOverride, 0, advertised)
 	if err != nil {
 		return err
 	}
@@ -73,9 +108,14 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	l.startTurnRate(sessionID)
 
 	compactions := 0
-	if l.maybeAutoCompact(ctx, sessionID, run.client, run.profile, run.system) {
+	if l.maybeAutoCompact(ctx, sessionID, run.client, run.profile, run.system, run.systemBlocks) {
 		compactions++
-		l.traceSpan(ctx, traceID, sessionID, trace.SpanCompact, trace.Record{Detail: "automatic, past the context threshold"})
+		// No compact span here. compactHistory writes the one lifecycle
+		// record when the history is actually replaced; a second one
+		// from the caller made an automatic compaction two compact
+		// records where a manual one is a single record, and the count
+		// this line existed to convey is already on the turn.end record
+		// as Compactions.
 		l.runCompactHook(ctx, sessionID, "automatic")
 	}
 
@@ -88,11 +128,18 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	if modelText != displayText {
 		userMsgData["model_text"] = modelText
 	}
+	// The source id, not the classification: rehydration looks the
+	// entry back up from it, so the event log carries one string and
+	// the constructors stay the single definition of what that string
+	// means.
+	if openingSource != "" {
+		userMsgData["source"] = openingSource
+	}
 	l.Store.Append(sessionID, events.TypeUserMessage, userMsgData)
 
 	l.appendHistory(sessionID, provider.Message{
 		Role:    provider.RoleUser,
-		Content: []provider.Block{provider.TextBlock(modelText)},
+		Content: []provider.Block{{Type: provider.BlockText, Text: modelText, Source: openingSource}},
 	})
 
 	// Rescues come in two kinds, in order.
@@ -140,13 +187,6 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// another nudge. See keepGoing.
 	madeCalls := map[string]bool{}
 
-	// The tool allowlist for this turn: the agent's own restriction, or
-	// everything minus whichever delegation tools make no sense right now.
-	// Read once here rather than per step, so flipping Smart Agent off
-	// mid-turn cannot leave the model holding a tool_use for a tool the
-	// next request no longer advertises.
-	allowedTools := l.toolsForTurn(ctx, agentCfg)
-
 	for {
 		history := l.history(sessionID)
 		messages := sendableHistory(history)
@@ -181,10 +221,22 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// injects on every call gives up system-prompt caching for that
 		// session — a trade the person who wrote the hook is making
 		// deliberately.
-		// The request this iteration actually sends, described. Usually
-		// the run's own manifest; a hook that injects context makes it a
-		// different request, and the record says so with a different id.
-		iterManifest := run.manifest
+		// The request this iteration actually sends, described.
+		//
+		// The tool definitions are part of that: a tool description
+		// steers the model exactly as a system instruction does, and an
+		// MCP server's description is written by another process. They
+		// stay native tool definitions on the wire and gain a manifest
+		// identity here, so the record covers the whole model-visible
+		// surface rather than the system block alone.
+		// Derived from the messages this request carries, not from what
+		// this invocation happened to build. A tool result stays in
+		// history and is sent again on every later request, including
+		// the next user turn and the ones after a restart; naming it
+		// only on the request that first carried it made every manifest
+		// after that one say the request contained no external content.
+		iterManifest := run.manifest.WithRuntimeEntries(
+			append(toolEntries(req.Tools), historyEntries(messages)...)...)
 		if len(l.Config.Hooks) > 0 {
 			out := hooks.RunOutcome(ctx, l.Config.Hooks, hooks.EventPreModel, map[string]any{
 				"session_id": sessionID,
@@ -219,7 +271,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					id, prompt.KindRuntimeReminder, prompt.FromHook, prompt.TrustUser,
 					prompt.PlaceSystem, extra, "injected by a pre_model hook for this request"))
 			}
-			iterManifest = run.manifest.WithRuntimeEntries(hookEntries...)
+			iterManifest = iterManifest.WithRuntimeEntries(hookEntries...)
 		}
 
 		// The hooks have allowed this request and it is going out, which
@@ -229,6 +281,13 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		if !l.commitRetry(ctx, traceID, sessionID, run, &pending, &sameTries, &retries) {
 			return ctx.Err()
 		}
+
+		// The complete record of this request, written before it goes.
+		// Everything model-visible that this iteration adds is already
+		// in it, so the manifest the trace names describes what was
+		// sent rather than what was planned.
+		iterManifest.At = time.Now()
+		l.Manifests.Put(iterManifest)
 
 		trRun := run
 		trRun.manifest = iterManifest
@@ -249,9 +308,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 						"error":     "the conversation no longer fits in this model's context window; summarizing it and retrying",
 						"recovered": true,
 					})
-					if cerr := l.compactHistory(ctx, sessionID, run.client, run.profile, run.system, "", false); cerr == nil {
+					if cerr := l.compactHistory(ctx, sessionID, run.client, run.profile, run.system, run.systemBlocks, "", CompactRescue); cerr == nil {
 						compactions++
-						l.traceSpan(ctx, traceID, sessionID, trace.SpanCompact, trace.Record{Detail: "recovering from a refused request"})
+						// Likewise no compact span: compactHistory
+						// records the replacement, and why this one
+						// happened is the rescue's own business, which
+						// the error record beside it already says.
 						l.runCompactHook(ctx, sessionID, "overflow")
 						continue
 					} else {
@@ -316,7 +378,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				return fmt.Errorf("chat request: %w", err)
 			}
 			if next, ok := l.nextFallback(chain, &chainAt, err); ok {
-				if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride); berr == nil {
+				if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 					l.reportFallback(sessionID, run, newRun, err)
 					fallbacks++
 					l.traceSpan(ctx, traceID, sessionID, trace.SpanFallback, trace.Record{
@@ -372,7 +434,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					return err
 				}
 				if next, ok := l.nextFallback(chain, &chainAt, err); ok {
-					if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride); berr == nil {
+					if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 						l.reportFallback(sessionID, run, newRun, err)
 						fallbacks++
 						l.traceSpan(ctx, traceID, sessionID, trace.SpanFallback, trace.Record{
@@ -457,10 +519,16 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				// history with two assistant messages back to back — a
 				// shape Bedrock rejects outright — and a conversation the
 				// model remembered differently from how it happened.
-				l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "auto": true})
+				l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{
+					"text": text, "auto": true, "source": "reminder.keep_going",
+				})
+				// localcode's own words, arriving in a user-role message
+				// that the user did not write. The role does not say
+				// that; the tag on the block does, and it stays with the
+				// message for as long as the message is sent.
 				l.appendHistory(sessionID, provider.Message{
 					Role:    provider.RoleUser,
-					Content: []provider.Block{provider.TextBlock(text)},
+					Content: []provider.Block{{Type: provider.BlockText, Text: text, Source: "reminder.keep_going"}},
 				})
 				continue
 			}
@@ -755,8 +823,24 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 			// reconstruct the exact message sent to the model after a
 			// restart. See rehydrateHistory in loop_rehydrate.go.
 			"input": string(tu.ToolInput),
+			// And which children an aggregating result carries, so the
+			// rebuilt history describes the same sources the live one
+			// did rather than one anonymous answer.
+			"sources": res.Sources,
 		})
-		results = append(results, provider.ToolResultBlock(tu.ToolUseID, res.Content, res.IsError))
+		// The result is part of what every later request says, and it
+		// is the least trusted text in any of them. Nothing is recorded
+		// here: the manifest derives it from the tool_use block this
+		// answers, which is in the history the request carries, so the
+		// description lasts exactly as long as the text does.
+		block := provider.ToolResultBlock(tu.ToolUseID, res.Content, res.IsError)
+		// A result that aggregates several children names them, because
+		// no pairing with the tool_use block can recover which agents
+		// contributed to one lump of text.
+		for _, src := range res.Sources {
+			block.Sources = append(block.Sources, "child.result."+src)
+		}
+		results = append(results, block)
 		if res.Refused {
 			refused = true
 		}

@@ -392,7 +392,7 @@ type modelRun struct {
 
 // buildRun derives a request from a profile. Called once for the profile a
 // turn starts on, and again for each fallback it moves to.
-func (l *Loop) buildRun(ctx context.Context, sessionID, resolveAgent string, agentCfg config.AgentConfig, profileName string, profile config.Profile, modelOverride string) (modelRun, error) {
+func (l *Loop) buildRun(ctx context.Context, sessionID, resolveAgent string, agentCfg config.AgentConfig, profileName string, profile config.Profile, modelOverride string, fallbackIndex int, advertisedTools []string) (modelRun, error) {
 	// A custom command's "model:" frontmatter pins the model for this turn
 	// and travels with the fallback, because the person asked for that
 	// model specifically and a chain is about reaching an endpoint rather
@@ -419,7 +419,7 @@ func (l *Loop) buildRun(ctx context.Context, sessionID, resolveAgent string, age
 	// assembly happens per attempt by construction: the note written for
 	// the family that just failed cannot survive into the request that
 	// goes to a different one.
-	actx := l.activationFor(ctx, sessionID, resolveAgent, agentCfg, profileName, profile)
+	actx := l.activationFor(ctx, sessionID, resolveAgent, agentCfg, profileName, profile, fallbackIndex, advertisedTools)
 	env := prompt.Assemble(l.promptAssets(), actx)
 	// The request carries both forms of the system prompt: the blocks,
 	// one per asset with the seams the assembly had, and the folded
@@ -433,10 +433,9 @@ func (l *Loop) buildRun(ctx context.Context, sessionID, resolveAgent string, age
 	for _, b := range env.System {
 		blocks = append(blocks, provider.SystemBlock{Text: b.Text, Asset: b.AssetID})
 	}
-	if len(env.System) > 1 && l.Config.Providers[profile.Provider].Type == config.ProviderOpenAICompat {
-		env.Manifest.Lowering = append(env.Manifest.Lowering,
-			fmt.Sprintf("%d system blocks folded into one system string for an openai-compatible endpoint", len(env.System)))
-	}
+	env.Manifest = l.lowerForProvider(env.Manifest, profile, len(env.System))
+	env.Manifest.At = time.Now()
+	l.Manifests.Put(env.Manifest)
 
 	return modelRun{
 		profileName:  profileName,
@@ -449,6 +448,35 @@ func (l *Loop) buildRun(ctx context.Context, sessionID, resolveAgent string, age
 	}, nil
 }
 
+// lowerForProvider records the adapter compatibility decision this
+// profile's backend actually makes, and is the one definition of it.
+//
+// One definition because there are two callers and they were once two
+// implementations. buildRun folded only for an openai-compatible
+// endpoint and recorded it through WithLowering, which recomputes the
+// manifest id; "/context" folded whenever there was more than one block,
+// wrote different words, and appended to Lowering directly, which does
+// not recompute anything. The consequence was the one thing a preview
+// must not do: it reported an id that no request would ever carry, so
+// the diagnostic answering "what will the next turn send" described an
+// assembly that did not exist.
+//
+// Blocks are folded only where the protocol has nowhere to put them. The
+// Anthropic API takes an array of system blocks and Bedrock takes a list
+// of SystemContentBlocks, so on those backends nothing is lowered and
+// nothing is recorded; an openai-compatible endpoint takes one string,
+// and that fold is what this puts on the record.
+func (l *Loop) lowerForProvider(m prompt.Manifest, profile config.Profile, systemBlocks int) prompt.Manifest {
+	if systemBlocks <= 1 || l.Config.Providers[profile.Provider].Type != config.ProviderOpenAICompat {
+		return m
+	}
+	// Through WithLowering, never by appending: a lowering changes the
+	// request, so two assemblies that differ only in it must not share
+	// an identity.
+	return m.WithLowering(
+		fmt.Sprintf("%d system blocks folded into one system string for an openai-compatible endpoint", systemBlocks))
+}
+
 // activationFor snapshots everything one request knows about itself, so
 // an asset's activation condition is a pure function of it.
 //
@@ -456,7 +484,7 @@ func (l *Loop) buildRun(ctx context.Context, sessionID, resolveAgent string, age
 // setting: a turn admitted with the bundle on keeps it for every round
 // including the ones after somebody flipped the switch, and the prompt
 // has to agree with the tools that were chosen under the same pin.
-func (l *Loop) activationFor(ctx context.Context, sessionID, resolveAgent string, agentCfg config.AgentConfig, profileName string, profile config.Profile) prompt.ActivationContext {
+func (l *Loop) activationFor(ctx context.Context, sessionID, resolveAgent string, agentCfg config.AgentConfig, profileName string, profile config.Profile, fallbackIndex int, advertisedTools []string) prompt.ActivationContext {
 	smartOn := l.smartOn(ctx)
 
 	role := prompt.RoleOrchestrator
@@ -485,19 +513,33 @@ func (l *Loop) activationFor(ctx context.Context, sessionID, resolveAgent string
 	}
 
 	return prompt.ActivationContext{
-		SmartAgent:     smartOn,
-		Agent:          resolveAgent,
-		Role:           role,
-		Profile:        profileName,
-		Model:          profile.Model,
-		Provider:       profile.Provider,
-		Family:         modelFamily(profile.Model),
+		SmartAgent: smartOn,
+		Agent:      resolveAgent,
+		Role:       role,
+		Profile:    profileName,
+		Model:      profile.Model,
+		Provider:   profile.Provider,
+		Family:     modelFamily(profile.Model),
+		// Where in the chain this attempt is. Zero on the profile the
+		// turn started on; a fallback passes its own position, so a
+		// manifest records which endpoint in the chain it describes
+		// rather than always claiming the first.
+		FallbackIndex: fallbackIndex,
+		// The tools actually advertised for this call, resolved before
+		// assembly rather than after it, so an asset can condition on
+		// what the model can really call.
+		Tools:          advertisedTools,
 		Workspace:      dir,
 		WorkspaceClass: wsClass,
 		Lifecycle:      prompt.LifecycleTurn,
+		Flags: map[string]bool{
+			"auto_compact":     l.AutoCompactEnabled(),
+			"skip_permissions": l.Config.PermissionsSkipped(),
+		},
 		Values: map[string]string{
 			valBaseSystem:   l.SystemPrompt,
 			valSkillsIndex:  l.SkillsSection,
+			valMemoryPolicy: l.MemoryPolicy,
 			valMemoryIndex:  l.MemorySection,
 			valProjectRules: rules,
 			valAgentPrompt:  agentCfg.Prompt,

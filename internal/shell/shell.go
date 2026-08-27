@@ -182,15 +182,48 @@ func storeStub(goos, command string, lookPath func(string) (string, error)) (str
 			continue
 		}
 		if strings.Contains(strings.ToLower(path), `\microsoft\windowsapps\`) {
-			return fields[0] + " is not installed on this machine: it resolves to a Microsoft Store " +
-				"app-execution-alias stub, which opens the Store instead of running Python, and a Store " +
-				"blocked by policy makes every such call fail with no output. Do not retry python; use " +
-				"node, awk, or another available tool for this task. To fix permanently: install real " +
-				"Python, or disable the aliases under Settings > Apps > Advanced app settings > App " +
-				"execution aliases.", true
+			return stubMessage(fields[0], lookPath), true
 		}
 	}
 	return "", false
+}
+
+// pythonWingetID is the winget package to install. Versioned because
+// winget publishes Python per minor version: there is no floating
+// "latest 3.x" id, so this is one line to bump per release rather than
+// something that can be derived at runtime.
+const pythonWingetID = "Python.Python.3.14"
+
+// stubMessage is what a python command gets instead of running.
+//
+// It is an instruction rather than an apology. The failure it replaces
+// taught the model nothing, so it retried python in three more
+// spellings; this tells it exactly what to do, in the order that works:
+// install once, then use it.
+//
+// The install goes through the ordinary bash tool, which means it goes
+// through the ordinary permission gate. That is deliberate. localcode
+// could shell out to winget itself the moment it saw the stub, and it
+// would be installing software on someone's machine without the
+// confirmation every other command needs. Handing the command back
+// keeps one permission model instead of two.
+func stubMessage(invoked string, lookPath func(string) (string, error)) string {
+	msg := invoked + " is not installed: it resolves to a Microsoft Store app-execution-alias " +
+		"stub, which opens the Store rather than running Python. Do not retry python in another " +
+		"spelling; every spelling hits the same stub."
+	if _, err := lookPath("winget"); err != nil {
+		return msg + " winget is not available here either, so this cannot be fixed from a command: " +
+			"install Python through whatever software channel this machine uses, or disable the " +
+			"aliases under Settings > Apps > Advanced app settings > App execution aliases. For " +
+			"now, use node, awk, or another available tool."
+	}
+	return msg + " Install it with:\n\n    winget install --id " + pythonWingetID +
+		" -e --source winget --scope user --accept-package-agreements --accept-source-agreements\n\n" +
+		"If winget reports that id is not available, run `winget search Python.Python.3` and install " +
+		"the newest one listed. The install does not reach a shell that is already running, so call " +
+		"python in a later command rather than chaining it onto the install with &&; if it is still " +
+		"not found, `py -3` uses the launcher the installer adds. Prefer node or awk instead if this " +
+		"task does not actually need Python."
 }
 
 // splitSegments breaks a command line at the operators that start a new

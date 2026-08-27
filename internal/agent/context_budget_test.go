@@ -188,7 +188,7 @@ func TestCompactWorksOnAHistoryThatNoLongerFits(t *testing.T) {
 		})
 	}
 
-	if err := loop.compactHistory(context.Background(), sid, loop.Providers["local"], profile, "", "", true); err != nil {
+	if err := loop.compactHistory(context.Background(), sid, loop.Providers["local"], profile, "", compactSystemBlocks(""), "", CompactManual); err != nil {
 		t.Fatalf("compaction failed on an over-long history: %v", err)
 	}
 

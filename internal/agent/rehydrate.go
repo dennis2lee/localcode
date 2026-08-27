@@ -184,7 +184,13 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			if text == "" {
 				text = dataString(ev.Data, "text")
 			}
-			out = append(out, provider.Message{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(text)}})
+			// The source tag comes back with the message. Without it a
+			// restarted daemon would send a skill body, a command
+			// expansion or a carry-on notice as if the person had typed
+			// it, and the manifest would say so.
+			out = append(out, provider.Message{Role: provider.RoleUser, Content: []provider.Block{
+				{Type: provider.BlockText, Text: text, Source: dataString(ev.Data, "source")},
+			}})
 
 		case events.TypeToolStart:
 			id := dataString(ev.Data, "tool_use_id")
@@ -213,7 +219,15 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			}
 			toolInputs[id] = input
 			isError, _ := ev.Data["is_error"].(bool)
-			toolResults[id] = provider.ToolResultBlock(id, dataString(ev.Data, "content"), isError)
+			block := provider.ToolResultBlock(id, dataString(ev.Data, "content"), isError)
+			// The children an aggregating result carried. Restored so a
+			// rebuilt history describes the same sources the live one
+			// did; without it the manifest after a restart would name
+			// one anonymous child answer where there were four.
+			for _, src := range dataStrings(ev.Data, "sources") {
+				block.Sources = append(block.Sources, "child.result."+src)
+			}
+			toolResults[id] = block
 			toolsDone = append(toolsDone, id)
 			if len(toolsDone) == len(pendingToolOrder) {
 				flush()
@@ -315,4 +329,23 @@ func dataFloat(data map[string]any, key string) float64 {
 	default:
 		return 0
 	}
+}
+
+// dataStrings reads a list-of-strings field out of an event's data,
+// which arrives as []any after a round trip through JSON.
+func dataStrings(data map[string]any, key string) []string {
+	raw, ok := data[key].([]any)
+	if !ok {
+		if already, ok := data[key].([]string); ok {
+			return already
+		}
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }

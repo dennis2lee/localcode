@@ -36,6 +36,21 @@ type Block struct {
 
 	ToolResultContent string `json:"tool_result_content,omitempty"` // BlockToolResult
 	IsError           bool   `json:"is_error,omitempty"`            // BlockToolResult
+
+	// Source is the prompt-entry ID for a block whose author the message
+	// role does not express: a skill body or a command expansion sent as
+	// the user's turn, a runtime notice localcode wrote into a user-role
+	// message. Wire formats do not carry it, exactly as SystemBlock.Asset
+	// is not carried; it is how the assembly manifest can name every
+	// source in the request rather than only the ones created during the
+	// call that happens to be running.
+	//
+	// Tool results need no Source: their author is derivable from the
+	// tool_use block they answer, which is in the same history. The one
+	// exception is a result that aggregates several sources, which
+	// Sources names, because no pairing can recover them.
+	Source  string   `json:"source,omitempty"`
+	Sources []string `json:"sources,omitempty"`
 }
 
 type BlockType string

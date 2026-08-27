@@ -47,6 +47,20 @@ type ActivationContext struct {
 	// the model that caught the overflow reads this.
 	FallbackIndex int
 
+	// UtilityAttempt numbers the tries one utility operation has made,
+	// starting at zero. A compaction whose request did not fit shrinks
+	// its budget and asks the same model again, which is a different
+	// event from moving to the next endpoint in a fallback chain.
+	//
+	// Its own field because it was once FallbackIndex, and a diagnostic
+	// reading that field cannot tell a retry from a fallback: a third
+	// compaction attempt in a session that never fell back rendered as
+	// "fallback position 2". It is part of the manifest identity for
+	// the same reason the chain position is: two attempts of one
+	// compaction are two different requests, and in the degenerate case
+	// where nothing else about them differs, this is what says so.
+	UtilityAttempt int
+
 	// Tools are the names actually advertised to the model for this
 	// call. A tool description asset whose tool is not here does not
 	// belong in the request: the model would be told how to use
@@ -277,6 +291,13 @@ func (r *Registry) Validate() []string {
 			if a.Trust != TrustExternal {
 				problems = append(problems, a.ID+": arrives from outside but is not TrustExternal")
 			}
+		}
+		// Text a model wrote cannot be an instruction, whatever the
+		// asset's author believed. The laundering path is one restart
+		// long: untrusted content influences what gets saved, and the
+		// save is read back as a system block.
+		if a.Provenance == FromGeneratedSummary && a.Trust.Instruction() {
+			problems = append(problems, a.ID+": is model-generated but claims instruction authority")
 		}
 	}
 	sort.Strings(problems)

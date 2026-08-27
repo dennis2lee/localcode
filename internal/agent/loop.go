@@ -186,7 +186,18 @@ type Loop struct {
 	// is text the model wrote for itself, and an inventory that lists
 	// them as "the base prompt" cannot answer questions about either.
 	SkillsSection string
+	// MemoryPolicy is the product's own description of the auto-memory
+	// convention; MemorySection is the model's own notes read back.
+	// Separate fields because they are separate trust classes: the
+	// policy instructs, and a note a previous turn wrote does not.
+	MemoryPolicy  string
 	MemorySection string
+
+	// Manifests is where assembly manifests are kept so a trace line's
+	// manifest id can still be resolved after the call: identities,
+	// hashes, reasons, exclusions, warnings and lowering, never bodies.
+	// Nil is safe and simply records nothing.
+	Manifests *prompt.Store
 
 	// promptReg is the declared prompt surface (see prompt_assets.go),
 	// built on first use and immutable after. Shared across turns on

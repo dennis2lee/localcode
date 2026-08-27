@@ -102,6 +102,12 @@ const (
 	FromToolResult Provenance = "tool_result"
 	// FromChildResult is what a sub-agent handed back.
 	FromChildResult Provenance = "child_result"
+	// FromParentAgent is text an orchestrating model wrote as the task
+	// for a sub-agent. Neither the product's nor the person's: the
+	// person asked for an outcome and the parent model decided what to
+	// say to get it, and recording it as either of the other two would
+	// name an author who did not write it.
+	FromParentAgent Provenance = "parent_agent"
 	// FromGeneratedSummary is text a model wrote about earlier text,
 	// which is worth distinguishing because a summary of untrusted
 	// content is still untrusted.
@@ -131,6 +137,40 @@ const (
 	// controls the repository, which is usually but not always the
 	// person running localcode. Instruction, but attributable.
 	TrustProject Trust = "project"
+	// TrustGenerated is text a model wrote: an auto-memory note, a
+	// summary, anything a previous turn produced and a later turn reads
+	// back. It may be recalled and reasoned about and it may not be
+	// followed as an instruction.
+	//
+	// The reason is the laundering path, and it is short: a tool result,
+	// a fetched page or a hostile repository can influence what the
+	// model chooses to save, and the next process start loads that text
+	// into a system block. If generated text could instruct, that path
+	// turns any untrusted content into a standing instruction with one
+	// restart in between. Distinct from TrustExternal because the
+	// provenance genuinely differs, and identical to it in the one
+	// respect that matters.
+	TrustGenerated Trust = "generated"
+	// TrustDelegated is the task a parent agent handed to a sub-agent.
+	//
+	// It instructs, and it has to: it is the entire reason the child
+	// context exists, and a child that treated its own task as data
+	// would do nothing. What it must not do is claim to be the person's
+	// words or the product's, because it is neither, and because the
+	// difference is exactly what a reader of a child's transcript needs
+	// in order to ask where an instruction came from.
+	//
+	// It is instruction-authoritative only where it belongs, which is
+	// the child's own request. It is never selected into the parent's,
+	// where the text does not appear at all.
+	//
+	// The exposure this carries is stated rather than implied: a parent
+	// that has read a hostile tool result can put that influence into a
+	// task, and this class does not stop that. What stops it is the
+	// child's own tool gating and the permission gate, which are
+	// runtime controls; a trust label is a declaration, and declaring
+	// this one honestly is what it can do.
+	TrustDelegated Trust = "delegated"
 	// TrustExternal is data. It may be read, quoted and reasoned about,
 	// and it may never be followed as an instruction, however it is
 	// phrased and whatever it claims to be.
@@ -138,9 +178,26 @@ const (
 )
 
 // Instruction reports whether content at this trust class may be followed
-// as an instruction at all. External content may not, which is the whole
-// of the distinction the class exists to draw.
-func (t Trust) Instruction() bool { return t != TrustExternal }
+// as an instruction at all.
+//
+// Four classes may: the product's own text, the person's, the
+// workspace's, and a task an orchestrator handed to the sub-agent that
+// is running. Everything else may not, and that includes a class this
+// function has never heard of.
+//
+// Failing closed on the unknown is the point. The first version of this
+// asked "is it external?" and returned true for everything else, so
+// TrustGenerated was instruction-authoritative the moment it was
+// declared and before anyone thought about it. An allowlist cannot make
+// that mistake: a class added later is data until someone comes here and
+// decides otherwise, which is the decision that should be deliberate.
+func (t Trust) Instruction() bool {
+	switch t {
+	case TrustSystem, TrustUser, TrustProject, TrustDelegated:
+		return true
+	}
+	return false
+}
 
 // Placement is where an asset belongs in the request. It is a field
 // because the old design's answer was always "the system string", and

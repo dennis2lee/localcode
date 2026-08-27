@@ -39,8 +39,12 @@ const (
 	AssetModelQuirk = "model.quirk"
 	// AssetSkillsIndex lists the installed skills, loaded at startup.
 	AssetSkillsIndex = "skills.index"
+	// AssetMemoryPolicy is the product's description of the auto-memory
+	// convention: where notes live and what belongs in them.
+	AssetMemoryPolicy = "memory.policy"
 	// AssetMemoryIndex is the model's own cross-session notes: text the
-	// model wrote for itself, reloaded each start.
+	// model wrote for itself, reloaded each start. Generated content,
+	// never instruction.
 	AssetMemoryIndex = "memory.index"
 	// AssetCompactPrompt is the summarizing call's instruction. A
 	// utility asset: it belongs to a different call than the
@@ -61,6 +65,7 @@ const (
 	valOrchestrator = "orchestration"
 	valModelQuirk   = "model_quirk"
 	valSkillsIndex  = "skills_index"
+	valMemoryPolicy = "memory_policy"
 	valMemoryIndex  = "memory_index"
 )
 
@@ -119,20 +124,43 @@ func promptRegistry() *prompt.Registry {
 		},
 		Render: func(a prompt.ActivationContext) string { return a.Value(valSkillsIndex) },
 	})
+	// The auto-memory convention, and the notes themselves, are two
+	// assets because they are two trust classes. They were one string
+	// once, and the consequence was that text the model wrote in an
+	// earlier session arrived in a system block declared as project
+	// instruction: a laundering path one restart long, since a tool
+	// result or a hostile repository can influence what gets saved.
+	r.Add(prompt.Asset{
+		ID:         AssetMemoryPolicy,
+		Kind:       prompt.KindModeInstruction,
+		Provenance: prompt.FromProduct,
+		Trust:      prompt.TrustSystem,
+		Placement:  prompt.PlaceSystem,
+		Cache:      prompt.CacheDurableReload,
+		Order:      15,
+		Version:    "1",
+		Active: func(a prompt.ActivationContext) (bool, string) {
+			if a.Value(valMemoryPolicy) == "" {
+				return false, "auto memory is off"
+			}
+			return true, "how to keep notes across sessions"
+		},
+		Render: func(a prompt.ActivationContext) string { return a.Value(valMemoryPolicy) },
+	})
 	r.Add(prompt.Asset{
 		ID:         AssetMemoryIndex,
-		Kind:       prompt.KindProjectInstruction,
+		Kind:       prompt.KindExternalContent,
 		Provenance: prompt.FromGeneratedSummary,
-		Trust:      prompt.TrustProject,
+		Trust:      prompt.TrustGenerated,
 		Placement:  prompt.PlaceSystem,
 		Cache:      prompt.CacheDurableReload,
 		Order:      16,
-		Version:    "1",
+		Version:    "2",
 		Active: func(a prompt.ActivationContext) (bool, string) {
 			if a.Value(valMemoryIndex) == "" {
 				return false, "auto memory is off or this project has none"
 			}
-			return true, "the project's auto-memory index, written by the model in earlier sessions"
+			return true, "notes the model wrote in earlier sessions, recalled as a record"
 		},
 		Render: func(a prompt.ActivationContext) string { return a.Value(valMemoryIndex) },
 	})

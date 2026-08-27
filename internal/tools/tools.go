@@ -24,6 +24,17 @@ type Result struct {
 	// carry on: after a refusal, a model that stops has stopped for the
 	// right reason.
 	Refused bool
+	// Sources names the identities whose material this result carries,
+	// for a tool that aggregates several. TaskCollect is the only one:
+	// it returns the answers of every finished background child in one
+	// tool result, and without this the whole aggregate would be
+	// recorded as one anonymous child answer, losing which agents
+	// actually contributed to it.
+	//
+	// Free-form identities, interpreted by whoever recorded them. The
+	// tools package does not know what a sub-agent is and does not need
+	// to.
+	Sources []string
 }
 
 // Tool is one callable capability exposed to the model.
@@ -141,6 +152,22 @@ func (r *Registry) Specs(ctx context.Context) []provider.Tool {
 // referencing a typo'd tool name just gets fewer tools, not a crash.
 // ctx is the turn's, so a Contextual tool renders the same schema for
 // every round of one turn.
+// NamesFor is the names SpecsFor would advertise, in the same order.
+//
+// It exists so the prompt assembly can be told which tools the model
+// will actually be offered without building the schemas twice. A nil
+// allowlist means everything, which is why this cannot be answered by
+// looking at the allowlist alone: nil reads as zero tools, and the
+// request has all of them.
+func (r *Registry) NamesFor(ctx context.Context, allowed []string) []string {
+	specs := r.SpecsFor(ctx, allowed)
+	out := make([]string, len(specs))
+	for i, s := range specs {
+		out[i] = s.Name
+	}
+	return out
+}
+
 func (r *Registry) SpecsFor(ctx context.Context, allowed []string) []provider.Tool {
 	allowSet := toSet(allowed)
 	out := make([]provider.Tool, 0, len(r.order))

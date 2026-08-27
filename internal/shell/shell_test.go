@@ -113,8 +113,8 @@ func TestStoreStubIsDetectedBeforeLaunch(t *testing.T) {
 
 	if msg, is := storeStub("windows", `python3 -c "print(1)"`, stub); !is {
 		t.Error("the python3 alias stub was not detected")
-	} else if !strings.Contains(msg, "node, awk") || !strings.Contains(msg, "App") {
-		t.Errorf("the message does not say what to do instead: %q", msg)
+	} else if !strings.Contains(msg, "winget install") || !strings.Contains(msg, pythonWingetID) {
+		t.Errorf("the message does not name the install command: %q", msg)
 	}
 	// A real installation is not a stub.
 	if _, is := storeStub("windows", `python3 -c "print(1)"`, real); is {
@@ -138,5 +138,50 @@ func TestStoreStubIsDetectedBeforeLaunch(t *testing.T) {
 		return "", nil
 	}); is {
 		t.Error("node was called a stub")
+	}
+}
+
+// The message is an instruction, and which instruction depends on
+// whether winget is actually there. Recommending a command that does
+// not exist is how the original failure got its second life.
+func TestStubMessageDependsOnWingetBeingAvailable(t *testing.T) {
+	withWinget := func(name string) (string, error) {
+		if name == "winget" {
+			return `C:\Windows\System32\winget.exe`, nil
+		}
+		return `C:\Users\u\AppData\Local\Microsoft\WindowsApps\` + name + `.exe`, nil
+	}
+	withoutWinget := func(name string) (string, error) {
+		if name == "winget" {
+			return "", errors.New("not found")
+		}
+		return `C:\Users\u\AppData\Local\Microsoft\WindowsApps\` + name + `.exe`, nil
+	}
+
+	msg, is := storeStub("windows", "python3 x.py", withWinget)
+	if !is {
+		t.Fatal("the stub was not detected")
+	}
+	for _, want := range []string{"winget install", pythonWingetID, "winget search", "py -3"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("with winget present, the message is missing %q:\n%s", want, msg)
+		}
+	}
+	// The PATH caveat matters: the install cannot reach a shell that is
+	// already running, so chaining it onto the same command fails and
+	// looks like the install failed.
+	if !strings.Contains(msg, "already running") {
+		t.Errorf("the message does not warn that the install misses the current shell:\n%s", msg)
+	}
+
+	msg, is = storeStub("windows", "python3 x.py", withoutWinget)
+	if !is {
+		t.Fatal("the stub was not detected")
+	}
+	if strings.Contains(msg, "winget install") {
+		t.Errorf("a machine without winget was told to run winget:\n%s", msg)
+	}
+	if !strings.Contains(msg, "App execution aliases") || !strings.Contains(msg, "node, awk") {
+		t.Errorf("without winget, the message does not give a workable path:\n%s", msg)
 	}
 }

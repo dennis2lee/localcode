@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -147,7 +149,7 @@ func (tm *TaskManager) spawn(launchCtx context.Context, parentSessionID, agentNa
 		return "", fmt.Errorf("append task.spawned: %w", err)
 	}
 	tm.loop.traceSpan(childCtx, traceID, parentSessionID, trace.SpanDelegate, trace.Record{
-		Agent: agentName, Detail: "background -> " + taskID,
+		Agent: agentName, Detail: "background -> " + taskID + ", " + describeTask(prompt),
 	})
 
 	ctx, cancel := context.WithCancel(childCtx)
@@ -241,7 +243,7 @@ func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentNa
 	})
 
 	stopMirror := tm.mirrorProgress(taskID, parentSessionID)
-	err := tm.loop.SendMessage(ctx, taskID, agentName, prompt)
+	err := tm.loop.SendMessage(withDelegatedTask(ctx, agentName, prompt), taskID, agentName, prompt)
 	stopMirror()
 
 	// Recorded before the status event goes out, so anything woken by that
@@ -384,8 +386,14 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 		tm.loop.lifecycle.admitted(parentSessionID)
 		return "", fmt.Errorf("append task.spawned: %w", err)
 	}
+	// The parent's record of what it delegated. On the delegate span
+	// rather than in the parent's prompt manifest: the task text is not
+	// in the parent's next request, and a manifest entry claiming it was
+	// would describe a request nobody sent. The child's own manifest is
+	// where the text is named, because the child's request is where the
+	// text is.
 	tm.loop.traceSpan(ctx, trace.ID(ctx), parentSessionID, trace.SpanDelegate, trace.Record{
-		Agent: agentName, Detail: "synchronous -> " + taskID,
+		Agent: agentName, Detail: "synchronous -> " + taskID + ", " + describeTask(prompt),
 	})
 
 	// Registered like a background task, even though this one runs on the
@@ -435,7 +443,9 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 
 	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "running"})
 
-	err := tm.loop.SendMessage(ctx, taskID, agentName, prompt)
+	// The task travels with the child's own turn, so the request that
+	// actually contains it is the one whose manifest names it.
+	err := tm.loop.SendMessage(withDelegatedTask(ctx, agentName, prompt), taskID, agentName, prompt)
 	if err != nil {
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
 			"task_id": taskID, "status": "failed", "error": err.Error(),
@@ -498,4 +508,27 @@ type SessionSummary struct {
 	ID        string    `json:"id"`
 	Agent     string    `json:"agent"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// describeTask says what a delegation handed over without writing the
+// text into a trace file.
+//
+// Identity and size, the same shape a manifest entry carries and for the
+// same reason: a task is written by a model that has been reading tool
+// output, and a turn log is not where that belongs. The hash is what
+// makes "the same task, twice" answerable, and the size is what makes a
+// runaway one visible.
+func describeTask(task string) string {
+	sum := sha256.Sum256([]byte(task))
+	return fmt.Sprintf("task %s, %d chars", hex.EncodeToString(sum[:4]), len([]rune(task)))
+}
+
+// childAgent names the agent a task ran as, for a record that has only
+// the task id. Falls back to the id itself, because a record naming the
+// task is still better than one naming nothing.
+func (tm *TaskManager) childAgent(taskID string) string {
+	if agent := tm.loop.sessionAgent(taskID); agent != "" {
+		return agent
+	}
+	return taskID
 }
