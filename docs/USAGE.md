@@ -853,7 +853,7 @@ The prompt a turn sends is assembled from a declared inventory rather than conca
 * warnings, such as an unstable asset sitting ahead of a stable one and spoiling the cache prefix behind it,
 * and the rest of what fills a window: the tool definitions, counted separately for built-in tools and for each MCP server, the conversation so far, and the room reserved for the answer, against the window itself.
 
-`/context all` also lists what was left out and why, which is the form that answers "why are my project's rules not in there".
+`/context all` also lists what was left out and why, which is the form that answers "why are my project's rules not in there". It is also the form that lists the conversation's own sources one by one: a request carries an entry for every tool result it is still sending, and past a dozen the short form folds them into a count rather than printing a transcript index.
 
 Identities, sizes and reasons only: the bodies are never printed. The assets include the workspace's own instructions and anything a hook injected, and the transcript is a durable log.
 

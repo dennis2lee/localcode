@@ -214,9 +214,26 @@ func renderManifest(m prompt.Manifest, all bool, heading string) string {
 		byKind[e.Kind] += e.Tokens
 	}
 	fmt.Fprintf(&b, "\nIncluded, about %d tokens in %d assets:\n", m.TotalTokens, len(m.Selected))
+	// The conversation's own sources are listed in full only when they
+	// are few enough to read. A long session carries one entry per tool
+	// result it is still sending, which is the point of describing them
+	// at all, and printing four hundred rows would bury the eleven that
+	// answer "what is this request made of". The full list is behind
+	// "/context all", where somebody has asked for it.
+	shown, folded, foldedTokens := 0, 0, 0
 	for _, e := range m.Selected {
+		if !all && e.Placement == prompt.PlaceMessage && conversationEntries(m) > maxListedConversationEntries {
+			folded++
+			foldedTokens += e.Tokens
+			continue
+		}
+		shown++
 		fmt.Fprintf(&b, "  %-24s %-20s %-9s ~%d tokens · %s\n",
 			e.ID, e.Kind, e.Trust, e.Tokens, e.Reason)
+	}
+	if folded > 0 {
+		fmt.Fprintf(&b, "  %-24s %-20s %-9s ~%d tokens · \"/context all\" lists them\n",
+			fmt.Sprintf("(%d conversation sources)", folded), "message", "mixed", foldedTokens)
 	}
 	if len(byKind) > 1 {
 		kinds := make([]string, 0, len(byKind))
@@ -253,6 +270,23 @@ func renderManifest(m prompt.Manifest, all bool, heading string) string {
 		fmt.Fprintf(&b, "\n%d assets were not included. \"/context all\" says which, and why.\n", len(m.Excluded))
 	}
 	return b.String()
+}
+
+// maxListedConversationEntries is how many message-placed sources are
+// printed one per line before the short form folds them into a count. A
+// turn or two of tool use stays readable; a long session does not turn
+// the report into a transcript index.
+const maxListedConversationEntries = 12
+
+// conversationEntries counts the message-placed sources on a manifest.
+func conversationEntries(m prompt.Manifest) int {
+	n := 0
+	for _, e := range m.Selected {
+		if e.Placement == prompt.PlaceMessage {
+			n++
+		}
+	}
+	return n
 }
 
 func lifecycleOr(l prompt.Lifecycle) string {
