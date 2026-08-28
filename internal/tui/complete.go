@@ -35,20 +35,52 @@ type completionState struct {
 }
 
 // completionCandidates is everything "/" can be completed to: the
-// skills and the custom commands.
+// skills, the custom commands, the commands the daemon answers, and the
+// ones this client answers itself.
 //
-// Both, because both are invoked the same way and someone typing "/re"
-// is not thinking about which of the two lists "review" is in. Built-in
-// commands are deliberately absent: there are twenty of them, they are
-// in /help, and cycling through /compact on the way to a skill is a
-// worse experience than typing the four characters.
+// All four, because they are all invoked the same way and somebody
+// typing "/sm" is not thinking about which list "/smart-agent" is in.
+// An earlier version left the built-in commands out on the grounds that
+// walking past "/compact" on the way to a skill costs presses, which is
+// true and is the smaller cost: a command you cannot complete is one you
+// have to remember exactly, and "/permission-skip-all" is not a name
+// anybody types twice from memory. The count in the footer is what makes
+// a long walk bearable.
+//
+// Skills and custom commands come first because they are the ones a
+// person installed, and the built-ins are the ones documented in /help.
 func (m Model) completionCandidates() []string {
-	out := make([]string, 0, len(m.skillsList)+len(m.commandsList))
+	out := make([]string, 0, len(m.skillsList)+len(m.commandsList)+len(m.slashList)+8)
 	for _, s := range m.skillsList {
 		out = append(out, "/"+s.Name)
 	}
 	for _, c := range m.commandsList {
 		out = append(out, "/"+c.Name)
+	}
+	for _, c := range m.slashList {
+		out = append(out, "/"+c.Name)
+	}
+	// This client's own, which the daemon has never heard of. Taken from
+	// the table that dispatches them, so a command added there is
+	// completable without a second list to remember.
+	for _, c := range localCommands() {
+		out = append(out, c.name)
+	}
+	return dedupe(out)
+}
+
+// dedupe keeps the first spelling of each name. A skill and a custom
+// command can share one, and offering it twice in a walk looks like the
+// key stopped working.
+func dedupe(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	out := names[:0]
+	for _, n := range names {
+		if seen[strings.ToLower(n)] {
+			continue
+		}
+		seen[strings.ToLower(n)] = true
+		out = append(out, n)
 	}
 	return out
 }

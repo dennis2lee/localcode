@@ -62,6 +62,11 @@ type commandsMsg struct {
 	err      error
 }
 
+type slashCommandsMsg struct {
+	commands []client.SlashCommandInfo
+	err      error
+}
+
 type skillsMsg struct {
 	skills []client.SkillInfo
 	err    error

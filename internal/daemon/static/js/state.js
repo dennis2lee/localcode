@@ -10,6 +10,7 @@ export const app = {
   agents: [],           // [{name, description, model}]
   customCommands: [],   // [{name, description}]
   skills: [],            // [{name, description}], for completing "/<skill name>"
+  slashCommands: [],     // [{name, description}] the daemon answers itself
   sessions: [],          // cached list rendered in the aside
   mcpServers: [],
   workspacePath: '',

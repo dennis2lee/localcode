@@ -153,3 +153,47 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// The three switches got a command each so they could be reached from a
+// prompt, and being completable is half of what that is for:
+// "/permission-skip-all" is not a name anybody types twice from memory.
+func TestTheDaemonsOwnCommandsComplete(t *testing.T) {
+	m := newTestModel()
+	m.slashList = []client.SlashCommandInfo{
+		{Name: "smart-agent"},
+		{Name: "skill"},
+	}
+	m.setInputTo("/sm")
+
+	m = pressRight(t, m)
+	if m.input.Value() != "/smart-agent" {
+		t.Errorf("input = %q, want the daemon's own command completed", m.input.Value())
+	}
+}
+
+// This client's own commands come from the table that dispatches them,
+// so one added there is completable without a second list to remember.
+func TestThisClientsOwnCommandsComplete(t *testing.T) {
+	m := newTestModel()
+	m.setInputTo("/vers")
+
+	m = pressRight(t, m)
+	if m.input.Value() != "/version" {
+		t.Errorf("input = %q, want a local command completed", m.input.Value())
+	}
+}
+
+// A skill and a custom command can share a name. Offering it twice in a
+// walk looks like the key stopped working.
+func TestASharedNameIsOfferedOnce(t *testing.T) {
+	m := withSkills(newTestModel(), "review")
+	m.commandsList = []client.CommandInfo{{Name: "review"}}
+	m.setInputTo("/rev")
+
+	m = pressRight(t, m)
+	first := m.input.Value()
+	m = pressRight(t, m)
+	if first != "/review" || m.input.Value() != "/rev" {
+		t.Errorf("walk gave %q then %q, want the name once and then what was typed", first, m.input.Value())
+	}
+}

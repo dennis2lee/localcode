@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.60.0
+
+* **The three switches that change how a turn behaves each have a command now.** `/smart-agent`, `/auto-delegate` and `/permission-skip-all`. Smart Agent could be flipped with `/config smart_agent on`, which no help text mentioned, so in practice it was the settings window; skip permissions had no command at all, which meant the TUI could not reach it. They are answered by the daemon rather than by a client, so both the TUI and the Web UI have them and both say the same thing about them.
+
+  With no argument each one flips, which is what makes them toggles rather than setters: the common use is one word at the prompt. `on` and `off` set it outright.
+
+  **They save.** The choice is written to config.json, which is how these switches have always behaved in the settings window and is not how `/config` behaved: `/config smart_agent on` applied for the run and forgot, so the same switch survived a restart or not depending on which of the two you had used. When there is nowhere to write, or the write fails, the change still applies and the reply says so, rather than reporting a change that did happen as one that did not.
+
+  Each reply says what the switch did and what it did not. Turning Smart Agent on with no profiles configured is legal and inert, so it says so instead of reading as a change that took effect. `/permission-skip-all on` says in as many words that shell commands and writes outside the workspace will no longer ask, and that rules which deny still deny, because "skip permissions" reads like "skip all safety" and is not.
+
+* **Built-in commands complete like a skill name does.** The right arrow already finished a `/<skill name>`; it now finishes `/sm` to `/smart-agent` and `/perm` to `/permission-skip-all`. Four lists feed it: the installed skills, the custom commands, the commands the daemon answers, and the few each client answers itself. A name in more than one list is offered once, since offering it twice in a walk looks like the key stopped working.
+
+  The previous release left the built-ins out deliberately, on the grounds that walking past `/compact` on the way to a skill costs presses. That was the smaller cost: a command you cannot complete is one you have to remember exactly, and `/permission-skip-all` is not a name anybody types twice from memory.
+
+  A client cannot complete what it cannot name, so `GET /api/slash-commands` reports the daemon's own commands with their descriptions. A test walks that list through the router and fails if anything offered for completion is not actually answered, so the list a client completes against cannot drift from the one the daemon serves.
+
 ## v0.59.1
 
 * **Typing `localcode` next to a running one no longer refuses to start.** It printed `daemon failed to start: bind: address already in use` and that was the whole of it: no TUI, no explanation of what had the port, nothing to do about it but read the source for the flag that changes it. The most common thing holding port 4096 is another localcode, which made the failure especially poor, since the daemon is designed as a shared core with clients attaching over HTTP and this is one of its clients.

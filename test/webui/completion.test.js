@@ -120,3 +120,36 @@ test('the status line counts the candidates before you press anything', async ()
   typeAt(app, 'hello');
   assert.doesNotMatch(app.el('status-text').textContent, /matches/);
 });
+
+test('the daemon\'s own commands complete like a skill does', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/slash-commands': [
+        { name: 'smart-agent', description: 'turn the Smart Agent bundle on or off' },
+        { name: 'skill', description: 'list installed skills' },
+      ],
+    },
+  });
+  const input = typeAt(app, '/sm');
+
+  app.press('ArrowRight');
+  assert.equal(input.value, '/smart-agent',
+    'the three switches got a command each so they could be reached from a prompt');
+});
+
+test('a name shared by a skill and a command is offered once', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/skills': [{ name: 'review' }],
+      'GET /api/commands': [{ name: 'review' }],
+    },
+  });
+  const input = typeAt(app, '/rev');
+
+  app.press('ArrowRight');
+  const first = input.value;
+  input.selectionStart = input.selectionEnd = first.length;
+  app.press('ArrowRight');
+  assert.deepEqual([first, input.value], ['/review', '/rev'],
+    'offering one name twice looks like the key stopped working');
+});

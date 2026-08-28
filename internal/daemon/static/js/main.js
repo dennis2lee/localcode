@@ -17,7 +17,7 @@ import {
   atInputStart, atInputEnd, historyPrev, historyNext,
   navigatingHistory, endHistoryNavigation,
 } from './composer.js';
-import { loadAgents, loadCommands, loadSkills, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
+import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
 import { loadSessions, selectSession, createNewSession, deleteAllSessions } from './sessions.js';
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
@@ -228,6 +228,7 @@ async function init() {
     loadAgents(),
     loadCommands(),
     loadSkills(),
+    loadSlashCommands(),
     loadSettings(),
     loadWorkspace(),
     loadMCPServers(),

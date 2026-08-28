@@ -104,6 +104,7 @@ type Model struct {
 	agents           []client.AgentInfo
 	commandsList     []client.CommandInfo
 	skillsList       []client.SkillInfo
+	slashList        []client.SlashCommandInfo
 
 	// picker is the open selection list, or nil. See picker.go.
 	picker *picker
@@ -178,5 +179,5 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents(), m.fetchCommands(), m.fetchSkills())
+	return tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents(), m.fetchCommands(), m.fetchSkills(), m.fetchSlashCommands())
 }

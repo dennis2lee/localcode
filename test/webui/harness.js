@@ -48,6 +48,7 @@ function defaultRoutes() {
     ],
     'GET /api/commands': [],
     'GET /api/skills': [],
+    'GET /api/slash-commands': [],
     'GET /api/settings': {
       auto_compact_enabled: true,
       show_tps: true,

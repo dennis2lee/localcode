@@ -73,6 +73,16 @@ export async function loadSkills() {
   }
 }
 
+// The commands the daemon answers itself, so they complete like a skill
+// does. A daemon too old to have the endpoint simply offers fewer names.
+export async function loadSlashCommands() {
+  try {
+    app.slashCommands = await apiClient.getSlashCommands();
+  } catch (err) {
+    app.slashCommands = [];
+  }
+}
+
 export async function loadSettings() {
   try {
     const s = await apiClient.getSettings();

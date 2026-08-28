@@ -767,7 +767,7 @@ The walk comes back round to what you typed, so it is never a cycle you cannot l
 
 The right arrow only completes at the very end of a one-word `/name`. Anywhere else it moves the cursor, and a prompt that already has arguments (`/pdf-tools merge a.pdf`) is past completing.
 
-The built-in commands such as `/compact` are deliberately not offered: there are twenty of them, `/help` lists them, and passing them on the way to a skill would cost more presses than typing the name.
+Built-in commands complete too, so `/sm` finishes to `/smart-agent` and `/perm` to `/permission-skip-all`. Four lists feed it: the installed skills, the custom commands, the commands the daemon answers, and the few each client answers itself. A name in more than one list is offered once.
 
 When two things share a name, precedence is:
 
@@ -892,6 +892,24 @@ The same assembly is recorded in the turn log as `prompt_manifest`, `prompt_asse
 
 A fallback that reports the same manifest id on a different model family reused a prompt written for the model that failed, which is what the id makes visible.
 
+### The three switches
+
+Three settings change how every turn behaves, and each has a command of its own. They are answered by the daemon rather than by a client, so the TUI and the Web UI both have them and both say the same thing about them.
+
+| Command | Setting | What it does |
+|---|---|---|
+| `/smart-agent` | `smart_agent` | The specialist roster, the fallback chain, the trace, the prompt cache markers and the guards. See [Smart Agent](#smart-agent). |
+| `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
+| `/permission-skip-all` | `skip_permissions` | Turns every prompt that would have asked into an allow, for every session on the daemon. |
+
+With no argument each one flips: `/smart-agent` turns it on if it was off. `on` and `off` set it outright, which is what you want in a script or when you are not sure what it currently is.
+
+**They save.** The choice is written to config.json, so it survives a restart, which is how the same switches have always behaved in the settings window and is not how `/config` behaved: `/config smart_agent on` applies for the run and forgets. When there is no config.json to write to, or the write fails, the change still applies and the reply says so rather than reporting a change that did happen as one that did not.
+
+Each reply says what the switch did and what it did not. Turning Smart Agent on with no profiles configured is legal and inert, so it says so instead of reading as a change that took effect; the same for auto-delegation with no `auto_delegate` block. `/permission-skip-all on` says in as many words that shell commands and writes outside the workspace will no longer ask, and that rules which **deny** still deny, since "skip permissions" reads like "skip all safety" and is not.
+
+`/config` still works and still lists all four settings including `auto_compact`.
+
 ### Other local commands
 
 These are typed into the message box but never reach the event log, so replaying a session does not bring them back.
@@ -906,6 +924,9 @@ These are typed into the message box but never reach the event log, so replaying
 | `/skill` | Lists registered skills. See [Running a skill](#running-a-skill). |
 | `/commands` | Lists the custom commands registered from `.localcode/commands/*.md`. See [Custom commands](#custom-commands). |
 | `/tasks` | Lists background tasks in this session. See [`/tasks`](#tasks). |
+| `/smart-agent` | Toggles the Smart Agent bundle and saves the choice. `/smart-agent on\|off` sets it outright. Answered by the daemon, so both clients have it. See [The three switches](#the-three-switches). |
+| `/auto-delegate` | Toggles auto-delegation the same way. |
+| `/permission-skip-all` | Toggles `skip_permissions` the same way. |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions

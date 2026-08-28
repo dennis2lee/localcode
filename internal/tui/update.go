@@ -108,6 +108,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case slashCommandsMsg:
+		if msg.err == nil {
+			m.slashList = msg.commands
+		}
+		// No error line: an older daemon has no such endpoint, and
+		// completion simply offers fewer names.
+		return m, nil
+
 	case skillsMsg:
 		if msg.err != nil {
 			// Not an error line: skills are optional, and a daemon

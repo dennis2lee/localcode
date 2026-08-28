@@ -187,6 +187,21 @@ func (c *Client) ListSkills(ctx context.Context) ([]SkillInfo, error) {
 	return out, err
 }
 
+// SlashCommandInfo is one command the daemon answers itself, from
+// GET /api/slash-commands. Clients use it to complete "/<name>" without
+// keeping their own copy of the list.
+type SlashCommandInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// ListSlashCommands returns the daemon's own slash commands.
+func (c *Client) ListSlashCommands(ctx context.Context) ([]SlashCommandInfo, error) {
+	var out []SlashCommandInfo
+	err := c.doJSON(ctx, http.MethodGet, "/api/slash-commands", nil, &out)
+	return out, err
+}
+
 // Version returns the version string of the daemon this client is
 // attached to — not necessarily the local binary's own version, since a
 // TUI can be pointed at a remote daemon via --server.

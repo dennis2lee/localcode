@@ -14,15 +14,36 @@ import { inputEl } from './dom.js';
 // edit ends the walk without every editing path having to remember to.
 let walk = { prefix: '', last: '', idx: -1 };
 
-// Everything "/" can complete to: the skills and the custom commands.
-// Both, because both are invoked the same way. The built-in commands are
-// deliberately absent: there are twenty of them, they are in /help, and
-// passing /compact on the way to a skill is worse than typing it out.
+// Everything "/" can complete to: the skills, the custom commands, the
+// commands the daemon answers, and the few this page answers itself.
+//
+// All of them, because they are all invoked the same way and somebody
+// typing "/sm" is not thinking about which list "/smart-agent" is in. An
+// earlier version left the built-ins out on the grounds that walking
+// past "/compact" costs presses, which is true and is the smaller cost:
+// a command you cannot complete is one you have to remember exactly, and
+// "/permission-skip-all" is not a name anybody types twice from memory.
+//
+// Installed things first, since those are the ones somebody chose to
+// have; the built-ins are the ones /help lists.
+const localOnly = ['/help', '/version', '/agent', '/commands'];
+
 export function completionCandidates() {
-  return [
+  const all = [
     ...(app.skills || []).map(s => `/${s.name}`),
     ...(app.customCommands || []).map(c => `/${c.name}`),
+    ...(app.slashCommands || []).map(c => `/${c.name}`),
+    ...localOnly,
   ];
+  // A skill and a custom command can share a name, and offering it twice
+  // in a walk looks like the key stopped working.
+  const seen = new Set();
+  return all.filter((n) => {
+    const k = n.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 export function completionsFor(candidates, prefix) {

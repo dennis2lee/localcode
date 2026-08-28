@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"localcode/internal/agent"
 	"localcode/internal/events"
 	"localcode/internal/hooks"
 	"localcode/internal/session"
@@ -509,6 +510,14 @@ func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleListSlashCommands returns the commands the daemon answers
+// itself, so a client can complete one without a hardcoded copy of the
+// list. The clients already fetch skills and custom commands; this is
+// the third kind, and the only one they had no way to ask about.
+func (d *Daemon) handleListSlashCommands(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, agent.SlashCommands())
 }
 
 // SkillInfo is the client-facing view of an installed skill.

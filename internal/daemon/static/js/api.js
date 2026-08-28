@@ -56,6 +56,7 @@ export async function uploadFile(sessionID, file) {
 export const getAgents = () => api('GET', '/api/agents');
 export const getCommands = () => api('GET', '/api/commands');
 export const getSkills = () => api('GET', '/api/skills');
+export const getSlashCommands = () => api('GET', '/api/slash-commands');
 export const getSettings = () => api('GET', '/api/settings');
 export const getVersion = () => api('GET', '/api/version');
 // Updating. The check is a request to GitHub made through the daemon, so

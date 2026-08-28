@@ -91,6 +91,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	}
 
 	broker := agent.NewPermissionBroker(store)
+	configFilePath := ""
 	if path, err := resolvedConfigPath(configPath); err != nil {
 		// Not fatal: "always allow" just falls back to session-only
 		// approvals (ConfigPath == "" disables persisting), same as
@@ -98,6 +99,10 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		log.Printf("permission: could not resolve a config.json path for \"always allow\", falling back to session-only approvals: %v", err)
 	} else {
 		broker.ConfigPath = path
+		// The same file the toggle commands persist to. One resolution,
+		// so "always allow" and "/smart-agent on" cannot end up writing
+		// to two different config.json files.
+		configFilePath = path
 	}
 	registry, err := buildRegistry(cfg, broker)
 	if err != nil {
@@ -155,6 +160,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.Skills = skillList
 	loop.Commands = cmdList
 	loop.ProjectDir = e.cwd
+	loop.ConfigPath = configFilePath
 	loop.MemoryDir = memDir
 	// The structured turn log. Opened whatever the setting says, because
 	// the setting is live and a daemon started with Smart Agent off can

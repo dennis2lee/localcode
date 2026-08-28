@@ -94,6 +94,13 @@ type Loop struct {
 	// "!`shell`" and "@file" expansions against.
 	ProjectDir string
 
+	// ConfigPath is the config.json the toggle commands write to, so a
+	// switch flipped at the prompt survives a restart the way the same
+	// switch flipped in the settings window does. Empty means there is
+	// no file to write, and those commands then say the change is for
+	// this run only rather than pretending it was saved.
+	ConfigPath string
+
 	// PendingInput, if set, is asked at every tool boundary inside a turn
 	// whether the user has typed anything since the turn began, and
 	// returns one such message at a time until it reports false.

@@ -113,6 +113,12 @@ func (m Model) cancelTask(taskID string) tea.Cmd {
 	}, func(err error) tea.Msg { return taskCancelledMsg{taskID: taskID, err: err} })
 }
 
+func (m Model) fetchSlashCommands() tea.Cmd {
+	return call(m.client.ListSlashCommands, func(c []client.SlashCommandInfo, err error) tea.Msg {
+		return slashCommandsMsg{commands: c, err: err}
+	})
+}
+
 func (m Model) fetchSkills() tea.Cmd {
 	return call(m.client.ListSkills, func(s []client.SkillInfo, err error) tea.Msg { return skillsMsg{skills: s, err: err} })
 }

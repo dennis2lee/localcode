@@ -96,5 +96,5 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 
 | Idea | Why |
 |---|---|
-| Serve `/help` from the daemon | The TUI and Web UI each hardcode their own help string, so adding a command means editing two places. A single source such as `GET /api/commands/help` would keep them in sync. |
+| Serve `/help` from the daemon | The TUI and Web UI each hardcode their own help string, so adding a command means editing two places. A single source such as `GET /api/commands/help` would keep them in sync. Half done in v0.60.0: `GET /api/slash-commands` reports the daemon's own commands with descriptions, and both clients read it for completion. The help strings still do not. |
 | ~~Mixed Korean and English error messages~~ | Done in v0.13.0. All program output is English now, and the documentation followed in v0.19.0. |
