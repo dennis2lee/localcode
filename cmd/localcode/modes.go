@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -93,9 +94,44 @@ func runGUI(configPath string) error {
 // it over real HTTP/SSE — the TUI and daemon are still separate,
 // independently-addressable components, just sharing a process for
 // single-binary convenience.
-func runEmbedded(configPath, listen, agentName string) error {
+func runEmbedded(configPath, listen, agentName string, listenExplicit bool) error {
+	// The address is taken before the daemon is built, because one of
+	// the answers is "there is already a daemon there", and building a
+	// second one to throw away would start MCP servers and load skills
+	// for a process that is about to be a client.
+	// The directory this terminal is in decides whether an already
+	// running daemon is one to attach to: a daemon stamps its own
+	// directory onto every session created on it, so attaching from
+	// another project would open a conversation editing the wrong files.
+	workdir, _ := os.Getwd()
+
+	got, err := takeListener(listen, workdir, listenExplicit)
+	if err != nil {
+		return fmt.Errorf("daemon failed to start: %w", err)
+	}
+	if got.attachTo != "" {
+		fmt.Printf("attaching to the localcode daemon already running at %s\n", got.attachTo)
+		// No restart hook, for the same reason --server has none: that
+		// daemon is somebody else's process and not ours to replace.
+		return runTUIClient(got.attachTo, agentName, nil)
+	}
+	if got.elsewhere != "" {
+		// A localcode is there, and it works somewhere else.
+		ln, lerr := bindElsewhere(listen)
+		if lerr != nil {
+			return fmt.Errorf("daemon failed to start: %w", lerr)
+		}
+		got.ln, got.moved = ln, true
+		fmt.Printf("a localcode at %s is working in %s, so this one started its own\n", listen, got.elsewhere)
+	}
+	listen = got.ln.Addr().String()
+	if got.moved {
+		fmt.Printf("the Web UI for this one is at http://%s\n", listen)
+	}
+
 	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
 	if err != nil {
+		got.ln.Close()
 		return err
 	}
 	defer cleanup()
@@ -136,9 +172,11 @@ func runEmbedded(configPath, listen, agentName string) error {
 		}
 	}
 
-	srv := &http.Server{Addr: listen, Handler: d.Handler()}
+	// Serve, not ListenAndServe: the listener is already bound, which is
+	// what let the decision above be made before anything was built.
+	srv := &http.Server{Handler: d.Handler()}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- srv.Serve(got.ln) }()
 
 	// Give the listener a moment to come up before the client dials it.
 	select {

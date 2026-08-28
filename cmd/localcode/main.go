@@ -97,5 +97,15 @@ func run() error {
 		// and that daemon is not ours to replace.
 		return runTUIClient(*server, *agentName, nil)
 	}
-	return runEmbedded(*configPath, *listen, *agentName)
+	// Whether --listen was typed, not just what it holds. An address
+	// somebody asked for by name is a request; the default is a
+	// convention, and a convention can move out of the way when
+	// something else already has the port.
+	listenExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "listen" {
+			listenExplicit = true
+		}
+	})
+	return runEmbedded(*configPath, *listen, *agentName, listenExplicit)
 }

@@ -25,7 +25,7 @@ localcode --agent general-purpose
 |---|---|---|
 | `--config <path>` | none | Use only this file as config. Without it, `~/.localcode/config.json` and `./.localcode/config.json` are merged, with the project file winning. |
 | `--agent <name>` | `general-purpose` | Which model profile to use, resolved through the `agents` map in config |
-| `--listen <host:port>` | `127.0.0.1:4096` | Address the daemon binds. The Web UI is served here too. |
+| `--listen <host:port>` | `127.0.0.1:4096` | Address the daemon binds. The Web UI is served here too. See [When the port is already taken](#when-the-port-is-already-taken). |
 | `--server <url>` | none | Do not start a local daemon. Attach the TUI to an already running daemon, which may be remote. |
 | `--headless` | `false` | Run the daemon alone with no TUI, exposing the HTTP API and Web UI |
 | `--gui` | on for a `-tags gui` build, off otherwise | Open the native desktop window instead of the TUI. `--gui=false` forces the TUI on a build that has the window. |
@@ -39,6 +39,23 @@ Three useful combinations:
 |---|---|
 | `localcode` | Starts a local daemon and attaches the TUI. Open `http://127.0.0.1:4096` in a browser to use the Web UI on the same sessions at the same time. |
 | `localcode --headless --listen 0.0.0.0:4096` | Daemon only. Meant for a remote server. |
+
+#### When the port is already taken
+
+Running `localcode` starts a daemon and attaches the TUI to it, so it needs the address in `--listen`. When something already has it, what happens depends on what that something is:
+
+| What holds the address | What happens |
+|---|---|
+| A localcode daemon working in **this** directory | The TUI attaches to it and says so. The daemon is a shared core and this is one of its clients, so a second terminal on the same project is the normal case, not a conflict. You get that daemon's sessions in the picker. |
+| A localcode daemon working in **another** directory | Not attached to. It starts its own daemon on a free port and says which project the other one is in. |
+| Anything else | The daemon binds a free port on the same host instead and prints where the Web UI went. The terminal still works, which is the point. |
+| Anything else, and you typed `--listen` yourself | An error naming the address, because you asked for that one and serving somewhere else would answer a different request. Stop what is using it, or pass a different `--listen`. |
+
+The directory matters because a daemon stamps its own onto every session created on it. Attaching from another project would open a conversation that edits the first project's files while the terminal sits in the second, so sharing a daemon is a convenience and working where you are is the promise. Two spellings of one directory are one directory: a symlink and its target match, which is why `/tmp` and `/private/tmp` on macOS do not start two daemons.
+
+The daemon is asked what it is before the TUI attaches to it: a `GET /api/version` that has to answer as localcode, then a `GET /api/workspace` for where it is working. A web server on 4096 that is not localcode gets out of the way like anything else rather than being handed a client, and a localcode that will not say where it works is treated as working somewhere else, since the cost of that is one extra daemon and the cost of guessing the other way is a session in the wrong project.
+
+This does not apply to the desktop window, which has never had the problem: nobody types its address, so it binds whatever port the OS gives it.
 | `localcode --server http://host:4096` | TUI only, attached to a daemon that is already running. |
 | `localcode-gui` | A native desktop window instead of the TUI. Experimental, built with `-tags gui`, opens by default on such a build (no `--gui` needed). See [Desktop window](#desktop-window-experimental). |
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.59.1
+
+* **Typing `localcode` next to a running one no longer refuses to start.** It printed `daemon failed to start: bind: address already in use` and that was the whole of it: no TUI, no explanation of what had the port, nothing to do about it but read the source for the flag that changes it. The most common thing holding port 4096 is another localcode, which made the failure especially poor, since the daemon is designed as a shared core with clients attaching over HTTP and this is one of its clients.
+
+  What happens now depends on what is there. Another localcode working in this same directory is attached to, which is what `--server` has always done for a daemon on another machine and there is no reason a daemon on this one should be different. Anything else gets out of the way: the daemon binds a free port and says where the Web UI went, so the terminal works. An address typed as `--listen` is still a request rather than a suggestion, so that case reports the conflict instead of quietly serving somewhere else.
+
+  The directory is checked, not just the port, and that is the part worth knowing. A daemon stamps its own directory onto every session created on it, so attaching to one running in another project would open a conversation editing that project's files while the terminal sits in this one. A localcode in another directory is therefore not attached to; this one starts its own and says which project the other is in. Two spellings of one directory are one directory, so a symlink and its target do not start two daemons.
+
+  The address is asked what it is before anything is handed to it: a version request that has to answer as localcode, then a workspace request for where it is working. A web server on 4096 that is not localcode is treated like any other stranger, and a localcode that will not say where it works is treated as working somewhere else, since the cost of that is one extra daemon and the cost of guessing the other way is a session in the wrong project.
+
+  The desktop window never had any of this and still does not: nobody types its address, so it binds whatever port the OS gives it.
+
 ## v0.59.0
 
 * **The TUI can now change what it is talking to, and to whom.** Both were things you had to already know: `/agent <name>` needs the name, Tab cycles blind, and a session could be chosen once, on the plain listing printed before the program starts, after which the only way to another was to restart. `/model` opens the agents as a list with the model each one resolves to; `/session` opens the conversations. Arrow keys move, Enter selects, Esc cancels, and the list takes the transcript's room while it is open rather than a line under the prompt box, because a list you are choosing from wants the room and the transcript is still there when you come back.
