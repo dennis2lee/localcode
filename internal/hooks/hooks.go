@@ -96,6 +96,16 @@ const defaultTimeout = 30 * time.Second
 // matches payload's "tool_name", in order, stopping at the first one that
 // blocks. payload is marshaled to JSON and piped to each hook's stdin.
 //
+// dir is the directory the hook commands run in: the workspace of the
+// session this event is about. It is a parameter rather than something
+// read from ctx because a hook is a shell command and where a shell
+// command runs is not a detail — passing it makes every call site name
+// the project it is calling about, and there is no way to add a new one
+// without answering the question. Empty means the process's own working
+// directory, which is what every hook used to get: a `git status` or a
+// `./scripts/check.sh` ran wherever the daemon was started rather than in
+// the project whose tool call had just triggered it.
+//
 // A hook blocks the action by either exiting with status 2 (reason taken
 // from stderr) or printing {"decision":"block","reason":"..."} as JSON on
 // stdout — mirroring Claude Code's own hook contract. Any other outcome
@@ -103,8 +113,8 @@ const defaultTimeout = 30 * time.Second
 // action proceed; a script's own failure is reported back as a warning,
 // not treated as an implicit block, so a broken hook script can't lock
 // the user out of their own tools.
-func Run(ctx context.Context, cfg Config, event string, payload map[string]any) (blocked bool, reason string, warnings []error) {
-	out := RunOutcome(ctx, cfg, event, payload)
+func Run(ctx context.Context, cfg Config, event, dir string, payload map[string]any) (blocked bool, reason string, warnings []error) {
+	out := RunOutcome(ctx, cfg, event, dir, payload)
 	return out.Blocked, out.Reason, out.Warnings
 }
 
@@ -123,13 +133,29 @@ type Outcome struct {
 }
 
 // RunOutcome is Run with the hooks' own output returned as well.
-func RunOutcome(ctx context.Context, cfg Config, event string, payload map[string]any) (out Outcome) {
+func RunOutcome(ctx context.Context, cfg Config, event, dir string, payload map[string]any) (out Outcome) {
 	list := cfg[event]
 	if len(list) == 0 {
 		return out
 	}
 
 	toolName, _ := payload["tool_name"].(string)
+	if dir != "" {
+		// Told as well as applied. A hook that shells out somewhere else,
+		// or writes a line to a log shared by several projects, still has
+		// to be able to say which project it was called about, and the
+		// answer is not derivable from anything else on stdin.
+		//
+		// Copied rather than written into: the caller built this map for
+		// this call, and a function that quietly adds a key to its
+		// argument is one that surprises the next caller who reuses one.
+		with := make(map[string]any, len(payload)+1)
+		for k, v := range payload {
+			with[k] = v
+		}
+		with["cwd"] = dir
+		payload = with
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		out.Warnings = []error{fmt.Errorf("marshal hook payload: %w", err)}
@@ -154,6 +180,7 @@ func RunOutcome(ctx context.Context, cfg Config, event string, payload map[strin
 
 		hookCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
 		cmd := shell.Command(hookCtx, h.Command)
+		cmd.Dir = dir
 		cmd.Stdin = bytes.NewReader(data)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout

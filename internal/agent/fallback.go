@@ -609,7 +609,7 @@ func (l *Loop) runRetryHook(ctx context.Context, sessionID string, from, to mode
 	if len(l.Config.Hooks) == 0 {
 		return
 	}
-	hooks.Run(ctx, l.Config.Hooks, hooks.EventRetry, map[string]any{
+	hooks.Run(ctx, l.Config.Hooks, hooks.EventRetry, l.SessionDir(sessionID), map[string]any{
 		"session_id": sessionID,
 		"from_model": from.profile.Model,
 		"to_model":   to.profile.Model,
@@ -623,7 +623,7 @@ func (l *Loop) runCompactHook(ctx context.Context, sessionID, reason string) {
 	if len(l.Config.Hooks) == 0 {
 		return
 	}
-	hooks.Run(ctx, l.Config.Hooks, hooks.EventCompact, map[string]any{
+	hooks.Run(ctx, l.Config.Hooks, hooks.EventCompact, l.SessionDir(sessionID), map[string]any{
 		"session_id": sessionID,
 		"reason":     reason,
 	})

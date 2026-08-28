@@ -547,6 +547,8 @@ The folder icon beside the path opens that directory in a file-manager window â€
 
 **Each session has its own workspace.** Every relative file path and every bash command resolves against the directory of the session it belongs to, so two sessions can work in two different projects at the same time, on the same daemon, without disturbing each other. It is a property of the session, not of the localcode process, which is why reopening a conversation about another project puts you back in that project rather than wherever the daemon happens to have been started.
 
+**Delegated work inherits it.** A sub agent started by the `Task` tool, by `TaskBackground`, or through the tasks API works in the directory of the session that launched it, and so does anything it delegates in turn. The directory is taken at the moment the task starts and stays with it: moving the parent afterwards moves the parent, and the task finishes the instructions it was given where it was given them. Custom commands (`@file`, `` !`cmd` ``) and hooks resolve against the same directory.
+
 Switching is refused only while *this* session has a turn in flight, since redirecting it mid-tool-call would change what an already-running command is operating on. A turn in some other session is not your business and no longer blocks anything.
 
 Omitting the session (a client that does not track them) sets the default instead: what a newly created session starts in, and what a session with no recorded workspace of its own falls back to.
@@ -590,8 +592,11 @@ With both enabled, `pre_tool_use` runs first, and if it does not block, the `per
 | `compact` | `session_id`, `reason` (`automatic` or `overflow`) | No |
 | `retry` | `session_id`, `from_model`, `to_model`, `error` | No, the switch has already been decided |
 
+Every payload also carries **`cwd`**: the workspace of the session the event is about.
+
 Other details:
 
+* **A hook runs in that `cwd`.** Not in the directory localcode was started in, which is what it used to be: a `git status`, a `./scripts/check.sh`, a formatter looking for the project's own config all now see the project whose turn triggered them, including a delegated sub agent's, and including a session that was moved to another directory after it was created. `cwd` is on stdin as well as being the working directory, for a hook that shells out somewhere else or appends to a log shared by several projects.
 * **`pre_model` can inject context.** Print `{"context":"..."}` on stdout and that text is appended to the system prompt for that one call. Useful for facts the model cannot look up: an incident in progress, a freeze window, who is on call. It costs the session its system prompt cache for every call the hook injects on, since the cached prefix is exactly the part being changed.
 * **matcher** only means something for `pre_tool_use` and `post_tool_use`. It is a regex against the tool name, **anchored to the whole name**, so `"bash"` hits only the `bash` tool. Alternation such as `"bash|edit"` and patterns such as `"mcp__github__.*"` both work. Omit it to run on every tool call.
 * **To block**, print `{"decision":"block","reason":"..."}` on stdout, or exit with code **2**, in which case stderr becomes the reason. Any other non zero exit is treated as a warning and execution continues.

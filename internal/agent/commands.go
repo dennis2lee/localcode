@@ -37,7 +37,7 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	ctx = l.pinSmart(ctx)
 
 	if len(l.Config.Hooks) > 0 {
-		blocked, reason, _ := hooks.Run(ctx, l.Config.Hooks, hooks.EventUserPromptSubmit, map[string]any{
+		blocked, reason, _ := hooks.Run(ctx, l.Config.Hooks, hooks.EventUserPromptSubmit, l.SessionDir(sessionID), map[string]any{
 			"session_id": sessionID,
 			"prompt":     text,
 		})
@@ -169,7 +169,13 @@ func (l *Loop) routeCustomCommand(ctx context.Context, sessionID, agentName, tex
 	if !ok {
 		return false, nil
 	}
-	segs, err := commands.ExpandSegments(cmd, args, l.GetProjectDir())
+	// The session's directory, not the daemon's default. A command body
+	// expands @file by reading it and !`cmd` by running it, and both are
+	// the same claim a tool makes when it takes a relative path: it means
+	// the project this conversation is in. Resolved daemon-wide, a
+	// /review in a session working somewhere else quoted the other
+	// project's file back at the model with this project's name on it.
+	segs, err := commands.ExpandSegments(cmd, args, l.SessionDir(sessionID))
 	if err != nil {
 		l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})

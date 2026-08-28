@@ -243,7 +243,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		iterManifest := run.manifest.WithRuntimeEntries(
 			append(toolEntries(req.Tools), historyEntries(messages, l.isDelegatedSession(sessionID))...)...)
 		if len(l.Config.Hooks) > 0 {
-			out := hooks.RunOutcome(ctx, l.Config.Hooks, hooks.EventPreModel, map[string]any{
+			out := hooks.RunOutcome(ctx, l.Config.Hooks, hooks.EventPreModel, l.SessionDir(sessionID), map[string]any{
 				"session_id": sessionID,
 				"agent":      resolveAgent,
 				"model":      run.profile.Model,
@@ -416,7 +416,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// Fire and forget: the reply is already here, so there is
 			// nothing left to block. This is the point for logging what a
 			// model actually cost, or for reacting to a truncated answer.
-			hooks.Run(ctx, l.Config.Hooks, hooks.EventPostModel, map[string]any{
+			hooks.Run(ctx, l.Config.Hooks, hooks.EventPostModel, l.SessionDir(sessionID), map[string]any{
 				"session_id":    sessionID,
 				"agent":         resolveAgent,
 				"model":         run.profile.Model,
@@ -555,7 +555,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				// block decision, if any, has no effect, since there's no
 				// well-defined "keep going without a new user turn" flow
 				// to force.
-				hooks.Run(ctx, l.Config.Hooks, hooks.EventStop, map[string]any{"session_id": sessionID})
+				hooks.Run(ctx, l.Config.Hooks, hooks.EventStop, l.SessionDir(sessionID), map[string]any{"session_id": sessionID})
 			}
 			return nil
 		}

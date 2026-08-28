@@ -286,7 +286,10 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 	}
 
 	if len(r.Hooks) > 0 {
-		blocked, reason, _ := hooks.Run(ctx, r.Hooks, hooks.EventPreToolUse, map[string]any{
+		// The same directory the tool itself is about to resolve paths
+		// against: a hook that checks or formats what a tool is doing has
+		// to be looking at the same project the tool is.
+		blocked, reason, _ := hooks.Run(ctx, r.Hooks, hooks.EventPreToolUse, WorkingDir(ctx), map[string]any{
 			"tool_name":  name,
 			"tool_input": json.RawMessage(input),
 		})
@@ -335,7 +338,7 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		// there's nothing left to block — a "block" decision here is
 		// simply ignored. This is the hook point for side effects like
 		// auto-formatting a file right after an edit.
-		hooks.Run(ctx, r.Hooks, hooks.EventPostToolUse, map[string]any{
+		hooks.Run(ctx, r.Hooks, hooks.EventPostToolUse, WorkingDir(ctx), map[string]any{
 			"tool_name":   name,
 			"tool_input":  json.RawMessage(input),
 			"tool_output": result.Content,

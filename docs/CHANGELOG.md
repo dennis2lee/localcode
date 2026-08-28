@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.62.1
+
+* **Delegated work happens in the project that delegated it.** A task session was created with no workspace recorded, so it fell through to the daemon's default, which is wherever localcode was started. Any conversation that had moved from there — a workspace switched in the header, a session reopened in the project it belongs to, a second client on the same daemon in a second checkout — delegated to agents that read and wrote in a different project from the one that asked, and said nothing about it. The `implement` agent is the sharp end: told to change a file it resolves by relative path, it changed the other project's copy and reported that it was done.
+
+  A task now works in the directory of the session that launched it, taken at the moment it starts and recorded on the task, so it survives a restart and the parent moving afterwards moves only the parent. Both ways of delegating are fixed, since they create the child in two separate places: the synchronous `Task` tool and background `TaskBackground`/`POST /api/sessions/<id>/tasks`. Nesting needs no rule of its own, because a task that delegates is by then a session with a workspace to pass down.
+
+* **Custom commands expand in the session's directory too.** `@file` reads a file and `` !`cmd` `` runs a shell command, and both were resolved against the daemon's default. A `/review` typed in a session working somewhere else quoted the other project's file back at the model under this project's name.
+
+* **A hook runs in the workspace of the session whose event triggered it.** It used to run in the directory the daemon was started in, so a `git status`, a `./scripts/check.sh` or a formatter looking for the project's own config all saw whichever project that happened to be. Every hook payload now also carries `cwd`, for a hook that shells out somewhere else or appends to a log shared by several projects.
+
 ## v0.62.0
 
 * **Keep-going is muse's, and now actually reaches muse.** The carry-on nudge — localcode typing "continue" for a model that stops mid-task — was keyed on `glimmer`, which was a live bug: the habit is the family's, every muse variant has it, and a variant without that one word in its id got a budget of zero. The feature built for these models was off for most of them. It is keyed on `muse` now, case-insensitively, and it is a hard boundary in the other direction too: on any model whose id does not contain `muse` the feature does not exist, whatever is configured, because a nudge sent to a model without the habit is localcode second-guessing a finished answer.

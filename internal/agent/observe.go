@@ -136,7 +136,7 @@ func (l *Loop) delegateBlocked(ctx context.Context, parentSessionID, agentName, 
 	if len(l.Config.Hooks) == 0 {
 		return false, ""
 	}
-	blocked, reason, _ := hooks.Run(ctx, l.Config.Hooks, hooks.EventDelegate, map[string]any{
+	blocked, reason, _ := hooks.Run(ctx, l.Config.Hooks, hooks.EventDelegate, l.SessionDir(parentSessionID), map[string]any{
 		"session_id": parentSessionID,
 		"agent":      agentName,
 		"prompt":     prompt,

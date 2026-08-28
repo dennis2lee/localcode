@@ -135,7 +135,7 @@ func (tm *TaskManager) spawn(launchCtx context.Context, parentSessionID, agentNa
 	}
 
 	taskID := tm.nextTaskID()
-	if _, err := tm.loop.Store.CreateSession(taskID, parentSessionID, agentName, false); err != nil {
+	if _, err := tm.loop.Store.CreateSessionIn(taskID, parentSessionID, agentName, tm.childWorkspace(parentSessionID), false); err != nil {
 		return "", fmt.Errorf("create task session: %w", err)
 	}
 
@@ -184,6 +184,32 @@ func (tm *TaskManager) childContext(launchCtx context.Context, traceID string) c
 	ctx := trace.WithID(tm.rootCtx, traceID)
 	ctx = withTaskDepth(ctx, taskDepthFromContext(launchCtx)+1)
 	return config.WithSmartAgent(ctx, tm.loop.Config.SmartAgentFor(launchCtx))
+}
+
+// childWorkspace is the directory a task works in: the one its parent is
+// working in, resolved at spawn and stamped onto the child session.
+//
+// The third thing that has to survive the handover, and the one that was
+// being dropped. A task session was created with no workspace at all, so
+// SessionDir fell through to the daemon's default for every one of them,
+// and that default is wherever the daemon was started. The moment a
+// conversation was anywhere else — a workspace switched from the header, a
+// session reopened in the project it was created in, a second client on
+// the same daemon working in a second checkout — the agents it delegated
+// to read and wrote in a different project from the one that asked. The
+// implement agent is the sharp end of it: told to change a file it
+// resolves by relative path, it changed the other project's copy, and
+// reported back that it was done.
+//
+// Resolved now rather than looked up per turn on the parent, because a
+// task is given its instructions in a particular directory and should
+// finish them there: the parent moving afterwards moves the parent, and
+// the child goes on working where it was sent. Stamping is also what
+// makes it survive a restart, and what makes nesting need no code of its
+// own, since a task that delegates is by then a parent with a workspace
+// of its own to pass down.
+func (tm *TaskManager) childWorkspace(parentSessionID string) string {
+	return tm.loop.SessionDir(parentSessionID)
 }
 
 func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentName, prompt string) {
@@ -372,7 +398,7 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 
 	taskID := tm.nextTaskID()
 
-	if _, err := tm.loop.Store.CreateSession(taskID, parentSessionID, agentName, false); err != nil {
+	if _, err := tm.loop.Store.CreateSessionIn(taskID, parentSessionID, agentName, tm.childWorkspace(parentSessionID), false); err != nil {
 		tm.loop.lifecycle.admitted(parentSessionID)
 		return "", fmt.Errorf("create task session: %w", err)
 	}

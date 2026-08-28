@@ -83,7 +83,7 @@ func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if len(d.Loop.Config.Hooks) > 0 {
 		// Fire-and-forget: session_start is purely a notification point
 		// (e.g. log/announce a new session starting) — nothing to block.
-		hooks.Run(r.Context(), d.Loop.Config.Hooks, hooks.EventSessionStart, map[string]any{
+		hooks.Run(r.Context(), d.Loop.Config.Hooks, hooks.EventSessionStart, sess.Workspace, map[string]any{
 			"session_id": id,
 			"agent":      req.Agent,
 		})
