@@ -115,14 +115,18 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 		// daemon is somebody else's process and not ours to replace.
 		return runTUIClient(got.attachTo, agentName, nil)
 	}
-	if got.elsewhere != "" {
+	if got.otherDaemon {
 		// A localcode is there, and it works somewhere else.
 		ln, lerr := bindElsewhere(listen)
 		if lerr != nil {
 			return fmt.Errorf("daemon failed to start: %w", lerr)
 		}
+		where := got.elsewhere
+		if where == "" {
+			where = "another directory"
+		}
 		got.ln, got.moved = ln, true
-		fmt.Printf("a localcode at %s is working in %s, so this one started its own\n", listen, got.elsewhere)
+		fmt.Printf("a localcode at %s is working in %s, so this one started its own\n", listen, where)
 	}
 	listen = got.ln.Addr().String()
 	if got.moved {

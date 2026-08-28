@@ -201,8 +201,9 @@ func TestADaemonInAnotherProjectIsNotAttachedTo(t *testing.T) {
 	if got.attachTo != "" {
 		t.Errorf("attached to a daemon working in %s while this terminal is in %s", theirs, mine)
 	}
-	if got.elsewhere != theirs {
-		t.Errorf("elsewhere = %q, want the other daemon's directory so the caller can say why", got.elsewhere)
+	if !got.otherDaemon || got.elsewhere != theirs {
+		t.Errorf("otherDaemon=%v elsewhere=%q, want the other daemon's directory so the caller can say why",
+			got.otherDaemon, got.elsewhere)
 	}
 }
 
@@ -247,6 +248,21 @@ func TestADaemonThatWillNotSayWhereItWorksIsNotAttachedTo(t *testing.T) {
 	}
 	if sameDir(dir, t.TempDir()) {
 		t.Error("an unknown workspace matched a real directory")
+	}
+
+	// And the whole decision, not just its inputs: this case used to
+	// fall out of takeListener with no listener bound and nothing to
+	// say, which the caller then dereferenced.
+	got, err := takeListener(strings.TrimPrefix(srv.URL, "http://"), t.TempDir(), false)
+	if err != nil {
+		t.Fatalf("takeListener: %v", err)
+	}
+	if got.ln != nil {
+		got.ln.Close()
+		t.Fatal("bound a listener on an address a daemon already holds")
+	}
+	if !got.otherDaemon {
+		t.Error("a daemon that will not say where it works is still a daemon in the way")
 	}
 }
 

@@ -40,9 +40,18 @@ type listenResult struct {
 	// moved is set when the daemon ended up somewhere other than the
 	// address asked for, so the caller can say where the Web UI went.
 	moved bool
-	// elsewhere names the directory a localcode daemon at the requested
-	// address is working in, when that is why this one did not attach to
-	// it. The caller says so and then binds its own port.
+	// otherDaemon is set when a localcode daemon holds the address and
+	// works somewhere else, which is why this one did not attach to it.
+	// The caller says so and then binds its own port.
+	//
+	// A flag of its own rather than "elsewhere is not empty", because a
+	// daemon that answers as localcode and will not say where it works
+	// is exactly this case with nothing to name. Deriving it from the
+	// string left that one falling out of the switch below with no
+	// listener bound, which the caller then dereferenced.
+	otherDaemon bool
+	// elsewhere is that daemon's directory when it said, and empty when
+	// it did not.
 	elsewhere string
 }
 
@@ -98,7 +107,7 @@ func takeListener(addr, workdir string, explicit bool) (listenResult, error) {
 	// asked for this address by name. The port only matters for reaching
 	// the Web UI, and the caller prints where it went.
 	if isDaemon {
-		return listenResult{elsewhere: their}, nil
+		return listenResult{otherDaemon: true, elsewhere: their}, nil
 	}
 	free, ferr := net.Listen("tcp", freePortOn(addr))
 	if ferr != nil {
