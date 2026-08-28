@@ -90,7 +90,12 @@ func loadOptional(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
-	// {env:NAME} first, so every field of every version of this struct
+	// Comments out first, so everything after this is ordinary JSON and
+	// nothing downstream has to know the file could carry them. Blanked
+	// rather than deleted, so a parse error's offset still points at the
+	// line it came from. See jsonc.go.
+	data = stripComments(data)
+	// {env:NAME} next, so every field of every version of this struct
 	// gets it without anything here having to know which fields are
 	// secrets. See env.go.
 	expanded, err := expandEnv(data, osLookup)

@@ -157,6 +157,16 @@ export function renderPermissionRulesList() {
   }
 }
 
+// refreshPermissionSettingsIfOpen re-reads the checkbox from app state
+// after somebody else changed it: a "/permission-skip-all" typed at a
+// prompt, or another window's own checkbox. Only when the panel is open,
+// since that is the only time it is on screen; the pill beside the
+// status line is redrawn either way.
+export function refreshPermissionSettingsIfOpen() {
+  if (!permissionSettingsModal || permissionSettingsModal.hidden) return;
+  skipPermissionsCheckbox.checked = app.skipPermissions;
+}
+
 export function openPermissionSettings() {
   skipPermissionsCheckbox.checked = app.skipPermissions;
   skipPermissionsCheckbox.disabled = !app.canEditPermissions;

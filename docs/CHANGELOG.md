@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.61.0
+
+* **A background task's window shows the whole of what is happening in it.** It showed a tool call starting and then, whatever happened next, nothing: `tool.end` was dropped on the floor, so you watched the moment work began and never the moment it finished, which is the half you are usually waiting for. Tool calls now complete in place with their result and a success or failure marker, the same shape the main conversation uses.
+
+  Worse than the missing half was the missing signal: a task blocked on a permission looked exactly like a task working. It now says `⏸ waiting for permission` and names what it wants to do. The answer is still given in the session that spawned it, which is where the prompt appears. A task that delegates work of its own shows that too, since a task waiting on its own children with nothing on screen about them is the same gap one level down. And the end of the work has a marker at all now, instead of the last reply simply stopping and leaving you to guess whether more was coming.
+
+* **A finished task can be deleted from that window.** Its work is over and its transcript is all that is left, so this is how you are rid of a row that has served its purpose. A running task still offers Stop and nothing else, because they are the same question at two different moments.
+
+  The row is built from the parent session's own `task.spawned` event, which is what makes it survive a reload, so deleting the child alone would have removed the conversation and left the row pointing at a session that no longer existed. The removal is recorded where the row comes from, and stays gone.
+
+* **config.json is JSONC.** `//` to the end of a line, `/* */` across lines, and a trailing comma before a `}` or `]`. A config is a thing you write by hand, and a thing written by hand wants to say why; the file has been carrying `"//base_url"` pseudo-keys instead, which read badly and turn up in the parsed config as fields nothing reads.
+
+  **The comments survive the writes localcode makes.** That is the half that took the work. Saving a permission rule or typing `/smart-agent on` rewrites config.json, and a rewrite that dropped the comments would eat the very thing they are for, silently, the first time somebody used the feature. So comments are blanked to spaces of the same length when the file is parsed, which keeps every byte offset, and a file with comments in it is then edited one key at a time in place: the value changes and everything else, including your indentation and key order, stays exactly as it was. Adding a key that is not already in a commented file is refused rather than guessed at, because choosing a position would mean deciding which side of one of your comments it belongs on.
+
+  A `//` inside a string is not a comment, so a `base_url` of `https://example.com/v1` still means what it says.
+
+* **`config.sample.json`: one worked setup for orchestration.** The answer to "what agents do I need for this" is that you need none: with Smart Agent on, localcode builds all six specialists and points each at whichever of your profiles suits its work. What it needs from you is profiles to choose between, and three is the useful number because the roster sorts into quick, balanced and deep.
+
+  The sample says that, and then writes the roster out anyway with all six prompts in full, because the prompts are the interesting part and are otherwise invisible, and because declaring an agent by name is how you replace one. A test holds the file to the built-in roster prompt for prompt, so it is what localcode actually uses rather than a copy that drifted. It caught two drifts the first time it ran.
+
 ## v0.60.0
 
 * **The three switches that change how a turn behaves each have a command now.** `/smart-agent`, `/auto-delegate` and `/permission-skip-all`. Smart Agent could be flipped with `/config smart_agent on`, which no help text mentioned, so in practice it was the settings window; skip permissions had no command at all, which meant the TUI could not reach it. They are answered by the daemon rather than by a client, so both the TUI and the Web UI have them and both say the same thing about them.

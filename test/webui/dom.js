@@ -166,6 +166,16 @@ class Element {
     return this.children.filter((el) => el.tagName === 'OPTION');
   }
 
+  // append is appendChild's variadic form, which a browser has and this
+  // did not. Code that reached for it appended nothing here, and because
+  // the caller is inside a try/catch that logs and moves on, the test
+  // saw an empty element rather than an error: a failure that pointed at
+  // the wrong thing. Anything a shipped file can reasonably call has to
+  // exist here or it fails silently in exactly this way.
+  append(...nodes) {
+    for (const n of nodes) this.appendChild(n);
+  }
+
   appendChild(node) {
     if (node.parentNode) node.parentNode.removeChild(node);
     node.parentNode = this;

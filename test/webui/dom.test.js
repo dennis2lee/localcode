@@ -143,3 +143,12 @@ test('an element carries the scroll geometry a test sets on it', () => {
   box.scrollTop = 800;
   assert.equal(box.scrollHeight - box.scrollTop - box.clientHeight, 0);
 });
+
+test('append takes several nodes, like a browser', () => {
+  const parent = new Element('div');
+  const a = new Element('span');
+  const b = new Element('span');
+  parent.append(a, b);
+  assert.equal(parent.children.length, 2, 'append should add every node it is given');
+  assert.equal(parent.children[0], a);
+});

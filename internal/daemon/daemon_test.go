@@ -1829,3 +1829,202 @@ func TestDaemonForkCarriesHistoryIntoTheNextRequest(t *testing.T) {
 		t.Errorf("the fork's first request is missing the model's own reply:\n%s", seen)
 	}
 }
+
+// waitForSettings reads the stream until a settings.changed arrives, or
+// gives up. Every switch is in every event, so a test asserts on a
+// snapshot rather than on which field moved.
+func waitForSettings(t *testing.T, evCh <-chan events.Event) map[string]any {
+	t.Helper()
+	got := make(chan map[string]any, 1)
+	go func() {
+		for ev := range evCh {
+			if ev.Type == events.TypeSettingsChanged {
+				select {
+				case got <- ev.Data:
+				default:
+				}
+				return
+			}
+		}
+	}()
+	select {
+	case d := <-got:
+		return d
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for a settings.changed event")
+		return nil
+	}
+}
+
+// A switch is a fact about the daemon, not about a conversation, so a
+// client looking at any session has to learn when one moves.
+//
+// It did not. The toggle commands wrote a session-scoped config.changed,
+// which only reached clients attached to the session the command was
+// typed in, and the settings endpoints wrote nothing at all, so the
+// window that changed a switch was the only thing that knew. A second
+// window went on showing the old state until it was reloaded.
+func TestASwitchChangedAnywhereReachesEveryClient(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	watched, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	// The command is typed in a different conversation from the one being
+	// watched, which is the case that used to be missed entirely.
+	other, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	evCtx, cancelEvents := context.WithCancel(ctx)
+	defer cancelEvents()
+	evCh, err := c.SubscribeEvents(evCtx, watched.ID, 0)
+	if err != nil {
+		t.Fatalf("SubscribeEvents: %v", err)
+	}
+	// This stream has no backlog by design, so the subscription has to be
+	// registered before anything is sent.
+	time.Sleep(100 * time.Millisecond)
+
+	if err := c.SendMessage(ctx, other.ID, "/permission-skip-all on"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	data := waitForSettings(t, evCh)
+	if data["skip_permissions"] != true {
+		t.Errorf("skip_permissions = %v, want true", data["skip_permissions"])
+	}
+	// The whole snapshot, so a client applies a state rather than merging
+	// a sequence and cannot end up half-updated by an event it missed.
+	for _, k := range []string{"smart_agent", "auto_delegate", "show_tps", "auto_compact_enabled"} {
+		if _, ok := data[k]; !ok {
+			t.Errorf("the event omits %s, so a client would have to merge rather than apply", k)
+		}
+	}
+}
+
+// And the other direction: the settings window changing a switch has to
+// reach the prompt somebody else is typing at.
+func TestTheSettingsEndpointsAlsoAnnounce(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	evCtx, cancelEvents := context.WithCancel(ctx)
+	defer cancelEvents()
+	evCh, err := c.SubscribeEvents(evCtx, sess.ID, 0)
+	if err != nil {
+		t.Fatalf("SubscribeEvents: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Post(httpSrv.URL+"/api/settings/smart-agent", "application/json",
+		strings.NewReader(`{"enabled":true}`))
+	if err != nil {
+		t.Fatalf("POST smart-agent: %v", err)
+	}
+	resp.Body.Close()
+
+	if data := waitForSettings(t, evCh); data["smart_agent"] != true {
+		t.Errorf("smart_agent = %v, want true", data["smart_agent"])
+	}
+}
+
+// A background task's row in the panel is built from the parent's own
+// task.spawned event, which is what makes it survive a reload. Deleting
+// the child alone therefore removed the conversation and left the row:
+// it came back on the next replay, pointing at a session that no longer
+// existed. The removal has to be recorded where the row comes from.
+func TestDeletingATaskTellsItsParent(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	parent, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	// A task is a session with a parent, which is the whole of what makes
+	// it a task rather than a conversation.
+	const taskID = "task-under-test"
+	if _, err := d.Loop.Store.CreateSession(taskID, parent.ID, "explore", false); err != nil {
+		t.Fatalf("create task session: %v", err)
+	}
+
+	if err := c.DeleteSession(ctx, taskID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	evs, err := d.Loop.Store.Events(parent.ID, 0)
+	if err != nil {
+		t.Fatalf("parent events: %v", err)
+	}
+	var told bool
+	for _, ev := range evs {
+		if ev.Type == events.TypeTaskStatus && ev.Data["task_id"] == taskID && ev.Data["status"] == "deleted" {
+			told = true
+		}
+	}
+	if !told {
+		t.Error("the task's conversation was deleted and its parent was not told, so the row comes back on the next reload")
+	}
+
+	// And the conversation really is gone, not merely marked.
+	if _, err := d.Loop.Store.Get(taskID); err == nil {
+		t.Error("the task session still exists after being deleted")
+	}
+}
+
+// Deleting an ordinary conversation has no parent to tell, and must not
+// invent one.
+func TestDeletingAConversationTellsNobody(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	other, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	doomed, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	before, _ := d.Loop.Store.Events(other.ID, 0)
+
+	if err := c.DeleteSession(ctx, doomed.ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	after, _ := d.Loop.Store.Events(other.ID, 0)
+	if len(after) != len(before) {
+		t.Errorf("deleting one conversation wrote %d events into another", len(after)-len(before))
+	}
+}

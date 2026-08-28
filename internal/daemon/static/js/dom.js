@@ -56,6 +56,7 @@ export const taskModalTitle = document.getElementById('task-modal-title');
 export const taskModalBody = document.getElementById('task-modal-body');
 export const taskModalNote = document.getElementById('task-modal-note');
 export const taskCancelBtn = document.getElementById('task-cancel');
+export const taskDeleteBtn = document.getElementById('task-delete');
 export const taskCloseBtn = document.getElementById('task-close');
 export const leftPanel = document.getElementById('left-panel');
 export const rightPanel = document.getElementById('right-panel');

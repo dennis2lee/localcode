@@ -94,6 +94,16 @@ type Loop struct {
 	// "!`shell`" and "@file" expansions against.
 	ProjectDir string
 
+	// OnSettingsChanged, if set, is called after a toggle command moves
+	// one of the daemon-wide switches. The daemon wires it to a
+	// broadcast; without it a switch flipped at one prompt was invisible
+	// to every client not looking at that same conversation.
+	//
+	// A hook rather than a direct call, for the same reason PickDirectory
+	// is one: the agent loop does not know what a subscriber is, and the
+	// daemon is the thing that has them.
+	OnSettingsChanged func()
+
 	// ConfigPath is the config.json the toggle commands write to, so a
 	// switch flipped at the prompt survives a restart the way the same
 	// switch flipped in the settings window does. Empty means there is

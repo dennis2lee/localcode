@@ -309,6 +309,14 @@ func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 	defer d.turns.end(id)
 
+	// Read before the delete, because after it there is nothing to read.
+	// A background task's session is a child, and its parent's log is
+	// where the row in the task panel comes from.
+	parentID := ""
+	if sess, err := d.Loop.Store.Get(id); err == nil {
+		parentID = sess.ParentID
+	}
+
 	// Claim the tree, stop the work, wait for it, and only then remove
 	// what it was writing to. The claim is released last, after the
 	// records are gone: releasing it between the last task stopping and
@@ -320,6 +328,25 @@ func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	if err := d.Loop.Store.DeleteTree(id); err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
+	}
+
+	// Tell the parent its task is gone.
+	//
+	// The panel's rows are built from the parent's own task.spawned and
+	// task.status events, which is what makes them survive a reload. So
+	// deleting the child alone removes the conversation and leaves the
+	// row: it would come back on the next replay, pointing at a session
+	// that no longer exists. Recording the removal where the row comes
+	// from is what makes it stay gone.
+	//
+	// A status rather than a new event type, because every client already
+	// reads task.status and an unknown status is ignored by one that has
+	// not learned this one.
+	if parentID != "" {
+		d.Loop.Store.Append(parentID, events.TypeTaskStatus, map[string]any{
+			"task_id": id,
+			"status":  "deleted",
+		})
 	}
 	// A child session can have unanswered permission prompts of its own.
 	for _, sid := range ids {

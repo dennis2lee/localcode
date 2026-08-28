@@ -4,9 +4,9 @@ import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
 } from './transcript.js';
-import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers } from './render.js';
+import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
-import { refreshDelegatePanelIfOpen, permissionRequest } from './modals.js';
+import { refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen, permissionRequest } from './modals.js';
 import { refreshSmartAgentIfOpen } from './settings.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
@@ -94,6 +94,14 @@ const handlers = {
     renderTasks();
   },
   'task.status': (d) => {
+    // "deleted" is the daemon saying this task's conversation is gone,
+    // recorded on this session's own log so the row stays gone across a
+    // reload rather than being rebuilt from the task.spawned above it.
+    if (d.status === 'deleted') {
+      session.tasks.delete(d.task_id);
+      renderTasks();
+      return;
+    }
     if (session.tasks.has(d.task_id)) session.tasks.get(d.task_id).status = d.status;
     else session.tasks.set(d.task_id, { agent: '', status: d.status });
     renderTasks();
@@ -147,6 +155,37 @@ const handlers = {
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
     }
+  },
+  // Daemon-wide, and the live half of every switch: a toggle typed at
+  // any prompt, the settings window in this tab or another one. It
+  // carries all of them, so this applies a snapshot rather than merging
+  // a sequence and cannot leave the page half-updated by a missed event.
+  //
+  // The session-scoped config.changed above still arrives for the four
+  // settings it has always carried, and applying the same state twice is
+  // harmless. This one is the only half that reaches a window looking at
+  // another session, which is where the old state used to sit.
+  'settings.changed': (d) => {
+    if (typeof d.auto_compact_enabled === 'boolean') app.autoCompactEnabled = d.auto_compact_enabled;
+    if (typeof d.show_tps === 'boolean') app.showTPS = d.show_tps;
+    if (typeof d.auto_delegate === 'boolean') {
+      app.autoDelegate = d.auto_delegate;
+      renderAutoDelegate();
+      refreshDelegatePanelIfOpen();
+    }
+    if (typeof d.smart_agent === 'boolean') {
+      app.smartAgent = d.smart_agent;
+      refreshSmartAgentIfOpen();
+    }
+    if (typeof d.skip_permissions === 'boolean') {
+      app.skipPermissions = d.skip_permissions;
+      // The pill by the status line, always: it is the one place the
+      // page says permissions are being skipped, and it going stale is
+      // the whole reason this event exists.
+      renderPermissionStatus();
+      refreshPermissionSettingsIfOpen();
+    }
+    renderStatusBar();
   },
   // A fork is a verbatim copy of a conversation, so its transcript is
   // indistinguishable from the original's. This line is the only thing

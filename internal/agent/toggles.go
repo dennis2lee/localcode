@@ -140,9 +140,11 @@ func (l *Loop) routeSkipPermissions(sessionID, text string) (bool, error) {
 	b.WriteString(l.persist(func(path string) error { return config.SetSkipPermissionsInFile(path, want) }))
 
 	// Not announceConfig: skip_permissions is not one of the four fields
-	// that event carries, and inventing a fifth would make every client
-	// that reads it guess. Clients learn this one from GET /api/settings,
-	// which is where they already read it.
+	// that event carries, and inventing a fifth would change the meaning
+	// of an event other clients already parse. The daemon-wide one is
+	// where it belongs, and it carries every switch including this one,
+	// which is what makes the permission pill in another window move.
+	l.announceSettings()
 	return true, l.replyText(sessionID, b.String())
 }
 
@@ -163,9 +165,14 @@ func (l *Loop) persist(write func(path string) error) string {
 	return ""
 }
 
-// announceConfig tells every attached client the four live settings, the
-// same shape "/config" emits, so a toggle typed in one client moves the
-// switch in another.
+// announceConfig records the change in this conversation's log, the same
+// shape "/config" emits, and tells every client on the daemon.
+//
+// Both, because they answer different questions. The session event is
+// history: it says this conversation is the one the switch was flipped
+// in, and it replays. The broadcast is the live one, and it is the only
+// half that reaches a client looking at another session or at no session
+// at all, which is where a second window sat showing the old state.
 func (l *Loop) announceConfig(sessionID string) {
 	l.Store.Append(sessionID, events.TypeConfigChanged, map[string]any{
 		"auto_compact_enabled": l.AutoCompactEnabled(),
@@ -173,6 +180,15 @@ func (l *Loop) announceConfig(sessionID string) {
 		"auto_delegate":        l.AutoDelegateEnabled(),
 		"smart_agent":          l.SmartAgentEnabled(),
 	})
+	l.announceSettings()
+}
+
+// announceSettings tells every client on the daemon what all the
+// switches are now.
+func (l *Loop) announceSettings() {
+	if l.OnSettingsChanged != nil {
+		l.OnSettingsChanged()
+	}
 }
 
 // matchToggleCommand recognizes "/name" and "/name <arg>", matching the

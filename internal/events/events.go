@@ -56,6 +56,23 @@ const (
 	// on load and keep it current from these.
 	TypeSessionActivity Type = "session.activity"
 
+	// TypeSettingsChanged reports the daemon-wide switches after one of
+	// them moved, whoever moved it: a toggle typed at a prompt, the
+	// settings window, another client entirely.
+	//
+	// Daemon-wide, so it goes out on the broadcast rather than into a
+	// session's log. A setting is not part of any conversation, and the
+	// session-scoped TypeConfigChanged could only reach clients that
+	// happened to be looking at the session the command was typed in,
+	// which is why a second window went on showing the old state.
+	//
+	// It carries every switch rather than the one that moved, so a
+	// client applies a snapshot instead of merging a sequence and cannot
+	// end up half-updated by a missed event. Fan-out only, no history: a
+	// client that was not connected re-reads GET /api/settings on load,
+	// which is where it gets these in the first place.
+	TypeSettingsChanged Type = "settings.changed"
+
 	// TypeUsage reports the latest known token usage/context-window fill
 	// for a turn: {"input_tokens","output_tokens","max_context","percent",
 	// "tps","show_tps","model"}.

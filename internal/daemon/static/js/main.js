@@ -5,7 +5,7 @@ import {
   delegateMatchAddBtn, delegateMatchInput,
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
   workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, stopBtn,
-  workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskCloseBtn,
+  workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskDeleteBtn, taskCloseBtn,
   windowBarEl, windowMinimizeBtn, windowMaximizeBtn, windowCloseBtn, windowEdgesEl, windowTitleEl, windowEdges,
 } from './dom.js';
 import { app, session } from './state.js';
@@ -25,7 +25,7 @@ import {
   openWorkspacePicker, closeWorkspaceModal, saveWorkspace, anyModalOpen, permissionRequest,
   browseWorkspace, revealWorkspace, stopBlockingTurns,
 } from './modals.js';
-import { closeTaskView, cancelOpenTask, taskView } from './taskview.js';
+import { closeTaskView, cancelOpenTask, deleteOpenTask, taskView } from './taskview.js';
 import { initResizers } from './resize.js';
 import { tryComplete, resetCompletion } from './complete.js';
 import { initSettings } from './settings.js';
@@ -165,6 +165,7 @@ workspaceRevealBtn.addEventListener('click', revealWorkspace);
 workspaceStopBusyBtn.addEventListener('click', stopBlockingTurns);
 taskCloseBtn.addEventListener('click', closeTaskView);
 taskCancelBtn.addEventListener('click', cancelOpenTask);
+taskDeleteBtn.addEventListener('click', deleteOpenTask);
 workspaceCancelBtn.addEventListener('click', closeWorkspaceModal);
 workspaceSaveBtn.addEventListener('click', saveWorkspace);
 workspaceInput.addEventListener('keydown', (e) => {

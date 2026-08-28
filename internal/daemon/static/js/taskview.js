@@ -1,5 +1,5 @@
 import {
-  taskModal, taskModalTitle, taskModalBody, taskModalNote, taskCancelBtn,
+  taskModal, taskModalTitle, taskModalBody, taskModalNote, taskCancelBtn, taskDeleteBtn,
 } from './dom.js';
 import { createFollower } from './scroll.js';
 import { session } from './state.js';
@@ -49,6 +49,69 @@ function line(cls, text) {
 // producing one line per fragment.
 let currentEl = null;
 
+// The tool calls still running, by tool_use_id, so the result can be put
+// back on the row that asked for it.
+//
+// This window used to drop tool.end on the floor. A task showed "▸ bash
+// go test ./..." and then, whatever happened next, nothing: no result, no
+// success or failure, no sign the call had even ended. Watching a task
+// meant watching the moment work started and never the moment it
+// finished, which is the half you are usually waiting for.
+const taskToolRows = new Map();
+
+// toolRow is the task window's version of the transcript's tool block:
+// the same classes, so it is styled by the same rules, and the same
+// shape, so a task's tools read like the main conversation's.
+function toolRow(toolUseID, name, inputJSON) {
+  const row = document.createElement('div');
+  row.className = 'msg-toolcall running';
+
+  const head = document.createElement('div');
+  head.className = 'head';
+  const marker = document.createElement('span');
+  marker.className = 'marker';
+  marker.textContent = '▸';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'name';
+  nameEl.textContent = name || 'tool';
+  const argEl = document.createElement('span');
+  argEl.className = 'arg';
+  argEl.textContent = summarizeInput(inputJSON || '');
+  const stateEl = document.createElement('span');
+  stateEl.className = 'state';
+  stateEl.textContent = 'running…';
+  // appendChild one at a time, the way every other builder in the
+  // shipped code does. The variadic append() is equivalent in a browser.
+  head.appendChild(marker);
+  head.appendChild(nameEl);
+  head.appendChild(argEl);
+  head.appendChild(stateEl);
+
+  const detail = document.createElement('pre');
+  detail.className = 'detail';
+  detail.textContent = String(inputJSON || '');
+
+  row.appendChild(head);
+  row.appendChild(detail);
+  follower.keeping(() => taskModalBody.appendChild(row));
+  if (toolUseID) taskToolRows.set(toolUseID, { row, stateEl, marker, detail });
+}
+
+function finishToolRow(toolUseID, content, isError) {
+  const entry = taskToolRows.get(toolUseID);
+  if (!entry) return;
+  taskToolRows.delete(toolUseID);
+  const { row, stateEl, marker, detail } = entry;
+  row.classList.remove('running');
+  row.classList.toggle('failed', !!isError);
+  marker.textContent = isError ? '✗' : '✓';
+  const text = String(content ?? '');
+  follower.keeping(() => {
+    stateEl.textContent = isError ? 'failed' : `${text.split('\n').length} lines`;
+    detail.textContent = `${detail.textContent}\n\n${text}`;
+  });
+}
+
 function applyTaskEvent(ev) {
   const d = ev.data || {};
   switch (ev.type) {
@@ -69,18 +132,79 @@ function applyTaskEvent(ev) {
       break;
     case 'tool.start':
       currentEl = null;
-      line('msg-toolcall', `▸ ${d.name || 'tool'}  ${summarizeInput(d.input || '')}`);
+      toolRow(d.tool_use_id, d.name || '', d.input || '');
       break;
     case 'tool.end':
       currentEl = null;
+      finishToolRow(d.tool_use_id, d.content, d.is_error);
+      break;
+    // A task waiting on a permission looked exactly like a task working,
+    // which is the worst thing this window could get wrong: it is stuck,
+    // it is stuck on something specific, and nothing said so. The answer
+    // is given in the main window, where the prompt appears; this says
+    // what it is waiting for and stops saying it when it is answered.
+    case 'permission.request':
+      currentEl = null;
+      line('msg-error', `⏸ waiting for permission: [${d.tool || '?'}] ${d.description || ''}`);
+      break;
+    case 'permission.resolved':
+      currentEl = null;
+      line('msg-tool', d.allowed ? '▶ permission granted' : '⛔ permission denied');
+      break;
+    // A task can delegate too, and a task waiting on its own children
+    // with nothing on screen about them is the same gap one level down.
+    case 'task.spawned':
+      currentEl = null;
+      line('msg-tool', `⇢ delegated to ${d.agent || '?'} (${d.task_id || ''})`);
+      break;
+    case 'task.status':
+      currentEl = null;
+      line('msg-tool', `⇠ ${d.task_id || 'task'}: ${d.status || ''}`);
+      break;
+    case 'delegated':
+      currentEl = null;
+      line('msg-tool', `⇢ handed to ${d.agent || '?'}`);
+      break;
+    case 'agent.switched':
+      currentEl = null;
+      line('msg-tool', `agent: ${d.agent || ''}`);
+      break;
+    case 'compacted':
+      currentEl = null;
+      line('msg-tool', `[the task's history was summarized to save context]`);
+      break;
+    // The end of the work, which had no marker at all: the last reply
+    // simply stopped and you were left guessing whether more was coming.
+    case 'turn.done':
+      currentEl = null;
+      abandonRunningToolRows();
+      line('msg-tool', '— finished —');
+      break;
+    case 'turn.cancelled':
+      currentEl = null;
+      abandonRunningToolRows();
+      line('msg-tool', '— cancelled —');
       break;
     case 'error':
       currentEl = null;
+      abandonRunningToolRows();
       line('msg-error', `Error: ${d.error || ''}`);
       break;
     default:
       break;
   }
+}
+
+// abandonRunningToolRows closes out any row still spinning when the work
+// ends. A cancelled turn emits no tool.end for the call it stopped, so
+// without this the row spins under the "cancelled" line forever.
+function abandonRunningToolRows() {
+  for (const [, entry] of taskToolRows) {
+    entry.row.classList.remove('running');
+    entry.marker.textContent = '–';
+    entry.stateEl.textContent = 'did not finish';
+  }
+  taskToolRows.clear();
 }
 
 export function openTaskView(taskID) {
@@ -91,13 +215,12 @@ export function openTaskView(taskID) {
   const t = session.tasks.get(taskID);
   taskModalTitle.textContent = t && t.agent ? `${t.agent} — ${taskID}` : taskID;
   taskModalBody.innerHTML = '';
+  taskToolRows.clear();
   // A newly opened task starts at its newest output, whatever the last
   // one this modal showed was left scrolled to.
   follower.force();
   taskModalNote.textContent = t ? `status: ${t.status}` : '';
-  // Only a task still running has anything to stop.
-  taskCancelBtn.style.display = (t && (t.status === 'running' || t.status === 'spawned')) ? '' : 'none';
-  taskCancelBtn.disabled = false;
+  showTaskButtons(t ? t.status : '');
 
   stream = new EventSource(`/api/sessions/${taskID}/events?tail=${TASK_TAIL}`);
   stream.onmessage = (e) => {
@@ -129,10 +252,50 @@ export async function cancelOpenTask() {
   }
 }
 
-// refreshTaskViewStatus keeps the open window's status line and its stop
-// button honest when a task.status event lands for the task being watched.
+// showTaskButtons offers exactly one of the two, because they are the
+// same question at two different moments: a task that is running can be
+// stopped, and a task that has finished can be thrown away. Neither is
+// useful at the other's moment, and both at once would put a Delete
+// beside a Stop for work still going on.
+function showTaskButtons(status) {
+  const running = status === 'running' || status === 'spawned';
+  taskCancelBtn.style.display = running ? '' : 'none';
+  taskCancelBtn.disabled = false;
+  // Not for a task with no status at all: that is a window opened on
+  // something the panel has no record of, and offering to delete it
+  // would be offering to delete what might still be working.
+  taskDeleteBtn.style.display = (!running && status) ? '' : 'none';
+  taskDeleteBtn.disabled = false;
+}
+
+// refreshTaskViewStatus keeps the open window's status line and its
+// buttons honest when a task.status event lands for the task being
+// watched: a task that finishes while you are reading it stops offering
+// to be stopped and starts offering to be removed.
 export function refreshTaskViewStatus(taskID, status) {
   if (!taskView.isOpen || taskID !== openTaskID) return;
   taskModalNote.textContent = `status: ${status}`;
-  if (status !== 'running' && status !== 'spawned') taskCancelBtn.style.display = 'none';
+  showTaskButtons(status);
+}
+
+// deleteOpenTask removes a finished task's conversation for good.
+//
+// The work is over and its transcript is the only thing left, so this is
+// the one way to be rid of a row that has served its purpose. It goes
+// through the ordinary session delete, because a task is a session; the
+// daemon records the removal on the parent's log, which is where the row
+// in the panel comes from, so it does not come back on the next reload.
+export async function deleteOpenTask() {
+  if (!openTaskID) return;
+  const id = openTaskID;
+  taskDeleteBtn.disabled = true;
+  try {
+    await apiClient.deleteSession(id);
+    // The row goes on the task.status event the daemon just recorded,
+    // and this window has nothing left to show.
+    closeTaskView();
+  } catch (err) {
+    taskModalNote.textContent = `could not delete this task: ${err}`;
+    taskDeleteBtn.disabled = false;
+  }
 }

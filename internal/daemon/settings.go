@@ -108,6 +108,9 @@ func (d *Daemon) handleSetAutoDelegate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Once, after both halves: the target and the switch are one change
+	// to a reader, and two events would make a panel redraw twice.
+	d.announceSettings()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -145,6 +148,7 @@ func (d *Daemon) handleSetSmartAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Loop.SetSmartAgentEnabled(req.Enabled)
+	d.announceSettings()
 	resp := map[string]any{
 		"smart_agent": req.Enabled,
 		"applied":     true,
@@ -171,6 +175,7 @@ func (d *Daemon) handleSetSkipPermissions(w http.ResponseWriter, r *http.Request
 		return
 	}
 	d.Loop.Config.SetSkipPermissionsRuntime(req.Enabled)
+	d.announceSettings()
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetSkipPermissionsInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			http.Error(w, fmt.Sprintf("saved for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)

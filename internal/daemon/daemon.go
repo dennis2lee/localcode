@@ -127,6 +127,11 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 			Data: map[string]any{"session": sessionID, "busy": busy},
 		})
 	}
+	// One place every switch change becomes an event, wired here so no
+	// path that changes a setting can forget it: the toggle commands
+	// call the loop's hook, and the settings endpoints call this method
+	// directly.
+	loop.OnSettingsChanged = d.announceSettings
 	if mcpManager != nil {
 		mcpManager.OnStatusChange(func(states []mcp.ServerState) {
 			d.daemonEvents.send(events.Event{
@@ -182,6 +187,28 @@ func (d *Daemon) routes(webFS fs.FS) {
 	if webFS != nil {
 		d.mux.Handle("/", http.FileServerFS(webFS))
 	}
+}
+
+// announceSettings tells every connected client what the daemon-wide
+// switches are now, whoever just moved one.
+//
+// A snapshot of all of them rather than the one that changed, so a
+// client applies a state instead of merging a sequence and cannot end up
+// half-updated by an event it missed. On the broadcast rather than in a
+// session's log, because a setting belongs to the daemon and not to any
+// one conversation; a client that was not connected re-reads
+// GET /api/settings on load, which is the same shape.
+func (d *Daemon) announceSettings() {
+	d.daemonEvents.send(events.Event{
+		Type: events.TypeSettingsChanged,
+		Data: map[string]any{
+			"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
+			"show_tps":             d.Loop.ShowTPS(),
+			"auto_delegate":        d.Loop.AutoDelegateEnabled(),
+			"smart_agent":          d.Loop.SmartAgentEnabled(),
+			"skip_permissions":     d.Loop.Config.PermissionsSkipped(),
+		},
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

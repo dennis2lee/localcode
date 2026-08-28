@@ -27,26 +27,57 @@ func updateRawConfig(path string, mutate func(raw map[string]json.RawMessage) er
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		if err := json.Unmarshal(data, &raw); err != nil {
+		// Comments are blanked to spaces of the same length, so the
+		// offsets below still point into the original bytes. See
+		// jsonc.go.
+		if err := json.Unmarshal(stripComments(append([]byte(nil), data...)), &raw); err != nil {
 			return fmt.Errorf("parse config %s: %w", path, err)
 		}
 	case !os.IsNotExist(err):
 		return fmt.Errorf("read config %s: %w", path, err)
 	}
 
+	before := map[string]json.RawMessage{}
+	for k, v := range raw {
+		before[k] = v
+	}
 	if err := mutate(raw); err != nil {
 		return err
 	}
 
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
+	// A file with comments in it is rewritten key by key rather than
+	// re-marshalled, because re-marshalling would drop every comment in
+	// it. That is the one thing this feature must not do: somebody
+	// writes notes into their config and the first /smart-agent silently
+	// eats them.
+	if len(data) > 0 && hasComments(data) {
+		if out, ok := spliceKeys(data, before, raw); ok {
+			return writeFileAtomic(path, out)
+		}
+		// A shape the splice cannot edit safely: a key being added
+		// rather than changed, or a file it could not scan. Better to
+		// say so than to rewrite it and take the comments with it.
+		return fmt.Errorf("config %s has comments and this change cannot be made without rewriting it; "+
+			"edit the file by hand, or remove the comments", path)
 	}
+
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	out = append(out, '\n')
+	return writeFileAtomic(path, out)
+}
+
+// writeFileAtomic is the temp-file + rename this package has always used:
+// a crash or a full disk can never leave a truncated config.json, and the
+// file is created 0o600 because it can hold provider API keys and MCP
+// auth headers.
+func writeFileAtomic(path string, out []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
 
 	tmp, err := os.CreateTemp(dir, ".config-*.json")
 	if err != nil {

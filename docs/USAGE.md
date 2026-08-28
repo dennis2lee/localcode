@@ -145,6 +145,23 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 }
 ```
 
+Two files in the repository are worth copying from:
+
+| File | What it is |
+|---|---|
+| `config.example.json` | Every key this program reads, with a note on each. The reference. |
+| `config.sample.json` | One worked setup for orchestration: providers, three profiles, the switch, and the six specialists with their prompts written out. Start here if what you want is the multi-agent behaviour. |
+
+#### Comments: the file is JSONC
+
+`//` to the end of a line, `/* */` across lines, and a trailing comma before a `}` or `]`. A config is a thing you write by hand, and a thing written by hand wants to say why.
+
+**Comments survive the writes localcode makes.** Saving a permission rule, or typing `/smart-agent on`, rewrites config.json, and a rewrite that dropped your comments would eat the very thing they are for. So a file with comments in it is edited one key at a time, in place: the value changes and every other byte, including the comments and your own indentation and key order, stays exactly as it was.
+
+One case is refused rather than guessed at: adding a key that is not already in a commented file. There is no span to replace, and choosing a position would mean deciding which side of one of your comments it belongs on. localcode says so, the change still applies for the run, and you can add the key by hand.
+
+A `//` inside a string is not a comment, so a `base_url` of `https://example.com/v1` means what it says.
+
 #### Values from the environment: `{env:NAME}`
 
 Any string value in config.json may be `{env:NAME}`, and is replaced by that environment variable when the file is read. It is the same spelling opencode uses, so a config written for that works here.
@@ -1184,14 +1201,35 @@ What it turns on is a way of working rather than a preference, which is why it i
 
 | Added | Detail |
 |---|---|
-| Six specialist agents | `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. They exist without being configured, and disappear again when the switch is turned off. |
+| Six specialist agents | `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. They exist without being configured, and disappear again when the switch is turned off. See [What the roster needs from your config](#what-the-roster-needs-from-your-config). |
 | An orchestration prompt | Appended to the system prompt of top level sessions only. It tells the model to work out what is being asked, send wide reading to a sub agent, do the narrow work itself, verify before reporting, and say what it checked. |
 | `TaskBackground` and `TaskCollect` | Launch several specialists at once and pick up the answers together, instead of waiting for each in turn. |
+
 | [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by retrying the same endpoint with a bounded backoff, then moving to the next profile, re-deriving the prompt for the model it moved to. |
 | [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
 | [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas, the system prompt and the tail of the conversation are marked, so the provider can serve the unchanged part of every request from cache. |
 | [Two guards](#secrets-and-the-workspace-boundary) | Credential files are refused, and paths outside the session's workspace — symlinks resolved — are asked about. |
 | [A trust boundary](#the-trust-boundary) | The system prompt states which sources are instructions and which are data, and MCP output arrives framed as data. |
+
+#### What the roster needs from your config
+
+Nothing, in the sense that matters: **you do not declare the specialists.** With `smart_agent` on, localcode creates all six and points each at whichever of your profiles suits the work it does. What it needs from you is profiles to choose between.
+
+Three is the useful number, because the roster sorts into three kinds of work:
+
+| Kind | Agents | Work |
+|---|---|---|
+| quick | `explore`, `verify` | Searching, running a build |
+| balanced | `implement` | Making one self-contained change |
+| deep | `plan`, `oracle`, `librarian` | Judgement: design, review, reading something long |
+
+With one profile everything runs on it and orchestration still works; it just costs the same everywhere, which is most of the point of having a roster. With none at all there is no roster, and turning the switch on says so.
+
+Name a profile `smart-quick`, `smart-balanced` or `smart-deep` to pin a category by hand; no heuristic gets a vote after that. Without those names localcode guesses from the model ids, which works and is worth not relying on.
+
+**`config.sample.json` is this written out**, with the six prompts in full. A test in `internal/smart` holds that file to the built-in roster, so the prompts in it are the prompts localcode actually uses rather than a copy that drifted.
+
+To replace one, declare an agent with the same name. A name you have declared is yours entirely — prompt, model and tools — and localcode does not supply its own version of it.
 
 #### The specialists
 
@@ -1482,6 +1520,20 @@ curl -X POST http://127.0.0.1:4096/api/sessions/<parent-id>/tasks \
 ```
 
 `task.spawned` and `task.status` events, carrying running, completed, failed, or cancelled, flow into the parent session's stream and appear live in the Web UI sidebar and the TUI transcript. Background concurrency is capped by `max_concurrent_tasks`; a task cancelled while it is still queued reaches a terminal status like any other, and collecting it returns the cancellation rather than waiting.
+
+#### Watching one
+
+A task is a session, so it has a full conversation behind those three words. Click its row in the Web UI's right panel to open it. The window shows the whole of what is happening in it:
+
+| What | Shown as |
+|---|---|
+| Tool calls | A line when the call starts and the same line completed with its result, `✓` or `✗`, and the output; click it for the full arguments. |
+| A permission it is blocked on | `⏸ waiting for permission`, naming the tool and what it wants to do. Answer it in the session that spawned the task, which is where the prompt appears. |
+| Work it delegates itself | A line per sub-task it spawns and per status that comes back. |
+| The end | `— finished —` or `— cancelled —`, and any call the turn stopped mid-flight is marked as not finished rather than left spinning. |
+| Errors and compaction | A line each. |
+
+A task still running offers **Stop this task**. One that has finished offers **Delete this task** instead: its work is over and its transcript is all that is left, so this is how you are rid of a row that has served its purpose. Deleting removes the conversation and the row together, and the row stays gone across a reload, because the removal is recorded on the parent session's own log where the row comes from.
 
 ### Switching models
 
