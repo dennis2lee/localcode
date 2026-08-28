@@ -256,8 +256,8 @@ function drawPermissionSettings() {
   permissionScopeNote.textContent =
     'These four apply to this conversation only. Defaults for new ones come from config.json.'
     + (inherited.length ? ` Inherited from the conversation that started this one: ${inherited.join(', ')}.` : '');
-  permissionWorkspaceNote.textContent = app.workspace
-    ? `Paths that land outside ${app.workspace}: an absolute path, a "..", a symlink that leads out.`
+  permissionWorkspaceNote.textContent = app.workspacePath
+    ? `Paths that land outside ${app.workspacePath}: an absolute path, a "..", a symlink that leads out.`
     : 'Paths that land outside this conversation\'s own directory.';
   renderRememberedOutside();
 }
