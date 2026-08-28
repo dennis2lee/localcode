@@ -22,6 +22,8 @@ export const HELP_TEXT = [
   '  /version            show the daemon version',
   '  /skill              list registered skills',
   '  /<skill name>        run that skill (e.g. /pdf-tools)',
+  '                        type part of a name and press the right arrow to complete it;',
+  '                        press it again to cycle through the other matches',
   '  Esc                 cancel the running turn',
   '  Tab / Shift+Tab      switch to the next/previous agent',
   '  /agent              list registered agents',

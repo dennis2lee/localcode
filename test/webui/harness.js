@@ -47,6 +47,7 @@ function defaultRoutes() {
       { name: 'plan', description: 'read-only planner', model: 'test-model-2' },
     ],
     'GET /api/commands': [],
+    'GET /api/skills': [],
     'GET /api/settings': {
       auto_compact_enabled: true,
       show_tps: true,

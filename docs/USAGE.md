@@ -740,6 +740,18 @@ Type a skill's own name as a command. You do not have to wait for the model to d
 
 The transcript keeps just the short command you typed. The full skill body goes only to the model.
 
+**Completing a name.** Type part of one and press the right arrow. In both the TUI and the Web UI, a `/name` with nothing after it completes against the installed skills and the custom commands, and pressing the key again offers the next match:
+
+```text
+/p     ->  /pdf-tools  ->  /plan-review  ->  /pptx  ->  /p
+```
+
+The walk comes back round to what you typed, so it is never a cycle you cannot leave. The line under the prompt box shows the first match and how many there are, which is what tells you whether the key is worth pressing. Editing the text ends the walk and the next press starts a fresh one from what is now in the box.
+
+The right arrow only completes at the very end of a one-word `/name`. Anywhere else it moves the cursor, and a prompt that already has arguments (`/pdf-tools merge a.pdf`) is past completing.
+
+The built-in commands such as `/compact` are deliberately not offered: there are twenty of them, `/help` lists them, and passing them on the way to a skill would cost more presses than typing the name.
+
 When two things share a name, precedence is:
 
 1. Built in commands such as `/init` and `/compact`
@@ -872,6 +884,8 @@ These are typed into the message box but never reach the event log, so replaying
 | `/help` | Lists available commands instantly, no model call |
 | `/version` | Shows the version of the **daemon** you are attached to, from `GET /api/version`. With `--server` against a remote daemon this is that daemon's version, which can differ from your local binary. |
 | `/agent` | Lists registered agents; `/agent <name>` switches. See [Switching agents](#switching-agents-with-tab). |
+| `/model` | **TUI.** Opens a list of agents to choose from, with the model each one resolves to, so you can switch without knowing the name first. `/model <name>` switches directly. The Web UI has the header dropdown instead. |
+| `/session` | **TUI.** Opens a list of conversations to switch to. `/session <id>` switches directly. The Web UI has the left panel instead. See [Switching sessions](#switching-sessions). |
 | `/skill` | Lists registered skills. See [Running a skill](#running-a-skill). |
 | `/commands` | Lists the custom commands registered from `.localcode/commands/*.md`. See [Custom commands](#custom-commands). |
 | `/tasks` | Lists background tasks in this session. See [`/tasks`](#tasks). |
@@ -884,6 +898,7 @@ These are typed into the message box but never reach the event log, so replaying
 A session is an append only event log that lives as long as the daemon, so reopening the TUI or a browser tab picks the conversation back up.
 
 * **TUI**: at startup, if any session exists, the terminal lists them with session ID, agent, and creation time. Enter a number to resume, or `n` or an empty line to start fresh. From the same screen, `d<number>` such as `d1` deletes one session and reshows the list, and `da` deletes every session after you type `yes` to confirm.
+* **TUI, once running**: `/session` opens the same choice without restarting. Arrow keys move, Enter switches, Esc cancels. Switching clears the screen and replays the chosen conversation from its own log; the prompt recall history goes with it, since it belonged to the conversation you left.
 * **Web UI**: the left panel always shows the session list, each entry labelled with the workspace directory it was created in. Click a session to switch to it — the screen clears and that session's whole event log replays, including user messages, model replies, and tool runs. See [Left panel: sessions](#left-panel-sessions).
 
 `GET /api/sessions` returns the same list. Background tasks are `visible:false` and do not appear there. Use `GET /api/sessions/{id}/tasks` for those.
@@ -1014,6 +1029,8 @@ One line directly below the input box:
 `Tab` switches to the next agent and `Shift+Tab` to the previous one, the same as in the TUI — the browser's normal "move focus to the next control" behavior is suppressed so the key means the same thing in both clients. Focus stays in the prompt box. Inside a modal (permissions, workspace) Tab still moves between fields, which is the only thing it could usefully mean there.
 
 The header dropdown does the same thing and lists each agent with the model it resolves to, e.g. `explore (qwen3-1.7b)`; the agent's description is in the option's tooltip.
+
+In the TUI, `/model` opens the same choice as a list: arrow keys to move, Enter to switch, Esc to cancel, with the model each agent resolves to beside its name. Tab still cycles, which is faster when there are two agents and blind when there are six.
 
 ### Model output renders as markdown
 

@@ -56,7 +56,13 @@ func (m Model) inputBorder() string {
 // string, because it needs to know which row the prompt box starts on to
 // place the real terminal cursor (see the tea.Cursor handoff at the end).
 func (m Model) View() tea.View {
-	lines := strings.Split(m.viewport.View(), "\n")
+	// A picker takes the transcript's room while it is open. See
+	// picker.go for why that is the right place for it.
+	body := m.viewport.View()
+	if m.picker != nil {
+		body = m.pickerView(m.viewport.Width(), m.viewport.Height())
+	}
+	lines := strings.Split(body, "\n")
 
 	lines = append(lines, m.inputBorder())
 	// Row the prompt box's first line lands on. Derived from the frame
@@ -86,6 +92,12 @@ func (m Model) View() tea.View {
 	footer := "agent: " + m.currentAgent
 	if model, ok := m.currentModel(); ok {
 		footer += "  ·  model: " + model
+	}
+	// The completion hint replaces the agent line while a "/name" is
+	// being typed: it is about the key you are deciding whether to press,
+	// and the agent is not going anywhere.
+	if hint := m.completionHint(); hint != "" && m.picker == nil {
+		footer = hint
 	}
 	lines = append(lines, statusStyle.Render(footer))
 

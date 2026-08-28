@@ -8,6 +8,7 @@ import (
 
 	"localcode/internal/client"
 	"localcode/internal/events"
+	"localcode/internal/session"
 )
 
 // apiCallTimeout bounds every daemon call issued from here. Without it, a
@@ -40,13 +41,22 @@ func callErr(fn func(context.Context) error, wrap func(error) tea.Msg) tea.Cmd {
 	}
 }
 
-func listenForEvent(ch <-chan events.Event) tea.Cmd {
+// listenForEvent waits for one event and tags it with the generation of
+// the stream it came from.
+//
+// The tag is what lets a session switch be clean. Switching cancels the
+// old stream, but a read already parked on its channel is not cancelled
+// by that: it either returns the event that was in flight or returns
+// nothing when the channel closes. Both arrive after the switch, and
+// without the generation the first would be shown in the new session and
+// the second would look like the new stream ending.
+func listenForEvent(ch <-chan events.Event, gen uint64) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return nil
+			return streamEndedMsg{gen: gen}
 		}
-		return eventMsg(ev)
+		return eventMsg{ev: ev, gen: gen}
 	}
 }
 
@@ -101,6 +111,16 @@ func (m Model) cancelTask(taskID string) tea.Cmd {
 	return callErr(func(ctx context.Context) error {
 		return m.client.CancelTask(ctx, taskID)
 	}, func(err error) tea.Msg { return taskCancelledMsg{taskID: taskID, err: err} })
+}
+
+func (m Model) fetchSkills() tea.Cmd {
+	return call(m.client.ListSkills, func(s []client.SkillInfo, err error) tea.Msg { return skillsMsg{skills: s, err: err} })
+}
+
+// fetchSessions lists the conversations this daemon holds, for the
+// "/session" picker.
+func (m Model) fetchSessions() tea.Cmd {
+	return call(m.client.ListSessions, func(s []session.Session, err error) tea.Msg { return sessionsMsg{sessions: s, err: err} })
 }
 
 func (m Model) fetchCommands() tea.Cmd {

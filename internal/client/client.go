@@ -172,6 +172,21 @@ func (c *Client) ListCommands(ctx context.Context) ([]CommandInfo, error) {
 	return out, err
 }
 
+// SkillInfo is one installed skill, as offered by the daemon's
+// GET /api/skills, for a listing or for completing "/<skill name>".
+// Invoking a skill still goes through SendMessage like any other text.
+type SkillInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// ListSkills returns every skill installed on the daemon, sorted by name.
+func (c *Client) ListSkills(ctx context.Context) ([]SkillInfo, error) {
+	var out []SkillInfo
+	err := c.doJSON(ctx, http.MethodGet, "/api/skills", nil, &out)
+	return out, err
+}
+
 // Version returns the version string of the daemon this client is
 // attached to — not necessarily the local binary's own version, since a
 // TUI can be pointed at a remote daemon via --server.

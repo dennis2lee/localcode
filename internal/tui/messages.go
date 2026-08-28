@@ -3,9 +3,22 @@ package tui
 import (
 	"localcode/internal/client"
 	"localcode/internal/events"
+	"localcode/internal/session"
 )
 
-type eventMsg events.Event
+// eventMsg is one event off the stream, with the generation of the
+// stream that produced it. See listenForEvent.
+type eventMsg struct {
+	ev  events.Event
+	gen uint64
+}
+
+// streamEndedMsg says a stream's channel closed. For the current
+// generation that is the daemon going away; for an older one it is the
+// expected end of a stream this client switched off.
+type streamEndedMsg struct {
+	gen uint64
+}
 
 type turnDoneMsg struct {
 	text string
@@ -47,6 +60,31 @@ type taskCancelledMsg struct {
 type commandsMsg struct {
 	commands []client.CommandInfo
 	err      error
+}
+
+type skillsMsg struct {
+	skills []client.SkillInfo
+	err    error
+}
+
+type sessionsMsg struct {
+	sessions []session.Session
+	err      error
+}
+
+// sessionSwitchedMsg carries the outcome of opening another session: the
+// new stream to read, or the reason there is none.
+type sessionSwitchedMsg struct {
+	sessionID string
+	agent     string
+	events    <-chan events.Event
+	cancel    func()
+	gen       uint64
+	err       error
+	// reattach marks a re-open of the session already on screen, after a
+	// failed switch left this client attached to nothing. The transcript
+	// is not rebuilt for one.
+	reattach bool
 }
 
 type spinTickMsg struct{}

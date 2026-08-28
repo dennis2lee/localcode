@@ -52,6 +52,22 @@ func (m Model) atInputBottom() bool {
 	return m.input.Line() == m.input.LineCount()-1 && info.RowOffset == info.Height-1
 }
 
+// atInputEnd reports whether the cursor sits after the last character of
+// the whole prompt, which is where Right has nothing else to do and can
+// mean completion instead.
+//
+// Only meaningful for the single-line, space-free prompts completion
+// applies to, which is why it compares against the whole value: on one
+// logical line the cursor's offset within it is its offset within the
+// text. LineInfo().Width is not the comparison to make, since it counts
+// a trailing slot the cursor never reaches.
+func (m Model) atInputEnd() bool {
+	if m.input.LineCount() != 1 {
+		return false
+	}
+	return m.input.LineInfo().CharOffset == len([]rune(m.input.Value()))
+}
+
 // setInputTo replaces the prompt contents and parks the cursor at the end,
 // which is where you want it after recalling something to edit.
 func (m *Model) setInputTo(text string) {

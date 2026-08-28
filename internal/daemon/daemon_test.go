@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"localcode/internal/hooks"
 	"localcode/internal/provider"
 	"localcode/internal/session"
+	"localcode/internal/skills"
 	"localcode/internal/tools"
 )
 
@@ -444,6 +446,54 @@ func TestDaemonListCommands(t *testing.T) {
 	}
 	if got[0].Description != "sorts first" {
 		t.Errorf("Description = %q, want %q", got[0].Description, "sorts first")
+	}
+}
+
+// TestDaemonListSkills confirms GET /api/skills reports the installed
+// skills, sorted by name and without their bodies.
+//
+// The endpoint exists so a client can complete "/<skill name>" without
+// already knowing it. Neither client had any way to ask: "/skill" is
+// answered on the daemon and arrives as transcript text, which is a
+// thing to read rather than a thing to complete against.
+func TestDaemonListSkills(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	d.Loop.Skills = []skills.Skill{
+		{Name: "pptx", Description: "slide decks", Body: "# a long body nobody completing a name needs"},
+		{Name: "pdf-tools", Description: "work with PDFs", Body: "# another"},
+	}
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	got, err := c.ListSkills(context.Background())
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 skills, got %d: %+v", len(got), got)
+	}
+	if got[0].Name != "pdf-tools" || got[1].Name != "pptx" {
+		t.Errorf("skills = %+v, want sorted by name", got)
+	}
+	if got[0].Description != "work with PDFs" {
+		t.Errorf("Description = %q", got[0].Description)
+	}
+
+	// The body is what a skill says, and a listing is not the place for
+	// it: it can be thousands of words, and every client asks for this
+	// at startup.
+	resp, err := http.Get(httpSrv.URL + "/api/skills")
+	if err != nil {
+		t.Fatalf("GET /api/skills: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(raw), "long body") {
+		t.Errorf("the listing carries skill bodies: %s", raw)
 	}
 }
 

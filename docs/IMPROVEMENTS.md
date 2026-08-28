@@ -87,7 +87,7 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 | Idea | Why |
 |---|---|
 | Markdown and code block rendering | A renderer such as glamour would make replies far easier to read. |
-| Session picker inside the TUI | Today you type a number at a plain terminal prompt before the TUI starts. A Bubble Tea list with arrow key selection would feel native. |
+| ~~Session picker inside the TUI~~ | Done in v0.59.0. `/session` opens an arrow-key list of conversations without leaving the program, which is what the startup prompt could never be: it ran before the screen existed, so switching afterwards meant restarting. `/model` is the same list for agents. The startup prompt is still there and still deletes sessions, which the in-program picker deliberately does not. |
 | ~~Tool progress display~~ | Done in v0.25.0, extended in v0.32.11. An animated line below the prompt box names the running tool, the queue depth, and the background-task count, and clears at the turn boundary; each tool call also gets a transcript line that survives the turn. Elapsed time is still not shown. |
 | Context gauge | Turn the percentage in the status line into a colored bar, yellow at 70%, red at 85%. |
 | History scroll and search | Search earlier output in long sessions with the `/` key. |

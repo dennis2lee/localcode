@@ -17,7 +17,7 @@ import {
   atInputStart, atInputEnd, historyPrev, historyNext,
   navigatingHistory, endHistoryNavigation,
 } from './composer.js';
-import { loadAgents, loadCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
+import { loadAgents, loadCommands, loadSkills, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
 import { loadSessions, selectSession, createNewSession, deleteAllSessions } from './sessions.js';
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
@@ -27,6 +27,7 @@ import {
 } from './modals.js';
 import { closeTaskView, cancelOpenTask, taskView } from './taskview.js';
 import { initResizers } from './resize.js';
+import { tryComplete, resetCompletion } from './complete.js';
 import { initSettings } from './settings.js';
 
 agentSelectEl.addEventListener('change', async () => {
@@ -85,6 +86,9 @@ inputEl.addEventListener('input', () => {
   // typing fires this — setting .value from code (which is how recall
   // fills the box) does not.
   endHistoryNavigation();
+  // The hint under the box is about what is in the box, so it moves
+  // with it.
+  renderStatusBar();
 });
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -100,6 +104,13 @@ inputEl.addEventListener('keydown', (e) => {
     if (historyPrev()) e.preventDefault();
   } else if (e.key === 'ArrowDown' && (atInputEnd() || navigatingHistory())) {
     if (historyNext()) e.preventDefault();
+  } else if (e.key === 'ArrowRight') {
+    // Completion, but only at the very end of a one-word "/name".
+    // Anywhere else the key moves the caret, which is what it is for.
+    if (tryComplete()) {
+      e.preventDefault();
+      renderStatusBar();
+    }
   }
 });
 
@@ -209,13 +220,14 @@ async function init() {
   initResizers();
   initSettings();
   renderTasks();
-  // Six independent GETs against the same daemon — each one writes its own
+  // Independent GETs against the same daemon — each one writes its own
   // slice of app state and renders its own pane, so there is no ordering
-  // between them and no reason to pay six sequential round-trips before the
-  // page is usable.
+  // between them and no reason to pay a round-trip each in sequence
+  // before the page is usable.
   await Promise.all([
     loadAgents(),
     loadCommands(),
+    loadSkills(),
     loadSettings(),
     loadWorkspace(),
     loadMCPServers(),

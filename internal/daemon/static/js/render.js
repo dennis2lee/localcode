@@ -1,8 +1,9 @@
 import {
   tasksEl, mcpServersEl, statusTextEl, statusBarEl, agentSelectEl,
-  permissionStatusBtn, autoDelegateBtn, workspaceBtn, workspaceRevealBtn, stopBtn,
+  permissionStatusBtn, autoDelegateBtn, workspaceBtn, workspaceRevealBtn, stopBtn, inputEl,
 } from './dom.js';
 import { app, session, turnInFlight } from './state.js';
+import { completionHint } from './complete.js';
 import { openTaskView } from './taskview.js';
 
 // renderTasks builds each row with createElement/textContent rather than an
@@ -134,6 +135,17 @@ export function renderStatusBar() {
   }
   const activeTasks = [...session.tasks.values()].filter(t => t.status === 'spawned' || t.status === 'running').length;
   if (activeTasks > 0) parts.push(`${activeTasks} background task${activeTasks > 1 ? 's' : ''}`);
+
+  // While a "/name" is being typed, the line also says what the right
+  // arrow would complete it to and how many other candidates there are.
+  //
+  // Appended rather than substituted, unlike the TUI's footer. There the
+  // busy indicator has a band of its own; here this one line carries it,
+  // so a line replaced by a completion hint is a line that stopped
+  // saying a turn is running the moment you started typing the next
+  // prompt, which is exactly when you are watching it.
+  const hint = completionHint(inputEl.value);
+  if (hint) parts.push(hint);
   statusTextEl.textContent = parts.join('  ·  ');
 
   statusBarEl.classList.remove('ctx-warn', 'ctx-crit');

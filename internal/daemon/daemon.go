@@ -158,6 +158,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/mcp-servers", d.handleListMCPServers)
 	d.mux.HandleFunc("GET /api/agents", d.handleListAgents)
 	d.mux.HandleFunc("GET /api/commands", d.handleListCommands)
+	d.mux.HandleFunc("GET /api/skills", d.handleListSkills)
 	d.mux.HandleFunc("POST /api/sessions", d.handleCreateSession)
 	d.mux.HandleFunc("GET /api/sessions", d.handleListSessions)
 	d.mux.HandleFunc("GET /api/sessions/{id}", d.handleGetSession)

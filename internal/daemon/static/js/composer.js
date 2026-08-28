@@ -4,6 +4,7 @@ import * as apiClient from './api.js';
 import { appendTool, appendError, appendPendingUser, resolvePendingUser } from './transcript.js';
 import { renderStatusBar } from './render.js';
 import { isPlainPrompt, tryLocalCommand } from './commands.js';
+import { resetCompletion } from './complete.js';
 
 const defaultInputPlaceholder = inputEl.placeholder;
 
@@ -56,6 +57,9 @@ export function setConnected(v) {
 }
 
 export function rememberPrompt(text) {
+  // Sending ends any completion walk: the box is about to be empty, and
+  // the next "/" starts a new one.
+  resetCompletion();
   const h = session.history;
   if (h.length === 0 || h[h.length - 1] !== text) h.push(text);
   if (h.length > historyLimit) h.splice(0, h.length - historyLimit);

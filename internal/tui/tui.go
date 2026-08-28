@@ -5,6 +5,7 @@
 package tui
 
 import (
+	"context"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -50,7 +51,22 @@ type Model struct {
 	viewport   viewport.Model
 	input      textarea.Model
 	termHeight int
+	termWidth  int
 	events     <-chan events.Event
+	// streamCancel stops the event stream this model is currently
+	// reading, and streamGen identifies it.
+	//
+	// Both exist because a session can now be changed from inside the
+	// program. The old stream has to end or its goroutine reads a
+	// conversation nobody is looking at forever; and an event already in
+	// flight when the switch happens has to be dropped, or the first
+	// thing a newly opened session shows is the tail of the one before
+	// it. The generation is what makes that decidable: a message
+	// carries the generation of the stream it came from, and anything
+	// that does not match the current one is from a session this client
+	// has left.
+	streamCancel context.CancelFunc
+	streamGen    uint64
 
 	// transcript holds every line ever shown, as structured entries rather
 	// than one flat pre-rendered string — styling lives in view.go's
@@ -87,6 +103,14 @@ type Model struct {
 	currentAgent     string
 	agents           []client.AgentInfo
 	commandsList     []client.CommandInfo
+	skillsList       []client.SkillInfo
+
+	// picker is the open selection list, or nil. See picker.go.
+	picker *picker
+	// completion carries the state of a "/"-prefix completion walk, so
+	// pressing the same key again offers the next candidate rather than
+	// the same one. See complete.go.
+	completion completionState
 
 	// history is every prompt submitted from this client, oldest first,
 	// for Up/Down recall. It's deliberately client-side and in-memory:
@@ -154,5 +178,5 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(listenForEvent(m.events), m.fetchAgents(), m.fetchCommands())
+	return tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents(), m.fetchCommands(), m.fetchSkills())
 }

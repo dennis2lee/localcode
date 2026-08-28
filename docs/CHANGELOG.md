@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.59.0
+
+* **The TUI can now change what it is talking to, and to whom.** Both were things you had to already know: `/agent <name>` needs the name, Tab cycles blind, and a session could be chosen once, on the plain listing printed before the program starts, after which the only way to another was to restart. `/model` opens the agents as a list with the model each one resolves to; `/session` opens the conversations. Arrow keys move, Enter selects, Esc cancels, and the list takes the transcript's room while it is open rather than a line under the prompt box, because a list you are choosing from wants the room and the transcript is still there when you come back.
+
+  Switching conversation exchanges the event stream. The old one is cancelled rather than left reading a session nobody is looking at, and an event already in flight when the switch happened is dropped rather than drawn at the top of the new one, which is how this feature usually breaks. Everything that belonged to the conversation being left goes with it: its transcript, its prompt recall, its queue, its background task list. A switch that fails re-attaches to the session you were already in, without replaying a transcript that is still on screen.
+
+* **The right arrow completes a `/<skill name>`, in the TUI and the Web UI alike.** Type part of one and press it. What decides whether this is useful is the ambiguous case, and the shell answer of "complete to the longest common prefix" is the wrong one here: skills are named for what they do rather than to share prefixes, so the common prefix of `pdf-tools` and `pptx` is one letter and completing to it has told you nothing. So the same key walks the candidates instead, and the text you typed is the last stop on the walk, because a cycle you cannot leave is a trap.
+
+  The line under the prompt box names the first match and counts the rest, so an ambiguous prefix looks ambiguous before you press anything. Custom commands complete alongside skills, since both are invoked the same way and nobody typing `/re` is thinking about which list it is in. The built-in commands are deliberately absent: there are twenty of them, `/help` lists them, and passing `/compact` on the way to a skill would cost more presses than typing the name. The key only completes at the end of a one-word `/name`; anywhere else it moves the cursor, which is what it is for.
+
+  Neither client could do this before because neither knew what a skill was called: `/skill` is answered on the daemon and its listing arrives as transcript text, which is a thing to read rather than a thing to complete against. `GET /api/skills` reports the names and descriptions, and deliberately not the bodies, which can run to thousands of words and which every client would otherwise fetch at startup.
+
 ## v0.58.1
 
 * **An unused Bedrock entry no longer makes local-only startup load AWS configuration.** Global and project config files are merged, so a Bedrock declaration can survive in one scope after the active profiles have moved to a local model. Startup previously constructed every AWS SDK client immediately and could stop at `load AWS config` even though no Bedrock request would ever be made. Bedrock setup is now lazy: the daemon records the region and profile at startup, then opens the AWS config and credential chain only on the first request through that provider. A failed load is retried on the next Bedrock request, so correcting the AWS profile does not require restarting localcode.

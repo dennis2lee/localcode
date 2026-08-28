@@ -1,13 +1,13 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"localcode/internal/client"
-	"localcode/internal/events"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -19,6 +19,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleWindowSize(msg)
 
 	case tea.KeyMsg:
+		// A picker owns the keyboard while it is open, so nothing lands
+		// in the prompt box behind a list somebody is reading.
+		if m.picker != nil {
+			model, cmd, _ := m.handlePickerKey(msg)
+			return model, cmd
+		}
 		if model, cmd, handled := m.handleKey(msg); handled {
 			return model, cmd
 		}
@@ -26,7 +32,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// every other message type.
 
 	case eventMsg:
+		if msg.gen != m.streamGen {
+			// From a session this client has left. Dropping it is the
+			// point of the generation; re-arming the read is not, since
+			// that stream is over.
+			return m, nil
+		}
 		return m.handleServerEvent(msg)
+
+	case streamEndedMsg:
+		if msg.gen != m.streamGen {
+			return m, nil
+		}
+		// The current stream closed. Nothing to re-arm and nothing to
+		// say: the daemon going away shows up as the next call failing,
+		// which reports itself.
+		return m, nil
+
+	case sessionsMsg:
+		return m.handleSessionsMsg(msg)
+
+	case sessionSwitchedMsg:
+		return m.handleSessionSwitched(msg)
 
 	case turnDoneMsg:
 		return m.handleTurnDone(msg)
@@ -80,6 +107,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commandsList = msg.commands
 		}
 		return m, nil
+
+	case skillsMsg:
+		if msg.err != nil {
+			// Not an error line: skills are optional, and a daemon
+			// without them is not a fault. Completion simply has fewer
+			// candidates.
+			return m, nil
+		}
+		m.skillsList = msg.skills
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -100,8 +137,8 @@ func (m Model) handleSpinTick() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleServerEvent(msg eventMsg) (tea.Model, tea.Cmd) {
-	m.applyEvent(events.Event(msg))
-	cmds := []tea.Cmd{listenForEvent(m.events)}
+	m.applyEvent(msg.ev)
+	cmds := []tea.Cmd{listenForEvent(m.events, m.streamGen)}
 	if cmd := m.dequeue(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -158,4 +195,148 @@ func (m Model) handleTaskOutputMsg(msg taskOutputMsg) (tea.Model, tea.Cmd) {
 	}
 	m.appendLocal(header + "\n" + out)
 	return m, nil
+}
+
+// handleSessionsMsg turns a session listing into the picker, or says why
+// there is nothing to show.
+func (m Model) handleSessionsMsg(msg sessionsMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("failed to list sessions: %v", msg.err)
+		return m, nil
+	}
+	items := make([]pickerItem, 0, len(msg.sessions))
+	for _, s := range msg.sessions {
+		label := s.Title
+		if label == "" {
+			label = s.ID
+		}
+		if s.ID == m.sessionID {
+			label += "  (current)"
+		}
+		detail := s.Agent + ", " + s.CreatedAt.Local().Format("2006-01-02 15:04")
+		items = append(items, pickerItem{id: s.ID, label: label, detail: detail})
+	}
+	cmd := m.openPicker(&picker{
+		title:  "Sessions",
+		items:  items,
+		onPick: func(m *Model, it pickerItem) tea.Cmd { return m.openSession(it.id) },
+	}, "No sessions to switch to.")
+	return m, cmd
+}
+
+// openSession leaves this conversation for another one.
+//
+// The switch is done here rather than in a tea.Cmd because half of it is
+// local: ending the old stream and clearing what belonged to the old
+// session have to happen before anything from the new one can arrive.
+// Only the part that talks to the daemon is deferred.
+func (m *Model) openSession(id string) tea.Cmd {
+	if id == m.sessionID {
+		m.appendLocal("Already in this session.")
+		return nil
+	}
+	if m.streamCancel != nil {
+		m.streamCancel()
+		m.streamCancel = nil
+	}
+	m.streamGen++
+	gen := m.streamGen
+	c := m.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		callCtx, callCancel := context.WithTimeout(ctx, apiCallTimeout)
+		defer callCancel()
+		sessions, err := c.ListSessions(callCtx)
+		if err != nil {
+			cancel()
+			return sessionSwitchedMsg{gen: gen, err: err}
+		}
+		agent := ""
+		found := false
+		for _, s := range sessions {
+			if s.ID == id {
+				agent, found = s.Agent, true
+				break
+			}
+		}
+		if !found {
+			cancel()
+			return sessionSwitchedMsg{gen: gen, err: fmt.Errorf("session %s is gone", id)}
+		}
+		// From sequence zero: the transcript is being rebuilt from
+		// nothing, so the whole conversation is what it needs.
+		ch := c.StreamEvents(ctx, id, 0)
+		return sessionSwitchedMsg{sessionID: id, agent: agent, events: ch, cancel: cancel, gen: gen}
+	}
+}
+
+// handleSessionSwitched adopts the new stream, or puts the old session
+// back on screen if opening the new one failed.
+func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd) {
+	if msg.gen != m.streamGen {
+		// A third switch overtook this one. Its stream is nobody's, so
+		// it has to be closed rather than left running.
+		if msg.cancel != nil {
+			msg.cancel()
+		}
+		return m, nil
+	}
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("failed to open session: %v", msg.err)
+		// The old stream is already cancelled, so this client is now
+		// attached to nothing. Re-open what it had rather than leaving a
+		// window that has stopped receiving.
+		return m, m.reopenCurrent()
+	}
+
+	if msg.reattach {
+		// The same session, a fresh stream. Only the plumbing changes.
+		m.events = msg.events
+		m.streamCancel = msg.cancel
+		return m, listenForEvent(m.events, m.streamGen)
+	}
+
+	// Everything below belonged to the conversation being left.
+	m.sessionID = msg.sessionID
+	m.currentAgent = msg.agent
+	m.events = msg.events
+	m.streamCancel = msg.cancel
+	m.transcript = nil
+	m.transcriptRev++
+	m.streamOpen = false
+	m.history = nil
+	m.historyIdx = 0
+	m.draft = ""
+	m.queue = nil
+	m.pending = nil
+	m.pendingHintShown = false
+	m.waiting = false
+	m.runningTool = ""
+	m.errMsg = ""
+	m.tasks = map[string]taskState{}
+	m.completion = completionState{}
+	m.appendLocal("Switched to session " + msg.sessionID + ".")
+	m.refreshViewport()
+	return m, listenForEvent(m.events, m.streamGen)
+}
+
+// reopenCurrent re-attaches to the session this client is already in,
+// after a failed switch cancelled its stream.
+//
+// It reports itself as a switch to the session already open, which is
+// what it is. The transcript is left alone: it is still this session's,
+// and rebuilding it would show every line a second time.
+func (m *Model) reopenCurrent() tea.Cmd {
+	m.streamGen++
+	gen := m.streamGen
+	c, id, agent := m.client, m.sessionID, m.currentAgent
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		// Replay nothing: the transcript on screen is still this
+		// session's, and a re-attach that replayed it would show every
+		// line a second time. The events that matter are the ones that
+		// have not happened yet.
+		ch := c.StreamEvents(ctx, id, ^uint64(0))
+		return sessionSwitchedMsg{sessionID: id, agent: agent, events: ch, cancel: cancel, gen: gen, reattach: true}
+	}
 }

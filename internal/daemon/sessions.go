@@ -511,6 +511,30 @@ func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// SkillInfo is the client-facing view of an installed skill.
+type SkillInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// handleListSkills returns every installed skill, name and description
+// only.
+//
+// It exists because both clients had to be told what a skill is called
+// before they could offer to complete one, and neither had any way to
+// ask: "/skill" is answered on the daemon and its listing arrives as
+// transcript text, which is a thing to read rather than a thing to
+// complete against. The body is what a skill is called and what it is
+// for, never a skill's body, which can be long and is not a listing.
+func (d *Daemon) handleListSkills(w http.ResponseWriter, r *http.Request) {
+	out := make([]SkillInfo, 0, len(d.Loop.Skills))
+	for _, s := range d.Loop.Skills {
+		out = append(out, SkillInfo{Name: s.Name, Description: s.Description})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	writeJSON(w, http.StatusOK, out)
+}
+
 // CommandInfo is the client-facing view of a loaded custom slash command.
 type CommandInfo struct {
 	Name        string `json:"name"`

@@ -9,6 +9,7 @@
 export const app = {
   agents: [],           // [{name, description, model}]
   customCommands: [],   // [{name, description}]
+  skills: [],            // [{name, description}], for completing "/<skill name>"
   sessions: [],          // cached list rendered in the aside
   mcpServers: [],
   workspacePath: '',

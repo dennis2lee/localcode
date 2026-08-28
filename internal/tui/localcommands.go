@@ -80,6 +80,44 @@ func localCommands() []localCommand {
 			},
 		},
 		{
+			name:     "/model",
+			takesArg: true,
+			help:     "pick the agent (and so the model) to answer with; /model <name> switches directly",
+			run: func(m *Model, arg string) tea.Cmd {
+				if arg != "" {
+					return m.switchAgent(arg)
+				}
+				items := make([]pickerItem, 0, len(m.agents))
+				for _, a := range m.agents {
+					label := a.Name
+					if a.Name == m.currentAgent {
+						label += "  (current)"
+					}
+					detail := a.Model
+					if detail == "" {
+						detail = a.Description
+					}
+					items = append(items, pickerItem{id: a.Name, label: label, detail: detail})
+				}
+				return m.openPicker(&picker{
+					title:  "Agents",
+					items:  items,
+					onPick: func(m *Model, it pickerItem) tea.Cmd { return m.switchAgent(it.id) },
+				}, "No agents registered.")
+			},
+		},
+		{
+			name:     "/session",
+			takesArg: true,
+			help:     "pick a conversation to switch to; /session <id> switches directly",
+			run: func(m *Model, arg string) tea.Cmd {
+				if arg != "" {
+					return m.openSession(arg)
+				}
+				return m.fetchSessions()
+			},
+		},
+		{
 			name: "/commands",
 			help: "list registered custom commands",
 			run: func(m *Model, _ string) tea.Cmd {
@@ -167,7 +205,9 @@ const serverSideHelpText = `  /skill              list registered skills
   /<custom command>   run a command defined in .localcode/commands/*.md
   exit, :q            quit the TUI (same as Ctrl+C)
 
-Enter to send, Ctrl+J for a newline, Tab to switch agents, Esc to cancel a running turn.`
+Enter to send, Ctrl+J for a newline, Tab to switch agents, Esc to cancel a running turn.
+Right arrow completes "/<name>" against the installed skills and custom commands,
+and completes to the next candidate each time it is pressed.`
 
 // renderHelp lists every local command from the table above, plus the
 // daemon-side commands documented in serverSideHelpText.

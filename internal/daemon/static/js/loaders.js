@@ -62,6 +62,17 @@ export async function loadCommands() {
   }
 }
 
+// Skills are loaded for the same reason commands are: to complete a
+// "/<name>" without having to already know it. A daemon that cannot
+// answer simply has none, which is not a failure worth reporting.
+export async function loadSkills() {
+  try {
+    app.skills = await apiClient.getSkills();
+  } catch (err) {
+    app.skills = [];
+  }
+}
+
 export async function loadSettings() {
   try {
     const s = await apiClient.getSettings();
