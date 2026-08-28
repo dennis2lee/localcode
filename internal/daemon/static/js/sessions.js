@@ -7,6 +7,7 @@ import { renderTasks, renderStatusBar, setCurrentAgent, renderWorkspace } from '
 import { setWaiting, setInputLocked, renderCommDot } from './composer.js';
 import { connectEvents } from './events.js';
 import { loadWorkspace } from './loaders.js';
+import { loadSessionPermissions } from './modals.js';
 import { permissionRequest } from './modals.js';
 
 export async function loadSessions() {
@@ -321,6 +322,9 @@ export function selectSession(id, agent, workspace) {
     renderWorkspace();
   }
   loadWorkspace();
+  // The four permission switches belong to the conversation, so the
+  // panel and the pill would otherwise go on showing the last one's.
+  loadSessionPermissions(id);
 }
 
 export async function createNewSession() {

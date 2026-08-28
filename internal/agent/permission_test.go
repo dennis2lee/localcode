@@ -12,6 +12,7 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/session"
+	"localcode/internal/tools"
 )
 
 func newPermissionTestBroker(t *testing.T) (*PermissionBroker, *session.Store, string) {
@@ -49,7 +50,7 @@ func callAndResolve(t *testing.T, broker *PermissionBroker, sessionID, toolName,
 	resultCh := make(chan bool, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		allowed, err := broker.Func()(ctx, toolName, subject, "test call")
+		allowed, err := broker.Func()(ctx, tools.Ask{Tool: toolName, Subject: subject, Description: "test call"})
 		resultCh <- allowed
 		errCh <- err
 	}()
@@ -125,7 +126,7 @@ func TestScopeSessionRemembersWithinSession(t *testing.T) {
 	// rule ("npm *") and should be granted without a new request —
 	// call Func() directly and expect it to return immediately rather
 	// than blocking on a permission.request this test never resolves.
-	allowed, err := broker.Func()(WithSessionID(context.Background(), "s1"), "bash", "npm install", "test call")
+	allowed, err := broker.Func()(WithSessionID(context.Background(), "s1"), tools.Ask{Tool: "bash", Subject: "npm install", Description: "test call"})
 	if err != nil {
 		t.Fatalf("Func(): %v", err)
 	}
@@ -192,7 +193,7 @@ func TestScopeAlwaysAlsoGrantsCurrentSession(t *testing.T) {
 		t.Fatal("expected the call to be allowed")
 	}
 
-	allowed, err := broker.Func()(WithSessionID(context.Background(), "s1"), "bash", "npm install", "test call")
+	allowed, err := broker.Func()(WithSessionID(context.Background(), "s1"), tools.Ask{Tool: "bash", Subject: "npm install", Description: "test call"})
 	if err != nil {
 		t.Fatalf("Func(): %v", err)
 	}
@@ -250,7 +251,7 @@ func TestScopeAlwaysWithoutConfigPathStillGrantsSession(t *testing.T) {
 	if !callAndResolve(t, broker, "s1", "bash", "npm test", true, "always") {
 		t.Fatal("expected the call to be allowed even though persisting will fail")
 	}
-	allowed, err := broker.Func()(WithSessionID(context.Background(), "s1"), "bash", "npm install", "test call")
+	allowed, err := broker.Func()(WithSessionID(context.Background(), "s1"), tools.Ask{Tool: "bash", Subject: "npm install", Description: "test call"})
 	if err != nil {
 		t.Fatalf("Func(): %v", err)
 	}
@@ -273,7 +274,7 @@ func TestTaskPermissionIsAskedInTheParentSession(t *testing.T) {
 	ctx := WithSessionID(context.Background(), "t1")
 	resultCh := make(chan bool, 1)
 	go func() {
-		allowed, _ := broker.Func()(ctx, "bash", "rm -rf build/", "clean the tree")
+		allowed, _ := broker.Func()(ctx, tools.Ask{Tool: "bash", Subject: "rm -rf build/", Description: "clean the tree"})
 		resultCh <- allowed
 	}()
 
@@ -319,7 +320,7 @@ func TestCancelledTaskPermissionClearsTheParentModal(t *testing.T) {
 	ctx, cancel := context.WithCancel(WithSessionID(context.Background(), "t1"))
 	done := make(chan struct{})
 	go func() {
-		broker.Func()(ctx, "bash", "rm -rf build/", "clean the tree")
+		broker.Func()(ctx, tools.Ask{Tool: "bash", Subject: "rm -rf build/", Description: "clean the tree"})
 		close(done)
 	}()
 	waitForPermissionID(t, store, "s1", 0)

@@ -13,6 +13,28 @@ func (c *Config) PermissionsSkipped() bool {
 	return c.SkipPermissions != nil && *c.SkipPermissions
 }
 
+// ToolPermissionsSkipped, ReadOutsideAllowed and WriteOutsideAllowed are
+// the daemon defaults for the other three switches — what a session that
+// has not answered the question for itself follows. All three default to
+// off, which for the two boundary ones means "ask".
+func (c *Config) ToolPermissionsSkipped() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.SkipToolPermissions != nil && *c.SkipToolPermissions
+}
+
+func (c *Config) ReadOutsideAllowed() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.ReadOutsideWorkspace != nil && *c.ReadOutsideWorkspace
+}
+
+func (c *Config) WriteOutsideAllowed() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.WriteOutsideWorkspace != nil && *c.WriteOutsideWorkspace
+}
+
 // SetSkipPermissionsRuntime changes the live skip_permissions setting —
 // the in-memory counterpart to SetSkipPermissionsInFile, which persists it.
 func (c *Config) SetSkipPermissionsRuntime(v bool) {

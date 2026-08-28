@@ -11,18 +11,45 @@ const assert = require('node:assert/strict');
 
 const { load } = require('./harness');
 
-test('a /permission-skip-all typed anywhere moves the pill here', async () => {
+// The four permission switches are per conversation, so they arrive on
+// that conversation's own stream rather than on the daemon-wide one: a
+// window showing session A must not repaint because session B answered a
+// prompt. The event carries the whole snapshot for the same reason
+// settings.changed does.
+test('a /permission-skip-all typed in this conversation moves the pill', async () => {
   const app = await load();
   assert.equal(app.el('permission-status-btn').classList.contains('skip'), false,
     'nothing is skipped to start with');
 
   app.applyEvent({
-    type: 'settings.changed',
-    data: { skip_permissions: true, smart_agent: false, auto_delegate: false },
+    type: 'permissions.changed',
+    data: {
+      effective: { skip_all: true, skip_tools: false, read_outside: false, write_outside: false },
+      source: { skip_all: 'session' },
+      remembered: { read: [], write: [] },
+    },
   });
 
   assert.ok(app.el('permission-status-btn').classList.contains('skip'),
     'the pill is the one place the page says permissions are being skipped');
+});
+
+// An "allow anywhere outside" answered at the prompt turns the switch on,
+// which is the point of routing that answer through the session's own
+// setting: it is visible afterwards instead of being a private grant.
+test('answering a boundary prompt with "anywhere" shows up as the switch', async () => {
+  const app = await load();
+  app.applyEvent({
+    type: 'permissions.changed',
+    data: {
+      effective: { skip_all: false, skip_tools: false, read_outside: true, write_outside: false },
+      source: { read_outside: 'session' },
+      remembered: { read: [], write: [] },
+    },
+  });
+  assert.equal(app.state.sessionPermissions.read_outside, true);
+  assert.equal(app.state.sessionPermissions.write_outside, false,
+    'allowing reads out there says nothing about writes');
 });
 
 test('the same event moves the Smart Agent and auto-delegate state', async () => {
@@ -43,10 +70,10 @@ test('the same event moves the Smart Agent and auto-delegate state', async () =>
 test('a later event turns a switch back off', async () => {
   const app = await load();
 
-  app.applyEvent({ type: 'settings.changed', data: { skip_permissions: true } });
+  app.applyEvent({ type: 'permissions.changed', data: { effective: { skip_all: true } } });
   assert.ok(app.el('permission-status-btn').classList.contains('skip'));
 
-  app.applyEvent({ type: 'settings.changed', data: { skip_permissions: false } });
+  app.applyEvent({ type: 'permissions.changed', data: { effective: { skip_all: false } } });
   assert.equal(app.el('permission-status-btn').classList.contains('skip'), false,
     'turning it off has to reach the page too');
 });

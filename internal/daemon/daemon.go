@@ -82,6 +82,11 @@ type Daemon struct {
 	// helps nobody. Clients read "can_reveal" from GET /api/workspace.
 	RevealDirectory func(ctx context.Context, dir string) error
 
+	// Policy answers the four permission switches for a session. Built
+	// here from the loop's own store and config, so the daemon and the
+	// tool registry cannot disagree about what a session has said.
+	Policy *agent.PermissionPolicy
+
 	mux *http.ServeMux
 
 	// turns tracks which sessions currently have a turn in flight and how
@@ -117,6 +122,15 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	// build a daemon whose loop silently ignores what someone typed.
 	loop.PendingInput = d.turns.takeOne
 	loop.UserWaiting = d.turns.hasPending
+
+	// The broker needs the switches for the "allow anywhere outside this
+	// project" answer, which turns one on rather than remembering
+	// something only it can see, and the daemon needs to be told so a
+	// window showing the switches follows an answer given at the prompt.
+	d.Policy = agent.NewPermissionPolicy(loop.Store, loop.Config)
+	broker.SetPolicy(d.Policy, d.announceSessionPermissions)
+	loop.OnPermissionsChanged = d.announceSessionPermissions
+	loop.ForgetOutside = broker.ForgetOutside
 
 	d.routes(webFS)
 	// Every status change becomes one live event carrying the whole list.
@@ -177,6 +191,14 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleSendMessage)
 	d.mux.HandleFunc("POST /api/sessions/{id}/uploads", d.handleUploadFile)
 	d.mux.HandleFunc("GET /api/sessions/{id}/events", d.handleEvents)
+	// The four switches, per session. Registered before the pattern that
+	// takes a {permId}, which they cannot collide with (Go's mux matches
+	// the more specific literal), but read together they are two
+	// different things at one path: one answers a pending question, the
+	// other configures which questions get asked.
+	d.mux.HandleFunc("GET /api/sessions/{id}/permissions", d.handleGetSessionPermissions)
+	d.mux.HandleFunc("POST /api/sessions/{id}/permissions", d.handleSetSessionPermission)
+	d.mux.HandleFunc("POST /api/sessions/{id}/permissions/forget", d.handleForgetSessionOutside)
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions/{permId}", d.handleResolvePermission)
 	d.mux.HandleFunc("POST /api/sessions/{id}/tasks", d.handleSpawnTask)
 	d.mux.HandleFunc("GET /api/sessions/{id}/tasks", d.handleListTasks)

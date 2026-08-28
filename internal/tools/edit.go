@@ -19,6 +19,9 @@ func (Edit) InputSchema() json.RawMessage {
 }
 func (Edit) RequiresPermission(json.RawMessage) bool { return true }
 
+// OutsideClass: writing (see WriteFile.OutsideClass).
+func (Edit) OutsideClass() OutsideClass { return OutsideWrite }
+
 // Subject exposes the target file path as the permission-rule pattern
 // subject (see WriteFile.Subject).
 func (Edit) Subject(input json.RawMessage) string {

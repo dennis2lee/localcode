@@ -19,6 +19,10 @@ func (WriteFile) InputSchema() json.RawMessage {
 }
 func (WriteFile) RequiresPermission(json.RawMessage) bool { return true }
 
+// OutsideClass: writing, the half of the boundary worth asking about
+// every time. See outside.go.
+func (WriteFile) OutsideClass() OutsideClass { return OutsideWrite }
+
 // Subject exposes the target file path as the permission-rule pattern
 // subject, so config can e.g. allow writes under "dist/*" while asking
 // for everything else.

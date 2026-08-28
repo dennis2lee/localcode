@@ -167,6 +167,15 @@ func (c *Config) merge(other *Config) {
 	if other.SkipPermissions != nil {
 		c.SkipPermissions = other.SkipPermissions
 	}
+	if other.SkipToolPermissions != nil {
+		c.SkipToolPermissions = other.SkipToolPermissions
+	}
+	if other.ReadOutsideWorkspace != nil {
+		c.ReadOutsideWorkspace = other.ReadOutsideWorkspace
+	}
+	if other.WriteOutsideWorkspace != nil {
+		c.WriteOutsideWorkspace = other.WriteOutsideWorkspace
+	}
 	if other.SmartAgent != nil {
 		c.SmartAgent = other.SmartAgent
 	}

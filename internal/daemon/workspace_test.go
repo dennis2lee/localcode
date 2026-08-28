@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"localcode/internal/agent"
+	"localcode/internal/tools"
 )
 
 // A turn in some *other* session no longer blocks a switch.
@@ -214,7 +215,7 @@ func TestStoppingATurnParkedOnAPermissionFreesTheWorkspace(t *testing.T) {
 		// The session id has to travel on the context, the way a real turn
 		// carries it — without it the broker refuses rather than asking,
 		// and nothing parks.
-		allow, _ := d.Broker.Func()(agent.WithSessionID(ctx, busy), "bash", "rm -rf /", "delete everything")
+		allow, _ := d.Broker.Func()(agent.WithSessionID(ctx, busy), tools.Ask{Tool: "bash", Subject: "rm -rf /", Description: "delete everything"})
 		answered <- allow
 		d.turns.end(busy)
 	}()

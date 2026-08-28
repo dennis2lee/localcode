@@ -161,9 +161,18 @@ export function renderStatusBar() {
 // both the browser Web UI and the native GUI window (same page).
 export function renderPermissionStatus() {
   const ruleCount = Object.values(app.permissionRules).reduce((n, rs) => n + rs.length, 0);
-  permissionStatusBtn.classList.toggle('skip', app.skipPermissions);
-  if (app.skipPermissions) {
+  // This conversation's own answer, not the daemon's default: the four
+  // switches are per session, and a pill reading "skip" while the open
+  // conversation is asking would be describing something else.
+  const p = app.sessionPermissions || {};
+  permissionStatusBtn.classList.toggle('skip', !!p.skip_all);
+  if (p.skip_all) {
     permissionStatusBtn.textContent = 'permissions: skip';
+  } else if (p.skip_tools) {
+    // Said as what it is, because "skip" here would overstate it and
+    // "ask" would understate it: tools do not ask, leaving the project
+    // does.
+    permissionStatusBtn.textContent = 'permissions: tools skipped';
   } else if (ruleCount > 0) {
     permissionStatusBtn.textContent = `permissions: ask (${ruleCount} rule${ruleCount > 1 ? 's' : ''})`;
   } else {

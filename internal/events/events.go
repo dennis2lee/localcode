@@ -87,6 +87,15 @@ const (
 	// TypeConfigChanged reports a live settings change from "/config":
 	// {"auto_compact_enabled","show_tps"}.
 	TypeConfigChanged Type = "config.changed"
+	// TypePermissionsChanged reports this session's four permission
+	// switches after one of them moved, along with the directories it
+	// currently remembers approving outside the workspace.
+	//
+	// Its own event rather than a field on config.changed, because these
+	// are per session and that one is about the daemon: a client showing
+	// conversation A must not repaint its switches because conversation B
+	// answered a prompt.
+	TypePermissionsChanged Type = "permissions.changed"
 	// TypeSessionRenamed reports a session's title changing: {"title"}.
 	TypeSessionRenamed Type = "session.renamed"
 	// TypeSessionForked opens the log of a session created by forking

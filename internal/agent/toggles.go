@@ -8,6 +8,8 @@ import (
 
 	"localcode/internal/config"
 	"localcode/internal/events"
+	"localcode/internal/session"
+	"localcode/internal/tools"
 )
 
 // The three switches that decide how a turn behaves had one home each,
@@ -109,43 +111,144 @@ func (l *Loop) routeAutoDelegate(sessionID, text string) (bool, error) {
 	return true, l.replyText(sessionID, b.String())
 }
 
-// routeSkipPermissions answers "/permission-skip-all [on|off]".
+// The four permission switches, and why they are four.
 //
-// The one switch here worth a sentence of warning in its own reply. It
-// turns every "ask" into an allow for the whole daemon, so the next
-// shell command runs without asking, and it is the setting most likely
-// to be flipped on for one task and forgotten.
+// There used to be one: skip_permissions, daemon-wide, every ask turned
+// into an allow. It is the setting most likely to be flipped on for one
+// task and forgotten, and while it was on the model could write anywhere
+// on the machine without a word — including into a project this
+// conversation was never told about.
+//
+// So the blanket is split. skip_tools is the one people actually want:
+// stop interrupting me about this project, and still ask before anything
+// leaves it. read-outside and write-outside are the two halves of
+// leaving, separate because they are not the same risk. skip_all is what
+// it always was, and is now the only one that crosses the boundary.
+//
+// All four are per session (see session.Permissions), which is why these
+// four commands set the conversation they are typed in rather than the
+// daemon. config.json still holds the defaults for a session that has
+// not answered.
+
+// routeSkipPermissions answers "/permission-skip-all [on|off]".
 func (l *Loop) routeSkipPermissions(sessionID, text string) (bool, error) {
-	arg, ok := matchToggleCommand(text, "/permission-skip-all")
+	return l.routeSwitch(sessionID, text, "/permission-skip-all", session.SwitchSkipAll, func(b *strings.Builder, want bool) {
+		if !want {
+			return
+		}
+		// What it does and what it does not, because "skip permissions"
+		// reads like "skip all safety" and it is not: a deny rule still
+		// denies, and the credential guards are deny-class.
+		b.WriteString("\nEvery prompt that would have asked is now allowed in this conversation, shell" +
+			"\ncommands and reads and writes outside the workspace included. Rules that deny still" +
+			"\ndeny, and the credential-file guards are unaffected." +
+			"\nFor the same thing without the last part, use /permission-skip-tools.")
+	})
+}
+
+// routeSkipTools answers "/permission-skip-tools [on|off]".
+func (l *Loop) routeSkipTools(sessionID, text string) (bool, error) {
+	return l.routeSwitch(sessionID, text, "/permission-skip-tools", session.SwitchSkipTools, func(b *strings.Builder, want bool) {
+		if !want {
+			return
+		}
+		b.WriteString("\nEvery tool prompt in this conversation is now allowed, and the workspace boundary" +
+			"\nis not: a path that leaves " + l.SessionDir(sessionID) + " is still a question." +
+			"\nAnswer that one for good with /read-outside or /write-outside.")
+	})
+}
+
+// routeReadOutside answers "/read-outside [on|off|mem-clear]".
+func (l *Loop) routeReadOutside(sessionID, text string) (bool, error) {
+	return l.routeOutside(sessionID, text, "/read-outside", session.SwitchReadOutside, tools.OutsideRead)
+}
+
+// routeWriteOutside answers "/write-outside [on|off|mem-clear]".
+func (l *Loop) routeWriteOutside(sessionID, text string) (bool, error) {
+	return l.routeOutside(sessionID, text, "/write-outside", session.SwitchWriteOutside, tools.OutsideWrite)
+}
+
+// routeOutside is the two boundary commands, which differ only in which
+// half they are about. Both take one argument the other two do not:
+// mem-clear, which forgets the individual directories approved at a
+// prompt without touching the switch. The two retractions are different
+// and somebody who approved one directory by mistake should not have to
+// change a setting to take it back.
+func (l *Loop) routeOutside(sessionID, text, name string, sw session.Switch, class tools.OutsideClass) (bool, error) {
+	arg, ok := matchToggleCommand(text, name)
+	if !ok {
+		return false, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(arg), "mem-clear") {
+		return l.routeSwitch(sessionID, text, name, sw, func(b *strings.Builder, want bool) {
+			if want {
+				fmt.Fprintf(b, "\nReaching outside %s to %s no longer asks, in this conversation.", l.SessionDir(sessionID), class)
+			} else {
+				fmt.Fprintf(b, "\nEach new directory outside %s will be asked about once.", l.SessionDir(sessionID))
+			}
+		})
+	}
+
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+	if l.ForgetOutside == nil {
+		return true, l.replyText(sessionID, "this build has no permission broker, so there is nothing remembered to clear")
+	}
+	n := l.ForgetOutside(sessionID, class)
+	if l.OnPermissionsChanged != nil {
+		l.OnPermissionsChanged(sessionID)
+	}
+	if n == 0 {
+		return true, l.replyText(sessionID, fmt.Sprintf("%s mem-clear: nothing was remembered.", name))
+	}
+	return true, l.replyText(sessionID, fmt.Sprintf(
+		"%s mem-clear: forgot %d approved director%s. The next %s outside the workspace asks again.",
+		name, n, plural(n, "y", "ies"), class))
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// routeSwitch is the shape all four share: read the argument, set this
+// session's own answer, say what it is now and what that means.
+//
+// Setting the session rather than the daemon is the change these
+// commands carry. A switch flipped here used to be flipped for every
+// conversation on the machine, so "skip permissions while I do this one
+// thing" also skipped them in the window editing something that
+// mattered.
+func (l *Loop) routeSwitch(sessionID, text, name string, sw session.Switch, explain func(*strings.Builder, bool)) (bool, error) {
+	arg, ok := matchToggleCommand(text, name)
 	if !ok {
 		return false, nil
 	}
 	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 
-	want, valid := toggleArg(arg, l.Config.PermissionsSkipped())
+	now, from := l.Permissions.Effective(sessionID, sw)
+	want, valid := toggleArg(arg, now)
 	if !valid {
-		return true, l.replyText(sessionID, "usage: /permission-skip-all [on|off]")
+		return true, l.replyText(sessionID, fmt.Sprintf("usage: %s [on|off]", name))
 	}
-	l.Config.SetSkipPermissionsRuntime(want)
+	if err := l.Permissions.Set(sessionID, sw, &want); err != nil {
+		return true, l.replyText(sessionID, fmt.Sprintf("could not set %s: %v", sw, err))
+	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "skip_permissions: %s", onOff(want))
-	if want {
-		// What it does and what it does not, because "skip permissions"
-		// reads like "skip all safety" and it is not: a deny rule still
-		// denies, and the credential guards are deny-class.
-		b.WriteString("\nEvery prompt that would have asked is now allowed, for every session on this daemon," +
-			"\nincluding shell commands and writes outside the workspace. Rules that deny still deny," +
-			"\nand the credential-file guards are unaffected.")
+	fmt.Fprintf(&b, "%s: %s (this conversation)", sw, onOff(want))
+	if want == now && from == SourceDefault {
+		// It already read this way, from config.json. Saying so stops
+		// "on" being read as a change that did something.
+		fmt.Fprintf(&b, "\nIt already was, from config.json; it is now this conversation's own setting.")
 	}
-	b.WriteString(l.persist(func(path string) error { return config.SetSkipPermissionsInFile(path, want) }))
-
-	// Not announceConfig: skip_permissions is not one of the four fields
-	// that event carries, and inventing a fifth would change the meaning
-	// of an event other clients already parse. The daemon-wide one is
-	// where it belongs, and it carries every switch including this one,
-	// which is what makes the permission pill in another window move.
-	l.announceSettings()
+	if explain != nil {
+		explain(&b, want)
+	}
+	if l.OnPermissionsChanged != nil {
+		l.OnPermissionsChanged(sessionID)
+	}
 	return true, l.replyText(sessionID, b.String())
 }
 
@@ -235,7 +338,10 @@ func SlashCommands() []SlashCommand {
 		{Name: "config", Description: "show settings, or change one with /config <name> on|off"},
 		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off"},
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off"},
-		{Name: "permission-skip-all", Description: "allow every prompt that would have asked"},
+		{Name: "permission-skip-all", Description: "allow every prompt in this conversation, the workspace boundary included"},
+		{Name: "permission-skip-tools", Description: "allow every tool prompt, but still ask before leaving the workspace"},
+		{Name: "read-outside", Description: "reading outside the workspace: on, off, or mem-clear to forget approved directories"},
+		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories"},
 		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models"},
 		{Name: "auto-compact", Description: "toggle auto-compaction, or set its threshold with a percent"},
 		{Name: "reset-mcp", Description: "reconnect MCP servers and pick up config changes without a restart"},

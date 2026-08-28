@@ -53,27 +53,24 @@ func TestWithNoWorkspaceNothingIsOutsideIt(t *testing.T) {
 	}
 }
 
-// Escalate allow to ask and nothing else. A deny is a rule somebody wrote
-// and is not softened by where the file happens to be.
-func TestBoundaryDecisionOnlyEscalates(t *testing.T) {
-	dir := t.TempDir()
-	ctx := WithWorkingDir(context.Background(), dir)
-
-	if got := BoundaryDecision(ctx, DecisionAllow, "/etc/passwd", true); got != DecisionAsk {
-		t.Errorf("allow outside the workspace = %q, want ask", got)
-	}
-	if got := BoundaryDecision(ctx, DecisionAllow, "main.go", true); got != DecisionAllow {
-		t.Errorf("allow inside the workspace = %q, want allow", got)
-	}
-	if got := BoundaryDecision(ctx, DecisionDeny, "/etc/passwd", true); got != DecisionDeny {
-		t.Errorf("deny outside the workspace = %q, want it left alone", got)
-	}
-	if got := BoundaryDecision(ctx, DecisionAsk, "main.go", true); got != DecisionAsk {
-		t.Errorf("ask = %q, want it left alone", got)
-	}
-	// Off is off: this is part of a feature that is opted into.
-	if got := BoundaryDecision(ctx, DecisionAllow, "/etc/passwd", false); got != DecisionAllow {
-		t.Errorf("with the boundary off = %q, want the previous behaviour", got)
+// A tool that does not touch a path has no boundary to cross. bash is
+// the member that matters: a shell command is not a path, "cd /etc &&
+// cat passwd" cannot be judged by looking at it, and a guard that
+// pretended otherwise would be claiming a protection it does not have.
+func TestOnlyPathToolsHaveABoundary(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := WithWorkingDir(context.Background(), workspace)
+	resolver := ComposeResolver(
+		func(context.Context, string, string, bool) Decision { return DecisionAllow },
+		Policy{
+			SkipAll:        func(context.Context) bool { return false },
+			SkipTools:      func(context.Context) bool { return false },
+			OutsideAllowed: func(context.Context, OutsideClass) bool { return false },
+		},
+	)
+	got := resolver(ctx, Query{Tool: "bash", Subject: "cat /etc/passwd", Class: OutsideNone})
+	if got.Decision != DecisionAllow || got.Outside != OutsideNone {
+		t.Errorf("bash = %+v, want a plain allow: the boundary has nothing to say about a shell command", got)
 	}
 }
 
@@ -195,9 +192,9 @@ func TestADanglingSymlinkToOutsideIsOutside(t *testing.T) {
 		t.Error("a dangling symlink to an external missing file was called inside")
 	}
 	// And the classification is what the permission layer actually sees:
-	// an allow through that link escalates to ask.
-	if got := BoundaryDecision(ctx, DecisionAllow, "link", true); got != DecisionAsk {
-		t.Errorf("allow through a dangling external symlink = %q, want ask", got)
+	// a read through that link becomes a boundary question.
+	if got := askOutside(ctx, "link", OutsideRead); got.Decision != DecisionAsk {
+		t.Errorf("read through a dangling external symlink = %q, want ask", got.Decision)
 	}
 
 	// A relative dangling link is followed relative to its own directory,
@@ -247,8 +244,8 @@ func TestADeepMissingPathInsideTheWorkspaceIsStillInside(t *testing.T) {
 	if OutsideWorkspace(ctx, deep) {
 		t.Error("a deep missing path inside the workspace was classified outside")
 	}
-	if got := BoundaryDecision(ctx, DecisionAllow, deep, true); got != DecisionAllow {
-		t.Errorf("allow on a deep path inside the workspace = %q, want it left alone", got)
+	if got := askOutside(ctx, deep, OutsideRead); got.Decision != DecisionAllow {
+		t.Errorf("a deep path inside the workspace = %q, want it left alone", got.Decision)
 	}
 
 	// The same depth aimed out of the workspace is still outside: the
@@ -274,48 +271,97 @@ func TestADeepMissingPathInsideTheWorkspaceIsStillInside(t *testing.T) {
 	}
 }
 
-// The bug a user actually hit in v0.55.0: skip_permissions on, Smart
-// Agent on, and localcode kept asking anyway. The boundary's escalation
-// ran after the skip downgrade, so the one promise skip makes — every
-// ask becomes an allow, only an explicit deny still denies — was broken
-// by the very guard that is documented as ask-class. The pipeline's
-// order is a contract now, and this test is the contract's statement.
-func TestSkipPermissionsSilencesTheBoundaryButNeverADeny(t *testing.T) {
+// The whole pipeline, stated as a table, because the interaction between
+// the four switches is the feature and everything about it is easy to get
+// subtly wrong.
+//
+// The row that names the design is skip_tools with a write outside: the
+// blanket that stops the interruptions still stops at the edge of the
+// project. Before there was one blanket, and turning it on to stop being
+// asked about this project also stopped being asked about every other
+// one on the machine.
+func TestThePermissionPipeline(t *testing.T) {
 	workspace := t.TempDir()
 	ctx := WithWorkingDir(context.Background(), workspace)
 
+	// A deny rule on anything that looks like a private key, an allow on
+	// everything else: the shipped guards in miniature.
 	rules := func(_ context.Context, _, subject string, _ bool) Decision {
 		if strings.Contains(subject, "id_rsa") {
 			return DecisionDeny
 		}
 		return DecisionAllow
 	}
-	smartOn := func(context.Context) bool { return true }
+	outside := filepath.Join(filepath.Dir(workspace), "other-project", "main.go")
+	inside := "main.go"
 
-	skip := false
-	resolver := ComposeResolver(rules, smartOn, func() bool { return skip })
+	for _, tt := range []struct {
+		name                      string
+		skipAll, skipTools        bool
+		readOutside, writeOutside bool
+		tool, subject             string
+		class                     OutsideClass
+		want                      Decision
+		wantOutside               OutsideClass
+	}{
+		// Nothing on. Inside is ordinary, outside is a question, in both
+		// directions.
+		{"inside, nothing on", false, false, false, false, "read_file", inside, OutsideRead, DecisionAllow, OutsideNone},
+		{"read outside, nothing on", false, false, false, false, "read_file", outside, OutsideRead, DecisionAsk, OutsideRead},
+		{"write outside, nothing on", false, false, false, false, "write_file", outside, OutsideWrite, DecisionAsk, OutsideWrite},
 
-	// Without skip: the boundary escalates an outside path to ask.
-	if got := resolver(ctx, "read_file", "/etc/hosts", true); got != DecisionAsk {
-		t.Errorf("outside path without skip = %q, want ask", got)
+		// The example this feature was specified with: skip_tools on and
+		// everything else off, and a grep reaching outside still asks.
+		{"grep outside under skip_tools", false, true, false, false, "grep", outside, OutsideRead, DecisionAsk, OutsideRead},
+		{"write outside under skip_tools", false, true, false, false, "write_file", outside, OutsideWrite, DecisionAsk, OutsideWrite},
+		{"write inside under skip_tools", false, true, false, false, "write_file", inside, OutsideWrite, DecisionAllow, OutsideNone},
+
+		// The two halves are separate. Allowing reads out there says
+		// nothing about writes.
+		{"read outside with read allowed", false, false, true, false, "read_file", outside, OutsideRead, DecisionAllow, OutsideNone},
+		{"write outside with read allowed", false, false, true, false, "write_file", outside, OutsideWrite, DecisionAsk, OutsideWrite},
+		{"write outside with write allowed", false, false, false, true, "write_file", outside, OutsideWrite, DecisionAllow, OutsideNone},
+
+		// skip_all is the only one that crosses the boundary.
+		{"write outside under skip_all", true, false, false, false, "write_file", outside, OutsideWrite, DecisionAllow, OutsideNone},
+
+		// A deny is a rule somebody wrote. Nothing below it softens it,
+		// including both skips, and including being inside the project.
+		{"deny inside", false, false, false, false, "read_file", "id_rsa", OutsideRead, DecisionDeny, OutsideNone},
+		{"deny under skip_all", true, false, false, false, "read_file", "id_rsa", OutsideRead, DecisionDeny, OutsideNone},
+		{"deny outside", false, false, false, false, "read_file", filepath.Join(filepath.Dir(workspace), "id_rsa"), OutsideRead, DecisionDeny, OutsideNone},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := ComposeResolver(rules, Policy{
+				SkipAll:   func(context.Context) bool { return tt.skipAll },
+				SkipTools: func(context.Context) bool { return tt.skipTools },
+				OutsideAllowed: func(_ context.Context, c OutsideClass) bool {
+					return (c == OutsideRead && tt.readOutside) || (c == OutsideWrite && tt.writeOutside)
+				},
+			})
+			got := resolver(ctx, Query{Tool: tt.tool, Subject: tt.subject, Static: true, Class: tt.class})
+			if got.Decision != tt.want {
+				t.Errorf("decision = %q, want %q", got.Decision, tt.want)
+			}
+			if got.Outside != tt.wantOutside {
+				t.Errorf("outside class = %v, want %v (a question that cannot say why it is being asked is one people answer without reading)", got.Outside, tt.wantOutside)
+			}
+			if tt.wantOutside != OutsideNone && got.Dir == "" {
+				t.Error("a boundary question carried no directory, so there is nothing an \"allow this directory\" answer could cover")
+			}
+		})
 	}
-	// With skip: that ask becomes an allow, because the person said so.
-	skip = true
-	if got := resolver(ctx, "read_file", "/etc/hosts", true); got != DecisionAllow {
-		t.Errorf("outside path with skip_permissions = %q, want allow: skip's promise is that every ask becomes an allow", got)
-	}
-	// A deny is not an ask and skip never touches it.
-	if got := resolver(ctx, "read_file", "/home/user/.ssh/id_rsa", true); got != DecisionDeny {
-		t.Errorf("deny with skip_permissions = %q, want it untouched", got)
-	}
-	// Inside the workspace nothing was ever going to ask.
-	if got := resolver(ctx, "read_file", "main.go", true); got != DecisionAllow {
-		t.Errorf("inside path = %q, want allow", got)
-	}
-	// And with smart agent off the boundary does not exist, skip or not.
-	skip = false
-	off := ComposeResolver(rules, func(context.Context) bool { return false }, func() bool { return false })
-	if got := off(ctx, "read_file", "/etc/hosts", true); got != DecisionAllow {
-		t.Errorf("outside path with smart agent off = %q, want allow", got)
-	}
+}
+
+// askOutside runs one subject through the pipeline with every switch off,
+// which is the state the boundary is the only thing speaking in.
+func askOutside(ctx context.Context, subject string, class OutsideClass) Outcome {
+	return ComposeResolver(
+		func(context.Context, string, string, bool) Decision { return DecisionAllow },
+		Policy{
+			SkipAll:        func(context.Context) bool { return false },
+			SkipTools:      func(context.Context) bool { return false },
+			OutsideAllowed: func(context.Context, OutsideClass) bool { return false },
+		},
+	)(ctx, Query{Tool: "read_file", Subject: subject, Static: true, Class: class})
 }

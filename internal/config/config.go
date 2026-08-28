@@ -98,6 +98,33 @@ type Config struct {
 	// to forbid something would be a different, much worse promise.
 	SkipPermissions *bool `json:"skip_permissions,omitempty"`
 
+	// The other three switches, and what all four are: the daemon's
+	// defaults. A session answers these questions for itself (see
+	// session.Permissions); these are what a session that has not been
+	// asked follows, and what a new one starts with.
+	//
+	// SkipToolPermissions is the useful middle. It allows every tool
+	// prompt the way SkipPermissions does and stops at the edge of the
+	// project: a shell command, a write, an edit, all without asking, and
+	// still a question before anything reaches outside the workspace.
+	// Someone working head-down in one repository wants exactly that, and
+	// before this the only way to stop being interrupted was to turn off
+	// the guard that matters most.
+	SkipToolPermissions *bool `json:"skip_tool_permissions,omitempty"`
+
+	// ReadOutsideWorkspace and WriteOutsideWorkspace allow the two halves
+	// of leaving the project without being asked. Separate, because they
+	// are not the same risk: reading a header in /usr/include is ordinary
+	// work, and writing to a directory this conversation was never told
+	// about is the failure a boundary exists to catch.
+	//
+	// Nil means unset, which defaults to OFF, which means "ask". That is
+	// the whole point of the feature: the model leaving the project is a
+	// question, and the two switches are how someone answers it once
+	// instead of every time.
+	ReadOutsideWorkspace  *bool `json:"read_outside_workspace,omitempty"`
+	WriteOutsideWorkspace *bool `json:"write_outside_workspace,omitempty"`
+
 	// delegateMu guards AutoDelegate against the daemon's settings endpoint
 	// rewriting the agent or match patterns while a turn on another
 	// goroutine is deciding whether to delegate. Read unlocked at load time,

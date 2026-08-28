@@ -98,7 +98,18 @@ export const resolvePermissionRequest = (sessionID, id, allow, scope) =>
 
 export const setAutoDelegate = (patch) => api('POST', '/api/settings/auto-delegate', patch);
 export const setSmartAgent = (enabled) => api('POST', '/api/settings/smart-agent', { enabled });
+// The daemon-wide default, still written to config.json. What a
+// conversation that has not answered for itself follows.
 export const setSkipPermissions = (enabled) => api('POST', '/api/permissions/skip', { enabled });
+
+// The four switches for one conversation. enabled null clears this
+// session's own answer, so the daemon default applies again.
+export const getSessionPermissions = (sessionID) =>
+  api('GET', `/api/sessions/${sessionID}/permissions`);
+export const setSessionPermission = (sessionID, name, enabled) =>
+  api('POST', `/api/sessions/${sessionID}/permissions`, { switch: name, enabled });
+export const forgetOutside = (sessionID, cls) =>
+  api('POST', `/api/sessions/${sessionID}/permissions/forget`, { class: cls });
 export const addPermissionRule = (tool, match, decision) =>
   api('POST', '/api/permissions/rules', { tool, match, decision });
 export const removePermissionRule = (tool, match, decision) =>

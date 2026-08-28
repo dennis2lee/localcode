@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"localcode/internal/events"
+	"localcode/internal/session"
 )
 
 // replyTo runs one command and returns what the session was told.
@@ -79,11 +80,17 @@ func TestAllThreeSwitchesHaveACommand(t *testing.T) {
 		t.Error("auto delegate did not turn on")
 	}
 
-	if out := replyTo(t, loop, sid, "/permission-skip-all on"); !strings.Contains(out, "skip_permissions: on") {
+	// Per session as of v0.63.0: the switch is a sentence about a
+	// project, and flipping it for one task used to flip it for the
+	// window editing something that mattered.
+	if out := replyTo(t, loop, sid, "/permission-skip-all on"); !strings.Contains(out, "skip_all: on") {
 		t.Errorf("/permission-skip-all said %q", out)
 	}
-	if !loop.Config.PermissionsSkipped() {
-		t.Error("skip permissions did not turn on")
+	if !loop.Permissions.OnFor(sid, session.SwitchSkipAll) {
+		t.Error("skip permissions did not turn on for this session")
+	}
+	if loop.Config.PermissionsSkipped() {
+		t.Error("a session's own answer was written into the daemon default")
 	}
 	// It says what it did and what it did not do. "Skip permissions"
 	// reads like "skip all safety" and is not: a deny still denies.
@@ -91,7 +98,7 @@ func TestAllThreeSwitchesHaveACommand(t *testing.T) {
 	if strings.Contains(out, "deny") {
 		t.Error("turning it off repeated the warning about turning it on")
 	}
-	if loop.Config.PermissionsSkipped() {
+	if loop.Permissions.OnFor(sid, session.SwitchSkipAll) {
 		t.Error("skip permissions did not turn off")
 	}
 }

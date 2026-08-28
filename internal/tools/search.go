@@ -21,6 +21,22 @@ func (Glob) InputSchema() json.RawMessage {
 }
 func (Glob) RequiresPermission(json.RawMessage) bool { return false }
 
+// OutsideClass: reading. Listing another project's files is reading it,
+// even though nothing is opened.
+func (Glob) OutsideClass() OutsideClass { return OutsideRead }
+
+// Subject is the fixed part of the pattern — the directory being listed.
+// See globSubject.
+func (Glob) Subject(input json.RawMessage) string {
+	var args struct {
+		Pattern string `json:"pattern"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return ""
+	}
+	return globSubject(args.Pattern)
+}
+
 func (Glob) Execute(ctx context.Context, input json.RawMessage) Result {
 	var args struct {
 		Pattern string `json:"pattern"`
@@ -84,6 +100,25 @@ func (Grep) InputSchema() json.RawMessage {
 	return schema(`{"pattern":{"type":"string"},"path":{"type":"string","description":"file or directory to search; defaults to \".\""}}`, "pattern")
 }
 func (Grep) RequiresPermission(json.RawMessage) bool { return false }
+
+// OutsideClass: reading. A grep reads every file under its path, which
+// is more of somebody else's project than a read_file ever is.
+func (Grep) OutsideClass() OutsideClass { return OutsideRead }
+
+// Subject is the path being searched, defaulting to the workspace itself
+// the same way Execute does.
+func (Grep) Subject(input json.RawMessage) string {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return ""
+	}
+	if args.Path == "" {
+		return "."
+	}
+	return args.Path
+}
 
 func (Grep) Execute(ctx context.Context, input json.RawMessage) Result {
 	var args struct {

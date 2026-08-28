@@ -43,7 +43,7 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 		// repeat press).
 		if !m.pendingHintShown {
 			m.pendingHintShown = true
-			m.appendLocal("Resolve the permission request above (y/n/s/a) before sending a message.")
+			m.appendLocal("Resolve the permission request above (see the keys under it) before sending a message.")
 		}
 		return m, nil
 	}

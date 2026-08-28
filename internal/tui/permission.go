@@ -17,23 +17,49 @@ type pendingPermission struct {
 	// to (started with neither --config nor a resolvable global config),
 	// in which case "always" isn't offered — only once/session/deny.
 	canAlways bool
+
+	// outside is "read" or "write" when this question exists because the
+	// path leaves the workspace, and empty otherwise. It changes both
+	// halves of the prompt: what it says, and which answers it takes.
+	//
+	// A boundary question is about a place, not about a tool call, and a
+	// place is answered at one of two sizes. Offering only "once" and
+	// "for the session" would make the useful answer impossible to give:
+	// a model told to read the sibling repository reads forty files in
+	// it, and forty prompts is one decision and thirty-nine keystrokes.
+	outside string
+	// outsideDir is the directory "d" approves; workspace is the project
+	// the path is outside of, which is the half that makes the question
+	// legible at all.
+	outsideDir string
+	workspace  string
 }
 
-// prompt renders the permission modal's single line, listing exactly the
-// answers this request will accept — "a" only appears when the daemon
-// actually has somewhere to persist it.
+// prompt renders the permission modal, listing exactly the answers this
+// request will accept.
 func (p pendingPermission) prompt(typing bool) string {
+	head := fmt.Sprintf("Permission request [%s]: %s", p.tool, p.description)
 	keys := "y: allow once  n: deny  s: allow for session"
 	if p.canAlways {
 		keys += fmt.Sprintf("  a: always allow %q", p.rule)
 	}
+
+	if p.outside != "" {
+		// Why, before what to press. Without this line the request reads
+		// as an ordinary write and there is nothing on screen saying the
+		// path is in another project.
+		head += fmt.Sprintf("\noutside this session's workspace (%s)", p.workspace)
+		keys = fmt.Sprintf("y: allow once  n: deny\nd: allow %s under %s for this session\ns: allow %s anywhere outside the workspace for this session",
+			p.outside, p.outsideDir, p.outside)
+	}
+
 	// Said plainly, because otherwise the keys look broken: pressing y
 	// with a half-written message in the box types a y, and the reason
 	// is not visible anywhere on screen.
 	if typing {
 		keys += "\n(clear the prompt box to answer — those are ordinary letters while you are writing)"
 	}
-	return fmt.Sprintf("Permission request [%s]: %s\n%s", p.tool, p.description, keys)
+	return head + "\n" + keys
 }
 
 // permissionArmDelay is how long after a request appears before a single
@@ -46,8 +72,8 @@ func (p pendingPermission) prompt(typing bool) string {
 // screen when the finger started moving.
 const permissionArmDelay = 750 * time.Millisecond
 
-// canAnswerPermission reports whether a bare "y"/"n"/"s"/"a" should be
-// taken as an answer rather than as a character to type.
+// canAnswerPermission reports whether a bare "y"/"n"/"s"/"a"/"d" should
+// be taken as an answer rather than as a character to type.
 //
 // Two conditions, and both exist because the alternative was silently
 // approving a command the user never read. "y" is an ordinary letter:

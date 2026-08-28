@@ -1,4 +1,7 @@
-import { permissionTextEl, permissionAllowAlwaysBtn } from './dom.js';
+import {
+  permissionTextEl, permissionAllowAlwaysBtn, permissionAllowSessionBtn,
+  permissionOutsideEl, permissionAllowDirBtn, permissionAllowOutsideBtn,
+} from './dom.js';
 import { app, session } from './state.js';
 import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
@@ -6,7 +9,10 @@ import {
 } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
-import { refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen, permissionRequest } from './modals.js';
+import {
+  refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen, permissionRequest,
+  applySessionPermissions,
+} from './modals.js';
 import { refreshSmartAgentIfOpen, refreshKeepGoingIfOpen } from './settings.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
@@ -77,12 +83,39 @@ const handlers = {
     session.pendingPermissionID = d.id;
     session.pendingPermissionCanAlways = !!d.can_always;
     permissionTextEl.textContent = `[${d.tool}] ${d.description || '(no description given)'}`;
-    permissionAllowAlwaysBtn.style.display = session.pendingPermissionCanAlways ? '' : 'none';
-    if (session.pendingPermissionCanAlways) {
+    // A boundary question is a different question, so it gets different
+    // buttons: a place is answered at one of two sizes, and "always
+    // allow" would write a tool rule that outlives the reason for it.
+    const outside = d.outside === 'read' || d.outside === 'write' ? d.outside : '';
+    session.pendingPermissionOutside = outside;
+    permissionOutsideEl.hidden = !outside;
+    if (outside) {
+      permissionOutsideEl.textContent =
+        `This path is outside the project this conversation is working in (${d.workspace || 'unknown'}).`;
+      permissionAllowDirBtn.hidden = false;
+      permissionAllowDirBtn.textContent = `Allow ${outside} under ${d.outside_dir || 'this directory'}`;
+      permissionAllowDirBtn.title = 'for the rest of this session; /'
+        + outside + '-outside mem-clear forgets it';
+      permissionAllowOutsideBtn.hidden = false;
+      permissionAllowOutsideBtn.textContent = `Allow ${outside} anywhere outside`;
+      permissionAllowOutsideBtn.title = `turns ${outside}-outside on for this conversation`;
+    } else {
+      permissionAllowDirBtn.hidden = true;
+      permissionAllowOutsideBtn.hidden = true;
+    }
+    const offerAlways = session.pendingPermissionCanAlways && !outside;
+    permissionAllowAlwaysBtn.style.display = offerAlways ? '' : 'none';
+    permissionAllowSessionBtn.style.display = outside ? 'none' : '';
+    if (offerAlways) {
       permissionAllowAlwaysBtn.title = `don't ask again — writes "${d.rule}" to config.json`;
     }
     permissionRequest.open();
     setInputLocked(true, 'Resolve the permission request above to continue.');
+  },
+  // The four switches for this conversation moved: at its own prompt, in
+  // another window, or by somebody answering "allow anywhere" above.
+  'permissions.changed': (d) => {
+    applySessionPermissions(d);
   },
   'permission.resolved': () => {
     permissionRequest.close();
@@ -183,12 +216,11 @@ const handlers = {
     }
     if (typeof d.auto_compact_percent === 'number') app.autoCompactPercent = d.auto_compact_percent;
     if (typeof d.skip_permissions === 'boolean') {
+      // The daemon default, which is what a conversation that has not
+      // answered for itself follows. The pill and the checkboxes read
+      // the open conversation's own answer instead and are moved by
+      // permissions.changed, which is the event that carries it.
       app.skipPermissions = d.skip_permissions;
-      // The pill by the status line, always: it is the one place the
-      // page says permissions are being skipped, and it going stale is
-      // the whole reason this event exists.
-      renderPermissionStatus();
-      refreshPermissionSettingsIfOpen();
     }
     renderStatusBar();
   },

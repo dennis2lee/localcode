@@ -205,10 +205,40 @@
 <div id="permission-settings-modal">
   <div class="box">
     <h3>Permissions</h3>
+    <!--
+      Four switches, and they belong to this conversation rather than to
+      the daemon. Two conversations on one daemon are two projects, and
+      every one of these four is a sentence about a project: "do not ask
+      me about this one" flipped for a throwaway experiment used to
+      silence the prompts in the window editing something that mattered.
+
+      config.json still holds the defaults, which is what a conversation
+      that has not disagreed follows.
+    -->
+    <p class="note" id="permission-scope-note"></p>
     <div class="skip-row">
       <input type="checkbox" id="skip-permissions-checkbox">
-      <label for="skip-permissions-checkbox">Skip all permission prompts (dangerous — every tool call runs without asking; explicit deny rules still deny)</label>
+      <label for="skip-permissions-checkbox">Skip every prompt (dangerous — tool calls and paths outside this project both run without asking; explicit deny rules still deny)</label>
     </div>
+    <div class="skip-row">
+      <input type="checkbox" id="skip-tools-checkbox">
+      <label for="skip-tools-checkbox">Skip tool prompts, but keep asking about paths outside this project</label>
+    </div>
+
+    <h4 class="settings-section">Outside this project</h4>
+    <p class="note" id="permission-workspace-note"></p>
+    <div class="skip-row">
+      <input type="checkbox" id="read-outside-checkbox">
+      <label for="read-outside-checkbox">Allow reading outside it without asking (read_file, grep, glob)</label>
+    </div>
+    <div class="skip-row">
+      <input type="checkbox" id="write-outside-checkbox">
+      <label for="write-outside-checkbox">Allow writing outside it without asking (write_file, edit)</label>
+    </div>
+    <div id="remembered-outside"></div>
+    <p class="note">A shell command is not a path, so bash is not covered by these two. It asks on its own terms.</p>
+
+    <h4 class="settings-section">Rules</h4>
     <div id="permission-rules-list"></div>
     <div class="add-rule-row">
       <input type="text" name="tool" id="rule-tool-input" placeholder="tool (e.g. bash)">
@@ -251,10 +281,20 @@
   <div class="box">
     <h3>Permission request</h3>
     <p id="permission-text"></p>
+    <!-- Why this is being asked, when the answer is "because the path
+         leaves this project". Without it the request reads as an
+         ordinary write and nothing on screen says the file is somewhere
+         else. Hidden for every other kind of request. -->
+    <p class="note warn" id="permission-outside" hidden></p>
     <div class="actions">
       <button class="deny" id="permission-deny">Deny</button>
       <button id="permission-allow-session" title="don't ask again this session">Allow for session</button>
       <button id="permission-allow-always" title="don't ask again — writes a rule to config.json">Always allow</button>
+      <!-- The two answers a boundary question takes. A place is answered
+           at one of two sizes, and being asked once per file in another
+           project is how a prompt stops being read. -->
+      <button id="permission-allow-dir" hidden></button>
+      <button id="permission-allow-outside" hidden></button>
       <button id="permission-allow">Allow once</button>
     </div>
   </div>

@@ -41,6 +41,88 @@ type Session struct {
 	// that was arranged before it existed.
 	Order     int       `json:"order,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	// Permissions is how this conversation answers permission questions,
+	// where it differs from the daemon's defaults. See Permissions.
+	Permissions Permissions `json:"permissions,omitempty"`
+}
+
+// Permissions is a session's own answer to the four permission switches.
+//
+// Per session rather than per daemon, for the same reason the workspace
+// is: two conversations on one daemon are two projects, and "do not ask
+// me about this one" is a thing said about a project. A skip flipped on
+// for a throwaway experiment used to silence the prompts in the
+// conversation editing something that mattered.
+//
+// A nil field means this session has not been asked the question and
+// follows the daemon's default from config.json. That is what makes the
+// default still worth setting, and it is why these are pointers: false
+// and unset have to be different, or turning a switch off in one session
+// would be indistinguishable from never having touched it.
+type Permissions struct {
+	// SkipAll allows every prompt that would have asked, the workspace
+	// boundary included.
+	SkipAll *bool `json:"skip_all,omitempty"`
+	// SkipTools allows every tool prompt and leaves the boundary alone,
+	// which is the useful middle: work without being interrupted about
+	// this project, and still be asked before anything leaves it.
+	SkipTools *bool `json:"skip_tools,omitempty"`
+	// ReadOutside and WriteOutside allow reads and writes outside this
+	// session's workspace without asking.
+	ReadOutside  *bool `json:"read_outside,omitempty"`
+	WriteOutside *bool `json:"write_outside,omitempty"`
+}
+
+// Switch names one of the four, so setting one is a value rather than a
+// field name spelled out at each call site.
+type Switch string
+
+const (
+	SwitchSkipAll      Switch = "skip_all"
+	SwitchSkipTools    Switch = "skip_tools"
+	SwitchReadOutside  Switch = "read_outside"
+	SwitchWriteOutside Switch = "write_outside"
+)
+
+// Switches lists them in the order a client should show them: the two
+// blanket ones first, then the two that survive the second blanket.
+func Switches() []Switch {
+	return []Switch{SwitchSkipAll, SwitchSkipTools, SwitchReadOutside, SwitchWriteOutside}
+}
+
+// Get returns this session's own answer for one switch, or nil when it
+// has none and the daemon's default applies.
+func (p Permissions) Get(sw Switch) *bool {
+	switch sw {
+	case SwitchSkipAll:
+		return p.SkipAll
+	case SwitchSkipTools:
+		return p.SkipTools
+	case SwitchReadOutside:
+		return p.ReadOutside
+	case SwitchWriteOutside:
+		return p.WriteOutside
+	}
+	return nil
+}
+
+// set writes one switch. A nil value clears it, which is how a session
+// goes back to following the daemon's default rather than pinning the
+// same value the default happens to have today.
+func (p *Permissions) set(sw Switch, v *bool) bool {
+	switch sw {
+	case SwitchSkipAll:
+		p.SkipAll = v
+	case SwitchSkipTools:
+		p.SkipTools = v
+	case SwitchReadOutside:
+		p.ReadOutside = v
+	case SwitchWriteOutside:
+		p.WriteOutside = v
+	default:
+		return false
+	}
+	return true
 }
 
 type subscriber struct {
@@ -229,6 +311,32 @@ func (s *Store) SetWorkspace(sessionID, dir string) (*Session, error) {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
 	st.meta.Workspace = dir
+	metaCopy := st.meta
+	if s.dir != "" {
+		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
+			return nil, err
+		}
+	}
+	return &metaCopy, nil
+}
+
+// SetPermission records this session's own answer to one permission
+// switch, or clears it (v nil) so the daemon's default applies again.
+//
+// Persisted with the rest of the session's metadata, so reopening a
+// conversation reopens it configured the way it was left. That is the
+// same promise the workspace makes, and it is the reason these are on
+// the session at all: the setting describes the work, not the process.
+func (s *Store) SetPermission(sessionID string, sw Switch, v *bool) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	if !st.meta.Permissions.set(sw, v) {
+		return nil, fmt.Errorf("unknown permission switch %q", sw)
+	}
 	metaCopy := st.meta
 	if s.dir != "" {
 		if err := writeSessionMeta(s.dir, metaCopy); err != nil {

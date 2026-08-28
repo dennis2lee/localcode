@@ -2,7 +2,9 @@ import {
   modalEl,
   delegateModal, delegateEnabledCheckbox, delegateAgentSelect, delegateMatchListEl,
   delegateMatchInput, delegateNote,
-  permissionSettingsModal, skipPermissionsCheckbox, permissionRulesListEl,
+  permissionSettingsModal, skipPermissionsCheckbox, skipToolsCheckbox,
+  readOutsideCheckbox, writeOutsideCheckbox, permissionScopeNote,
+  permissionWorkspaceNote, rememberedOutsideEl, permissionRulesListEl,
   ruleToolInput, ruleMatchInput, ruleDecisionSelect,
   permissionSettingsNote,
   workspaceModal, workspaceInput, workspaceNote, workspaceBrowseBtn, workspaceStopBusyBtn,
@@ -157,40 +159,129 @@ export function renderPermissionRulesList() {
   }
 }
 
-// refreshPermissionSettingsIfOpen re-reads the checkbox from app state
-// after somebody else changed it: a "/permission-skip-all" typed at a
-// prompt, or another window's own checkbox. Only when the panel is open,
-// since that is the only time it is on screen; the pill beside the
-// status line is redrawn either way.
+// ---- The four switches, per conversation ----
+
+// The checkbox for each switch, in the order the panel shows them: the
+// two blankets first, then the two that survive the second blanket.
+const SWITCH_BOXES = [
+  ['skip_all', () => skipPermissionsCheckbox],
+  ['skip_tools', () => skipToolsCheckbox],
+  ['read_outside', () => readOutsideCheckbox],
+  ['write_outside', () => writeOutsideCheckbox],
+];
+
+// applySessionPermissions takes one whole snapshot from the daemon and
+// applies it. A snapshot rather than a field, so a client that missed an
+// event cannot end up half-updated.
+export function applySessionPermissions(d) {
+  if (!d || !d.effective) return;
+  app.sessionPermissions = d.effective;
+  app.permissionSource = d.source || {};
+  app.rememberedOutside = d.remembered || { read: [], write: [] };
+  renderPermissionStatus();
+  refreshPermissionSettingsIfOpen();
+}
+
+// loadSessionPermissions fetches them for the open conversation. Called
+// on a session switch, because these belong to the conversation and the
+// panel would otherwise show the previous one's.
+export async function loadSessionPermissions(sessionID) {
+  if (!sessionID) return;
+  try {
+    applySessionPermissions(await apiClient.getSessionPermissions(sessionID));
+  } catch {
+    // A daemon that cannot answer leaves the last snapshot standing,
+    // which is better than blanking the panel to a state nothing is in.
+  }
+}
+
+// setSessionSwitch is a checkbox click. The checkbox shows the effective
+// answer and clicking it writes this conversation's own, which is why
+// there is no third visual state: "unset" and "set to what the default
+// happens to be" look the same and behave the same until the default
+// changes, and the source line under the panel says which one it is.
+async function setSessionSwitch(name, enabled) {
+  if (!session.sessionID) return;
+  try {
+    applySessionPermissions(await apiClient.setSessionPermission(session.sessionID, name, enabled));
+  } catch (err) {
+    permissionSettingsNote.textContent = `could not change ${name}: ${err.message}`;
+    permissionSettingsNote.classList.add('err');
+  }
+}
+
+// renderRememberedOutside lists the directories answered with "allow this
+// directory" at a prompt, each with a way to take it back. Without this
+// the grant is a decision with no record and no undo.
+function renderRememberedOutside() {
+  rememberedOutsideEl.innerHTML = '';
+  for (const cls of ['read', 'write']) {
+    const dirs = (app.rememberedOutside && app.rememberedOutside[cls]) || [];
+    if (dirs.length === 0) continue;
+    const row = document.createElement('div');
+    row.className = 'rule-row';
+    const text = document.createElement('span');
+    text.className = 'rule-text';
+    text.textContent = `${cls}: ${dirs.join(', ')}`;
+    row.appendChild(text);
+    const clear = document.createElement('button');
+    clear.textContent = 'forget';
+    clear.title = `same as /${cls}-outside mem-clear`;
+    clear.addEventListener('click', async () => {
+      try {
+        applySessionPermissions(await apiClient.forgetOutside(session.sessionID, cls));
+      } catch { /* the list simply stays as it was */ }
+    });
+    row.appendChild(clear);
+    rememberedOutsideEl.appendChild(row);
+  }
+}
+
+// refreshPermissionSettingsIfOpen re-reads the checkboxes from app state
+// after somebody else changed them: a "/read-outside" typed at a prompt,
+// another window's own checkbox, or an "allow anywhere" answer given to
+// a prompt. Only when the panel is open, since that is the only time it
+// is on screen; the pill beside the status line is redrawn either way.
 export function refreshPermissionSettingsIfOpen() {
   if (!permissionSettingsModal || permissionSettingsModal.hidden) return;
-  skipPermissionsCheckbox.checked = app.skipPermissions;
+  drawPermissionSettings();
+}
+
+function drawPermissionSettings() {
+  for (const [name, box] of SWITCH_BOXES) {
+    box().checked = !!app.sessionPermissions[name];
+  }
+  const sources = app.permissionSource || {};
+  const inherited = Object.keys(sources).filter(k => sources[k] === 'parent');
+  permissionScopeNote.textContent =
+    'These four apply to this conversation only. Defaults for new ones come from config.json.'
+    + (inherited.length ? ` Inherited from the conversation that started this one: ${inherited.join(', ')}.` : '');
+  permissionWorkspaceNote.textContent = app.workspace
+    ? `Paths that land outside ${app.workspace}: an absolute path, a "..", a symlink that leads out.`
+    : 'Paths that land outside this conversation\'s own directory.';
+  renderRememberedOutside();
 }
 
 export function openPermissionSettings() {
-  skipPermissionsCheckbox.checked = app.skipPermissions;
-  skipPermissionsCheckbox.disabled = !app.canEditPermissions;
+  drawPermissionSettings();
   ruleToolInput.disabled = ruleMatchInput.disabled = ruleDecisionSelect.disabled = !app.canEditPermissions;
+  permissionSettingsNote.classList.remove('err');
   permissionSettingsNote.textContent = app.canEditPermissions
-    ? 'Changes apply immediately and are written to config.json.'
-    : 'No config.json path is available in this run, so settings are read-only.';
+    ? 'Rules apply immediately and are written to config.json. The four switches above are saved with the conversation.'
+    : 'No config.json path is available in this run, so rules are read-only.';
   renderPermissionRulesList();
   permissionSettings.open();
 }
 
-export function closePermissionSettings() {
-  permissionSettings.close();
+// wireSessionPermissionCheckboxes is called once from main.js.
+export function wireSessionPermissionCheckboxes() {
+  for (const [name, box] of SWITCH_BOXES) {
+    box().addEventListener('change', (e) => setSessionSwitch(name, e.target.checked));
+  }
 }
 
-export async function toggleSkipPermissions(enabled) {
-  try {
-    await apiClient.setSkipPermissions(enabled);
-    app.skipPermissions = enabled;
-    renderPermissionStatus();
-  } catch (err) {
-    skipPermissionsCheckbox.checked = app.skipPermissions; // revert on failure
-    permissionSettingsNote.textContent = `Failed to change: ${String(err)}`;
-  }
+export function closePermissionSettings() {
+  permissionSettings.close();
 }
 
 export async function addPermissionRule() {

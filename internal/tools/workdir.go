@@ -210,50 +210,95 @@ func resolvePhysical(path string) (string, error) {
 // has not converged is not going to.
 const maxDanglingLinkHops = 64
 
-// BoundaryDecision applies the workspace boundary to a resolved
-// permission decision.
+// Policy is the four switches, answered by whoever knows about sessions
+// and configuration. This package knows about paths and nothing else.
 //
-// It escalates allow to ask and does nothing else. A deny stays a deny —
-// a rule written to forbid something is not softened by where the file is
-// — and an ask is already asking. enforce is the caller's switch, so the
-// boundary can be part of a feature that is opted into rather than
-// something that starts happening to everyone.
-func BoundaryDecision(ctx context.Context, d Decision, subject string, enforce bool) Decision {
-	if !enforce || d != DecisionAllow {
-		return d
-	}
-	if OutsideWorkspace(ctx, subject) {
-		return DecisionAsk
-	}
-	return d
+// All three take a context because all four switches are per session: two
+// conversations on one daemon are two projects, and "do not ask me about
+// this one" is a sentence about a project.
+type Policy struct {
+	// SkipAll allows every question, the boundary included. The blanket.
+	SkipAll func(ctx context.Context) bool
+	// SkipTools allows every question the boundary did not raise. The
+	// useful middle: work without being interrupted about this project,
+	// and still be asked before anything leaves it.
+	SkipTools func(ctx context.Context) bool
+	// OutsideAllowed answers whether this session has already said yes to
+	// leaving the workspace for reads, or for writes.
+	OutsideAllowed func(ctx context.Context, class OutsideClass) bool
 }
 
-// ComposeResolver is the whole permission pipeline in its required
-// order: the user's rules and the shipped guards first, then the
-// workspace boundary, then skip_permissions' downgrade of whatever
-// "ask" is left standing.
+// Query is one permission question as the registry asks it.
+type Query struct {
+	Tool    string
+	Subject string
+	// Static is the tool's own default (Tool.RequiresPermission).
+	Static bool
+	// Class is what this tool does to Subject, from the tool itself.
+	Class OutsideClass
+}
+
+// Outcome is the decision and, when the workspace boundary is the thing
+// asking, enough for the question to explain itself.
 //
-// The order is the contract, and it exists because it was once wrong.
-// The boundary used to run after the skip downgrade, so its escalation
-// produced asks that skip_permissions could not reach — a person who
-// had said "ask me nothing" was asked about every path outside the
-// workspace, which contradicts the one promise skip_permissions makes:
-// every ask becomes an allow, and only an explicit deny still denies.
-// The boundary is an ask-class guard, so under skip it is silent by
-// design; the deny-class guards (the credential patterns) are the ones
-// skip never touches, and they are unaffected by this ordering because
-// a deny passes through both steps unchanged.
+// The boundary reports back rather than being recomputed by whoever draws
+// the prompt: deciding it costs symlink resolution, and two independent
+// answers to "is this outside?" is one of them being wrong eventually.
+type Outcome struct {
+	Decision Decision
+	// Outside is set only when this decision is the boundary speaking.
+	Outside OutsideClass
+	// Dir is the directory an "allow this directory" answer covers, and
+	// Workspace is the project the subject is outside of. Both empty
+	// unless Outside is set.
+	Dir       string
+	Workspace string
+}
+
+// ComposeResolver is the whole permission pipeline in its required order.
+//
+//  1. The user's rules and the shipped guards. A deny here is final:
+//     nothing below softens a rule somebody wrote to forbid something.
+//  2. The workspace boundary. A path that leaves the project is a
+//     question of its own, with its own switch per direction, and it is
+//     asked whatever the rules said — a rule that allows write_file
+//     everywhere is a statement about this project, not a licence to
+//     edit the one next door.
+//  3. skip_tools over whatever ask is left, then skip_all over
+//     everything.
+//
+// The order is the contract and it has been wrong twice. The boundary
+// used to run after the skip downgrade, so a person who had said "ask me
+// nothing" was asked anyway. Then it ran before, and skip_permissions
+// silenced the one guard worth keeping, which is what skip_tools now
+// exists to separate: skip_tools stops at the edge of the project, and
+// only skip_all crosses it.
 func ComposeResolver(
 	resolve func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision,
-	smartOn func(context.Context) bool,
-	skipOn func() bool,
-) func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
-	return func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
-		d := resolve(ctx, toolName, subject, staticRequiresPermission)
-		d = BoundaryDecision(ctx, d, subject, smartOn(ctx))
-		if d == DecisionAsk && skipOn() {
-			return DecisionAllow
+	p Policy,
+) func(ctx context.Context, q Query) Outcome {
+	return func(ctx context.Context, q Query) Outcome {
+		d := resolve(ctx, q.Tool, q.Subject, q.Static)
+		if d == DecisionDeny {
+			return Outcome{Decision: d}
 		}
-		return d
+
+		if q.Class != OutsideNone && OutsideWorkspace(ctx, q.Subject) &&
+			!p.OutsideAllowed(ctx, q.Class) {
+			if p.SkipAll(ctx) {
+				return Outcome{Decision: DecisionAllow}
+			}
+			return Outcome{
+				Decision:  DecisionAsk,
+				Outside:   q.Class,
+				Dir:       OutsideDir(ctx, q.Subject),
+				Workspace: WorkingDir(ctx),
+			}
+		}
+
+		if d == DecisionAsk && (p.SkipAll(ctx) || p.SkipTools(ctx)) {
+			return Outcome{Decision: DecisionAllow}
+		}
+		return Outcome{Decision: d}
 	}
 }

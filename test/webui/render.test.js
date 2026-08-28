@@ -100,10 +100,20 @@ test('the permission pill counts rules, and shouts when prompts are skipped', as
   app.renderPermissionStatus();
   assert.equal(app.el('permission-status-btn').textContent, 'permissions: ask (2 rules)');
 
-  app.state.skipPermissions = true;
+  // Per conversation as of v0.63.0: the pill reads the open session's
+  // own answer, not the daemon default, or it would be describing
+  // something other than what is in front of you.
+  app.state.sessionPermissions = { skip_all: true };
   app.renderPermissionStatus();
   assert.equal(app.el('permission-status-btn').textContent, 'permissions: skip');
   assert.ok(app.el('permission-status-btn').classList.contains('skip'));
+
+  // The middle state has its own words. "skip" would overstate it and
+  // "ask" would understate it: tools do not ask, leaving the project does.
+  app.state.sessionPermissions = { skip_all: false, skip_tools: true };
+  app.renderPermissionStatus();
+  assert.equal(app.el('permission-status-btn').textContent, 'permissions: tools skipped');
+  assert.ok(!app.el('permission-status-btn').classList.contains('skip'));
 });
 
 test('auto-delegate on with no target agent says it is doing nothing', async () => {

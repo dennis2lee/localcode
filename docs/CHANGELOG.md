@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.63.0
+
+* **Leaving the project is a question of its own, and it has four switches instead of one.** There was one blanket: `skip_permissions`, daemon-wide, every prompt turned into an allow. It is the setting most likely to be flipped on for one task and forgotten, and while it was on the model could write anywhere on the machine without a word. The workspace boundary existed, but only with Smart Agent on, and the blanket silenced it along with everything else.
+
+  So the blanket is split into four, and each is a sentence about a project rather than about the daemon:
+
+  | Command | Allows without asking |
+  |---|---|
+  | `/permission-skip-all` | Everything, the workspace boundary included |
+  | `/permission-skip-tools` | Every tool prompt, and **not** a path that leaves the project |
+  | `/read-outside` | Reading outside the project |
+  | `/write-outside` | Writing outside it |
+
+  `/permission-skip-tools` is the one most people want: work head-down in one repository without being interrupted, and still be asked before anything reaches another project. Reading and writing are separate because they are not the same risk — reading a header in `/usr/include` is ordinary work, and writing to a directory this conversation was never told about is the failure the boundary exists to catch. The boundary itself no longer depends on Smart Agent, because it is a safety property rather than an orchestration feature.
+
+* **The four belong to the conversation, not to the daemon.** Two conversations on one daemon are two projects, and "do not ask me about this one" said in a scratch experiment used to silence the prompts in the window editing something that mattered. Each conversation carries its own answers, saved with the session so reopening it reopens it configured as it was left; config.json holds the defaults for a conversation that has not answered. A background task follows the conversation that started it, live, so turning a switch off reaches work already running.
+
+* **The question is answered by place, because a place is what it is about.** A model told to read a sibling repository reads forty files in it, and forty prompts is one decision and thirty-nine keystrokes, which is how a permission prompt stops being read. So a boundary prompt says which project the path is outside of and offers two sizes of yes: this directory and everything under it for the rest of the session, or anywhere outside the project — the second one turning the conversation's own switch on, so the decision is visible afterwards instead of being a grant only the broker knew about. `/read-outside mem-clear` and `/write-outside mem-clear` forget the directories without touching the switches, and the Permissions panel lists them with a forget button each.
+
+* **`grep` and `glob` are covered for the first time.** Neither had a permission subject, so no rule could match them and the boundary could not see them: `glob` on `/Users/someone/other-project/**/*.go` listed another project's files and nothing asked. `bash` is still not covered and does not claim to be, since a shell command is not a path and `cd /etc && cat passwd` cannot be judged by looking at it.
+
+* **A hook is told which project it was called about.** Every hook payload now carries `cwd`, alongside the working directory it already runs in as of v0.62.1.
+
 ## v0.62.1
 
 * **Delegated work happens in the project that delegated it.** A task session was created with no workspace recorded, so it fell through to the daemon's default, which is wherever localcode was started. Any conversation that had moved from there — a workspace switched in the header, a session reopened in the project it belongs to, a second client on the same daemon in a second checkout — delegated to agents that read and wrote in a different project from the one that asked, and said nothing about it. The `implement` agent is the sharp end: told to change a file it resolves by relative path, it changed the other project's copy and reported that it was done.

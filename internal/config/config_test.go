@@ -239,9 +239,15 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"Hooks":              true,
 		"AutoDelegate":       true,
 		"SkipPermissions":    true,
-		"SmartAgent":         true,
-		"TraceMaxAgeDays":    true,
-		"TraceMaxTotalMB":    true,
+		// The other three switches. Same reason as SkipPermissions: a
+		// project that says "do not leave this directory" must not have
+		// that dropped because a global config also exists.
+		"SkipToolPermissions":   true,
+		"ReadOutsideWorkspace":  true,
+		"WriteOutsideWorkspace": true,
+		"SmartAgent":            true,
+		"TraceMaxAgeDays":       true,
+		"TraceMaxTotalMB":       true,
 	}
 	intentionallyNotMerged := map[string]bool{}
 

@@ -85,7 +85,13 @@ func (m *Model) applyEvent(ev events.Event) {
 		if desc == "" {
 			desc = "(no description given)"
 		}
-		m.pending = &pendingPermission{id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways}
+		outside, _ := ev.Data["outside"].(string)
+		outsideDir, _ := ev.Data["outside_dir"].(string)
+		workspace, _ := ev.Data["workspace"].(string)
+		m.pending = &pendingPermission{
+			id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways,
+			outside: outside, outsideDir: outsideDir, workspace: workspace,
+		}
 		m.pendingHintShown = false
 		m.pendingSince = time.Now()
 	case events.TypePermissionResolved:

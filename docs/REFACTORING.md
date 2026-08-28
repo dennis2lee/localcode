@@ -612,7 +612,7 @@ line refs are to the current file:
 | `tui.go` | styles, layout consts, `Model`, `New`, `Init` (~130 lines) |
 | `messages.go` | the 10 `...Msg` types, `spinFrames`, `spinTick` |
 | `update.go` | `Update` reduced to a dispatcher: `case tea.KeyMsg: return m.updateKey(msg)` etc. |
-| `keys.go` | the key handlers (`ctrl+c`, `esc`, `y/n/s/a`, `up`, `down`, `tab`) |
+| `keys.go` | the key handlers (`ctrl+c`, `esc`, `y/n/s/a/d`, `up`, `down`, `tab`) |
 | `submit.go` | the whole `"enter"` case → `handleSubmit`, plus `isPlainPrompt`, `dequeue` |
 | `events.go` | `applyEvent` |
 | `history.go` | `rememberPrompt`, `atInputTop/Bottom`, `setInputTo`, `historyPrev/Next` + the `history`/`historyIdx`/`draft` fields as a `promptHistory` struct |

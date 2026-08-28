@@ -4,7 +4,7 @@ import tea "charm.land/bubbletea/v2"
 
 // handleKey is the tea.KeyMsg case of Update. Most keys either return
 // immediately or fall out to the bottom of Update, which forwards the
-// keypress to the textarea — "up"/"down" at a history boundary and "y/n/s/a"
+// keypress to the textarea — "up"/"down" at a history boundary and "y/n/s/a/d"
 // with no pending permission are the two that deliberately fall through
 // (returning a zero tea.Cmd here is what signals "let the caller pass this
 // on"), so typing the letter y or moving within a multi-line prompt still
@@ -28,20 +28,36 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.queue = nil
 		return m, m.cancelTurn(), true
 
-	case "y", "n", "s", "a":
+	case "y", "n", "s", "a", "d":
 		if m.pending != nil && m.canAnswerPermission() {
 			id := m.pending.id
 			canAlways := m.pending.canAlways
+			// A boundary question takes a different set of answers: see
+			// pendingPermission.prompt. "d" only exists there, and "s"
+			// and "a" mean something else.
+			outside := m.pending.outside != ""
+			key := msg.String()
+			if key == "d" && !outside {
+				return m, nil, false // an ordinary letter everywhere else
+			}
 			m.pending = nil
 			m.pendingHintShown = false
-			switch msg.String() {
+			switch key {
 			case "n":
 				return m, m.resolvePermission(id, false, ""), true
+			case "d":
+				return m, m.resolvePermission(id, true, "outside-dir"), true
 			case "s":
+				if outside {
+					return m, m.resolvePermission(id, true, "outside-all"), true
+				}
 				return m, m.resolvePermission(id, true, "session"), true
 			case "a":
-				if !canAlways {
-					return m, nil, true // no config.json to write to; "a" isn't offered
+				if outside || !canAlways {
+					// Not offered: a boundary question is answered by
+					// place, and "always" would write a tool rule that
+					// outlives the reason it was written.
+					return m, nil, true
 				}
 				return m, m.resolvePermission(id, true, "always"), true
 			default: // "y"

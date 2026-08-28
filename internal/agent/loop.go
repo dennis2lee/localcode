@@ -134,6 +134,23 @@ type Loop struct {
 	// daemon is the thing that has them.
 	OnSettingsChanged func()
 
+	// Permissions answers and changes the four per-session permission
+	// switches. Built in New from the same store and config the tool
+	// registry's policy uses, so a command and a tool call cannot
+	// disagree about what a session has said.
+	Permissions *PermissionPolicy
+
+	// OnPermissionsChanged is OnSettingsChanged for the per-session ones,
+	// and separate for the reason they are per session: a client showing
+	// another conversation must not repaint its switches because this one
+	// changed.
+	OnPermissionsChanged func(sessionID string)
+
+	// ForgetOutside backs "/read-outside mem-clear": drop the directories
+	// a session has approved leaving the workspace for. The memory lives
+	// in the permission broker, which is above this package.
+	ForgetOutside func(sessionID string, class tools.OutsideClass) int
+
 	// SetSkills replaces the skill list and its prompt index together,
 	// under the loop's own lock, which matters now that "/reset-skills"
 	// can swap them while turns are running. The exported fields stay as
@@ -277,6 +294,7 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 		Tools:        reg,
 		Providers:    providers,
 		Config:       cfg,
+		Permissions:  NewPermissionPolicy(store, cfg),
 		SystemPrompt: defaultSystemPrompt,
 		settings: liveSettings{
 			autoCompact:        cfg.CompactEnabled(),

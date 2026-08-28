@@ -1895,12 +1895,15 @@ func TestASwitchChangedAnywhereReachesEveryClient(t *testing.T) {
 	// registered before anything is sent.
 	time.Sleep(100 * time.Millisecond)
 
-	if err := c.SendMessage(ctx, other.ID, "/permission-skip-all on"); err != nil {
+	// A daemon-wide switch. The four permission ones are per session as
+	// of v0.63.0 and announce on their own session instead, which is the
+	// scope of what they changed.
+	if err := c.SendMessage(ctx, other.ID, "/smart-agent on"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	data := waitForSettings(t, evCh)
-	if data["skip_permissions"] != true {
-		t.Errorf("skip_permissions = %v, want true", data["skip_permissions"])
+	if data["smart_agent"] != true {
+		t.Errorf("smart_agent = %v, want true", data["smart_agent"])
 	}
 	// The whole snapshot, so a client applies a state rather than merging
 	// a sequence and cannot end up half-updated by an event it missed.

@@ -37,6 +37,25 @@ const (
 	// ScopeAlways approves matching calls permanently by writing a rule
 	// into config.json, and also covers the current session.
 	ScopeAlways = "always"
+
+	// The two answers a workspace-boundary question accepts, and the
+	// reason it is a different question from every other one.
+	//
+	// An ordinary permission asks about a tool call. This one asks about
+	// a place, and a place is answered at one of two sizes: this
+	// directory, or anywhere. Offering only "once" and "for the session"
+	// would have made the useful answer impossible to give — a model told
+	// to read the sibling repository reads forty files in it, and forty
+	// prompts is one decision and thirty-nine keystrokes, which is how a
+	// permission prompt stops being read.
+	//
+	// ScopeOutsideDir remembers the directory for the rest of the
+	// session, in memory. ScopeOutsideAll turns this session's read- or
+	// write-outside switch on, which is the same thing the Permissions
+	// window and /read-outside do, so the answer is visible afterwards
+	// rather than being an invisible state only the broker knows about.
+	ScopeOutsideDir = "outside-dir"
+	ScopeOutsideAll = "outside-all"
 )
 
 // PermissionBroker turns a blocking tool-permission check into a
@@ -62,6 +81,23 @@ type PermissionBroker struct {
 	// per session and must not leak into other sessions or outlive the
 	// process.
 	granted map[string]map[string]bool
+	// outside remembers the directories a session has approved leaving
+	// the workspace for, per class. Separate from granted because it is
+	// matched by containment rather than by an exact pattern, and keyed
+	// by class rather than by tool: approving a directory for reading
+	// approves it for read_file, grep and glob alike, since what was
+	// approved is the place, not the tool that happened to reach it.
+	//
+	// In memory, and per session, like every other session-scoped grant.
+	// A directory approved for one conversation is not approved for the
+	// next one, and nothing here survives a restart.
+	outside map[string]map[tools.OutsideClass][]string
+	// policy is consulted for the "yes, anywhere" answer, which turns a
+	// session switch on rather than remembering something privately.
+	policy *PermissionPolicy
+	// onChanged, if set, tells the daemon a session's switches moved, so
+	// a window showing them follows an answer given at the prompt.
+	onChanged func(sessionID string)
 }
 
 // resolution is one answer to a permission request: whether to allow, and
@@ -76,11 +112,22 @@ func NewPermissionBroker(store *session.Store) *PermissionBroker {
 		store:   store,
 		pending: map[string]chan resolution{},
 		granted: map[string]map[string]bool{},
+		outside: map[string]map[tools.OutsideClass][]string{},
 	}
 }
 
+// SetPolicy gives the broker the session switches, so a "yes, anywhere"
+// answer can turn one on. onChanged is told which session moved.
+func (b *PermissionBroker) SetPolicy(p *PermissionPolicy, onChanged func(sessionID string)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.policy = p
+	b.onChanged = onChanged
+}
+
 func (b *PermissionBroker) Func() tools.PermissionFunc {
-	return func(ctx context.Context, toolName, subject, description string) (bool, error) {
+	return func(ctx context.Context, ask tools.Ask) (bool, error) {
+		toolName, subject, description := ask.Tool, ask.Subject, ask.Description
 		sessionID, ok := SessionIDFromContext(ctx)
 		if !ok {
 			return false, fmt.Errorf("permission check has no session context")
@@ -90,6 +137,12 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 		// this call, so don't ask again.
 		rule := config.PermissionRuleFor(toolName, subject)
 		if b.isGranted(sessionID, toolName, rule.Match) {
+			return true, nil
+		}
+		// A directory this conversation already approved leaving the
+		// workspace for. Checked before anything is written to the log,
+		// so a remembered answer produces no prompt and no event at all.
+		if ask.Outside != tools.OutsideNone && b.outsideGranted(sessionID, ask.Outside, ask.Subject, ask.Dir) {
 			return true, nil
 		}
 
@@ -104,10 +157,10 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 		// an ordinary session that is the session itself; for a background
 		// task it is also the conversation that spawned it, since nothing
 		// streams a task's own log.
-		ask := b.audience(sessionID)
+		where := b.audience(sessionID)
 
-		for _, target := range ask.mirrors {
-			b.store.Append(target, events.TypePermissionRequest, map[string]any{
+		for _, target := range where.mirrors {
+			b.store.Append(target, events.TypePermissionRequest, outsideFields(ask, map[string]any{
 				"id":   id,
 				"tool": toolName,
 				// Prefixed rather than carried in a separate field so both
@@ -119,10 +172,10 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 				"rule":         rule.Match,
 				"can_always":   b.ConfigPath != "",
 				"task_session": sessionID,
-			})
+			}))
 		}
 
-		if _, err := b.store.Append(sessionID, events.TypePermissionRequest, map[string]any{
+		if _, err := b.store.Append(sessionID, events.TypePermissionRequest, outsideFields(ask, map[string]any{
 			"id":          id,
 			"tool":        toolName,
 			"description": description,
@@ -131,24 +184,16 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			// the user guess.
 			"rule":       rule.Match,
 			"can_always": b.ConfigPath != "",
-		}); err != nil {
+		})); err != nil {
 			return false, err
 		}
 
 		select {
 		case res := <-ch:
-			if res.allow && res.scope != ScopeOnce {
-				b.grant(sessionID, toolName, rule.Match)
+			if res.allow {
+				b.applyScope(sessionID, toolName, rule, ask, res.scope)
 			}
-			if res.allow && res.scope == ScopeAlways {
-				if err := b.persist(toolName, rule); err != nil {
-					// The approval still stands for this session; only the
-					// permanence failed, which is worth logging but not
-					// worth refusing the tool call the user just approved.
-					log.Printf("permission: could not persist %q rule %q: %v", toolName, rule.Match, err)
-				}
-			}
-			for _, target := range ask.all() {
+			for _, target := range where.all() {
 				b.store.Append(target, events.TypePermissionResolved, map[string]any{
 					"id": id, "allow": res.allow, "scope": res.scope,
 				})
@@ -162,7 +207,7 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			// otherwise cancelling a stuck task leaves its request on
 			// screen in the parent conversation, refusing every message
 			// for a task that no longer exists.
-			for _, target := range ask.all() {
+			for _, target := range where.all() {
 				b.store.Append(target, events.TypePermissionResolved, map[string]any{
 					"id": id, "allow": false, "scope": ScopeOnce, "cancelled": true,
 				})
@@ -170,6 +215,53 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			return false, ctx.Err()
 		}
 	}
+}
+
+// applyScope is what an allow means beyond this one call.
+//
+// Split out because there are five answers now and the branching had
+// outgrown the select. The two boundary answers are handled first and
+// exclusively: a question raised by the boundary is about a place, so
+// answering it must not also widen a tool rule that was never the
+// subject. "Allow reads under /Users/me/other" is not "allow read_file
+// /Users/me/other/x.go for the session", and granting both would leave a
+// rule behind that outlives the reason it was written.
+func (b *PermissionBroker) applyScope(sessionID, toolName string, rule config.PermissionRule, ask tools.Ask, scope string) {
+	if ask.Outside != tools.OutsideNone {
+		switch scope {
+		case ScopeOutsideDir:
+			b.rememberOutside(sessionID, ask.Outside, ask.Dir)
+			return
+		case ScopeOutsideAll:
+			b.allowOutside(sessionID, ask.Outside)
+			return
+		}
+	}
+	if scope == ScopeOnce {
+		return
+	}
+	b.grant(sessionID, toolName, rule.Match)
+	if scope == ScopeAlways {
+		if err := b.persist(toolName, rule); err != nil {
+			// The approval still stands for this session; only the
+			// permanence failed, which is worth logging but not worth
+			// refusing the tool call the user just approved.
+			log.Printf("permission: could not persist %q rule %q: %v", toolName, rule.Match, err)
+		}
+	}
+}
+
+// outsideFields adds what a boundary question needs to explain itself,
+// and nothing at all to an ordinary one, so a client can tell the two
+// apart by whether "outside" is there.
+func outsideFields(ask tools.Ask, data map[string]any) map[string]any {
+	if ask.Outside == tools.OutsideNone {
+		return data
+	}
+	data["outside"] = ask.Outside.String()
+	data["outside_dir"] = ask.Dir
+	data["workspace"] = ask.Workspace
+	return data
 }
 
 // audience is where one permission request has to be written: the
@@ -244,6 +336,114 @@ func (b *PermissionBroker) isGranted(sessionID, toolName, pattern string) bool {
 	return b.granted[sessionID][grantKey(toolName, pattern)]
 }
 
+// rememberOutside records a directory this session may leave the
+// workspace for. Idempotent, and it drops a directory that is already
+// covered by one remembered earlier, so approving a tree and then a leaf
+// inside it does not grow the list with an entry that changes nothing.
+func (b *PermissionBroker) rememberOutside(sessionID string, class tools.OutsideClass, dir string) {
+	if dir == "" {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.outside[sessionID] == nil {
+		b.outside[sessionID] = map[tools.OutsideClass][]string{}
+	}
+	for _, had := range b.outside[sessionID][class] {
+		if tools.UnderDir(had, dir) {
+			return
+		}
+	}
+	b.outside[sessionID][class] = append(b.outside[sessionID][class], dir)
+}
+
+// outsideGranted reports whether this session, or a conversation above
+// it, has already approved the directory a call is reaching into.
+//
+// The walk up matches the switches (see PermissionPolicy): a background
+// task works in its parent's project on work the parent authorized, so a
+// directory the parent approved is one the task may use. Asking again
+// would put the question in a log nobody is reading.
+func (b *PermissionBroker) outsideGranted(sessionID string, class tools.OutsideClass, subject, dir string) bool {
+	target := dir
+	if target == "" {
+		target = subject
+	}
+	if target == "" {
+		return false
+	}
+	id := sessionID
+	for range maxParentWalk {
+		b.mu.Lock()
+		dirs := append([]string(nil), b.outside[id][class]...)
+		b.mu.Unlock()
+		for _, had := range dirs {
+			if tools.UnderDir(had, target) {
+				return true
+			}
+		}
+		sess, err := b.store.Get(id)
+		if err != nil || sess.ParentID == "" || sess.ParentID == sessionID {
+			return false
+		}
+		id = sess.ParentID
+	}
+	return false
+}
+
+// RememberedOutside lists the directories a session has approved, for a
+// client that wants to show what it is currently trusting.
+func (b *PermissionBroker) RememberedOutside(sessionID string, class tools.OutsideClass) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.outside[sessionID][class]...)
+}
+
+// ForgetOutside drops a session's remembered directories for one class —
+// what "/read-outside mem-clear" does.
+//
+// Its own operation rather than a side effect of turning a switch off,
+// because the two are different retractions: the switch is about the
+// blanket answer, and this is about the individual places. Somebody who
+// approved one directory by mistake needs a way to take that back
+// without also changing a switch they never touched.
+func (b *PermissionBroker) ForgetOutside(sessionID string, class tools.OutsideClass) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := len(b.outside[sessionID][class])
+	if b.outside[sessionID] != nil {
+		delete(b.outside[sessionID], class)
+		if len(b.outside[sessionID]) == 0 {
+			delete(b.outside, sessionID)
+		}
+	}
+	return n
+}
+
+// allowOutside is the "yes, anywhere" answer: it turns this session's own
+// switch on, the same one the Permissions window and /read-outside set.
+//
+// Through the session rather than into a private map, so the answer is
+// visible afterwards. An approval that only the broker knew about would
+// be a setting with no off switch and nowhere to see it.
+func (b *PermissionBroker) allowOutside(sessionID string, class tools.OutsideClass) {
+	b.mu.Lock()
+	policy, onChanged := b.policy, b.onChanged
+	b.mu.Unlock()
+	sw, ok := OutsideSwitch(class)
+	if !ok || policy == nil {
+		return
+	}
+	yes := true
+	if err := policy.Set(sessionID, sw, &yes); err != nil {
+		log.Printf("permission: could not set %s for session %s: %v", sw, sessionID, err)
+		return
+	}
+	if onChanged != nil {
+		onChanged(sessionID)
+	}
+}
+
 func (b *PermissionBroker) persist(toolName string, rule config.PermissionRule) error {
 	if b.ConfigPath == "" {
 		return fmt.Errorf("no config path configured for permanent permissions")
@@ -258,6 +458,7 @@ func (b *PermissionBroker) ForgetSession(sessionID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.granted, sessionID)
+	delete(b.outside, sessionID)
 }
 
 // Resolve answers a pending permission request. It is a no-op if id is
@@ -272,7 +473,7 @@ func (b *PermissionBroker) ForgetSession(sessionID string) {
 // told it worked while nothing happened.
 func (b *PermissionBroker) Resolve(id string, allow bool, scope string) bool {
 	switch scope {
-	case ScopeSession, ScopeAlways:
+	case ScopeSession, ScopeAlways, ScopeOutsideDir, ScopeOutsideAll:
 	default:
 		scope = ScopeOnce
 	}

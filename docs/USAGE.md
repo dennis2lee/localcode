@@ -203,7 +203,10 @@ The point is a config.json that can be committed to a repository, copied between
 | `max_concurrent_tasks` | Caps how many **background** tasks run at once. Unset means 1, so background tasks queue rather than run together. Synchronous `Task` delegation is not counted against it, because a caller that is blocked cannot start a second one and holding a slot while waiting for a nested child would deadlock against itself. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
-| `skip_permissions` | Turns every "ask" into "allow", including the workspace-boundary escalation, which is applied before the downgrade so it cannot outlive it. Off unless set; explicit deny rules still deny. See [Skipping confirmations](#skipping-confirmations-entirely). |
+| `skip_permissions` | The daemon default for `skip_all`: turns every "ask" into "allow", the workspace boundary included. Off unless set; explicit deny rules still deny. See [The four switches](#the-four-switches). |
+| `skip_tool_permissions` | The daemon default for `skip_tools`: every tool prompt allowed, and a path that leaves the workspace still asked about. |
+| `read_outside_workspace` | The daemon default for `read_outside`: reading outside the session's workspace without being asked. |
+| `write_outside_workspace` | The daemon default for `write_outside`. |
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `smart_agent` | Turns on the built-in specialist roster and the orchestration prompt. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
@@ -472,15 +475,33 @@ What each pattern matches:
 
 Patterns are globs where `*` is zero or more characters and `?` is exactly one.
 
-#### Skipping confirmations entirely
+#### The four switches
 
-`"skip_permissions": true` turns every `ask` into `allow`, the equivalent of Claude Code's `--dangerously-skip-permissions`. It defaults to **off** and has to be opted into deliberately.
+Four switches decide which prompts you see. **Each belongs to the conversation, not to the daemon**: two conversations on one daemon are two projects, and "do not ask me about this one" is a sentence about a project. Flipping one in a scratch experiment used to flip it in the window editing something that mattered.
+
+| Switch | Command | What it allows without asking |
+|---|---|---|
+| `skip_all` | `/permission-skip-all` | Everything, the workspace boundary included |
+| `skip_tools` | `/permission-skip-tools` | Every tool prompt, and **not** a path that leaves the workspace |
+| `read_outside` | `/read-outside` | Reading outside the workspace (`read_file`, `grep`, `glob`) |
+| `write_outside` | `/write-outside` | Writing outside the workspace (`write_file`, `edit`) |
+
+`skip_tools` is the one most people want: work head-down in one repository without being interrupted, and still be asked before anything reaches another project. Before it existed the only way to stop the interruptions was to turn off the guard that matters most.
+
+config.json holds the **defaults** for a conversation that has not answered for itself:
 
 ```json
-{ "skip_permissions": true }
+{
+  "skip_permissions": false,
+  "skip_tool_permissions": false,
+  "read_outside_workspace": false,
+  "write_outside_workspace": false
+}
 ```
 
-With it on, the model writes files and runs shell commands with no confirmation at all. Turn it on only where that is acceptable: a scratch repository, a container, a machine whose state you do not mind losing.
+The Permissions panel and the four commands set the conversation you are in and save the answer with the session, so reopening it reopens it configured the way you left it. A background task follows the conversation that started it, live: turning a switch off reaches work already running.
+
+With `skip_all` on, the model writes files and runs shell commands with no confirmation at all, anywhere on the machine. Turn it on only where that is acceptable: a scratch repository, a container, a machine whose state you do not mind losing.
 
 `deny` rules still deny. Skipping confirmations is a convenience; overriding a rule written specifically to forbid something would be a different and much worse promise. Pairing the two is a reasonable middle ground:
 
@@ -503,6 +524,8 @@ Command substitution and output redirection (`$(...)`, `` `...` ``, `<(...)`, `>
 
 ### Answering a permission prompt: once, this session, or always
 
+An ordinary permission prompt offers four answers. A prompt raised by the workspace boundary offers a different set, because it is a different question: see [Leaving the project](#leaving-the-project).
+
 A permission prompt offers four answers:
 
 | Answer | TUI key | Effect |
@@ -524,9 +547,10 @@ Session grants are forgotten when a session is deleted, and when the daemon rest
 
 ### Viewing and changing permission settings without waiting for a prompt
 
-A pill under the prompt box (Web UI and the GUI window, same page) always shows the current permission state: `permissions: ask (N rules)`, or `permissions: skip` in warn color when `skip_permissions` is on. Click it to open a panel that:
+A pill under the prompt box (Web UI and the GUI window, same page) always shows the open conversation's permission state: `permissions: ask (N rules)`, `permissions: tools skipped`, or `permissions: skip` in warn color. Click it to open a panel that:
 
-* toggles `skip_permissions` on or off
+* shows the four switches for the conversation you are in, and says where each answer came from: this conversation, the one that started it, or config.json
+* lists the directories this conversation has approved leaving the project for, each with a **forget** button (the same thing `/read-outside mem-clear` does)
 * lists every rule currently in `permission`, with a remove button per rule
 * adds a new rule by tool name, match pattern, and decision (allow/ask/deny)
 
@@ -926,23 +950,33 @@ The same assembly is recorded in the turn log as `prompt_manifest`, `prompt_asse
 
 A fallback that reports the same manifest id on a different model family reused a prompt written for the model that failed, which is what the id makes visible.
 
-### The three switches
+### The switches
 
-Three settings change how every turn behaves, and each has a command of its own. They are answered by the daemon rather than by a client, so the TUI and the Web UI both have them and both say the same thing about them.
+These settings change how every turn behaves, and each has a command of its own. They are answered by the daemon rather than by a client, so the TUI and the Web UI both have them and both say the same thing about them.
+
+**Daemon-wide**, saved to config.json:
 
 | Command | Setting | What it does |
 |---|---|---|
 | `/smart-agent` | `smart_agent` | The specialist roster, the fallback chain, the trace, the prompt cache markers and the guards. See [Smart Agent](#smart-agent). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
-| `/permission-skip-all` | `skip_permissions` | Turns every prompt that would have asked into an allow, for every session on the daemon. |
 | `/keep-going` | `keep_going` | The carry-on nudge for muse models. See [A model that stops mid-task](#a-model-that-stops-mid-task). The settings window has the same switch as a checkbox. |
 | `/auto-compact` | `auto_compact_enabled`, `auto_compact_percent` | Auto-compaction. A number sets the threshold and turns it on: `/auto-compact 70` compacts past 70% of the context window. The default threshold is 50%. |
 
+**Per conversation**, saved with the session. config.json holds their defaults. See [The four switches](#the-four-switches):
+
+| Command | Switch | What it allows without asking |
+|---|---|---|
+| `/permission-skip-all` | `skip_all` | Everything, the workspace boundary included. |
+| `/permission-skip-tools` | `skip_tools` | Every tool prompt, and not a path that leaves the workspace. |
+| `/read-outside` | `read_outside` | Reading outside the workspace. `mem-clear` forgets the directories approved at a prompt. |
+| `/write-outside` | `write_outside` | Writing outside the workspace. `mem-clear` likewise. |
+
 With no argument each one flips: `/smart-agent` turns it on if it was off. `on` and `off` set it outright, which is what you want in a script or when you are not sure what it currently is.
 
-**They save.** The choice is written to config.json, so it survives a restart, which is how the same switches have always behaved in the settings window and is not how `/config` behaved: `/config smart_agent on` applies for the run and forgets. When there is no config.json to write to, or the write fails, the change still applies and the reply says so rather than reporting a change that did happen as one that did not.
+**They save.** A daemon-wide choice is written to config.json and a per-conversation one is saved with the session, so either survives a restart, which is how the same switches have always behaved in the settings window and is not how `/config` behaved: `/config smart_agent on` applies for the run and forgets. When there is no config.json to write to, or the write fails, the change still applies and the reply says so rather than reporting a change that did happen as one that did not.
 
-Each reply says what the switch did and what it did not. Turning Smart Agent on with no profiles configured is legal and inert, so it says so instead of reading as a change that took effect; the same for auto-delegation with no `auto_delegate` block. `/permission-skip-all on` says in as many words that shell commands and writes outside the workspace will no longer ask, and that rules which **deny** still deny, since "skip permissions" reads like "skip all safety" and is not.
+Each reply says what the switch did and what it did not. Turning Smart Agent on with no profiles configured is legal and inert, so it says so instead of reading as a change that took effect; the same for auto-delegation with no `auto_delegate` block. `/permission-skip-all on` says in as many words that shell commands and paths outside the workspace will no longer ask in this conversation, that rules which **deny** still deny, and that `/permission-skip-tools` is the same thing without the last part.
 
 `/config` still works and still lists all four settings including `auto_compact`.
 
@@ -967,9 +1001,12 @@ These are typed into the message box but never reach the event log, so replaying
 | `/skill` | Lists registered skills. See [Running a skill](#running-a-skill). |
 | `/commands` | Lists the custom commands registered from `.localcode/commands/*.md`. See [Custom commands](#custom-commands). |
 | `/tasks` | Lists background tasks in this session. See [`/tasks`](#tasks). |
-| `/smart-agent` | Toggles the Smart Agent bundle and saves the choice. `/smart-agent on\|off` sets it outright. Answered by the daemon, so both clients have it. See [The three switches](#the-three-switches). |
+| `/smart-agent` | Toggles the Smart Agent bundle and saves the choice. `/smart-agent on\|off` sets it outright. Answered by the daemon, so both clients have it. See [The switches](#the-switches). |
 | `/auto-delegate` | Toggles auto-delegation the same way. |
-| `/permission-skip-all` | Toggles `skip_permissions` the same way. |
+| `/permission-skip-all` | Allows every prompt in this conversation, the workspace boundary included. |
+| `/permission-skip-tools` | Allows every tool prompt in this conversation, and still asks before a path leaves the workspace. |
+| `/read-outside` | Reading outside the workspace: `on`, `off`, or `mem-clear` to forget the directories approved at a prompt. See [Leaving the project](#leaving-the-project). |
+| `/write-outside` | Writing outside the workspace, the same three arguments. |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions
@@ -1383,7 +1420,7 @@ Because each specialist runs in its own session, each has its own stable prefix 
 
 #### Secrets and the workspace boundary
 
-Two shipped guards, both on only with Smart Agent on, both overridable.
+Two shipped guards. The credential one is on with Smart Agent on; the workspace boundary is always on, because it is a safety property rather than an orchestration feature. Both are overridable.
 
 **Secrets are refused outright.** `read_file`, `write_file` and `edit` are denied for paths that look like a credential store: `.env` and `.env.*`, private keys (`*.pem`, `*.key`, `id_rsa` and friends), `~/.ssh`, `~/.aws/credentials`, `~/.kube/config`, `~/.npmrc`, `*credentials.json`, `.netrc`. The threat does not need a malicious model: a summarized repository or a "what is in this directory" is enough, and once a credential is in a context it has been sent to a provider.
 
@@ -1395,7 +1432,34 @@ Denied rather than asked, because "may I read your SSH private key?" has one rig
 
 `bash` is deliberately not covered. A shell command is not a path, and matching `cat .env` out of an arbitrary command line catches the honest case and misses every other one. The shell has its own rules.
 
-**Paths outside the workspace are asked about.** A tool call on a path that lands outside the session's own directory turns an `allow` into an `ask`. Not a refusal: reading a system header or a file in another checkout is ordinary work. It is the difference between an agent that stays where it was pointed and one that is discovered to have been somewhere else. A `deny` stays a `deny`, and an `ask` is already asking.
+### Leaving the project
+
+**A path that lands outside the session's own directory is a question of its own.** Not a refusal: reading a system header or a file in another checkout is ordinary work. It is the difference between an agent that stays where it was pointed and one that is discovered to have been somewhere else. A `deny` stays a `deny`, and a rule that allows `write_file` everywhere is a statement about this project rather than a licence to edit the one next door.
+
+**Which tools it covers**, and what counts as reading or writing:
+
+| Class | Tools | Switch |
+|---|---|---|
+| Reading | `read_file`, `grep`, `glob` | `read_outside` |
+| Writing | `write_file`, `edit` | `write_outside` |
+| Not covered | `bash` | — |
+
+`bash` is not covered and does not claim to be. A shell command is not a path, and `cd /etc && cat passwd` cannot be judged by looking at it. `bash` asks on its own terms, as it always has.
+
+**The question is answered by place**, because a place is what it is about. A model told to read a sibling repository reads forty files in it, and forty prompts is one decision and thirty-nine keystrokes, which is how a permission prompt stops being read.
+
+| Answer | TUI key | Effect |
+|---|---|---|
+| Allow once | `y` | This call only. |
+| Deny | `n` | Refuses this call. |
+| Allow this directory | `d` | That directory and everything under it, for the rest of this session. Nothing is written to disk. |
+| Allow anywhere outside | `s` | Turns this conversation's `read_outside` or `write_outside` on, so it shows in the Permissions panel and can be turned off there. |
+
+The prompt says which project the path is outside of, and names the directory `d` would cover, before you answer.
+
+`/read-outside mem-clear` and `/write-outside mem-clear` forget the directories approved with `d`, without touching the switches: somebody who approved one directory by mistake should not have to change a setting to take it back. The Permissions panel lists them with a **forget** button each. A background task inherits its parent's approved directories, since it works in the parent's project on work the parent authorized.
+
+`permission-skip-tools` does not silence this question. Only `permission-skip-all` does.
 
 The comparison is between physical paths: symlinks are resolved on both sides before the question is decided, so a link inside the workspace pointing at `~/.aws` is outside, which is where it actually leads, and a workspace that is itself reached through a link (macOS's `/tmp`) still contains its own files. A path that cannot be resolved at all — a link loop, a permission failure — is treated as outside, which costs one question rather than one blind allow. A file about to be created is judged by its closest existing ancestor, so a new file under a link is judged by where the link leads — and a dangling symlink, whose own target does not exist yet, is followed to that target rather than judged by where it sits, because writing through it is what creates the file there.
 

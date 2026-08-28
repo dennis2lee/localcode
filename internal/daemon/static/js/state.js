@@ -28,10 +28,20 @@ export const app = {
   autoDelegateMatch: [],      // glob patterns that qualify a prompt for delegation
   smartAgent: false,
   smartAgentRoster: [],       // the specialist names the daemon build ships
+  // The daemon default for skip_all, from config.json. What a new
+  // conversation starts with; see sessionPermissions for the open one.
   skipPermissions: false,
   keepGoing: true,       // the carry-on nudge for muse models
   autoCompactPercent: 50,
   permissionRules: {},        // tool -> [{match, decision}]
+  // The four switches as they apply to the open conversation, plus where
+  // each answer came from ('session' | 'parent' | 'default') and the
+  // directories this conversation has approved leaving the project for.
+  // Per session, so this is refreshed on every switch and by the
+  // permissions.changed event.
+  sessionPermissions: { skip_all: false, skip_tools: false, read_outside: false, write_outside: false },
+  permissionSource: {},
+  rememberedOutside: { read: [], write: [] },
   canEditPermissions: false,  // false when the daemon has no config.json path to persist to
 };
 

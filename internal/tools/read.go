@@ -19,6 +19,9 @@ func (ReadFile) InputSchema() json.RawMessage {
 }
 func (ReadFile) RequiresPermission(json.RawMessage) bool { return false }
 
+// OutsideClass: reading. See outside.go.
+func (ReadFile) OutsideClass() OutsideClass { return OutsideRead }
+
 // Subject is the path being read, so a permission rule can match on it.
 //
 // Reading needs no permission by default and still needs to be

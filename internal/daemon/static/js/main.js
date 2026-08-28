@@ -1,6 +1,7 @@
 import {
   inputEl, sendBtn, agentSelectEl, newSessionBtn, deleteAllSessionsBtn,
   permissionAllowBtn, permissionAllowSessionBtn, permissionAllowAlwaysBtn, permissionDenyBtn,
+  permissionAllowDirBtn, permissionAllowOutsideBtn,
   autoDelegateBtn, delegateCloseBtn, delegateEnabledCheckbox, delegateAgentSelect,
   delegateMatchAddBtn, delegateMatchInput,
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
@@ -21,7 +22,8 @@ import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, 
 import { loadSessions, selectSession, createNewSession, deleteAllSessions } from './sessions.js';
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
-  openPermissionSettings, closePermissionSettings, toggleSkipPermissions, addPermissionRule,
+  openPermissionSettings, closePermissionSettings, addPermissionRule,
+  wireSessionPermissionCheckboxes,
   openWorkspacePicker, closeWorkspaceModal, saveWorkspace, anyModalOpen, permissionRequest,
   browseWorkspace, revealWorkspace, stopBlockingTurns,
 } from './modals.js';
@@ -141,6 +143,9 @@ permissionAllowBtn.addEventListener('click', () => resolvePermission(true, 'once
 permissionAllowSessionBtn.addEventListener('click', () => resolvePermission(true, 'session'));
 permissionAllowAlwaysBtn.addEventListener('click', () => resolvePermission(true, 'always'));
 permissionDenyBtn.addEventListener('click', () => resolvePermission(false, 'once'));
+// The two answers a workspace-boundary question takes.
+permissionAllowDirBtn.addEventListener('click', () => resolvePermission(true, 'outside-dir'));
+permissionAllowOutsideBtn.addEventListener('click', () => resolvePermission(true, 'outside-all'));
 
 autoDelegateBtn.addEventListener('click', openAutoDelegateSettings);
 delegateCloseBtn.addEventListener('click', closeDelegateModal);
@@ -156,7 +161,9 @@ delegateMatchInput.addEventListener('keydown', (e) => {
 });
 permissionStatusBtn.addEventListener('click', openPermissionSettings);
 permissionSettingsCloseBtn.addEventListener('click', closePermissionSettings);
-skipPermissionsCheckbox.addEventListener('change', () => toggleSkipPermissions(skipPermissionsCheckbox.checked));
+// The four switches are per conversation, wired in one place because
+// they behave identically. The daemon-wide default is config.json's.
+wireSessionPermissionCheckboxes();
 ruleAddBtn.addEventListener('click', addPermissionRule);
 
 workspaceBtn.addEventListener('click', openWorkspacePicker);

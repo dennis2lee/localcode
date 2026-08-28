@@ -106,7 +106,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		// to two different config.json files.
 		configFilePath = path
 	}
-	registry, err := buildRegistry(cfg, broker)
+	registry, err := buildRegistry(cfg, broker, store)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -352,20 +352,18 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 // buildRegistry constructs the tool registry and registers every built-in
 // tool, wiring the permission broker and per-tool decision resolver from
 // cfg.
-func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker) (*tools.Registry, error) {
+func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker, store *session.Store) (*tools.Registry, error) {
 	registry := tools.NewRegistry(broker.Func())
 	// The pipeline's order lives in ComposeResolver, where it is a
 	// stated contract with its own test: rules and guards, then the
-	// workspace boundary, then skip_permissions over whatever ask is
-	// left. The boundary reads Smart Agent off ctx, so a tool call is
-	// judged by the rules its own turn was admitted under rather than
-	// by whatever the switch says at the moment it runs.
+	// workspace boundary, then the two skips. The four switches are
+	// per session, so the policy takes the session off the context and
+	// falls back to this config's defaults.
 	registry.Resolver = tools.ComposeResolver(
 		func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) tools.Decision {
 			return tools.Decision(cfg.ResolvePermissionFor(ctx, toolName, subject, staticRequiresPermission))
 		},
-		cfg.SmartAgentFor,
-		cfg.PermissionsSkipped,
+		agent.NewPermissionPolicy(store, cfg).ToolsPolicy(),
 	)
 	registry.Hooks = cfg.Hooks
 	registry.Register(tools.ReadFile{})

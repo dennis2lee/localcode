@@ -91,11 +91,30 @@ type Contextual interface {
 }
 
 // PermissionFunc is asked to approve a side-effecting tool call before it
-// runs. subject is the same pattern-matchable string PermissionSubject
-// exposes ("" if the tool has none) — passed through so an "always allow"
-// decision knows what pattern it's actually granting. description is
-// human-readable ("run: rm -rf build/").
-type PermissionFunc func(ctx context.Context, toolName, subject, description string) (bool, error)
+// runs.
+type PermissionFunc func(ctx context.Context, ask Ask) (bool, error)
+
+// Ask is one question put to the person at the keyboard.
+type Ask struct {
+	Tool string
+	// Subject is the same pattern-matchable string PermissionSubject
+	// exposes ("" if the tool has none), so an "always allow" decision
+	// knows what pattern it is actually granting.
+	Subject string
+	// Description is human-readable ("run: rm -rf build/").
+	Description string
+	// Outside, Dir and Workspace are set only when the workspace boundary
+	// is what raised this question, and they are what lets the prompt say
+	// so. A question that cannot say why it is being asked is one people
+	// answer without reading: "write_file /Users/me/other/x.go" looks
+	// like every other write until something points out that it is not in
+	// this project.
+	//
+	// Dir is what an "allow this directory" answer covers. See OutsideDir.
+	Outside   OutsideClass
+	Dir       string
+	Workspace string
+}
 
 // Decision is a resolved permission outcome for one tool call — mirrors
 // config.Decision (same underlying string values: "allow"/"ask"/"deny")
@@ -120,7 +139,7 @@ const (
 // happening as well as what it is: the workspace this turn belongs to
 // rides on the context (see workdir.go), and "is this path outside the
 // project?" is not answerable without it.
-type PermissionResolver func(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision
+type PermissionResolver func(ctx context.Context, q Query) Outcome
 
 // PermissionSubject is implemented by tools whose input has a natural
 // pattern-matchable "subject" — a shell command for Bash, a file path for
@@ -303,15 +322,22 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		subject = ps.Subject(input)
 	}
 
-	decision := DecisionAsk
+	outcome := Outcome{Decision: DecisionAsk}
 	if !t.RequiresPermission(input) {
-		decision = DecisionAllow
+		outcome.Decision = DecisionAllow
 	}
 	if r.Resolver != nil {
-		decision = r.Resolver(ctx, name, subject, t.RequiresPermission(input))
+		outcome = r.Resolver(ctx, Query{
+			Tool:    name,
+			Subject: subject,
+			Static:  t.RequiresPermission(input),
+			// Asked of the tool, so a tool that touches paths cannot be
+			// left out of the boundary by forgetting to list it here.
+			Class: ClassOf(t),
+		})
 	}
 
-	switch decision {
+	switch outcome.Decision {
 	case DecisionDeny:
 		return Result{Content: fmt.Sprintf("tool %q is denied by permission policy", name), IsError: true, Refused: true}
 
@@ -322,7 +348,14 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		if describe == "" {
 			describe = fmt.Sprintf("%s %s", name, string(input))
 		}
-		allowed, err := r.permission(ctx, name, subject, describe)
+		allowed, err := r.permission(ctx, Ask{
+			Tool:        name,
+			Subject:     subject,
+			Description: describe,
+			Outside:     outcome.Outside,
+			Dir:         outcome.Dir,
+			Workspace:   outcome.Workspace,
+		})
 		if err != nil {
 			return Result{Content: fmt.Sprintf("permission check failed: %v", err), IsError: true}
 		}
