@@ -532,7 +532,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   max-width: 480px;
 }
 #permission-modal h3 { margin-top: 0; color: var(--warn); }
-#permission-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+/* The reason line, shown only when the boundary is what is asking. Warn
+   coloured because it is the part that changes what the request means:
+   without it, a write to another project reads as an ordinary write. */
+#permission-modal .note { color: var(--muted); font-size: 11px; margin-top: 8px; }
+#permission-modal .note.warn { color: var(--warn); }
+/* Wraps, because a boundary prompt has five answers and two of them are
+   long enough to name a directory. */
+#permission-modal .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 #permission-modal .deny { background: transparent; color: var(--err); border: 1px solid var(--err); }
 
 #prompt-status {
@@ -629,6 +636,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #permission-settings-modal .add-rule-row input[name="match"] { flex: 1; }
 #permission-settings-modal .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
 #permission-settings-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
+#permission-settings-modal .note.err { color: var(--err); }
+/* The same section heading the settings window uses. The permission
+   panel has sections now (the four switches, then the boundary, then the
+   rules) and an unstyled h4 in the middle of it reads as a mistake. */
+#permission-settings-modal h4.settings-section {
+  margin: 18px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.95em;
+  color: var(--muted);
+  font-weight: 600;
+}
+#permission-settings-modal .skip-row label { font-size: 12px; }
 #auto-delegate-modal {
   position: fixed;
   inset: 0;
