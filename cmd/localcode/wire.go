@@ -21,6 +21,8 @@ import (
 	"localcode/internal/skills"
 	"localcode/internal/tools"
 	"localcode/internal/trace"
+	"strings"
+	"sync"
 )
 
 // env is the ambient machine state every builder below needs, resolved
@@ -149,7 +151,9 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 			// idle client's indicator would keep claiming a long-dead
 			// server was fine.
 			mcpManager.StartHealthChecks(ctx)
-			cleanup = mcpManager.Close
+			// Shutdown goes through currentMCP below, which "/reset-mcp"
+			// updates, so the servers closed are the ones actually
+			// running rather than the ones that were at startup.
 		}
 	}
 
@@ -230,17 +234,111 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	registry.Register(agent.NewTaskBackgroundTool(tasks, loop.DelegatableAgents))
 	registry.Register(agent.NewTaskCollectTool(tasks))
 
-	// The trace file is closed with everything else. Wrapped rather than
-	// assigned, because cleanup may already be the MCP manager's.
-	if loop.Trace != nil {
-		mcpCleanup := cleanup
-		cleanup = func() {
-			mcpCleanup()
+	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
+
+	// "/reset-skills": reload from disk, against the *live* workspace
+	// rather than the directory the daemon started in, which is itself a
+	// small fix — a workspace switched at runtime used to keep serving
+	// the old project's skills until a restart.
+	loop.ReloadSkills = func() (string, error) {
+		list, err := skills.LoadAll(
+			filepath.Join(loop.GetProjectDir(), ".localcode", "skills"),
+			filepath.Join(e.home, ".localcode", "skills"),
+		)
+		if err != nil {
+			return "", err
+		}
+		section := ""
+		if len(list) > 0 {
+			section = skills.SystemPromptSection(list)
+			registry.Register(tools.NewSkillTool(list))
+		} else {
+			// No skills means no Skill tool: offering the model a tool
+			// with nothing behind it is a call that can only fail.
+			registry.Deregister("Skill")
+		}
+		loop.SetSkills(list, section)
+		if len(list) == 0 {
+			return "skills reloaded: none installed", nil
+		}
+		names := make([]string, len(list))
+		for i, sk := range list {
+			names[i] = sk.Name
+		}
+		return fmt.Sprintf("skills reloaded: %d (%s)", len(list), strings.Join(names, ", ")), nil
+	}
+
+	// "/reset-mcp": stop the servers, re-read their configuration from
+	// disk, and reconnect. The whole point is picking up an edited
+	// config.json without restarting, so the config is read fresh rather
+	// than reusing the one this process started with.
+	//
+	// currentMCP is what cleanup closes, through the pointer, so a
+	// daemon shut down after a reload stops the servers that are
+	// actually running rather than the ones that were.
+	currentMCP := mcpManager
+	var mcpReloadMu sync.Mutex
+	loop.ReloadMCP = func() (string, error) {
+		mcpReloadMu.Lock()
+		defer mcpReloadMu.Unlock()
+
+		fresh, err := loadConfig(configPath, e)
+		if err != nil {
+			return "", fmt.Errorf("re-read config: %w", err)
+		}
+
+		// The old servers go first: two managers running the same
+		// stdio server would be two child processes fighting over one
+		// configuration.
+		if currentMCP != nil {
+			currentMCP.Close()
+		}
+		// And their tools go with them, so a server removed from the
+		// config takes its tools out of the model's hands rather than
+		// leaving calls that can only fail.
+		for _, name := range registry.Names() {
+			if strings.HasPrefix(name, "mcp__") {
+				registry.Deregister(name)
+			}
+		}
+
+		var report strings.Builder
+		if len(fresh.MCPServers) == 0 {
+			currentMCP = nil
+			d.SwapMCP(nil)
+			loop.Config.MCPServers = fresh.MCPServers
+			return "MCP reset: no servers configured", nil
+		}
+		manager, mcpTools, warnings := mcpclient.Connect(ctx, fresh.MCPServers,
+			filepath.Join(e.home, ".localcode", "mcp-pins.json"), nil)
+		for _, t := range mcpTools {
+			registry.Register(t)
+		}
+		for _, w := range warnings {
+			fmt.Fprintf(&report, "warning: %v\n", w)
+		}
+		if manager != nil {
+			manager.StartHealthChecks(ctx)
+		}
+		currentMCP = manager
+		d.SwapMCP(manager)
+		loop.Config.MCPServers = fresh.MCPServers
+		fmt.Fprintf(&report, "MCP reset: %d server(s) connected, %d tool(s) registered", len(fresh.MCPServers), len(mcpTools))
+		return report.String(), nil
+	}
+	// One shutdown for everything, whatever has changed since startup:
+	// the MCP servers running *now* (a reload may have replaced or first
+	// created them), then the trace file.
+	cleanup = func() {
+		mcpReloadMu.Lock()
+		if currentMCP != nil {
+			currentMCP.Close()
+		}
+		mcpReloadMu.Unlock()
+		if loop.Trace != nil {
 			loop.Trace.Close()
 		}
 	}
-
-	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
 
 	// The same path "always allow" persists to, and for the same reason:
 	// a settings change the user makes should still be there next time.

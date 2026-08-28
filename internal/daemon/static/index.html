@@ -161,6 +161,23 @@
     </div>
 
     <!--
+      Keep going.
+
+      One family's fix with one family's scope. The label says the scope,
+      because the switch is daemon-wide and the feature only ever reaches
+      a muse model: someone whose profiles run something else should read
+      here that flipping it changes nothing for them.
+    -->
+    <h4 class="settings-section">Keep going</h4>
+    <div class="settings-field">
+      <div class="check-row">
+        <input type="checkbox" id="keep-going-checkbox">
+        <label for="keep-going-checkbox">Nudge a model that stops mid-task to carry on, up to a few times per turn. Applies only to muse models (any model whose id contains "muse"); other models are never nudged. Also toggled with /keep-going.</label>
+      </div>
+      <p class="note warn" id="keep-going-warn" hidden></p>
+    </div>
+
+    <!--
       Updates.
 
       Two buttons rather than one, because the two things they do are not

@@ -279,3 +279,37 @@ func SetSmartAgentInFile(path string, enabled bool) error {
 		return nil
 	})
 }
+
+// SetKeepGoingInFile writes the top-level "keep_going" key, leaving
+// everything else in the file alone.
+func SetKeepGoingInFile(path string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal keep_going: %w", err)
+		}
+		raw["keep_going"] = encoded
+		return nil
+	})
+}
+
+// SetAutoCompactInFile writes the switch, and the threshold when percent
+// is nonzero, so "/auto-compact 70" is one write rather than two chances
+// to fail halfway.
+func SetAutoCompactInFile(path string, enabled bool, percent int) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal auto_compact_enabled: %w", err)
+		}
+		raw["auto_compact_enabled"] = encoded
+		if percent != 0 {
+			p, err := json.Marshal(percent)
+			if err != nil {
+				return fmt.Errorf("marshal auto_compact_percent: %w", err)
+			}
+			raw["auto_compact_percent"] = p
+		}
+		return nil
+	})
+}

@@ -8,6 +8,7 @@
 import {
   settingsModalEl, settingsBtn, settingsCloseBtn,
   smartAgentCheckbox, smartAgentNoteEl, smartAgentWarnEl,
+  keepGoingCheckbox, keepGoingWarnEl,
   updateCheckBtn, updateInstallBtn, updateNoteEl,
 } from './dom.js';
 import { Modal } from './modal.js';
@@ -22,7 +23,39 @@ export function openSettings() {
   updateNoteEl.textContent = '';
   updateInstallBtn.hidden = true;
   renderSmartAgent();
+  renderKeepGoing();
   settings.open();
+}
+
+// Keep going.
+//
+// The label in index.html carries the scope (muse models only); this
+// only moves the box and reports a save that did not stick.
+function renderKeepGoing(warning) {
+  keepGoingCheckbox.checked = !!app.keepGoing;
+  keepGoingWarnEl.textContent = warning || '';
+  keepGoingWarnEl.hidden = !warning;
+}
+
+// refreshKeepGoingIfOpen redraws the box when the switch moved somewhere
+// else: "/keep-going" typed at any prompt, or another window.
+export function refreshKeepGoingIfOpen() {
+  if (settings.isOpen) renderKeepGoing();
+}
+
+async function toggleKeepGoing() {
+  const enabled = keepGoingCheckbox.checked;
+  keepGoingCheckbox.disabled = true;
+  try {
+    await apiClient.setKeepGoing(enabled);
+    app.keepGoing = enabled;
+    renderKeepGoing();
+  } catch (err) {
+    keepGoingCheckbox.checked = !enabled;
+    renderKeepGoing(`Not changed: ${err}`);
+  } finally {
+    keepGoingCheckbox.disabled = false;
+  }
 }
 
 // Smart Agent.
@@ -186,6 +219,7 @@ export function initSettings() {
   settingsBtn.addEventListener('click', openSettings);
   settingsCloseBtn.addEventListener('click', () => settings.close());
   smartAgentCheckbox.addEventListener('change', toggleSmartAgent);
+  keepGoingCheckbox.addEventListener('change', toggleKeepGoing);
   updateCheckBtn.addEventListener('click', checkForUpdate);
   updateInstallBtn.addEventListener('click', installUpdate);
 }

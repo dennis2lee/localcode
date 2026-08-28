@@ -86,6 +86,10 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeSmartAgent(sessionID, text) },
 		func() (bool, error) { return l.routeAutoDelegate(sessionID, text) },
 		func() (bool, error) { return l.routeSkipPermissions(sessionID, text) },
+		func() (bool, error) { return l.routeKeepGoing(sessionID, text) },
+		func() (bool, error) { return l.routeAutoCompact(sessionID, text) },
+		func() (bool, error) { return l.routeResetMCP(sessionID, text) },
+		func() (bool, error) { return l.routeResetSkills(sessionID, text) },
 		func() (bool, error) { return l.routeCompact(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeUsage(sessionID, text) },
 		func() (bool, error) { return l.routeContext(ctx, sessionID, agentName, text) },
@@ -227,10 +231,10 @@ func parseSkillCommand(text string) (arg string, ok bool) {
 // name/description index that's in the system prompt.
 func (l *Loop) listSkills(sessionID, displayText string) error {
 	text := "No skills registered."
-	if len(l.Skills) > 0 {
+	if list := l.SkillList(); len(list) > 0 {
 		var b strings.Builder
 		b.WriteString("Available skills (/<name> to run one):\n")
-		for _, s := range l.Skills {
+		for _, s := range list {
 			fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
 		}
 		text = b.String()
@@ -476,7 +480,7 @@ func (l *Loop) handleCostCommand(sessionID, displayText string) error {
 }
 
 func (l *Loop) findSkill(name string) (skills.Skill, bool) {
-	for _, s := range l.Skills {
+	for _, s := range l.SkillList() {
 		if strings.EqualFold(s.Name, name) {
 			return s, true
 		}
@@ -485,8 +489,9 @@ func (l *Loop) findSkill(name string) (skills.Skill, bool) {
 }
 
 func (l *Loop) skillNames() string {
-	names := make([]string, len(l.Skills))
-	for i, s := range l.Skills {
+	list := l.SkillList()
+	names := make([]string, len(list))
+	for i, s := range list {
 		names[i] = s.Name
 	}
 	return strings.Join(names, ", ")

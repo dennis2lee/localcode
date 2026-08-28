@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"localcode/internal/config"
@@ -235,8 +236,133 @@ func SlashCommands() []SlashCommand {
 		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off"},
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off"},
 		{Name: "permission-skip-all", Description: "allow every prompt that would have asked"},
+		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models"},
+		{Name: "auto-compact", Description: "toggle auto-compaction, or set its threshold with a percent"},
+		{Name: "reset-mcp", Description: "reconnect MCP servers and pick up config changes without a restart"},
+		{Name: "reset-skills", Description: "reload skills from disk without a restart"},
 		{Name: "compact", Description: "summarize the conversation now, optionally with instructions"},
 		{Name: "usage", Description: "cumulative token usage per model"},
 		{Name: "context", Description: "what the next request is made of; /context all, /context <id>"},
 	}
+}
+
+// routeKeepGoing answers "/keep-going [on|off]".
+func (l *Loop) routeKeepGoing(sessionID, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/keep-going")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+
+	want, valid := toggleArg(arg, l.KeepGoingEnabled())
+	if !valid {
+		return true, l.replyText(sessionID, "usage: /keep-going [on|off]")
+	}
+	l.SetKeepGoingEnabled(want)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "keep_going: %s", onOff(want))
+	// The scope is the part worth a sentence: the switch is daemon-wide
+	// and the feature is one family's. Someone turning it on while every
+	// profile runs another model has changed nothing, and should hear
+	// that from the reply rather than from the absence of any effect.
+	b.WriteString("\nApplies only to models whose id contains \"muse\"; other models are never nudged.")
+	if want && !l.anyMuseProfile() {
+		b.WriteString("\n(no configured profile currently runs a muse model, so nothing changes until one does)")
+	}
+	b.WriteString(l.persist(func(path string) error { return config.SetKeepGoingInFile(path, want) }))
+
+	l.announceSettings()
+	return true, l.replyText(sessionID, b.String())
+}
+
+// anyMuseProfile reports whether any configured profile runs a model the
+// keep-going feature applies to.
+func (l *Loop) anyMuseProfile() bool {
+	for _, p := range l.Config.Profiles {
+		if keepGoingApplies(p.Model) {
+			return true
+		}
+	}
+	return false
+}
+
+// routeAutoCompact answers "/auto-compact [on|off|<percent>]".
+//
+// A number both sets the threshold and turns the feature on, because
+// "/auto-compact 70" is somebody asking for compaction at 70%, and
+// honouring the number while leaving the switch off would honour the
+// letter of it and not the request.
+func (l *Loop) routeAutoCompact(sessionID, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/auto-compact")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+
+	if n, err := strconv.Atoi(strings.TrimSpace(arg)); err == nil {
+		if n < 10 || n > 95 {
+			return true, l.replyText(sessionID,
+				"usage: /auto-compact [on|off|<percent>], percent between 10 and 95.\nBelow 10 would compact almost every turn; above 95 would never fire, which is what off is for.")
+		}
+		l.SetCompactPercent(n)
+		l.SetAutoCompactEnabled(true)
+		var b strings.Builder
+		fmt.Fprintf(&b, "auto_compact: on, at %d%% of the context window", n)
+		b.WriteString(l.persist(func(path string) error { return config.SetAutoCompactInFile(path, true, n) }))
+		l.announceConfig(sessionID)
+		return true, l.replyText(sessionID, b.String())
+	}
+
+	want, valid := toggleArg(arg, l.AutoCompactEnabled())
+	if !valid {
+		return true, l.replyText(sessionID, "usage: /auto-compact [on|off|<percent>]")
+	}
+	l.SetAutoCompactEnabled(want)
+	var b strings.Builder
+	fmt.Fprintf(&b, "auto_compact: %s", onOff(want))
+	if want {
+		fmt.Fprintf(&b, " (at %d%% of the context window; /auto-compact <percent> changes it)", l.CompactPercent())
+	}
+	b.WriteString(l.persist(func(path string) error { return config.SetAutoCompactInFile(path, want, 0) }))
+	l.announceConfig(sessionID)
+	return true, l.replyText(sessionID, b.String())
+}
+
+// routeResetMCP answers "/reset-mcp": stop the MCP servers, re-read
+// their configuration, and reconnect, without restarting localcode.
+//
+// A hook rather than an implementation, because everything it needs
+// lives above this package: the manager, the tool registry swap, the
+// config re-read. The daemon wires it; a Loop without one says so.
+func (l *Loop) routeResetMCP(sessionID, text string) (bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(text), "/reset-mcp") {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+	if l.ReloadMCP == nil {
+		return true, l.replyText(sessionID, "this build has no MCP reload wired; restart localcode to apply MCP changes")
+	}
+	report, err := l.ReloadMCP()
+	if err != nil {
+		return true, l.replyText(sessionID, "MCP reload failed: "+err.Error())
+	}
+	return true, l.replyText(sessionID, report)
+}
+
+// routeResetSkills answers "/reset-skills": reload the skills from disk
+// so an edited or newly installed one applies without a restart.
+func (l *Loop) routeResetSkills(sessionID, text string) (bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(text), "/reset-skills") {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+	if l.ReloadSkills == nil {
+		return true, l.replyText(sessionID, "this build has no skill reload wired; restart localcode to apply skill changes")
+	}
+	report, err := l.ReloadSkills()
+	if err != nil {
+		return true, l.replyText(sessionID, "skill reload failed: "+err.Error())
+	}
+	return true, l.replyText(sessionID, report)
 }

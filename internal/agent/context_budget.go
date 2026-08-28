@@ -20,7 +20,7 @@ import (
 //	total of at least 131073 tokens.
 //
 // Note the arithmetic. 67073 input tokens is 51% of the window, and the
-// context meter said 53% — nowhere near the 80% that triggers
+// context meter said 53% — nowhere near the threshold that triggers
 // auto-compaction. Nothing was going to save this session, because the
 // thing that overflowed was not the history: it was the history *plus the
 // output the request reserved room for*. A max_tokens of 64000 against a

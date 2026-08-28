@@ -44,11 +44,13 @@ func distinctToolCall(arg string) []provider.StreamEvent {
 	}
 }
 
-// keepGoingLoop is scriptedLoop with keep_going set on the profile.
+// keepGoingLoop is scriptedLoop with keep_going set on the profile. The
+// model id contains "muse" because the feature only exists for that
+// family now; TestKeepGoingIsMuseOnly is the test of that boundary.
 func keepGoingLoop(t *testing.T, p provider.Provider, reg *tools.Registry, n int) (*Loop, string) {
 	t.Helper()
 	loop, sessionID := scriptedLoop(t, p, reg)
-	loop.Config.Profiles["balanced"] = config.Profile{Provider: "local", Model: "m", KeepGoing: n}
+	loop.Config.Profiles["balanced"] = config.Profile{Provider: "local", Model: "muse-test-7b", KeepGoing: n}
 	return loop, sessionID
 }
 
@@ -486,5 +488,50 @@ func TestTheCarryOnPromptLetsTheModelSayItIsDone(t *testing.T) {
 	}
 	if !strings.Contains(lower, "redo") && !strings.Contains(lower, "re-run") {
 		t.Error("the prompt does not tell the model to leave finished work alone")
+	}
+}
+
+// The feature exists for one family. A profile's own keep_going number
+// used to be able to opt any model in, and the daemon-wide switch could
+// be read as arming it everywhere; neither is wanted, because a nudge
+// sent to a model without the habit is localcode second-guessing a
+// finished answer.
+func TestKeepGoingIsMuseOnly(t *testing.T) {
+	loop := newSmartLoop(t, "http://127.0.0.1:1")
+
+	for _, tc := range []struct {
+		model string
+		extra int
+		want  int
+	}{
+		{"muse-glimmer-30b", 0, 3},   // the family default
+		{"MUSE-GLIMMER-30B", 0, 3},   // case does not matter
+		{"my-Muse-variant-7b", 0, 3}, // any variant of the family
+		{"muse-test", 5, 5},          // profile override, muse
+		{"muse-test", -1, -1},        // profile opt-out, muse
+		{"gemma-3-27b-it", 0, 0},     // another family: nothing
+		{"gemma-3-27b-it", 5, 0},     // even asked for by the profile
+		{"claude-sonnet-4-6", 3, 0},  // even asked for by the profile
+		{"qwen3-30b-a3b", 0, 0},      // nothing
+	} {
+		got := loop.effectiveKeepGoing(config.Profile{Model: tc.model, KeepGoing: tc.extra})
+		if got != tc.want {
+			t.Errorf("effectiveKeepGoing(%q, keep_going=%d) = %d, want %d", tc.model, tc.extra, got, tc.want)
+		}
+	}
+}
+
+// The daemon-wide switch kills it for muse too, which is what
+// "/keep-going off" means.
+func TestTheKeepGoingSwitchGatesTheFamily(t *testing.T) {
+	loop := newSmartLoop(t, "http://127.0.0.1:1")
+	profile := config.Profile{Model: "muse-glimmer-30b"}
+
+	if got := loop.effectiveKeepGoing(profile); got != 3 {
+		t.Fatalf("budget with the switch on = %d, want 3", got)
+	}
+	loop.SetKeepGoingEnabled(false)
+	if got := loop.effectiveKeepGoing(profile); got != 0 {
+		t.Errorf("budget with the switch off = %d, want 0", got)
 	}
 }

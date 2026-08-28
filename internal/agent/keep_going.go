@@ -29,14 +29,35 @@ import (
 // bounded, because the one thing worse than a model that stops early is a
 // session that prompts itself forever.
 
+// keepGoingApplies reports whether the feature exists for this model at
+// all: only when its id contains "muse", case-insensitively.
+//
+// A hard gate rather than a default, and the distinction matters. The
+// quirk table already made muse the only family with a budget, but a
+// profile's own keep_going number could opt any model in, and the switch
+// below could be read as arming the feature everywhere. Neither is
+// wanted: the habit this compensates for is one family's, a nudge sent
+// to a model without it is localcode second-guessing a finished answer,
+// and the person flipping "/keep-going on" should not have to know which
+// of their profiles it could reach. On anything that is not muse, this
+// feature does not exist, whatever else is configured.
+func keepGoingApplies(model string) bool {
+	return strings.Contains(strings.ToLower(model), "muse")
+}
+
 // effectiveKeepGoing resolves the carry-on budget for a profile.
 //
-// The profile's own number wins when set — including -1, which is "never,
-// whatever the model". Unset falls back to the model's default from the
-// quirk table, which is what makes the fix arrive with the release: the
-// person who reported the stall gets a model that finishes by installing
-// the update, not by finding a config key.
-func effectiveKeepGoing(profile config.Profile) int {
+// Zero unless the feature applies to the model (see keepGoingApplies)
+// and the daemon-wide switch is on. Then the profile's own number wins
+// when set — including -1, which is "never, whatever the switch says" —
+// and unset falls back to the family default, which is what makes the
+// fix arrive with the release: the person who reported the stall gets a
+// model that finishes by installing the update, not by finding a config
+// key.
+func (l *Loop) effectiveKeepGoing(profile config.Profile) int {
+	if !keepGoingApplies(profile.Model) || !l.KeepGoingEnabled() {
+		return 0
+	}
 	if profile.KeepGoing != 0 {
 		return profile.KeepGoing
 	}
@@ -88,7 +109,7 @@ const keepGoingPrompt = "Check whether the task you were given is actually compl
 //   - the user has typed something that has not reached the model yet,
 //     which is a better continuation than an invented one.
 func (l *Loop) keepGoing(sessionID string, profile config.Profile, stopReason string, reply []provider.Block, ranTools, refused, nudgedSinceWork bool, nudges int) (string, bool) {
-	if budget := effectiveKeepGoing(profile); budget <= 0 || nudges >= budget {
+	if budget := l.effectiveKeepGoing(profile); budget <= 0 || nudges >= budget {
 		return "", false
 	}
 	if !ranTools || refused || stopReason == "max_tokens" {

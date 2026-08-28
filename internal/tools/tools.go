@@ -10,6 +10,7 @@ import (
 
 	"localcode/internal/hooks"
 	"localcode/internal/provider"
+	"sync"
 )
 
 // Result is what a tool execution produces; Content goes back to the model
@@ -133,6 +134,12 @@ type PermissionSubject interface {
 // Registry holds the tools available to an agent loop and mediates
 // permission checks around execution.
 type Registry struct {
+	// mu guards tools and order. Registration used to happen only at
+	// startup, before anything could race it; "/reset-mcp" and
+	// "/reset-skills" now swap tools while turns are running, and a
+	// turn's SpecsFor iterating order during a swap is exactly the race
+	// the map would lose.
+	mu         sync.RWMutex
 	tools      map[string]Tool
 	order      []string
 	permission PermissionFunc
@@ -153,10 +160,33 @@ func NewRegistry(permission PermissionFunc) *Registry {
 }
 
 func (r *Registry) Register(t Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, exists := r.tools[t.Name()]; !exists {
 		r.order = append(r.order, t.Name())
 	}
 	r.tools[t.Name()] = t
+}
+
+// Deregister removes a tool by name. A no-op for a name that is not
+// registered, so a reload can hand it yesterday's list without checking.
+//
+// It exists for "/reset-mcp": a server removed from the configuration
+// has to take its tools with it, or the model goes on being offered
+// calls that can only fail.
+func (r *Registry) Deregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.tools[name]; !exists {
+		return
+	}
+	delete(r.tools, name)
+	for i, n := range r.order {
+		if n == name {
+			r.order = append(r.order[:i], r.order[i+1:]...)
+			break
+		}
+	}
 }
 
 // Specs returns provider-facing tool specs in registration order, for
@@ -189,6 +219,8 @@ func (r *Registry) NamesFor(ctx context.Context, allowed []string) []string {
 
 func (r *Registry) SpecsFor(ctx context.Context, allowed []string) []provider.Tool {
 	allowSet := toSet(allowed)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]provider.Tool, 0, len(r.order))
 	for _, name := range r.order {
 		if allowSet != nil && !allowSet[name] {
@@ -216,6 +248,8 @@ func (r *Registry) SpecsFor(ctx context.Context, allowed []string) []provider.To
 // allowlists, and a single subtractive case is not worth a second
 // mechanism running beside them.
 func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return append([]string(nil), r.order...)
 }
 
@@ -244,7 +278,9 @@ func toSet(names []string) map[string]bool {
 // gating on the permission broker if the resolution is "ask". describe, if
 // non-empty, overrides the default permission prompt text.
 func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage, describe string) Result {
+	r.mu.RLock()
 	t, ok := r.tools[name]
+	r.mu.RUnlock()
 	if !ok {
 		return Result{Content: fmt.Sprintf("unknown tool %q", name), IsError: true}
 	}

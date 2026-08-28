@@ -152,6 +152,12 @@ func (c *Config) merge(other *Config) {
 	if other.AutoCompactEnabled != nil {
 		c.AutoCompactEnabled = other.AutoCompactEnabled
 	}
+	if other.AutoCompactPercent != 0 {
+		c.AutoCompactPercent = other.AutoCompactPercent
+	}
+	if other.KeepGoingEnabled != nil {
+		c.KeepGoingEnabled = other.KeepGoingEnabled
+	}
 	if other.ShowTPS != nil {
 		c.ShowTPS = other.ShowTPS
 	}

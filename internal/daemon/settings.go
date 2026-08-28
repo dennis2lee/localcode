@@ -28,6 +28,8 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
+		"auto_compact_percent": d.Loop.CompactPercent(),
+		"keep_going":           d.Loop.KeepGoingEnabled(),
 		"smart_agent":          d.Loop.SmartAgentEnabled(),
 		"smart_agent_roster":   smart.Names(),
 		"show_tps":             d.Loop.ShowTPS(),
@@ -161,6 +163,33 @@ func (d *Daemon) handleSetSmartAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSetKeepGoing turns the carry-on nudge on or off live and, when a
+// config.json path is known, persists it. It backs the settings window's
+// checkbox; "/keep-going" is the same switch from a prompt.
+//
+// Nothing here checks whether any profile runs a muse model, because
+// that is not this endpoint's question: the switch is daemon state, and
+// whether it reaches a given turn is decided per profile at turn time.
+// The panel says the scope beside the checkbox instead.
+func (d *Daemon) handleSetKeepGoing(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	d.Loop.SetKeepGoingEnabled(req.Enabled)
+	d.announceSettings()
+	if d.Broker.ConfigPath != "" {
+		if err := config.SetKeepGoingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
+			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleSetSkipPermissions toggles skip_permissions at runtime and, when a

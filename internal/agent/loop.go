@@ -27,10 +27,16 @@ const defaultMaxTokens = 4096
 // usage, and sharing a mutex with those only happened because all of it
 // once lived directly on Loop.
 type liveSettings struct {
-	mu           sync.Mutex
-	autoCompact  bool
-	showTPS      bool
-	autoDelegate bool
+	mu          sync.Mutex
+	autoCompact bool
+	// autoCompactPercent is the context fill that triggers it.
+	autoCompactPercent int
+	showTPS            bool
+	autoDelegate       bool
+	// keepGoing gates the carry-on nudge. The switch is daemon-wide;
+	// whether it applies to a model at all is decided in keep_going.go,
+	// and only ever for one family.
+	keepGoing bool
 }
 
 func (s *liveSettings) AutoCompact() bool {
@@ -43,6 +49,30 @@ func (s *liveSettings) SetAutoCompact(v bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.autoCompact = v
+}
+
+func (s *liveSettings) CompactPercent() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.autoCompactPercent
+}
+
+func (s *liveSettings) SetCompactPercent(v int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.autoCompactPercent = v
+}
+
+func (s *liveSettings) KeepGoing() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.keepGoing
+}
+
+func (s *liveSettings) SetKeepGoing(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keepGoing = v
 }
 
 func (s *liveSettings) ShowTPS() bool {
@@ -103,6 +133,21 @@ type Loop struct {
 	// is one: the agent loop does not know what a subscriber is, and the
 	// daemon is the thing that has them.
 	OnSettingsChanged func()
+
+	// SetSkills replaces the skill list and its prompt index together,
+	// under the loop's own lock, which matters now that "/reset-skills"
+	// can swap them while turns are running. The exported fields stay as
+	// the wiring surface; these are how running code reads and writes
+	// them.
+
+	// ReloadMCP and ReloadSkills, if set, back "/reset-mcp" and
+	// "/reset-skills": apply an edited configuration without restarting
+	// the daemon. Hooks for the same reason OnSettingsChanged is one —
+	// everything they touch (the MCP manager, the skill directories,
+	// the registry swap) lives above this package, and the wiring layer
+	// is the one place that has it all.
+	ReloadMCP    func() (string, error)
+	ReloadSkills func() (string, error)
 
 	// ConfigPath is the config.json the toggle commands write to, so a
 	// switch flipped at the prompt survives a restart the way the same
@@ -234,9 +279,11 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 		Config:       cfg,
 		SystemPrompt: defaultSystemPrompt,
 		settings: liveSettings{
-			autoCompact:  cfg.CompactEnabled(),
-			showTPS:      cfg.TPSEnabled(),
-			autoDelegate: cfg.DelegateEnabled(),
+			autoCompact:        cfg.CompactEnabled(),
+			autoCompactPercent: cfg.CompactPercent(),
+			showTPS:            cfg.TPSEnabled(),
+			autoDelegate:       cfg.DelegateEnabled(),
+			keepGoing:          cfg.KeepGoing(),
 		},
 		messages:        map[string][]provider.Message{},
 		usage:           map[string]sessionUsage{},
@@ -403,6 +450,17 @@ func (l *Loop) AutoCompactEnabled() bool { return l.settings.AutoCompact() }
 // SetAutoCompactEnabled changes the live auto-compaction setting.
 func (l *Loop) SetAutoCompactEnabled(v bool) { l.settings.SetAutoCompact(v) }
 
+// CompactPercent is the context-window fill that triggers
+// auto-compaction, settable live with "/auto-compact <percent>".
+func (l *Loop) CompactPercent() int     { return l.settings.CompactPercent() }
+func (l *Loop) SetCompactPercent(v int) { l.settings.SetCompactPercent(v) }
+
+// KeepGoingEnabled gates the carry-on nudge daemon-wide. Whether it
+// applies to a model at all is keep_going.go's question, and the answer
+// is only ever yes for one family.
+func (l *Loop) KeepGoingEnabled() bool     { return l.settings.KeepGoing() }
+func (l *Loop) SetKeepGoingEnabled(v bool) { l.settings.SetKeepGoing(v) }
+
 // ShowTPS reports whether usage events should carry a tokens-per-second
 // figure for display — process-global, toggleable live via "/config
 // show_tps on|off".
@@ -429,6 +487,31 @@ func (l *Loop) GetProjectDir() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.ProjectDir
+}
+
+// SetSkills replaces the loaded skills and the prompt index built from
+// them, atomically, so a turn assembling its prompt sees a list and an
+// index from the same load.
+func (l *Loop) SetSkills(list []skills.Skill, section string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.Skills = list
+	l.SkillsSection = section
+}
+
+// SkillList reads the loaded skills under the same lock SetSkills writes
+// them with.
+func (l *Loop) SkillList() []skills.Skill {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.Skills
+}
+
+// SkillIndex reads the skill prompt section the same way.
+func (l *Loop) SkillIndex() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.SkillsSection
 }
 
 // SetProjectDir changes the default project directory — the one a session

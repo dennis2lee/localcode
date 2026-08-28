@@ -207,7 +207,8 @@ The point is a config.json that can be committed to a repository, copied between
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `smart_agent` | Turns on the built-in specialist roster and the orchestration prompt. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
-| `auto_compact_enabled` | Automatic compaction past 80% of the window. On unless set to false; also `/config auto_compact`. |
+| `auto_compact_enabled` | Automatic compaction past the threshold. On unless set to false; `/auto-compact` toggles it. |
+| `auto_compact_percent` | The threshold, as a percent of the context window. `50` unless set; `/auto-compact <percent>` changes it live and saves it. |
 | `auto_memory_enabled` | The notes the model keeps for itself across sessions. On unless set to false. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
 | `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
@@ -222,7 +223,7 @@ The point is a config.json that can be committed to a repository, copied between
 | `model` | Model id, as the provider names it |
 | `max_tokens` | Cap on one reply, 4096 if unset. Unlike `context_window` this cannot be discovered: it is a choice about how long an answer you want, not a fact about the server. Reduced automatically when the conversation leaves less room than this in the window, so a generous ceiling is safe, and a reply that runs into it says so rather than just stopping. |
 | `temperature` | Sampling temperature |
-| `keep_going` | How many times one turn may be told to carry on after the model stops with the task unfinished. `0` (default) defers to the model: families known to stall get `3` out of the box, everything else gets none. `-1` forces it off. See [below](#a-model-that-stops-mid-task). |
+| `keep_going` | How many times one turn may be told to carry on after the model stops with the task unfinished. Only ever applies to muse models; on them `0` (default) means `3` out of the box and `-1` forces it off. See [below](#a-model-that-stops-mid-task). |
 | `fallback` | Other profile names to try, in order, when a request to this one fails for a reason another model could survive. Read only with [Smart Agent](#smart-agent) on. See [Fallback chains](#fallback-chains-when-a-model-will-not-answer). |
 | `context_window` | The model's total input+output token limit. Usually unnecessary: an openai-compatible server is asked directly (`GET /v1/models`, or `/props` on llama.cpp), and only when it does not answer is the limit guessed from the model name, falling back to 128k for anything unrecognised. Set it when the server reports nothing and the name gives no clue, or to override both. Guessing high is the harmful direction, since this number is what keeps a request inside the real limit. |
 
@@ -242,24 +243,35 @@ paragraph, applies to nothing else, and needs no configuration. It is
 also not a guarantee, which is why there is a second thing.
 
 **`keep_going`**, which is localcode typing "carry on" for you, at most
-N times per turn. Models known to stall get a budget of 3 out of the box
-— installing the release is the whole fix, no config key required. For
-any other model it stays off, and the profile can override either way:
+N times per turn.
+
+**It exists for muse models and reaches nothing else.** Any model whose
+id contains `muse` (case does not matter, so `Muse-Glimmer-30B` and
+`my-muse-variant` both count) gets a budget of 3 out of the box —
+installing the release is the whole fix, no config key required. On any
+other model the feature does not exist, whatever is configured: the
+habit it compensates for is this family's, and a nudge sent to a model
+without it is localcode second-guessing a finished answer. This used to
+be keyed on `glimmer`, which was a live bug — a muse variant without
+that word in its id got a budget of zero, and the feature built for
+these models was off for most of them.
+
+Two controls:
+
+* **`/keep-going`** toggles it for the whole daemon (the GUI settings
+  window has the same switch as a checkbox — one switch, two homes, kept
+  in step). The choice is saved to config.json.
+* A muse profile's own `keep_going` number adjusts the budget, and `-1`
+  turns it off for that profile alone:
 
 ```json
 {
   "profiles": {
-    "local": { "provider": "local", "model": "some-other-model", "keep_going": 3 },
-    "quiet": { "provider": "local", "model": "muse-glimmer-30b", "keep_going": -1 }
+    "eager": { "provider": "local", "model": "muse-glimmer-30b", "keep_going": 5 },
+    "quiet": { "provider": "local", "model": "muse-small-7b", "keep_going": -1 }
   }
 }
 ```
-
-`0` (or leaving it out) means the model's own default; `-1` means never.
-The default for unrecognised models has to stay zero: a turn that ends
-after tool use looks exactly the same whether the model finished or gave
-up, so on a model that stops when it is done this would spend a turn
-asking "anything else?" after every task.
 
 The rules it carries on under, each of which is a case where stopping
 was right:
@@ -861,7 +873,7 @@ Settings that can be toggled while running. They apply daemon wide rather than p
 | Command | Effect |
 |---|---|
 | `/config` | Shows current values, no model call |
-| `/config auto_compact on\|off` | Automatic compaction past 80% context |
+| `/config auto_compact on\|off` | Automatic compaction; `/auto-compact` is the fuller command, with a threshold |
 | `/config show_tps on\|off` | The tokens per second reading under the prompt |
 | `/config auto_delegate on\|off` | Sending matching prompts to a cheaper sub agent, see [Auto delegation](#auto-delegation) |
 | `/config smart_agent on\|off` | The built-in specialist roster and the orchestration prompt, see [Smart Agent](#smart-agent). Reports the roster it turned on, or says why it is empty. |
@@ -870,7 +882,7 @@ Each change records a `config.changed` event on that session and the Web UI upda
 
 ### `/compact`
 
-Compacts the conversation immediately instead of waiting for the 80% threshold. See [Context window management](#context-window-management).
+Compacts the conversation immediately instead of waiting for the automatic threshold. See [Context window management](#context-window-management).
 
 | Command | Effect |
 |---|---|
@@ -918,6 +930,8 @@ Three settings change how every turn behaves, and each has a command of its own.
 | `/smart-agent` | `smart_agent` | The specialist roster, the fallback chain, the trace, the prompt cache markers and the guards. See [Smart Agent](#smart-agent). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `/permission-skip-all` | `skip_permissions` | Turns every prompt that would have asked into an allow, for every session on the daemon. |
+| `/keep-going` | `keep_going` | The carry-on nudge for muse models. See [A model that stops mid-task](#a-model-that-stops-mid-task). The settings window has the same switch as a checkbox. |
+| `/auto-compact` | `auto_compact_enabled`, `auto_compact_percent` | Auto-compaction. A number sets the threshold and turns it on: `/auto-compact 70` compacts past 70% of the context window. The default threshold is 50%. |
 
 With no argument each one flips: `/smart-agent` turns it on if it was off. `on` and `off` set it outright, which is what you want in a script or when you are not sure what it currently is.
 
@@ -926,6 +940,13 @@ With no argument each one flips: `/smart-agent` turns it on if it was off. `on` 
 Each reply says what the switch did and what it did not. Turning Smart Agent on with no profiles configured is legal and inert, so it says so instead of reading as a change that took effect; the same for auto-delegation with no `auto_delegate` block. `/permission-skip-all on` says in as many words that shell commands and writes outside the workspace will no longer ask, and that rules which **deny** still deny, since "skip permissions" reads like "skip all safety" and is not.
 
 `/config` still works and still lists all four settings including `auto_compact`.
+
+Two more commands apply an edited configuration without restarting:
+
+| Command | What it does |
+|---|---|
+| `/reset-mcp` | Stops the MCP servers, re-reads their configuration from config.json, reconnects, and swaps the tools. A server removed from the file takes its tools with it; one added while the daemon runs connects. The status indicator follows. |
+| `/reset-skills` | Reloads skills from disk, against the live workspace. A skill installed or edited mid-run applies immediately, and the name completes like any other. |
 
 ### Other local commands
 
@@ -983,9 +1004,9 @@ At the end of every turn, the token usage the provider reports is recorded as a 
 
 Each event carries input and output token counts, the model's known maximum context from the best effort table in [internal/modelinfo](../internal/modelinfo/modelinfo.go) defaulting to 128000 for unknown models, the percentage filled, and tokens per second. Both clients drive their status bar from this.
 
-**Automatic compaction.** Once context use passes **80%**, and `auto_compact` is on, the next message triggers a one time summarization of the whole conversation. That summary replaces the history and the new message is sent after it. The transcript notes that compaction happened.
+**Automatic compaction.** Once context use passes the threshold (**50%** unless `/auto-compact <percent>` set another), and `auto_compact` is on, the next message triggers a one time summarization of the whole conversation. That summary replaces the history and the new message is sent after it. The transcript notes that compaction happened.
 
-**When a request is too big anyway.** The 80% figure watches the history alone, and what a server refuses is the history *plus* the room the request reserves for the reply, so a large `max_tokens` against a small window can be refused while the meter reads half full. Four things guard against that.
+**When a request is too big anyway.** The threshold watches the history alone, and what a server refuses is the history *plus* the room the request reserves for the reply, so a large `max_tokens` against a small window can be refused while the meter reads half full. Four things guard against that.
 
 | Guard | What it does |
 |---|---|

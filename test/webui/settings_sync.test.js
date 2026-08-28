@@ -50,3 +50,35 @@ test('a later event turns a switch back off', async () => {
   assert.equal(app.el('permission-status-btn').classList.contains('skip'), false,
     'turning it off has to reach the page too');
 });
+
+// The keep-going switch is one switch with two homes: the settings
+// window's checkbox and "/keep-going" at any prompt. Flipped in either,
+// the other has to hear.
+test('a /keep-going typed anywhere moves the settings checkbox here', async () => {
+  const app = await load();
+  await app.settle();
+  assert.equal(app.state.keepGoing, true, 'the nudge defaults to on');
+
+  app.applyEvent({ type: 'settings.changed', data: { keep_going: false } });
+  assert.equal(app.state.keepGoing, false, 'the switch did not move');
+
+  // With the panel open, the box itself follows.
+  app.el('settings-btn').click();
+  await app.settle();
+  app.applyEvent({ type: 'settings.changed', data: { keep_going: true } });
+  assert.equal(app.el('keep-going-checkbox').checked, true, 'the open panel shows a stale box');
+});
+
+test('the checkbox posts the change to the daemon', async () => {
+  const app = await load({ routes: { 'POST /api/settings/keep-going': { status: 204 } } });
+  app.el('settings-btn').click();
+  await app.settle();
+
+  const box = app.el('keep-going-checkbox');
+  box.checked = false;
+  box.fire('change');
+  await app.settle();
+
+  assert.equal(app.callsTo('POST', '/api/settings/keep-going').length, 1);
+  assert.equal(app.state.keepGoing, false);
+});

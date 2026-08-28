@@ -12,9 +12,9 @@ import (
 	"localcode/internal/trace"
 )
 
-// compactThresholdPercent is the context-window fill percentage that
-// triggers auto-compaction (when Loop.AutoCompactEnabled is true).
-const compactThresholdPercent = 80.0
+// The context-window fill percentage that triggers auto-compaction is a
+// live setting now (Loop.CompactPercent, default 50, settable with
+// "/auto-compact <percent>"), where it used to be this constant at 80.
 
 // maxCompactAttempts bounds how many times the summarization request is
 // shrunk and re-sent after being refused for being too long. Each attempt
@@ -47,7 +47,7 @@ const compactionPrompt = "Summarize our conversation so far concisely, preservin
 
 // maybeAutoCompact summarizes sessionID's history in place when
 // AutoCompactEnabled is on and the last recorded usage crossed
-// compactThresholdPercent — freeing up context space before the next
+// the threshold — freeing up context space before the next
 // user turn is appended. Best-effort: any failure (including the
 // summarization call itself erroring) just leaves the full history intact
 // rather than blocking the real turn.
@@ -62,7 +62,7 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 		return false
 	}
 	percent := float64(u.InputTokens+u.OutputTokens) / float64(u.MaxContext) * 100
-	if percent < compactThresholdPercent {
+	if percent < float64(l.CompactPercent()) {
 		return false
 	}
 	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic) == nil

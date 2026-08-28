@@ -2028,3 +2028,130 @@ func TestDeletingAConversationTellsNobody(t *testing.T) {
 		t.Errorf("deleting one conversation wrote %d events into another", len(after)-len(before))
 	}
 }
+
+// The keep-going switch is one switch with two homes, a checkbox and a
+// command, and they have to be the same switch: flipped in either, the
+// other has to hear about it.
+func TestKeepGoingSyncsBetweenTheCommandAndTheCheckbox(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	evCtx, cancelEvents := context.WithCancel(ctx)
+	defer cancelEvents()
+	evCh, err := c.SubscribeEvents(evCtx, sess.ID, 0)
+	if err != nil {
+		t.Fatalf("SubscribeEvents: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// The checkbox's endpoint moves the switch and every client hears.
+	resp, err := http.Post(httpSrv.URL+"/api/settings/keep-going", "application/json",
+		strings.NewReader(`{"enabled":false}`))
+	if err != nil {
+		t.Fatalf("POST keep-going: %v", err)
+	}
+	resp.Body.Close()
+	if data := waitForSettings(t, evCh); data["keep_going"] != false {
+		t.Errorf("keep_going = %v after the checkbox turned it off", data["keep_going"])
+	}
+	if d.Loop.KeepGoingEnabled() {
+		t.Error("the daemon still has the switch on")
+	}
+
+	// And GET /api/settings is where a client that just opened reads it.
+	var got map[string]any
+	r2, err := http.Get(httpSrv.URL + "/api/settings")
+	if err != nil {
+		t.Fatalf("GET settings: %v", err)
+	}
+	defer r2.Body.Close()
+	if err := json.NewDecoder(r2.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["keep_going"] != false {
+		t.Errorf("GET /api/settings keep_going = %v", got["keep_going"])
+	}
+	if _, ok := got["auto_compact_percent"]; !ok {
+		t.Error("GET /api/settings omits auto_compact_percent")
+	}
+}
+
+// "/reset-skills" through a real daemon: install a skill after startup,
+// reset, and the skill is listable and completable without a restart.
+func TestResetSkillsAppliesWithoutARestart(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+
+	d := newTestDaemon(t, model.URL)
+	// The daemon's own wiring is in cmd/localcode; this test wires the
+	// same shape against a temp dir, which is the contract the command
+	// depends on: the hook reloads, the daemon serves the new list.
+	skillDir := t.TempDir()
+	d.Loop.ReloadSkills = func() (string, error) {
+		list, err := skills.LoadAll(skillDir)
+		if err != nil {
+			return "", err
+		}
+		section := ""
+		if len(list) > 0 {
+			section = skills.SystemPromptSection(list)
+		}
+		d.Loop.SetSkills(list, section)
+		return fmt.Sprintf("skills reloaded: %d", len(list)), nil
+	}
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	c := client.New(httpSrv.URL)
+	ctx := context.Background()
+	before, err := c.ListSkills(ctx)
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("expected no skills to start, got %d", len(before))
+	}
+
+	// A skill installed while the daemon is running.
+	if err := os.MkdirAll(filepath.Join(skillDir, "late-arrival"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "late-arrival", "SKILL.md"),
+		[]byte("---\nname: late-arrival\ndescription: installed after startup\n---\n# Late\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := c.CreateSession(ctx, "general-purpose")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := c.SendMessage(ctx, sess.ID, "/reset-skills"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	// The send is a 202 and the command runs on the turn's own goroutine,
+	// so the listing is polled rather than read once.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		after, err := c.ListSkills(ctx)
+		if err != nil {
+			t.Fatalf("ListSkills: %v", err)
+		}
+		if len(after) == 1 && after[0].Name == "late-arrival" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("skills after reset = %+v, want the one installed mid-run", after)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

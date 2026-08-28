@@ -7,7 +7,7 @@ import {
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
 import { refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen, permissionRequest } from './modals.js';
-import { refreshSmartAgentIfOpen } from './settings.js';
+import { refreshSmartAgentIfOpen, refreshKeepGoingIfOpen } from './settings.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
@@ -177,6 +177,11 @@ const handlers = {
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
     }
+    if (typeof d.keep_going === 'boolean') {
+      app.keepGoing = d.keep_going;
+      refreshKeepGoingIfOpen();
+    }
+    if (typeof d.auto_compact_percent === 'number') app.autoCompactPercent = d.auto_compact_percent;
     if (typeof d.skip_permissions === 'boolean') {
       app.skipPermissions = d.skip_permissions;
       // The pill by the status line, always: it is the one place the

@@ -236,3 +236,100 @@ func TestATogglePutsTheNewStateOnTheEventLog(t *testing.T) {
 		t.Error("the switch changed and no client was told")
 	}
 }
+
+// "/keep-going" flips the carry-on switch and says its scope, which is
+// the part worth a sentence: the switch is daemon-wide and the feature
+// is one family's.
+func TestKeepGoingCommandTogglesAndStatesItsScope(t *testing.T) {
+	loop := newSmartLoop(t, "http://127.0.0.1:1")
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	out := replyTo(t, loop, sid, "/keep-going off")
+	if !strings.Contains(out, "keep_going: off") {
+		t.Errorf("reply = %q", out)
+	}
+	if loop.KeepGoingEnabled() {
+		t.Error("the switch did not turn off")
+	}
+	if !strings.Contains(out, "muse") {
+		t.Errorf("the reply does not state the muse-only scope: %q", out)
+	}
+
+	// No configured profile runs a muse model here, and turning it on
+	// should say that rather than read as a change that took effect.
+	out = replyTo(t, loop, sid, "/keep-going on")
+	if !strings.Contains(out, "no configured profile currently runs a muse model") {
+		t.Errorf("reply = %q, want the no-muse-profile note", out)
+	}
+}
+
+// "/auto-compact 70" sets the threshold and turns the feature on: the
+// number is somebody asking for compaction at 70%, and honouring it while
+// leaving the switch off would honour the letter and not the request.
+func TestAutoCompactTakesAThreshold(t *testing.T) {
+	loop := newSmartLoop(t, "http://127.0.0.1:1")
+	loop.SetAutoCompactEnabled(false)
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	out := replyTo(t, loop, sid, "/auto-compact 70")
+	if !strings.Contains(out, "70%") {
+		t.Errorf("reply = %q", out)
+	}
+	if !loop.AutoCompactEnabled() || loop.CompactPercent() != 70 {
+		t.Errorf("enabled=%v percent=%d, want on at 70", loop.AutoCompactEnabled(), loop.CompactPercent())
+	}
+
+	// A bare toggle keeps the threshold.
+	replyTo(t, loop, sid, "/auto-compact")
+	replyTo(t, loop, sid, "/auto-compact")
+	if loop.CompactPercent() != 70 {
+		t.Errorf("toggling changed the threshold to %d", loop.CompactPercent())
+	}
+
+	// A threshold that cannot mean anything is refused with the reason.
+	out = replyTo(t, loop, sid, "/auto-compact 5")
+	if !strings.Contains(out, "between 10 and 95") {
+		t.Errorf("reply = %q", out)
+	}
+	if loop.CompactPercent() != 70 {
+		t.Errorf("a refused threshold still changed the setting to %d", loop.CompactPercent())
+	}
+}
+
+// The default threshold is 50, which is what the command's own reply and
+// the automatic behaviour both key on.
+func TestAutoCompactDefaultsToFiftyPercent(t *testing.T) {
+	loop := newSmartLoop(t, "http://127.0.0.1:1")
+	if got := loop.CompactPercent(); got != 50 {
+		t.Errorf("default threshold = %d, want 50", got)
+	}
+}
+
+// The reset commands answer even in a build with nothing wired, because
+// a command that is offered for completion and then silently does
+// nothing is worse than one that says why.
+func TestResetCommandsSayWhenNothingIsWired(t *testing.T) {
+	loop := newSmartLoop(t, "http://127.0.0.1:1")
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if out := replyTo(t, loop, sid, "/reset-mcp"); !strings.Contains(out, "restart") {
+		t.Errorf("/reset-mcp with no hook: %q", out)
+	}
+	if out := replyTo(t, loop, sid, "/reset-skills"); !strings.Contains(out, "restart") {
+		t.Errorf("/reset-skills with no hook: %q", out)
+	}
+
+	// And with hooks wired, the hook's own report is the answer.
+	loop.ReloadSkills = func() (string, error) { return "skills reloaded: 2 (a, b)", nil }
+	if out := replyTo(t, loop, sid, "/reset-skills"); !strings.Contains(out, "skills reloaded: 2") {
+		t.Errorf("/reset-skills with a hook: %q", out)
+	}
+}

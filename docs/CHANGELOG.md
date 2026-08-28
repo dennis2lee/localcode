@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.62.0
+
+* **Keep-going is muse's, and now actually reaches muse.** The carry-on nudge — localcode typing "continue" for a model that stops mid-task — was keyed on `glimmer`, which was a live bug: the habit is the family's, every muse variant has it, and a variant without that one word in its id got a budget of zero. The feature built for these models was off for most of them. It is keyed on `muse` now, case-insensitively, and it is a hard boundary in the other direction too: on any model whose id does not contain `muse` the feature does not exist, whatever is configured, because a nudge sent to a model without the habit is localcode second-guessing a finished answer.
+
+  `/keep-going` toggles it for the whole daemon and saves the choice; the settings window has the same switch as a checkbox. One switch, two homes, kept in step through the same daemon-wide event the other switches use, so flipping it at a prompt moves the checkbox in an open window and the other way round. The command's reply states the scope, and says so when no configured profile runs a muse model, so "on" cannot read as a change that took effect when nothing is there to receive it.
+
+* **`/auto-compact`, with a threshold.** Automatic compaction fired at a fixed 80% of the context window; the threshold is now a setting, 50% by default, and `/auto-compact 70` moves it — the number both sets it and turns the feature on, because a number is somebody asking for compaction at that point and honouring it while leaving the switch off would honour the letter of the request and not the request. Bare `/auto-compact` toggles; a threshold below 10 or above 95 is refused with the reason, since one would compact almost every turn and the other would never fire, which is what off is for.
+
+* **`/reset-mcp` and `/reset-skills`: apply an edited configuration without restarting.** Changing an MCP server or installing a skill used to mean restarting localcode. `/reset-mcp` stops the servers, re-reads their configuration from disk, reconnects, and swaps the tools — a server removed from config.json takes its tools out of the model's hands rather than leaving calls that can only fail, one added mid-run connects, and the status indicator follows. `/reset-skills` reloads from disk against the live workspace, which quietly fixes a second thing: a workspace switched at runtime kept serving the old project's skills until a restart.
+
+  Under both, the tool registry learned to be mutated while turns are running, which it never had to be before: registration happened at startup, and a reload swapping tools mid-turn was a race the map would have lost.
+
+  All four commands complete with the right arrow like everything else, and both clients have them, because they are answered by the daemon.
+
 ## v0.61.0
 
 * **A background task's window shows the whole of what is happening in it.** It showed a tool call starting and then, whatever happened next, nothing: `tool.end` was dropped on the floor, so you watched the moment work began and never the moment it finished, which is the half you are usually waiting for. Tool calls now complete in place with their result and a success or failure marker, the same shape the main conversation uses.

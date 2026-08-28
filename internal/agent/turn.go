@@ -520,7 +520,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				l.Store.Append(sessionID, events.TypeError, map[string]any{
 					"error": fmt.Sprintf(
 						"the model ended its turn with the task unfinished, so localcode told it to carry on (%d of %d — keep_going for %q)",
-						nudges, effectiveKeepGoing(run.profile), run.profile.Model),
+						nudges, l.effectiveKeepGoing(run.profile), run.profile.Model),
 					"recovered": true,
 				})
 				// Persisted as the user message it is, marked auto so no

@@ -563,8 +563,9 @@ type SkillInfo struct {
 // complete against. The body is what a skill is called and what it is
 // for, never a skill's body, which can be long and is not a listing.
 func (d *Daemon) handleListSkills(w http.ResponseWriter, r *http.Request) {
-	out := make([]SkillInfo, 0, len(d.Loop.Skills))
-	for _, s := range d.Loop.Skills {
+	list := d.Loop.SkillList()
+	out := make([]SkillInfo, 0, len(list))
+	for _, s := range list {
 		out = append(out, SkillInfo{Name: s.Name, Description: s.Description})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

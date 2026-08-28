@@ -47,10 +47,17 @@ var modelQuirks = []struct {
 		// has to be updated" — and ends its turn. "진행" makes it pick up,
 		// and it stops again one step later.
 		//
+		// Matched on "muse", not "glimmer", and the difference was a
+		// live bug: the habit is the family's, every muse variant has
+		// it, and a variant without "glimmer" in its id got a carry-on
+		// budget of zero — the feature built for these models was off
+		// for most of them. The family name is the part every variant
+		// shares.
+		//
 		// A note is not a guarantee, which is why keep_going exists as
-		// well (see keep_going.go). It costs one paragraph on a model that
-		// has the habit and is sent to nothing else.
-		match:     "glimmer",
+		// well (see keep_going.go). It costs one paragraph on a model
+		// that has the habit and is sent to nothing else.
+		match:     "muse",
 		keepGoing: 3,
 		note: "Working style: finish the task before you end your turn. When a tool result shows you what has " +
 			"to happen next — another file to update, a build to re-run, a test to fix — do it in the same turn " +

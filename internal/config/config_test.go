@@ -233,6 +233,8 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"AutoMemoryEnabled":  true,
 		"Permissions":        true,
 		"AutoCompactEnabled": true,
+		"AutoCompactPercent": true,
+		"KeepGoingEnabled":   true,
 		"ShowTPS":            true,
 		"Hooks":              true,
 		"AutoDelegate":       true,

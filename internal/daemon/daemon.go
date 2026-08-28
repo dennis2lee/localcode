@@ -20,6 +20,7 @@ import (
 	"localcode/internal/agent"
 	"localcode/internal/events"
 	"localcode/internal/mcp"
+	"sync"
 )
 
 type Daemon struct {
@@ -28,6 +29,9 @@ type Daemon struct {
 	Tasks   *agent.TaskManager
 	Version string
 
+	// mcpMu guards MCP, which "/reset-mcp" can swap while requests are
+	// reading it.
+	mcpMu sync.Mutex
 	// MCP is nil when no MCP servers are configured — handleListMCPServers
 	// reports an empty list in that case rather than requiring callers to
 	// special-case it.
@@ -133,12 +137,7 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	// directly.
 	loop.OnSettingsChanged = d.announceSettings
 	if mcpManager != nil {
-		mcpManager.OnStatusChange(func(states []mcp.ServerState) {
-			d.daemonEvents.send(events.Event{
-				Type: events.TypeMCPStatus,
-				Data: map[string]any{"servers": states},
-			})
-		})
+		d.watchMCP(mcpManager)
 	}
 	return d
 }
@@ -153,6 +152,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
 	d.mux.HandleFunc("POST /api/settings/auto-delegate", d.handleSetAutoDelegate)
 	d.mux.HandleFunc("POST /api/settings/smart-agent", d.handleSetSmartAgent)
+	d.mux.HandleFunc("POST /api/settings/keep-going", d.handleSetKeepGoing)
 	d.mux.HandleFunc("POST /api/permissions/skip", d.handleSetSkipPermissions)
 	d.mux.HandleFunc("POST /api/permissions/rules", d.handleAddPermissionRule)
 	d.mux.HandleFunc("POST /api/permissions/rules/remove", d.handleRemovePermissionRule)
@@ -207,8 +207,47 @@ func (d *Daemon) announceSettings() {
 			"auto_delegate":        d.Loop.AutoDelegateEnabled(),
 			"smart_agent":          d.Loop.SmartAgentEnabled(),
 			"skip_permissions":     d.Loop.Config.PermissionsSkipped(),
+			"keep_going":           d.Loop.KeepGoingEnabled(),
+			"auto_compact_percent": d.Loop.CompactPercent(),
 		},
 	})
+}
+
+// watchMCP forwards a manager's status changes to every connected
+// client. Split out of New because "/reset-mcp" builds a new manager
+// mid-run, and the new one needs the same wiring or the indicator stops
+// moving exactly when somebody is watching it.
+func (d *Daemon) watchMCP(m *mcp.Manager) {
+	m.OnStatusChange(func(states []mcp.ServerState) {
+		d.daemonEvents.send(events.Event{
+			Type: events.TypeMCPStatus,
+			Data: map[string]any{"servers": states},
+		})
+	})
+}
+
+// SwapMCP replaces the manager "/reset-mcp" just rebuilt, wires its
+// status changes to clients, and announces the new state so every
+// indicator moves without being asked.
+func (d *Daemon) SwapMCP(m *mcp.Manager) {
+	d.mcpMu.Lock()
+	d.MCP = m
+	d.mcpMu.Unlock()
+	if m != nil {
+		d.watchMCP(m)
+		d.daemonEvents.send(events.Event{
+			Type: events.TypeMCPStatus,
+			Data: map[string]any{"servers": m.States()},
+		})
+	}
+}
+
+// mcpManager reads the current manager under the same lock SwapMCP
+// writes it with.
+func (d *Daemon) mcpManager() *mcp.Manager {
+	d.mcpMu.Lock()
+	defer d.mcpMu.Unlock()
+	return d.MCP
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -235,8 +274,8 @@ func (d *Daemon) handleVersion(w http.ResponseWriter, r *http.Request) {
 // events.TypeMCPStatus on the session event stream.
 func (d *Daemon) handleListMCPServers(w http.ResponseWriter, r *http.Request) {
 	states := []mcp.ServerState{}
-	if d.MCP != nil {
-		states = d.MCP.States()
+	if m := d.mcpManager(); m != nil {
+		states = m.States()
 	}
 	writeJSON(w, http.StatusOK, states)
 }

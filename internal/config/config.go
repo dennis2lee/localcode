@@ -32,10 +32,24 @@ type Config struct {
 	Permissions map[string]ToolPermission `json:"permission,omitempty"`
 
 	// AutoCompactEnabled toggles automatically summarizing a session's
-	// history once its context window usage crosses 80%, freeing up
-	// space to keep the conversation going. A nil pointer means unset,
-	// defaulting to enabled. Also runtime-toggleable via "/config".
+	// history once its context window usage crosses the threshold
+	// (AutoCompactPercent, 50 by default), freeing up space to keep the
+	// conversation going. A nil pointer means unset, defaulting to
+	// enabled. Also runtime-toggleable via "/auto-compact".
 	AutoCompactEnabled *bool `json:"auto_compact_enabled,omitempty"`
+
+	// AutoCompactPercent is the context-window fill percentage that
+	// triggers auto-compaction. Zero means unset, defaulting to 50.
+	// Settable at runtime with "/auto-compact <percent>".
+	AutoCompactPercent int `json:"auto_compact_percent,omitempty"`
+
+	// KeepGoingEnabled gates the carry-on nudge for models known to stop
+	// mid-task (see internal/agent/keep_going.go). A nil pointer means
+	// unset, defaulting to enabled. It only ever applies to models whose
+	// id contains "muse"; on everything else the nudge never fires
+	// regardless of this switch. Toggleable via "/keep-going" and the
+	// settings window.
+	KeepGoingEnabled *bool `json:"keep_going,omitempty"`
 
 	// ShowTPS toggles whether a tokens-per-second figure is included in
 	// usage events for clients to display. A nil pointer means unset,
@@ -164,6 +178,35 @@ func (c *Config) MemoryEnabled() bool {
 // when AutoCompactEnabled is unset.
 func (c *Config) CompactEnabled() bool {
 	return c.AutoCompactEnabled == nil || *c.AutoCompactEnabled
+}
+
+// DefaultCompactPercent is the context-window fill that triggers
+// auto-compaction when no threshold is configured.
+const DefaultCompactPercent = 50
+
+// CompactPercent reports the auto-compaction threshold, clamped to a
+// range where it can still mean something: below 10 would compact almost
+// every turn, and 100 or above would never fire, which is what the off
+// switch is for.
+func (c *Config) CompactPercent() int {
+	p := c.AutoCompactPercent
+	if p == 0 {
+		return DefaultCompactPercent
+	}
+	if p < 10 {
+		return 10
+	}
+	if p > 95 {
+		return 95
+	}
+	return p
+}
+
+// KeepGoing reports whether the carry-on nudge is enabled — the default
+// when KeepGoingEnabled is unset. Whether it applies to a given model is
+// a separate question; see internal/agent/keep_going.go.
+func (c *Config) KeepGoing() bool {
+	return c.KeepGoingEnabled == nil || *c.KeepGoingEnabled
 }
 
 // TPSEnabled reports whether tokens-per-second display is on — the

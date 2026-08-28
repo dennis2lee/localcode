@@ -36,7 +36,7 @@
       "model": "qwen3-30b-a3b",
       "max_tokens": 4096,
       "context_window": 32768,
-      "//keep_going": "How many times one turn may be told to carry on after the model stops with the task unfinished. 0 (the default) defers to the model: families known to stall get 3 out of the box, everything else none. -1 forces it off. See docs/USAGE.md.",
+      "//keep_going": "How many times one turn may be told to carry on after the model stops with the task unfinished. Only ever applies to muse models (any id containing 'muse'); on them 0 (the default) means 3 out of the box and -1 forces it off. /keep-going toggles the whole feature. See docs/USAGE.md.",
       "keep_going": 0
     }
   },
@@ -102,5 +102,9 @@
   "trace_max_total_mb": 0,
   "//smart_agent": "Off by default. On, the session's own model becomes an orchestrator with six built-in specialist sub-agents (explore, librarian, oracle, plan, implement, verify), each routed to whichever profile above suits it. Name a profile smart-quick, smart-balanced or smart-deep to pin that routing by hand. Also togglable from the settings window and with /config smart_agent on|off. See docs/USAGE.md.",
   "smart_agent": false,
-  "skip_permissions": false
+  "skip_permissions": false,
+  "//auto_compact_percent": "The context-window fill that triggers automatic compaction, as a percent. 50 unless set; /auto-compact <percent> changes it live and saves it here.",
+  "auto_compact_percent": 50,
+  "//keep_going": "The carry-on nudge for muse models, on unless set to false. Toggled with /keep-going or the settings window checkbox. Only ever applies to models whose id contains 'muse'.",
+  "keep_going": true
 }

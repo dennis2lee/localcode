@@ -29,6 +29,8 @@ export const app = {
   smartAgent: false,
   smartAgentRoster: [],       // the specialist names the daemon build ships
   skipPermissions: false,
+  keepGoing: true,       // the carry-on nudge for muse models
+  autoCompactPercent: 50,
   permissionRules: {},        // tool -> [{match, decision}]
   canEditPermissions: false,  // false when the daemon has no config.json path to persist to
 };
