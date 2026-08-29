@@ -164,3 +164,25 @@ func (d *Daemon) handlePreviewSchedule(w http.ResponseWriter, r *http.Request) {
 		"human": when.Format(at, now),
 	})
 }
+
+// handleRenameSchedule sets a booked task's name, the panel's own label
+// for it. Cosmetic, like a session's title: nothing resolves by it.
+func (d *Daemon) handleRenameSchedule(w http.ResponseWriter, r *http.Request) {
+	if d.Loop.Schedules == nil {
+		writeError(w, http.StatusNotFound, errNoScheduler)
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	entry, ok := d.Loop.Schedules.Rename(r.PathValue("sid"), req.Name)
+	if !ok {
+		writeError(w, http.StatusNotFound, errNoSuchSchedule)
+		return
+	}
+	writeJSON(w, http.StatusOK, entry)
+}

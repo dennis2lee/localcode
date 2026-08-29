@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,8 +62,17 @@ type Scheduled struct {
 	SessionID string    `json:"session_id"`
 	At        time.Time `json:"at"`
 	Prompt    string    `json:"prompt"`
-	Agent     string    `json:"agent"`
-	Status    string    `json:"status"`
+	// Name is what the panel calls this task, when somebody has given it
+	// one. Empty otherwise, and the row falls back to the prompt.
+	//
+	// It exists because a booked prompt is a paragraph and a row is one
+	// truncated line: "run the tests and report the fail…" beside "check
+	// the nightly build and report the fail…" is two rows nobody can tell
+	// apart at the moment they need to. Cosmetic, like a session's title —
+	// nothing resolves by it.
+	Name   string `json:"name,omitempty"`
+	Agent  string `json:"agent"`
+	Status string `json:"status"`
 	// RunSession is the child session the work ran in, and therefore
 	// where its output is. Empty until it fires.
 	RunSession string `json:"run_session,omitempty"`
@@ -207,6 +217,36 @@ func (s *Scheduler) MarkSeen(id string) bool {
 	s.loop.Store.Append(sessionID, events.TypeScheduleSeen, map[string]any{"id": id})
 	return true
 }
+
+// Rename gives a booked task a name, or clears it. Reports whether there
+// was one to rename.
+//
+// Recorded on the conversation's log like every other change to a row,
+// which is what makes the name survive a reload and reach a second window
+// without either having to ask again.
+func (s *Scheduler) Rename(id, name string) (Scheduled, bool) {
+	name = strings.TrimSpace(name)
+	if len(name) > maxScheduleName {
+		name = strings.TrimSpace(string([]rune(name)[:maxScheduleName]))
+	}
+	s.mu.Lock()
+	entry, ok := s.entries[id]
+	if !ok {
+		s.mu.Unlock()
+		return Scheduled{}, false
+	}
+	entry.Name = name
+	out, sessionID := *entry, entry.SessionID
+	s.mu.Unlock()
+
+	s.loop.Store.Append(sessionID, events.TypeScheduleRenamed, map[string]any{"id": id, "name": name})
+	return out, true
+}
+
+// maxScheduleName bounds a name at what a panel row can show. A row is
+// one line; a name longer than this is a prompt in the wrong field, and
+// truncating says so more usefully than a scrollbar would.
+const maxScheduleName = 80
 
 // List returns one conversation's booked tasks, soonest first, with the
 // ones still waiting ahead of the ones that have run.
@@ -355,6 +395,10 @@ func (s *Scheduler) Restore(sessions []string, now time.Time) {
 				if e := byID[id]; e != nil {
 					e.Seen = true
 				}
+			case events.TypeScheduleRenamed:
+				if e := byID[id]; e != nil {
+					e.Name = str(ev.Data["name"])
+				}
 			case events.TypeScheduleRemoved:
 				delete(byID, id)
 			}
@@ -412,6 +456,9 @@ func Describe(e Scheduled, now time.Time) string {
 	line := fmt.Sprintf("%s  %s  %s", e.ID, e.Status, e.At.Format("2006-01-02 15:04"))
 	if e.Status == SchedulePending {
 		line += fmt.Sprintf(" (in %s)", roughUntil(e.At, now))
+	}
+	if e.Name != "" {
+		line += "  " + e.Name
 	}
 	line += "\n    " + promptSummary(e.Prompt)
 	if e.Error != "" {

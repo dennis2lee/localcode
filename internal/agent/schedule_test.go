@@ -345,3 +345,92 @@ func errorsAs(err error, target **tools.RefusedError) bool {
 	}
 	return false
 }
+
+// A booked prompt is a paragraph and a row is one truncated line, so a
+// task can be given a name. Cosmetic, like a session's title: nothing
+// resolves by it, and the prompt stays visible underneath.
+func TestRenamingAScheduledTask(t *testing.T) {
+	loop := scheduleLoop(t)
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	sched := NewScheduler(context.Background(), loop)
+	entry, err := sched.Add(sid, "general-purpose", "run the tests and report the failures", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if entry.Name != "" {
+		t.Errorf("a new task is named %q; it should have none until somebody gives it one", entry.Name)
+	}
+
+	got, ok := sched.Rename(entry.ID, "  nightly tests  ")
+	if !ok {
+		t.Fatal("Rename found nothing to rename")
+	}
+	if got.Name != "nightly tests" {
+		t.Errorf("name = %q, want it trimmed", got.Name)
+	}
+	if got.Prompt != "run the tests and report the failures" {
+		t.Error("naming a task changed what it will run")
+	}
+	// Recorded where the row comes from, so it survives a reload and
+	// reaches a second window.
+	renamed := false
+	for _, ev := range mustEvents(t, loop.Store, sid) {
+		if ev.Type == events.TypeScheduleRenamed {
+			renamed = true
+		}
+	}
+	if !renamed {
+		t.Error("the rename was not recorded, so it would vanish on a reload")
+	}
+
+	// An empty name clears it and the row goes back to the prompt.
+	if got, _ := sched.Rename(entry.ID, "   "); got.Name != "" {
+		t.Errorf("clearing left %q", got.Name)
+	}
+	if _, ok := sched.Rename("no-such-task", "x"); ok {
+		t.Error("renaming a task that does not exist reported success")
+	}
+}
+
+// A name is a row's label, and a row is one line. A prompt pasted into
+// the name field is truncated rather than allowed to push the panel
+// around.
+func TestAnOverlongNameIsCutToWhatARowCanShow(t *testing.T) {
+	loop := scheduleLoop(t)
+	const sid = "s1"
+	loop.Store.CreateSession(sid, "", "general-purpose", true)
+	sched := NewScheduler(context.Background(), loop)
+	entry, _ := sched.Add(sid, "general-purpose", "x", time.Now().Add(time.Hour))
+
+	got, _ := sched.Rename(entry.ID, strings.Repeat("가", 300))
+	if n := len([]rune(got.Name)); n > maxScheduleName {
+		t.Errorf("name kept %d characters, want at most %d", n, maxScheduleName)
+	}
+}
+
+// And it comes back after a restart, along with everything else the row
+// is built from.
+func TestANameSurvivesARestart(t *testing.T) {
+	loop := scheduleLoop(t)
+	const sid = "s1"
+	loop.Store.CreateSession(sid, "", "general-purpose", true)
+	at := time.Now().Add(time.Hour)
+	loop.Store.Append(sid, events.TypeScheduleCreated, map[string]any{
+		"id": "sched-x", "at": at.Format(time.RFC3339Nano),
+		"prompt": "run the tests", "agent": "general-purpose",
+	})
+	loop.Store.Append(sid, events.TypeScheduleRenamed, map[string]any{"id": "sched-x", "name": "nightly tests"})
+
+	sched := NewScheduler(context.Background(), loop)
+	sched.Restore([]string{sid}, time.Now())
+	e, ok := sched.Get("sched-x")
+	if !ok {
+		t.Fatal("the booking was not restored")
+	}
+	if e.Name != "nightly tests" {
+		t.Errorf("name after a restart = %q, want it back", e.Name)
+	}
+}

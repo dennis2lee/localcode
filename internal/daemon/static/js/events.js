@@ -123,6 +123,7 @@ const handlers = {
   'schedule.created': (d) => applyScheduleEvent('schedule.created', d),
   'schedule.status': (d) => applyScheduleEvent('schedule.status', d),
   'schedule.seen': (d) => applyScheduleEvent('schedule.seen', d),
+  'schedule.renamed': (d) => applyScheduleEvent('schedule.renamed', d),
   'schedule.removed': (d) => applyScheduleEvent('schedule.removed', d),
   'permission.resolved': () => {
     permissionRequest.close();

@@ -96,10 +96,14 @@ const (
 	// TypeScheduleStatus: {"id","status","run_session","error"}.
 	// TypeScheduleSeen: {"id"} — somebody read the result, which is the
 	// third state of the row's light.
+	// TypeScheduleRenamed: {"id","name"} — cosmetic, like a session's
+	// title. An empty name clears it and the row goes back to showing the
+	// prompt.
 	// TypeScheduleRemoved: {"id"}.
 	TypeScheduleCreated Type = "schedule.created"
 	TypeScheduleStatus  Type = "schedule.status"
 	TypeScheduleSeen    Type = "schedule.seen"
+	TypeScheduleRenamed Type = "schedule.renamed"
 	TypeScheduleRemoved Type = "schedule.removed"
 
 	// TypePermissionsChanged reports this session's four permission

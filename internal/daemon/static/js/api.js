@@ -115,6 +115,8 @@ export const bookSchedule = (sessionID, when, prompt) =>
 export const previewSchedule = (when) => api('POST', '/api/schedules/preview', { when });
 export const markScheduleSeen = (sessionID, id) =>
   api('POST', `/api/sessions/${sessionID}/schedules/${id}/seen`);
+export const renameSchedule = (sessionID, id, name) =>
+  api('POST', `/api/sessions/${sessionID}/schedules/${id}/rename`, { name });
 export const deleteSchedule = (sessionID, id) =>
   api('DELETE', `/api/sessions/${sessionID}/schedules/${id}`);
 

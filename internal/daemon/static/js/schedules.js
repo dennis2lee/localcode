@@ -73,15 +73,32 @@ export function renderSchedules() {
     when.textContent = whenText(s);
     head.appendChild(when);
 
+    // Both stop propagation, or clicking either would also open the row
+    // they sit on.
+    const ren = document.createElement('button');
+    ren.className = 'del';
+    ren.textContent = '✎';
+    ren.title = 'name this scheduled task';
+    ren.addEventListener('click', (e) => { e.stopPropagation(); renameSchedulePrompt(s); });
+    head.appendChild(ren);
+
     const del = document.createElement('button');
     del.className = 'del';
     del.textContent = '×';
     del.title = 'delete this scheduled task';
-    // Stopped here, or clicking delete would also open the row it is on.
     del.addEventListener('click', (e) => { e.stopPropagation(); deleteSchedule(s.id); });
     head.appendChild(del);
     row.appendChild(head);
 
+    // The name when there is one, and the prompt underneath it in the
+    // muted line — so naming a task adds a label rather than hiding what
+    // it will actually run, which is the thing worth being able to check.
+    if (s.name) {
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = s.name;
+      row.appendChild(name);
+    }
     const prompt = document.createElement('div');
     prompt.className = 'prompt';
     prompt.textContent = s.prompt || '';
@@ -114,13 +131,30 @@ export async function openSchedule(s) {
     schedulesEl.title = note;
     return;
   }
-  openTaskView(s.run_session, { title: `scheduled — ${s.prompt}`, status: s.status });
+  openTaskView(s.run_session, { title: `scheduled — ${s.name || s.prompt}`, status: s.status });
   if (!s.seen) {
     try {
       await apiClient.markScheduleSeen(session.sessionID, s.id);
       s.seen = true;
       renderSchedules();
     } catch { /* the light stays solid; nothing else breaks */ }
+  }
+}
+
+// renameSchedulePrompt asks for the label, the same window.prompt the
+// session list uses for the same job.
+export async function renameSchedulePrompt(s) {
+  const name = window.prompt('Name for this scheduled task (empty to clear):', s.name || '');
+  if (name === null) return;
+  try {
+    const updated = await apiClient.renameSchedule(session.sessionID, s.id, name);
+    // The row also arrives on the schedule.renamed event, which is what
+    // makes it survive a reload and reach a second window; this is the
+    // one in front of the person who typed it.
+    session.schedules.set(updated.id, { ...s, name: updated.name });
+    renderSchedules();
+  } catch (err) {
+    if (schedulesEl) schedulesEl.title = `could not rename: ${err}`;
   }
 }
 
@@ -170,6 +204,9 @@ export function applyScheduleEvent(type, d) {
       break;
     case 'schedule.seen':
       session.schedules.set(d.id, { ...cur, seen: true });
+      break;
+    case 'schedule.renamed':
+      session.schedules.set(d.id, { ...cur, name: d.name || '' });
       break;
     case 'schedule.removed':
       session.schedules.delete(d.id);

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.66.0
+
+* **A scheduled task can be given a name.** ✎ on its row in the panel, or `/schedule rename <id> <name>`. A booked prompt is a paragraph and a row is one truncated line, so two tasks that both start "run the tests and report the fail…" are two rows nobody can tell apart at the moment they need to.
+
+  The name is a label for the row and nothing else — cosmetic, like a session's title, with nothing resolving by it. **The prompt stays visible underneath it**, because naming a task should add a label rather than hide what it will actually run, which is the thing worth being able to check before it does. An empty name clears it and the row goes back to the prompt alone. Recorded on the conversation's own log like every other change to a row, so it survives a reload and reaches a second window without either having to ask again.
+
+* **The test DOM can find an element.** It only ever had `innerHTML`, so a test that wanted one row's light had to match a substring of the whole panel's markup — which is how an assertion ends up depending on the reader's timezone rather than on the thing it meant to check. `querySelector` and `querySelectorAll` now handle `.class`, `#id` and `tag`, and refuse anything else by name: a selector that silently matches nothing is a test that passes while asserting nothing, which is the one failure a fake DOM must not have.
+
 ## v0.65.0
 
 * **The scheduler understood the wrong Korean, and said so about none of it.** Three of the four commonest phrasings booked the right moment and handed the model a broken request:

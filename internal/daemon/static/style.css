@@ -450,6 +450,7 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 .sched:hover { border-color: var(--border-strong); }
 .sched .head { display: flex; align-items: center; gap: 6px; }
 .sched .when { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched .prompt { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched .err { color: var(--err); font-size: 11px; }
 /* Outlined and quiet: it sits on every row, and a filled red per row

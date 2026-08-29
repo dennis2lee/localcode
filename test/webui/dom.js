@@ -61,6 +61,27 @@ class TextNode {
   }
 }
 
+// matcherFor turns one simple selector into a predicate. Three shapes,
+// and a clear refusal for everything else — see Element.querySelectorAll.
+function matcherFor(selector) {
+  const sel = String(selector).trim();
+  if (sel.startsWith('.')) {
+    const cls = sel.slice(1);
+    return (el) => el.classList.contains(cls);
+  }
+  if (sel.startsWith('#')) {
+    const id = sel.slice(1);
+    return (el) => el.id === id;
+  }
+  if (/^[a-zA-Z][a-zA-Z0-9-]*$/.test(sel)) {
+    const tag = sel.toUpperCase();
+    return (el) => el.tagName === tag;
+  }
+  throw new Error(
+    `querySelector: only ".class", "#id" and "tag" are implemented, got '${selector}'`,
+  );
+}
+
 class ClassList {
   constructor() {
     this._set = new Set();
@@ -199,6 +220,31 @@ class Element {
       throw new Error(`insertAdjacentHTML: only 'beforeend' is implemented, got '${position}'`);
     }
     this.appendChild(new RawHTML(html));
+  }
+
+  // querySelector over the subtree, for the three selector shapes a test
+  // actually reaches for: ".class", "#id" and "tag".
+  //
+  // Deliberately not a selector engine. Anything else throws by name
+  // rather than returning null, because a selector that silently matches
+  // nothing is a test that passes while asserting nothing — which is the
+  // one failure mode a fake DOM must not have.
+  querySelector(selector) {
+    return this.querySelectorAll(selector)[0] || null;
+  }
+  querySelectorAll(selector) {
+    const match = matcherFor(selector);
+    const out = [];
+    const walk = (node) => {
+      for (const child of node.childNodes || []) {
+        if (child instanceof Element) {
+          if (match(child)) out.push(child);
+          walk(child);
+        }
+      }
+    };
+    walk(this);
+    return out;
   }
 
   get innerHTML() {

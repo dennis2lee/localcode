@@ -79,3 +79,52 @@ test('a booked prompt containing markup renders as text', async () => {
   assert.ok(!html.includes('<img'), html);
   assert.ok(html.includes('&lt;img'), html);
 });
+
+// A booked prompt is a paragraph and a row is one line, so a task can be
+// given a name. The prompt stays underneath it: naming a task adds a
+// label rather than hiding what it will actually run, which is the thing
+// worth being able to check before it does.
+test('a named task shows the name and still shows the prompt', async () => {
+  const app = await load();
+  book(app);
+  app.applyEvent({ type: 'schedule.renamed', data: { id: 's1', name: 'nightly tests' } });
+  const html = app.el('schedules').innerHTML;
+  assert.ok(html.includes('nightly tests'), html);
+  assert.ok(html.includes('run the tests'), 'the prompt must still be visible');
+});
+
+test('an empty name clears it and the row goes back to the prompt alone', async () => {
+  const app = await load();
+  book(app);
+  app.applyEvent({ type: 'schedule.renamed', data: { id: 's1', name: 'nightly tests' } });
+  app.applyEvent({ type: 'schedule.renamed', data: { id: 's1', name: '' } });
+  const html = app.el('schedules').innerHTML;
+  assert.ok(!html.includes('nightly tests'), html);
+  assert.ok(html.includes('run the tests'), html);
+});
+
+// A name is typed by a person and comes back off the wire, so it renders
+// as text. Same rule as everything else in the panel.
+test('a name containing markup renders as text', async () => {
+  const app = await load();
+  book(app);
+  app.applyEvent({ type: 'schedule.renamed', data: { id: 's1', name: XSS } });
+  const html = app.el('schedules').innerHTML;
+  assert.ok(!html.includes('<img'), html);
+  assert.ok(html.includes('&lt;img'), html);
+});
+
+// Renaming a task must not disturb what it is waiting for.
+test('renaming leaves the light and the time alone', async () => {
+  const app = await load();
+  book(app);
+  const led = () => app.el('schedules').querySelector('.led').className;
+  const when = () => app.el('schedules').querySelector('.when').textContent;
+  const [led0, when0] = [led(), when()];
+  app.applyEvent({ type: 'schedule.renamed', data: { id: 's1', name: 'nightly' } });
+  // Compared against what was there, not against a literal time: the row
+  // renders in the reader's own timezone, and a test that spells one out
+  // is a test that fails on somebody else's machine.
+  assert.equal(led(), led0);
+  assert.equal(when(), when0);
+});

@@ -1654,9 +1654,12 @@ The reply echoes what was read, in full, because a misread time is worth catchin
 | Where | What you get |
 |---|---|
 | ⏰ Schedule button | Two fields — when, and what to do — with the time echoed back as you type it. |
-| Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. Click the row to read the result; the × deletes it, and the run's transcript with it. |
+| Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. Click the row to read the result; ✎ names it, and × deletes it along with the run's transcript. |
 | `/show-scheduled-task` | The same list as text, for the TUI. |
 | `/schedule cancel <id>` | Removes one. |
+| `/schedule rename <id> <name>` | Labels one; an empty name clears it. |
+
+**Naming a task.** A booked prompt is a paragraph and a row is one truncated line, so two rows that both start "run the tests and report the fail…" are two rows nobody can tell apart at the moment they need to. A name is a label for the row — cosmetic, like a session's title, and nothing resolves by it. The prompt stays visible underneath, so naming a task adds a label rather than hiding what it will actually run.
 
 One prompt, one moment: there are no repeats. A repeating job needs a failure policy and a stop condition of its own, and shipping it without them is how an expired credential becomes five hundred identical failed sessions.
 

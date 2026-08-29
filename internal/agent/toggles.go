@@ -342,7 +342,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off"},
 		{Name: "permission-skip-all", Description: "allow every prompt in this conversation, the workspace boundary included"},
 		{Name: "permission-skip-tools", Description: "allow every tool prompt, but still ask before leaving the workspace"},
-		{Name: "schedule", Description: "book a prompt for later: /schedule <when> <what to do>"},
+		{Name: "schedule", Description: "book a prompt for later: /schedule <when> <what to do>; also cancel and rename"},
 		{Name: "show-scheduled-task", Description: "list the prompts booked for later in this conversation"},
 		{Name: "read-outside", Description: "reading outside the workspace: on, off, or mem-clear to forget approved directories"},
 		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories"},
@@ -495,7 +495,23 @@ func (l *Loop) routeSchedule(sessionID, agentName, text string) (bool, error) {
 	}
 	if arg == "" {
 		return true, l.replyText(sessionID, "usage: /schedule <when> <what to do>\n"+when.Examples+
-			"\n\"/schedule cancel <id>\" removes one, and \"/show-scheduled-task\" lists them.")
+			"\n\"/schedule cancel <id>\" removes one, \"/schedule rename <id> <name>\" labels one,"+
+			"\nand \"/show-scheduled-task\" lists them.")
+	}
+	if _, found := strings.CutPrefix(strings.ToLower(arg), "rename "); found {
+		rest := strings.TrimSpace(arg[len("rename "):])
+		id, name, _ := strings.Cut(rest, " ")
+		if id == "" {
+			return true, l.replyText(sessionID, "usage: /schedule rename <id> <name>  (an empty name clears it)")
+		}
+		entry, ok := l.Schedules.Rename(id, strings.TrimSpace(name))
+		if !ok {
+			return true, l.replyText(sessionID, fmt.Sprintf("no scheduled task %q in this conversation", id))
+		}
+		if entry.Name == "" {
+			return true, l.replyText(sessionID, "cleared the name of "+id)
+		}
+		return true, l.replyText(sessionID, fmt.Sprintf("%s is now %q", id, entry.Name))
 	}
 	if _, found := strings.CutPrefix(strings.ToLower(arg), "cancel "); found {
 		// Sliced from the original rather than the lowercased copy: an id

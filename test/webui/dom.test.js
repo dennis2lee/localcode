@@ -152,3 +152,43 @@ test('append takes several nodes, like a browser', () => {
   assert.equal(parent.children.length, 2, 'append should add every node it is given');
   assert.equal(parent.children[0], a);
 });
+
+// querySelector over the subtree, for the three shapes a test reaches
+// for. It is not a selector engine, and the refusal for anything else is
+// the point: a selector that silently matches nothing is a test that
+// passes while asserting nothing.
+test('querySelector finds by class, id and tag', async () => {
+  const doc = new Document('');
+  const root = doc.createElement('div');
+  const a = doc.createElement('span');
+  a.classList.add('when');
+  a.textContent = 'now';
+  const b = doc.createElement('button');
+  b.id = 'go';
+  root.appendChild(a);
+  root.appendChild(b);
+
+  assert.equal(root.querySelector('.when'), a);
+  assert.equal(root.querySelector('#go'), b);
+  assert.equal(root.querySelector('button'), b);
+  assert.equal(root.querySelector('.missing'), null);
+  assert.equal(root.querySelectorAll('span').length, 1);
+});
+
+test('querySelector finds nested elements, not just children', async () => {
+  const doc = new Document('');
+  const root = doc.createElement('div');
+  const mid = doc.createElement('div');
+  const deep = doc.createElement('span');
+  deep.classList.add('led');
+  mid.appendChild(deep);
+  root.appendChild(mid);
+  assert.equal(root.querySelector('.led'), deep);
+});
+
+test('an unimplemented selector throws rather than matching nothing', async () => {
+  const doc = new Document('');
+  const root = doc.createElement('div');
+  assert.throws(() => root.querySelector('div > .x'), /only/);
+  assert.throws(() => root.querySelector('[data-id="1"]'), /only/);
+});
