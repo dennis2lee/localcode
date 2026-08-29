@@ -342,7 +342,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off"},
 		{Name: "permission-skip-all", Description: "allow every prompt in this conversation, the workspace boundary included"},
 		{Name: "permission-skip-tools", Description: "allow every tool prompt, but still ask before leaving the workspace"},
-		{Name: "debate", Description: "have another agent review this one's work, round after round: /debate <reviewer> [rounds] <what to do>"},
+		{Name: "debate", Description: "have other agents review this one's work, round after round: /debate <reviewer>[,<reviewer>] [rounds] <what to do>"},
 		{Name: "schedule", Description: "book a prompt for later: /schedule <when> <what to do>; also cancel and rename"},
 		{Name: "show-scheduled-task", Description: "list the prompts booked for later in this conversation"},
 		{Name: "read-outside", Description: "reading outside the workspace: on, off, or mem-clear to forget approved directories"},

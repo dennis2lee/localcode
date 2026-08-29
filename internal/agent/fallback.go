@@ -228,11 +228,32 @@ var retryPhrases = []string{
 
 // sleepFor waits d unless ctx ends first, and reports whether the wait
 // ran its course. A cancelled turn does not sit out a backoff.
-// retryWaitBarrier, when non-nil, runs after a retry is announced and
-// just before its backoff wait. Nil outside tests; a test sets it to
-// cancel the turn at exactly that point, so the cancelled-mid-backoff
-// path can be exercised without racing a timer.
-var retryWaitBarrier func()
+// retryWaitBarrier, when set, runs after a retry is announced and just
+// before its backoff wait. Unset outside tests; a test sets it to cancel
+// the turn at exactly that point, so the cancelled-mid-backoff path can
+// be exercised without racing a timer.
+//
+// Atomic, like retryBase beside it, and for a reason the plain variable
+// could not survive: this is read by production code on whatever
+// goroutine a turn is running on, including a background task still
+// finishing from an earlier test, while the test that owns the hook sets
+// and clears it. Under -race that is a reported race between two tests
+// that never referred to each other.
+var retryWaitBarrier atomic.Pointer[func()]
+
+func setRetryWaitBarrier(fn func()) {
+	if fn == nil {
+		retryWaitBarrier.Store(nil)
+		return
+	}
+	retryWaitBarrier.Store(&fn)
+}
+
+func runRetryWaitBarrier() {
+	if fn := retryWaitBarrier.Load(); fn != nil {
+		(*fn)()
+	}
+}
 
 func sleepFor(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
@@ -292,9 +313,7 @@ func (l *Loop) maybeRetrySameEndpoint(ctx context.Context, sessionID string, run
 			describeRun(run), err, wait, attempt, maxSameEndpointRetries),
 		"recovered": true,
 	})
-	if retryWaitBarrier != nil {
-		retryWaitBarrier()
-	}
+	runRetryWaitBarrier()
 	if !sleepFor(ctx, wait) {
 		// Cancelled mid-backoff. Said in the transcript so the announced
 		// retry does not read as one that happened.

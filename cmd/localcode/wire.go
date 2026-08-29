@@ -241,6 +241,12 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// homework. See Loop.hiddenTools and agent.reviewerToolNames.
 	registry.Register(agent.VerdictTool{})
 
+	// The natural-language way into a debate: the model separates who
+	// reviews, how many rounds and the work, and localcode runs the loop.
+	// Registered after the task manager, which the debate needs to give a
+	// reviewer a session of its own.
+	registry.Register(agent.NewDebateTool(loop))
+
 	// The delegation tools. Registered unconditionally, and hidden per
 	// turn instead — see Loop.hiddenTools. They used to be
 	// registered only when the config had more than one agent, which was
@@ -394,6 +400,12 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker, store *se
 	registry.Register(tools.Bash{})
 	registry.Register(tools.Glob{})
 	registry.Register(tools.Grep{})
+	// Only when the project has said how it is checked. Registering it
+	// regardless would advertise a tool whose every call is an error, and
+	// the model would keep trying it.
+	if strings.TrimSpace(cfg.VerifyCommand) != "" {
+		registry.Register(tools.NewCheck(func() string { return cfg.VerifyCommand }))
+	}
 	return registry, nil
 }
 

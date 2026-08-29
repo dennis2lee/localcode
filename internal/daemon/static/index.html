@@ -143,6 +143,16 @@
     and in two fields there is nothing to guess.
   -->
   <button class="pill" id="schedule-btn" title="book a prompt to run later">&#9200; schedule</button>
+  <!--
+    Starting a debate without having to know the command. The three
+    things it needs are asked for as three things: who reviews, how many
+    rounds, and the work. The command line it will send is shown as it is
+    filled in, so the form teaches the command rather than replacing it.
+  -->
+  <!-- The variation selector is not decoration: without it the scales
+       render as a thin monochrome glyph beside the clock's colour emoji,
+       and the two buttons stop looking like the same kind of thing. -->
+  <button class="pill" id="debate-btn" title="have another agent review this one's work, round after round">&#9878;&#65039; debate</button>
   <button class="pill" id="permission-status-btn" title="click to view or change permission settings"></button>
   <button class="pill" id="settings-btn" title="settings">&#9881; settings</button>
 </div>
@@ -162,6 +172,30 @@
     <div class="close-row">
       <button id="schedule-cancel">Cancel</button>
       <button id="schedule-save">Schedule it</button>
+    </div>
+  </div>
+</div>
+
+<div id="debate-modal">
+  <div class="box">
+    <h3>Debate</h3>
+    <p class="note">This conversation's agent writes; the agents you pick read it and say what is wrong;
+      it answers them. That repeats until they all approve or the rounds run out. A reviewer can read
+      and run this project's check, and cannot write.</p>
+    <label class="field-label">Reviewers</label>
+    <div id="debate-reviewers"></div>
+    <label class="field-label" for="debate-rounds">Rounds</label>
+    <input type="number" id="debate-rounds" min="1" max="10" value="3">
+    <label class="field-label" for="debate-task">What to do</label>
+    <!-- The work only. The rest of the sentence people write — "then have
+         girl review it, ten times" — is the two fields above, and putting
+         it here too would give the author its own loop to run. -->
+    <textarea id="debate-task" rows="4" placeholder="write a script that sums 1..10"></textarea>
+    <p class="note" id="debate-preview"></p>
+    <p class="note" id="debate-note"></p>
+    <div class="close-row">
+      <button id="debate-cancel">Cancel</button>
+      <button id="debate-start">Start it</button>
     </div>
   </div>
 </div>

@@ -110,6 +110,22 @@ type Config struct {
 	// internal/update/mirror.go.
 	UpdateURL string `json:"update_url,omitempty"`
 
+	// VerifyCommand is the one command this project can be checked with:
+	// its tests, its build, its linter. It backs the `check` tool, which
+	// runs exactly this and takes no arguments.
+	//
+	// Declared here rather than composed by a model, which is the whole
+	// of why it exists. A debate reviewer is read-only and must stay that
+	// way — a reviewer with a shell is a second author — but a reviewer
+	// that cannot find out whether the code runs is judging by reading
+	// alone, which is the weaker half of a review. One fixed command the
+	// person wrote settles both: the model chooses whether to run it and
+	// never what it is.
+	//
+	// Empty means the tool is not registered at all, rather than
+	// registered and always failing.
+	VerifyCommand string `json:"verify_command,omitempty"`
+
 	// The other three switches, and what all four are: the daemon's
 	// defaults. A session answers these questions for itself (see
 	// session.Permissions); these are what a session that has not been

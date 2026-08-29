@@ -78,7 +78,8 @@
         "read_file",
         "glob",
         "grep",
-        "bash"
+        "bash",
+        "check"
       ]
     }
   },
@@ -104,6 +105,8 @@
   "smart_agent": false,
   "//update_url": "Where the update button looks instead of GitHub: one https address at which the current installers are published side by side, named the way localcode names them (localcode-1.2.3-darwin-universal.tar.gz, localcode-1.2.3-windows-amd64.msi, ...). The version is read out of the filenames, since on a directory of files that is the only place it is written down. For a machine that cannot reach github.com, or an organisation that would rather its own build were the one installed. https only, because the file is run as an installer. Unset means GitHub. See docs/USAGE.md.",
   "update_url": "",
+  "//verify_command": "The one command this project is checked with: its tests, its build, its linter. It backs the `check` tool, which runs exactly this in the session's workspace and takes no arguments at all \u2014 a model chooses whether to run the check, never what the check is. That is what lets a debate reviewer, which can read but never write, still find out whether the code runs: a reviewer with `bash` would be a second author, and a reviewer that cannot run anything judges by reading alone. Unset means the tool is not registered rather than registered and always failing. See docs/USAGE.md.",
+  "verify_command": "",
   "//skip_permissions": "The daemon default for the first of four permission switches, and what a conversation that has not answered for itself follows. All four are per session: /permission-skip-all in a conversation, or the Permissions window, sets that conversation and saves it with the session. This one allows every prompt, the workspace boundary included.",
   "skip_permissions": false,
   "//skip_tool_permissions": "The useful middle: every tool prompt allowed, and a path that leaves the session's workspace still asked about. /permission-skip-tools.",

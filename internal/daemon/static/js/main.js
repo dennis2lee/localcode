@@ -6,6 +6,7 @@ import {
   delegateMatchAddBtn, delegateMatchInput,
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
   scheduleBtn, scheduleCancelBtn, scheduleSaveBtn, scheduleWhenInput, schedulePromptInput,
+  debateBtn, debateCancelBtn, debateStartBtn, debateRoundsInput, debateTaskInput,
   workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, stopBtn,
   workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskDeleteBtn, taskCloseBtn,
   windowBarEl, windowMinimizeBtn, windowMaximizeBtn, windowCloseBtn, windowEdgesEl, windowTitleEl, windowEdges,
@@ -24,6 +25,9 @@ import { loadSessions, selectSession, createNewSession, deleteAllSessions } from
 import {
   openScheduleDialog, closeScheduleDialog, saveSchedule, previewWhen,
 } from './schedules.js';
+import {
+  openDebateDialog, closeDebateDialog, startDebate, renderDebatePreview,
+} from './debate.js';
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
   openPermissionSettings, closePermissionSettings, addPermissionRule,
@@ -173,6 +177,11 @@ scheduleWhenInput.addEventListener('input', previewWhen);
 scheduleWhenInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); schedulePromptInput.focus(); }
 });
+debateBtn.addEventListener('click', openDebateDialog);
+debateCancelBtn.addEventListener('click', closeDebateDialog);
+debateStartBtn.addEventListener('click', startDebate);
+debateRoundsInput.addEventListener('input', renderDebatePreview);
+debateTaskInput.addEventListener('input', renderDebatePreview);
 permissionStatusBtn.addEventListener('click', openPermissionSettings);
 permissionSettingsCloseBtn.addEventListener('click', closePermissionSettings);
 // The four switches are per conversation, wired in one place because

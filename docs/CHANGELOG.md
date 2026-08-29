@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.69.0
+
+Four things v0.68.0 shipped a debate without, listed in its own "remaining work" entry the day it went out.
+
+* **A reviewer can run your check.** Read-only meant a reviewer could not find out whether the code runs, which is the strongest thing anybody can say about a change, and it left the review the weaker half of a review. `verify_command` in config.json is one line — your tests, your build, your linter — and it backs a `check` tool that runs exactly that, in the session's workspace, **with no arguments at all**:
+
+  ```json
+  "verify_command": "go test ./... && go vet ./..."
+  ```
+
+  The model decides whether to run the check, never what the check is. That is what makes it safe to give an agent that must not write, where `bash` never could be: a shell command is not a path and cannot be judged by looking at it. A project that sets nothing does not register the tool, rather than advertising one whose every call is an error. A failing check is reported as an answer, not as a tool error — the one outcome the caller most needs to read was being painted as though the reviewer itself were broken.
+
+* **The reviewer is shown what changed, not what localcode watched.** The brief used to list the files it had seen `write_file` and `edit` called on, which is a list of tool calls wearing the costume of a diff: a file the author moved, generated or rewrote through the shell is missing from it, and a file written back unchanged is in it. Where there is a git repository the brief now carries `git diff HEAD` — the work as it now stands, which is the more useful answer in round four anyway — plus the names of files not yet added to git, capped so a lockfile cannot spend the reviewer's whole context. Outside a repository it falls back to the old list and **says that is what it is**.
+
+* **A panel, up to three.** `/debate girl,tom 5 <task>`. They run at the same time, in separate sessions, and never see each other's findings: three models agreeing is worth something only if they arrived there separately, and a panel that reads the first opinion is one opinion with witnesses. Each is told the others exist and that it is reviewing the whole thing, so nobody covers half of it assuming somebody else has the rest. **All of them have to approve** — one holdout keeps the debate going, because taking the approval would be picking the answer that ends the work.
+
+* **Two more ways in, so all three doors exist.**
+
+  * **Say it.** "1부터 10까지 더하는 프로그램을 만들고 @girl이 검토하게 해라, 10번" now books a debate instead of being read as one long instruction. The model separates who reviews, how many rounds and the work; localcode runs the loop; the confirmation names the reviewers, the rounds, the model turns it will cost, and the task **as localcode read it** — which is where a protocol sentence that leaked into the task becomes visible, before the turns are spent.
+  * **The ⚖️ button**, under the prompt box, asks for the same three things as three fields and shows the command line it is about to send as you fill it in. It sends that line through the prompt box rather than an endpoint of its own: one code path, and every guard the box already has.
+
+  A booked debate cannot start inside the turn that booked it — that turn belongs to the session the debate has to drive — so it starts the moment that turn ends, and the tool says so rather than letting the model do the work it has just asked to have reviewed. Nothing inside a debate can open another: the tool is hidden from those turns as well as refused.
+
+* **Fixes found by running it rather than by testing it.** The closing note said "girl and tom has not approved". A near miss in the other direction is worth recording too: the form appeared to be offering an agent as its own reviewer, and it was not — the header dropdown shows its first option when nothing has selected one, so the page was right and the reading was wrong. Filtering by the dropdown would have hidden a perfectly good reviewer.
+
+* **Two repo guards earned their keep.** The new `git` call was starting a child process without `childproc.Hide`, which on the desktop build is a console window blinking over the app twice a round; and `verify_command` was not merged, so a project's own check command would have been silently dropped whenever a global config also existed. A third find was a data race that predates this work: a test hook read by production code on a background task's goroutine while another test set it. It is an atomic now, like the backoff beside it.
+
 ## v0.68.0
 
 * **Two agents on one piece of work.** `/debate <reviewer> [rounds] <what to do>`: this conversation's agent writes it, another agent on another model reads it and says what is wrong, the first one answers, and that repeats until the reviewer approves or the rounds run out.

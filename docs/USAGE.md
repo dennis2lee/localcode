@@ -1017,7 +1017,7 @@ These are typed into the message box but never reach the event log, so replaying
 | `/write-outside` | Writing outside the workspace, the same three arguments. |
 | `/schedule` | Books a prompt for later: `/schedule <when> <what to do>`. Runs only while localcode is running. See [Scheduled tasks](#scheduled-tasks). |
 | `/show-scheduled-task` | Lists the prompts booked for later in this conversation. |
-| `/debate` | `/debate <reviewer> [rounds] <what to do>` — this conversation's agent writes, another agent reviews, round after round. See [Debate](#debate). |
+| `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <what to do>` — this conversation's agent writes, the others review, round after round. Also started by asking for it in words, or with the ⚖️ button. See [Debate](#debate). |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions
@@ -1611,39 +1611,72 @@ How much this saves depends on how often you ask lookup questions. If you mostly
 
 ### Debate
 
-Two agents on one piece of work: this conversation's agent writes it, another agent reads it and says what is wrong, the first one answers, and that repeats. One command starts it.
+Two agents on one piece of work, or four: this conversation's agent writes it, the reviewers read it and say what is wrong, it answers them, and that repeats.
+
+**Just say so.** An ordinary message that asks for review-and-iterate starts one:
+
+```
+1부터 10까지 더하는 파이선 프로그램을 만들어라. 완료되면 @girl이 검토하고, 그 결과를 반영해라. 10번 반복해라.
+write a retry wrapper for the upload call, then have the review agent check it and fix what it finds, 5 rounds
+```
+
+The model reads the sentence and separates the three things in it — who reviews, how many rounds, and the work. **localcode runs the loop**, and asks first: the confirmation names the reviewers, the rounds, the model turns it will cost, and the task as localcode read it. That echo is the point — a protocol sentence that leaked into the task is visible before the turns are spent.
+
+**The ⚖️ button** (under the prompt box) asks for the same three things as three fields, and shows the command it is about to send as you fill it in.
+
+**Or type it.** `/debate <reviewer>[,<reviewer>] [rounds] <what to do>`:
 
 ```
 /debate girl 10 1부터 10까지 더하는 파이선 프로그램을 만들어라
 /debate review write a retry wrapper around the upload call
+/debate girl,tom 5 rewrite the parser
 ```
 
-`/debate <reviewer> [rounds] <what to do>`. The reviewer is any configured agent other than the one already running; the rounds default to **3** and cannot exceed **10**. Rounds are positional and optional, and a count is a token that is *only* digits — `/debate girl 10페이지 문서를 써라` is three rounds writing a ten-page document, not ten rounds writing "페이지 문서를 써라".
+The reviewers are any configured agents other than the one already running; the rounds default to **3** and cannot exceed **10**. Rounds are positional and optional, and a count is a token that is *only* digits — `/debate girl 10페이지 문서를 써라` is three rounds writing a ten-page document, not ten rounds writing "페이지 문서를 써라".
 
-**The protocol is not in the prompt.** Everything except the work itself lives in the command: who reviews, how many times, when to stop. That is not brevity, it is correctness — a prompt that still says "review it ten times" gives the author a loop of its own to run inside the loop already running it, and a model told to repeat ten times inside one turn stops at three and reports that it is done. localcode counts the rounds; the models do the work.
+**The protocol is not in the prompt.** Everything except the work itself lives in the command or the tool arguments: who reviews, how many times, when to stop. That is not brevity, it is correctness — a prompt that still says "review it ten times" gives the author a loop of its own to run inside the loop already running it, and a model told to repeat ten times inside one turn stops at three and reports that it is done. localcode counts the rounds; the models do the work.
 
-**A round is two model turns**, plus whatever tools each of them runs. Ten rounds is twenty turns, which is why ten is something you ask for by name and three is what you get by default.
+**A round is one author turn plus one turn per reviewer**, plus whatever tools each of them runs. Ten rounds with two reviewers is thirty turns, which is why the numbers are shown before it starts.
 
-**Who runs where.** The author runs in this conversation, with its history and its cached prefix intact, so its work appears exactly as it always does. The reviewer runs in a sub-session of its own — switching this session's model mid-conversation would invalidate its tools, its system prompt and its cache at once — and **keeps that session for every round**, which is what lets it say "the second thing I raised is still not fixed". Its row appears in the right panel; click it to read the whole review session, tool calls included.
+**Who runs where.** The author runs in this conversation, with its history and its cached prefix intact, so its work appears exactly as it always does. Each reviewer runs in a sub-session of its own — switching this session's model mid-conversation would invalidate its tools, its system prompt and its cache at once — and **keeps that session for every round**, which is what lets it say "the second thing I raised is still not fixed". Its row appears in the right panel; click it to read the whole review session, tool calls included.
 
-**The reviewer can read but not write.** Its allowlist for the debate is `read_file`, `glob`, `grep` and the verdict, intersected with whatever its own config already permits — no `write_file`, no `edit`, and no `bash`, because a shell command is not a path and a reviewer with a shell is a second author. The cost is real and worth knowing: a reviewer cannot run the tests. It judges by reading, and running them is the author's job.
+**A panel reviews independently.** Reviewers run at the same time, in separate sessions, and never see each other's findings. Three models agreeing is worth something only if they arrived there separately, and **all of them have to approve** — one holdout keeps the debate going, because taking the approval would be picking the answer that ends the work.
 
-**What the reviewer is given.** The task, the author's own account of what it did, the files localcode saw written this round, and the workspace to read for itself. Not this conversation's transcript: a history full of another model's tool calls is rejected outright by some providers, and it would be re-sent every round. The account and the file list are deliberately separate — one is what the author says, the other is what happened.
+**The reviewer can read, and can run your check, and cannot write.**
+
+| | |
+|---|---|
+| Reading | `read_file`, `glob`, `grep` |
+| Checking | `check` — runs `verify_command` from config.json, exactly, with no arguments |
+| Reporting | `Verdict` |
+| Never | `write_file`, `edit`, `bash` |
+
+`bash` is the one worth explaining: a shell command is not a path and cannot be judged by looking at it, so a reviewer with a shell is a second author editing the same files from the other side. `check` is the narrow way back — one line you wrote in your own config, fixed before any model saw it:
+
+```json
+"verify_command": "go test ./... && go vet ./..."
+```
+
+The model chooses whether to run the check, never what the check is. Unset, the tool is not registered at all rather than registered and always failing. An agent with its own `tools` list only gets what that list also permits, so add `"check"` to it.
+
+**What the reviewer is given.** The task, the author's own account of what it did, what actually changed, and the workspace to read for itself. Not this conversation's transcript: a history full of another model's tool calls is rejected outright by some providers, and it would be re-sent every round. The account and the change report are deliberately separate — one is what the author says, the other is what happened.
+
+The change report is a real diff where there is a repository to ask: `git diff HEAD`, plus the names of files not yet added to git. Outside a repository it falls back to the files localcode watched `write_file` and `edit` touch, **labelled as what it is** — a file the shell moved or generated is not in that list, and a reviewer that took it for a diff would review the wrong set without knowing.
 
 **How it ends**, and it always says which:
 
 | Reason | What happened |
 |---|---|
-| `approved` | The reviewer approved. |
+| `approved` | Every reviewer approved. |
 | `rounds` | The budget ran out with no approval. The work stands; read it before trusting it. |
 | `stalled` | Two rounds running in which the author called no tool at all. That is a standoff, and the rounds left would only restate it. |
 | `stopped` | You pressed Stop. What was done is kept. |
 
-The approval is a **tool call**, not a sentence: the reviewer sets a boolean, because "did it approve" cannot be read reliably out of prose in two languages. A model that will not call tools can end its reply with a line that is exactly `APPROVED`. Anything else — silence, an unreadable call, a reply with the word inside a sentence — is *not approved*, because ending a debate a round early on a misread stops the work being looked at while the transcript says somebody signed it off.
+The approval is a **tool call**, not a sentence: the reviewer sets a boolean, because "did it approve" cannot be read reliably out of prose in two languages. A model that will not call tools can end its reply with a line that is exactly `APPROVED`. Anything else — silence, an unreadable call, a reply with the word inside a sentence — is *not approved*, because ending a debate a round early on a misread stops the work being looked at while the transcript says somebody signed it off. The verdict tool is hidden from every turn that is not a review, so no model is ever in a position to mark its own homework.
 
-**Two models agreeing is not evidence that the code is right.** It is two readings instead of one. The tests are the evidence, and they are still yours to run.
+**Models agreeing is not evidence that the code is right.** It is two or three readings instead of one. The tests are the evidence, which is what `verify_command` is for.
 
-A debate can only be started from a conversation somebody is having: not from a sub-agent, and not from a scheduled run. Nobody is watching those, and a tree of debates has no ceiling on it.
+A debate can only be started from a conversation somebody is having: not from a sub-agent, not from a scheduled run, and not from inside a debate. Nobody is watching those, and a tree of debates has no ceiling on it.
 
 ### Scheduled tasks
 

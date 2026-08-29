@@ -115,3 +115,105 @@ test('the message localcode sends on the user\'s behalf is not painted or recall
     'an automatic message went into Up/Down recall',
   );
 });
+
+// The form. Three things asked for as three things, the command shown as
+// it is filled in, and the command is what gets sent — one code path,
+// with every guard the prompt box already has.
+
+// The current agent comes from the daemon's agent.switched event, which
+// is how the page learns it after a switch; setting it that way keeps
+// the test on the same path the app uses.
+function useAgent(app, name) {
+  app.sse.emit({ seq: 1, type: 'agent.switched', data: { agent: name } });
+}
+
+
+test('the reviewer list offers every agent except the one already running', async () => {
+  const app = await load();
+  useAgent(app, 'boy');
+  app.state.agents = [
+    { name: 'boy', model: 'author-model' },
+    { name: 'girl', model: 'review-model' },
+    { name: 'tom', model: 'third-model' },
+  ];
+  await app.el('debate-btn').click();
+
+  const names = Array.from(app.el('debate-reviewers').querySelectorAll('.name')).map((e) => e.textContent);
+  assert.deepEqual(names.sort(), ['girl', 'tom'], 'the running agent must not be offered as its own reviewer');
+  const models = Array.from(app.el('debate-reviewers').querySelectorAll('.model')).map((e) => e.textContent);
+  assert.ok(models.includes('review-model'), 'the model is why one reviewer is picked over another: ' + models);
+});
+
+test('the preview shows the command and what it will cost', async () => {
+  const app = await load();
+  useAgent(app, 'boy');
+  app.state.agents = [{ name: 'boy' }, { name: 'girl' }, { name: 'tom' }];
+  await app.el('debate-btn').click();
+
+  const boxes = app.el('debate-reviewers').querySelectorAll('input');
+  boxes[0].checked = true;
+  boxes[0].fire('change');
+  boxes[1].checked = true;
+  boxes[1].fire('change');
+  app.el('debate-rounds').value = '4';
+  app.el('debate-task').value = 'write a sum function';
+  app.el('debate-task').fire('input');
+
+  const preview = app.el('debate-preview').textContent;
+  assert.ok(preview.includes('/debate girl,tom 4 write a sum function'), preview);
+  // rounds x (1 + reviewers): the number worth seeing before agreeing.
+  assert.ok(preview.includes('12 model turns'), preview);
+});
+
+test('starting sends the command through the prompt box', async () => {
+  const app = await load();
+  useAgent(app, 'boy');
+  app.state.agents = [{ name: 'boy' }, { name: 'girl' }];
+  await app.el('debate-btn').click();
+
+  const box = app.el('debate-reviewers').querySelectorAll('input')[0];
+  box.checked = true;
+  box.fire('change');
+  app.el('debate-task').value = 'write a sum function';
+  await app.el('debate-start').click();
+  await app.settle();
+
+  const sent = app.callsTo('POST', /\/messages$/);
+  assert.equal(sent.length, 1, 'expected one message, got ' + JSON.stringify(sent));
+  const body = typeof sent[0].body === 'string' ? JSON.parse(sent[0].body) : sent[0].body;
+  assert.equal(body.text, '/debate girl 3 write a sum function');
+});
+
+test('it refuses to start without a reviewer or without a task', async () => {
+  const app = await load();
+  useAgent(app, 'boy');
+  app.state.agents = [{ name: 'boy' }, { name: 'girl' }];
+  await app.el('debate-btn').click();
+
+  app.el('debate-task').value = 'write a sum function';
+  await app.el('debate-start').click();
+  assert.ok(app.el('debate-note').textContent.includes('reviewer'), app.el('debate-note').textContent);
+
+  const box = app.el('debate-reviewers').querySelectorAll('input')[0];
+  box.checked = true;
+  box.fire('change');
+  app.el('debate-task').value = '   ';
+  await app.el('debate-start').click();
+  assert.ok(app.el('debate-note').textContent.includes('what to do'), app.el('debate-note').textContent);
+
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 0, 'nothing should have been sent');
+});
+
+// Each reviewer is a model turn in every round, so the fourth box does
+// not tick rather than the form being refused once it is filled in.
+test('a fourth reviewer will not tick', async () => {
+  const app = await load();
+  useAgent(app, 'boy');
+  app.state.agents = [{ name: 'boy' }, { name: 'a' }, { name: 'b' }, { name: 'c' }, { name: 'd' }];
+  await app.el('debate-btn').click();
+
+  const boxes = Array.from(app.el('debate-reviewers').querySelectorAll('input'));
+  for (const b of boxes) { b.checked = true; b.fire('change'); }
+  assert.equal(boxes.filter((b) => b.checked).length, 3, 'a fourth reviewer was accepted');
+  assert.ok(app.el('debate-note').textContent.includes('At most 3'), app.el('debate-note').textContent);
+});

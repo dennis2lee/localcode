@@ -170,6 +170,12 @@ func (c *Config) merge(other *Config) {
 	if other.UpdateURL != "" {
 		c.UpdateURL = other.UpdateURL
 	}
+	// The project's own, and it has to be: how a project is checked is a
+	// fact about the project, so a repository's config.json naming its
+	// test command must win over whatever is in the home directory.
+	if other.VerifyCommand != "" {
+		c.VerifyCommand = other.VerifyCommand
+	}
 	if other.SkipToolPermissions != nil {
 		c.SkipToolPermissions = other.SkipToolPermissions
 	}

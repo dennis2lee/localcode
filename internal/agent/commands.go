@@ -66,7 +66,17 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		return l.delegatePrompt(ctx, sessionID, target, text)
 	}
 
-	return l.sendWithModelText(ctx, sessionID, agentName, text, text, "", "")
+	err := l.sendWithModelText(ctx, sessionID, agentName, text, text, "", "")
+
+	// A debate the model asked for during that turn starts now, not
+	// during it: it drives turns in this same session, and the tool call
+	// that booked it was inside one of them. Taken unconditionally, error
+	// or not, because a booking left behind would fire on some later and
+	// unrelated message. See DebateTool.Execute.
+	if d, booked := l.takePendingDebate(sessionID); booked && err == nil {
+		return l.runDebate(ctx, d)
+	}
+	return err
 }
 
 // commandRoutes returns this turn's built-in/custom-command/skill

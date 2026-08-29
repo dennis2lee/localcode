@@ -193,6 +193,12 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 //     approved, which is the one thing a review must not be.
 func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	hidden := map[string]bool{verdictToolName: true}
+	// Not from inside a debate. The tool would refuse anyway, and an
+	// offered tool that always refuses is a call the model spends a turn
+	// discovering it cannot make.
+	if inDebate(ctx) {
+		hidden[debateToolName] = true
+	}
 	if !l.smartOn(ctx) {
 		hidden[smart.ToolSpawn] = true
 		hidden[smart.ToolCollect] = true

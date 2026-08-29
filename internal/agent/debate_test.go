@@ -29,20 +29,31 @@ type debateScript struct {
 
 	// approveAt is the round the reviewer approves on. 0 never approves.
 	approveAt int
+	// holdout, when set, is a reviewer model that never approves — for a
+	// panel where one member disagrees.
+	holdout string
 	// authorWorks makes the author call a tool before answering, which is
 	// what the stall check counts.
 	authorWorks bool
+	// bookViaTool has the author's first turn call the Debate tool
+	// instead of doing the work, which is the natural-language entrance.
+	bookViaTool bool
+	booked      bool
 
 	authorPrompts   []string
+	authorTools     []map[string]bool
 	reviewPrompts   []string
 	reviewerTools   []map[string]bool
 	reviewerSystems []string
-	rounds          int
+	// rounds counts per reviewer model, since a panel's members open
+	// their rounds independently.
+	rounds map[string]int
 }
 
 const (
 	authorModel = "author-model"
 	reviewModel = "review-model"
+	thirdModel  = "third-model"
 )
 
 func (s *debateScript) server(t *testing.T) *httptest.Server {
@@ -89,34 +100,46 @@ func (s *debateScript) server(t *testing.T) *httptest.Server {
 			}
 		}
 
+		author := body.Model == authorModel
+
 		s.mu.Lock()
-		round := s.rounds
-		switch body.Model {
-		case authorModel:
+		if s.rounds == nil {
+			s.rounds = map[string]int{}
+		}
+		round := s.rounds[body.Model]
+		book := false
+		if author {
 			if !hasToolResult {
 				s.authorPrompts = append(s.authorPrompts, lastUser)
+				if s.bookViaTool && !s.booked {
+					s.booked, book = true, true
+				}
 			}
-		case reviewModel:
+			s.authorTools = append(s.authorTools, toolset)
+		} else {
 			if !hasToolResult {
-				s.rounds++
-				round = s.rounds
+				s.rounds[body.Model]++
+				round = s.rounds[body.Model]
 				s.reviewPrompts = append(s.reviewPrompts, lastUser)
 			}
 			s.reviewerTools = append(s.reviewerTools, toolset)
 			s.reviewerSystems = append(s.reviewerSystems, system)
 		}
-		approve := s.approveAt != 0 && round >= s.approveAt
+		approve := s.approveAt != 0 && round >= s.approveAt && body.Model != s.holdout
 		works := s.authorWorks
 		s.mu.Unlock()
 
 		var chunks []string
 		switch {
-		case body.Model == authorModel && works && !hasToolResult:
+		case book:
+			chunks = toolCallChunks("call_debate", debateToolName,
+				`{\"reviewers\":[\"girl\"],\"rounds\":2,\"task\":\"write a sum function\"}`)
+		case author && works && !hasToolResult:
 			chunks = toolCallChunks("call_glob", "glob", `{\"pattern\":\"*.go\"}`)
-		case body.Model == authorModel:
+		case author:
 			chunks = textChunks("the author's answer")
-		case body.Model == reviewModel && !hasToolResult:
-			args := fmt.Sprintf(`{\"approved\":%t,\"findings\":\"round %d finding\"}`, approve, round)
+		case !hasToolResult:
+			args := fmt.Sprintf(`{\"approved\":%t,\"findings\":\"%s round %d finding\"}`, approve, body.Model, round)
 			chunks = toolCallChunks("call_verdict", verdictToolName, args)
 		default:
 			chunks = textChunks(fmt.Sprintf("review of round %d", round))
@@ -155,7 +178,10 @@ func newDebateLoop(t *testing.T, modelURL string) *Loop {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	registry := tools.NewRegistry(nil)
+	// A permission handler that says yes: booking a debate asks, and a
+	// registry with no handler answers every ask with "no handler
+	// configured", which would make this suite test the absence of one.
+	registry := tools.NewRegistry(func(context.Context, tools.Ask) (bool, error) { return true, nil })
 	registry.Register(tools.ReadFile{})
 	registry.Register(tools.WriteFile{})
 	registry.Register(tools.Edit{})
@@ -171,10 +197,12 @@ func newDebateLoop(t *testing.T, modelURL string) *Loop {
 		Profiles: map[string]config.Profile{
 			"strong": {Provider: "local", Model: authorModel},
 			"cheap":  {Provider: "local", Model: reviewModel},
+			"third":  {Provider: "local", Model: thirdModel},
 		},
 		Agents: map[string]config.AgentConfig{
 			"boy":  {Profile: "strong", Description: "writes code"},
 			"girl": {Profile: "cheap", Description: "reviews code"},
+			"tom":  {Profile: "third", Description: "reviews code too"},
 		},
 		DefaultProfile: "strong",
 	}
@@ -268,7 +296,7 @@ func TestADebateEndsWhenTheReviewerApproves(t *testing.T) {
 	if strings.Contains(prompts[1], "5 rounds") || strings.Contains(prompts[1], "repeat") {
 		t.Errorf("the author's second prompt carries the protocol: %q", prompts[1])
 	}
-	if !strings.Contains(prompts[1], "round 1 finding") {
+	if !strings.Contains(prompts[1], "round 1 finding") || !strings.Contains(prompts[1], "girl") {
 		t.Errorf("the author's second prompt does not carry the review: %q", prompts[1])
 	}
 }
@@ -437,11 +465,11 @@ func TestAReviewArrivesAsAnotherAgentsWordsNotTheUsers(t *testing.T) {
 		t.Errorf("span id = %q, want debate.review.girl", spans[0].ID)
 	}
 	model := dataString(second, "model_text")
-	if got := model[spans[0].From:spans[0].To]; got != "round 1 finding" {
+	if got := model[spans[0].From:spans[0].To]; got != reviewModel+" round 1 finding" {
 		t.Errorf("the span covers %q, want exactly the reviewer's words", got)
 	}
 
-	entry, ok := entryForSource("debate.review.girl", "round 1 finding", false)
+	entry, ok := entryForSource("debate.review.girl", reviewModel+" round 1 finding", false)
 	if !ok {
 		t.Fatal("a review span has no prompt-surface entry, so no manifest can describe it")
 	}
@@ -507,41 +535,46 @@ func TestTheReviewerKeepsOneSessionAcrossRounds(t *testing.T) {
 // number.
 func TestParseDebateCommand(t *testing.T) {
 	cases := []struct {
-		name     string
-		arg      string
-		reviewer string
-		rounds   int
-		task     string
-		wantErr  bool
+		name      string
+		arg       string
+		reviewers []string
+		rounds    int
+		task      string
+		wantErr   bool
 	}{
 		{name: "reviewer, rounds and task", arg: "girl 10 write a sum function",
-			reviewer: "girl", rounds: 10, task: "write a sum function"},
+			reviewers: []string{"girl"}, rounds: 10, task: "write a sum function"},
 		{name: "no rounds falls back to the default", arg: "girl write a sum function",
-			reviewer: "girl", rounds: debateDefaultRounds, task: "write a sum function"},
+			reviewers: []string{"girl"}, rounds: debateDefaultRounds, task: "write a sum function"},
 		{name: "a task that starts with a number is a task", arg: "girl 10페이지 문서를 써라",
-			reviewer: "girl", rounds: debateDefaultRounds, task: "10페이지 문서를 써라"},
+			reviewers: []string{"girl"}, rounds: debateDefaultRounds, task: "10페이지 문서를 써라"},
 		{name: "a number glued to a word is not a count", arg: "girl 3rd draft, tidy it up",
-			reviewer: "girl", rounds: debateDefaultRounds, task: "3rd draft, tidy it up"},
+			reviewers: []string{"girl"}, rounds: debateDefaultRounds, task: "3rd draft, tidy it up"},
+		{name: "a panel", arg: "girl,tom 4 write a sum function",
+			reviewers: []string{"girl", "tom"}, rounds: 4, task: "write a sum function"},
+		{name: "a panel with spaces after the commas is still one token", arg: "girl,tom,ann do it",
+			reviewers: []string{"girl", "tom", "ann"}, rounds: debateDefaultRounds, task: "do it"},
 		{name: "no task", arg: "girl 5", wantErr: true},
 		{name: "reviewer only", arg: "girl", wantErr: true},
 		{name: "rounds above the ceiling", arg: "girl 99 do something", wantErr: true},
 		{name: "zero rounds", arg: "girl 0 do something", wantErr: true},
+		{name: "too many reviewers", arg: "a,b,c,d 3 do something", wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reviewer, rounds, task, err := parseDebateCommand(tc.arg)
+			reviewers, rounds, task, err := parseDebateCommand(tc.arg)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("parsed %q as %q/%d/%q, want an error", tc.arg, reviewer, rounds, task)
+					t.Fatalf("parsed %q as %v/%d/%q, want an error", tc.arg, reviewers, rounds, task)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("parse %q: %v", tc.arg, err)
 			}
-			if reviewer != tc.reviewer || rounds != tc.rounds || task != tc.task {
-				t.Errorf("parsed %q as %q/%d/%q, want %q/%d/%q",
-					tc.arg, reviewer, rounds, task, tc.reviewer, tc.rounds, tc.task)
+			if strings.Join(reviewers, ",") != strings.Join(tc.reviewers, ",") || rounds != tc.rounds || task != tc.task {
+				t.Errorf("parsed %q as %v/%d/%q, want %v/%d/%q",
+					tc.arg, reviewers, rounds, task, tc.reviewers, tc.rounds, tc.task)
 			}
 		})
 	}
@@ -726,4 +759,192 @@ func debateEventsQuiet(loop *Loop, sid string, typ events.Type) []events.Event {
 		}
 	}
 	return out
+}
+
+// TestAPanelReviewsIndependentlyAndAllMustApprove is what a second and
+// third reviewer are for: separate sessions, no sight of each other, and
+// one holdout is enough to keep the debate going.
+func TestAPanelReviewsIndependentlyAndAllMustApprove(t *testing.T) {
+	script := &debateScript{approveAt: 1, holdout: thirdModel, authorWorks: true}
+	srv := script.server(t)
+	defer srv.Close()
+
+	loop := newDebateLoop(t, srv.URL)
+	sid := startDebateSession(t, loop)
+
+	if err := loop.SendMessage(context.Background(), sid, "boy", "/debate girl,tom 2 write a sum function"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	reviews := debateEvents(t, loop, sid, events.TypeDebateReview)
+	if len(reviews) != 4 {
+		t.Fatalf("got %d reviews, want 4 (two reviewers, two rounds)", len(reviews))
+	}
+	// girl approves from round 1 and tom never does, so the debate must
+	// not end early: taking the approval would be picking the answer that
+	// stops the work.
+	ended := debateEvents(t, loop, sid, events.TypeDebateEnded)
+	if reason, _ := ended[0].Data["reason"].(string); reason != "rounds" {
+		t.Errorf("ended reason = %q, want \"rounds\" — one reviewer never approved", reason)
+	}
+	if note, _ := ended[0].Data["note"].(string); !strings.Contains(note, "girl and tom have not approved") {
+		t.Errorf("closing note = %q — two reviewers take a plural verb", note)
+	}
+
+	byReviewer := map[string]string{}
+	for _, ev := range reviews {
+		byReviewer[dataString(ev.Data, "reviewer")] = dataString(ev.Data, "session")
+	}
+	if len(byReviewer) != 2 {
+		t.Fatalf("reviews came from %v, want girl and tom", byReviewer)
+	}
+	if byReviewer["girl"] == byReviewer["tom"] {
+		t.Error("both reviewers ran in the same session, so each could read the other's findings")
+	}
+	if spawned := debateEvents(t, loop, sid, events.TypeTaskSpawned); len(spawned) != 2 {
+		t.Errorf("got %d task.spawned events, want one per reviewer", len(spawned))
+	}
+
+	// Each is told the others exist and that it cannot see them, so
+	// nobody reviews half of it assuming somebody else has the rest.
+	script.mu.Lock()
+	prompts := append([]string(nil), script.reviewPrompts...)
+	script.mu.Unlock()
+	if !strings.Contains(prompts[0], "independently") || !strings.Contains(prompts[0], "cannot see") {
+		t.Errorf("the opening brief does not say the reviews are independent: %q", prompts[0])
+	}
+}
+
+// TestTheAuthorIsGivenEveryReviewWithItsAuthorOnIt: two reviewers means
+// two spans, each naming who wrote it. The framing between them is
+// localcode's and must not be inside either.
+func TestTheAuthorIsGivenEveryReviewWithItsAuthorOnIt(t *testing.T) {
+	script := &debateScript{holdout: thirdModel, authorWorks: true}
+	srv := script.server(t)
+	defer srv.Close()
+
+	loop := newDebateLoop(t, srv.URL)
+	sid := startDebateSession(t, loop)
+
+	if err := loop.SendMessage(context.Background(), sid, "boy", "/debate girl,tom 2 write a sum function"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	msgs := debateEvents(t, loop, sid, events.TypeUserMessage)
+	if len(msgs) != 2 {
+		t.Fatalf("got %d user messages, want 2", len(msgs))
+	}
+	spans, ok := msgs[1].Data["sources"].([]provider.BlockSource)
+	if !ok || len(spans) != 2 {
+		t.Fatalf("round-2 sources = %#v, want one span per reviewer", msgs[1].Data["sources"])
+	}
+	model := dataString(msgs[1].Data, "model_text")
+	seen := map[string]bool{}
+	for _, s := range spans {
+		seen[s.ID] = true
+		body := model[s.From:s.To]
+		if !strings.Contains(body, "finding") {
+			t.Errorf("span %s covers %q, want that reviewer's words", s.ID, body)
+		}
+		if strings.Contains(body, "Fix what you agree with") {
+			t.Errorf("span %s swallowed localcode's own framing: %q", s.ID, body)
+		}
+	}
+	if !seen["debate.review.girl"] || !seen["debate.review.tom"] {
+		t.Errorf("spans = %v, want one for each reviewer", seen)
+	}
+}
+
+// TestADebateCanBeStartedBySayingSo is the natural-language entrance: the
+// model separates the reviewer, the rounds and the work, and localcode
+// runs the loop after the turn that asked for it ends.
+func TestADebateCanBeStartedBySayingSo(t *testing.T) {
+	script := &debateScript{approveAt: 2, authorWorks: true, bookViaTool: true}
+	srv := script.server(t)
+	defer srv.Close()
+
+	loop := newDebateLoop(t, srv.URL)
+	registerDebateTool(t, loop)
+	sid := startDebateSession(t, loop)
+
+	err := loop.SendMessage(context.Background(), sid,
+		"boy", "1부터 10까지 더하는 프로그램을 만들고 @girl이 두 번 검토하게 해라")
+	if err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	started := debateEvents(t, loop, sid, events.TypeDebateStarted)
+	if len(started) != 1 {
+		t.Fatalf("got %d debate.started events, want 1", len(started))
+	}
+	if got := dataString(started[0].Data, "task"); got != "write a sum function" {
+		t.Errorf("task = %q, want the work the model separated out", got)
+	}
+	if rounds := started[0].Data["rounds"]; rounds != 2 {
+		t.Errorf("rounds = %v, want 2", rounds)
+	}
+	if reviews := debateEvents(t, loop, sid, events.TypeDebateReview); len(reviews) != 2 {
+		t.Fatalf("got %d reviews, want 2", len(reviews))
+	}
+	if pending, ok := loop.takePendingDebate(sid); ok {
+		t.Errorf("a booking was left behind after the debate ran: %+v", pending)
+	}
+}
+
+// TestNothingInsideADebateCanStartAnother. The author's rounds are turns
+// of the same session with the same tools, so without this the round-two
+// author could book a debate of its own inside the one running it.
+func TestNothingInsideADebateCanStartAnother(t *testing.T) {
+	script := &debateScript{approveAt: 1, authorWorks: true}
+	srv := script.server(t)
+	defer srv.Close()
+
+	loop := newDebateLoop(t, srv.URL)
+	registerDebateTool(t, loop)
+
+	ctx := context.Background()
+	if hidden := loop.hiddenTools(ctx); hidden[debateToolName] {
+		t.Error("an ordinary turn is not offered the Debate tool")
+	}
+	if hidden := loop.hiddenTools(withInDebate(ctx)); !hidden[debateToolName] {
+		t.Error("a turn inside a debate is still offered the Debate tool")
+	}
+
+	sid := startDebateSession(t, loop)
+	res := NewDebateTool(loop).Execute(
+		withInDebate(WithSessionID(withInDebate(ctx), sid)),
+		json.RawMessage(`{"reviewers":["girl"],"task":"do it again"}`))
+	if !res.IsError || !res.Refused {
+		t.Errorf("Debate inside a debate returned %+v, want a refusal", res)
+	}
+}
+
+// TestADebateToolCallSaysWhatItWillCost. The permission prompt is the
+// only moment anybody sees the size of this before it is spent, and a
+// protocol sentence that leaked into the task is visible there too.
+func TestADebateToolCallSaysWhatItWillCost(t *testing.T) {
+	script := &debateScript{}
+	srv := script.server(t)
+	defer srv.Close()
+	loop := newDebateLoop(t, srv.URL)
+
+	desc := NewDebateTool(loop).Describe(
+		json.RawMessage(`{"reviewers":["girl","tom"],"rounds":5,"task":"write a sum function"}`))
+	for _, want := range []string{"girl and tom", "5 rounds", "15 model turns", "write a sum function"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("permission prompt %q does not mention %q", desc, want)
+		}
+	}
+	if !NewDebateTool(loop).RequiresPermission(nil) {
+		t.Error("booking a debate does not ask")
+	}
+}
+
+// registerDebateTool wires the tool the way the binary does. Separate
+// from newDebateLoop because most of these tests drive the command
+// instead, and a tool nobody calls in the roster changes what every
+// other turn is offered.
+func registerDebateTool(t *testing.T, loop *Loop) {
+	t.Helper()
+	loop.Tools.Register(NewDebateTool(loop))
 }

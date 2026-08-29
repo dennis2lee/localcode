@@ -547,8 +547,8 @@ func TestCancellationDuringTheBackoffEndsTheTurnWithoutFallback(t *testing.T) {
 	defer cancel()
 	// The cancellation lands after the retry is announced and before its
 	// wait begins, which is the deterministic middle of the backoff.
-	retryWaitBarrier = cancel
-	t.Cleanup(func() { retryWaitBarrier = nil })
+	setRetryWaitBarrier(cancel)
+	t.Cleanup(func() { setRetryWaitBarrier(nil) })
 
 	var mu sync.Mutex
 	requests := 0

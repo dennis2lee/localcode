@@ -256,6 +256,13 @@ type Loop struct {
 	usage           map[string]sessionUsage           // sessionID -> latest known usage
 	cumulativeUsage map[string]map[string]modelTotals // sessionID -> model -> running totals, see /usage
 	turnRate        map[string]turnRate               // sessionID -> this turn's tokens/generation time
+	// pendingDebate holds a debate the Debate tool asked for, until the
+	// turn that asked is over. See DebateTool.Execute: a debate runs turns
+	// in the session it belongs to, and the tool call is itself inside one
+	// of those, so it cannot start there without two writers appending to
+	// one conversation at once.
+	pendingDebate map[string]debateRun
+
 	// probedWindows caches what a provider's server said its context
 	// window is, keyed by provider+model. A zero value means "asked, and
 	// it did not say" — recorded so a server that has no answer is not
@@ -311,6 +318,7 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 		usage:           map[string]sessionUsage{},
 		cumulativeUsage: map[string]map[string]modelTotals{},
 		turnRate:        map[string]turnRate{},
+		pendingDebate:   map[string]debateRun{},
 		probedWindows:   map[string]int{},
 		lifecycle:       newLifecycle(),
 	}
@@ -326,6 +334,7 @@ func (l *Loop) ClearSessionState(sessionID string) {
 	delete(l.usage, sessionID)
 	delete(l.cumulativeUsage, sessionID)
 	delete(l.turnRate, sessionID)
+	delete(l.pendingDebate, sessionID)
 	if l.Tasks != nil {
 		// Background tasks launched from this session and never collected
 		// hold their answers in the manager, not in the session log. The

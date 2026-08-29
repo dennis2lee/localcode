@@ -249,6 +249,7 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"SmartAgent":            true,
 		"TraceMaxAgeDays":       true,
 		"TraceMaxTotalMB":       true,
+		"VerifyCommand":         true,
 	}
 	intentionallyNotMerged := map[string]bool{}
 

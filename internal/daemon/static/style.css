@@ -238,6 +238,31 @@ main {
 }
 #transcript .msg-review.approved .head { color: var(--ok); }
 
+/* One reviewer per row in the debate form: a checkbox, the agent's name,
+   and the model it runs on. The model is the reason anybody picks one
+   reviewer over another, so it is on the row rather than in a tooltip. */
+.debate-reviewer {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.debate-reviewer .name { color: var(--text); }
+.debate-reviewer .model {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+/* The command it is about to send, shown as it is filled in. Monospace
+   and wrapping on its own newlines, because it is a command line and the
+   turn count sits under it. */
+#debate-preview {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
 /* A tool call: one quiet line, deliberately quieter than the conversation
    around it. It is there so a long turn is legible while it runs, not to
    compete with what the model actually said. */
@@ -434,18 +459,18 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 /* Booking a prompt for later. Two fields, because at a prompt the split
    between the moment and the request has to be guessed from one string,
    and here there is nothing to guess. */
-#schedule-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10; }
-#schedule-modal.open { display: flex; }
-#schedule-modal .box {
+#schedule-modal, #debate-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10; }
+#schedule-modal.open, #debate-modal.open { display: flex; }
+#schedule-modal .box, #debate-modal .box {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 20px;
   width: min(560px, 90vw);
 }
-#schedule-modal h3 { margin-top: 0; }
-#schedule-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: 12px; }
-#schedule-modal input, #schedule-modal textarea {
+#schedule-modal h3, #debate-modal h3 { margin-top: 0; }
+#schedule-modal .field-label, #debate-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: 12px; }
+#schedule-modal input, #schedule-modal textarea, #debate-modal input, #debate-modal textarea {
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -455,11 +480,18 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
   font: inherit;
   font-size: 13px;
 }
-#schedule-modal textarea { resize: vertical; }
-#schedule-modal .note { color: var(--muted); font-size: 11px; margin-top: 6px; min-height: 1em; }
-#schedule-modal .note.err { color: var(--err); }
-#schedule-modal .note.ok { color: var(--ok); }
-#schedule-modal .close-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+#schedule-modal textarea, #debate-modal textarea { resize: vertical; }
+#schedule-modal .note, #debate-modal .note { color: var(--muted); font-size: 11px; margin-top: 6px; min-height: 1em; }
+#schedule-modal .note.err, #debate-modal .note.err { color: var(--err); }
+#schedule-modal .note.ok, #debate-modal .note.ok { color: var(--ok); }
+#schedule-modal .close-row, #debate-modal .close-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* The debate form's own three. The checkbox must not stretch to the
+   width every other field in a dialog takes, and neither must the round
+   count — a number between 1 and 10 in a 560px box reads as a mistake.
+   These come after the shared block because they are overriding it. */
+#debate-modal .debate-reviewer input[type="checkbox"] { width: auto; }
+#debate-modal #debate-rounds { width: 6em; }
 
 /* Scheduled tasks. The same row as a background task, because they are
    the same thing at a different moment, plus a light for the state and a
