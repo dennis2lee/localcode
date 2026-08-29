@@ -211,6 +211,7 @@ const serverSideHelpText = `  /skill              list registered skills
   /write-outside [on|off|mem-clear]  writing outside it
   /schedule <when> <what to do>  book a prompt for later (only while localcode runs)
   /show-scheduled-task  list the prompts booked for later
+  /debate <reviewer> [rounds] <what to do>  another agent reviews this one's work, round after round
   /compact           summarize and compact the conversation right now
   /compact <instructions>      give instructions for how to compact
   /usage              show cumulative token usage per model
