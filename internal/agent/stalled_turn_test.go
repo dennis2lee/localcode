@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"localcode/internal/config"
@@ -16,6 +17,12 @@ import (
 // can say exactly what the server reports — including the shapes a local
 // server produces that the real API never does.
 type scriptedProvider struct {
+	// mu guards everything below. One provider now serves turns that
+	// genuinely run at once — two scheduled tasks in two conversations
+	// firing at the same moment — and an unguarded counter and slice
+	// under -race is a failure in the harness reported as a failure in
+	// the code it is testing.
+	mu    sync.Mutex
 	turns [][]provider.StreamEvent
 	sent  int
 	// systems records the system prompt of each request, which is how the
@@ -23,7 +30,25 @@ type scriptedProvider struct {
 	systems []string
 }
 
+// sentCount and systemPrompts read what the harness recorded, under the
+// same lock the recording takes. Tests read these after the turns they
+// are about have finished, but "after" is not a thing the race detector
+// can see.
+func (p *scriptedProvider) sentCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sent
+}
+
+func (p *scriptedProvider) systemPrompts() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.systems...)
+}
+
 func (p *scriptedProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.systems = append(p.systems, req.System)
 	var evs []provider.StreamEvent
 	if p.sent < len(p.turns) {
@@ -105,8 +130,8 @@ func TestToolsRunEvenWhenTheServerSaysTheTurnEnded(t *testing.T) {
 	if !ran {
 		t.Fatal("the tool the model asked for never ran; the turn ended instead")
 	}
-	if p.sent != 2 {
-		t.Errorf("provider turns = %d, want 2 (the tool result has to go back to the model)", p.sent)
+	if p.sentCount() != 2 {
+		t.Errorf("provider turns = %d, want 2 (the tool result has to go back to the model)", p.sentCount())
 	}
 }
 

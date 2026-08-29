@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.67.0
+
+* **Say when, and it books instead of doing it now.** `내일 아침에 테스트 돌려줘` typed as an ordinary message used to go straight to the model, which ran the tests immediately — the one reading of that sentence which is certainly wrong. The model has a `Schedule` tool now, and the division of labour is the whole design:
+
+  * The **model** decides this is a request for later and separates the time from the work. That is language, and even a small local model does it.
+  * **localcode reads the time**, with the same parser the command and the button use. Not the model: one asked for a timestamp gets the year wrong occasionally, and a scheduled task is exactly where an occasional wrong answer stays invisible until the day it matters. The tool takes the user's own words and refuses to accept a date from the model at all.
+  * **The person confirms.** Booking asks first, like any other side effect — it is a turn that will run later, unattended, with tools of its own — and the question names the moment localcode read rather than the words the model passed: `schedule for 09:00 tomorrow (in 10.0 hours): 테스트 돌려줘`.
+
+  A scheduled turn cannot book another. Nobody is watching it, so a task that books its own successor is a loop with no one in the room, and the ceiling on outstanding tasks is per conversation — which a chain would walk straight past by using a new conversation each time.
+
+* **Ids are short and belong to their conversation**: `s1`, `s2`. They were `sched-1788019200000000000-1`, which is fine for a panel with buttons and is not something anybody retypes into a TUI to cancel a task. A number is never handed out twice even after a deletion, and the counter picks up where the log left off, so a restart cannot reissue one — a fresh `s1` where a cancelled `s1` used to be is the one way a short id can mislead.
+
+* **The test provider is thread-safe.** Writing a test for two conversations firing a task at the same moment found the shared scripted provider counting its turns without a lock. It had never had two callers before. An unguarded harness under `-race` is a failure in the test scaffolding reported as a failure in the code it is testing.
+
 ## v0.66.1
 
 * **The scheduled-task rows carry named buttons, like the session rows do.** They shipped with a ✎ and a × in the header, which is smaller and asks somebody to learn two glyphs for two jobs the panel on the other side of the screen already spells out. They are **rename** and **delete** now, on their own line, wrapping the same way, with delete outlined in the same shared danger style — one word in two places beats two vocabularies.

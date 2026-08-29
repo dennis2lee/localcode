@@ -504,7 +504,7 @@ func (l *Loop) routeSchedule(sessionID, agentName, text string) (bool, error) {
 		if id == "" {
 			return true, l.replyText(sessionID, "usage: /schedule rename <id> <name>  (an empty name clears it)")
 		}
-		entry, ok := l.Schedules.Rename(id, strings.TrimSpace(name))
+		entry, ok := l.Schedules.Rename(sessionID, id, strings.TrimSpace(name))
 		if !ok {
 			return true, l.replyText(sessionID, fmt.Sprintf("no scheduled task %q in this conversation", id))
 		}
@@ -517,7 +517,7 @@ func (l *Loop) routeSchedule(sessionID, agentName, text string) (bool, error) {
 		// Sliced from the original rather than the lowercased copy: an id
 		// is case-sensitive and only the prefix was being matched loosely.
 		id := strings.TrimSpace(arg[len("cancel "):])
-		if l.Schedules.Cancel(id) {
+		if l.Schedules.Cancel(sessionID, id) {
 			return true, l.replyText(sessionID, "cancelled "+id)
 		}
 		return true, l.replyText(sessionID, fmt.Sprintf("no scheduled task %q in this conversation", id))

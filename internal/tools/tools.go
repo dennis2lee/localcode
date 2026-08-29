@@ -153,6 +153,18 @@ const (
 // project?" is not answerable without it.
 type PermissionResolver func(ctx context.Context, q Query) Outcome
 
+// Describer is implemented by a tool that can say what one call of it
+// will do, in a sentence a person can answer.
+//
+// Without it a permission prompt reads "Schedule {\"when\":\"내일
+// 아침에\",\"prompt\":\"...\"}" — the raw arguments, which is the
+// model's reading of the request rather than what localcode is about to
+// do with it. For anything whose arguments need interpreting before they
+// mean something, that is a question nobody can answer properly.
+type Describer interface {
+	Describe(input json.RawMessage) string
+}
+
 // PermissionSubject is implemented by tools whose input has a natural
 // pattern-matchable "subject" — a shell command for Bash, a file path for
 // WriteFile/Edit — so permission rules can match against it (e.g. allow
@@ -358,7 +370,11 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 			return Result{Content: fmt.Sprintf("tool %q requires permission but no permission handler is configured", name), IsError: true}
 		}
 		if describe == "" {
-			describe = fmt.Sprintf("%s %s", name, string(input))
+			if d, ok := t.(Describer); ok {
+				describe = d.Describe(input)
+			} else {
+				describe = fmt.Sprintf("%s %s", name, string(input))
+			}
 		}
 		allowed, err := r.permission(ctx, Ask{
 			Tool:        name,

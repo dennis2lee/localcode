@@ -40,7 +40,7 @@ func (d *Daemon) handleSeenSchedule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errNoScheduler)
 		return
 	}
-	d.Loop.Schedules.MarkSeen(r.PathValue("sid"))
+	d.Loop.Schedules.MarkSeen(r.PathValue("id"), r.PathValue("sid"))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -57,9 +57,9 @@ func (d *Daemon) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errNoScheduler)
 		return
 	}
-	sid := r.PathValue("sid")
-	entry, found := d.Loop.Schedules.Get(sid)
-	if !d.Loop.Schedules.Cancel(sid) {
+	id, sid := r.PathValue("id"), r.PathValue("sid")
+	entry, found := d.Loop.Schedules.Get(id, sid)
+	if !d.Loop.Schedules.Cancel(id, sid) {
 		writeError(w, http.StatusNotFound, errNoSuchSchedule)
 		return
 	}
@@ -179,7 +179,7 @@ func (d *Daemon) handleRenameSchedule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	entry, ok := d.Loop.Schedules.Rename(r.PathValue("sid"), req.Name)
+	entry, ok := d.Loop.Schedules.Rename(r.PathValue("id"), r.PathValue("sid"), req.Name)
 	if !ok {
 		writeError(w, http.StatusNotFound, errNoSuchSchedule)
 		return

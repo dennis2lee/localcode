@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -88,18 +89,31 @@ type Scheduler struct {
 	loop    *Loop
 	rootCtx context.Context
 
-	mu      sync.Mutex
-	counter int
-	entries map[string]*Scheduled
-	timers  map[string]*time.Timer
+	mu sync.Mutex
+	// counters is the next number to hand out per conversation, and
+	// entries and timers are keyed by conversation and id together.
+	//
+	// An id is short and per conversation — "s1", "s2" — because the one
+	// place it has to be typed is a TUI, and
+	// "sched-1788019200000000000-1" is not something anybody retypes to
+	// cancel a task. It is only ever meaningful inside the conversation
+	// it belongs to, which is also the only place it is ever shown.
+	counters map[string]int
+	entries  map[string]*Scheduled
+	timers   map[string]*time.Timer
 }
+
+// key namespaces an id by the conversation it belongs to, since "s1"
+// means a different task in every conversation that has one.
+func key(sessionID, id string) string { return sessionID + "\x00" + id }
 
 func NewScheduler(rootCtx context.Context, loop *Loop) *Scheduler {
 	s := &Scheduler{
-		loop:    loop,
-		rootCtx: rootCtx,
-		entries: map[string]*Scheduled{},
-		timers:  map[string]*time.Timer{},
+		loop:     loop,
+		rootCtx:  rootCtx,
+		counters: map[string]int{},
+		entries:  map[string]*Scheduled{},
+		timers:   map[string]*time.Timer{},
 	}
 	loop.Schedules = s
 	return s
@@ -131,13 +145,15 @@ func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time) (Sche
 		s.mu.Unlock()
 		return Scheduled{}, fmt.Errorf("this conversation already has %d scheduled tasks waiting; run or delete some before booking more", pending)
 	}
-	s.counter++
-	id := fmt.Sprintf("sched-%d-%d", at.UnixNano(), s.counter)
+	// Never reused, even after a deletion: a fresh s1 where a cancelled
+	// s1 used to be is the one way a short id can mislead.
+	s.counters[sessionID]++
+	id := fmt.Sprintf("s%d", s.counters[sessionID])
 	entry := &Scheduled{
 		ID: id, SessionID: sessionID, At: at, Prompt: prompt,
 		Agent: agentName, Status: SchedulePending,
 	}
-	s.entries[id] = entry
+	s.entries[key(sessionID, id)] = entry
 	s.mu.Unlock()
 
 	// Recorded on the conversation's own log, which is what makes the
@@ -146,43 +162,43 @@ func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time) (Sche
 	if _, err := s.loop.Store.Append(sessionID, events.TypeScheduleCreated, map[string]any{
 		"id": id, "at": at.Format(time.RFC3339), "prompt": prompt, "agent": agentName,
 	}); err != nil {
-		s.forget(id)
+		s.forget(sessionID, id)
 		return Scheduled{}, fmt.Errorf("schedule: %w", err)
 	}
-	s.arm(id, at)
+	s.arm(sessionID, id, at)
 	return *entry, nil
 }
 
 // arm sets the timer. Separate from Add because a restart re-arms
 // everything it finds still in the future, and that path has no booking
 // to do.
-func (s *Scheduler) arm(id string, at time.Time) {
+func (s *Scheduler) arm(sessionID, id string, at time.Time) {
 	d := time.Until(at)
 	if d < 0 {
 		d = 0
 	}
+	k := key(sessionID, id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.entries[id]; !ok {
+	if _, ok := s.entries[k]; !ok {
 		return
 	}
-	s.timers[id] = time.AfterFunc(d, func() { s.fire(id) })
+	s.timers[k] = time.AfterFunc(d, func() { s.fire(sessionID, id) })
 }
 
 // Cancel removes a booked task. Reports whether there was one.
-func (s *Scheduler) Cancel(id string) bool {
+func (s *Scheduler) Cancel(sessionID, id string) bool {
+	k := key(sessionID, id)
 	s.mu.Lock()
-	entry, ok := s.entries[id]
-	if !ok {
+	if _, ok := s.entries[k]; !ok {
 		s.mu.Unlock()
 		return false
 	}
-	sessionID := entry.SessionID
-	if t := s.timers[id]; t != nil {
+	if t := s.timers[k]; t != nil {
 		t.Stop()
 	}
-	delete(s.timers, id)
-	delete(s.entries, id)
+	delete(s.timers, k)
+	delete(s.entries, k)
 	s.mu.Unlock()
 
 	// Recorded where the row comes from, so it does not come back on the
@@ -191,28 +207,28 @@ func (s *Scheduler) Cancel(id string) bool {
 	return true
 }
 
-func (s *Scheduler) forget(id string) {
+func (s *Scheduler) forget(sessionID, id string) {
+	k := key(sessionID, id)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if t := s.timers[id]; t != nil {
+	if t := s.timers[k]; t != nil {
 		t.Stop()
 	}
-	delete(s.timers, id)
-	delete(s.entries, id)
+	delete(s.timers, k)
+	delete(s.entries, k)
 }
 
 // MarkSeen records that somebody has read the result: the third LED
 // state, and the one that makes the panel a list of what still wants
 // attention rather than a list of everything that ever ran.
-func (s *Scheduler) MarkSeen(id string) bool {
+func (s *Scheduler) MarkSeen(sessionID, id string) bool {
 	s.mu.Lock()
-	entry, ok := s.entries[id]
+	entry, ok := s.entries[key(sessionID, id)]
 	if !ok || entry.Seen {
 		s.mu.Unlock()
 		return false
 	}
 	entry.Seen = true
-	sessionID := entry.SessionID
 	s.mu.Unlock()
 	s.loop.Store.Append(sessionID, events.TypeScheduleSeen, map[string]any{"id": id})
 	return true
@@ -224,19 +240,19 @@ func (s *Scheduler) MarkSeen(id string) bool {
 // Recorded on the conversation's log like every other change to a row,
 // which is what makes the name survive a reload and reach a second window
 // without either having to ask again.
-func (s *Scheduler) Rename(id, name string) (Scheduled, bool) {
+func (s *Scheduler) Rename(sessionID, id, name string) (Scheduled, bool) {
 	name = strings.TrimSpace(name)
-	if len(name) > maxScheduleName {
+	if len([]rune(name)) > maxScheduleName {
 		name = strings.TrimSpace(string([]rune(name)[:maxScheduleName]))
 	}
 	s.mu.Lock()
-	entry, ok := s.entries[id]
+	entry, ok := s.entries[key(sessionID, id)]
 	if !ok {
 		s.mu.Unlock()
 		return Scheduled{}, false
 	}
 	entry.Name = name
-	out, sessionID := *entry, entry.SessionID
+	out := *entry
 	s.mu.Unlock()
 
 	s.loop.Store.Append(sessionID, events.TypeScheduleRenamed, map[string]any{"id": id, "name": name})
@@ -270,10 +286,10 @@ func (s *Scheduler) List(sessionID string) []Scheduled {
 }
 
 // Get returns one entry by id.
-func (s *Scheduler) Get(id string) (Scheduled, bool) {
+func (s *Scheduler) Get(sessionID, id string) (Scheduled, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e, ok := s.entries[id]
+	e, ok := s.entries[key(sessionID, id)]
 	if !ok {
 		return Scheduled{}, false
 	}
@@ -281,53 +297,57 @@ func (s *Scheduler) Get(id string) (Scheduled, bool) {
 }
 
 // fire runs the booked prompt.
-func (s *Scheduler) fire(id string) {
+func (s *Scheduler) fire(sessionID, id string) {
+	k := key(sessionID, id)
 	s.mu.Lock()
-	entry, ok := s.entries[id]
+	entry, ok := s.entries[k]
 	if !ok || entry.Status != SchedulePending {
 		s.mu.Unlock()
 		return
 	}
 	entry.Status = ScheduleRunning
-	sessionID, agentName, prompt := entry.SessionID, entry.Agent, entry.Prompt
-	delete(s.timers, id)
+	agentName, prompt := entry.Agent, entry.Prompt
+	delete(s.timers, k)
 	s.mu.Unlock()
 
 	// The parent may have been deleted between booking and firing.
 	if _, err := s.loop.Store.Get(sessionID); err != nil {
-		s.finish(id, "", ScheduleFailed, "the conversation this was scheduled in no longer exists")
+		s.finish(sessionID, id, "", ScheduleFailed, "the conversation this was scheduled in no longer exists")
 		return
 	}
 
-	runID := id + "-run"
+	// The conversation's id is in it, because a short id is only unique
+	// inside one conversation and a session id has to be unique in the
+	// store.
+	runID := sessionID + "-" + id + "-run"
 	// Under the parent's workspace and, through the parent, its
 	// permission switches: the work was booked in a project and by
 	// somebody who had already decided what may happen without asking.
 	if _, err := s.loop.Store.CreateSessionIn(runID, sessionID, agentName, s.loop.SessionDir(sessionID), false); err != nil {
-		s.finish(id, "", ScheduleFailed, fmt.Sprintf("could not create the session to run in: %v", err))
+		s.finish(sessionID, id, "", ScheduleFailed, fmt.Sprintf("could not create the session to run in: %v", err))
 		return
 	}
-	s.status(id, ScheduleRunning, runID, "")
+	s.status(sessionID, id, ScheduleRunning, runID, "")
 
 	// Unattended: nobody is watching this turn, so a permission request
 	// it raises must not wait forever. See WithUnattended.
 	ctx := WithUnattended(s.rootCtx)
 	err := s.loop.SendMessage(ctx, runID, agentName, prompt)
 	if err != nil {
-		s.finish(id, runID, ScheduleFailed, err.Error())
+		s.finish(sessionID, id, runID, ScheduleFailed, err.Error())
 		return
 	}
-	s.finish(id, runID, ScheduleDone, "")
+	s.finish(sessionID, id, runID, ScheduleDone, "")
 }
 
-func (s *Scheduler) finish(id, runID, status, errText string) {
-	s.status(id, status, runID, errText)
+func (s *Scheduler) finish(sessionID, id, runID, status, errText string) {
+	s.status(sessionID, id, status, runID, errText)
 }
 
 // status updates one entry and tells the conversation it belongs to.
-func (s *Scheduler) status(id, status, runID, errText string) {
+func (s *Scheduler) status(sessionID, id, status, runID, errText string) {
 	s.mu.Lock()
-	entry, ok := s.entries[id]
+	entry, ok := s.entries[key(sessionID, id)]
 	if !ok {
 		s.mu.Unlock()
 		return
@@ -337,7 +357,6 @@ func (s *Scheduler) status(id, status, runID, errText string) {
 		entry.RunSession = runID
 	}
 	entry.Error = errText
-	sessionID := entry.SessionID
 	data := map[string]any{"id": id, "status": status}
 	if entry.RunSession != "" {
 		data["run_session"] = entry.RunSession
@@ -415,15 +434,20 @@ func (s *Scheduler) Restore(sessions []string, now time.Time) {
 				e.Error = "localcode stopped while this was running"
 			}
 			s.mu.Lock()
-			s.entries[id] = e
+			s.entries[key(sessionID, id)] = e
+			// The counter picks up where the log left off, so a restart
+			// cannot hand out an id a cancelled task already used.
+			if n := idNumber(id); n > s.counters[sessionID] {
+				s.counters[sessionID] = n
+			}
 			s.mu.Unlock()
 			if e.Status != SchedulePending {
 				continue
 			}
 			if e.At.After(now) {
-				s.arm(id, e.At)
+				s.arm(sessionID, id, e.At)
 			} else {
-				s.status(id, ScheduleMissed, "", "localcode was not running at "+e.At.Format("2006-01-02 15:04"))
+				s.status(sessionID, id, ScheduleMissed, "", "localcode was not running at "+e.At.Format("2006-01-02 15:04"))
 			}
 		}
 	}
@@ -439,16 +463,32 @@ func str(v any) string {
 func (s *Scheduler) ForgetSession(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for id, e := range s.entries {
+	for k, e := range s.entries {
 		if e.SessionID != sessionID {
 			continue
 		}
-		if t := s.timers[id]; t != nil {
+		if t := s.timers[k]; t != nil {
 			t.Stop()
 		}
-		delete(s.timers, id)
-		delete(s.entries, id)
+		delete(s.timers, k)
+		delete(s.entries, k)
 	}
+	delete(s.counters, sessionID)
+}
+
+// idNumber reads the number out of "s12", for restoring the counter. Zero
+// for anything that is not one of these ids, including the long ones
+// booked before they were short.
+func idNumber(id string) int {
+	rest, ok := strings.CutPrefix(id, "s")
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // Describe renders one entry as the line "/show-scheduled-task" prints.

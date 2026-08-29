@@ -1610,7 +1610,19 @@ How much this saves depends on how often you ask lookup questions. If you mostly
 
 ### Scheduled tasks
 
-Book a prompt for later. `/schedule <when> <what to do>`:
+**Just say when.** An ordinary message that asks for something later books it instead of doing it now:
+
+```
+내일 아침에 테스트 돌려줘
+in 30 minutes check whether the build is still green
+금요일 저녁에 배포 준비해줘
+```
+
+The model recognises the request and separates the time from the work; **localcode reads the time**, with the same parser the command and the button use, and the confirmation names the moment it read rather than the words the model passed. That division is the point: a local model asked for a timestamp gets the year wrong occasionally, and a scheduled task is exactly where an occasional wrong answer stays invisible until the day it matters.
+
+Booking asks first, like any other side effect — it is a turn that will run later, unattended, with tools of its own. `/permission-skip-tools` silences that question along with the rest.
+
+You can also book one by hand. `/schedule <when> <what to do>`:
 
 ```
 /schedule 30분 뒤 run the tests and report the failures
@@ -1656,7 +1668,7 @@ The reply echoes what was read, in full, because a misread time is worth catchin
 | ⏰ Schedule button | Two fields — when, and what to do — with the time echoed back as you type it. |
 | Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. Click the row to read the result; **rename** names it and **delete** removes it along with the run's transcript, the same two buttons a session row carries. |
 | `/show-scheduled-task` | The same list as text, for the TUI. |
-| `/schedule cancel <id>` | Removes one. |
+| `/schedule cancel <id>` | Removes one. Ids are short and belong to the conversation: `s1`, `s2`. |
 | `/schedule rename <id> <name>` | Labels one; an empty name clears it. |
 
 **Naming a task.** A booked prompt is a paragraph and a row is one truncated line, so two rows that both start "run the tests and report the fail…" are two rows nobody can tell apart at the moment they need to. A name is a label for the row — cosmetic, like a session's title, and nothing resolves by it. The prompt stays visible underneath, so naming a task adds a label rather than hiding what it will actually run.

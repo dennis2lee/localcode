@@ -73,8 +73,8 @@ func TestAStalledTurnCarriesOnWhenTheProfileAsksForIt(t *testing.T) {
 	if runs != 2 {
 		t.Errorf("the tool ran %d times, want 2 — the turn stopped after the model described the next step", runs)
 	}
-	if p.sent != 4 {
-		t.Errorf("provider turns = %d, want 4", p.sent)
+	if p.sentCount() != 4 {
+		t.Errorf("provider turns = %d, want 4", p.sentCount())
 	}
 	// And the budget stops it: with one carry-on allowed, the reply that
 	// says the work is done is the end of the turn.
@@ -122,8 +122,8 @@ func TestATurnIsNotCarriedOnByDefault(t *testing.T) {
 	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if p.sent != 2 {
-		t.Errorf("provider turns = %d, want 2 — an unconfigured profile must carry on nothing", p.sent)
+	if p.sentCount() != 2 {
+		t.Errorf("provider turns = %d, want 2 — an unconfigured profile must carry on nothing", p.sentCount())
 	}
 }
 
@@ -141,8 +141,8 @@ func TestAPlainAnswerIsLeftAlone(t *testing.T) {
 	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "are Go maps concurrent?"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if p.sent != 1 {
-		t.Errorf("provider turns = %d, want 1", p.sent)
+	if p.sentCount() != 1 {
+		t.Errorf("provider turns = %d, want 1", p.sentCount())
 	}
 }
 
@@ -174,8 +174,8 @@ func TestCarryingOnIsBounded(t *testing.T) {
 	// Six requests: the first reply, then two carry-ons each followed by
 	// the work they produced, then the third stall — which is past the
 	// budget and ends the turn.
-	if p.sent != 6 {
-		t.Errorf("provider turns = %d, want 6", p.sent)
+	if p.sentCount() != 6 {
+		t.Errorf("provider turns = %d, want 6", p.sentCount())
 	}
 	if runs != 3 {
 		t.Errorf("the tool ran %d times, want 3", runs)
@@ -203,8 +203,8 @@ func TestACarryOnThatProducesNoWorkEndsTheTurn(t *testing.T) {
 	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if p.sent != 3 {
-		t.Errorf("provider turns = %d, want 3 — one carry-on, and the answer to it was taken as final", p.sent)
+	if p.sentCount() != 3 {
+		t.Errorf("provider turns = %d, want 3 — one carry-on, and the answer to it was taken as final", p.sentCount())
 	}
 }
 
@@ -229,8 +229,8 @@ func TestARefusedToolEndsTheTurnForGood(t *testing.T) {
 	if runs != 0 {
 		t.Fatalf("the denied tool ran %d times", runs)
 	}
-	if p.sent != 2 {
-		t.Errorf("provider turns = %d, want 2 — the model was told to carry on after a refusal", p.sent)
+	if p.sentCount() != 2 {
+		t.Errorf("provider turns = %d, want 2 — the model was told to carry on after a refusal", p.sentCount())
 	}
 }
 
@@ -252,8 +252,8 @@ func TestAQuestionToTheUserIsNotAStall(t *testing.T) {
 	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if p.sent != 2 {
-		t.Errorf("provider turns = %d, want 2 — the model's question was answered by the harness", p.sent)
+	if p.sentCount() != 2 {
+		t.Errorf("provider turns = %d, want 2 — the model's question was answered by the harness", p.sentCount())
 	}
 }
 
@@ -315,8 +315,8 @@ func TestMinusOneTurnsCarryingOnOffForAStallingModel(t *testing.T) {
 	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if p.sent != 2 {
-		t.Errorf("provider turns = %d, want 2 — keep_going -1 did not turn it off", p.sent)
+	if p.sentCount() != 2 {
+		t.Errorf("provider turns = %d, want 2 — keep_going -1 did not turn it off", p.sentCount())
 	}
 }
 
@@ -421,8 +421,8 @@ func TestAWaitingUserIsNotTalkedOver(t *testing.T) {
 	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	if p.sent != 2 {
-		t.Errorf("provider turns = %d, want 2 — the turn carried on over a message the user had already sent", p.sent)
+	if p.sentCount() != 2 {
+		t.Errorf("provider turns = %d, want 2 — the turn carried on over a message the user had already sent", p.sentCount())
 	}
 }
 
@@ -459,8 +459,8 @@ func TestACarryOnThatOnlyRepeatsItselfEndsTheTurn(t *testing.T) {
 	}
 	// One carry-on, the repeat it produced, and the reply that ends the
 	// turn: four requests, not the eight a budget of three would allow.
-	if p.sent != 4 {
-		t.Errorf("provider turns = %d, want 4 — a finished task was carried on %d times", p.sent, p.sent-2)
+	if p.sentCount() != 4 {
+		t.Errorf("provider turns = %d, want 4 — a finished task was carried on %d times", p.sentCount(), p.sentCount()-2)
 	}
 	// Twice: the real work, and the one repeat the single carry-on bought.
 	if runs != 2 {

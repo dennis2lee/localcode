@@ -224,6 +224,10 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// not yet come are re-armed, and the rest are marked missed rather
 	// than fired late. See agent.Scheduler.Restore.
 	scheduler := agent.NewScheduler(ctx, loop)
+	// The model's way in: a request for later becomes a booking rather
+	// than work done now. Registered after the scheduler exists, because
+	// the tool is useless without one.
+	registry.Register(agent.NewScheduleTool(loop))
 	var sessionIDs []string
 	for _, sess := range store.AllSessions() {
 		sessionIDs = append(sessionIDs, sess.ID)

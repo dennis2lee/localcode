@@ -56,17 +56,17 @@ func TestEachSessionGetsItsOwnWorkspaceRules(t *testing.T) {
 		}
 	}
 
-	if len(p.systems) != 2 {
-		t.Fatalf("provider saw %d requests, want 2", len(p.systems))
+	if len(p.systemPrompts()) != 2 {
+		t.Fatalf("provider saw %d requests, want 2", len(p.systemPrompts()))
 	}
-	if !strings.Contains(p.systems[0], "rules of /projects/alpha") {
-		t.Errorf("first system prompt = %q, want alpha's rules", p.systems[0])
+	if !strings.Contains(p.systemPrompts()[0], "rules of /projects/alpha") {
+		t.Errorf("first system prompt = %q, want alpha's rules", p.systemPrompts()[0])
 	}
-	if !strings.Contains(p.systems[1], "rules of /projects/beta") {
-		t.Errorf("second system prompt = %q, want beta's rules", p.systems[1])
+	if !strings.Contains(p.systemPrompts()[1], "rules of /projects/beta") {
+		t.Errorf("second system prompt = %q, want beta's rules", p.systemPrompts()[1])
 	}
-	if strings.Contains(p.systems[1], "/projects/alpha") {
-		t.Errorf("second system prompt still carries the other session's rules: %q", p.systems[1])
+	if strings.Contains(p.systemPrompts()[1], "/projects/alpha") {
+		t.Errorf("second system prompt still carries the other session's rules: %q", p.systemPrompts()[1])
 	}
 }
 
@@ -111,10 +111,10 @@ func TestOnlyTheModelsThatNeedItGetAFormattingNote(t *testing.T) {
 		if err := loop.SendMessage(context.Background(), "s-1", "general-purpose", "hi"); err != nil {
 			t.Fatalf("SendMessage: %v", err)
 		}
-		if len(p.systems) != 1 {
-			t.Fatalf("provider saw %d requests, want 1", len(p.systems))
+		if len(p.systemPrompts()) != 1 {
+			t.Fatalf("provider saw %d requests, want 1", len(p.systemPrompts()))
 		}
-		got := strings.Contains(p.systems[0], "there is no LaTeX or MathJax")
+		got := strings.Contains(p.systemPrompts()[0], "there is no LaTeX or MathJax")
 		if got != tt.want {
 			t.Errorf("model %q: formatting note present = %v, want %v", tt.model, got, tt.want)
 		}
