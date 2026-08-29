@@ -251,6 +251,35 @@ export function endModelText(text) {
   session.currentModelBuffer = '';
 }
 
+// appendReview draws one round of a debate: what the reviewing agent
+// said about this session's work.
+//
+// Its own shape rather than a model message or a user one, because in a
+// two-agent conversation the one thing a reader must never have to guess
+// is which of them is talking. The header names the agent, its model, the
+// round and the verdict; the body is rendered as markdown like any other
+// model output, since that is what it is.
+export function appendReview(d) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-review' + (d.approved ? ' approved' : '');
+
+  const head = document.createElement('div');
+  head.className = 'head';
+  const who = d.reviewer || 'reviewer';
+  const model = d.model ? ` (${d.model})` : '';
+  head.textContent = `${who}${model} · round ${d.round || 0}/${d.rounds || 0} · ` +
+    (d.approved ? 'approved' : 'changes requested');
+  wrap.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'body msg-model';
+  body.innerHTML = renderMarkdown(String(d.text || ''));
+  wrap.appendChild(body);
+
+  follower.keeping(() => transcriptEl.appendChild(wrap));
+  return wrap;
+}
+
 export function clearTranscript() {
   transcriptEl.innerHTML = '';
   // A different conversation, drawn from the bottom up. Carrying the

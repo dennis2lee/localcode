@@ -150,10 +150,19 @@ func (l *Loop) profileName(agentName string) string {
 // in runTools both already speak allowlist, and both get this same slice,
 // so a tool hidden from the model is also refused if it is called anyway.
 func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []string {
+	// A debate reviewer's allowlist is not the agent's own. It reads and
+	// it reports, whatever that agent is permitted to do when somebody
+	// talks to it directly — a reviewer that can write is not reviewing,
+	// it is a second author editing the same files from the other side.
+	// See reviewerToolNames, which has already intersected this with the
+	// agent's own restriction.
+	if forced, reviewing := reviewerTools(ctx); reviewing {
+		return forced
+	}
 	if len(agentCfg.Tools) > 0 {
 		return agentCfg.Tools
 	}
-	hidden := l.hiddenDelegationTools(ctx)
+	hidden := l.hiddenTools(ctx)
 	if len(hidden) == 0 || l.Tools == nil {
 		return nil
 	}
@@ -167,10 +176,9 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 	return out
 }
 
-// hiddenDelegationTools names the delegation tools that should not be
-// offered on this turn.
+// hiddenTools names the tools that should not be offered on this turn.
 //
-// Two separate reasons, and they hide different amounts:
+// Three separate reasons, and they hide different amounts:
 //
 //   - Nowhere to delegate. A config with one agent and Smart Agent off has
 //     no second role to hand work to, so Task would be an expensive way
@@ -179,8 +187,12 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 //   - Smart Agent off. Background delegation is part of the bundle rather
 //     than a general capability: launching work that runs unattended, in
 //     a session nobody is looking at, is the thing a user opts into.
-func (l *Loop) hiddenDelegationTools(ctx context.Context) map[string]bool {
-	hidden := map[string]bool{}
+//   - Always, for the verdict. It belongs to one role in one situation:
+//     the reviewer in a debate, which is given it explicitly. Offered to
+//     anyone else it is a model handed a way to declare its own work
+//     approved, which is the one thing a review must not be.
+func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
+	hidden := map[string]bool{verdictToolName: true}
 	if !l.smartOn(ctx) {
 		hidden[smart.ToolSpawn] = true
 		hidden[smart.ToolCollect] = true

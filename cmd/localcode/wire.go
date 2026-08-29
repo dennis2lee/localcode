@@ -234,8 +234,15 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	}
 	scheduler.Restore(sessionIDs, time.Now())
 
+	// A debate reviewer's only way to answer. Registered unconditionally
+	// and hidden from every turn that is not a review, which is the same
+	// pattern the delegation tools use and for a sharper reason: a model
+	// that could call this on its own work would be marking its own
+	// homework. See Loop.hiddenTools and agent.reviewerToolNames.
+	registry.Register(agent.VerdictTool{})
+
 	// The delegation tools. Registered unconditionally, and hidden per
-	// turn instead — see Loop.hiddenDelegationTools. They used to be
+	// turn instead — see Loop.hiddenTools. They used to be
 	// registered only when the config had more than one agent, which was
 	// the same rule read at the only moment it could not change; Smart
 	// Agent moves that rule to turn time, because turning it on adds six

@@ -361,6 +361,25 @@ func taskDepthFromContext(ctx context.Context) int {
 // the delegating agent's own turn needs the sub-agent's answer before it
 // can continue.
 func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName, prompt string) (string, error) {
+	_, text, err := tm.spawnSync(ctx, parentSessionID, "", agentName, prompt)
+	return text, err
+}
+
+// SpawnSyncInto is SpawnSync for a sub-agent session that already exists:
+// another turn in the same child, which still has everything it said
+// before. childID may be "", which creates one and returns its id.
+//
+// A debate is what needs it. A reviewer handed a fresh session every
+// round reads the work from scratch every round, and cannot say "the
+// second thing I raised is still not fixed" — which is the difference
+// between a review and a debate. Reusing the session is also what keeps
+// the per-round prompt small: its own findings are already in its
+// history, so they are not sent again.
+func (tm *TaskManager) SpawnSyncInto(ctx context.Context, parentSessionID, childID, agentName, prompt string) (string, string, error) {
+	return tm.spawnSync(ctx, parentSessionID, childID, agentName, prompt)
+}
+
+func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, agentName, prompt string) (string, string, error) {
 	// Pinned here rather than relying on the caller, because the callers
 	// are not all turns: the Task tool arrives with its parent's pin and
 	// keeps it, but a direct SpawnSync from the API or from an embedding
@@ -371,7 +390,7 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 	ctx = tm.loop.pinSmart(ctx)
 
 	if blocked, reason := tm.loop.delegateBlocked(ctx, parentSessionID, agentName, prompt); blocked {
-		return "", fmt.Errorf("delegation to %q was refused: %s", agentName, reason)
+		return "", "", fmt.Errorf("delegation to %q was refused: %s", agentName, reason)
 	}
 
 	// Admission, the same window the background path takes, for the same
@@ -380,7 +399,7 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 	// from the API and from an embedding program, so unlike the Task tool
 	// it has no turn holding the session for it.
 	if !tm.loop.lifecycle.admit(parentSessionID) {
-		return "", errSessionClosing(parentSessionID)
+		return "", "", errSessionClosing(parentSessionID)
 	}
 
 	// Checked before anything is created, and rolled back if the parent
@@ -393,24 +412,38 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 	// this function can rely on.
 	if _, err := tm.loop.Store.Get(parentSessionID); err != nil {
 		tm.loop.lifecycle.admitted(parentSessionID)
-		return "", fmt.Errorf("spawn task: %w", err)
+		return "", "", fmt.Errorf("spawn task: %w", err)
 	}
 
-	taskID := tm.nextTaskID()
-
-	if _, err := tm.loop.Store.CreateSessionIn(taskID, parentSessionID, agentName, tm.childWorkspace(parentSessionID), false); err != nil {
-		tm.loop.lifecycle.admitted(parentSessionID)
-		return "", fmt.Errorf("create task session: %w", err)
-	}
-	if _, err := tm.loop.Store.Append(parentSessionID, events.TypeTaskSpawned, map[string]any{
-		"task_id": taskID,
-		"agent":   agentName,
-		"prompt":  prompt,
-	}); err != nil {
-		// Nothing is watching this child and nothing ever will be.
-		tm.loop.Store.Delete(taskID)
-		tm.loop.lifecycle.admitted(parentSessionID)
-		return "", fmt.Errorf("append task.spawned: %w", err)
+	taskID := childID
+	switch {
+	case taskID == "":
+		taskID = tm.nextTaskID()
+		if _, err := tm.loop.Store.CreateSessionIn(taskID, parentSessionID, agentName, tm.childWorkspace(parentSessionID), false); err != nil {
+			tm.loop.lifecycle.admitted(parentSessionID)
+			return "", "", fmt.Errorf("create task session: %w", err)
+		}
+		if _, err := tm.loop.Store.Append(parentSessionID, events.TypeTaskSpawned, map[string]any{
+			"task_id": taskID,
+			"agent":   agentName,
+			"prompt":  prompt,
+		}); err != nil {
+			// Nothing is watching this child and nothing ever will be.
+			tm.loop.Store.Delete(taskID)
+			tm.loop.lifecycle.admitted(parentSessionID)
+			return "", "", fmt.Errorf("append task.spawned: %w", err)
+		}
+	default:
+		// Resuming a child that already exists: no second task.spawned,
+		// because the row a client is already showing is this one, and a
+		// second spawn event would give one sub-agent two of them. It is
+		// checked rather than assumed — the caller holds an id from an
+		// earlier call, and the session behind it can have been deleted
+		// since.
+		if _, err := tm.loop.Store.Get(taskID); err != nil {
+			tm.loop.lifecycle.admitted(parentSessionID)
+			return "", "", fmt.Errorf("resume task session: %w", err)
+		}
 	}
 	// The parent's record of what it delegated. On the delegate span
 	// rather than in the parent's prompt manifest: the task text is not
@@ -464,7 +497,7 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 	// delegation is the one that fans out, and it still queues here.
 	if err := ctx.Err(); err != nil {
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "cancelled"})
-		return "", err
+		return taskID, "", err
 	}
 
 	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "running"})
@@ -476,11 +509,11 @@ func (tm *TaskManager) SpawnSync(ctx context.Context, parentSessionID, agentName
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
 			"task_id": taskID, "status": "failed", "error": err.Error(),
 		})
-		return "", err
+		return taskID, "", err
 	}
 
 	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "completed"})
-	return lastAssistantText(tm.loop.Store, taskID), nil
+	return taskID, lastAssistantText(tm.loop.Store, taskID), nil
 }
 
 // lastAssistantText finds the most recent message.part.end event in a

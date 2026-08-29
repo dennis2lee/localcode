@@ -106,6 +106,27 @@ const (
 	TypeScheduleRenamed Type = "schedule.renamed"
 	TypeScheduleRemoved Type = "schedule.removed"
 
+	// The debate events: one agent doing the work, another reviewing it,
+	// round after round, with localcode counting.
+	//
+	// TypeDebateStarted: {"author","reviewer","model","rounds","task"} —
+	// written before the first turn, so a client can say what is about to
+	// happen rather than explaining it afterwards.
+	// TypeDebateReview: {"round","rounds","reviewer","model","text",
+	// "approved","session"}. The review itself, carried here rather than
+	// as an ordinary message because it is neither the person speaking
+	// nor this session's model: it is another agent's words, and a client
+	// that paints it as either is lying about who said it. "session" is
+	// the reviewer's own session, so the row can be opened and read.
+	// TypeDebateEnded: {"reason","rounds","approved","note"}, reason being
+	// one of approved / rounds / stalled / stopped / failed. "note" is the
+	// sentence to show; it rides on the event rather than being written as
+	// a reply, because a reply with no user message before it rehydrates
+	// as a second assistant message in a row.
+	TypeDebateStarted Type = "debate.started"
+	TypeDebateReview  Type = "debate.review"
+	TypeDebateEnded   Type = "debate.ended"
+
 	// TypePermissionsChanged reports this session's four permission
 	// switches after one of them moved, along with the directories it
 	// currently remembers approving outside the workspace.

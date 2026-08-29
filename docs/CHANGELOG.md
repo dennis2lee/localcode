@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.68.0
+
+* **Two agents on one piece of work.** `/debate <reviewer> [rounds] <what to do>`: this conversation's agent writes it, another agent on another model reads it and says what is wrong, the first one answers, and that repeats until the reviewer approves or the rounds run out.
+
+  **The protocol is not in the prompt.** Who reviews, how many times, when to stop — all of it is the command's, and none of it reaches either model. That is not brevity. A prompt that still says "review it ten times" hands the author a loop of its own to run inside the loop already running it, and a model told to repeat ten times inside one turn stops at three and reports that it is done, which is indistinguishable from having finished. localcode counts the rounds; the models do the work.
+
+  A round is two model turns plus their tools, so ten rounds is twenty turns. The default is **3** and the ceiling is **10** — the ten is something you ask for by name.
+
+* **The author keeps its conversation; the reviewer keeps its session.** The author runs here, with its history and its cached prefix intact, because switching this session's model mid-conversation would invalidate its tools, its system prompt and its cache at once. The reviewer runs in one sub-session that it keeps for **every round**, which is the difference between a debate and a series of unrelated reviews: in round four it still knows what it asked for in round one, and the round-two brief is short because its own findings are already in its history rather than re-sent.
+
+* **The reviewer can read but not write.** `read_file`, `glob`, `grep` and the verdict, intersected with whatever that agent's own config already allows — and never `bash`, because a shell command is not a path and a reviewer with a shell is a second author editing the same files from the other side. The cost is stated rather than hidden: a reviewer cannot run the tests, so it judges by reading and running them stays the author's job.
+
+* **The approval is a boolean, not a sentence.** "Did it approve" is asked every round, and reading it out of prose fails exactly where it matters — two languages, three paragraphs, and the word "approved" sitting inside the sentence explaining what would have to change first. The reviewer sets a field on a tool call instead; a model that will not call tools can end its reply with a line that is exactly `APPROVED`. Everything else is *not approved*. Ending a debate a round early on a misread is the failure that ships: the work stops being looked at while the transcript says somebody signed it off.
+
+  The verdict tool is hidden from every turn that is not a review, so no model is ever in a position to mark its own homework.
+
+* **It always says why it ended**: the reviewer approved, the round budget ran out, you pressed Stop, or two rounds ran in which the author called no tool at all — a standoff, where the rounds left would only restate the disagreement, and settling it is yours. Two models agreeing is not evidence that the code is right, and the closing line does not pretend it is.
+
+* **A review is drawn as the agent that wrote it**, with its name, its model, the round and the verdict — not as the model of this session and not as something the person typed. The same care goes into the request: the review reaches the author inside a user-role message, which is the most instruction-authoritative position a request has, and the span on it records that the framing is localcode's and the review is another model's output.
+
+* **A rounds count is a token that is only digits.** `/debate girl 10페이지 문서를 써라` is three rounds writing a ten-page document, not ten rounds writing "페이지 문서를 써라".
+
 ## v0.67.0
 
 * **Say when, and it books instead of doing it now.** `내일 아침에 테스트 돌려줘` typed as an ordinary message used to go straight to the model, which ran the tests immediately — the one reading of that sentence which is certainly wrong. The model has a `Schedule` tool now, and the division of labour is the whole design:

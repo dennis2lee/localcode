@@ -1017,6 +1017,7 @@ These are typed into the message box but never reach the event log, so replaying
 | `/write-outside` | Writing outside the workspace, the same three arguments. |
 | `/schedule` | Books a prompt for later: `/schedule <when> <what to do>`. Runs only while localcode is running. See [Scheduled tasks](#scheduled-tasks). |
 | `/show-scheduled-task` | Lists the prompts booked for later in this conversation. |
+| `/debate` | `/debate <reviewer> [rounds] <what to do>` — this conversation's agent writes, another agent reviews, round after round. See [Debate](#debate). |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions
@@ -1607,6 +1608,42 @@ Practical loop:
 4. `/config auto_delegate off` turns it off mid-conversation with no restart, and `/config` shows the current state and target agent.
 
 How much this saves depends on how often you ask lookup questions. If you mostly ask for code to be written, little will match and the effect will be small. That is a fine reason to leave it off.
+
+### Debate
+
+Two agents on one piece of work: this conversation's agent writes it, another agent reads it and says what is wrong, the first one answers, and that repeats. One command starts it.
+
+```
+/debate girl 10 1부터 10까지 더하는 파이선 프로그램을 만들어라
+/debate review write a retry wrapper around the upload call
+```
+
+`/debate <reviewer> [rounds] <what to do>`. The reviewer is any configured agent other than the one already running; the rounds default to **3** and cannot exceed **10**. Rounds are positional and optional, and a count is a token that is *only* digits — `/debate girl 10페이지 문서를 써라` is three rounds writing a ten-page document, not ten rounds writing "페이지 문서를 써라".
+
+**The protocol is not in the prompt.** Everything except the work itself lives in the command: who reviews, how many times, when to stop. That is not brevity, it is correctness — a prompt that still says "review it ten times" gives the author a loop of its own to run inside the loop already running it, and a model told to repeat ten times inside one turn stops at three and reports that it is done. localcode counts the rounds; the models do the work.
+
+**A round is two model turns**, plus whatever tools each of them runs. Ten rounds is twenty turns, which is why ten is something you ask for by name and three is what you get by default.
+
+**Who runs where.** The author runs in this conversation, with its history and its cached prefix intact, so its work appears exactly as it always does. The reviewer runs in a sub-session of its own — switching this session's model mid-conversation would invalidate its tools, its system prompt and its cache at once — and **keeps that session for every round**, which is what lets it say "the second thing I raised is still not fixed". Its row appears in the right panel; click it to read the whole review session, tool calls included.
+
+**The reviewer can read but not write.** Its allowlist for the debate is `read_file`, `glob`, `grep` and the verdict, intersected with whatever its own config already permits — no `write_file`, no `edit`, and no `bash`, because a shell command is not a path and a reviewer with a shell is a second author. The cost is real and worth knowing: a reviewer cannot run the tests. It judges by reading, and running them is the author's job.
+
+**What the reviewer is given.** The task, the author's own account of what it did, the files localcode saw written this round, and the workspace to read for itself. Not this conversation's transcript: a history full of another model's tool calls is rejected outright by some providers, and it would be re-sent every round. The account and the file list are deliberately separate — one is what the author says, the other is what happened.
+
+**How it ends**, and it always says which:
+
+| Reason | What happened |
+|---|---|
+| `approved` | The reviewer approved. |
+| `rounds` | The budget ran out with no approval. The work stands; read it before trusting it. |
+| `stalled` | Two rounds running in which the author called no tool at all. That is a standoff, and the rounds left would only restate it. |
+| `stopped` | You pressed Stop. What was done is kept. |
+
+The approval is a **tool call**, not a sentence: the reviewer sets a boolean, because "did it approve" cannot be read reliably out of prose in two languages. A model that will not call tools can end its reply with a line that is exactly `APPROVED`. Anything else — silence, an unreadable call, a reply with the word inside a sentence — is *not approved*, because ending a debate a round early on a misread stops the work being looked at while the transcript says somebody signed it off.
+
+**Two models agreeing is not evidence that the code is right.** It is two readings instead of one. The tests are the evidence, and they are still yours to run.
+
+A debate can only be started from a conversation somebody is having: not from a sub-agent, and not from a scheduled run. Nobody is watching those, and a tree of debates has no ceiling on it.
 
 ### Scheduled tasks
 

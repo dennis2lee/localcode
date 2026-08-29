@@ -6,6 +6,7 @@ import { app, session } from './state.js';
 import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
+  appendReview,
 } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
@@ -125,6 +126,20 @@ const handlers = {
   'schedule.seen': (d) => applyScheduleEvent('schedule.seen', d),
   'schedule.renamed': (d) => applyScheduleEvent('schedule.renamed', d),
   'schedule.removed': (d) => applyScheduleEvent('schedule.removed', d),
+  // A debate: this session's agent writes, another one reviews, round
+  // after round. The banner goes up before the first turn so the page
+  // says what is about to happen rather than explaining it afterwards.
+  'debate.started': (d) => {
+    const model = d.model ? ` (${d.model})` : '';
+    appendTool(`[debate: ${d.author} writes, ${d.reviewer}${model} reviews, up to ${d.rounds} rounds]`);
+  },
+  'debate.review': (d) => appendReview(d),
+  // The note is composed by the daemon and travels on the event, so both
+  // clients say the same thing and neither has to reconstruct why the
+  // debate ended from a reason code.
+  'debate.ended': (d) => {
+    if (d.note) appendTool(`[${d.note}]`);
+  },
   'permission.resolved': () => {
     permissionRequest.close();
     setInputLocked(false);

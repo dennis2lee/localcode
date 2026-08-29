@@ -41,8 +41,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// because the message outlives this call and the slice does not.
 	openingSource := ""
 	var openingSpans []provider.BlockSource
+	openingAuto := false
 	if len(origin) > 0 {
-		openingSource, openingSpans = origin[0].source, origin[0].spans
+		openingSource, openingSpans, openingAuto = origin[0].source, origin[0].spans, origin[0].auto
 	}
 	// A sub-agent's first message is the task its parent wrote. The
 	// parent's own manifest names it too, from the tool_use block that
@@ -136,6 +137,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	}
 	if len(openingSpans) > 0 {
 		userMsgData["sources"] = openingSpans
+	}
+	if openingAuto {
+		userMsgData["auto"] = true
 	}
 	l.Store.Append(sessionID, events.TypeUserMessage, userMsgData)
 

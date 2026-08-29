@@ -2,10 +2,26 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"localcode/internal/events"
 )
+
+// intField reads a number out of an event payload. JSON has one number
+// type and it arrives as a float64 over the wire but as an int from a
+// store in this same process, so both are accepted — a debate round
+// rendered as "round 0/0" because the event came from the wrong side of
+// that line would be a bug nobody could see the cause of.
+func intField(data map[string]any, key string) int {
+	switch v := data[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
+}
 
 // endTurn clears everything that means "a turn is running". Called
 // unconditionally for every turn-terminating event, including an error
@@ -136,6 +152,32 @@ func (m *Model) applyEvent(ev events.Event) {
 	case events.TypeDelegated:
 		if name, ok := ev.Data["agent"].(string); ok {
 			m.appendTool(fmt.Sprintf("[delegated to %s]", name))
+		}
+	case events.TypeDebateStarted:
+		author, _ := ev.Data["author"].(string)
+		reviewer, _ := ev.Data["reviewer"].(string)
+		model, _ := ev.Data["model"].(string)
+		rounds := intField(ev.Data, "rounds")
+		m.appendTool(fmt.Sprintf("[debate: %s writes, %s (%s) reviews, up to %d rounds]", author, reviewer, model, rounds))
+	case events.TypeDebateReview:
+		// The review in full, not a one-line note. It is the half of a
+		// debate the person is here for, and it is another model's
+		// argument about this session's work — a status line saying it
+		// happened would be the least useful summary available.
+		reviewer, _ := ev.Data["reviewer"].(string)
+		text, _ := ev.Data["text"].(string)
+		verdict := "changes requested"
+		if approved, _ := ev.Data["approved"].(bool); approved {
+			verdict = "approved"
+		}
+		m.appendTool(fmt.Sprintf("[%s · round %d/%d · %s]",
+			reviewer, intField(ev.Data, "round"), intField(ev.Data, "rounds"), verdict))
+		if strings.TrimSpace(text) != "" {
+			m.appendLocal(text)
+		}
+	case events.TypeDebateEnded:
+		if note, _ := ev.Data["note"].(string); note != "" {
+			m.appendTool("[" + note + "]")
 		}
 	case events.TypeTurnCancelled:
 		m.endTurn()

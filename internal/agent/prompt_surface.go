@@ -311,6 +311,8 @@ func entryForSource(id, text string, delegated bool) (prompt.Entry, bool) {
 		return splicedShellEntry(strings.TrimPrefix(id, "shell."), text), true
 	case strings.HasPrefix(id, "reminder."):
 		return reminderEntry(strings.TrimPrefix(id, "reminder."), text), true
+	case strings.HasPrefix(id, "debate.review."):
+		return reviewEntry(strings.TrimPrefix(id, "debate.review."), text), true
 	case strings.HasPrefix(id, "child.input."):
 		// Only where the session actually is a sub-agent. The tag says
 		// this message was somebody's delegated task; whether it still
@@ -399,6 +401,12 @@ func (l *Loop) isDelegatedSession(sessionID string) bool {
 type messageOrigin struct {
 	source string
 	spans  []provider.BlockSource
+	// auto marks a message localcode wrote and sent on the person's
+	// behalf, the way keep_going's nudge is marked: it belongs in the log,
+	// because the model was really given it and a restart has to rebuild
+	// the same history, and it does not belong in the transcript as a
+	// typed line or in Up/Down recall. Both clients already honour it.
+	auto bool
 }
 
 // expansionSpans turns a command's expanded segments into the text that
@@ -534,6 +542,22 @@ func childInputEntry(agent, task string) prompt.Entry {
 	return prompt.RuntimeEntry(
 		"child.input."+agent, prompt.KindAgentPrompt, prompt.FromParentAgent, prompt.TrustDelegated,
 		prompt.PlaceMessage, task, "the task the "+agent+" sub-agent was given by its parent")
+}
+
+// reviewEntry describes what a reviewing agent said about this session's
+// work, as it arrives in the author's next message.
+//
+// The same class as any other child's answer: another model's words,
+// read as material rather than as instruction. It matters here more than
+// most, because the message it arrives in is a user-role one and the
+// reviewer is telling the author what to change — the framing around it
+// is localcode's and instructs; the review itself is a report, and the
+// span is what keeps the two apart.
+func reviewEntry(agent, text string) prompt.Entry {
+	return prompt.RuntimeEntry(
+		"debate.review."+agent, prompt.KindExternalContent, prompt.FromChildResult,
+		prompt.TrustExternal, prompt.PlaceMessage, text,
+		"what the "+agent+" agent said when it reviewed this session's work")
 }
 
 func childResultEntry(agent, result string) prompt.Entry {

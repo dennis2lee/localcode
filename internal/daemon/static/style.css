@@ -220,6 +220,24 @@ main {
 #transcript .msg-tool { color: var(--muted); font-style: italic; }
 #transcript .msg-error { color: var(--err); font-weight: 600; }
 
+/* A review by the other agent in a debate. Indented behind a rule,
+   because it is the one thing in the transcript that is neither the
+   person nor this session's model, and a reader scrolling past has to be
+   able to tell at a glance whose paragraph they are in. */
+#transcript .msg-review {
+  border-left: 2px solid var(--muted);
+  padding-left: 10px;
+  margin: 8px 0;
+}
+#transcript .msg-review.approved { border-left-color: var(--ok); }
+#transcript .msg-review .head {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+#transcript .msg-review.approved .head { color: var(--ok); }
+
 /* A tool call: one quiet line, deliberately quieter than the conversation
    around it. It is there so a long turn is legible while it runs, not to
    compete with what the model actually said. */
