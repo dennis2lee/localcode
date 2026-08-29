@@ -143,7 +143,10 @@ async function checkForUpdate() {
   latest = null;
   updateInstallBtn.hidden = true;
   updateCheckBtn.disabled = true;
-  showUpdate('Asking GitHub…');
+  // Not "Asking GitHub" any more: a machine configured with update_url
+  // is asking somewhere else entirely, and saying GitHub while looking
+  // at an internal server is the panel telling a small lie.
+  showUpdate('Checking for a newer version…');
   try {
     const res = await apiClient.checkUpdate();
     if (!res.checked) {
@@ -160,12 +163,17 @@ async function checkForUpdate() {
     // clicking share a machine. Over --server it would replace the
     // program on the *server*, so the daemon says no and the panel says
     // where to get it instead.
+    // Where it looked, when that is not the public releases page. An
+    // internal build reported as "0.65.0 is available" reads as a public
+    // release, and nobody notices it came from somewhere else.
+    const from = res.source && !res.source.startsWith('https://github.com/')
+      ? ` (from ${res.source})` : '';
     if (res.can_install) {
-      showUpdate(`localcode ${res.latest} is available. This will download ${res.asset}${size} and run the installer.`);
+      showUpdate(`localcode ${res.latest} is available${from}. This will download ${res.asset}${size} and run the installer.`);
       updateInstallBtn.textContent = `Download and install ${res.latest}`;
       updateInstallBtn.hidden = false;
     } else {
-      showUpdate(`localcode ${res.latest} is available. ${res.detail || ''}`.trim());
+      showUpdate(`localcode ${res.latest} is available${from}. ${res.detail || ''}`.trim());
     }
   } catch (err) {
     showUpdate(`Could not check: ${err}`, true);
@@ -186,7 +194,14 @@ async function installUpdate() {
   showUpdate(`Downloading ${latest.asset}… this can take a minute.`);
   try {
     const res = await apiClient.installUpdate();
-    showUpdate(res.detail || `localcode ${res.version} downloaded.`);
+    // An unverified download is stated rather than left unsaid. A file
+    // share publishes the installer and usually nothing else, so there
+    // was no checksum to check it against, and that is a true thing
+    // about a file that has just been run.
+    const unverified = res.verified === false
+      ? ' The download could not be verified: no checksum was published beside it.'
+      : '';
+    showUpdate((res.detail || `localcode ${res.version} downloaded.`) + unverified);
     // The daemon is about to replace itself with the version it just
     // installed, which takes this page's connection with it. Nothing to
     // do but say so and let the browser reconnect — the new daemon binds

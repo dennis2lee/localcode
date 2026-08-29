@@ -102,6 +102,8 @@
   "trace_max_total_mb": 0,
   "//smart_agent": "Off by default. On, the session's own model becomes an orchestrator with six built-in specialist sub-agents (explore, librarian, oracle, plan, implement, verify), each routed to whichever profile above suits it. Name a profile smart-quick, smart-balanced or smart-deep to pin that routing by hand. Also togglable from the settings window and with /config smart_agent on|off. See docs/USAGE.md.",
   "smart_agent": false,
+  "//update_url": "Where the update button looks instead of GitHub: one https address at which the current installers are published side by side, named the way localcode names them (localcode-1.2.3-darwin-universal.tar.gz, localcode-1.2.3-windows-amd64.msi, ...). The version is read out of the filenames, since on a directory of files that is the only place it is written down. For a machine that cannot reach github.com, or an organisation that would rather its own build were the one installed. https only, because the file is run as an installer. Unset means GitHub. See docs/USAGE.md.",
+  "update_url": "",
   "//skip_permissions": "The daemon default for the first of four permission switches, and what a conversation that has not answered for itself follows. All four are per session: /permission-skip-all in a conversation, or the Permissions window, sets that conversation and saves it with the session. This one allows every prompt, the workspace boundary included.",
   "skip_permissions": false,
   "//skip_tool_permissions": "The useful middle: every tool prompt allowed, and a path that leaves the session's workspace still asked about. /permission-skip-tools.",

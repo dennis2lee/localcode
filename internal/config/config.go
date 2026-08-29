@@ -98,6 +98,18 @@ type Config struct {
 	// to forbid something would be a different, much worse promise.
 	SkipPermissions *bool `json:"skip_permissions,omitempty"`
 
+	// UpdateURL, when set, is where the update button looks instead of
+	// GitHub: one https address at which the current installers are
+	// published, side by side, named the way localcode names them.
+	//
+	// It exists for a machine that cannot reach github.com, or an
+	// organisation that would rather its own build were the one installed
+	// — an internal Bitbucket, an artifact server, a file share. The
+	// version is read out of the filenames, because on a directory of
+	// files that is the only place it is written down. See
+	// internal/update/mirror.go.
+	UpdateURL string `json:"update_url,omitempty"`
+
 	// The other three switches, and what all four are: the daemon's
 	// defaults. A session answers these questions for itself (see
 	// session.Permissions); these are what a session that has not been

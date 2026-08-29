@@ -203,6 +203,7 @@ The point is a config.json that can be committed to a repository, copied between
 | `max_concurrent_tasks` | Caps how many **background** tasks run at once. Unset means 1, so background tasks queue rather than run together. Synchronous `Task` delegation is not counted against it, because a caller that is blocked cannot start a second one and holding a slot while waiting for a nested child would deadlock against itself. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
+| `update_url` | Where the update button looks instead of GitHub: an https address at which the current installers are published. Unset means GitHub. See [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
 | `skip_permissions` | The daemon default for `skip_all`: turns every "ask" into "allow", the workspace boundary included. Off unless set; explicit deny rules still deny. See [The four switches](#the-four-switches). |
 | `skip_tool_permissions` | The daemon default for `skip_tools`: every tool prompt allowed, and a path that leaves the workspace still asked about. |
 | `read_outside_workspace` | The daemon default for `read_outside`: reading outside the session's workspace without being asked. |
@@ -1620,7 +1621,31 @@ Book a prompt for later. `/schedule <when> <what to do>`:
 
 **It runs only while localcode is running.** There is no service, no launchd job, and nothing wakes the machine. If localcode is closed or the machine is asleep at that moment, the task is reported as **missed** — in those words, with the time it was booked for — and is **not** run late. Running "summarize yesterday's commits" at four in the afternoon because the machine was asleep at nine would be doing something nobody asked for at a moment they did not choose. A booking whose moment has not yet come is re-armed when localcode starts again.
 
-**The time is read by localcode, not by the model.** Relative (`30분 뒤`, `in 2 hours`, `2시간 뒤`), clock (`오후 3시`, `at 3pm`, `18:00`), named (`내일 아침`, `tomorrow 9am`, `저녁 7시`, `모레 점심`), or absolute (`2026-09-01 14:30`). A clock time that has already gone today means tomorrow. The reply echoes what was read, in full, because a misread time is worth catching before the work is booked rather than after it fails to happen. A time it cannot read is refused with examples rather than guessed at.
+**The Schedule button** (⏰ under the prompt box, Web UI and the desktop window) asks for the two separately: a **When** field and a **What to do** field. That is the difference from typing the command — at a prompt the split between the moment and the request has to be found in one string, and in two fields there is nothing to find. The When field shows what the time was read as while you type it, before anything is booked.
+
+**The time is read by localcode, not by the model.**
+
+| Shape | Examples |
+|---|---|
+| Relative | `30분 뒤`, `3시간 후에`, `in 2 hours`, `in half an hour`, `한 시간 뒤` |
+| Clock | `오후 3시`, `5시까지`, `at 3pm`, `18:00` |
+| Named | `내일 아침`, `모레 점심`, `저녁 7시`, `tomorrow 9am`, `tonight`, `at noon` |
+| Weekday | `금요일 저녁`, `다음주 월요일`, `next monday`, `friday evening` |
+| Absolute | `2026-09-01 14:30`, `2026-09-01` |
+
+The particle belongs to the time, not to the request: `내일 아침에 테스트 돌려줘` books tomorrow at nine and sends `테스트 돌려줘`, and `에러 로그 확인` is not mistaken for a particle because a word that merely starts the same way is not one.
+
+**A bare hour means the nearest one.** `5시` said at half past four is the five half an hour away, not the one nineteen hours away that happens to be a morning. A named day pins the date, so `내일 9시` is nine that morning; `오전 9시` and `18:00` are unambiguous and are left alone.
+
+**What it refuses, and why it says which.** A refusal names the kind of no, because "could not read a time" sends you looking for a spelling mistake when the answer is something else:
+
+| Input | Answer |
+|---|---|
+| `나중에`, `곧`, `later today` | Not a time. Nobody has picked a moment, and a scheduler must not pick one for you. |
+| `매일 9시`, `1시간마다`, `every day at 9am` | Repeats are not supported — one prompt, one moment. |
+| Anything else it cannot read | Refused with the examples above. |
+
+The reply echoes what was read, in full, because a misread time is worth catching before the work is booked rather than after it fails to happen.
 
 **Where it runs.** In a session of its own, under the conversation's workspace and its four permission switches — the same shape a background task runs in, which is most of why this is small. The reply says which directory before you commit to it.
 
@@ -1628,6 +1653,7 @@ Book a prompt for later. `/schedule <when> <what to do>`:
 
 | Where | What you get |
 |---|---|
+| ⏰ Schedule button | Two fields — when, and what to do — with the time echoed back as you type it. |
 | Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. Click the row to read the result; the × deletes it, and the run's transcript with it. |
 | `/show-scheduled-task` | The same list as text, for the TUI. |
 | `/schedule cancel <id>` | Removes one. |
@@ -1691,13 +1717,38 @@ with two buttons, and neither does anything until it is clicked.
 
 | Button | What it does |
 | --- | --- |
-| Check for updates | Asks GitHub for the latest release of `dennis2lee/localcode` and compares it against this build. |
+| Check for updates | Asks GitHub for the latest release of `dennis2lee/localcode` and compares it against this build — or asks `update_url` instead, when config.json sets one. See [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
 | Download and install | Downloads the file for this platform, verifies it, and either installs it and restarts localcode or starts the platform's installer — see [What installing does](#checking-for-updates) below. Appears only when there is a newer release *and* this localcode can install it. |
 
 Nothing checks on a timer or on opening the panel. A check is an outbound
 request that tells GitHub which version this machine is running, which is
 a thing to ask for rather than assume, and an update replaces the program
 while someone is using it.
+
+#### Updating from somewhere other than GitHub
+
+`update_url` in config.json replaces GitHub entirely: one **https** address at which the current installers are published, side by side, named the way localcode names them.
+
+```json
+{ "update_url": "https://bitbucket.org/acme/localcode-builds/downloads/" }
+```
+
+It exists for a machine that cannot reach github.com, or an organisation that would rather its own build were the one installed: an internal Bitbucket, an artifact server, a plain file share.
+
+**The version is read out of the filenames**, because on a directory of files that is the only place it is written down. Publish the installers under the names localcode publishes them under — `localcode-1.2.3-darwin-universal.tar.gz`, `localcode-1.2.3-windows-amd64.msi`, `localcode-1.2.3-linux-amd64.deb` and the rest — and drop the new build in. The page is scanned for those names whatever it is: an Apache or nginx directory index, a Bitbucket downloads listing, an artifact server's JSON, or a direct link to a single file. If several versions are there, the highest wins, so a leftover from last month cannot offer a downgrade.
+
+| Situation | What you get |
+|---|---|
+| The URL cannot be reached | `could not reach update_url <url>: ...`, naming the address |
+| It answers 404, 403, ... | `update_url <url> answered 404 Not Found` |
+| Nothing there looks like an installer | A message saying so, with an example filename |
+| It is not https | Refused, with the reason |
+
+**https only.** What this URL names is a file localcode will run as an installer, and a file share usually publishes nothing beside it to check the download against — so the connection is the only thing that says the file came from the host you meant. An `http://` URL is refused rather than allowed with a warning.
+
+**Verifying the download.** GitHub publishes a SHA-256 for every asset and localcode checks it. A file share does not, so if a `<filename>.sha256` sits beside the installer (the shape `sha256sum` writes) it is used; if nothing is published, the install goes ahead and the panel says the download **could not be verified**, which is a true thing about a file that has just been run.
+
+The panel names the source when it is not the public releases page, so an internal build is never reported as though it came from GitHub.
 
 **Where the install button appears.** Where the daemon and the person
 clicking share a machine: the desktop window, and a daemon listening on

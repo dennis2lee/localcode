@@ -242,6 +242,7 @@ func TestMergeFieldsGuard(t *testing.T) {
 		// The other three switches. Same reason as SkipPermissions: a
 		// project that says "do not leave this directory" must not have
 		// that dropped because a global config also exists.
+		"UpdateURL":             true,
 		"SkipToolPermissions":   true,
 		"ReadOutsideWorkspace":  true,
 		"WriteOutsideWorkspace": true,

@@ -199,6 +199,8 @@ func (d *Daemon) routes(webFS fs.FS) {
 	// Work booked for later. The list on open, then the schedule.*
 	// events on this conversation's own stream.
 	d.mux.HandleFunc("GET /api/sessions/{id}/schedules", d.handleListSchedules)
+	d.mux.HandleFunc("POST /api/sessions/{id}/schedules", d.handleBookSchedule)
+	d.mux.HandleFunc("POST /api/schedules/preview", d.handlePreviewSchedule)
 	d.mux.HandleFunc("POST /api/sessions/{id}/schedules/{sid}/seen", d.handleSeenSchedule)
 	d.mux.HandleFunc("DELETE /api/sessions/{id}/schedules/{sid}", d.handleDeleteSchedule)
 	d.mux.HandleFunc("GET /api/sessions/{id}/permissions", d.handleGetSessionPermissions)

@@ -67,6 +67,11 @@ type Checker struct {
 	Repo string
 	// API overrides GitHub's address. Empty means the real one.
 	API string
+	// URL, when set, replaces GitHub entirely: a plain address where the
+	// installers are published, config.json's "update_url". See mirror.go
+	// for why the two sources cannot share a code path — one answers a
+	// question about releases and the other is a directory of files.
+	URL string
 	// Client is the HTTP client to use. Nil means a plain one with a
 	// timeout, because the default client has none and this call is made
 	// from a click.
@@ -94,8 +99,20 @@ func (c Checker) client() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
-// Latest returns the most recent published release.
+// Latest returns the most recent published release, from update_url when
+// one is configured and from GitHub otherwise.
+//
+// Dispatched here rather than at the call sites, so the check button, the
+// install button and anything added later all follow the same setting
+// without each having to remember to.
 func (c Checker) Latest(ctx context.Context) (Release, error) {
+	if strings.TrimSpace(c.URL) != "" {
+		return c.LatestFromURL(ctx, c.URL)
+	}
+	return c.latestFromGitHub(ctx)
+}
+
+func (c Checker) latestFromGitHub(ctx context.Context) (Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", c.api(), c.repo())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

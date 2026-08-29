@@ -1,5 +1,9 @@
 import { app, session } from './state.js';
-import { schedulesEl } from './dom.js';
+import {
+  schedulesEl, scheduleModal, scheduleWhenInput, scheduleWhenNote,
+  schedulePromptInput, scheduleNote, scheduleSaveBtn,
+} from './dom.js';
+import { Modal } from './modal.js';
 import * as apiClient from './api.js';
 import { openTaskView } from './taskview.js';
 
@@ -174,4 +178,89 @@ export function applyScheduleEvent(type, d) {
       return;
   }
   renderSchedules();
+}
+
+// ---- Booking one from the window ----
+
+
+export const scheduleDialog = new Modal(scheduleModal);
+
+// The moment and the request are asked for separately, which is the whole
+// difference from typing "/schedule". At a prompt the split between the
+// two has to be guessed out of one string — where does "내일 아침에" end
+// and the request begin — and in two fields there is nothing to guess.
+export function openScheduleDialog() {
+  scheduleWhenInput.value = '';
+  schedulePromptInput.value = '';
+  setNote(scheduleWhenNote, '');
+  setNote(scheduleNote, '');
+  scheduleSaveBtn.disabled = false;
+  scheduleDialog.open();
+  scheduleWhenInput.focus();
+}
+
+export function closeScheduleDialog() {
+  scheduleDialog.close();
+}
+
+function setNote(el, text, kind) {
+  el.textContent = text;
+  el.className = kind ? `note ${kind}` : 'note';
+}
+
+// previewWhen shows what the daemon read the time as, while it is still
+// being typed. That echo is the reason the parser is allowed to guess at
+// all: a misread moment is caught here, before the work is booked,
+// instead of by the work not happening.
+let previewTimer = null;
+// Which preview is the current one. Debouncing alone does not settle it:
+// two requests can be in flight when typing pauses and resumes, and the
+// older one answering last would leave the box showing a moment that is
+// not what is written in the field — which is the exact failure this echo
+// exists to catch, produced by the echo itself.
+let previewSeq = 0;
+export function previewWhen() {
+  clearTimeout(previewTimer);
+  const text = scheduleWhenInput.value.trim();
+  const seq = ++previewSeq;
+  if (!text) {
+    setNote(scheduleWhenNote, '');
+    return;
+  }
+  // Debounced, because this runs on every keystroke and half a word is
+  // not a question worth asking the daemon.
+  previewTimer = setTimeout(async () => {
+    let res;
+    try {
+      res = await apiClient.previewSchedule(text);
+    } catch {
+      if (seq === previewSeq) setNote(scheduleWhenNote, '');
+      return;
+    }
+    if (seq !== previewSeq) return; // a newer answer has already landed
+    if (res.ok) setNote(scheduleWhenNote, `→ ${res.human}`, 'ok');
+    else setNote(scheduleWhenNote, res.detail || 'not a time', 'err');
+  }, 250);
+}
+
+export async function saveSchedule() {
+  const at = scheduleWhenInput.value.trim();
+  const prompt = schedulePromptInput.value.trim();
+  if (!at || !prompt) {
+    setNote(scheduleNote, 'Both fields are needed: when, and what to do.', 'err');
+    return;
+  }
+  scheduleSaveBtn.disabled = true;
+  setNote(scheduleNote, '');
+  try {
+    const res = await apiClient.bookSchedule(session.sessionID, at, prompt);
+    // The row arrives on the schedule.created event, which is also what
+    // makes it survive a reload, so there is nothing to add to the panel
+    // here.
+    setNote(scheduleNote, `Scheduled for ${res.human}.`, 'ok');
+    setTimeout(closeScheduleDialog, 900);
+  } catch (err) {
+    setNote(scheduleNote, String(err && err.message ? err.message : err), 'err');
+    scheduleSaveBtn.disabled = false;
+  }
 }

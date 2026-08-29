@@ -135,8 +135,35 @@
   <span id="status-text"></span>
   <button class="pill stop" id="stop-btn" title="stop the running turn" hidden>&#9632; stop</button>
   <button class="pill" id="auto-delegate-btn" title="click to toggle auto-delegation"></button>
+  <!--
+    Booking work for later, without having to know the command or how the
+    time parser reads a sentence. The two are asked for separately here,
+    which is the difference from "/schedule": at a prompt the split
+    between the moment and the request has to be guessed from one string,
+    and in two fields there is nothing to guess.
+  -->
+  <button class="pill" id="schedule-btn" title="book a prompt to run later">&#9200; schedule</button>
   <button class="pill" id="permission-status-btn" title="click to view or change permission settings"></button>
   <button class="pill" id="settings-btn" title="settings">&#9881; settings</button>
+</div>
+
+<div id="schedule-modal">
+  <div class="box">
+    <h3>Schedule a prompt</h3>
+    <label class="field-label" for="schedule-when">When</label>
+    <input type="text" id="schedule-when" placeholder="30분 뒤 / 내일 아침 / tomorrow 9am / 2026-09-01 14:30" autocomplete="off">
+    <!-- What the time was read as, before anything is booked. The whole
+         reason parsing is allowed to guess: a misread moment is caught
+         here rather than by the work not happening. -->
+    <p class="note" id="schedule-when-note"></p>
+    <label class="field-label" for="schedule-prompt">What to do</label>
+    <textarea id="schedule-prompt" rows="4" placeholder="run the tests and report the failures"></textarea>
+    <p class="note" id="schedule-note"></p>
+    <div class="close-row">
+      <button id="schedule-cancel">Cancel</button>
+      <button id="schedule-save">Schedule it</button>
+    </div>
+  </div>
 </div>
 
 <!--

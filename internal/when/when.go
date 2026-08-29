@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Parse reads a leading time expression and returns the moment it names
@@ -40,14 +42,38 @@ func Parse(text string, now time.Time) (at time.Time, rest string, err error) {
 	if s == "" {
 		return time.Time{}, "", fmt.Errorf("say when, and what to do: %s", Examples)
 	}
+	if word, ok := leadingWord(s, vagueWords); ok {
+		// "나중에", "later", "soon". A scheduler cannot pick a moment on
+		// somebody's behalf, and picking one anyway is worse than saying
+		// so: the work would happen at a time nobody chose.
+		return time.Time{}, "", fmt.Errorf("%q is not a time. Say when: %s", word, Examples)
+	}
+	if word, ok := leadingWord(s, repeatWords); ok {
+		return time.Time{}, "", repeatRefusal(word)
+	}
 
 	for _, try := range []func(string, time.Time) (time.Time, string, bool){
 		parseAbsolute,
 		parseRelative,
+		parseWordNumber,
+		parseWeekday,
 		parseDayAndClock,
 	} {
 		if at, rest, ok := try(s, now); ok {
-			rest = strings.TrimSpace(rest)
+			// The particle the time was written with belongs to the time,
+			// not to the request. Without this, "내일 아침에 테스트
+			// 돌려줘" booked the right moment and handed the model
+			// "에 테스트 돌려줘" — a success that produced a broken
+			// prompt, which is worse than a refusal because nothing looks
+			// wrong until the answer arrives.
+			rest = strings.TrimSpace(stripParticle(rest))
+			if word, ok := leadingWord(rest, repeatMarkers); ok {
+				// "1시간마다" parsed as one hour with "마다" left over,
+				// and booked a single run at the wrong time. A repeat
+				// asked for and silently turned into something else is
+				// the one outcome worth refusing outright.
+				return time.Time{}, "", repeatRefusal(word)
+			}
 			if rest == "" {
 				return time.Time{}, "", fmt.Errorf("that says when but not what to do. Add the request after the time, e.g. %q", "30분 뒤 run the tests")
 			}
@@ -109,7 +135,7 @@ func parseAbsolute(s string, now time.Time) (time.Time, string, bool) {
 // RE2's \b is ASCII-only, so there is no word boundary after "분" or
 // "시간" and the pattern simply never matched the Korean forms it was
 // written for. The clock parser then caught "2시간 뒤" as two o'clock.
-var relativeRe = regexp.MustCompile(`^(?i)(?:in|after)?\s*(\d+)\s*(초|분|시간|일|seconds|second|secs|sec|minutes|minute|mins|min|hours|hour|hrs|hr|days|day|s|m|h|d)\s*(?:뒤|후|이따가|later|from now)?(?:\s+|$)`)
+var relativeRe = regexp.MustCompile(`^(?i)(?:in|after)?\s*(\d+)\s*(초|분|시간|일|seconds|second|secs|sec|minutes|minute|mins|min|hours|hour|hrs|hr|days|day|s|m|h|d)\s*(?:뒤|후|later|from now)?\s*(?:에다가|에다|에|쯤|경|께)?(?:\s+|$)`)
 
 // parseRelative reads "30분 뒤", "in 2 hours", "2h", "3일 후".
 //
@@ -141,6 +167,54 @@ func parseRelative(s string, now time.Time) (time.Time, string, bool) {
 	return now.Add(d).Truncate(time.Second), s[len(m[0]):], true
 }
 
+// wordNumbers are the counts people write out instead of typing a digit.
+// A short list on purpose: "a few hours" and "a while" are not on it,
+// because they are vague and the vague answer is to ask.
+var wordNumbers = []struct {
+	phrase string
+	d      time.Duration
+}{
+	{"half an hour", 30 * time.Minute},
+	{"half a day", 12 * time.Hour},
+	{"an hour", time.Hour},
+	{"a couple of hours", 2 * time.Hour},
+	{"a couple hours", 2 * time.Hour},
+	{"a day", 24 * time.Hour},
+	{"a week", 7 * 24 * time.Hour},
+	{"반나절", 12 * time.Hour},
+	{"한시간", time.Hour},
+	{"한 시간", time.Hour},
+	{"하루", 24 * time.Hour},
+	{"이틀", 48 * time.Hour},
+	{"일주일", 7 * 24 * time.Hour},
+}
+
+// parseWordNumber reads "in half an hour", "한 시간 뒤".
+func parseWordNumber(s string, now time.Time) (time.Time, string, bool) {
+	rest := s
+	for _, lead := range []string{"in", "after"} {
+		if cut, ok := cutPrefixFold(rest, lead); ok {
+			rest = cut
+			break
+		}
+	}
+	for _, w := range wordNumbers {
+		cut, ok := cutPrefixFold(rest, w.phrase)
+		if !ok {
+			continue
+		}
+		// The trailing marker, when there is one: "한 시간 뒤에".
+		for _, tail := range []string{"뒤", "후", "later", "from now"} {
+			if c2, ok := cutPrefixFold(cut, tail); ok {
+				cut = c2
+				break
+			}
+		}
+		return now.Add(w.d).Truncate(time.Second), cut, true
+	}
+	return time.Time{}, "", false
+}
+
 // ---- a day, and a clock on it ----
 
 // dayWords move the date. Anything else leaves it today, and the clock
@@ -151,7 +225,7 @@ var dayWords = []struct {
 }{
 	{"내일모레", 2}, {"모레", 2}, {"day after tomorrow", 2},
 	{"내일", 1}, {"tomorrow", 1}, {"tmr", 1},
-	{"오늘", 0}, {"today", 0}, {"tonight", 0}, {"이따", 0},
+	{"오늘", 0}, {"today", 0},
 }
 
 // namedTimes are the parts of a day people name instead of a number. The
@@ -200,6 +274,12 @@ func parseDayAndClock(s string, now time.Time) (time.Time, string, bool) {
 		return at, cut, ok
 	}
 
+	// "at noon", "at 저녁" — the preposition belongs to the time and was
+	// keeping the named forms from ever being reached.
+	if cut, ok := cutPrefixFold(rest, "at"); ok {
+		rest = cut
+	}
+
 	// A named part of the day: "아침", "evening", "저녁 7시". The hour it
 	// names is used on its own, and as the am/pm sense of a bare clock
 	// after it, which is how the pair is actually said.
@@ -229,6 +309,93 @@ func parseDayAndClock(s string, now time.Time) (time.Time, string, bool) {
 	return time.Time{}, "", false
 }
 
+// weekdays, in both languages. The Korean forms come first and are
+// matched whole; the English ones are full names only, because "sun" and
+// "mon" are ordinary words and a scheduler that reads "sun" out of
+// "sunset the feature flag" is worse than one that asks.
+var weekdays = []struct {
+	word string
+	day  time.Weekday
+}{
+	{"일요일", time.Sunday}, {"월요일", time.Monday}, {"화요일", time.Tuesday},
+	{"수요일", time.Wednesday}, {"목요일", time.Thursday}, {"금요일", time.Friday},
+	{"토요일", time.Saturday},
+	{"sunday", time.Sunday}, {"monday", time.Monday}, {"tuesday", time.Tuesday},
+	{"wednesday", time.Wednesday}, {"thursday", time.Thursday}, {"friday", time.Friday},
+	{"saturday", time.Saturday},
+}
+
+// nextWeekWords push the answer a further seven days out: "다음주
+// 월요일" is not this coming Monday when today is Sunday.
+var nextWeekWords = []string{"다음주", "담주", "next week", "next"}
+
+// parseWeekday reads "금요일 저녁에 배포", "next monday review this".
+//
+// The next occurrence, strictly in the future: "금요일" said on a Friday
+// means the Friday after this one, because a day that is already most of
+// the way through is not what somebody means by naming it. "다음주" adds
+// a week to whatever that came to.
+func parseWeekday(s string, now time.Time) (time.Time, string, bool) {
+	rest := s
+	extraWeek := false
+	for _, w := range nextWeekWords {
+		if cut, ok := cutPrefixFold(rest, w); ok {
+			extraWeek, rest = true, cut
+			break
+		}
+	}
+	for _, d := range weekdays {
+		cut, ok := cutPrefixFold(rest, d.word)
+		if !ok {
+			continue
+		}
+		days := int(d.day-now.Weekday()+7) % 7
+		if days == 0 {
+			days = 7 // naming today's weekday means the next one
+		}
+		if extraWeek {
+			days += 7
+		}
+		// The clock on that day, if one follows: "금요일 저녁", "next
+		// monday at 3pm". Otherwise nine in the morning, the same
+		// reading a bare date gets.
+		if at, c2, ok := clockOnDay(cut, now, days); ok {
+			return at, c2, true
+		}
+		return rollForward(now, days, 9, 0, true), cut, true
+	}
+	// "next" with no weekday after it is not a time. "next week" alone is
+	// a range, not a moment, and picking one out of it would be choosing
+	// on somebody's behalf.
+	return time.Time{}, "", false
+}
+
+// clockOnDay reads an optional named part of the day and an optional
+// clock, pinned to a date that has already been decided.
+func clockOnDay(rest string, now time.Time, days int) (time.Time, string, bool) {
+	rest = strings.TrimSpace(stripParticle(rest))
+	if at, cut, matched, ok := parseKoreanClock(rest, now, days, true, -1); matched {
+		return at, cut, ok
+	}
+	for _, n := range namedTimes {
+		cut, ok := cutPrefixFold(rest, n.word)
+		if !ok {
+			continue
+		}
+		if at, c2, matched, valid := parseKoreanClock(cut, now, days, true, n.hour); matched {
+			return at, c2, valid
+		}
+		if at, c2, matched, valid := parseWesternClock(cut, now, days, true, n.hour); matched {
+			return at, c2, valid
+		}
+		return rollForward(now, days, n.hour, 0, true), cut, true
+	}
+	if at, cut, matched, ok := parseWesternClock(rest, now, days, true, -1); matched {
+		return at, cut, ok
+	}
+	return time.Time{}, "", false
+}
+
 // applyHint gives a bare clock the am/pm sense of the word in front of
 // it: "저녁 7시" is seven in the evening, and "아침 9시" is nine in the
 // morning. hint is the named hour, or -1 when there was no such word.
@@ -251,6 +418,7 @@ func parseKoreanClock(rest string, now time.Time, days int, sawDay bool, hint in
 		return time.Time{}, "", false, false
 	}
 	hour, _ := strconv.Atoi(m[2])
+	raw := hour
 	minute := 0
 	if m[3] != "" {
 		minute, _ = strconv.Atoi(m[3])
@@ -274,7 +442,8 @@ func parseKoreanClock(rest string, now time.Time, days int, sawDay bool, hint in
 		// afternoon with "25시 deploy" as the request.
 		return time.Time{}, "", true, false
 	}
-	return rollForward(now, days, hour, minute, sawDay), rest[len(m[0]):], true, true
+	ambiguous := m[1] == "" && hint < 0 && raw >= 1 && raw <= 11
+	return rollForwardHour(now, days, hour, minute, sawDay, ambiguous), rest[len(m[0]):], true, true
 }
 
 func parseWesternClock(rest string, now time.Time, days int, sawDay bool, hint int) (at time.Time, cut string, matched, valid bool) {
@@ -286,6 +455,7 @@ func parseWesternClock(rest string, now time.Time, days int, sawDay bool, hint i
 		return time.Time{}, "", false, false
 	}
 	hour, _ := strconv.Atoi(m[1])
+	raw := hour
 	minute := 0
 	if m[2] != "" {
 		minute, _ = strconv.Atoi(m[2])
@@ -305,7 +475,8 @@ func parseWesternClock(rest string, now time.Time, days int, sawDay bool, hint i
 	if hour > 23 || minute > 59 {
 		return time.Time{}, "", true, false
 	}
-	return rollForward(now, days, hour, minute, sawDay), rest[len(m[0]):], true, true
+	ambiguous := m[3] == "" && hint < 0 && raw >= 1 && raw <= 11
+	return rollForwardHour(now, days, hour, minute, sawDay, ambiguous), rest[len(m[0]):], true, true
 }
 
 // rollForward builds the moment, and moves it to tomorrow when the clock
@@ -315,9 +486,34 @@ func parseWesternClock(rest string, now time.Time, days int, sawDay bool, hint i
 // on tomorrow whatever the current time is, and only a time with no day
 // attached is allowed to roll.
 func rollForward(now time.Time, days, hour, minute int, sawDay bool) time.Time {
-	at := time.Date(now.Year(), now.Month(), now.Day()+days, hour, minute, 0, 0, now.Location())
-	if !sawDay && !at.After(now) {
-		at = at.AddDate(0, 0, 1)
+	return rollForwardHour(now, days, hour, minute, sawDay, false)
+}
+
+// rollForwardHour is rollForward with the twelve-hour question answered.
+//
+// ambiguous means the clock was a bare 1 to 11 with no 오전/오후, no
+// am/pm and no word in front of it. "5시까지 끝내줘" said at half past
+// four is one of those, and reading it as five in the morning tomorrow
+// booked the work nineteen hours after the half hour the person meant.
+//
+// So both readings are considered and the nearer future one wins, which
+// is how a person reads a bare hour: the next five o'clock, not the next
+// five o'clock that happens to be a morning. Only when no day was named —
+// "내일 9시" is nine on that day and not nine in the evening tonight.
+func rollForwardHour(now time.Time, days, hour, minute int, sawDay, ambiguous bool) time.Time {
+	on := func(h int) time.Time {
+		at := time.Date(now.Year(), now.Month(), now.Day()+days, h, minute, 0, 0, now.Location())
+		if !sawDay && !at.After(now) {
+			at = at.AddDate(0, 0, 1)
+		}
+		return at
+	}
+	at := on(hour)
+	if sawDay || !ambiguous || hour < 1 || hour > 11 {
+		return at
+	}
+	if alt := on(hour + 12); alt.Before(at) {
+		return alt
 	}
 	return at
 }
@@ -369,3 +565,110 @@ func roughly(d time.Duration) string {
 		return fmt.Sprintf("%.1f days", d.Hours()/24)
 	}
 }
+
+// ---- what is not a time ----
+
+// vagueWords are the ones people say when they have not decided. They are
+// refused by name rather than falling into the generic "could not read a
+// time", because the answer is different: this is not a spelling this
+// cannot parse, it is a moment nobody has chosen yet.
+var vagueWords = []string{
+	"나중에", "나중", "이따가", "이따", "곧", "언젠가", "적당히", "알아서",
+	"later today", "later on", "later", "soon", "sometime", "in a bit", "shortly", "whenever",
+}
+
+// repeatWords open a repeating request, and repeatMarkers are what is
+// left over when one was half-parsed as a single time ("1시간마다" reads
+// as one hour with "마다" behind it).
+//
+// Both are refused. There are no repeats, and the reason they cannot
+// simply be ignored is what "1시간마다 확인" did before this: it booked
+// one run at one in the morning with "간마다 확인" as the request. A
+// repeat that quietly becomes a different single job is the worst of the
+// three possible outcomes.
+var repeatWords = []string{
+	"매일", "매주", "매시간", "매달", "매월", "매분", "날마다", "주마다",
+	"every", "each day", "each week", "daily", "weekly", "hourly", "repeat",
+}
+
+var repeatMarkers = []string{"마다", "간마다"}
+
+func repeatRefusal(word string) error {
+	return fmt.Errorf(
+		"%q asks for a repeating task, and localcode books one run at one moment. "+
+			"A repeat needs a stop condition and a policy for what happens when it fails, "+
+			"and neither exists yet. Say a single time instead: %s", word, Examples)
+}
+
+// leadingWord reports whether s opens with one of words, matched
+// case-insensitively and only at a boundary — so "에러" is not the
+// particle "에" and "everything" is not "every".
+func leadingWord(s string, words []string) (string, bool) {
+	t := strings.TrimSpace(s)
+	for _, w := range words {
+		if len(t) < len(w) || !strings.EqualFold(t[:len(w)], w) {
+			continue
+		}
+		if boundaryAfter(t, len(w)) {
+			return w, true
+		}
+	}
+	return "", false
+}
+
+// boundaryAfter reports whether the text ends or turns into something
+// other than a letter or digit at i.
+//
+// A boundary rather than a bare prefix match, and it is the whole
+// difference between stripping the particle in "아침에 테스트" and
+// mangling "아침 에러 로그": both start with the same two characters and
+// only one of them is a particle.
+func boundaryAfter(s string, i int) bool {
+	if i >= len(s) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(s[i:])
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+}
+
+// particles are what Korean writes after a time and before the request.
+// Longest first, so "에다가" is not read as "에" with "다가" left behind.
+var particles = []string{"에다가", "에다", "쯤에", "경에", "까지", "부터", "에", "쯤", "경", "께"}
+
+// stripParticle removes one trailing particle from the front of what is
+// left after a time, when it is a particle rather than the first word of
+// the request.
+func stripParticle(rest string) string {
+	t := strings.TrimLeft(rest, " \t")
+	for _, p := range particles {
+		if strings.HasPrefix(t, p) && boundaryAfter(t, len(p)) {
+			return t[len(p):]
+		}
+	}
+	return rest
+}
+
+// ParseTime reads a time expression that is only a time — the window's
+// "When" field, where the request is asked for separately.
+//
+// Parse's own rule that a time with nothing after it is not a schedule is
+// exactly wrong here: in two fields, a time with nothing after it is what
+// that field is for. So the two entry points differ in one thing and
+// share everything else, which is what keeps "내일 아침" meaning the same
+// moment whether it was typed at a prompt or into a box.
+func ParseTime(text string, now time.Time) (time.Time, error) {
+	at, rest, err := Parse(strings.TrimSpace(text)+" "+timeOnlyFiller, now)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if strings.TrimSpace(rest) != timeOnlyFiller {
+		return time.Time{}, fmt.Errorf("%q has more in it than a time. Put the request in the other field", strings.TrimSpace(text))
+	}
+	return at, nil
+}
+
+// timeOnlyFiller stands in for the request Parse insists on, so ParseTime
+// can reuse it whole rather than growing a second copy of the same rules
+// that drifts from it. Chosen to be a word no time expression can end
+// with and no particle can eat.
+const timeOnlyFiller = "\x00do"

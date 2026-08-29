@@ -413,6 +413,36 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
    about progress without the window having to be opened. */
 .task .doing { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Booking a prompt for later. Two fields, because at a prompt the split
+   between the moment and the request has to be guessed from one string,
+   and here there is nothing to guess. */
+#schedule-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10; }
+#schedule-modal.open { display: flex; }
+#schedule-modal .box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: min(560px, 90vw);
+}
+#schedule-modal h3 { margin-top: 0; }
+#schedule-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: 12px; }
+#schedule-modal input, #schedule-modal textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+#schedule-modal textarea { resize: vertical; }
+#schedule-modal .note { color: var(--muted); font-size: 11px; margin-top: 6px; min-height: 1em; }
+#schedule-modal .note.err { color: var(--err); }
+#schedule-modal .note.ok { color: var(--ok); }
+#schedule-modal .close-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
 /* Scheduled tasks. The same row as a background task, because they are
    the same thing at a different moment, plus a light for the state and a
    delete that does not open the row it sits in. */

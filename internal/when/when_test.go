@@ -50,6 +50,47 @@ func TestParse(t *testing.T) {
 		{"내일 아침 8시 30분 stand-up", time.Date(2026, 8, 27, 8, 30, 0, 0, time.UTC), "stand-up"},
 		{"tomorrow morning 8 stand-up", time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC), "stand-up"},
 
+		// The particle belongs to the time, not to the request. Before
+		// this, the most natural Korean phrasing booked the right moment
+		// and handed the model "에 테스트 돌려줘".
+		{"내일 아침에 테스트 돌려줘", time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC), "테스트 돌려줘"},
+		{"3시간 후에 빌드 확인", now.Add(3 * time.Hour), "빌드 확인"},
+		{"30분 뒤에 리포트 작성", now.Add(30 * time.Minute), "리포트 작성"},
+		{"5시까지 끝내줘", time.Date(2026, 8, 26, 17, 0, 0, 0, time.UTC), "끝내줘"},
+		// ... and a request that merely starts with the same letters is
+		// not a particle. "에러" is not "에".
+		{"내일 아침 에러 로그 확인", time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC), "에러 로그 확인"},
+
+		// A bare hour means the nearest one. Said at half past four,
+		// "5시" is the five half an hour away, not the one nineteen hours
+		// away that happens to be a morning.
+		{"5시 deploy", time.Date(2026, 8, 26, 17, 0, 0, 0, time.UTC), "deploy"},
+		{"9시에 리포트", time.Date(2026, 8, 26, 21, 0, 0, 0, time.UTC), "리포트"},
+		// Unless a day was named, or the hour was written unambiguously.
+		{"내일 9시에 리포트", time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC), "리포트"},
+		{"오전 9시 리포트", time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC), "리포트"},
+		{"18:00 deploy", time.Date(2026, 8, 26, 18, 0, 0, 0, time.UTC), "deploy"},
+
+		// tonight was in the day list and the time list both, so the day
+		// list ate it and threw the hour away: it came out as nine in the
+		// morning, already past, refused as "in the past".
+		{"tonight write the notes", time.Date(2026, 8, 26, 21, 0, 0, 0, time.UTC), "write the notes"},
+		// "at" belongs to the time, and was keeping the named forms from
+		// ever being reached.
+		{"at noon summarize the diff", time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC), "summarize the diff"},
+
+		// Weekdays. The next one, strictly ahead of us.
+		{"금요일 저녁에 배포", time.Date(2026, 8, 28, 18, 0, 0, 0, time.UTC), "배포"},
+		{"friday evening deploy", time.Date(2026, 8, 28, 18, 0, 0, 0, time.UTC), "deploy"},
+		{"수요일 리뷰", time.Date(2026, 9, 2, 9, 0, 0, 0, time.UTC), "리뷰"},
+		{"다음주 월요일에 리뷰", time.Date(2026, 9, 7, 9, 0, 0, 0, time.UTC), "리뷰"},
+		{"next monday review this", time.Date(2026, 9, 7, 9, 0, 0, 0, time.UTC), "review this"},
+
+		// The counts people write out instead of typing a digit.
+		{"in half an hour check the build", now.Add(30 * time.Minute), "check the build"},
+		{"in a couple of hours ping me", now.Add(2 * time.Hour), "ping me"},
+		{"한 시간 뒤에 확인", now.Add(time.Hour), "확인"},
+
 		// Absolute, with and without a clock.
 		{"2026-09-01 14:30 ship it", time.Date(2026, 9, 1, 14, 30, 0, 0, time.UTC), "ship it"},
 		{"2026-09-01 ship it", time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC), "ship it"},
@@ -81,6 +122,19 @@ func TestParseRefuses(t *testing.T) {
 		{"2020-01-01 09:00 do it", "a date in the past"},
 		{"3 run the tests", "a bare number is not a clock"},
 		{"오후 25시 deploy", "not a real hour"},
+		// Vague, and refused by name rather than by "could not read a
+		// time": nobody has chosen a moment, and a scheduler must not
+		// choose one for them.
+		{"나중에 정리해줘", "nobody has picked a time"},
+		{"곧 확인해줘", "the same, one word shorter"},
+		{"later today check it", "the English one"},
+		// A repeat asked for and silently turned into a single job at the
+		// wrong time is the worst of the three outcomes. "1시간마다" used
+		// to book one run at one in the morning with "간마다 확인" as the
+		// request.
+		{"매일 아침 9시에 리포트", "a repeat"},
+		{"1시간마다 확인", "a repeat, half-parsed"},
+		{"every day at 9am report", "the English repeat"},
 	} {
 		t.Run(tt.because, func(t *testing.T) {
 			if _, _, err := Parse(tt.in, now); err == nil {
@@ -116,6 +170,43 @@ func TestFormatSaysWhenInTermsAPersonChecks(t *testing.T) {
 	} {
 		if got := Format(tt.at, now); !strings.Contains(got, tt.want) {
 			t.Errorf("Format(%s) = %q, want it to contain %q", tt.at.Format(time.RFC3339), got, tt.want)
+		}
+	}
+}
+
+// A refusal has to say which kind of no it is. "Could not read a time"
+// sends somebody looking for a spelling mistake when the real answer is
+// that repeats do not exist, or that they have not chosen a moment yet.
+func TestTheRefusalSaysWhichKindOfNo(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{"매일 9시에 리포트", "repeating"},
+		{"1시간마다 확인", "repeating"},
+		{"나중에 정리해줘", "is not a time"},
+		{"later check it", "is not a time"},
+	} {
+		_, _, err := Parse(tt.in, now)
+		if err == nil {
+			t.Fatalf("Parse(%q) succeeded", tt.in)
+		}
+		if !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("Parse(%q) said %q, want it to mention %q", tt.in, err, tt.want)
+		}
+	}
+}
+
+// A word that merely starts like a particle or a repeat is neither.
+func TestOrdinaryWordsAreNotSwallowed(t *testing.T) {
+	for _, tt := range []struct{ in, wantPrompt string }{
+		{"내일 아침 에러 로그 확인", "에러 로그 확인"},
+		{"30분 뒤 everything in the queue", "everything in the queue"},
+		{"내일 아침 경로 정리", "경로 정리"},
+	} {
+		_, rest, err := Parse(tt.in, now)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", tt.in, err)
+		}
+		if rest != tt.wantPrompt {
+			t.Errorf("Parse(%q) prompt = %q, want %q", tt.in, rest, tt.wantPrompt)
 		}
 	}
 }

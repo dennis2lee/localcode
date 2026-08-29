@@ -28,8 +28,19 @@ var updateMu sync.Mutex
 // every real build, so this is GitHub; a test points it somewhere it
 // controls, because a test that needs the internet and a published release
 // is not a test.
+// updateSource names where releases are looked up, for a client that
+// should say so rather than implying GitHub.
+func (d *Daemon) updateSource() string {
+	if u := d.Loop.Config.UpdateURL; u != "" {
+		return u
+	}
+	return "https://github.com/" + update.DefaultRepo + "/releases"
+}
+
 func (d *Daemon) updateChecker() update.Checker {
-	return update.Checker{API: d.UpdateAPI}
+	// config.json's update_url wins when it is set, which is the whole of
+	// how an internal build gets installed instead of a public one.
+	return update.Checker{API: d.UpdateAPI, URL: d.Loop.Config.UpdateURL}
 }
 
 // handleUpdateCheck asks GitHub what the latest release is and reports it
@@ -50,8 +61,13 @@ func (d *Daemon) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := map[string]any{
-		"current":     d.Version,
-		"checked":     true,
+		"current": d.Version,
+		"checked": true,
+		// Which source answered. A machine configured to update from an
+		// internal address should say so on the panel: otherwise "0.65.0
+		// is available" reads as a public release and nobody notices the
+		// build is coming from somewhere else entirely.
+		"source":      d.updateSource(),
 		"latest":      rel.Version,
 		"tag":         rel.Tag,
 		"page_url":    rel.PageURL,
@@ -126,6 +142,14 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	// download would otherwise abort a twenty-megabyte transfer most of
 	// the way through, and the client's own request has a deadline it
 	// cannot usefully hold for the whole of one.
+	// A file share publishes the installer and usually nothing else, so
+	// there is no size and no checksum to check the download against. A
+	// sibling "<asset>.sha256" is used when somebody published one; when
+	// nobody did, the reply says the download could not be verified
+	// rather than leaving that unsaid.
+	if d.Loop.Config.UpdateURL != "" && asset.Digest == "" {
+		asset.Digest = d.updateChecker().DigestFor(r.Context(), asset.URL)
+	}
 	path, err := update.Download(context.Background(), nil, asset, dir)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
@@ -144,7 +168,13 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	// user does is run the same old build.
 	detail, restarting := restartPlan(out, d.Restart != nil)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":    rel.Version,
+		"version": rel.Version,
+		"source":  d.updateSource(),
+		// Whether what was downloaded could be checked against a
+		// published checksum. False is not a failure and is not hidden:
+		// it is a true thing about a file that has just been run as an
+		// installer, and the panel says it.
+		"verified":   asset.Digest != "",
 		"started":    out.Started,
 		"replaced":   out.Replaced,
 		"restarting": restarting,

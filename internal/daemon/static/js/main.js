@@ -5,6 +5,7 @@ import {
   autoDelegateBtn, delegateCloseBtn, delegateEnabledCheckbox, delegateAgentSelect,
   delegateMatchAddBtn, delegateMatchInput,
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
+  scheduleBtn, scheduleCancelBtn, scheduleSaveBtn, scheduleWhenInput, schedulePromptInput,
   workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, stopBtn,
   workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskDeleteBtn, taskCloseBtn,
   windowBarEl, windowMinimizeBtn, windowMaximizeBtn, windowCloseBtn, windowEdgesEl, windowTitleEl, windowEdges,
@@ -20,6 +21,9 @@ import {
 } from './composer.js';
 import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
 import { loadSessions, selectSession, createNewSession, deleteAllSessions } from './sessions.js';
+import {
+  openScheduleDialog, closeScheduleDialog, saveSchedule, previewWhen,
+} from './schedules.js';
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
   openPermissionSettings, closePermissionSettings, addPermissionRule,
@@ -158,6 +162,16 @@ delegateAgentSelect.addEventListener('change', () => {
 delegateMatchAddBtn.addEventListener('click', addDelegateMatch);
 delegateMatchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); addDelegateMatch(); }
+});
+scheduleBtn.addEventListener('click', openScheduleDialog);
+scheduleCancelBtn.addEventListener('click', closeScheduleDialog);
+scheduleSaveBtn.addEventListener('click', saveSchedule);
+scheduleWhenInput.addEventListener('input', previewWhen);
+// Enter in the When field moves on rather than submitting: the request
+// is still empty at that point, and submitting would only produce the
+// error saying so.
+scheduleWhenInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); schedulePromptInput.focus(); }
 });
 permissionStatusBtn.addEventListener('click', openPermissionSettings);
 permissionSettingsCloseBtn.addEventListener('click', closePermissionSettings);

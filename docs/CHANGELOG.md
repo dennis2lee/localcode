@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.65.0
+
+* **The scheduler understood the wrong Korean, and said so about none of it.** Three of the four commonest phrasings booked the right moment and handed the model a broken request:
+
+  | Typed | Booked | The model actually got |
+  |---|---|---|
+  | `내일 아침에 테스트 돌려줘` | tomorrow 09:00 ✓ | `"에 테스트 돌려줘"` |
+  | `3시간 후에 빌드 확인해줘` | +3 hours ✓ | `"후에 빌드 확인해줘"` |
+  | `1시간마다 확인` | tomorrow **01:00** ✗ | `"간마다 확인"` |
+
+  The particle belongs to the time, not to the request, and it is stripped now — while `내일 아침 에러 로그 확인` keeps its `에러`, because a word that merely starts like a particle is not one. `tonight` and `이따` were in the day list and the time list both, so the day list ate them and threw the hour away: `tonight write the notes` came out as nine in the morning, already past, and was refused as "in the past".
+
+* **A refusal says which kind of no it is.** `나중에`, `곧`, `later today` are refused as not a time — nobody has picked a moment, and a scheduler must not pick one on your behalf. `매일`, `마다`, `every day` are refused as repeats, which do not exist here. Both used to fall into the generic "could not read a time", which sends somebody looking for a spelling mistake, and the repeat did not even do that: it booked a single run at the wrong hour.
+
+* **More of both languages.** Weekdays (`금요일 저녁`, `다음주 월요일`, `next monday`), `at noon` (the preposition was keeping the named forms from ever being reached), and the counts people write out (`in half an hour`, `한 시간 뒤`, `in a couple of hours`).
+
+* **A bare hour means the nearest one.** `5시까지 끝내줘` said at half past four booked five the next morning. It books the five half an hour away now. A named day still pins the date, so `내일 9시` is nine that morning, and `오전 9시` and `18:00` are unambiguous and untouched.
+
+* **A Schedule button under the prompt box.** ⏰, next to the permissions and settings pills. It asks for the moment and the request in two fields, which is the difference from typing the command: at a prompt the split between the two has to be found in one string, and in two fields there is nothing to find. The When field shows what the time was read as while you type it, answered by the daemon rather than by a second parser in the page — two parsers that disagree about `내일 아침` is the bug the echo exists to prevent.
+
+* **`update_url`: install from somewhere other than GitHub.** One https address in config.json at which the current installers are published, for a machine that cannot reach github.com or an organisation that would rather its own build were the one installed. The version is read out of the filenames, because on a directory of files that is the only place it is written down, and the page is scanned for them whatever it is — an Apache index, a Bitbucket downloads listing, an artifact server's JSON, or a link straight to one file. The highest version found wins, so a leftover from last month cannot offer a downgrade.
+
+  https only, because what the URL names is a file localcode runs as an installer and a file share usually publishes nothing beside it to check the download against. A `<filename>.sha256` is used when somebody published one; when nobody did, the panel says the download **could not be verified** rather than leaving that unsaid. The panel also names the source when it is not the public releases page, so an internal build is never reported as though it came from GitHub.
+
 ## v0.64.0
 
 * **Book a prompt for later.** `/schedule 30분 뒤 run the tests and report the failures`, `/schedule tomorrow 9am summarize yesterday's commits`, `/schedule 2026-09-01 14:30 draft the release notes`. When the moment comes it runs in a session of its own, under the conversation's workspace and its four permission switches — the same shape a background task runs in, which is most of why this is small: "run a prompt unattended in the right directory" was already built.

@@ -167,6 +167,9 @@ func (c *Config) merge(other *Config) {
 	if other.SkipPermissions != nil {
 		c.SkipPermissions = other.SkipPermissions
 	}
+	if other.UpdateURL != "" {
+		c.UpdateURL = other.UpdateURL
+	}
 	if other.SkipToolPermissions != nil {
 		c.SkipToolPermissions = other.SkipToolPermissions
 	}

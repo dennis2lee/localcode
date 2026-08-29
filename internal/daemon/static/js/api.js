@@ -107,6 +107,12 @@ export const setSkipPermissions = (enabled) => api('POST', '/api/permissions/ski
 // Work booked for later. The list on open; after that the schedule.*
 // events on the conversation's own stream.
 export const listSchedules = (sessionID) => api('GET', `/api/sessions/${sessionID}/schedules`);
+export const bookSchedule = (sessionID, when, prompt) =>
+  api('POST', `/api/sessions/${sessionID}/schedules`, { when, prompt });
+// What the daemon would read that time as, without booking anything. The
+// page does not parse times itself: two parsers that disagree about
+// "내일 아침" is the bug the echo exists to prevent.
+export const previewSchedule = (when) => api('POST', '/api/schedules/preview', { when });
 export const markScheduleSeen = (sessionID, id) =>
   api('POST', `/api/sessions/${sessionID}/schedules/${id}/seen`);
 export const deleteSchedule = (sessionID, id) =>
