@@ -73,21 +73,6 @@ export function renderSchedules() {
     when.textContent = whenText(s);
     head.appendChild(when);
 
-    // Both stop propagation, or clicking either would also open the row
-    // they sit on.
-    const ren = document.createElement('button');
-    ren.className = 'del';
-    ren.textContent = '✎';
-    ren.title = 'name this scheduled task';
-    ren.addEventListener('click', (e) => { e.stopPropagation(); renameSchedulePrompt(s); });
-    head.appendChild(ren);
-
-    const del = document.createElement('button');
-    del.className = 'del';
-    del.textContent = '×';
-    del.title = 'delete this scheduled task';
-    del.addEventListener('click', (e) => { e.stopPropagation(); deleteSchedule(s.id); });
-    head.appendChild(del);
     row.appendChild(head);
 
     // The name when there is one, and the prompt underneath it in the
@@ -110,6 +95,30 @@ export function renderSchedules() {
       err.textContent = s.error;
       row.appendChild(err);
     }
+
+    // Named buttons on their own line, the same shape a session row uses
+    // for the same two jobs. An icon is smaller and this panel is not
+    // short of room; "rename" and "delete" are what the left-hand list
+    // says, and one word in two places beats two glyphs somebody has to
+    // learn. Both stop propagation, or clicking either would also open
+    // the row they sit on.
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+
+    const renameBtn = document.createElement('button');
+    renameBtn.textContent = 'rename';
+    renameBtn.title = 'name this scheduled task';
+    renameBtn.addEventListener('click', (e) => { e.stopPropagation(); renameSchedulePrompt(s); });
+    actions.appendChild(renameBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.textContent = 'delete';
+    delBtn.className = 'danger-btn';
+    delBtn.title = 'delete this scheduled task and its transcript';
+    delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteSchedule(s.id); });
+    actions.appendChild(delBtn);
+
+    row.appendChild(actions);
 
     row.addEventListener('click', () => openSchedule(s));
     schedulesEl.appendChild(row);

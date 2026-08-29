@@ -1,8 +1,12 @@
 # Changelog
 
+## v0.66.1
+
+* **The scheduled-task rows carry named buttons, like the session rows do.** They shipped with a ✎ and a × in the header, which is smaller and asks somebody to learn two glyphs for two jobs the panel on the other side of the screen already spells out. They are **rename** and **delete** now, on their own line, wrapping the same way, with delete outlined in the same shared danger style — one word in two places beats two vocabularies.
+
 ## v0.66.0
 
-* **A scheduled task can be given a name.** ✎ on its row in the panel, or `/schedule rename <id> <name>`. A booked prompt is a paragraph and a row is one truncated line, so two tasks that both start "run the tests and report the fail…" are two rows nobody can tell apart at the moment they need to.
+* **A scheduled task can be given a name.** From its row in the panel, or `/schedule rename <id> <name>`. A booked prompt is a paragraph and a row is one truncated line, so two tasks that both start "run the tests and report the fail…" are two rows nobody can tell apart at the moment they need to.
 
   The name is a label for the row and nothing else — cosmetic, like a session's title, with nothing resolving by it. **The prompt stays visible underneath it**, because naming a task should add a label rather than hide what it will actually run, which is the thing worth being able to check before it does. An empty name clears it and the row goes back to the prompt alone. Recorded on the conversation's own log like every other change to a row, so it survives a reload and reaches a second window without either having to ask again.
 

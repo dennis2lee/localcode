@@ -128,3 +128,22 @@ test('renaming leaves the light and the time alone', async () => {
   assert.equal(led(), led0);
   assert.equal(when(), when0);
 });
+
+// The same two jobs the session list offers, named the same way. Two
+// panels doing the same thing should not ask somebody to learn two
+// vocabularies, and an icon is a vocabulary.
+test('a row offers rename and delete, named', async () => {
+  const app = await load();
+  book(app);
+  const labels = [...app.el('schedules').querySelectorAll('button')].map(b => b.textContent);
+  assert.deepEqual(labels, ['rename', 'delete']);
+});
+
+// Delete is outlined rather than filled, the same class the session list
+// uses: a solid red on every row makes a panel read as a wall of alarms.
+test('delete carries the shared danger class', async () => {
+  const app = await load();
+  book(app);
+  const del = app.el('schedules').querySelectorAll('button')[1];
+  assert.ok(del.classList.contains('danger-btn'));
+});

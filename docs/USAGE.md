@@ -1654,7 +1654,7 @@ The reply echoes what was read, in full, because a misread time is worth catchin
 | Where | What you get |
 |---|---|
 | ⏰ Schedule button | Two fields — when, and what to do — with the time echoed back as you type it. |
-| Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. Click the row to read the result; ✎ names it, and × deletes it along with the run's transcript. |
+| Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. Click the row to read the result; **rename** names it and **delete** removes it along with the run's transcript, the same two buttons a session row carries. |
 | `/show-scheduled-task` | The same list as text, for the TUI. |
 | `/schedule cancel <id>` | Removes one. |
 | `/schedule rename <id> <name>` | Labels one; an empty name clears it. |

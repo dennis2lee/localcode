@@ -453,16 +453,12 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 .sched .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched .prompt { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched .err { color: var(--err); font-size: 11px; }
-/* Outlined and quiet: it sits on every row, and a filled red per row
-   would make the panel read as a list of problems. */
-.sched .del {
-  padding: 0 6px;
-  font-size: 11px;
-  background: transparent;
-  color: var(--muted);
-  border: 1px solid var(--border);
-}
-.sched .del:hover { color: var(--err); border-color: var(--err); }
+/* The same buttons a session row has, on their own line and wrapping the
+   same way: two panels doing the same two jobs should not ask somebody to
+   learn two vocabularies. .danger-btn is shared, so delete is outlined
+   here for the reason it is outlined there. */
+.sched .actions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.sched .actions button { padding: 3px 8px; font-size: 11px; }
 
 /* A background task's own conversation, read-only. There is no prompt
    box: a task was given its instructions when it was spawned. */
