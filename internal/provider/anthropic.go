@@ -60,6 +60,11 @@ type anthContentBlock struct {
 	ToolUseID string `json:"tool_use_id,omitempty"` // tool_result
 	Content   string `json:"content,omitempty"`     // tool_result
 	IsError   bool   `json:"is_error,omitempty"`    // tool_result
+
+	// thinking. The signature is the API's attestation of the block, and
+	// a continuation that sends the text without it is refused.
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
 }
 
 type anthTool struct {
@@ -91,6 +96,19 @@ type anthRequest struct {
 	MaxTokens   int           `json:"max_tokens"`
 	Temperature float64       `json:"temperature,omitempty"`
 	Stream      bool          `json:"stream"`
+	Thinking    *anthThinking `json:"thinking,omitempty"`
+}
+
+// anthThinking is extended thinking, in the two shapes the API has had.
+//
+// "adaptive" is the current one and takes no number: the model decides
+// how much reasoning the request is worth. "enabled" is the older one and
+// requires a budget in tokens. Which of the two a model accepts is a
+// property of the model — the newest families reject a budget outright —
+// so the choice is made from the id. See anthropicThinking.
+type anthThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 // anthStreamEvent covers every field used across the handful of SSE event
@@ -113,6 +131,10 @@ type anthStreamEvent struct {
 		Text        string `json:"text"`
 		PartialJSON string `json:"partial_json"`
 		StopReason  string `json:"stop_reason"`
+		// Extended thinking arrives as its own two delta kinds: the
+		// reasoning itself, then the signature that attests to it.
+		Thinking  string `json:"thinking"`
+		Signature string `json:"signature"`
 	} `json:"delta,omitempty"`
 
 	// Message carries message_start's nested usage (input tokens are
@@ -143,12 +165,41 @@ type anthUsage struct {
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
+// toAnthropicMessages converts the history, keeping thinking blocks only
+// where the API needs them.
+//
+// The rule is narrow because both directions are wrong. A tool-use turn
+// that is still in flight must send back the thinking the model produced
+// before it asked for the tool, signature and all, or the continuation is
+// refused. Every earlier turn must not: that reasoning has already been
+// used, the API does not want it back, and re-sending pages of it every
+// request costs tokens for nothing.
+//
+// "Where the API needs them" is therefore exactly one message — the last
+// assistant message in the history, which is the only one a continuation
+// can be continuing.
 func toAnthropicMessages(msgs []Message) []anthMessage {
+	lastAssistant := -1
+	for i, m := range msgs {
+		if m.Role == RoleAssistant {
+			lastAssistant = i
+		}
+	}
+
 	out := make([]anthMessage, 0, len(msgs))
-	for _, m := range msgs {
+	for i, m := range msgs {
 		blocks := make([]anthContentBlock, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch b.Type {
+			case BlockThinking:
+				if i != lastAssistant || b.Signature == "" {
+					// An unsigned block is one this process assembled
+					// rather than received — a rehydrated history, a test.
+					// Sending it would be claiming an attestation that
+					// does not exist.
+					continue
+				}
+				blocks = append(blocks, anthContentBlock{Type: "thinking", Thinking: b.Text, Signature: b.Signature})
 			case BlockText:
 				blocks = append(blocks, anthContentBlock{Type: "text", Text: b.Text})
 			case BlockToolUse:
@@ -168,6 +219,65 @@ func toAnthropicMessages(msgs []Message) []anthMessage {
 
 // markConversationCache sets a cache breakpoint on the last block of
 // each of the last two messages. See the CachePrefix comment in Chat.
+// adaptiveThinkingFamilies are the model families whose extended
+// thinking takes no budget, and which refuse one outright.
+//
+// A list of families rather than a version comparison, because a model id
+// is a vendor string and "is this newer than 4.6" is not a question a
+// substring can answer. Matched on the id, lowercased, the way the quirk
+// table matches.
+var adaptiveThinkingFamilies = []string{
+	"claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5",
+	"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+}
+
+// AnthropicAdaptiveThinking reports whether a model decides the size of
+// its own reasoning rather than taking a budget. Exported because the
+// difference is worth telling the person who set the level: on these
+// families every level reaches the same switch.
+func AnthropicAdaptiveThinking(model string) bool {
+	id := strings.ToLower(model)
+	for _, family := range adaptiveThinkingFamilies {
+		if strings.Contains(id, family) {
+			return true
+		}
+	}
+	return false
+}
+
+// thinkingBudgets is what a level means on a model that takes a number.
+// Round figures, well inside the max_tokens a profile is likely to have,
+// because a budget larger than the output cap is refused.
+var thinkingBudgets = map[Effort]int{
+	EffortLow:    2048,
+	EffortMedium: 8192,
+	EffortHigh:   16384,
+}
+
+// anthropicThinking is the thinking field for a request, or nil for one
+// that should not carry it.
+//
+// Unset and off both send nothing. They differ in intent — one has no
+// opinion, the other wants the least — and on this API they cannot
+// differ in effect: there is no "think less than your default" to ask
+// for, only an absence, and inventing a zero budget would be a request
+// the API rejects rather than a smaller one.
+func anthropicThinking(model string, e Effort) *anthThinking {
+	budget, ok := thinkingBudgets[e]
+	if !ok {
+		return nil
+	}
+	if AnthropicAdaptiveThinking(model) {
+		// The newest families decide for themselves how much a request is
+		// worth, and reject a budget. Every level maps to the same field
+		// here, which is the honest answer: the wire has one switch, not
+		// three positions, and pretending otherwise would be localcode
+		// inventing a distinction the API does not have.
+		return &anthThinking{Type: "adaptive"}
+	}
+	return &anthThinking{Type: "enabled", BudgetTokens: budget}
+}
+
 func markConversationCache(msgs []anthMessage) {
 	marked := 0
 	for i := len(msgs) - 1; i >= 0 && marked < 2; i-- {
@@ -257,6 +367,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		Stream:      true,
+		Thinking:    anthropicThinking(req.Model, req.Effort),
 	}
 
 	payload, err := json.Marshal(body)
@@ -304,6 +415,15 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		}
 		toolByIndex := map[int]*pending{}
 
+		// Thinking accumulates the same way, and for one more reason: the
+		// signature arrives after the text it signs, so neither half is
+		// complete until the block closes.
+		type pendingThinking struct {
+			text      strings.Builder
+			signature strings.Builder
+		}
+		thinkingByIndex := map[int]*pendingThinking{}
+
 		// inputTokens is captured once from message_start (Anthropic
 		// doesn't repeat it in message_delta's usage, which only reports
 		// cumulative output_tokens).
@@ -348,6 +468,9 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 				}
 
 			case "content_block_start":
+				if ev.ContentBlock != nil && ev.ContentBlock.Type == "thinking" {
+					thinkingByIndex[ev.Index] = &pendingThinking{}
+				}
 				if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
 					toolByIndex[ev.Index] = &pending{id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
 					if !send(StreamEvent{Type: EventToolUseStart, ToolUseID: ev.ContentBlock.ID, ToolName: ev.ContentBlock.Name}) {
@@ -364,6 +487,20 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 					if !send(StreamEvent{Type: EventTextDelta, TextDelta: ev.Delta.Text}) {
 						return
 					}
+				case "thinking_delta":
+					if p, ok := thinkingByIndex[ev.Index]; ok {
+						p.text.WriteString(ev.Delta.Thinking)
+						if !send(StreamEvent{Type: EventThinkingDelta, ThinkingDelta: ev.Delta.Thinking}) {
+							return
+						}
+					}
+				case "signature_delta":
+					// Arrives after the text, in pieces like everything
+					// else. Kept rather than shown: it is the API's
+					// attestation of the block, not part of it.
+					if p, ok := thinkingByIndex[ev.Index]; ok {
+						p.signature.WriteString(ev.Delta.Signature)
+					}
 				case "input_json_delta":
 					if p, ok := toolByIndex[ev.Index]; ok {
 						p.args.WriteString(ev.Delta.PartialJSON)
@@ -374,6 +511,14 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 				}
 
 			case "content_block_stop":
+				if p, ok := thinkingByIndex[ev.Index]; ok {
+					if !send(StreamEvent{
+						Type: EventThinkingEnd, ThinkingDelta: p.text.String(), Signature: p.signature.String(),
+					}) {
+						return
+					}
+					delete(thinkingByIndex, ev.Index)
+				}
 				if p, ok := toolByIndex[ev.Index]; ok {
 					input := json.RawMessage(p.args.String())
 					if len(input) == 0 {

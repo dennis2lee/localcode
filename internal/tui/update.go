@@ -320,6 +320,7 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.pendingHintShown = false
 	m.waiting = false
 	m.runningTool = ""
+	m.thinking = false
 	m.errMsg = ""
 	m.tasks = map[string]taskState{}
 	m.completion = completionState{}

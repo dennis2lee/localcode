@@ -30,6 +30,12 @@ type Block struct {
 
 	Text string `json:"text,omitempty"` // BlockText, BlockThinking
 
+	// Signature is the provider's attestation of a thinking block, and it
+	// travels with the text because the text is worthless without it: an
+	// API that produced reasoning refuses a continuation whose thinking
+	// block is not the one it signed. Empty for every other block kind.
+	Signature string `json:"signature,omitempty"` // BlockThinking
+
 	ToolUseID string          `json:"tool_use_id,omitempty"` // BlockToolUse, BlockToolResult
 	ToolName  string          `json:"tool_name,omitempty"`   // BlockToolUse
 	ToolInput json.RawMessage `json:"tool_input,omitempty"`  // BlockToolUse
@@ -136,6 +142,46 @@ type ChatRequest struct {
 	// some models. Nothing fails when it is not honoured; the request is
 	// simply priced as it was before.
 	CachePrefix bool
+
+	// Effort asks the model to spend more or less of its own reasoning on
+	// this request. Empty says nothing at all, which is the default and
+	// leaves every provider's request byte-identical to what it was.
+	//
+	// One word here, several wires under it: an OpenAI-compatible server
+	// takes "reasoning_effort", and Anthropic's API takes a thinking
+	// block whose shape depends on the model's age. What a level means is
+	// therefore per provider and, on one of them, per model family — see
+	// each adapter. localcode's part is to carry the intent, not to
+	// pretend the wires agree.
+	Effort Effort
+}
+
+// Effort is how hard the model is asked to think. Off is not the same as
+// unset: unset says nothing and leaves the model's own default alone,
+// while off asks for the least the wire can express.
+type Effort string
+
+const (
+	EffortUnset  Effort = ""
+	EffortOff    Effort = "off"
+	EffortLow    Effort = "low"
+	EffortMedium Effort = "medium"
+	EffortHigh   Effort = "high"
+)
+
+// Levels is every effort a person may configure, in order, for a message
+// that has to list them.
+func Levels() []Effort { return []Effort{EffortOff, EffortLow, EffortMedium, EffortHigh} }
+
+// ValidEffort reports whether s names a level. The empty string does not:
+// callers that mean "unset" have it already and do not need to ask.
+func ValidEffort(s string) bool {
+	for _, e := range Levels() {
+		if string(e) == s {
+			return true
+		}
+	}
+	return false
 }
 
 // StreamEvent is one item from a streamed model response. Exactly one field
@@ -144,6 +190,14 @@ type StreamEvent struct {
 	Type StreamEventType
 
 	TextDelta string // EventTextDelta
+
+	// ThinkingDelta is reasoning the model is doing rather than the
+	// answer it is giving. Separate from TextDelta because it is not the
+	// reply: appending it to the answer would put the model's working
+	// where its conclusion goes.
+	ThinkingDelta string // EventThinkingDelta
+	// Signature arrives at the end of a thinking block. See Block.
+	Signature string // EventThinkingEnd
 
 	ToolUseID  string          // EventToolUseStart, EventToolUseInputDelta, EventToolUseEnd
 	ToolName   string          // EventToolUseStart
@@ -170,7 +224,12 @@ type StreamEvent struct {
 type StreamEventType string
 
 const (
-	EventTextDelta         StreamEventType = "text_delta"
+	EventTextDelta StreamEventType = "text_delta"
+	// EventThinkingDelta and EventThinkingEnd bracket one block of the
+	// model's reasoning. The end carries the signature, which has to go
+	// back with the block on the next request of the same turn.
+	EventThinkingDelta     StreamEventType = "thinking_delta"
+	EventThinkingEnd       StreamEventType = "thinking_end"
 	EventToolUseStart      StreamEventType = "tool_use_start"
 	EventToolUseInputDelta StreamEventType = "tool_use_input_delta"
 	EventToolUseEnd        StreamEventType = "tool_use_end"

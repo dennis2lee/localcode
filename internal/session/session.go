@@ -44,6 +44,16 @@ type Session struct {
 	// Permissions is how this conversation answers permission questions,
 	// where it differs from the daemon's defaults. See Permissions.
 	Permissions Permissions `json:"permissions,omitempty"`
+	// Effort is this conversation's own answer to how hard the model
+	// should think, overriding the profile's. Empty means the profile
+	// decides, which is what every session starts as.
+	//
+	// Per session rather than per profile because the question belongs to
+	// the work, not to the model: the same model answering "which file is
+	// this in" and "why does this deadlock" wants different amounts of
+	// reasoning, and one is a profile people would otherwise have to
+	// duplicate to get both.
+	Effort string `json:"effort,omitempty"`
 }
 
 // Permissions is a session's own answer to the four permission switches.
@@ -337,6 +347,25 @@ func (s *Store) SetPermission(sessionID string, sw Switch, v *bool) (*Session, e
 	if !st.meta.Permissions.set(sw, v) {
 		return nil, fmt.Errorf("unknown permission switch %q", sw)
 	}
+	metaCopy := st.meta
+	if s.dir != "" {
+		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
+			return nil, err
+		}
+	}
+	return &metaCopy, nil
+}
+
+// SetEffort records this conversation's own reasoning level, or clears
+// it back to the profile's with "".
+func (s *Store) SetEffort(sessionID, effort string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	st.meta.Effort = effort
 	metaCopy := st.meta
 	if s.dir != "" {
 		if err := writeSessionMeta(s.dir, metaCopy); err != nil {

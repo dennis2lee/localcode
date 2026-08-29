@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"localcode/internal/hooks"
+	"localcode/internal/provider"
 )
 
 // Config is the root of ~/.localcode/config.json (global) merged with
@@ -318,6 +319,25 @@ type Profile struct {
 	// one is refused outright by the server.
 	ContextWindow int `json:"context_window,omitempty"`
 
+	// Effort is how hard this model is asked to think: "off", "low",
+	// "medium" or "high". Empty, the default, says nothing at all and
+	// leaves the request exactly as it has always been.
+	//
+	// One word over several wires, and what it reaches depends on the
+	// model. An OpenAI-compatible server is sent "reasoning_effort",
+	// which is the spelling local servers use, so a muse or a gemma that
+	// supports reasoning takes the level and one that does not ignores
+	// the field. Anthropic's API is sent extended thinking: the newest
+	// Claude families decide the amount themselves and every level maps
+	// to the same switch there, while an older one gets a token budget
+	// per level. Bedrock is not wired to it yet and says so rather than
+	// pretending. See internal/provider.
+	//
+	// Off by default on purpose: this changes what a model does with a
+	// request and what it costs, so nothing happens to anybody who has
+	// not asked for it.
+	Effort string `json:"effort,omitempty"`
+
 	// Fallback names other profiles to try, in order, when a request to
 	// this one fails for a reason another model could survive: a rate
 	// limit, a provider outage, a model that is not there, an expired
@@ -405,6 +425,10 @@ func (c *Config) Validate() error {
 		// Bounded at the point it is read rather than wherever it is used.
 		// This number multiplies turns, and a typo in it — a stray zero —
 		// is a session that keeps prompting itself.
+		if profile.Effort != "" && !provider.ValidEffort(profile.Effort) {
+			return fmt.Errorf("profile %q: effort is %q, which is not one of off, low, medium, high",
+				name, profile.Effort)
+		}
 		if profile.KeepGoing < -1 || profile.KeepGoing > maxKeepGoing {
 			return fmt.Errorf("profile %q: keep_going is %d, which is outside -1..%d (-1 means never, 0 means the model's own default)",
 				name, profile.KeepGoing, maxKeepGoing)

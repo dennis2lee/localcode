@@ -219,6 +219,18 @@ main {
 #transcript .msg-user.pending { opacity: 0.55; }
 #transcript .msg-tool { color: var(--muted); font-style: italic; }
 #transcript .msg-error { color: var(--err); font-weight: 600; }
+/* The model's working, not its answer. Quieter than the reply and set
+   apart from it, because a reader who is not following along live should
+   be able to skip the whole block at a glance. */
+#transcript .msg-thinking {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  white-space: pre-wrap;
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+  margin: 6px 0;
+}
 
 /* A review by the other agent in a debate. Indented behind a rule,
    because it is the one thing in the transcript that is neither the

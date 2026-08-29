@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.70.0
+
+* **How hard the model thinks is a setting now.** One word — `off`, `low`, `medium`, `high` — on a profile, or `/effort` for one conversation, which wins. The question belongs to the work rather than to the model: the same model answering "which file is this in" and "why does this deadlock" wants different amounts of reasoning, and without a per-conversation answer the only way to have both would be two profiles pointing at one model.
+
+  **Unset is the default and unset sends nothing**, so a request from anybody who has not asked for a level is byte for byte what it was before this existed. `off` is not sent as a level either: the wires' vocabulary is low/medium/high, servers disagree about whether there is a word for "none", and asking for one nobody agrees on is a worse answer than saying nothing.
+
+* **One word, several wires, and the difference is reported rather than smoothed over.**
+
+  | Provider | Sent as | The levels |
+  |---|---|---|
+  | OpenAI-compatible | `reasoning_effort` | Three levels. A server without reasoning ignores the field, which is what makes this safe on a local muse or gemma. |
+  | Anthropic, newest Claude families | extended thinking, `adaptive` | The model sizes its own reasoning: on or off, not a dial. |
+  | Anthropic, older Claude models | extended thinking, with a budget | Three levels, three budgets. |
+  | Bedrock | nothing yet | Not wired. |
+
+  A setting that claims three positions on a wire with two lies twice — once when it is set, and again when somebody tries to tell "high" from "medium" by watching the bill. So `/effort` says what the level reaches on **this** model, every time it is asked, including "Bedrock is not wired to this yet" rather than letting the setting look as though it took.
+
+  Which of the two thinking shapes an Anthropic model gets is chosen from its id, because the newest families reject a budget outright and the older ones require one: the wrong shape is a 400, not a worse answer.
+
+* **Thinking blocks go back exactly where the API needs them**, which is the part that would otherwise break tool use on the models this was asked for. A turn still in flight must return the reasoning it produced before it asked for a tool, signature and all, or the continuation is refused; every earlier turn must not, since that reasoning is spent and re-sending pages of it costs tokens for nothing. So one message carries them — the last assistant message, the only one a continuation can be continuing — and a block with no signature (a rehydrated history, a test) is never sent at all rather than claiming an attestation that does not exist.
+
+* **Reasoning is shown while it happens and never kept.** A muted block of its own in the Web UI, separate from the answer because it is the working and not the conclusion; the word `thinking` in the TUI's busy indicator instead of `working`. None of it reaches the session log — the API does not want it back, and a transcript that kept it would double the scrolling for something nobody reads twice. A reload does not bring it back, which is the honest consequence and is said out loud.
+
 ## v0.69.0
 
 Four things v0.68.0 shipped a debate without, listed in its own "remaining work" entry the day it went out.

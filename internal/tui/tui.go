@@ -131,6 +131,11 @@ type Model struct {
 	// indicator below the prompt box. Tool activity is deliberately NOT
 	// written into the transcript anymore — the indicator is its home.
 	runningTool string
+	// thinking is true while the model is reasoning rather than
+	// answering. The busy indicator's word, not a transcript entry: it is
+	// worth knowing about live and not worth scrolling past afterwards,
+	// and nothing replays it.
+	thinking bool
 	// spin/spinning drive the indicator's animation. spinning guards
 	// against starting a second tick loop: one loop keeps rescheduling
 	// itself while the client is busy and dies on its first tick after

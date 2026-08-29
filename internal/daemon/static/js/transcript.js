@@ -280,7 +280,37 @@ export function appendReview(d) {
   return wrap;
 }
 
+// The model's reasoning, while it happens.
+//
+// Its own block, muted, and deliberately not part of the answer: it is
+// the working, not the conclusion, and a reader scrolling back wants the
+// conclusion. It is never replayed either — the daemon broadcasts these
+// and logs none of them — so what is on screen is what this page watched
+// arrive, which is the only claim it can honestly make.
+let thinkingEl = null;
+let thinkingBuffer = '';
+
+export function appendThinking(text) {
+  if (!thinkingEl) {
+    thinkingEl = document.createElement('div');
+    thinkingEl.className = 'msg-thinking';
+    thinkingBuffer = '';
+    follower.keeping(() => transcriptEl.appendChild(thinkingEl));
+  }
+  follower.keeping(() => {
+    thinkingBuffer += text;
+    thinkingEl.textContent = thinkingBuffer;
+  });
+}
+
+export function endThinking() {
+  thinkingEl = null;
+  thinkingBuffer = '';
+}
+
 export function clearTranscript() {
+  thinkingEl = null;
+  thinkingBuffer = '';
   transcriptEl.innerHTML = '';
   // A different conversation, drawn from the bottom up. Carrying the
   // previous one's scrolled-up state over would open a session showing

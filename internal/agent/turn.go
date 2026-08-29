@@ -222,6 +222,11 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// is still not a change to make to everyone's requests
 			// silently. See provider.ChatRequest.CachePrefix.
 			CachePrefix: l.smartOn(ctx),
+			// This conversation's answer if it has one, the profile's
+			// otherwise, and nothing at all unless somebody asked — which
+			// is what keeps every request byte-identical to what it was
+			// for anybody who has not set it. See effort.go.
+			Effort: l.effortFor(sessionID, run.profile),
 		}
 
 		// The last chance to say no, and the point where a policy can add
@@ -669,6 +674,10 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 	var text strings.Builder
 	toolNames := map[string]string{}
 	toolInputs := map[string]*strings.Builder{}
+	// The model's reasoning, kept for the message it belongs to. It goes
+	// in front of the answer and the tool calls, which is the order the
+	// API requires of a continuation.
+	var thinking []provider.Block
 
 	// Generation timing, and the live rate estimate built on top of it.
 	// deltas counts stream deltas, not tokens — the authoritative token
@@ -706,6 +715,25 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			text.WriteString(ev.TextDelta)
 			l.Store.Append(sessionID, events.TypeMessagePartDelta, map[string]any{"text": ev.TextDelta})
 			generated()
+
+		case provider.EventThinkingDelta:
+			// Broadcast, not appended: reasoning is worth watching while
+			// it happens and is not part of the transcript afterwards.
+			// The API does not want it back on a later turn either, and
+			// the block that does have to go back is carried in memory
+			// for exactly as long as that is true — see EventThinkingEnd
+			// and toAnthropicMessages.
+			l.Store.Broadcast(sessionID, events.TypeThinkingDelta, map[string]any{"text": ev.ThinkingDelta})
+			generated()
+
+		case provider.EventThinkingEnd:
+			// First in the message, before any text or tool_use: the API
+			// requires that order, and a continuation whose thinking
+			// arrives after the tool call it explains is refused.
+			thinking = append(thinking, provider.Block{
+				Type: provider.BlockThinking, Text: ev.ThinkingDelta, Signature: ev.Signature,
+			})
+			l.Store.Broadcast(sessionID, events.TypeThinkingEnd, map[string]any{})
 
 		case provider.EventToolUseStart:
 			toolNames[ev.ToolUseID] = ev.ToolName
@@ -780,6 +808,7 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 
 	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String()})
 
+	blocks = append(blocks, thinking...)
 	if text.Len() > 0 {
 		blocks = append(blocks, provider.TextBlock(text.String()))
 	}

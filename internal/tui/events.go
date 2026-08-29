@@ -32,6 +32,7 @@ func intField(data map[string]any, key string) int {
 func (m *Model) endTurn() {
 	m.waiting = false
 	m.runningTool = ""
+	m.thinking = false
 }
 
 func (m *Model) applyEvent(ev events.Event) {
@@ -153,6 +154,13 @@ func (m *Model) applyEvent(ev events.Event) {
 		if name, ok := ev.Data["agent"].(string); ok {
 			m.appendTool(fmt.Sprintf("[delegated to %s]", name))
 		}
+	case events.TypeThinkingDelta:
+		// The status line, not the transcript. Reasoning is worth knowing
+		// about while it happens and is not worth scrolling past
+		// afterwards, and the TUI's transcript is the part that keeps.
+		m.thinking = true
+	case events.TypeThinkingEnd:
+		m.thinking = false
 	case events.TypeDebateStarted:
 		author, _ := ev.Data["author"].(string)
 		reviewer, _ := ev.Data["reviewer"].(string)

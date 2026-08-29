@@ -52,6 +52,12 @@ func (m Model) busyLine() string {
 	var parts []string
 	if m.waiting {
 		what := "working"
+		// Thinking first, and only until a tool starts: reasoning happens
+		// before the model asks for anything, so "thinking" while a tool
+		// runs would name the wrong half of the turn.
+		if m.thinking {
+			what = "thinking"
+		}
 		if m.runningTool != "" {
 			what = m.runningTool
 		}

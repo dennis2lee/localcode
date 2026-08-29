@@ -35,6 +35,18 @@ const (
 	// of the tool the task is in says a great deal.
 	TypeTaskProgress  Type = "task.progress"
 	TypeAgentSwitched Type = "agent.switched"
+
+	// The model's own reasoning, while it is happening: {"text"} on each
+	// delta, and an empty payload when a block ends.
+	//
+	// Broadcast, never written to a log, and that is the whole of the
+	// design. Reasoning is worth watching live and is not part of the
+	// conversation afterwards — the API does not want it back on a later
+	// turn, and a transcript that keeps it makes every reply twice as
+	// long to scroll past for something nobody reads twice. A client that
+	// is not looking simply misses it, which is correct.
+	TypeThinkingDelta Type = "thinking.delta"
+	TypeThinkingEnd   Type = "thinking.end"
 	TypeError         Type = "error"
 
 	// TypeMCPStatus reports the state of every configured MCP server:

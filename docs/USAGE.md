@@ -1018,6 +1018,7 @@ These are typed into the message box but never reach the event log, so replaying
 | `/schedule` | Books a prompt for later: `/schedule <when> <what to do>`. Runs only while localcode is running. See [Scheduled tasks](#scheduled-tasks). |
 | `/show-scheduled-task` | Lists the prompts booked for later in this conversation. |
 | `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <what to do>` — this conversation's agent writes, the others review, round after round. Also started by asking for it in words, or with the ⚖️ button. See [Debate](#debate). |
+| `/effort` | `/effort [off\|low\|medium\|high]` — how hard the model is asked to think in this conversation, and what that reaches on this model. `default` goes back to the profile's. See [Effort](#effort). |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions
@@ -1677,6 +1678,38 @@ The approval is a **tool call**, not a sentence: the reviewer sets a boolean, be
 **Models agreeing is not evidence that the code is right.** It is two or three readings instead of one. The tests are the evidence, which is what `verify_command` is for.
 
 A debate can only be started from a conversation somebody is having: not from a sub-agent, not from a scheduled run, and not from inside a debate. Nobody is watching those, and a tree of debates has no ceiling on it.
+
+### Effort
+
+How hard the model is asked to think, as one word:
+
+```
+/effort high
+/effort off
+/effort            # what is in force, and what it reaches on this model
+/effort default    # back to what the profile says
+```
+
+Or on the profile, for every conversation that uses it:
+
+```json
+"balanced": { "provider": "anthropic", "model": "claude-sonnet-5", "effort": "medium" }
+```
+
+The conversation wins over the profile. The question belongs to the work rather than to the model — the same model answering "which file is this in" and "why does this deadlock" wants different amounts of reasoning — and without a per-conversation answer the only way to have both would be two profiles pointing at one model.
+
+**Unset is the default, and unset sends nothing.** A request from anybody who has not asked for a level is byte for byte what it was before this existed. `off` is not a level either: the wires' own vocabulary is low/medium/high, servers disagree about whether there is a word for "none", and asking for one nobody agrees on is a worse answer than saying nothing.
+
+**One word, several wires, and they do not agree.** That is reported rather than smoothed over — a setting that claims three positions on a wire with two lies twice, once when it is set and again when somebody tries to tell "high" from "medium" by watching what it costs. `/effort` says what your level reaches on your model, every time it is asked.
+
+| Provider | What is sent | What the levels mean |
+|---|---|---|
+| OpenAI-compatible | `reasoning_effort` | The three levels, as the server understands them. A server that does not support reasoning ignores the field and nothing changes — which is what makes this safe on a local muse or gemma. |
+| Anthropic API, newest Claude families | extended thinking, `adaptive` | The model sizes its own reasoning, so low, medium and high all reach the same switch. Here the setting is **on or off, not a dial**. |
+| Anthropic API, older Claude models | extended thinking, with a budget | Three levels, three token budgets. |
+| Bedrock | nothing yet | Not wired to it. The level has no effect there, and `/effort` says so rather than letting it look as though it took. |
+
+**Reasoning is shown while it happens and never kept.** In the Web UI it is a muted block of its own, separate from the answer, because it is the working and not the conclusion; in the TUI the busy indicator says `thinking` instead of `working`. None of it is written to the session log: the API does not want it back on a later turn, and a transcript that kept it would double the scrolling for something nobody reads twice. A reload does not bring it back, which is the honest consequence.
 
 ### Scheduled tasks
 

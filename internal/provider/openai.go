@@ -66,6 +66,13 @@ type oaRequest struct {
 	// at the end of the stream — an OpenAI-compat server that doesn't
 	// recognize this field just ignores it, so it's safe to always send.
 	StreamOptions *oaStreamOptions `json:"stream_options,omitempty"`
+
+	// ReasoningEffort is the OpenAI-compatible spelling of how hard to
+	// think: "low", "medium", "high". Sent only when a profile asked for
+	// one, which is what keeps this safe on a server that has never heard
+	// of it — most ignore an unknown field, and the ones that refuse it
+	// only ever see it from somebody who set it on purpose.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type oaStreamOptions struct {
@@ -146,6 +153,16 @@ func toOpenAIMessages(system string, msgs []Message) []oaMessage {
 	return out
 }
 
+// openAIEffort is the value for "reasoning_effort", or "" for a request
+// that should not carry the field at all.
+func openAIEffort(e Effort) string {
+	switch e {
+	case EffortLow, EffortMedium, EffortHigh:
+		return string(e)
+	}
+	return ""
+}
+
 func toOpenAITools(tools []Tool) []oaTool {
 	out := make([]oaTool, 0, len(tools))
 	for _, t := range tools {
@@ -179,6 +196,12 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		MaxTokens:     req.MaxTokens,
 		Temperature:   req.Temperature,
 		StreamOptions: &oaStreamOptions{IncludeUsage: true},
+		// "off" is not sent as a level. The field's own vocabulary is
+		// low/medium/high, servers disagree about whether there is a word
+		// for "none", and asking for something no server agrees on is a
+		// worse answer than saying nothing — which is what a model's own
+		// default already is.
+		ReasoningEffort: openAIEffort(req.Effort),
 	}
 
 	payload, err := json.Marshal(body)

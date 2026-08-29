@@ -6,7 +6,7 @@ import { app, session } from './state.js';
 import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
-  appendReview,
+  appendReview, appendThinking, endThinking,
 } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
@@ -53,6 +53,12 @@ const handlers = {
     recordHistoryEntry(d.text);
     appendUser(d.text);
   },
+  // Reasoning, live. Never replayed, so a reload does not bring it back
+  // and is not meant to: the answer is what the transcript keeps.
+  'thinking.delta': (d) => {
+    if (typeof d.text === 'string') appendThinking(d.text);
+  },
+  'thinking.end': () => endThinking(),
   'message.part.delta': (d) => {
     if (typeof d.text === 'string') appendModelText(d.text);
   },
