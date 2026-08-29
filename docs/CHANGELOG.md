@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.64.0
+
+* **Book a prompt for later.** `/schedule 30분 뒤 run the tests and report the failures`, `/schedule tomorrow 9am summarize yesterday's commits`, `/schedule 2026-09-01 14:30 draft the release notes`. When the moment comes it runs in a session of its own, under the conversation's workspace and its four permission switches — the same shape a background task runs in, which is most of why this is small: "run a prompt unattended in the right directory" was already built.
+
+  **It fires only while localcode is running**, and the reply says so every time. There is no service, no launchd job, and nothing wakes the machine. A moment that passed while localcode was closed is reported as **missed**, in those words and with the time, and is not run late: the request was for a time, and running "summarize yesterday's commits" at four in the afternoon because the machine was asleep at nine would be doing something nobody asked for. A booking still ahead of us is re-armed when localcode starts again.
+
+* **The clock is not the model's job.** A local model asked for a timestamp gets the year wrong occasionally, and a scheduled task is exactly where an occasional wrong answer is invisible until the day it matters. The time is parsed by localcode: relative (`30분 뒤`, `in 2 hours`), clock (`오후 3시`, `at 3pm`, `18:00`), named (`내일 아침`, `tomorrow 9am`, `저녁 7시`, `모레 점심`) or absolute, in Korean and English, with a clock time that has already gone today meaning tomorrow. The reply echoes what was read, because a misread time is worth catching before the work is booked rather than after it fails to happen, and a time it cannot read is refused with examples rather than guessed at.
+
+* **A row in the right panel, with a light that means something.** Blinking green while it waits, solid green once there is an answer nobody has read, grey once it has been read. That third state is what makes the panel a list of what still wants attention rather than a list of everything that ever ran. Click the row to read the result in the same window a background task opens in; the × deletes the booking and the run's transcript together. `/show-scheduled-task` is the same list as text, for the TUI, and `/schedule cancel <id>` removes one.
+
+* **A turn nobody is watching no longer waits forever for permission.** A permission request has no timeout, so a scheduled turn that hit one would have blocked on a channel nothing would ever send to — the session busy, the work found in the morning not done, which is the background-task bug of a version ago one level up. An unattended turn now waits five minutes (long enough for somebody at the desk to answer the prompt, which appears in the conversation that booked the work) and then stops, saying which tool it wanted and that nobody answered.
+
+  There are no repeats. A repeating job needs a failure policy and a stop condition of its own, and shipping it without them is how an expired credential becomes five hundred identical failed sessions.
+
 ## v0.63.0
 
 * **Leaving the project is a question of its own, and it has four switches instead of one.** There was one blanket: `skip_permissions`, daemon-wide, every prompt turned into an allow. It is the setting most likely to be flipped on for one task and forgotten, and while it was on the model could write anywhere on the machine without a word. The workspace boundary existed, but only with Smart Agent on, and the blanket silenced it along with everything else.

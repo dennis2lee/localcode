@@ -140,6 +140,10 @@ type Loop struct {
 	// disagree about what a session has said.
 	Permissions *PermissionPolicy
 
+	// Schedules holds work booked for later. Nil for a Loop built
+	// without a scheduler, the same way Tasks is.
+	Schedules *Scheduler
+
 	// OnPermissionsChanged is OnSettingsChanged for the per-session ones,
 	// and separate for the reason they are per session: a client showing
 	// another conversation must not repaint its switches because this one

@@ -413,6 +413,26 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
    about progress without the window having to be opened. */
 .task .doing { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Scheduled tasks. The same row as a background task, because they are
+   the same thing at a different moment, plus a light for the state and a
+   delete that does not open the row it sits in. */
+.sched { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; cursor: pointer; }
+.sched:hover { border-color: var(--border-strong); }
+.sched .head { display: flex; align-items: center; gap: 6px; }
+.sched .when { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched .prompt { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched .err { color: var(--err); font-size: 11px; }
+/* Outlined and quiet: it sits on every row, and a filled red per row
+   would make the panel read as a list of problems. */
+.sched .del {
+  padding: 0 6px;
+  font-size: 11px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.sched .del:hover { color: var(--err); border-color: var(--err); }
+
 /* A background task's own conversation, read-only. There is no prompt
    box: a task was given its instructions when it was spawned. */
 #task-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10; }

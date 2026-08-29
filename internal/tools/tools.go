@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"localcode/internal/hooks"
@@ -93,6 +94,17 @@ type Contextual interface {
 // PermissionFunc is asked to approve a side-effecting tool call before it
 // runs.
 type PermissionFunc func(ctx context.Context, ask Ask) (bool, error)
+
+// RefusedError is a refusal that carries its own explanation.
+//
+// An ordinary false from a PermissionFunc means somebody said no, and
+// "denied by user" is the right thing to tell the model. A turn nobody is
+// watching can also be refused because nobody answered, and reporting
+// that as a denial would tell the model something untrue about what
+// happened. So the reason travels with the refusal.
+type RefusedError struct{ Reason string }
+
+func (e *RefusedError) Error() string { return e.Reason }
 
 // Ask is one question put to the person at the keyboard.
 type Ask struct {
@@ -356,6 +368,13 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 			Dir:         outcome.Dir,
 			Workspace:   outcome.Workspace,
 		})
+		var refused *RefusedError
+		if errors.As(err, &refused) {
+			// A refusal that knows why it happened. Marked Refused like
+			// any other, so the carry-on nudge treats it as a stop
+			// rather than as work still to do.
+			return Result{Content: refused.Reason, IsError: true, Refused: true}
+		}
 		if err != nil {
 			return Result{Content: fmt.Sprintf("permission check failed: %v", err), IsError: true}
 		}

@@ -207,20 +207,32 @@ function abandonRunningToolRows() {
   taskToolRows.clear();
 }
 
-export function openTaskView(taskID) {
+// about, when given, describes a session this panel has no row for: a
+// scheduled task's run. Without it the window opens with the id as its
+// title and no status, because session.tasks knows nothing about it.
+export function openTaskView(taskID, about) {
   closeTaskStream();
   openTaskID = taskID;
   currentEl = null;
 
-  const t = session.tasks.get(taskID);
-  taskModalTitle.textContent = t && t.agent ? `${t.agent} — ${taskID}` : taskID;
+  const t = about || session.tasks.get(taskID);
+  taskModalTitle.textContent = t && t.title ? t.title
+    : (t && t.agent ? `${t.agent} — ${taskID}` : taskID);
   taskModalBody.innerHTML = '';
   taskToolRows.clear();
   // A newly opened task starts at its newest output, whatever the last
   // one this modal showed was left scrolled to.
   follower.force();
   taskModalNote.textContent = t ? `status: ${t.status}` : '';
-  showTaskButtons(t ? t.status : '');
+  // A window opened on something this panel does not own gets no
+  // buttons. Stop and Delete both act on the *task* — cancelTask by id,
+  // deleteSession on the conversation — and neither is right for a
+  // scheduled run: stopping it would reach a task manager that has never
+  // heard of it, and deleting it would remove the transcript while
+  // leaving the schedule's own row pointing at a session that is gone.
+  // The row in the Scheduled tasks panel has its own delete, which
+  // removes the booking and the run together.
+  showTaskButtons(about ? '' : (t ? t.status : ''));
 
   stream = new EventSource(`/api/sessions/${taskID}/events?tail=${TASK_TAIL}`);
   stream.onmessage = (e) => {

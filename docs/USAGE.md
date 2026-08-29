@@ -970,6 +970,13 @@ These settings change how every turn behaves, and each has a command of its own.
 | `/permission-skip-all` | `skip_all` | Everything, the workspace boundary included. |
 | `/permission-skip-tools` | `skip_tools` | Every tool prompt, and not a path that leaves the workspace. |
 | `/read-outside` | `read_outside` | Reading outside the workspace. `mem-clear` forgets the directories approved at a prompt. |
+
+Two more commands book work for later. See [Scheduled tasks](#scheduled-tasks):
+
+| Command | What it does |
+|---|---|
+| `/schedule` | `/schedule <when> <what to do>` books a prompt; `/schedule cancel <id>` removes one. |
+| `/show-scheduled-task` | Lists this conversation's booked tasks. |
 | `/write-outside` | `write_outside` | Writing outside the workspace. `mem-clear` likewise. |
 
 With no argument each one flips: `/smart-agent` turns it on if it was off. `on` and `off` set it outright, which is what you want in a script or when you are not sure what it currently is.
@@ -1007,6 +1014,8 @@ These are typed into the message box but never reach the event log, so replaying
 | `/permission-skip-tools` | Allows every tool prompt in this conversation, and still asks before a path leaves the workspace. |
 | `/read-outside` | Reading outside the workspace: `on`, `off`, or `mem-clear` to forget the directories approved at a prompt. See [Leaving the project](#leaving-the-project). |
 | `/write-outside` | Writing outside the workspace, the same three arguments. |
+| `/schedule` | Books a prompt for later: `/schedule <when> <what to do>`. Runs only while localcode is running. See [Scheduled tasks](#scheduled-tasks). |
+| `/show-scheduled-task` | Lists the prompts booked for later in this conversation. |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions
@@ -1597,6 +1606,33 @@ Practical loop:
 4. `/config auto_delegate off` turns it off mid-conversation with no restart, and `/config` shows the current state and target agent.
 
 How much this saves depends on how often you ask lookup questions. If you mostly ask for code to be written, little will match and the effect will be small. That is a fine reason to leave it off.
+
+### Scheduled tasks
+
+Book a prompt for later. `/schedule <when> <what to do>`:
+
+```
+/schedule 30분 뒤 run the tests and report the failures
+/schedule 내일 아침 summarize yesterday's commits
+/schedule in 2 hours check whether the build is still green
+/schedule 2026-09-01 14:30 draft the release notes
+```
+
+**It runs only while localcode is running.** There is no service, no launchd job, and nothing wakes the machine. If localcode is closed or the machine is asleep at that moment, the task is reported as **missed** — in those words, with the time it was booked for — and is **not** run late. Running "summarize yesterday's commits" at four in the afternoon because the machine was asleep at nine would be doing something nobody asked for at a moment they did not choose. A booking whose moment has not yet come is re-armed when localcode starts again.
+
+**The time is read by localcode, not by the model.** Relative (`30분 뒤`, `in 2 hours`, `2시간 뒤`), clock (`오후 3시`, `at 3pm`, `18:00`), named (`내일 아침`, `tomorrow 9am`, `저녁 7시`, `모레 점심`), or absolute (`2026-09-01 14:30`). A clock time that has already gone today means tomorrow. The reply echoes what was read, in full, because a misread time is worth catching before the work is booked rather than after it fails to happen. A time it cannot read is refused with examples rather than guessed at.
+
+**Where it runs.** In a session of its own, under the conversation's workspace and its four permission switches — the same shape a background task runs in, which is most of why this is small. The reply says which directory before you commit to it.
+
+**Nobody is watching, so it cannot wait forever.** A permission request has no timeout; a scheduled turn that hits one waits five minutes (long enough for someone at the desk to answer the prompt, which appears in the conversation that booked the work) and then stops, saying which tool it wanted and why it did not run. Decide the posture in advance with `/permission-skip-tools`, `/read-outside` and `/write-outside` if the task needs to act without asking.
+
+| Where | What you get |
+|---|---|
+| Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. Click the row to read the result; the × deletes it, and the run's transcript with it. |
+| `/show-scheduled-task` | The same list as text, for the TUI. |
+| `/schedule cancel <id>` | Removes one. |
+
+One prompt, one moment: there are no repeats. A repeating job needs a failure policy and a stop condition of its own, and shipping it without them is how an expired credential becomes five hundred identical failed sessions.
 
 ### Background tasks
 

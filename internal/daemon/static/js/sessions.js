@@ -8,6 +8,7 @@ import { setWaiting, setInputLocked, renderCommDot } from './composer.js';
 import { connectEvents } from './events.js';
 import { loadWorkspace } from './loaders.js';
 import { loadSessionPermissions } from './modals.js';
+import { loadSchedules } from './schedules.js';
 import { permissionRequest } from './modals.js';
 
 export async function loadSessions() {
@@ -325,6 +326,9 @@ export function selectSession(id, agent, workspace) {
   // The four permission switches belong to the conversation, so the
   // panel and the pill would otherwise go on showing the last one's.
   loadSessionPermissions(id);
+  // Booked work belongs to the conversation too, so the panel would
+  // otherwise go on showing the last one's.
+  loadSchedules(id);
 }
 
 export async function createNewSession() {

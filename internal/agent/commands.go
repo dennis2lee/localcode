@@ -89,6 +89,8 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeSkipTools(sessionID, text) },
 		func() (bool, error) { return l.routeReadOutside(sessionID, text) },
 		func() (bool, error) { return l.routeWriteOutside(sessionID, text) },
+		func() (bool, error) { return l.routeSchedule(sessionID, agentName, text) },
+		func() (bool, error) { return l.routeShowScheduled(sessionID, text) },
 		func() (bool, error) { return l.routeKeepGoing(sessionID, text) },
 		func() (bool, error) { return l.routeAutoCompact(sessionID, text) },
 		func() (bool, error) { return l.routeResetMCP(sessionID, text) },

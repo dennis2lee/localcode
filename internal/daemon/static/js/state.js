@@ -58,7 +58,10 @@ export function freshSessionState(id) {
     // reach one, so it's what the status light reports as "connected".
     connected: false,
     waiting: false,
-    tasks: new Map(), // task_id -> {agent, status}
+    tasks: new Map(),
+    // Work booked for later in this conversation, id -> entry. Per
+    // session like the tasks are, and reloaded on a switch.
+    schedules: new Map(), // task_id -> {agent, status}
     lastUsage: null,   // {input_tokens, output_tokens, max_context, percent, tps, show_tps, model}
     runningTool: '',   // tool currently executing, shown in the status bar
     // tool_use_id -> the transcript row for that call, so tool.end can find

@@ -23,6 +23,7 @@ import (
 	"localcode/internal/trace"
 	"strings"
 	"sync"
+	"time"
 )
 
 // env is the ambient machine state every builder below needs, resolved
@@ -218,6 +219,16 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	progress("restoring conversation history")
 	loop.RehydrateAll()
 	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
+	// Work booked for later. Restored from the session logs, which is
+	// what makes a row survive a restart; only the ones whose moment has
+	// not yet come are re-armed, and the rest are marked missed rather
+	// than fired late. See agent.Scheduler.Restore.
+	scheduler := agent.NewScheduler(ctx, loop)
+	var sessionIDs []string
+	for _, sess := range store.AllSessions() {
+		sessionIDs = append(sessionIDs, sess.ID)
+	}
+	scheduler.Restore(sessionIDs, time.Now())
 
 	// The delegation tools. Registered unconditionally, and hidden per
 	// turn instead — see Loop.hiddenDelegationTools. They used to be

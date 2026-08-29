@@ -18,6 +18,7 @@ export const permissionDenyBtn = document.getElementById('permission-deny');
 export const permissionOutsideEl = document.getElementById('permission-outside');
 export const permissionAllowDirBtn = document.getElementById('permission-allow-dir');
 export const permissionAllowOutsideBtn = document.getElementById('permission-allow-outside');
+export const schedulesEl = document.getElementById('schedules');
 export const sessionListEl = document.getElementById('session-list');
 export const newSessionBtn = document.getElementById('new-session-btn');
 export const deleteAllSessionsBtn = document.getElementById('delete-all-sessions-btn');

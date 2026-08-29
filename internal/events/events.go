@@ -87,6 +87,21 @@ const (
 	// TypeConfigChanged reports a live settings change from "/config":
 	// {"auto_compact_enabled","show_tps"}.
 	TypeConfigChanged Type = "config.changed"
+	// The scheduled-task events. Written to the conversation a task was
+	// booked in, which is what makes its row in the panel survive a
+	// reload — the same reason a background task's row is built from
+	// task.spawned rather than from whatever the client happens to hold.
+	//
+	// TypeScheduleCreated: {"id","at","prompt","agent"}.
+	// TypeScheduleStatus: {"id","status","run_session","error"}.
+	// TypeScheduleSeen: {"id"} — somebody read the result, which is the
+	// third state of the row's light.
+	// TypeScheduleRemoved: {"id"}.
+	TypeScheduleCreated Type = "schedule.created"
+	TypeScheduleStatus  Type = "schedule.status"
+	TypeScheduleSeen    Type = "schedule.seen"
+	TypeScheduleRemoved Type = "schedule.removed"
+
 	// TypePermissionsChanged reports this session's four permission
 	// switches after one of them moved, along with the directories it
 	// currently remembers approving outside the workspace.

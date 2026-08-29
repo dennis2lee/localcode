@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/session"
 	"localcode/internal/tools"
+	"localcode/internal/when"
 )
 
 // The three switches that decide how a turn behaves had one home each,
@@ -340,6 +342,8 @@ func SlashCommands() []SlashCommand {
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off"},
 		{Name: "permission-skip-all", Description: "allow every prompt in this conversation, the workspace boundary included"},
 		{Name: "permission-skip-tools", Description: "allow every tool prompt, but still ask before leaving the workspace"},
+		{Name: "schedule", Description: "book a prompt for later: /schedule <when> <what to do>"},
+		{Name: "show-scheduled-task", Description: "list the prompts booked for later in this conversation"},
 		{Name: "read-outside", Description: "reading outside the workspace: on, off, or mem-clear to forget approved directories"},
 		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories"},
 		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models"},
@@ -471,4 +475,82 @@ func (l *Loop) routeResetSkills(sessionID, text string) (bool, error) {
 		return true, l.replyText(sessionID, "skill reload failed: "+err.Error())
 	}
 	return true, l.replyText(sessionID, report)
+}
+
+// routeSchedule answers "/schedule <when> <prompt>" and
+// "/schedule cancel <id>".
+//
+// The time is read by internal/when, not by the model, and the reply
+// echoes what was read. That echo is the whole reason parsing is allowed
+// to guess at all: a misread time is caught here, before the work is
+// booked, rather than by the work not happening.
+func (l *Loop) routeSchedule(sessionID, agentName, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/schedule")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+	if l.Schedules == nil {
+		return true, l.replyText(sessionID, "this build has no scheduler")
+	}
+	if arg == "" {
+		return true, l.replyText(sessionID, "usage: /schedule <when> <what to do>\n"+when.Examples+
+			"\n\"/schedule cancel <id>\" removes one, and \"/show-scheduled-task\" lists them.")
+	}
+	if _, found := strings.CutPrefix(strings.ToLower(arg), "cancel "); found {
+		// Sliced from the original rather than the lowercased copy: an id
+		// is case-sensitive and only the prefix was being matched loosely.
+		id := strings.TrimSpace(arg[len("cancel "):])
+		if l.Schedules.Cancel(id) {
+			return true, l.replyText(sessionID, "cancelled "+id)
+		}
+		return true, l.replyText(sessionID, fmt.Sprintf("no scheduled task %q in this conversation", id))
+	}
+
+	now := time.Now()
+	at, prompt, err := when.Parse(arg, now)
+	if err != nil {
+		return true, l.replyText(sessionID, err.Error())
+	}
+	entry, err := l.Schedules.Add(sessionID, agentName, prompt, at)
+	if err != nil {
+		return true, l.replyText(sessionID, err.Error())
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "scheduled for %s\n  %s\n  %s", when.Format(at, now), promptSummary(prompt), entry.ID)
+	// Said every time, because it is the one promise this feature does
+	// not make and the one people assume it does.
+	b.WriteString("\n\nIt runs only while localcode is running. If this machine is asleep or" +
+		"\nlocalcode is closed at that moment, the task is reported as missed rather than" +
+		"\nrun late. It will work in " + l.SessionDir(sessionID) + " under this conversation's" +
+		"\npermission settings.")
+	// No separate announcement: Add already wrote schedule.created to
+	// this conversation's log, which is where a client's row comes from.
+	return true, l.replyText(sessionID, b.String())
+}
+
+// routeShowScheduled answers "/show-scheduled-task".
+func (l *Loop) routeShowScheduled(sessionID, text string) (bool, error) {
+	if _, ok := matchToggleCommand(text, "/show-scheduled-task"); !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+	if l.Schedules == nil {
+		return true, l.replyText(sessionID, "this build has no scheduler")
+	}
+	list := l.Schedules.List(sessionID)
+	if len(list) == 0 {
+		return true, l.replyText(sessionID, "no scheduled tasks in this conversation.\n"+
+			"Book one with \"/schedule <when> <what to do>\". "+when.Examples)
+	}
+	now := time.Now()
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d scheduled task(s) in this conversation:\n\n", len(list))
+	for _, e := range list {
+		b.WriteString(Describe(e, now))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("\"/schedule cancel <id>\" removes one. They run only while localcode is running.")
+	return true, l.replyText(sessionID, strings.TrimRight(b.String(), "\n"))
 }

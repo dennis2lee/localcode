@@ -348,9 +348,14 @@ func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 			"status":  "deleted",
 		})
 	}
-	// A child session can have unanswered permission prompts of its own.
+	// A child session can have unanswered permission prompts of its own,
+	// and work booked for later that must not fire into a conversation
+	// that is gone.
 	for _, sid := range ids {
 		d.Broker.ForgetSession(sid)
+		if d.Loop.Schedules != nil {
+			d.Loop.Schedules.ForgetSession(sid)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -412,6 +417,9 @@ func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request)
 	}
 	for _, sid := range currentIDs {
 		d.Broker.ForgetSession(sid)
+		if d.Loop.Schedules != nil {
+			d.Loop.Schedules.ForgetSession(sid)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

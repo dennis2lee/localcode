@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"localcode/internal/config"
 	"localcode/internal/events"
@@ -188,6 +189,20 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 			return false, err
 		}
 
+		// A turn nobody is watching cannot wait forever, and until this
+		// existed it did: a request has no timeout, so a scheduled turn
+		// that asked at three in the morning blocked on a channel nothing
+		// would ever send to, held its session busy, and was found having
+		// done nothing. Not zero, because the common case is that
+		// somebody is at the desk and the question is mirrored into the
+		// conversation that booked the work.
+		var giveUp <-chan time.Time
+		if Unattended(ctx) {
+			t := time.NewTimer(unattendedPermissionWait)
+			defer t.Stop()
+			giveUp = t.C
+		}
+
 		select {
 		case res := <-ch:
 			if res.allow {
@@ -199,6 +214,20 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 				})
 			}
 			return res.allow, nil
+		case <-giveUp:
+			b.mu.Lock()
+			delete(b.pending, id)
+			b.mu.Unlock()
+			// The question goes off screen with the same event an answer
+			// produces, so a mirrored prompt does not sit in the parent
+			// conversation refusing every message for a turn that has
+			// already moved on.
+			for _, target := range where.all() {
+				b.store.Append(target, events.TypePermissionResolved, map[string]any{
+					"id": id, "allow": false, "scope": ScopeOnce, "unanswered": true,
+				})
+			}
+			return false, &tools.RefusedError{Reason: unattendedRefusal(ask)}
 		case <-ctx.Done():
 			b.mu.Lock()
 			delete(b.pending, id)

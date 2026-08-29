@@ -13,6 +13,7 @@ import {
   refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen, permissionRequest,
   applySessionPermissions,
 } from './modals.js';
+import { applyScheduleEvent } from './schedules.js';
 import { refreshSmartAgentIfOpen, refreshKeepGoingIfOpen } from './settings.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
@@ -117,6 +118,12 @@ const handlers = {
   'permissions.changed': (d) => {
     applySessionPermissions(d);
   },
+  // Work booked for later. The panel's rows are built from these, which
+  // is what makes them survive a reload.
+  'schedule.created': (d) => applyScheduleEvent('schedule.created', d),
+  'schedule.status': (d) => applyScheduleEvent('schedule.status', d),
+  'schedule.seen': (d) => applyScheduleEvent('schedule.seen', d),
+  'schedule.removed': (d) => applyScheduleEvent('schedule.removed', d),
   'permission.resolved': () => {
     permissionRequest.close();
     setInputLocked(false);

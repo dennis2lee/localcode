@@ -268,6 +268,7 @@ export { HELP_TEXT, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
 export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
+export { renderSchedules, applyScheduleEvent, loadSchedules } from './schedules.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
 export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';

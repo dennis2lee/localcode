@@ -104,6 +104,14 @@ export const setSkipPermissions = (enabled) => api('POST', '/api/permissions/ski
 
 // The four switches for one conversation. enabled null clears this
 // session's own answer, so the daemon default applies again.
+// Work booked for later. The list on open; after that the schedule.*
+// events on the conversation's own stream.
+export const listSchedules = (sessionID) => api('GET', `/api/sessions/${sessionID}/schedules`);
+export const markScheduleSeen = (sessionID, id) =>
+  api('POST', `/api/sessions/${sessionID}/schedules/${id}/seen`);
+export const deleteSchedule = (sessionID, id) =>
+  api('DELETE', `/api/sessions/${sessionID}/schedules/${id}`);
+
 export const getSessionPermissions = (sessionID) =>
   api('GET', `/api/sessions/${sessionID}/permissions`);
 export const setSessionPermission = (sessionID, name, enabled) =>

@@ -209,6 +209,8 @@ const serverSideHelpText = `  /skill              list registered skills
   /permission-skip-tools [on|off]  allow tool prompts, still ask before leaving the project
   /read-outside [on|off|mem-clear]   reading outside this project's directory
   /write-outside [on|off|mem-clear]  writing outside it
+  /schedule <when> <what to do>  book a prompt for later (only while localcode runs)
+  /show-scheduled-task  list the prompts booked for later
   /compact           summarize and compact the conversation right now
   /compact <instructions>      give instructions for how to compact
   /usage              show cumulative token usage per model

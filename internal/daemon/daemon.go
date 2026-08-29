@@ -196,6 +196,11 @@ func (d *Daemon) routes(webFS fs.FS) {
 	// the more specific literal), but read together they are two
 	// different things at one path: one answers a pending question, the
 	// other configures which questions get asked.
+	// Work booked for later. The list on open, then the schedule.*
+	// events on this conversation's own stream.
+	d.mux.HandleFunc("GET /api/sessions/{id}/schedules", d.handleListSchedules)
+	d.mux.HandleFunc("POST /api/sessions/{id}/schedules/{sid}/seen", d.handleSeenSchedule)
+	d.mux.HandleFunc("DELETE /api/sessions/{id}/schedules/{sid}", d.handleDeleteSchedule)
 	d.mux.HandleFunc("GET /api/sessions/{id}/permissions", d.handleGetSessionPermissions)
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions", d.handleSetSessionPermission)
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions/forget", d.handleForgetSessionOutside)

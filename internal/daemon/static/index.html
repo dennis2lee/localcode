@@ -106,6 +106,20 @@
       <h2>Background tasks</h2>
       <div id="tasks"></div>
     </div>
+    <!--
+      Work booked for later. Rows in the same shape as the background
+      tasks above, because they are the same thing at a different moment:
+      a prompt running unattended in its own session, clicked to read.
+
+      The light is the state: blinking green while it waits, solid green
+      once there is an answer nobody has read, grey once it has been read.
+      That last state is what makes the panel a list of what still wants
+      attention rather than a list of everything that ever ran.
+    -->
+    <div class="side-section">
+      <h2>Scheduled tasks</h2>
+      <div id="schedules"></div>
+    </div>
     <div class="side-section">
       <h2>MCP servers</h2>
       <div id="mcp-servers"></div>
