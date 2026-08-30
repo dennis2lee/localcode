@@ -1,0 +1,51 @@
+# Functions `go tool deadcode` reports as unreachable from cmd/localcode
+# that are known and accepted. One name per line; a "#" comment says why.
+#
+# scripts/check-deadcode.sh fails on anything reported that is not here,
+# and on anything here that is no longer reported. The second direction
+# matters as much as the first: an allowlist nobody has to maintain
+# becomes a list of names that used to mean something.
+#
+# What this file is NOT is a verdict that these are fine. Five of them are
+# genuinely uncalled and are candidates for removal; they are listed
+# rather than deleted because deleting them is a change to the product
+# and this commit is a change to the gate. See the notes below.
+
+# --- reachable only from tests -------------------------------------
+# deadcode runs with -test=false, so a function whose only callers are
+# tests is reported. That is the right setting: -test=true would call
+# every exported function reachable and report almost nothing.
+internal/agent/compact.go:compactSystemBlocks
+internal/agent/context_budget.go:contextWindow
+internal/commands/commands.go:Expand
+internal/memory/memory.go:SystemPromptSection
+internal/smart/smart.go:Builtins
+
+# --- test hooks, called from production code by a test that sets them --
+# Both are set by a test and read by the code under test, so no static
+# call site exists in either direction.
+internal/agent/fallback.go:setRetryWaitBarrier
+internal/agent/schedule.go:unattendedWaitForTest
+
+# --- build-tag variant ------------------------------------------------
+# The non-Windows no-op half of a pair. The Windows file's HideConsole has
+# the caller (internal/dialog/reveal_windows.go); this one is compiled on
+# every other platform and called by nobody there, which is what "does
+# nothing outside Windows" means.
+internal/childproc/childproc_other.go:HideConsole
+
+# --- genuinely uncalled, pending a decision ---------------------------
+# No caller anywhere in this tree, tests included. Left in place rather
+# than removed because removal is its own change and one of them is not
+# as dead as it looks: turnTracker.anyRunning has a live caller on the
+# branch in .claude/worktrees/bold-golick-d93a50 (workspace.go), so
+# deleting it here would break that work on merge. The turnTracker three
+# sit in the turn-admission tracker that v0.55.0 rewrote four times.
+# memory.SystemPromptSection above is the same shape one step further
+# along: it lost its production caller in the v0.57.0 trust split and
+# still has tests describing it as "used at daemon startup".
+internal/agent/loop.go:Loop.systemPromptFor
+internal/agent/rehydrate.go:dataStrings
+internal/daemon/turns.go:turnTracker.busy
+internal/daemon/turns.go:turnTracker.anyRunning
+internal/daemon/turns.go:turnTracker.whileIdle

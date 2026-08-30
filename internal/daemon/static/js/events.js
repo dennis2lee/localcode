@@ -95,7 +95,6 @@ const handlers = {
     // buttons: a place is answered at one of two sizes, and "always
     // allow" would write a tool rule that outlives the reason for it.
     const outside = d.outside === 'read' || d.outside === 'write' ? d.outside : '';
-    session.pendingPermissionOutside = outside;
     permissionOutsideEl.hidden = !outside;
     if (outside) {
       permissionOutsideEl.textContent =

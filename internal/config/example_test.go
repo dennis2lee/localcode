@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -32,5 +34,57 @@ func TestExampleConfigStillMatchesTheStruct(t *testing.T) {
 	}
 	if len(cfg.Profiles) == 0 {
 		t.Error("no profiles in the example")
+	}
+}
+
+// Every setting Config accepts has to appear in config.example.json.
+//
+// README calls that file the reference, "every key with a note on it",
+// and RELEASING.md makes adding new keys to it a release step. It was
+// neither: six settings were absent when this test was written --
+// mcp_servers, hooks, permission, auto_compact_enabled,
+// auto_memory_enabled and show_tps. Two of those are toggled from
+// /config and written back into the user's own config.json, so somebody
+// who flipped one found a key in their file that the reference had never
+// mentioned.
+//
+// The struct is the source of truth and the file is what drifts, so the
+// test reads the tags off Config by reflection rather than listing them.
+// A seventh key added tomorrow fails here on the day it is added, which
+// is the point: the release step this replaces asked a person to
+// remember, and eight releases went by with six keys missing.
+func TestEveryConfigKeyIsInTheExample(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("config.example.json does not parse: %v", err)
+	}
+
+	typ := reflect.TypeOf(Config{})
+	var checked int
+	for i := 0; i < typ.NumField(); i++ {
+		tag := typ.Field(i).Tag.Get("json")
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		checked++
+		if _, ok := doc[name]; !ok {
+			t.Errorf("%q is a setting config.json accepts and config.example.json never mentions it, so it is a setting nobody can find", name)
+		}
+	}
+	// Presence only, deliberately. Requiring a "//name" note beside every
+	// key was the first version of this and it failed on six: providers,
+	// profiles, agents, default_profile, max_concurrent_tasks and
+	// auto_delegate carry their notes inside the block instead, against
+	// the field being explained, which reads better than one paragraph
+	// above a twenty-line object. The convention the file actually
+	// follows is a note where a note helps, and a test that fought it
+	// would be a test somebody edits the file to satisfy.
+	if checked < 10 {
+		t.Fatalf("only %d json tags found on Config, so this test is checking almost nothing", checked)
 	}
 }

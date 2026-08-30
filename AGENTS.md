@@ -21,6 +21,12 @@ Project rules for agents working in this repo.
     cross-builds — `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
     GOOS=linux GOARCH=amd64`. Windows and Linux are release targets built
     from this machine, so a break in either is a break in the release.
+  * `scripts/check-deadcode.sh` — `go tool deadcode` over `./cmd/localcode`,
+    diffed against `scripts/deadcode.allow`. It fails on a function
+    nothing reaches that is not already known, and on an allowlist entry
+    that is no longer reported. The "written, tested, never called" shape
+    has shipped twice (v0.55.0, v0.57.0); `-test=false` is what makes it
+    visible, at the cost of listing the functions only tests call.
   * The Web UI suite (270 tests, deliberately also run by `TestWebUI`,
     which skips itself when node is absent), the doc-link checker,
     `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form

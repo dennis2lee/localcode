@@ -27,7 +27,7 @@
 # So: three lanes, running concurrently, serial within each lane.
 #   race  the race suite, alone, because it is the critical path and
 #         everything else finishing early is worth nothing if it is slower
-#   go    the four short Go commands, one after another beside it
+#   go    the five short Go commands, one after another beside it
 #   misc  the checks that are not Go and barely register
 #
 # What the summary prints is each check's own duration, which is how the
@@ -68,6 +68,7 @@ checks=(
 	"go	gui	go build -tags gui ./..."
 	"go	windows	GOOS=windows GOARCH=amd64 go build ./..."
 	"go	linux	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./..."
+	"go	deadcode	scripts/check-deadcode.sh"
 	"misc	js	node --experimental-vm-modules --test test/webui/*.test.js"
 	"misc	docs	python3 scripts/check-doc-links.py"
 	"misc	fmt	scripts/check-fmt.sh"

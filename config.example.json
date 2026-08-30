@@ -87,6 +87,12 @@
   },
   "default_profile": "balanced",
   "max_concurrent_tasks": 5,
+  "//mcp_servers": "MCP servers to connect at startup, name -> server. Three transports: \"stdio\" runs a command and talks over its pipes ({\"type\": \"stdio\", \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/srv/data\"], \"env\": {}}), while \"http\" and \"sse\" take {\"url\": \"https://...\", \"headers\": {\"Authorization\": \"Bearer {env:TOKEN}\"}}. Omitting \"type\" infers one from whether command or url is set. Header values are secrets and are never printed, only their names. Their tools join the session as mcp__<server>__<tool>; /reset-mcp reconnects after a change here without a restart. See docs/USAGE.md.",
+  "mcp_servers": {},
+  "//hooks": "Shell commands run at points in a turn, event -> list. The events are pre_tool_use, post_tool_use, user_prompt_submit, stop and session_start. Each entry is {\"command\": \"...\", \"matcher\": \"...\"}, where matcher is optional and limits the hook to tools whose name matches it. The event payload is piped to the command as JSON on stdin, the command runs in the session's workspace, and a pre_tool_use hook that exits non-zero blocks the call. Each is bounded by a 30-second timeout so one hung script cannot wedge a turn. See docs/USAGE.md.",
+  "hooks": {},
+  "//permission": "Fine-grained rules per tool, tool name -> rule, with \"*\" as the fallback for tools not named. A rule is either one decision (\"allow\", \"ask\" or \"deny\") applied to every call, or a list of {\"match\": \"<glob>\", \"decision\": \"...\"} tried in order, e.g. {\"bash\": [{\"match\": \"git push*\", \"decision\": \"ask\"}, {\"match\": \"*\", \"decision\": \"allow\"}]}. This is the per-tool layer; the four switches below are the blunt ones that sit over it. \"Always allow\" in a permission prompt writes a rule here. See docs/USAGE.md.",
+  "permission": {},
   "auto_delegate": {
     "enabled": false,
     "agent": "explore",
@@ -117,8 +123,14 @@
   "read_outside_workspace": false,
   "//write_outside_workspace": "The same for writing (write_file, edit). Separate from reading because they are not the same risk. /write-outside.",
   "write_outside_workspace": false,
+  "//auto_compact_enabled": "Whether a conversation is summarized automatically once it fills the share of the context window set below. On unless set to false. /auto-compact on|off toggles it and saves the answer here; /compact still compacts by hand either way.",
+  "auto_compact_enabled": true,
   "//auto_compact_percent": "The context-window fill that triggers automatic compaction, as a percent. 50 unless set; /auto-compact <percent> changes it live and saves it here.",
   "auto_compact_percent": 50,
+  "//auto_memory_enabled": "Whether the model keeps its own notes across conversations, in a per-project memory directory it reads at the start of each one. On unless set to false. /memory shows the directory and its index.",
+  "auto_memory_enabled": true,
+  "//show_tps": "Whether a tokens-per-second figure rides along with usage for the clients to show under the prompt. On unless set to false. /config show_tps on|off toggles it and saves it here.",
+  "show_tps": true,
   "//keep_going": "The carry-on nudge for muse models, on unless set to false. Toggled with /keep-going or the settings window checkbox. Only ever applies to models whose id contains 'muse'.",
   "keep_going": true
 }
