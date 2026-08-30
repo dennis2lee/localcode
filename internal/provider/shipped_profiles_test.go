@@ -26,11 +26,14 @@ import (
 // it is v0.61.0's sample-versus-roster test, which caught two drifts the
 // first time it ran.
 //
-// config.example.json only. config.sample.json is JSONC, and reproducing
-// the comment stripper here to read it would be a second implementation
-// of internal/config's parser inside a test -- and internal/config
-// imports this package, so it cannot be borrowed. The example file is the
-// one the README calls the reference and the one both 400s came from.
+// Read with encoding/json rather than through internal/config's loader,
+// which is why config.example.json has to stay plain JSON: internal/config
+// imports this package, so its parser cannot be borrowed here, and
+// reproducing the comment stripper would be a second implementation of it
+// inside a test. That file is the one the README calls the reference and
+// the one both 400s came from. It absorbed config.sample.json, so the
+// profiles walked here are also the ones the orchestration setup ships
+// with.
 func TestEveryShippedProfileSurvivesEveryEffortLevel(t *testing.T) {
 	profiles := shippedProfiles(t)
 	if len(profiles) < 2 {

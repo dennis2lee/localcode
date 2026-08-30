@@ -145,12 +145,13 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 }
 ```
 
-Two files in the repository are worth copying from:
+One file in the repository is worth copying from:
 
 | File | What it is |
 |---|---|
-| `config.example.json` | Every key this program reads, with a note on each. The reference. |
-| `config.sample.json` | One worked setup for orchestration: providers, three profiles, the switch, and the six specialists with their prompts written out. Start here if what you want is the multi-agent behaviour. |
+| `config.example.json` | Every key this program reads, with a note on each — and a worked orchestration setup that runs as it stands: three providers, the three `smart-*` profiles, the switch on, and the six specialists with their prompts written out. |
+
+It was two files until they were merged. `config.sample.json` held the orchestration setup and the example held the reference, which meant the install instructions pointed at the one that did not orchestrate, and its `agents` block shadowed two of the six specialists it never mentioned. One file answers both questions and cannot disagree with itself.
 
 #### Comments: the file is JSONC
 
@@ -1302,7 +1303,7 @@ With one profile everything runs on it and orchestration still works; it just co
 
 Name a profile `smart-quick`, `smart-balanced` or `smart-deep` to pin a category by hand; no heuristic gets a vote after that. Without those names localcode guesses from the model ids, which works and is worth not relying on.
 
-**`config.sample.json` is this written out**, with the six prompts in full. A test in `internal/smart` holds that file to the built-in roster, so the prompts in it are the prompts localcode actually uses rather than a copy that drifted.
+**`config.example.json`'s `agents` block is this written out**, with the six prompts in full. A test in `internal/smart` holds that block to the built-in roster, so the prompts in it are the prompts localcode actually uses rather than a copy that drifted — and it is why deleting the block changes nothing.
 
 To replace one, declare an agent with the same name. A name you have declared is yours entirely — prompt, model and tools — and localcode does not supply its own version of it.
 
@@ -1508,7 +1509,7 @@ Role stays constant, prompt does not. A policy that reads as a helpful summary t
 
 The same concept as opencode's Plan and Build modes on the Tab key.
 
-The `plan` agent in `config.example.json` allows only `tools: ["read_file","glob","grep"]`, so `write_file`, `edit`, and `bash` are never exposed or executed.
+The `plan` agent in `config.example.json` allows only `tools: ["read_file","glob","grep","Skill"]`, so `write_file`, `edit`, and `bash` are never exposed or executed.
 
 opencode implements Plan mode through an ask permission instead, which has produced reported escapes such as [bash running anyway in plan mode](https://github.com/anomalyco/opencode/issues/20938) and [subagents bypassing the read only restriction](https://github.com/anomalyco/opencode/issues/26514). localcode never shows the tool to the model in the first place and refuses it again just before execution, so that class of bypass is structurally impossible.
 

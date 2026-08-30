@@ -1,39 +1,44 @@
 {
+  "//": "config.example.json is two things at once: every key localcode reads, with a note on each, and a worked orchestration setup that works as it stands. Copy it to ~/.localcode/config.json for every project or .localcode/config.json for one; the two are merged, with the project's winning. This file is plain JSON so it can be copied anywhere, but localcode reads JSONC: your own config may use // and /* */ comments and a trailing comma, and localcode keeps them when it rewrites the file for you (a permission rule, a \"/smart-agent on\"). Full reference: docs/USAGE.md.",
   "providers": {
     "bedrock": {
       "type": "bedrock",
       "region": "us-west-2"
     },
-    "local": {
-      "type": "openai-compat",
-      "//base_url": "Any string here may be {env:NAME}, taken from the environment when the file is read, or {env:NAME:-fallback} when it is optional. See docs/USAGE.md.",
-      "base_url": "{env:LOCALCODE_LLM_URL:-http://localhost:1234/v1}"
-    },
     "anthropic": {
       "type": "anthropic",
-      "//api_key": "Omit this entirely to use the key stored by `localcode login anthropic`. {env:...} is the other way to keep a key out of this file.",
+      "//api_key": "Omit this entirely to use the key stored by `localcode login anthropic`. An environment reference is the other way to keep a key out of this file; see the note on base_url below.",
       "api_key": "{env:ANTHROPIC_API_KEY:-}"
+    },
+    "local": {
+      "type": "openai-compat",
+      "//base_url": "Any string in this file may reference the environment, read when the file is read. Two forms, written here without their braces so that this file loads with nothing set: env:NAME is required and refuses to load when the variable is unset, and env:NAME:-fallback is optional. The values below use the optional form, which is why copying this file works before you have exported anything. See docs/USAGE.md.",
+      "base_url": "{env:LOCALCODE_LLM_URL:-http://localhost:1234/v1}"
     }
   },
+  "//profiles": "The models, one entry per model you can reach. This is the part that matters for orchestration: with smart_agent on you do not declare the specialists, localcode creates all six and points each at whichever profile suits the work it does. What it needs from you is profiles to choose between, and three is the useful number because the roster sorts into three kinds of work. quick: explore and verify, searching and running a build. balanced: implement, making one self-contained change. deep: plan, oracle and librarian, the judgement work. The names below are the explicit form: a profile called smart-quick, smart-balanced or smart-deep pins that category by hand and no heuristic gets a vote after that. Without those names localcode guesses the class from the model id, which works and is worth not relying on. With one profile everything runs on it and orchestration still works; it just costs the same everywhere, which is most of the point of having a roster. See docs/USAGE.md.",
   "profiles": {
-    "strong": {
+    "smart-deep": {
       "provider": "bedrock",
       "model": "us.anthropic.claude-opus-4-6-v1",
       "max_tokens": 8192,
       "//fallback": "Other profiles to try, in order, when this one will not answer: a rate limit, an outage, a credential that expired. Read only with smart_agent on, because falling back also re-derives the prompt for the model it falls back to. See docs/USAGE.md.",
       "fallback": [
-        "balanced",
-        "cheap"
+        "smart-balanced",
+        "smart-quick"
       ]
     },
-    "balanced": {
-      "provider": "bedrock",
-      "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "smart-balanced": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
       "max_tokens": 8192,
       "//effort": "How hard this model is asked to think: off, low, medium, high. Unset, the default, sends nothing at all and the model answers exactly as it always has. One word over several wires: an OpenAI-compatible server is sent \"reasoning_effort\", so a local muse or gemma that supports reasoning takes the level and one that does not ignores it; the Anthropic API is sent extended thinking, where the newest Claude families size their own reasoning (so every level reaches the same switch there) and older ones take a token budget per level; Bedrock carries the same thing through additionalModelRequestFields. Two things follow automatically: a budget is fitted to this profile's max_tokens, since the budget is spent out of it, and temperature is dropped from a request that asks for reasoning, since the API refuses both together. \"/effort\" sets it for one conversation and says what it reaches on that model. See docs/USAGE.md.",
-      "effort": ""
+      "effort": "",
+      "fallback": [
+        "smart-quick"
+      ]
     },
-    "cheap": {
+    "smart-quick": {
       "provider": "local",
       "model": "qwen3-30b-a3b",
       "max_tokens": 4096,
@@ -42,57 +47,85 @@
       "keep_going": 0
     }
   },
+  "//default_profile": "The profile your own turns run on: the model that talks to you and, with smart_agent on, decides what to delegate. An agent with no profile of its own falls back to this one.",
+  "default_profile": "smart-deep",
+  "//smart_agent": "The orchestration switch, and the one setting in this file that is not at its shipped default: it is off in localcode and on here, because this file is also a worked setup. On, the session's own model becomes an orchestrator with six built-in specialist sub-agents (explore, librarian, oracle, plan, implement, verify), each routed to whichever profile above suits it, and it also turns on the fallback chains above, the turn log in ~/.localcode/trace/, the prompt-cache markers and the credential and workspace guards. It costs what the ordinary single-agent path does not: every delegation is a second model call against a second context. Set it to false for the shipped behaviour. \"/smart-agent\" toggles it and writes the change back here, as does the settings window and \"/config smart_agent on|off\". See docs/USAGE.md.",
+  "smart_agent": true,
+  "//agents": "You do not need this section. Delete it and localcode supplies the same six with the prompts below, which is where they came from; a test in internal/smart holds this block to the roster localcode actually builds, so what is written here is what runs. It is here because the prompts are the interesting part and are otherwise invisible, and because declaring a name is how you replace one: a name that appears here is yours entirely — prompt, profile and tools — and localcode does not supply its own version of it. Adding a name that is not one of the six adds a seventh agent alongside them. Read the six as a set: what makes a roster work is not any one prompt but that the roles do not overlap, each saying what it does, what it does not do, and what to answer with. The two that read as negatives are the two that matter most in practice, because a reviewer that starts editing and a verifier that reports a success it did not see are how a delegation quietly goes wrong. The tools list is an allowlist rather than a line of prompt: an agent without write cannot write however it is asked, and implement is the only one that has it. Every prompt ends with the same paragraph about reporting back, which is not repetition to tidy away — a specialist answers a model that cannot see anything it saw, so the length of the answer is the whole point of running the work somewhere else.",
   "agents": {
-    "general-purpose": {
-      "profile": "balanced",
-      "description": "Default agent for direct user conversation: full tool access, no scoped prompt."
-    },
-    "build": {
-      "profile": "strong",
-      "description": "Implements features and fixes bugs. Full tool access.",
-      "prompt": "You are the build agent. Focus on writing correct, working code and using tools to verify your changes. Delegate research/search-heavy sub-tasks to the explore agent via the Task tool instead of doing them yourself."
-    },
     "explore": {
-      "profile": "cheap",
-      "description": "Fast, read-only codebase search. Cheap/fast model on purpose \u2014 don't use it for anything requiring deep reasoning.",
-      "prompt": "You are the explore agent. Locate relevant files and summarize what you find, quickly and concisely. Do not modify anything.",
-      "tools": [
-        "read_file",
-        "glob",
-        "grep"
-      ]
-    },
-    "plan": {
-      "profile": "strong",
-      "description": "Designs a step-by-step implementation plan without making any changes.",
-      "prompt": "You are the plan agent. Read the codebase and propose a concrete, ordered implementation plan. Do not write or edit files \u2014 describe what should change and why.",
-      "tools": [
-        "read_file",
-        "glob",
-        "grep"
-      ]
-    },
-    "review": {
-      "profile": "balanced",
-      "description": "Reviews a diff or code section for correctness bugs, security issues, and unnecessary complexity.",
-      "prompt": "You are the review agent. Look for correctness bugs, security issues, and needless complexity \u2014 not style nitpicks. Do not modify files; report findings.",
+      "profile": "smart-quick",
+      "description": "Find things. Locates files, symbols, call sites and configuration across the project and reports where they are. Cheap and fast; use it instead of grepping the codebase yourself.",
+      "prompt": "You are the explore agent. Your job is to find where something lives in this project and report back, not to explain it in depth and not to change it. Search broadly first (Glob, Grep), then read only the files that matter. Prefer several cheap searches over one expensive read. Answer with paths and line numbers.\n\nReport back in under 300 words. You are answering a question for another agent that cannot see anything you saw: give it the findings, the exact file paths and line numbers, and the conclusion. Do not narrate what you did, do not paste long file contents or command output, and do not pad the answer to look thorough. If you could not find the answer, say that plainly and say where you looked.",
       "tools": [
         "read_file",
         "glob",
         "grep",
+        "Skill"
+      ]
+    },
+    "librarian": {
+      "profile": "smart-deep",
+      "description": "Read and digest. Works through documentation, long files, logs or unfamiliar subsystems and returns a condensed account of how they work.",
+      "prompt": "You are the librarian agent. You are given something long — documentation, a subsystem, a log — and you return the part of it that answers the question. Read the whole of what you are pointed at before answering. Quote exactly when the wording matters, summarise when it does not, and say explicitly when the source does not cover what was asked.\n\nReport back in under 300 words. You are answering a question for another agent that cannot see anything you saw: give it the findings, the exact file paths and line numbers, and the conclusion. Do not narrate what you did, do not paste long file contents or command output, and do not pad the answer to look thorough. If you could not find the answer, say that plainly and say where you looked.",
+      "tools": [
+        "read_file",
+        "glob",
+        "grep",
+        "Skill"
+      ]
+    },
+    "oracle": {
+      "profile": "smart-deep",
+      "description": "Review and critique. Reads a change or a design and looks for what is wrong with it: bugs, missed cases, bad assumptions. Never edits anything.",
+      "prompt": "You are the oracle agent: a reviewer, not an implementer. Read what you are given and look for what is actually wrong with it — a case it does not handle, an assumption that does not hold, a failure it cannot recover from. Say what would have to be true for each problem to bite, and where in the code it is. Do not list style preferences, do not restate what the code does, and do not approve something you have not read. If it looks correct, say so and say what you checked.\n\nReport back in under 300 words. You are answering a question for another agent that cannot see anything you saw: give it the findings, the exact file paths and line numbers, and the conclusion. Do not narrate what you did, do not paste long file contents or command output, and do not pad the answer to look thorough. If you could not find the answer, say that plainly and say where you looked.",
+      "tools": [
+        "read_file",
+        "glob",
+        "grep",
+        "Skill"
+      ]
+    },
+    "plan": {
+      "profile": "smart-deep",
+      "description": "Decompose. Turns a large or vague request into an ordered list of concrete steps, naming the files each one touches. Reads code but never edits it.",
+      "prompt": "You are the plan agent. Turn the request into an ordered list of steps that someone else could carry out without asking you anything. Read enough of the code first that each step names the actual files and functions involved. Say which steps depend on which. Call out the decisions that are the user's to make rather than deciding them. Do not write the code.\n\nReport back in under 300 words. You are answering a question for another agent that cannot see anything you saw: give it the findings, the exact file paths and line numbers, and the conclusion. Do not narrate what you did, do not paste long file contents or command output, and do not pad the answer to look thorough. If you could not find the answer, say that plainly and say where you looked.",
+      "tools": [
+        "read_file",
+        "glob",
+        "grep",
+        "Skill"
+      ]
+    },
+    "implement": {
+      "profile": "smart-balanced",
+      "description": "Make a self-contained change. Edits files and runs commands to carry out one clearly specified piece of work, then reports what changed.",
+      "prompt": "You are the implement agent. You are given one self-contained piece of work and you finish it: read what you need, make the change, and check that it builds or runs. Stay inside what you were asked for — if you find a second problem, report it rather than fixing it too. Report which files you changed and what you verified.\n\nReport back in under 300 words. You are answering a question for another agent that cannot see anything you saw: give it the findings, the exact file paths and line numbers, and the conclusion. Do not narrate what you did, do not paste long file contents or command output, and do not pad the answer to look thorough. If you could not find the answer, say that plainly and say where you looked.",
+      "tools": [
+        "read_file",
+        "write_file",
+        "edit",
         "bash",
-        "check"
+        "glob",
+        "grep",
+        "Skill"
+      ]
+    },
+    "verify": {
+      "profile": "smart-quick",
+      "description": "Check that it works. Runs the build, the tests or the command and reports what actually happened, without fixing anything.",
+      "prompt": "You are the verify agent. Run what you were asked to run and report exactly what happened: the command, whether it passed, and the failing output if it did not. Do not fix anything, do not edit files, and do not report success you did not observe — if the command could not be run, say that instead of guessing at the outcome.\n\nReport back in under 300 words. You are answering a question for another agent that cannot see anything you saw: give it the findings, the exact file paths and line numbers, and the conclusion. Do not narrate what you did, do not paste long file contents or command output, and do not pad the answer to look thorough. If you could not find the answer, say that plainly and say where you looked.",
+      "tools": [
+        "read_file",
+        "bash",
+        "glob",
+        "grep"
       ]
     }
   },
-  "default_profile": "balanced",
+  "//max_concurrent_tasks": "How many delegated sub-agents may run at once, across all conversations. 5 when unset.",
   "max_concurrent_tasks": 5,
-  "//mcp_servers": "MCP servers to connect at startup, name -> server. Three transports: \"stdio\" runs a command and talks over its pipes ({\"type\": \"stdio\", \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/srv/data\"], \"env\": {}}), while \"http\" and \"sse\" take {\"url\": \"https://...\", \"headers\": {\"Authorization\": \"Bearer {env:TOKEN}\"}}. Omitting \"type\" infers one from whether command or url is set. Header values are secrets and are never printed, only their names. Their tools join the session as mcp__<server>__<tool>; /reset-mcp reconnects after a change here without a restart. See docs/USAGE.md.",
-  "mcp_servers": {},
-  "//hooks": "Shell commands run at points in a turn, event -> list. The events are pre_tool_use, post_tool_use, user_prompt_submit, stop and session_start. Each entry is {\"command\": \"...\", \"matcher\": \"...\"}, where matcher is optional and limits the hook to tools whose name matches it. The event payload is piped to the command as JSON on stdin, the command runs in the session's workspace, and a pre_tool_use hook that exits non-zero blocks the call. Each is bounded by a 30-second timeout so one hung script cannot wedge a turn. See docs/USAGE.md.",
-  "hooks": {},
-  "//permission": "Fine-grained rules per tool, tool name -> rule, with \"*\" as the fallback for tools not named. A rule is either one decision (\"allow\", \"ask\" or \"deny\") applied to every call, or a list of {\"match\": \"<glob>\", \"decision\": \"...\"} tried in order, e.g. {\"bash\": [{\"match\": \"git push*\", \"decision\": \"ask\"}, {\"match\": \"*\", \"decision\": \"allow\"}]}. This is the per-tool layer; the four switches below are the blunt ones that sit over it. \"Always allow\" in a permission prompt writes a rule here. See docs/USAGE.md.",
-  "permission": {},
+  "//auto_delegate": "A different feature from smart_agent, and worth not confusing with it: this sends whole prompts of yours to a cheaper agent before your own model sees them, matched by glob against what you typed. It is about cost, not about orchestration. Off unless enabled; \"/auto-delegate\" toggles it. See docs/USAGE.md.",
   "auto_delegate": {
     "enabled": false,
     "agent": "explore",
@@ -105,16 +138,12 @@
       "grep *"
     ]
   },
-  "//trace_max_age_days": "How long a day of Smart Agent's turn log in ~/.localcode/trace/ is kept. 30 when unset; zero or below means that default, not \"keep forever\". See docs/USAGE.md.",
-  "trace_max_age_days": 30,
-  "//trace_max_total_mb": "Optional cap on the whole trace directory. When set, the oldest files go until it fits; today's file is never removed. Unset (0) means no size cap. See docs/USAGE.md.",
-  "trace_max_total_mb": 0,
-  "//smart_agent": "Off by default. On, the session's own model becomes an orchestrator with six built-in specialist sub-agents (explore, librarian, oracle, plan, implement, verify), each routed to whichever profile above suits it. Name a profile smart-quick, smart-balanced or smart-deep to pin that routing by hand. Also togglable from the settings window and with /config smart_agent on|off. See docs/USAGE.md.",
-  "smart_agent": false,
-  "//update_url": "Where the update button looks instead of GitHub: one https address at which the current installers are published side by side, named the way localcode names them (localcode-1.2.3-darwin-universal.tar.gz, localcode-1.2.3-windows-amd64.msi, ...). The version is read out of the filenames, since on a directory of files that is the only place it is written down. For a machine that cannot reach github.com, or an organisation that would rather its own build were the one installed. https only, because the file is run as an installer. Unset means GitHub. See docs/USAGE.md.",
-  "update_url": "",
-  "//verify_command": "The one command this project is checked with: its tests, its build, its linter. It backs the `check` tool, which runs exactly this in the session's workspace and takes no arguments at all \u2014 a model chooses whether to run the check, never what the check is. That is what lets a debate reviewer, which can read but never write, still find out whether the code runs: a reviewer with `bash` would be a second author, and a reviewer that cannot run anything judges by reading alone. Unset means the tool is not registered rather than registered and always failing. See docs/USAGE.md.",
-  "verify_command": "",
+  "//mcp_servers": "MCP servers to connect at startup, name -> server. Three transports: \"stdio\" runs a command and talks over its pipes ({\"type\": \"stdio\", \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/srv/data\"], \"env\": {}}), while \"http\" and \"sse\" take {\"url\": \"https://...\", \"headers\": {\"Authorization\": \"Bearer <an environment reference, see the note on base_url>\"}}. Omitting \"type\" infers one from whether command or url is set. Header values are secrets and are never printed, only their names. Their tools join the session as mcp__<server>__<tool>; /reset-mcp reconnects after a change here without a restart. See docs/USAGE.md.",
+  "mcp_servers": {},
+  "//hooks": "Shell commands run at points in a turn, event -> list. The events are pre_tool_use, post_tool_use, user_prompt_submit, stop and session_start. Each entry is {\"command\": \"...\", \"matcher\": \"...\"}, where matcher is optional and limits the hook to tools whose name matches it. The event payload is piped to the command as JSON on stdin, the command runs in the session's workspace, and a pre_tool_use hook that exits non-zero blocks the call. Each is bounded by a 30-second timeout so one hung script cannot wedge a turn. See docs/USAGE.md.",
+  "hooks": {},
+  "//permission": "Fine-grained rules per tool, tool name -> rule, with \"*\" as the fallback for tools not named. A rule is either one decision (\"allow\", \"ask\" or \"deny\") applied to every call, or a list of {\"match\": \"<glob>\", \"decision\": \"...\"} tried in order, e.g. {\"bash\": [{\"match\": \"git push*\", \"decision\": \"ask\"}, {\"match\": \"*\", \"decision\": \"allow\"}]}. This is the per-tool layer; the four switches below are the blunt ones that sit over it. \"Always allow\" in a permission prompt writes a rule here. See docs/USAGE.md.",
+  "permission": {},
   "//skip_permissions": "The daemon default for the first of four permission switches, and what a conversation that has not answered for itself follows. All four are per session: /permission-skip-all in a conversation, or the Permissions window, sets that conversation and saves it with the session. This one allows every prompt, the workspace boundary included.",
   "skip_permissions": false,
   "//skip_tool_permissions": "The useful middle: every tool prompt allowed, and a path that leaves the session's workspace still asked about. /permission-skip-tools.",
@@ -132,5 +161,13 @@
   "//show_tps": "Whether a tokens-per-second figure rides along with usage for the clients to show under the prompt. On unless set to false. /config show_tps on|off toggles it and saves it here.",
   "show_tps": true,
   "//keep_going": "The carry-on nudge for muse models, on unless set to false. Toggled with /keep-going or the settings window checkbox. Only ever applies to models whose id contains 'muse'.",
-  "keep_going": true
+  "keep_going": true,
+  "//trace_max_age_days": "How long a day of Smart Agent's turn log in ~/.localcode/trace/ is kept. 30 when unset; zero or below means that default, not \"keep forever\". See docs/USAGE.md.",
+  "trace_max_age_days": 30,
+  "//trace_max_total_mb": "Optional cap on the whole trace directory. When set, the oldest files go until it fits; today's file is never removed. Unset (0) means no size cap. See docs/USAGE.md.",
+  "trace_max_total_mb": 0,
+  "//update_url": "Where the update button looks instead of GitHub: one https address at which the current installers are published side by side, named the way localcode names them (localcode-1.2.3-darwin-universal.tar.gz, localcode-1.2.3-windows-amd64.msi, ...). The version is read out of the filenames, since on a directory of files that is the only place it is written down. For a machine that cannot reach github.com, or an organisation that would rather its own build were the one installed. https only, because the file is run as an installer. Unset means GitHub. See docs/USAGE.md.",
+  "update_url": "",
+  "//verify_command": "The one command this project is checked with: its tests, its build, its linter. It backs the `check` tool, which runs exactly this in the session's workspace and takes no arguments at all — a model chooses whether to run the check, never what the check is. That is what lets a debate reviewer, which can read but never write, still find out whether the code runs: a reviewer with `bash` would be a second author, and a reviewer that cannot run anything judges by reading alone. Unset means the tool is not registered rather than registered and always failing. See docs/USAGE.md.",
+  "verify_command": ""
 }

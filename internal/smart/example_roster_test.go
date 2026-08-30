@@ -8,19 +8,24 @@ import (
 	"localcode/internal/config"
 )
 
-// config.sample.json says, in as many words, that its "agents" section
+// config.example.json says, in as many words, that its "agents" section
 // can be deleted because localcode supplies the same six with the same
-// prompts. That is a claim about this package, and a sample that drifts
-// from the code it documents is worse than no sample: it is a wrong
-// answer somebody copied.
-func TestTheSampleMatchesTheBuiltInRoster(t *testing.T) {
-	path := filepath.Join("..", "..", "config.sample.json")
+// prompts. That is a claim about this package, and a reference file that
+// drifts from the code it documents is worse than no reference: it is a
+// wrong answer somebody copied.
+//
+// It used to check config.sample.json, which was the same six written out
+// in a second file. The two were merged into the example so there is one
+// config to copy rather than two to choose between, and this test moved
+// with the block it guards.
+func TestTheExampleMatchesTheBuiltInRoster(t *testing.T) {
+	path := filepath.Join("..", "..", "config.example.json")
 	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("config.sample.json is missing: %v", err)
+		t.Fatalf("config.example.json is missing: %v", err)
 	}
 	cfg, err := config.Load(path)
 	if err != nil {
-		t.Fatalf("config.sample.json does not load: %v", err)
+		t.Fatalf("config.example.json does not load: %v", err)
 	}
 
 	// The roster localcode would supply for these profiles, which is
@@ -32,17 +37,17 @@ func TestTheSampleMatchesTheBuiltInRoster(t *testing.T) {
 	supplied := Agents(cfg)
 	cfg.Agents = declared
 	if len(supplied) == 0 {
-		t.Fatal("the sample's profiles produce no roster at all")
+		t.Fatal("the example's profiles produce no roster at all")
 	}
 
 	for name, want := range supplied {
 		got, declared := cfg.Agents[name]
 		if !declared {
-			t.Errorf("localcode supplies %q and the sample does not list it", name)
+			t.Errorf("localcode supplies %q and the example does not list it", name)
 			continue
 		}
 		if got.Prompt != want.Prompt {
-			t.Errorf("%s: the sample's prompt is not the one localcode uses\n sample: %s\n  built: %s",
+			t.Errorf("%s: the example's prompt is not the one localcode uses\n example: %s\n  built: %s",
 				name, got.Prompt, want.Prompt)
 		}
 		if got.Description != want.Description {
@@ -61,15 +66,15 @@ func TestTheSampleMatchesTheBuiltInRoster(t *testing.T) {
 	}
 	for name := range cfg.Agents {
 		if _, ok := supplied[name]; !ok {
-			t.Errorf("the sample declares %q, which localcode does not supply: the section can no longer just be deleted", name)
+			t.Errorf("the example declares %q, which localcode does not supply: the section can no longer just be deleted", name)
 		}
 	}
 }
 
-// And the profiles the sample names have to be the ones the roster is
+// And the profiles the example names have to be the ones the roster is
 // routed to, or the file explains a mapping it does not produce.
-func TestTheSampleProfilesRouteAsItSays(t *testing.T) {
-	cfg, err := config.Load(filepath.Join("..", "..", "config.sample.json"))
+func TestTheExampleProfilesRouteAsItSays(t *testing.T) {
+	cfg, err := config.Load(filepath.Join("..", "..", "config.example.json"))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -79,13 +84,13 @@ func TestTheSampleProfilesRouteAsItSays(t *testing.T) {
 		{CategoryDeep, "smart-deep"},
 	} {
 		if got := ProfileFor(cfg, tc.category); got != tc.want {
-			t.Errorf("%s work routes to %q, and the sample says %q", tc.category, got, tc.want)
+			t.Errorf("%s work routes to %q, and the example says %q", tc.category, got, tc.want)
 		}
 	}
-	// Every agent the sample declares points at a profile it declares.
+	// Every agent the example declares points at a profile it declares.
 	for name, a := range cfg.Agents {
 		if _, ok := cfg.Profiles[a.Profile]; !ok {
-			t.Errorf("%s points at profile %q, which the sample does not define", name, a.Profile)
+			t.Errorf("%s points at profile %q, which the example does not define", name, a.Profile)
 		}
 	}
 }
