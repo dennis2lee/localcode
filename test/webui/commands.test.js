@@ -119,7 +119,7 @@ test('server-side commands are not intercepted', async () => {
 test('a command is matched case-insensitively but sent as typed', async () => {
   const app = await load();
   assert.equal(await app.tryLocalCommand('/HELP'), true);
-  assert.match(app.transcript(), /You: \/HELP/);
+  assert.deepEqual(app.userTurns(), ['/HELP']);
 });
 
 test('isPlainPrompt separates chat from commands', async () => {

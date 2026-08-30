@@ -37,7 +37,7 @@ test('a malformed frame is logged, not thrown', async () => {
 test('a user message renders escaped', async () => {
   const app = await load();
   app.sse.emit({ type: 'message.user', data: { text: '<b>hi</b>' } });
-  assert.ok(app.transcript().includes('You: &lt;b&gt;hi&lt;/b&gt;'), app.transcript());
+  assert.ok(app.transcript().includes('&lt;b&gt;hi&lt;/b&gt;'), app.transcript());
 });
 
 // keep_going: the message localcode sends a stalled model on the user's
@@ -218,7 +218,7 @@ test('a 409 from the daemon queues the prompt instead of reporting an error', as
   // The prompt is on screen as the pending line drawn when Enter was
   // pressed — it is queued, not lost, and the status bar counts it. There
   // is no separate "[queued]" line any more: it said the same thing twice.
-  assert.ok(app.transcript().includes('You: hello'), app.transcript());
+  assert.ok(app.userTurns().includes('hello'), app.transcript());
   assert.ok(!app.transcript().includes('Error:'), app.transcript());
   assert.equal(app.state.waiting, true);
 });
@@ -493,7 +493,7 @@ test('the mid-turn acknowledgement is replaced by the real line, not left above 
 
   const html = app.transcript();
   assert.ok(!html.includes('will pick this up'), html);
-  assert.ok(html.includes('You: actually, skip the tests'), html);
+  assert.ok(html.includes('actually, skip the tests'), html);
   // Exactly one occurrence of the text, not two.
   assert.equal(html.split('actually, skip the tests').length - 1, 1, html);
 });

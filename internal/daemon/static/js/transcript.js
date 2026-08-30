@@ -30,8 +30,36 @@ function appendDiv(cls, text) {
   return div;
 }
 
+// A user turn is two elements: the separator that says a turn starts
+// here and names who is speaking, and the prompt itself.
+//
+// Two rather than one because they are marking different things — the
+// separator spans the column and belongs to the boundary, the prompt
+// carries the rule down its own left edge and belongs to the message —
+// and CSS cannot draw the first from inside the second's border box.
+// They are created and removed together; see resolvePendingUser, which
+// has to take the pair back out when the real message lands.
+function appendUserBlock(text, pending) {
+  const sep = document.createElement('div');
+  sep.className = pending ? 'turn-sep pending' : 'turn-sep';
+  // A text node, not a ::before content string: this is the only thing
+  // left saying "you" once the inline prefix is gone, so it has to be
+  // readable by a screen reader and findable by the browser's own find.
+  sep.appendChild(document.createTextNode('You'));
+
+  const div = document.createElement('div');
+  div.className = pending ? 'msg-user pending' : 'msg-user';
+  div.textContent = text;
+
+  follower.keeping(() => {
+    transcriptEl.appendChild(sep);
+    transcriptEl.appendChild(div);
+  });
+  return { sep, div };
+}
+
 export function appendUser(text) {
-  const div = appendDiv('msg-user', 'You: ' + text);
+  const { div } = appendUserBlock(text, false);
   scrollToBottom();
   return div;
 }
@@ -54,11 +82,15 @@ export function appendUser(text) {
 const sentPlaceholders = new Map(); // text -> [element]
 
 export function appendPendingUser(text, midTurn = false) {
-  const div = midTurn
-    ? appendDiv('msg-tool', `[sent — the model will pick this up at its next step] ${text}`)
-    : appendDiv('msg-user pending', 'You: ' + text);
+  // A mid-turn send is a note, not a turn: it is one line of explanation
+  // about when the model will see this, and giving it a turn separator
+  // would announce a boundary that the transcript does not have there.
+  const parts = midTurn
+    ? { div: appendDiv('msg-tool', `[sent — the model will pick this up at its next step] ${text}`) }
+    : appendUserBlock(text, true);
+  const div = parts.div;
   const list = sentPlaceholders.get(text) || [];
-  list.push(div);
+  list.push(parts);
   sentPlaceholders.set(text, list);
   // Sending is a deliberate act, and the answer is going to arrive at the
   // bottom. Somebody who had scrolled up to re-read something and then
@@ -72,9 +104,71 @@ export function resolvePendingUser(text) {
   if (!list || list.length === 0) return;
   // Oldest first: the same text can be sent twice, and each send owns one
   // placeholder.
-  const div = list.shift();
+  const parts = list.shift();
   if (list.length === 0) sentPlaceholders.delete(text);
-  div.remove();
+  // Both halves, or the separator outlives the prompt it announced and
+  // the transcript grows a boundary with nothing after it.
+  if (parts.sep) parts.sep.remove();
+  parts.div.remove();
+}
+
+// Moving between your own turns.
+//
+// The separator and the rule make a turn findable by eye; this is the
+// same job done by keyboard, and on a session with fifty turns in it,
+// it is the one that actually gets used. Alt+Up / Alt+Down, bound in
+// main.js.
+//
+// The elements are read out of the DOM on each call rather than kept in
+// a list, because the DOM is already the record: a session switch
+// replaces the transcript wholesale, a pending prompt is removed when
+// the real one lands, and a list maintained beside all that is a second
+// copy waiting to disagree with the first.
+export function jumpToTurn(direction) {
+  const offsetOf = (el) => el.offsetTop - transcriptEl.offsetTop;
+  // Each turn is the prompt and the separator above it, when there is
+  // one. The separator is what the view is scrolled to, so the boundary
+  // lands on screen rather than just above it — and it is therefore also
+  // what "which turn am I on" has to be measured against. Measuring the
+  // position against the prompt while scrolling to the separator is an
+  // off-by-one that only shows up in use: after jumping to a turn, the
+  // prompt sits a few pixels below the fold, so the turn reads as the
+  // previous one and pressing "next" comes straight back to where it
+  // already was.
+  const turns = Array.from(transcriptEl.querySelectorAll('.msg-user'), (msg) => {
+    const prev = msg.previousElementSibling;
+    const sep = prev && prev.className && prev.className.split(' ').includes('turn-sep') ? prev : msg;
+    return { msg, top: offsetOf(sep) };
+  });
+  if (turns.length === 0) return false;
+
+  // Which turn the view is on: the last one whose top has reached the top
+  // of the scroll box. Measured against the box rather than the window,
+  // since the transcript is the thing that scrolls. A few pixels of slack
+  // so a turn scrolled exactly into place counts as the current one
+  // rather than as the one behind it.
+  const top = transcriptEl.scrollTop;
+  let current = -1;
+  for (let i = 0; i < turns.length; i++) {
+    if (turns[i].top <= top + 4) current = i;
+  }
+
+  const next = direction < 0 ? current - 1 : current + 1;
+  if (next < 0 || next >= turns.length) return false;
+
+  transcriptEl.scrollTop = turns[next].top;
+
+  // Say where the reader landed, on exactly one turn. Clearing every
+  // other one first is not tidiness: the class outlives its animation, so
+  // walking ten turns left ten of them marked as "here".
+  //
+  // Re-triggered by removing the class and forcing a reflow, or jumping
+  // to the same turn twice would animate once and then look broken.
+  const target = turns[next].msg;
+  for (const t of turns) t.msg.classList.remove('landed');
+  void target.offsetWidth;
+  target.classList.add('landed');
+  return true;
 }
 export function appendTool(text) { return appendDiv('msg-tool', text); }
 export function appendError(err) { return appendDiv('msg-error', 'Error: ' + String(err)); }

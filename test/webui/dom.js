@@ -112,6 +112,31 @@ class ClassList {
   }
 }
 
+// What querySelectorAll answers with: length, indices, forEach and an
+// iterator, and none of Array's other methods.
+//
+// It is deliberately this narrow. A browser's NodeList has exactly this
+// much, so code written against a fake that returned an Array could use
+// .map and .filter freely and only discover in a browser that they do
+// not exist — which is a module that throws while loading, not a span
+// that renders oddly. See querySelectorAll below.
+class NodeList {
+  constructor(items) {
+    this.length = items.length;
+    items.forEach((item, i) => { this[i] = item; });
+    this._items = items;
+  }
+  item(i) {
+    return this._items[i] ?? null;
+  }
+  forEach(fn, thisArg) {
+    this._items.forEach((el, i) => fn.call(thisArg, el, i, this));
+  }
+  [Symbol.iterator]() {
+    return this._items[Symbol.iterator]();
+  }
+}
+
 // Attributes that round-trip into serialized HTML. Everything else stays a
 // plain JS property on the element, invisible to the serializer — which is
 // fine, because the assertions that matter are about escaping of text and
@@ -148,12 +173,14 @@ class Element {
     this.placeholder = '';
     this.selectionStart = 0;
     this.selectionEnd = 0;
-    // Layout, such as it is. A test sets these three to describe a view
-    // that is scrolled somewhere, which is the only thing the code under
-    // test asks the layout: am I at the bottom?
+    // Layout, such as it is. A test sets these to describe a view that is
+    // scrolled somewhere and elements that sit at known heights in it —
+    // the two things the code under test asks the layout: am I at the
+    // bottom, and where in the scroll box does this element start?
     this.scrollTop = 0;
     this.scrollHeight = 0;
     this.clientHeight = 0;
+    this.offsetTop = 0;
   }
 
   // Only the generic attribute bag. The handful of attributes the code
@@ -179,6 +206,16 @@ class Element {
 
   get children() {
     return this.childNodes.filter((n) => n instanceof Element);
+  }
+
+  // The element before this one among its parent's children, skipping
+  // text nodes. The transcript's jump reads it to find the separator that
+  // announces a prompt, which is the element it actually scrolls to.
+  get previousElementSibling() {
+    if (!this.parentNode) return null;
+    const sibs = this.parentNode.children;
+    const i = sibs.indexOf(this);
+    return i > 0 ? sibs[i - 1] : null;
   }
 
   // <select>.options — app.js spreads this to find whether an agent name is
@@ -225,6 +262,16 @@ class Element {
   // querySelector over the subtree, for the three selector shapes a test
   // actually reaches for: ".class", "#id" and "tag".
   //
+  // querySelectorAll returns a NodeList rather than an Array, and that is
+  // load-bearing rather than pedantry: a browser's NodeList has length,
+  // indices, forEach and an iterator, and does NOT have map or filter.
+  // This used to return a plain Array, so app code written as
+  // `el.querySelectorAll('.x').map(...)` passed every test here and threw
+  // "map is not a function" the moment a browser ran it — a whole module
+  // failing to load, found by opening the page rather than by the suite.
+  // Array.from(...) and [...spread] work on both and are what the app
+  // already does everywhere else.
+  //
   // Deliberately not a selector engine. Anything else throws by name
   // rather than returning null, because a selector that silently matches
   // nothing is a test that passes while asserting nothing — which is the
@@ -244,7 +291,7 @@ class Element {
       }
     };
     walk(this);
-    return out;
+    return new NodeList(out);
   }
 
   get innerHTML() {

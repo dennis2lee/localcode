@@ -1238,7 +1238,7 @@ func TestEntriesAreSeparatedByExactlyOneBlankLine(t *testing.T) {
 	got := renderTranscript([]transcriptEntry{
 		{kind: entryModel, text: "Here is the answer.\n"},
 		{kind: entryModel, text: "\nAnd the follow-up.\n\n"},
-	})
+	}, 80)
 	if strings.Contains(got, "\n\n\n") {
 		t.Errorf("more than one blank line between entries: %q", got)
 	}
@@ -1250,12 +1250,74 @@ func TestEntriesAreSeparatedByExactlyOneBlankLine(t *testing.T) {
 	}
 }
 
+// A user turn is marked down its whole height, not on its first line.
+//
+// The old rendering put a bold "You: " in front of the first line and
+// nothing anywhere else, so a prompt long enough to wrap had one marked
+// line and several that were indistinguishable from a model reply — and
+// a pasted block of ten lines was nine lines of unattributed text. The
+// gutter is drawn by lipgloss's left border, which is why the wrap has
+// to happen here at a known width rather than in the viewport later:
+// wrapping bordered text puts the border on the first line only.
+func TestAUserTurnIsMarkedOnEveryLineItWraps(t *testing.T) {
+	const width = 40
+	got := renderTranscript([]transcriptEntry{
+		{kind: entryUser, text: "and can it repeat? also check whether the parser already knows the words, and if it does, say where."},
+	}, width)
+
+	lines := strings.Split(got, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected a separator and a wrapped block, got %d line(s): %q", len(lines), got)
+	}
+	if !strings.Contains(lines[0], turnLabel) {
+		t.Errorf("the separator does not name the speaker: %q", lines[0])
+	}
+	for _, ln := range lines[1:] {
+		if !strings.Contains(ln, "▌") {
+			t.Errorf("a wrapped line of the prompt carries no gutter: %q", ln)
+		}
+		if w := lipgloss.Width(ln); w > width {
+			t.Errorf("line is %d columns wide in a %d column transcript: %q", w, width, ln)
+		}
+	}
+	// The inline prefix is gone: the separator says who is speaking now,
+	// and saying it twice would indent the first line of every prompt
+	// against all the others.
+	if strings.Contains(got, "You: ") {
+		t.Errorf("the inline prefix is still being rendered: %q", got)
+	}
+}
+
+// The same shape for a prompt not yet confirmed, so nothing moves when
+// the real one replaces it.
+func TestAPendingTurnKeepsTheShapeOfTheRealOne(t *testing.T) {
+	got := renderTranscript([]transcriptEntry{{kind: entryPending, text: "waiting on the daemon"}}, 40)
+	if !strings.Contains(got, turnLabel) || !strings.Contains(got, "▌") {
+		t.Errorf("a pending turn is drawn differently from a confirmed one: %q", got)
+	}
+}
+
+// A viewport reports zero width until the first resize message arrives,
+// and a negative repeat count panics. An unsized transcript falls back to
+// the same width refreshViewport does, so the prompt is not wrapped to
+// one character per line.
+func TestRenderingSurvivesAnUnsizedTranscript(t *testing.T) {
+	got := renderTranscript([]transcriptEntry{{kind: entryUser, text: "hi"}}, 0)
+	if !strings.Contains(got, "hi") {
+		t.Errorf("the prompt was wrapped away at zero width: %q", got)
+	}
+	// A width small enough to leave no room at all must still not panic.
+	if out := renderTranscript([]transcriptEntry{{kind: entryUser, text: "hi"}}, 1); out == "" {
+		t.Error("a one-column transcript rendered nothing")
+	}
+}
+
 // Trimming is newlines only: the leading spaces of a code line the model
 // emitted are content, not spacing.
 func TestRenderingKeepsIndentationInsideAnEntry(t *testing.T) {
 	got := renderTranscript([]transcriptEntry{
 		{kind: entryModel, text: "\nfunc main() {\n    println(\"hi\")\n}\n"},
-	})
+	}, 80)
 	if !strings.Contains(got, "    println") {
 		t.Errorf("indentation was stripped: %q", got)
 	}
@@ -1268,7 +1330,7 @@ func TestBlankEntriesDoNotProduceGaps(t *testing.T) {
 		{kind: entryModel, text: "first"},
 		{kind: entryModel, text: "\n\n"},
 		{kind: entryModel, text: "second"},
-	})
+	}, 80)
 	if got != "first\n\nsecond" {
 		t.Errorf("blank entry left a gap: %q", got)
 	}

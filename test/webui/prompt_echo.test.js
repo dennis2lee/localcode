@@ -28,7 +28,7 @@ test('the prompt appears the moment it is submitted', async () => {
   app.type('hello');
   await app.el('send').click();
 
-  assert.ok(app.transcript().includes('You: hello'), app.transcript());
+  assert.deepEqual(app.userTurns(), ['hello'], app.transcript());
   assert.ok(
     app.transcript().includes('msg-user pending'),
     'the echo should be marked pending until the daemon confirms it',
@@ -45,7 +45,7 @@ test('the daemon event replaces the echo instead of duplicating it', async () =>
 
   app.sse.emit({ seq: 1, type: 'message.user', data: { text: 'hello' } });
 
-  assert.equal(occurrences(app.transcript(), 'You: hello'), 1, app.transcript());
+  assert.deepEqual(app.userTurns(), ['hello'], app.transcript());
   assert.ok(!app.transcript().includes('pending'), 'the pending line survived the real one');
 });
 
@@ -64,7 +64,7 @@ test('the same prompt sent twice keeps one line each', async () => {
   await app.settle();
   app.sse.emit({ seq: 3, type: 'message.user', data: { text: 'again' } });
 
-  assert.equal(occurrences(app.transcript(), 'You: again'), 2, app.transcript());
+  assert.deepEqual(app.userTurns(), ['again', 'again'], app.transcript());
   assert.ok(!app.transcript().includes('pending'), app.transcript());
 });
 
@@ -78,7 +78,7 @@ test('a local command keeps its own single line', async () => {
   await app.el('send').click();
   await app.settle();
 
-  assert.equal(occurrences(app.transcript(), 'You: /help'), 1, app.transcript());
+  assert.deepEqual(app.userTurns(), ['/help'], app.transcript());
   assert.ok(!app.transcript().includes('pending'), 'a command left a pending line nothing would ever resolve');
   assert.equal(app.callsTo('POST', '/api/sessions/sess-1/messages').length, 0, '/help is not a message');
 });
@@ -94,7 +94,7 @@ test('a send that fails takes its echo down with it', async () => {
 
   assert.ok(app.transcript().includes('Error:'), app.transcript());
   assert.ok(
-    !app.transcript().includes('You: hello'),
+    !app.userTurns().includes('hello'),
     'the echo claimed the prompt was sent, above the error saying it was not',
   );
   assert.equal(app.state.waiting, false);

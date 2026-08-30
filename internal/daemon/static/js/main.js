@@ -13,7 +13,7 @@ import {
 } from './dom.js';
 import { app, session } from './state.js';
 import { uploadFile, switchAgent } from './api.js';
-import { appendError } from './transcript.js';
+import { appendError, jumpToTurn } from './transcript.js';
 import { renderTasks, renderStatusBar } from './render.js';
 import {
   sendMessage, cancelTurn, autoResizeInput, insertAtCursor,
@@ -107,12 +107,17 @@ inputEl.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     e.preventDefault();
     cancelTurn();
-  } else if (e.key === 'ArrowUp' && (atInputStart() || navigatingHistory())) {
+  } else if (e.key === 'ArrowUp' && !e.altKey && (atInputStart() || navigatingHistory())) {
     // Either the caret is at the very top, which starts a walk, or one is
     // already under way — in which case recall has parked the caret at the
     // end of the text it inserted and the key means "keep going".
+    //
+    // Not with Alt held: that is the transcript jump below, and this
+    // listener is on the input and therefore runs first. Without the
+    // guard, Alt+Up with the caret at the top would recall a prompt
+    // instead of moving the view, which is a different thing entirely.
     if (historyPrev()) e.preventDefault();
-  } else if (e.key === 'ArrowDown' && (atInputEnd() || navigatingHistory())) {
+  } else if (e.key === 'ArrowDown' && !e.altKey && (atInputEnd() || navigatingHistory())) {
     if (historyNext()) e.preventDefault();
   } else if (e.key === 'ArrowRight') {
     // Completion, but only at the very end of a one-word "/name".
@@ -135,6 +140,19 @@ inputEl.addEventListener('keydown', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && e.target !== inputEl && !permissionRequest.isOpen) {
     cancelTurn();
+    return;
+  }
+  // Alt+Up / Alt+Down walk your own turns. It works with focus in the
+  // prompt box, which is where focus almost always is — the input's own
+  // listener skips Arrow keys with Alt held so this one gets them.
+  //
+  // Alt rather than a bare key because both arrows already mean
+  // something in the box (prompt recall) and something in a browser
+  // (scrolling); and not Ctrl or Cmd, which are the browser's own
+  // word-and-document jumps.
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && e.altKey
+    && !e.ctrlKey && !e.metaKey && !anyModalOpen()) {
+    if (jumpToTurn(e.key === 'ArrowUp' ? -1 : 1)) e.preventDefault();
     return;
   }
   if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !anyModalOpen()) {
@@ -287,6 +305,7 @@ export const ready = init();
 export { session, app } from './state.js';
 export { escapeHtml, formatTime, shortenPath } from './format.js';
 export { renderMarkdown, inline, unwrapMath } from './markdown.js';
+export { jumpToTurn } from './transcript.js';
 export { HELP_TEXT, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
 export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage } from './composer.js';

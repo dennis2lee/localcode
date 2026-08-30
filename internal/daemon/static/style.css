@@ -209,14 +209,72 @@ main {
 #transcript .msg-user, #transcript .msg-tool, #transcript .msg-error {
   white-space: pre-wrap;
 }
-/* Weight, not colour. This is the longest text the user reads on the
-   page and it is their own words: it needs to be findable when scrolling
-   back, which weight does, and it does not need to look like a link. */
-#transcript .msg-user { color: var(--user); font-weight: 600; }
+/* Weight, not colour, on the text itself. This is the longest text the
+   user reads on the page and it is their own words: tinting a paragraph
+   of prose reads worse than leaving it alone, and it must not look like
+   a link. Weight was the whole of it for a long time and was not enough
+   — 600 against 400 is not a signal the eye catches while scrolling.
+
+   So the block is marked at its edges instead, which leaves the prose
+   exactly as it was. Two marks, answering two different questions: the
+   rule down the left says how far this prompt extends, which is what a
+   ten-line paste needs, and the separator above says where the turn
+   began, which is what someone scrolling back is actually looking for.
+
+   --border-strong rather than an accent. This palette has already spent
+   both of those: --interactive is the only colour that invites a click,
+   and a prompt is not clickable; --select says which thing is current,
+   and every prompt cannot be. --border-strong is exactly "has to be
+   seen rather than merely inferred", which is the job. */
+#transcript .msg-user {
+  color: var(--user);
+  font-weight: 600;
+  border-left: 3px solid var(--border-strong);
+  padding-left: 12px;
+  margin-bottom: 12px;
+}
+/* The turn boundary, and the speaker's name on the same line.
+
+   The name is here rather than inline in front of the prompt, where it
+   used to be, because "You: " on the first line of a multi-line prompt
+   indents that line and no other. One label per turn on its own row
+   costs the same vertical space as the separator would have cost
+   anyway, and lets the prompt itself start at the margin. */
+#transcript .turn-sep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+#transcript .turn-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+/* No gap above the first turn: a rule against the top of the scroll box
+   is a boundary with nothing on the other side of it. */
+#transcript .turn-sep:first-child { margin-top: 0; }
 /* A prompt drawn the instant Enter is pressed, before the daemon has
-   confirmed it. Same line, dimmed: it says "this is on its way" without
-   moving or changing shape when the real one replaces it. */
-#transcript .msg-user.pending { opacity: 0.55; }
+   confirmed it. Same shape, dimmed: it says "this is on its way" without
+   moving or changing shape when the real one replaces it — which is why
+   the separator dims with it rather than staying solid above a ghost. */
+#transcript .msg-user.pending, #transcript .turn-sep.pending { opacity: 0.55; }
+/* The turn the jump keys just moved to. Held for a moment and faded,
+   because the reader needs to be told where they landed and does not
+   need a permanent highlight afterwards. */
+#transcript .msg-user.landed { animation: landed 1.2s ease-out; }
+@keyframes landed {
+  from { border-left-color: var(--user); }
+  to { border-left-color: var(--border-strong); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #transcript .msg-user.landed { animation: none; }
+}
 #transcript .msg-tool { color: var(--muted); font-style: italic; }
 #transcript .msg-error { color: var(--err); font-weight: 600; }
 /* The model's working, not its answer. Quieter than the reply and set

@@ -19,15 +19,37 @@ import (
 )
 
 var (
-	userStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	// The user's own turn, marked at its left edge rather than in the
+	// colour of the text.
+	//
+	// It used to be a bold cyan "You: " in front of the first line and
+	// nothing else, which said who was speaking and did not say how far
+	// the prompt went: a ten-line paste had one marked line and nine
+	// unmarked ones that looked exactly like a model reply. The gutter
+	// runs the height of the block instead, which is the same thing the
+	// window does with a border down the left of .msg-user.
+	//
+	// The text itself is left unstyled, also matching the window. A
+	// prompt is the longest thing on screen after the reply, and tinting
+	// a paragraph of prose reads worse than leaving it alone.
+	userStyle = lipgloss.NewStyle().
+			BorderStyle(lipgloss.Border{Left: "▌"}).
+			BorderLeft(true).
+			BorderLeftForeground(lipgloss.Color("6")).
+			PaddingLeft(1)
 	toolStyle = lipgloss.NewStyle().Faint(true)
 	// A prompt already on screen but not yet confirmed by the daemon: the
-	// user line's colour, without its weight, so it reads as the same line
-	// in a quieter voice.
-	pendingStyle = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("6"))
-	errorStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
-	modalStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
-	statusStyle  = lipgloss.NewStyle().Faint(true)
+	// same shape in a quieter voice, so it does not move or change shape
+	// when the real one replaces it.
+	pendingStyle = lipgloss.NewStyle().
+			Faint(true).
+			BorderStyle(lipgloss.Border{Left: "▌"}).
+			BorderLeft(true).
+			BorderLeftForeground(lipgloss.Color("8")).
+			PaddingLeft(1)
+	errorStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
+	modalStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
+	statusStyle = lipgloss.NewStyle().Faint(true)
 )
 
 // inputMaxHeight caps how tall the prompt box can grow (in rows) before it

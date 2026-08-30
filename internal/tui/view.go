@@ -4,15 +4,60 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
+
+// turnLabel is what the separator above a user turn says. One word, and
+// it is the only thing left naming the speaker now that the inline
+// "You: " prefix is gone.
+const turnLabel = "You"
+
+// fallbackWidth is the column count assumed when the viewport has not
+// been sized yet, which it has not been before the first resize message.
+// One constant rather than one number here and another in
+// refreshViewport, because a transcript wrapped to a different width
+// than the box it is put in wraps twice.
+const fallbackWidth = 80
+
+// minTurnWidth is the narrowest a user block is laid out at: one column
+// for the "▌", one for the space after it, and one for a character of
+// the prompt. Below that lipgloss has nothing to wrap into. It only
+// bites on a terminal narrow enough that nothing would be readable
+// anyway; it is here so a hostile width cannot panic the repeat below.
+const minTurnWidth = 3
+
+// turnSeparator draws the boundary a user turn starts at, with the
+// speaker's name on it.
+//
+// The rule is the same "─" run inputBorder already uses, so the two
+// horizontal lines in this interface are the same line rather than two
+// conventions that happen to look alike.
+func turnSeparator(width int) string {
+	rule := width - lipgloss.Width(turnLabel) - 1
+	if rule < 0 {
+		rule = 0
+	}
+	return statusStyle.Render(turnLabel + " " + strings.Repeat("─", rule))
+}
 
 // renderTranscript styles every entry by kind and joins them with the blank
 // line that has always separated transcript paragraphs — this is the one
 // place transcriptEntry becomes ANSI text, so a style change never means
 // touching the append call sites in transcript.go/events.go.
-func renderTranscript(entries []transcriptEntry) string {
+//
+// width is the column the transcript is laid out in. It is needed because
+// a user turn is wrapped here rather than by the viewport: the gutter has
+// to be drawn on every line of the block, and a wrap that happens after
+// the border is applied would put it on the first line only.
+func renderTranscript(entries []transcriptEntry, width int) string {
 	if len(entries) == 0 {
 		return ""
+	}
+	if width <= 0 {
+		width = fallbackWidth
+	}
+	if width < minTurnWidth {
+		width = minTurnWidth
 	}
 	parts := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -28,11 +73,11 @@ func renderTranscript(entries []transcriptEntry) string {
 		}
 		switch e.kind {
 		case entryUser:
-			parts = append(parts, userStyle.Render("You: ")+text)
+			parts = append(parts, turnSeparator(width)+"\n"+userStyle.Width(width).Render(text))
 		case entryPending:
-			// The same line, dimmed: it says "on its way" without moving
+			// The same block, dimmed: it says "on its way" without moving
 			// or changing shape when the real one replaces it.
-			parts = append(parts, pendingStyle.Render("You: "+text))
+			parts = append(parts, turnSeparator(width)+"\n"+pendingStyle.Width(width).Render(text))
 		case entryTool, entryLocal:
 			parts = append(parts, toolStyle.Render(text))
 		default: // entryModel: streamed as-is, no style

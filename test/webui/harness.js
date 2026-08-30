@@ -351,6 +351,13 @@ async function load(opts = {}) {
     // transcript() is everything the transcript module has written, as the
     // HTML string a browser would parse.
     transcript: () => document.getElementById('transcript').innerHTML,
+    // userTurns() is the text of each of the reader's own prompts, in
+    // order. It exists because the prompts stopped carrying a "You: "
+    // prefix that a substring search could anchor on — and it is the
+    // better assertion anyway: searching the whole transcript HTML for
+    // "hello" also matches a model reply that quoted it back.
+    userTurns: () =>
+      Array.from(document.getElementById('transcript').querySelectorAll('.msg-user'), (el) => el.textContent),
     // wait lets real time pass, for the handful of behaviours that are
     // about a deadline rather than about an event.
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

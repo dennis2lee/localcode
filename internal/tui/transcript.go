@@ -177,10 +177,10 @@ func (m *Model) appendTool(text string) {
 func (m *Model) refreshViewport() {
 	w := m.viewport.Width()
 	if w <= 0 {
-		w = 80
+		w = fallbackWidth
 	}
 	atBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(lipgloss.NewStyle().Width(w).Render(renderTranscript(m.transcript)))
+	m.viewport.SetContent(lipgloss.NewStyle().Width(w).Render(renderTranscript(m.transcript, w)))
 	if atBottom {
 		m.viewport.GotoBottom()
 	}

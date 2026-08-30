@@ -26,6 +26,7 @@ export const HELP_TEXT = [
   '                        press it again to cycle through the other matches',
   '  Esc                 cancel the running turn',
   '  Tab / Shift+Tab      switch to the next/previous agent',
+  '  Alt+Up / Alt+Down    jump back and forth between your own prompts',
   '  /agent              list registered agents',
   '  /agent <name>        switch to that agent (also available via the header dropdown)',
   '  /init              scan the repo and create/improve an AGENTS.md rules file',
