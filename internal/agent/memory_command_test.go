@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"localcode/internal/events"
-	"localcode/internal/memory"
 	"localcode/internal/session"
 )
 
@@ -76,21 +75,6 @@ func TestMemoryCommandShowsExistingIndex(t *testing.T) {
 	text := lastMessagePartEnd(t, store, sid)
 	if !strings.Contains(text, "prefers pnpm over npm") {
 		t.Errorf("text = %q, want it to contain the saved index entry", text)
-	}
-}
-
-// TestMemorySystemPromptSectionIncludesIndex is a sanity check that the
-// memory package's own section-builder (used at daemon startup, not
-// exercised by the Loop tests above) surfaces saved content — guards
-// against the two call sites drifting apart.
-func TestMemorySystemPromptSectionIncludesIndex(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "MEMORY.md"), []byte("- fact"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	section := memory.SystemPromptSection(dir, memory.LoadIndex(dir))
-	if !strings.Contains(section, "fact") {
-		t.Errorf("section = %q, want it to include the saved fact", section)
 	}
 }
 

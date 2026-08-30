@@ -572,19 +572,6 @@ func (l *Loop) SessionDir(sessionID string) string {
 	return l.GetProjectDir()
 }
 
-// systemPromptFor is the system prompt a turn in sessionID runs with: the
-// daemon-wide one, plus the rules of the project that session is in.
-func (l *Loop) systemPromptFor(sessionID string) string {
-	if l.WorkspaceRules == nil {
-		return l.SystemPrompt
-	}
-	section := l.WorkspaceRules(l.SessionDir(sessionID))
-	if section == "" {
-		return l.SystemPrompt
-	}
-	return l.SystemPrompt + "\n\n" + section
-}
-
 func (l *Loop) appendHistory(sessionID string, msg provider.Message) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

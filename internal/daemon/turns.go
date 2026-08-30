@@ -167,14 +167,6 @@ func (t *turnTracker) cancel(id string) bool {
 	return running
 }
 
-// busy reports whether id currently has a turn in flight.
-func (t *turnTracker) busy(id string) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	_, running := t.cancels[id]
-	return running
-}
-
 // anyBusy filters ids down to the ones with a turn currently in flight —
 // used by bulk operations (delete-all) that must refuse if any of a set of
 // sessions is mid-turn.
@@ -190,23 +182,10 @@ func (t *turnTracker) anyBusy(ids []string) []string {
 	return busyIDs
 }
 
-// anyRunning reports whether any session anywhere has a turn in flight —
-// used by the workspace switch, which is process-wide rather than
-// per-session and so refuses on any turn at all, not just a named set.
-func (t *turnTracker) anyRunning() bool {
-	return len(t.running()) > 0
-}
-
 // running lists the sessions with a turn registered, sorted so the answer
-// is stable.
-//
-// Named, not just counted, because "a turn is in progress" with no clue
-// which one is a dead end: the workspace guard is daemon-wide (the
-// working directory is one process-wide thing), so a turn in any session
-// blocks it — including one the user is not looking at and did not know
-// was still going. A turn waiting on an unanswered permission request
-// blocks it indefinitely, and without a name there is nothing to go and
-// answer.
+// is stable — what handleListSessions decorates the session list with, so
+// a client reloading the page can show which conversations are working
+// without waiting for the next activity event.
 func (t *turnTracker) running() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -218,37 +197,21 @@ func (t *turnTracker) running() []string {
 	return ids
 }
 
-// whileIdle runs fn with the guarantee that no turn is running anywhere
-// and none can start until it returns, or reports which sessions are busy
-// without running it at all.
+// whileSessionIdle runs fn with the guarantee that this one session has no
+// turn in flight and none can start until it returns, or reports that it
+// does without running fn at all.
 //
-// Checking and then acting are two different moments, and the guards that
-// used to do exactly that were protecting operations where the gap
-// matters. The working directory is one process-wide thing: a turn that
-// begins between "nothing is running" and the chdir runs its first
-// relative-path write against the new directory — a file written into the
-// wrong repository, reported nowhere. Forking has the same shape, and
-// copying a log mid-turn produces the dangling tool call that the guard's
-// own comment says it exists to prevent.
+// Checking and then acting are two different moments, and this closes the
+// gap between them: a turn that began in that gap would run its first
+// relative-path write against whichever directory won the race (see
+// handleSetWorkspace). It used to guard the whole daemon rather than one
+// session — the process had one working directory, so a turn anywhere at
+// all had to block a move — until workspaces became per-session in
+// v0.39.0 and the guard could narrow to match (see turnTracker.anyBusy
+// for the one bulk operation, delete-all, that still spans sessions).
 //
 // fn runs under the tracker's lock, so it must not block: a stat and a
-// chdir, not a network call.
-func (t *turnTracker) whileIdle(fn func() error) ([]string, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if len(t.cancels) > 0 {
-		ids := make([]string, 0, len(t.cancels))
-		for id := range t.cancels {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		return ids, nil
-	}
-	return nil, fn()
-}
-
-// whileSessionIdle is whileIdle for one session: the operations that only
-// need that session to be quiet, rather than the whole daemon.
+// store write, not a network call.
 func (t *turnTracker) whileSessionIdle(id string, fn func() error) (bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

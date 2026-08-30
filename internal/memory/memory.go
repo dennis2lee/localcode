@@ -100,17 +100,6 @@ func LoadIndex(dir string) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
-// SystemPromptSection describes the auto-memory convention and this
-// project's memory directory to the model, plus the current index content
-// (if any), so it knows where — and whether — to save/recall notes using
-// its ordinary file tools.
-func SystemPromptSection(dir, index string) string {
-	if body := IndexSection(index); body != "" {
-		return PolicySection(dir) + "\n" + body
-	}
-	return PolicySection(dir) + "\nNo memory index exists yet.\n"
-}
-
 // PolicySection is the product's own description of the auto-memory
 // convention: where the directory is, what belongs in it, how big the
 // index may get. Product text, and instruction.

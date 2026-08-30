@@ -344,8 +344,8 @@ func jsonBody(w http.ResponseWriter, r *http.Request) io.Reader {
 }
 
 // httpError carries a status alongside a message, so work done inside a
-// closure (see turnTracker.whileIdle) can still choose the response it
-// would have written itself.
+// closure (see turnTracker.whileSessionIdle) can still choose the response
+// it would have written itself.
 type httpError struct {
 	status  int
 	message string

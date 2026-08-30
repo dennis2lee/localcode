@@ -109,7 +109,7 @@ func TestFinishOrTakeClearsTheRegistrationWhenNothingIsQueued(t *testing.T) {
 	if _, more := tr.finishOrTake("s1"); more {
 		t.Fatal("finishOrTake reported more work with an empty queue")
 	}
-	if tr.busy("s1") {
+	if busy := tr.anyBusy([]string{"s1"}); len(busy) > 0 {
 		t.Error("the session is still registered as running after its turn finished")
 	}
 	if tr.inject("s1", "next") {

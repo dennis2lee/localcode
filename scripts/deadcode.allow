@@ -6,10 +6,15 @@
 # matters as much as the first: an allowlist nobody has to maintain
 # becomes a list of names that used to mean something.
 #
-# What this file is NOT is a verdict that these are fine. Five of them are
-# genuinely uncalled and are candidates for removal; they are listed
-# rather than deleted because deleting them is a change to the product
-# and this commit is a change to the gate. See the notes below.
+# The five genuinely uncalled functions this file used to carry (three in
+# turnTracker, Loop.systemPromptFor, rehydrate's dataStrings) plus
+# memory.SystemPromptSection are gone as of the architecture pass that
+# added this note: each was a superseded half of a completed migration
+# rather than an undecided one. See that commit for what replaced each —
+# per-session workspaces (v0.39.0) for the turnTracker three, the
+# activation/prompt-assets system for systemPromptFor, a typed dataSources
+# helper for dataStrings, and the v0.57.0 trust split (PolicySection +
+# IndexSection, tested directly) for SystemPromptSection.
 
 # --- reachable only from tests -------------------------------------
 # deadcode runs with -test=false, so a function whose only callers are
@@ -18,7 +23,6 @@
 internal/agent/compact.go:compactSystemBlocks
 internal/agent/context_budget.go:contextWindow
 internal/commands/commands.go:Expand
-internal/memory/memory.go:SystemPromptSection
 internal/smart/smart.go:Builtins
 
 # --- test hooks, called from production code by a test that sets them --
@@ -33,19 +37,3 @@ internal/agent/schedule.go:unattendedWaitForTest
 # every other platform and called by nobody there, which is what "does
 # nothing outside Windows" means.
 internal/childproc/childproc_other.go:HideConsole
-
-# --- genuinely uncalled, pending a decision ---------------------------
-# No caller anywhere in this tree, tests included. Left in place rather
-# than removed because removal is its own change and one of them is not
-# as dead as it looks: turnTracker.anyRunning has a live caller on the
-# branch in .claude/worktrees/bold-golick-d93a50 (workspace.go), so
-# deleting it here would break that work on merge. The turnTracker three
-# sit in the turn-admission tracker that v0.55.0 rewrote four times.
-# memory.SystemPromptSection above is the same shape one step further
-# along: it lost its production caller in the v0.57.0 trust split and
-# still has tests describing it as "used at daemon startup".
-internal/agent/loop.go:Loop.systemPromptFor
-internal/agent/rehydrate.go:dataStrings
-internal/daemon/turns.go:turnTracker.busy
-internal/daemon/turns.go:turnTracker.anyRunning
-internal/daemon/turns.go:turnTracker.whileIdle

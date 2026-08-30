@@ -402,22 +402,3 @@ func numberField(m map[string]any, names ...string) (int, bool) {
 	}
 	return 0, false
 }
-
-// dataStrings reads a list-of-strings field out of an event's data,
-// which arrives as []any after a round trip through JSON.
-func dataStrings(data map[string]any, key string) []string {
-	raw, ok := data[key].([]any)
-	if !ok {
-		if already, ok := data[key].([]string); ok {
-			return already
-		}
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, v := range raw {
-		if s, ok := v.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}

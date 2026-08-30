@@ -118,19 +118,42 @@ func TestLoadIndexByteCapKeepsValidUTF8(t *testing.T) {
 	}
 }
 
-func TestSystemPromptSectionMentionsDirAndIndex(t *testing.T) {
-	section := SystemPromptSection("/tmp/mem", "- some fact")
+// PolicySection and IndexSection are tested directly rather than through
+// a combining wrapper. They used to be one function, SystemPromptSection,
+// concatenating the two into a single system-prompt block; the v0.57.0
+// trust split gave them separate call sites instead (wire.go passes each
+// to its own prompt asset — see internal/agent/prompt_assets.go), because
+// folding the model's own recalled notes into the same block as product
+// instruction let a previous turn's text inherit the policy's authority.
+// Testing the wrapper after that split was testing a function nothing
+// built the real prompt with; these two are what wire.go actually calls.
+func TestPolicySectionMentionsDirAndIndexPath(t *testing.T) {
+	section := PolicySection("/tmp/mem")
 	if !strings.Contains(section, "/tmp/mem") {
 		t.Error("expected the memory directory path in the section")
 	}
-	if !strings.Contains(section, "some fact") {
-		t.Error("expected the current index content in the section")
+	if !strings.Contains(section, IndexPath("/tmp/mem")) {
+		t.Error("expected the index file's path in the section")
 	}
 }
 
-func TestSystemPromptSectionEmptyIndex(t *testing.T) {
-	section := SystemPromptSection("/tmp/mem", "")
-	if !strings.Contains(section, "No memory index exists yet") {
-		t.Errorf("SystemPromptSection() = %q, want a note that no index exists yet", section)
+func TestIndexSectionWrapsTheRecalledNotes(t *testing.T) {
+	section := IndexSection("- some fact")
+	if !strings.Contains(section, "some fact") {
+		t.Error("expected the current index content in the section")
+	}
+	if !strings.Contains(section, "not instructions") {
+		t.Error("expected the boundary explaining these are a record, not instructions")
+	}
+}
+
+// Empty index, empty section — the doc comment's claim, and the reason
+// the asset that renders this is skipped entirely rather than emitting a
+// placeholder (see internal/agent/prompt_assets.go): there is nothing to
+// tell the model about "no index yet" that PolicySection has not already
+// said by describing the convention.
+func TestIndexSectionEmptyIndexIsEmptySection(t *testing.T) {
+	if section := IndexSection(""); section != "" {
+		t.Errorf("IndexSection(\"\") = %q, want empty", section)
 	}
 }
