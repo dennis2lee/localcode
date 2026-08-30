@@ -1707,7 +1707,12 @@ The conversation wins over the profile. The question belongs to the work rather 
 | OpenAI-compatible | `reasoning_effort` | The three levels, as the server understands them. A server that does not support reasoning ignores the field and nothing changes — which is what makes this safe on a local muse or gemma. |
 | Anthropic API, newest Claude families | extended thinking, `adaptive` | The model sizes its own reasoning, so low, medium and high all reach the same switch. Here the setting is **on or off, not a dial**. |
 | Anthropic API, older Claude models | extended thinking, with a budget | Three levels, three token budgets. |
-| Bedrock | nothing yet | Not wired to it. The level has no effect there, and `/effort` says so rather than letting it look as though it took. |
+| Bedrock | extended thinking, through `additionalModelRequestFields` | The same shapes, chosen the same way from the model id. Merged with the million-token beta rather than overwriting it — that field is one document and the SDK gives no way to read one back, so both features have to be written at once or the last one wins. |
+
+**Two things happen on their own, because otherwise they are a 400 rather than a worse answer.**
+
+* **The budget is fitted to `max_tokens`.** On a model that takes a budget, that budget is spent out of the output cap: one larger than the cap is refused, and one equal to it leaves nothing to answer with. It is shrunk to fit, keeping 1024 tokens back for the answer, and a cap too small for any useful reasoning asks for none at all rather than for a reasoning model with no room to reason. This is not an exotic pairing — `config.example.json` puts `max_tokens: 8192` on the profiles these levels apply to, and `high` is 16384.
+* **Temperature is dropped.** The API fixes the temperature while a model is reasoning and refuses a request that also sets one. Dropping it is what leaves both usable; the alternative is that a profile with a temperature on it cannot ask for reasoning at all.
 
 **Reasoning is shown while it happens and never kept.** In the Web UI it is a muted block of its own, separate from the answer, because it is the working and not the conclusion; in the TUI the busy indicator says `thinking` instead of `working`. None of it is written to the session log: the API does not want it back on a later turn, and a transcript that kept it would double the scrolling for something nobody reads twice. A reload does not bring it back, which is the honest consequence.
 

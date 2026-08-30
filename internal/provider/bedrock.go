@@ -92,6 +92,33 @@ var credentialHintSubstrings = []string{
 // user with only a raw multi-line SDK error dump (get identity: get
 // credentials: failed to refresh cached credentials, no EC2 IMDS role
 // found, operation error ec2imds: GetMetadata, ...).
+// reasoningRejected adds the sentence somebody needs when a Bedrock
+// account refuses a request because of the reasoning parameter.
+//
+// It exists because this is the one part of the feature that cannot be
+// verified from here: Converse takes the model's native parameters and
+// which spelling a given account accepts is not in the SDK, the repo, or
+// anything a test can reach. An unexplained ValidationException naming a
+// field nobody set on purpose is the worst version of being wrong about
+// it; a sentence that names the setting and how to turn it off is the
+// least bad.
+func reasoningRejected(err error, effort Effort) error {
+	if err == nil || effort == EffortUnset || effort == EffortOff {
+		return err
+	}
+	lower := strings.ToLower(err.Error())
+	if !strings.Contains(lower, "validation") && !strings.Contains(lower, "malformed") {
+		return err
+	}
+	if !strings.Contains(lower, bedrockThinkingField) && !strings.Contains(lower, "reasoning") &&
+		!strings.Contains(lower, "additionalmodelrequestfields") {
+		return err
+	}
+	return fmt.Errorf("%w\n\nhint: this request asked for %q-effort reasoning, which Bedrock carries as "+
+		"the %q parameter, and this model or account did not accept it. Turn it off for this conversation "+
+		"with \"/effort off\", or remove \"effort\" from the profile", err, effort, bedrockThinkingField)
+}
+
 func wrapCredentialError(err error) error {
 	if err == nil {
 		return nil
@@ -105,9 +132,29 @@ func wrapCredentialError(err error) error {
 	return err
 }
 
+// toBedrockMessages converts the history, keeping reasoning blocks only
+// where the API needs them.
+//
+// The SDK says it in its own doc comment on ReasoningTextBlock: "If you
+// pass a reasoning block back to the API in a multi-turn conversation,
+// include the text and its signature unmodified." A tool-use turn still
+// in flight must therefore return the reasoning that preceded the tool
+// call. Every earlier turn must not — that reasoning is spent, and
+// re-sending pages of it every request costs tokens for nothing.
+//
+// So exactly one message carries them: the last assistant message, which
+// is the only one a continuation can be continuing. The same rule the
+// Anthropic adapter follows, for the same reason.
 func toBedrockMessages(msgs []Message) ([]types.Message, error) {
+	lastAssistant := -1
+	for i, m := range msgs {
+		if m.Role == RoleAssistant {
+			lastAssistant = i
+		}
+	}
+
 	out := make([]types.Message, 0, len(msgs))
-	for _, m := range msgs {
+	for i, m := range msgs {
 		role := types.ConversationRoleUser
 		if m.Role == RoleAssistant {
 			role = types.ConversationRoleAssistant
@@ -116,6 +163,23 @@ func toBedrockMessages(msgs []Message) ([]types.Message, error) {
 		blocks := make([]types.ContentBlock, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch b.Type {
+			case BlockThinking:
+				// Unsigned means this process assembled the block rather
+				// than receiving it — a rehydrated history, a test. Sending
+				// it would claim an attestation that does not exist, and
+				// the API refuses the request rather than the block.
+				if i != lastAssistant || b.Signature == "" {
+					continue
+				}
+				blocks = append(blocks, &types.ContentBlockMemberReasoningContent{
+					Value: &types.ReasoningContentBlockMemberReasoningText{
+						Value: types.ReasoningTextBlock{
+							Text:      aws.String(b.Text),
+							Signature: aws.String(b.Signature),
+						},
+					},
+				})
+
 			case BlockText:
 				blocks = append(blocks, &types.ContentBlockMemberText{Value: b.Text})
 
@@ -154,6 +218,80 @@ func toBedrockMessages(msgs []Message) ([]types.Message, error) {
 	return out, nil
 }
 
+// bedrockExtraFields builds additionalModelRequestFields: the model's own
+// native parameters, which Converse has no first-class field for.
+//
+// One map rather than two assignments, which is the bug this shape
+// forecloses. The field is a single document: whichever of the two
+// features wrote it last used to win, so asking for reasoning on a
+// million-token model would have silently dropped the beta header that
+// makes it a million-token model.
+//
+// Reasoning goes through here because ConverseStreamInput has no field
+// for it — grep the SDK for "reasoning" outside the content types and
+// there is nothing. Its shape is the model's, and for Claude that is the
+// same object the Anthropic API takes, which is why anthropicThinking
+// answers for both adapters rather than each having its own table.
+func bedrockExtraFields(oneMillionContext bool, model string, effort Effort, maxTokens int) map[string]any {
+	fields := map[string]any{}
+	if oneMillionContext {
+		fields["anthropic_beta"] = []string{oneMillionContextBeta}
+	}
+	if th := anthropicThinking(model, effort, maxTokens); th != nil {
+		if doc := asDocumentValue(th); doc != nil {
+			fields[bedrockThinkingField] = doc
+		}
+	}
+	return fields
+}
+
+// asDocumentValue converts a value to the plain map a smithy document
+// serializes correctly.
+//
+// It exists because of a difference worth stating rather than working
+// around silently: document.NewLazyDocument serializes a Go struct by its
+// FIELD names, not its json tags, so handing it anthThinking directly put
+// {"Type":"enabled","BudgetTokens":16384} on the wire — a shape no model
+// has ever accepted. Round-tripping through encoding/json applies the
+// tags, which keeps those tags the single definition of what extended
+// thinking looks like for both adapters instead of this file keeping a
+// second copy of the key names.
+//
+// A value that cannot make the trip comes back nil, and a nil entry is
+// dropped by the caller rather than sent as null.
+func asDocumentValue(v any) map[string]any {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// reasoningDelta splits one reasoning delta into its two halves.
+//
+// Two halves rather than one because they arrive separately and in that
+// order: the text streams, and the signature that attests to it comes
+// after the text is complete. Neither is usable alone — the text without
+// the signature cannot be sent back, and the signature without the text
+// signs nothing.
+//
+// Redacted reasoning returns neither, deliberately. It is bytes the
+// provider encrypted for its own reasons: it cannot be shown, and it is
+// not the block a continuation has to return.
+func reasoningDelta(d types.ReasoningContentBlockDelta) (text, signature string) {
+	switch r := d.(type) {
+	case *types.ReasoningContentBlockDeltaMemberText:
+		return r.Value, ""
+	case *types.ReasoningContentBlockDeltaMemberSignature:
+		return "", r.Value
+	}
+	return "", ""
+}
+
 func toBedrockTools(tools []Tool, cachePrefix bool) (*types.ToolConfiguration, error) {
 	if len(tools) == 0 {
 		return nil, nil
@@ -189,6 +327,24 @@ func toBedrockTools(tools []Tool, cachePrefix bool) (*types.ToolConfiguration, e
 // Bedrock's Converse API has no such header, so it's passed via
 // AdditionalModelRequestFields instead (see parseModelID/Chat below).
 const oneMillionContextBeta = "context-1m-2025-08-07"
+
+// bedrockThinkingField is the key extended thinking travels under inside
+// additionalModelRequestFields.
+//
+// Anthropic's own parameter name, and the choice is evidence-based rather
+// than obvious. Converse has no first-class field for reasoning, so what
+// goes in this document is the model's native parameters — and the
+// precedent is directly above: "anthropic_beta" is an Anthropic-native
+// name, it goes through this same document on this same API, and it
+// works. The value is the same object the direct Anthropic adapter
+// builds, which is why one function answers for both rather than each
+// keeping its own table of budgets.
+//
+// A constant because it is the one thing here that could be wrong. If a
+// Bedrock account rejects the request naming this field, this line is the
+// fix — and reasoningRejected below makes that rejection say so instead
+// of arriving as an unexplained validation error.
+const bedrockThinkingField = "thinking"
 
 // oneMillionContextSuffix is the "[1m]" marker Claude Code's own model
 // config uses as shorthand for "enable the 1M-context beta on this
@@ -272,10 +428,13 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	modelID, oneMillionContext := parseModelID(req.Model)
 
 	input := &bedrockruntime.ConverseStreamInput{
-		ModelId:         aws.String(modelID),
-		Messages:        messages,
-		ToolConfig:      toolConfig,
-		InferenceConfig: buildInferenceConfig(req.MaxTokens, req.Temperature),
+		ModelId:    aws.String(modelID),
+		Messages:   messages,
+		ToolConfig: toolConfig,
+		// Temperature is dropped when reasoning is asked for: the API
+		// fixes it while a model is thinking and refuses a request that
+		// also sets one. See the same rule in the Anthropic adapter.
+		InferenceConfig: buildInferenceConfig(req.MaxTokens, temperatureFor(req)),
 	}
 	// One SystemContentBlock per prompt asset when the blocks arrived
 	// with their seams; the folded string only when they did not. The
@@ -294,10 +453,8 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 			Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
 		})
 	}
-	if oneMillionContext {
-		input.AdditionalModelRequestFields = document.NewLazyDocument(map[string]any{
-			"anthropic_beta": []string{oneMillionContextBeta},
-		})
+	if extra := bedrockExtraFields(oneMillionContext, req.Model, req.Effort, req.MaxTokens); len(extra) > 0 {
+		input.AdditionalModelRequestFields = document.NewLazyDocument(extra)
 	}
 
 	client, err := p.clientFor(ctx)
@@ -306,7 +463,7 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	}
 	resp, err := client.ConverseStream(ctx, input)
 	if err != nil {
-		return nil, wrapCredentialError(fmt.Errorf("bedrock ConverseStream: %w", err))
+		return nil, reasoningRejected(wrapCredentialError(fmt.Errorf("bedrock ConverseStream: %w", err)), req.Effort)
 	}
 
 	out := make(chan StreamEvent, 16)
@@ -322,6 +479,15 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 			args     strings.Builder
 		}
 		toolByIndex := map[int32]*pending{}
+
+		// Reasoning accumulates per content-block index, the same way,
+		// because a stream can carry several blocks at once and the
+		// signature arrives separately from the text it signs.
+		type pendingThinking struct {
+			text      strings.Builder
+			signature strings.Builder
+		}
+		thinkingByIndex := map[int32]*pendingThinking{}
 
 		send := func(ev StreamEvent) bool {
 			select {
@@ -354,6 +520,19 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 					if !send(StreamEvent{Type: EventTextDelta, TextDelta: d.Value}) {
 						return
 					}
+				case *types.ContentBlockDeltaMemberReasoningContent:
+					text, signature := reasoningDelta(d.Value)
+					p := thinkingByIndex[idx]
+					if p == nil {
+						p = &pendingThinking{}
+						thinkingByIndex[idx] = p
+					}
+					p.text.WriteString(text)
+					p.signature.WriteString(signature)
+					if text != "" && !send(StreamEvent{Type: EventThinkingDelta, ThinkingDelta: text}) {
+						return
+					}
+
 				case *types.ContentBlockDeltaMemberToolUse:
 					if p, ok := toolByIndex[idx]; ok {
 						frag := aws.ToString(d.Value.Input)
@@ -366,6 +545,14 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 
 			case *types.ConverseStreamOutputMemberContentBlockStop:
 				idx := aws.ToInt32(e.Value.ContentBlockIndex)
+				if p, ok := thinkingByIndex[idx]; ok {
+					if !send(StreamEvent{
+						Type: EventThinkingEnd, ThinkingDelta: p.text.String(), Signature: p.signature.String(),
+					}) {
+						return
+					}
+					delete(thinkingByIndex, idx)
+				}
 				if p, ok := toolByIndex[idx]; ok {
 					if !send(StreamEvent{Type: EventToolUseEnd, ToolUseID: p.id, ToolInput: json.RawMessage(p.args.String())}) {
 						return

@@ -113,8 +113,12 @@ func effortReach(providerType config.ProviderType, model string, level provider.
 		}
 		return "On " + model + " this asks for extended thinking, with a token budget chosen for the level."
 	case config.ProviderBedrock:
-		return "Bedrock is not wired to this yet, so nothing is sent and the level has no effect there. " +
-			"It reaches the Anthropic API and OpenAI-compatible servers."
+		if provider.AnthropicAdaptiveThinking(model) {
+			return "On " + model + " this asks Bedrock for extended thinking. That family decides the " +
+				"amount itself, so low, medium and high all reach the same switch: here the setting is " +
+				"on or off rather than a dial."
+		}
+		return "On " + model + " this asks Bedrock for extended thinking, with a token budget for the level."
 	default:
 		return "Sent to the server as \"reasoning_effort\". One that supports reasoning takes the level; " +
 			"one that does not ignores the field, and nothing about the request changes."

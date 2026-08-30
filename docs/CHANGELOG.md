@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.71.0
+
+* **Effort reaches Bedrock.** v0.70.0 shipped it to two adapters and said plainly that the third was not wired; this is the third. Converse has no first-class field for reasoning — grep the whole SDK for "thinking" or "budget" and there is nothing — so it goes through `additionalModelRequestFields` as the model's own native parameter, in the same shape and chosen the same way from the model id, by the same function. One definition of what extended thinking looks like, not two tables that can drift apart on a budget.
+
+  **Merged with the million-token beta, not written over it.** That field is a single document and the SDK offers no way to read one back, so a second assignment can only overwrite the first: asking for reasoning on a million-token model would have silently dropped the beta header that makes it a million-token model. Both are built into one map now, and a test pins it.
+
+* **The reasoning comes back and goes back.** Bedrock returns it as content blocks rather than as a field, in two delta kinds — the text, then the signature that attests to it — with no start event, so a block opens on its first delta and closes on the stop event that carries its index. It then goes back on exactly one message: the last assistant one, the only message a continuation can be continuing. The SDK states the rule on the type itself — pass the text and its signature back "unmodified" — and an unsigned block is never sent at all, since that claims an attestation which does not exist.
+
+* **Two failures fixed that v0.70.0 shipped, both of which were a 400 rather than a worse answer.** Neither was hypothetical: `config.example.json` puts `max_tokens: 8192` on the profiles these levels apply to.
+
+  * **A budget larger than the output cap.** The budget is spent out of `max_tokens`, so `high` — 16384 — on an 8192 profile was a refused request rather than more thinking. It is fitted to the cap now, keeping 1024 tokens back for the answer, and a cap too small for any useful reasoning asks for none rather than for a reasoning model with no room to reason.
+  * **Temperature alongside thinking.** The API fixes the temperature while a model reasons and refuses a request that also sets one, so a profile with a `temperature` could not ask for reasoning. It is dropped from a reasoning request, on both adapters, by one shared function.
+
+* **A defect the tests found rather than the reviewer.** A smithy document serializes a Go struct by its **field names**, not its json tags, so handing it the thinking struct directly put `{"Type":"enabled","BudgetTokens":16384}` on the wire — a shape no model has ever accepted. It goes through `encoding/json` first now, which keeps the tags as the single definition of the wire keys rather than this adapter holding a second copy of them.
+
+* **The one thing that cannot be verified from here says so out loud.** Which spelling a Bedrock account accepts for the reasoning parameter is not in the SDK, the repository, or anything a test can reach — the SDK models that document as opaque passthrough. So a rejection explains itself: a validation error naming the field now carries a sentence saying which setting caused it and how to turn it off, rather than arriving as an unexplained `ValidationException` about a field nobody set on purpose.
+
 ## v0.70.0
 
 * **How hard the model thinks is a setting now.** One word — `off`, `low`, `medium`, `high` — on a profile, or `/effort` for one conversation, which wins. The question belongs to the work rather than to the model: the same model answering "which file is this in" and "why does this deadlock" wants different amounts of reasoning, and without a per-conversation answer the only way to have both would be two profiles pointing at one model.

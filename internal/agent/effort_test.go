@@ -181,7 +181,8 @@ func TestTheCommandSaysWhatTheLevelReaches(t *testing.T) {
 	}{
 		{config.ProviderAnthropic, "claude-opus-5", provider.EffortHigh, "on or off rather than a dial"},
 		{config.ProviderAnthropic, "claude-3-5-sonnet-20241022", provider.EffortHigh, "token budget"},
-		{config.ProviderBedrock, "claude-opus-5", provider.EffortHigh, "not wired to this yet"},
+		{config.ProviderBedrock, "us.anthropic.claude-opus-5-v1:0", provider.EffortHigh, "on or off rather than a dial"},
+		{config.ProviderBedrock, "us.anthropic.claude-sonnet-4-5-20250929-v1:0", provider.EffortHigh, "token budget"},
 		{config.ProviderOpenAICompat, "muse-glimmer-30b", provider.EffortHigh, "reasoning_effort"},
 		{config.ProviderOpenAICompat, "muse-glimmer-30b", provider.EffortOff, "does whatever it does by default"},
 	}

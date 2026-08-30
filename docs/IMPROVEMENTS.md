@@ -71,9 +71,13 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
     * **No diff outside git.** The fallback is the tool-call list, honestly labelled, and it still misses whatever the shell did. A workspace snapshot would close it and costs a tree hash per round.
     * **Nothing reconciles a split panel.** Two reviewers that disagree with each other, rather than with the author, produce two findings and no ruling; the author is left to decide, and the round budget is what stops it. A tie-break would need a fourth model or a rule, and both are worse than the person reading it.
 
-32. **Effort does not reach Bedrock.** v0.70.0 wires `effort` to the two adapters whose knob is a plain request field that can be pinned against a mock: `reasoning_effort` on OpenAI-compatible servers, and extended thinking on the Anthropic API. Bedrock's Converse API takes thinking through `additionalModelRequestFields` and returns it as a reasoning content block, which means the round trip — reasoning has to go back on a continuation — needs the SDK's union types on the way out as well as the way in. That is a bigger surface than the other two and none of it can be exercised from this repository's own machine, which has no Bedrock account; shipping it unverified would mean a 400 on somebody else's. `/effort` says Bedrock is not wired rather than letting the setting look as though it took.
+32. ~~**Effort does not reach Bedrock.**~~ Done in v0.71.0. Reasoning goes out through `additionalModelRequestFields` (merged with the million-token beta rather than overwriting it) and comes back as content blocks that return on the one message a continuation needs them on. The same work fixed two failures v0.70.0 had shipped on the other adapters: a budget larger than `max_tokens`, and a temperature alongside thinking, both of which are a 400 rather than a worse answer.
 
-    Two smaller residues from the same work: the newest Claude families take `adaptive` thinking, which has one position rather than three, so `low`/`medium`/`high` are indistinguishable there and the command says so; and the thinking a model produces is shown live but never stored, so a reload loses it and a `/context` report cannot account for what it cost.
+    What is still open, and the first one is the reason a rejection explains itself:
+
+    * **Which spelling Bedrock accepts is unverified.** Converse models that document as opaque passthrough, so nothing in the SDK, the repository, or any test pins the literal key. The choice is Anthropic's own name, on the evidence of `anthropic_beta` going through the same field on the same API in this same adapter and working. If an account refuses it, the error now names the setting and how to turn it off, and the fix is one constant — but it is a guess with good evidence rather than a fact.
+    * **`adaptive` on Bedrock is unverified for the same reason.** The newest families take it on the direct API; whether Bedrock's passthrough has caught up is not determinable from here.
+    * **Reasoning is shown live and never stored**, so a reload loses it and `/context` cannot account for what it cost.
 
 ## UI ideas
 

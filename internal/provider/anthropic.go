@@ -246,12 +246,61 @@ func AnthropicAdaptiveThinking(model string) bool {
 }
 
 // thinkingBudgets is what a level means on a model that takes a number.
-// Round figures, well inside the max_tokens a profile is likely to have,
-// because a budget larger than the output cap is refused.
 var thinkingBudgets = map[Effort]int{
 	EffortLow:    2048,
 	EffortMedium: 8192,
 	EffortHigh:   16384,
+}
+
+// temperatureFor is the temperature a request may carry: its own, unless
+// it is also asking the model to reason, in which case none.
+//
+// Temperature and extended thinking do not go together: the API fixes the
+// temperature while a model is reasoning and refuses a request that also
+// sets one. Dropping it is the answer that leaves both features usable —
+// the alternative is that a profile with a temperature on it cannot ask
+// for reasoning at all — and it is the same rule on both adapters, which
+// is why it lives in one function rather than two.
+func temperatureFor(req ChatRequest) float64 {
+	if anthropicThinking(req.Model, req.Effort, req.MaxTokens) != nil {
+		return 0
+	}
+	return req.Temperature
+}
+
+// answerReserve is how much of the output cap is kept back for the answer
+// when reasoning takes a budget out of it.
+//
+// The budget is spent from max_tokens, so a budget equal to it leaves the
+// model no room to say anything, and a budget larger than it is refused
+// outright. Neither is a subtle failure: one is an empty reply and the
+// other is a 400 on a profile that was working yesterday.
+const answerReserve = 1024
+
+// minThinkingBudget is the smallest budget worth asking for. Below this
+// the request is a reasoning model with no room to reason, so nothing is
+// asked for at all and the model answers as it would have.
+const minThinkingBudget = 1024
+
+// fitBudget shrinks a level's budget to what this request's output cap
+// can actually pay for, and reports whether anything is left.
+//
+// The case is ordinary rather than exotic: the shipped example config
+// pairs max_tokens 8192 with these profiles, and "high" is 16384. Without
+// this, turning effort up on that profile is a 400 rather than more
+// thinking.
+func fitBudget(budget, maxTokens int) (int, bool) {
+	if maxTokens <= 0 {
+		// Nothing said about the cap, so nothing to fit against.
+		return budget, true
+	}
+	if room := maxTokens - answerReserve; budget > room {
+		budget = room
+	}
+	if budget < minThinkingBudget {
+		return 0, false
+	}
+	return budget, true
 }
 
 // anthropicThinking is the thinking field for a request, or nil for one
@@ -262,7 +311,7 @@ var thinkingBudgets = map[Effort]int{
 // differ in effect: there is no "think less than your default" to ask
 // for, only an absence, and inventing a zero budget would be a request
 // the API rejects rather than a smaller one.
-func anthropicThinking(model string, e Effort) *anthThinking {
+func anthropicThinking(model string, e Effort, maxTokens int) *anthThinking {
 	budget, ok := thinkingBudgets[e]
 	if !ok {
 		return nil
@@ -274,6 +323,10 @@ func anthropicThinking(model string, e Effort) *anthThinking {
 		// three positions, and pretending otherwise would be localcode
 		// inventing a distinction the API does not have.
 		return &anthThinking{Type: "adaptive"}
+	}
+	budget, fits := fitBudget(budget, maxTokens)
+	if !fits {
+		return nil
 	}
 	return &anthThinking{Type: "enabled", BudgetTokens: budget}
 }
@@ -360,15 +413,15 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		markConversationCache(messages)
 	}
 	body := anthRequest{
-		Model:       req.Model,
-		System:      system,
-		Messages:    messages,
-		Tools:       tools,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		Stream:      true,
-		Thinking:    anthropicThinking(req.Model, req.Effort),
+		Model:     req.Model,
+		System:    system,
+		Messages:  messages,
+		Tools:     tools,
+		MaxTokens: req.MaxTokens,
+		Stream:    true,
+		Thinking:  anthropicThinking(req.Model, req.Effort, req.MaxTokens),
 	}
+	body.Temperature = temperatureFor(req)
 
 	payload, err := json.Marshal(body)
 	if err != nil {
