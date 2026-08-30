@@ -10,13 +10,22 @@ Project rules for agents working in this repo.
   that makes a release possible: it stamps the tree it passed on, and
   `make dist` refuses to build unless that stamp matches.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1` — and `-count=1` matters: a
-    cached PASS is a statement about a previous run of a previous tree.
+  * `go test ./... -race -parallel 8 -count=1` — 1,182 tests over 30
+    packages. `-count=1` matters: a cached PASS is a statement about a
+    previous run of a previous tree. `-parallel 8` does not: it bounds
+    only the tests that call `t.Parallel()`, of which this repo has ten,
+    all in `internal/config`. The suite's concurrency is `go test` running
+    package binaries side by side, which defaults to the core count.
+    Measured: `-parallel 1` 10s, `-parallel 8` 9s, `-p 1` 61s.
   * `go vet ./...`, `go build -tags gui ./...` (macOS only, CGo), and both
     cross-builds — `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
     GOOS=linux GOARCH=amd64`. Windows and Linux are release targets built
     from this machine, so a break in either is a break in the release.
-  * The Web UI suite, the doc-link checker, `gofmt`, and `git diff --check`.
+  * The Web UI suite (270 tests, deliberately also run by `TestWebUI`,
+    which skips itself when node is absent), the doc-link checker,
+    `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form
+    compares against the index and so inspects nothing once changes are
+    staged, which is the state a release is cut from.
 * Keep the default build pure Go. The GUI (`internal/gui`) is behind the `gui` build tag and uses CGo; never make a non-tagged package import it.
 * Roughly twenty tests in this repo police the repository rather than the
   product: an AST walk over every process-spawn site, the prompt-asset

@@ -48,6 +48,15 @@ cd "$(dirname "$0")/.."
 # about a previous run of a previous tree, and the one thing a release gate
 # must not do is report a result it did not produce.
 #
+# -parallel 8 is kept for the rule in AGENTS.md and does almost nothing
+# here, which is worth knowing before anyone tunes it. It bounds the tests
+# that call t.Parallel(), and this repository has ten such calls, all of
+# them in internal/config. Measured: -parallel 1 takes 10s and -parallel 8
+# takes 9s, while -p 1 takes 61s. All of the concurrency in the suite is
+# `go test` running package binaries side by side, which defaults to the
+# core count (10 here) and is not set on this line at all. Raising this
+# number buys nothing until tests start calling t.Parallel().
+#
 # HEAD on the whitespace check is equally deliberate. Bare `git diff
 # --check` compares the working tree against the index, so it inspects
 # nothing at all once the changes are staged — and a release is cut from a
