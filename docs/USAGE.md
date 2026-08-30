@@ -778,6 +778,7 @@ Common to the TUI and Web UI:
 | Answer a permission prompt | `y`, `n`, `s`, or `a` in the TUI; buttons in the Web UI — see [answering a permission prompt](#answering-a-permission-prompt-once-this-session-or-always) |
 | Cancel the running turn | **Esc**, in either client |
 | Recall a previous prompt | **Up** and **Down**, in either client |
+| Jump between your own prompts | **Alt+Up** and **Alt+Down**, Web UI only. Moves the view to the previous or next turn of yours and marks where it landed; it does not touch what is in the prompt box, which is what plain Up and Down are for. The TUI marks turns the same way but has no key for this. |
 | Switch agent | **Tab** for the next, **Shift+Tab** for the previous, in either client |
 | Quit the TUI | **Ctrl+C**, or type `exit` or `:q` |
 
@@ -1182,13 +1183,15 @@ This matters most on the turns where the model spends minutes in tools and says 
 
 The TUI writes the same one-line entries, without the expandable detail.
 
-A submitted prompt appears immediately, dimmed, and turns into an ordinary `You:` line once the daemon confirms it. The gap between the two is everything that happens before the model is handed the text — hooks, the auto-delegation decision, the first request — which on a remote or loaded model is seconds. Both clients do this; the transcript still holds one entry per message, the one the daemon recorded.
+A submitted prompt appears immediately, dimmed, and turns into a confirmed turn once the daemon acknowledges it. The gap between the two is everything that happens before the model is handed the text — hooks, the auto-delegation decision, the first request — which on a remote or loaded model is seconds. Both clients do this; the transcript still holds one entry per message, the one the daemon recorded.
+
+**How a turn of yours is marked.** Your prompt and the model's reply used to differ only in font weight, which is not something the eye catches while scrolling back. Since v0.72.0 the block is marked at its edges instead and the text itself is left alone: a boundary row reading `You` opens the turn, and a rule runs down the whole left side of the prompt, so a ten-line paste is marked on every line of it rather than only on its first. The TUI draws the same two things as a `You ────────` rule and a `▌` gutter. The inline `You: ` prefix in front of the prompt text is gone in both clients; the boundary row is what names the speaker now.
 
 ### Redirecting a turn while it runs
 
 You can keep typing while the model is working. A prompt sent during a turn is handed to that turn and picked up at its **next tool call** — so "actually, skip the tests" reaches the model mid-job instead of after it has finished the wrong thing.
 
-Until the model is handed it, the line reads `[sent — the model will pick this up at its next step]`. That is replaced by the normal `You: …` line at the moment the model actually receives it, which is where it appears in the transcript from then on.
+Until the model is handed it, the line reads `[sent — the model will pick this up at its next step]`. That is replaced by an ordinary confirmed turn — the `You` boundary row and the prompt beneath it — at the moment the model actually receives it, which is where it appears in the transcript from then on.
 
 Several messages can stack up, and they arrive in the order you typed them. The model is told the text came from you mid-task, so it is not mistaken for tool output.
 
@@ -1223,21 +1226,25 @@ An `agents` entry with only a `profile` is just routing, meaning "run under this
 
 The idea comes from opencode's subagent and model matching, such as `oh-my-opencode` attaching different models to orchestrator, explore, and review roles.
 
+The profile names below are the ones `config.example.json` ships, so this block can be pasted onto a copy of it. A profile an agent names has to exist, or the daemon refuses to start.
+
 ```json
 "agents": {
   "build": {
-    "profile": "strong",
+    "profile": "smart-deep",
     "description": "Implements features and fixes bugs.",
     "prompt": "You are the build agent. Delegate research to the explore agent via the Task tool instead of doing it yourself."
   },
   "explore": {
-    "profile": "cheap",
+    "profile": "smart-quick",
     "description": "Fast, read-only codebase search.",
     "prompt": "You are the explore agent. Locate relevant files and summarize quickly.",
     "tools": ["read_file", "glob", "grep"]
   }
 }
 ```
+
+Declaring a name the built-in roster already uses, as `explore` does here, replaces that specialist entirely — prompt, profile and tools. A name it does not use adds a seventh agent alongside the six.
 
 | Field | Meaning |
 |---|---|
@@ -1523,7 +1530,7 @@ opencode implements Plan mode through an ask permission instead, which has produ
 
 Switching posts to `POST /api/sessions/{id}/agent`. On success an `agent.switched` event goes to the session, so every attached client, including a TUI and Web UI open at once, updates together.
 
-The usual flow: let `plan` analyze and design with no ability to change files, then Tab to `build` and carry straight on with the context intact.
+The usual flow: let `plan` analyze and design with no ability to change files, then Tab to an agent that can write and carry straight on with the context intact. In the shipped `config.example.json` that agent is `implement`; a name that is not in your own `agents` block is refused with `unknown agent`, so this is a flow you set up rather than one that exists by default.
 
 ### Auto delegation
 
