@@ -26,6 +26,47 @@ test('markdown renders paragraphs, headers, rules and emphasis', () => {
   assert.equal(app.renderMarkdown('**b** and *i*'), '<p><strong>b</strong> and <em>i</em></p>');
 });
 
+// An identifier is not emphasis. A model naming read_file, write_file or
+// task_tool.go in prose writes underscores, and treating them as italics
+// deletes the character that makes the name a name.
+//
+// The damage is not limited to the one word either: the closing _ of a
+// pair can be found in the *next* identifier, so "call read_file then
+// write_file now" came out as one italic run spanning the middle of the
+// sentence with two underscores gone.
+//
+// This is also what CommonMark says: a _ opens emphasis only when it is
+// not inside a word, which is exactly the rule that separates prose from
+// snake_case. Asterisks keep their intraword behaviour, which CommonMark
+// also allows and which nothing writes by accident.
+test('markdown leaves the underscores in identifiers alone', () => {
+  for (const name of [
+    'read_file_contents',
+    'some_file_name.go',
+    'call read_file then write_file now',
+    '_leading_underscore_name',
+    'trailing_name_',
+    'a_b_c_d',
+  ]) {
+    const out = app.renderMarkdown(name);
+    assert.equal(out, `<p>${name}</p>`, `${name} was rendered as ${out}`);
+  }
+});
+
+test('markdown still emphasises underscores that are not inside a word', () => {
+  assert.equal(app.renderMarkdown('a _real_ emphasis'), '<p>a <em>real</em> emphasis</p>');
+  assert.equal(app.renderMarkdown('_opening_ the line'), '<p><em>opening</em> the line</p>');
+  assert.equal(app.renderMarkdown('ends with _this_.'), '<p>ends with <em>this</em>.</p>');
+  assert.equal(app.renderMarkdown('(_parenthesised_)'), '<p>(<em>parenthesised</em>)</p>');
+  assert.equal(app.renderMarkdown('__bold__ here'), '<p><strong>bold</strong> here</p>');
+  // Korean, and every other script: JavaScript's \w is ASCII-only, so a
+  // boundary test written with it would call a Hangul syllable a
+  // non-word character and italicise 강조_텍스트_ against the same rule
+  // this test exists to enforce.
+  assert.equal(app.renderMarkdown('한글 _강조_ 입니다'), '<p>한글 <em>강조</em> 입니다</p>');
+  assert.equal(app.renderMarkdown('식별자_이름_형식'), '<p>식별자_이름_형식</p>');
+});
+
 test('markdown groups consecutive bullets into one list and closes it', () => {
   assert.equal(app.renderMarkdown('- a\n- b'), '<ul>\n<li>a</li>\n<li>b</li>\n</ul>');
   assert.equal(app.renderMarkdown('1. a\n2. b'), '<ol>\n<li>a</li>\n<li>b</li>\n</ol>');

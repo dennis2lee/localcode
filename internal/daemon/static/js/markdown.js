@@ -281,12 +281,44 @@ export function unwrapMath(s) {
   });
 }
 
+// Underscores inside a word are part of the word, not emphasis.
+//
+// This is CommonMark's rule and it is the one that matters most here,
+// because the text being rendered is a coding assistant's: read_file,
+// task_tool.go and auto_compact_percent are written in prose constantly,
+// and `_([^_]+)_` matched straight through them. "read_file_contents"
+// rendered as "readfilecontents" with the middle in italics — the
+// underscore is what makes an identifier an identifier, and deleting it
+// silently produces a name that does not exist.
+//
+// The pair does not have to be inside one word to do damage. The closing
+// _ is found wherever the next one is, so "call read_file then
+// write_file now" came back as one italic run across the middle of the
+// sentence with two underscores gone.
+//
+// Asterisks are left as they were: *foo* intraword is also legal
+// CommonMark, and nothing writes one by accident the way every codebase
+// writes snake_case.
+//
+// Written as a captured leading character rather than a lookbehind,
+// which Safari only learned in 16.4 — and an unsupported group in a
+// regex literal is a parse error, so the whole module would fail to load
+// rather than one span rendering oddly. The classes are Unicode
+// (\p{L}\p{N}, needing the u flag) rather than \w, which is ASCII-only:
+// with \w a Hangul syllable counts as a non-word character, so
+// "식별자_이름_형식" would be italicised by the very rule meant to
+// prevent it.
+const strongUnderscore = /(^|[^\p{L}\p{N}_])__([^_]+)__(?![\p{L}\p{N}])/gu;
+const emUnderscore = /(^|[^\p{L}\p{N}_])_([^_]+)_(?![\p{L}\p{N}])/gu;
+
 // inline applies span-level markdown (bold, italic, links) to text that
 // has already been through escapeHtml — it only ever matches the plain
 // characters left behind (*, _, [, ], (, )), never entities.
 export function inline(s) {
   return unwrapMath(s)
-    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_, a, b) => `<strong>${a || b}</strong>`)
-    .replace(/\*([^*]+)\*|_([^_]+)_/g, (_, a, b) => `<em>${a || b}</em>`)
+    .replace(/\*\*([^*]+)\*\*/g, (_, body) => `<strong>${body}</strong>`)
+    .replace(strongUnderscore, (_, pre, body) => `${pre}<strong>${body}</strong>`)
+    .replace(/\*([^*]+)\*/g, (_, body) => `<em>${body}</em>`)
+    .replace(emUnderscore, (_, pre, body) => `${pre}<em>${body}</em>`)
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
 }
