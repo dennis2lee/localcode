@@ -4,10 +4,26 @@ Project rules for agents working in this repo.
 
 ## Build and test
 
-* `go build ./...` && `go vet ./...` && `go test ./... -race -parallel 8` before any commit.
+* **`make check` before any commit.** It runs everything below at once and
+  reports each check with its own duration; `./scripts/check.sh --list`
+  names them and `./scripts/check.sh vet` runs one. It is also the thing
+  that makes a release possible: it stamps the tree it passed on, and
+  `make dist` refuses to build unless that stamp matches.
+* What it runs, and why each is in it rather than left to memory:
+  * `go test ./... -race -parallel 8 -count=1` — and `-count=1` matters: a
+    cached PASS is a statement about a previous run of a previous tree.
+  * `go vet ./...`, `go build -tags gui ./...` (macOS only, CGo), and both
+    cross-builds — `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
+    GOOS=linux GOARCH=amd64`. Windows and Linux are release targets built
+    from this machine, so a break in either is a break in the release.
+  * The Web UI suite, the doc-link checker, `gofmt`, and `git diff --check`.
 * Keep the default build pure Go. The GUI (`internal/gui`) is behind the `gui` build tag and uses CGo; never make a non-tagged package import it.
-* Cross-compile checks, both must pass: `GOOS=windows GOARCH=amd64 go build ./cmd/localcode` and `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/localcode`. Windows and Linux are both release targets built from this machine.
-* Changing `internal/daemon/static/` means running the Web UI suite: `make test-js` (also runs inside `go test ./internal/daemon/`, and skips itself when `node` is missing).
+* Roughly twenty tests in this repo police the repository rather than the
+  product: an AST walk over every process-spawn site, the prompt-asset
+  inventory in both directions, config drift against the built-in roster,
+  the stylesheet's custom properties, the GUI chrome geometry against the
+  CSS. They only ever run under `go test`, which is why the gate is
+  wired into `make dist` rather than trusted to a habit.
 
 ## Parallel agents: isolate them, or do not let them near the tree
 

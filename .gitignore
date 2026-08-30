@@ -13,3 +13,9 @@
 # turn up in `git status` and get swept into a `git add -A` — which is how
 # one nearly reached a release commit.
 .DS_Store
+
+# Written by scripts/check.sh: the identity of the tree its gate last
+# passed on, so the release preflight can tell whether the gate that
+# passed was the one for this release. Local state, not a fact about the
+# repository.
+.check-passed

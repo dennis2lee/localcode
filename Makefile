@@ -4,7 +4,7 @@ VERSION     ?= 0.1.0
 DIST        := dist
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 
-.PHONY: build gui-mac test test-js clean release-check dist dist-mac dist-mac-gui dist-linux dist-windows dist-msi
+.PHONY: build check gui-mac test test-js clean release-check dist dist-mac dist-mac-gui dist-linux dist-windows dist-msi
 
 build:
 	go build -o $(BIN_NAME) ./cmd/localcode
@@ -21,6 +21,13 @@ gui-mac:
 # --- macOS: universal .app bundle of the native-window build ---
 dist-mac-gui:
 	./build/package-mac-gui.sh "$(VERSION)" "$(DIST)"
+
+# The gate: everything that has to pass before a commit, reported per
+# check with its own duration. It leaves a stamp naming the tree it
+# passed on, which the release preflight reads — see scripts/check.sh.
+# One check on its own: ./scripts/check.sh vet   (names: --list)
+check:
+	@./scripts/check.sh
 
 # `go test ./...` already covers the Web UI: internal/daemon's TestWebUI shells
 # out to the suite below (and skips when node isn't installed).
@@ -61,7 +68,7 @@ dist-msi:
 # RELEASING.md). This is deliberately a prerequisite of dist so a release
 # tarball cannot be produced with a stale CHANGELOG or broken doc links.
 release-check:
-	@./scripts/release-preflight.sh "$(VERSION)"
+	@./scripts/release-preflight.sh "$(VERSION)" "$(GUI_EXE)"
 
 # GUI_EXE (required, see dist-msi above) makes this: make dist VERSION=x.y.z GUI_EXE=...
 # The order matters and parallel make must not reorder it: dist-windows
@@ -70,4 +77,5 @@ release-check:
 # `make -j dist` cannot interleave them.
 .NOTPARALLEL: dist
 dist: release-check dist-mac dist-linux dist-windows dist-msi
+	@./scripts/check-dist.sh "$(VERSION)" "$(DIST)"
 	@echo "Packages written to $(DIST)/"

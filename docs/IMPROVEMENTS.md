@@ -79,6 +79,12 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
     * **`adaptive` on Bedrock is unverified for the same reason.** The newest families take it on the direct API; whether Bedrock's passthrough has caught up is not determinable from here.
     * **Reasoning is shown live and never stored**, so a reload loses it and `/context` cannot account for what it cost.
 
+33. **CI runs no tests.** The only workflow is `gui-windows.yml`, and its steps are checkout, resolve version, build, smoke check, upload — no `go test`, no `go vet`, no build of the pure-Go tree. So no test in this repository has ever been enforced by anything except a person running it.
+
+    `make check` plus the stamp the release preflight reads closes that for **releases**: a release cannot now be cut on a tree the gate has not passed. It does not close it for commits, and it cannot — the stamp is local state on one machine. A workflow running the gate on push would, and would also cover the case this repository has no coverage for at all: whether the tree builds and passes on a machine that is not this one. It is not built because this project is developed and released from a single machine, so the marginal value is smaller than it looks, and a second workflow is a second thing to keep working.
+
+    Two narrower gaps sit under it. The `.deb` acceptance test skips when `dpkg-deb` is absent, which is always true on the macOS box every release is cut from, so the authoritative check on package validity structurally never runs in the release path. And the Web UI suite is doubly conditional — it skips without `node` and under `-short` — though the preflight now refuses to release on a machine without `node` at all.
+
 ## UI ideas
 
 ### Web UI
@@ -112,5 +118,5 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 
 | Idea | Why |
 |---|---|
-| Serve `/help` from the daemon | The TUI and Web UI each hardcode their own help string, so adding a command means editing two places. A single source such as `GET /api/commands/help` would keep them in sync. Half done in v0.60.0: `GET /api/slash-commands` reports the daemon's own commands with descriptions, and both clients read it for completion. The help strings still do not. |
+| Serve `/help` from the daemon | The TUI and Web UI each hardcode their own help string, so adding a command means editing two places. A single source such as `GET /api/commands/help` would keep them in sync. Half done in v0.60.0: `GET /api/slash-commands` reports the daemon's own commands with descriptions, and both clients read it for completion. The help strings still do not, but as of the release-gate work they can no longer drift silently: a test per client requires every entry in `SlashCommands()` to be named in that client's help. Both were failing when written, the TUI by one command and the Web UI by eight. |
 | ~~Mixed Korean and English error messages~~ | Done in v0.13.0. All program output is English now, and the documentation followed in v0.19.0. |

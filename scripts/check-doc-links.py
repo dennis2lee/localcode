@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail if any internal markdown link (to a repo file or a #anchor) is
 broken. Run by release-preflight and safe to run any time."""
-import re, os, sys, glob
+import re, os, sys, subprocess
 
 def anchors(path):
     out = set()
@@ -23,7 +23,29 @@ def prose(path):
     text = re.sub(r'^[ \t]*```.*?^[ \t]*```', '', text, flags=re.S | re.M)
     return re.sub(r'`[^`\n]*`', '', text)
 
-files = sorted(glob.glob("*.md") + glob.glob("docs/*.md"))
+def markdown_files():
+    """Every markdown file the repository actually ships.
+
+    This was `glob("*.md") + glob("docs/*.md")`, which is neither a
+    superset nor a subset of the right answer. It missed
+    test/webui/README.md and would miss any future docs subdirectory,
+    while a plain recursive walk would be worse: this checkout has full
+    repository copies under .claude/worktrees, and a walk would descend
+    into every one of them and check the same files again.
+
+    Asking git for the tracked and untracked-but-not-ignored files gives
+    exactly the set that goes in a release, with ignored trees and
+    locally-excluded scratch documents left out on their own.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "*.md"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    return sorted({f for f in out.split("\0") if f and os.path.exists(f)})
+
+files = markdown_files()
+if len(files) < 5:
+    sys.exit(f"check-doc-links: only found {len(files)} markdown files, which cannot be right")
 cache = {f: anchors(f) for f in files}
 bad = []
 for f in files:

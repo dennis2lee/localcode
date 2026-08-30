@@ -216,6 +216,7 @@ const serverSideHelpText = `  /skill              list registered skills
   /compact           summarize and compact the conversation right now
   /compact <instructions>      give instructions for how to compact
   /usage              show cumulative token usage per model
+  /context            what the next request is made of; /context all, /context <id>
   /<custom command>   run a command defined in .localcode/commands/*.md
   exit, :q            quit the TUI (same as Ctrl+C)
 

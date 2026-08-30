@@ -340,3 +340,34 @@ func TestResetCommandsSayWhenNothingIsWired(t *testing.T) {
 		t.Errorf("/reset-skills with a hook: %q", out)
 	}
 }
+
+// TestEverySSlashCommandIsDocumented: a command that exists and is not in
+// docs/USAGE.md is a command nobody will find.
+//
+// The sibling test above proves each one is answered. This one proves each
+// one was written down, which is the half a release checklist has always
+// asked a human to remember — RELEASING.md's "document new commands,
+// flags, config keys and behavior changes in docs/USAGE.md", enforced by
+// nothing until now.
+//
+// It looks for the literal "/name", which is how USAGE writes them
+// everywhere: in the command tables, in the examples, in the prose. A
+// mention anywhere counts, deliberately — this is a guard against a
+// command being undocumented, not a style rule about where.
+func TestEverySlashCommandIsDocumented(t *testing.T) {
+	usage, err := os.ReadFile(filepath.Join("..", "..", "docs", "USAGE.md"))
+	if err != nil {
+		t.Fatalf("read USAGE.md: %v", err)
+	}
+	text := string(usage)
+
+	cmds := SlashCommands()
+	if len(cmds) < 5 {
+		t.Fatalf("only %d slash commands listed, so this test is checking almost nothing", len(cmds))
+	}
+	for _, c := range cmds {
+		if !strings.Contains(text, "/"+c.Name) {
+			t.Errorf("/%s is a command the daemon answers and docs/USAGE.md never mentions it", c.Name)
+		}
+	}
+}

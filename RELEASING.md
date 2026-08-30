@@ -61,9 +61,17 @@ reports the right version, and the fix you are shipping is simply absent from
 the desktop build. Check the run's `headSha` against your commit.
 
 ```bash
+make check                 # the whole gate, in parallel, ~15s warm
 git add -A && git commit   # code + docs together, never docs "later"
 git push origin main
 ```
+
+`make check` is not advisory. It leaves a stamp naming the tree it passed
+on, and `make dist` refuses to build unless that stamp matches the tree
+being released — which is what makes this repository's twenty-odd guard
+tests (the spawn-site AST walk, the prompt-asset inventory, the config
+drift checks, the stylesheet and chrome geometry checks) part of a
+release rather than something to remember.
 
 The Windows MSI bundles `localcode-gui.exe`, which is CGo and cannot be
 cross-compiled from macOS. Get a build from CI once main has the commit:
@@ -76,9 +84,20 @@ names the version before it.
 
 ```bash
 gh workflow run gui-windows.yml --ref main -f version=x.y.z
-gh run list --workflow=gui-windows.yml --limit 1 --json databaseId,status,conclusion,headSha
+gh run list --workflow=gui-windows.yml --limit 5 --json databaseId,event,status,conclusion,headSha
 gh run download <run-id> -n localcode-gui-windows-amd64 -D /tmp/gui-exe
 ```
+
+**Take the `workflow_dispatch` run, not the first one.** Pushing the
+release commit also triggers this workflow, so two runs appear with the
+same `headSha` and the push one sorts first — and only the dispatched one
+carries the version input. `--limit 1` returns the wrong run.
+
+You do not have to get that right by eye. `make dist` reads the version
+and the commit out of the downloaded binary itself (`go version -m`) and
+refuses one that was built from another commit or stamped with another
+version, which is the failure this whole dance exists to avoid and the one
+that has actually happened.
 
 ```bash
 make dist VERSION=x.y.z GUI_EXE=/tmp/gui-exe/localcode-gui.exe  # runs the preflight first; refuses if docs are stale
