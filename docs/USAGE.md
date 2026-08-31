@@ -8,7 +8,7 @@
 | [2. Configuration](#part-2-configuration) | [Config file (config.json)](#config-file-configjson), [Managing MCP servers](#managing-mcp-servers-with-localcode-mcp), [Permission rules](#fine-grained-permission-rules), [Permission settings panel](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt), [Switching the workspace directory](#switching-the-workspace-directory), [Hooks](#hooks), [Authenticating with /login](#authenticating-with-login) |
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [AGENTS.md](#agentsmd-project-rules), [Auto memory](#auto-memory) |
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
-| [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
+| [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Archive](#archiving-a-conversation), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
 | [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
@@ -1037,6 +1037,60 @@ A session is an append only event log that lives as long as the daemon, so reope
 * **Web UI**: the left panel always shows the session list, each entry labelled with the workspace directory it was created in. Click a session to switch to it — the screen clears and that session's whole event log replays, including user messages, model replies, and tool runs. See [Left panel: sessions](#left-panel-sessions).
 
 `GET /api/sessions` returns the same list. Background tasks are `visible:false` and do not appear there. Use `GET /api/sessions/{id}/tasks` for those.
+
+### Archiving a conversation
+
+A shelf, not a bin. A conversation that has gone quiet leaves the session list without losing anything, and comes back the moment you want it.
+
+| Where | Archive | Retrieve |
+|---|---|---|
+| Web UI | The `archive` button on the card, or drag the card onto the Archive header at the bottom of the panel | Open the Archive section and press `retrieve` |
+| TUI | `/archive` puts the conversation you are in away | `/retrieve` offers a picker of the archived ones; `/retrieve <id>` takes one directly |
+| API | `POST /api/sessions/{id}/archive` | `POST /api/sessions/{id}/retrieve` |
+
+`GET /api/sessions?archived=1` is the archived list. Same endpoint and same row shape as the active one, told apart by the query, so nothing can end up with two ideas of what a session is.
+
+#### What archiving keeps
+
+Everything. The title, the workspace, the permissions, the effort, the place in a hand arranged list, and the whole event log. An archived conversation is still readable: `GET /api/sessions/{id}` and its event stream both keep working, because reading the transcript is the point of keeping it.
+
+Its log is still written to, as well. A background task that outlives the archive still records that it finished, and a schedule still records that it was missed. The store refuses to **start** work in an archived conversation, never to record what happened in it.
+
+#### What it refuses, and with what
+
+| Request | Answer |
+|---|---|
+| Send a message | 403 |
+| Start a background task | 403 |
+| Book a scheduled prompt | 403 |
+| Switch its agent | 403 |
+| Upload a file to it | 403 |
+| Name it in a reorder | 400 |
+
+**403 and never 409.** Both clients read a 409 as "a turn is running" from the status code alone, and both answer it by queueing the prompt and waiting for a `turn.done` that an archived conversation will never produce. A 409 here would be a message that sits unsent with the spinner running.
+
+#### When archiving is refused
+
+| Going on in it | What happens |
+|---|---|
+| A turn | 409. Answer or cancel it first, including a permission prompt it may be waiting on. |
+| A background task | 409, naming the tasks. Wait for them or cancel them. |
+| A scheduled run | 409, naming the entries. |
+
+Refused rather than stopped, deliberately: deleting kills that work because the records are about to go away, and archiving has no such excuse. Killing work nobody asked to kill is a silent side effect.
+
+One residual, stated rather than hidden: a scheduled run that commits to running in the moment between that check and the flag being written completes its turn and reports into a conversation that is by then archived. Nothing is lost, since the log still accepts it.
+
+#### The other edges
+
+| | |
+|---|---|
+| Order | Retrieve restores the **rank**, not the number. Exact if the list was not rearranged while it was away, and as close as the remaining information allows if it was. |
+| A prompt booked for later | Reported **missed** when it comes round in an archived conversation, not fired and not failed. Retrieving does not run it late, for the reason a missed schedule never is. |
+| Background task sessions | Cannot be archived on their own: they are in no list, so archiving one hides nothing, and its parent's turn is waiting on it. |
+| Restart | Archived stays archived. A session file written before this feature existed has no flag and loads as active. |
+| Memory | Archiving releases the conversation history this process was holding, and retrieving replays it from the log. Uncollected background task answers are deliberately **not** dropped: they exist nowhere else, and archiving is reversible. |
+| Delete all sessions | Removes archived conversations too. The confirmation says so. |
 
 ### Renaming and deleting sessions
 

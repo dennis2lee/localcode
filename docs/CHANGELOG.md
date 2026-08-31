@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+* **Sessions can be archived.** A conversation that has gone quiet leaves the list without losing anything, and comes back the moment you want it. The `archive` button on a card, or drag the card onto the Archive header at the bottom of the panel; `/archive` and `/retrieve` in the TUI; `POST /api/sessions/{id}/archive` and `/retrieve`, with `GET /api/sessions?archived=1` for the other list.
+
+  A shelf, not a bin. The title, workspace, permissions, effort, place in a hand arranged list and the whole event log are kept, and an archived conversation is still readable, which is the point of keeping it. Its log is still written to as well: a background task that outlives the archive still records that it finished, and a schedule still records that it was missed. The store refuses to *start* work in an archived conversation, never to record what happened in it.
+
+  One store-level invariant does most of the enforcement rather than a check at each caller. `CreateSessionIn` refuses an archived parent under the store's own mutex, which is the mutex the archive is written with, so a `Task` spawn, a synchronous delegation and a scheduled run are closed at once with no check-then-act anywhere. The endpoints keep their own checks for the message they produce.
+
+  **403 and never 409** for every archived refusal. Both clients read a 409 as "a turn is running" from the status code alone, and both answer it by queueing the prompt and waiting for a `turn.done` an archived conversation will never produce. That is a defect this changelog already records once, and archiving would have reproduced it exactly.
+
+  Archiving is claimed, not checked: the session's turn slot is taken in one step, and the slot refuses injection so a message arriving mid-archive is answered rather than queued for a turn that will never exist. A turn, a background task or a scheduled run still going means the archive is refused with what is running named, not that the work is killed: deleting kills it because the records are about to go away, and archiving has no such excuse.
+
+  Retrieve restores the rank, not the number: exact if the list was not rearranged while it was away, and as close as the remaining information allows if it was. A prompt booked into a conversation that is archived before it comes round is reported **missed**, which is the honest word for a moment that passed with the work not done. Archiving releases the history this process was holding and retrieving replays it from the log, but uncollected background task answers are deliberately kept, since they exist nowhere else and archiving is reversible.
+
+  Three things the tests caught before they shipped. The notice about being archived elsewhere was appended before the switch that clears the transcript, so the conversation changed under the reader with nothing said about why. The Web UI test harness strips the query before matching a route, so a `?archived=1` fixture quietly answered with the active list. And the archive section reached for two CSS custom properties that do not exist, which a `var()` drops silently.
+
 * **A `git commit` could be refused for containing the word python.** The Windows Store-stub detector splits a command at the operators that start a new command, and it split the raw text, quotes and all. So `git commit -m "fix; python3 helper"` produced a second segment beginning `python3`, and on a machine where the Store app-execution alias is enabled that resolved: the commit was refused, never ran, and was answered with instructions for installing an interpreter it was never going to use. Measured, not imagined.
 
   The splitter is quote-aware now, by the shell's own rules, and an unbalanced quote makes the rest of the line one segment rather than inventing a split: a missed split can only fail to notice a python, and a wrong split refuses somebody's commit. `&` joins the operator list, and the interpreter name is lowercased before its extension is trimmed rather than after, so `PYTHON3.EXE` matches.

@@ -144,3 +144,38 @@ func (m Model) switchAgent(name string) tea.Cmd {
 		return err
 	}, func(err error) tea.Msg { return opErrMsg{op: "switch agent", err: err} })
 }
+
+// The archive, from the TUI's side.
+//
+// Three commands' worth of plumbing and one decision worth stating: the
+// landing list is fetched after the archive succeeds, never before it.
+// Counting the sessions and then archiving is the check-then-act interval
+// another client can archive or delete the fallback inside.
+func (m Model) fetchArchivedSessions() tea.Cmd {
+	return call(m.client.ListArchivedSessions, func(s []session.Session, err error) tea.Msg {
+		return archivedSessionsMsg{sessions: s, err: err}
+	})
+}
+
+func (m Model) archiveSession(id string) tea.Cmd {
+	return callErr(func(ctx context.Context) error {
+		_, err := m.client.ArchiveSession(ctx, id)
+		return err
+	}, func(err error) tea.Msg { return sessionArchivedMsg{id: id, err: err} })
+}
+
+func (m Model) retrieveSession(id string) tea.Cmd {
+	return callErr(func(ctx context.Context) error {
+		_, err := m.client.RetrieveSession(ctx, id)
+		return err
+	}, func(err error) tea.Msg { return sessionRetrievedMsg{id: id, err: err} })
+}
+
+// fetchLanding asks where to go after the conversation on screen has left
+// the list. A separate message from sessionsMsg, which means "open the
+// switch-to picker".
+func (m Model) fetchLanding() tea.Cmd {
+	return call(m.client.ListSessions, func(s []session.Session, err error) tea.Msg {
+		return landingSessionsMsg{sessions: s, err: err}
+	})
+}

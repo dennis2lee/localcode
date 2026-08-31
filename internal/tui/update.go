@@ -52,6 +52,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		return m.handleSessionsMsg(msg)
 
+	case archivedSessionsMsg:
+		return m.handleArchivedSessionsMsg(msg)
+
+	case sessionArchivedMsg:
+		return m.handleSessionArchived(msg)
+
+	case sessionRetrievedMsg:
+		return m.handleSessionRetrieved(msg)
+
+	case landingSessionsMsg:
+		return m.handleLandingSessions(msg)
+
+	case sessionCreatedMsg:
+		return m.handleSessionCreated(msg)
+
 	case sessionSwitchedMsg:
 		return m.handleSessionSwitched(msg)
 
@@ -348,4 +363,98 @@ func (m *Model) reopenCurrent() tea.Cmd {
 		ch := c.StreamEvents(ctx, id, ^uint64(0))
 		return sessionSwitchedMsg{sessionID: id, agent: agent, events: ch, cancel: cancel, gen: gen, reattach: true}
 	}
+}
+
+// The archive.
+//
+// "/archive" puts this conversation away and moves off it; "/retrieve"
+// offers the ones that have been put away. The picker is the same one
+// "/session" uses, because they are the same gesture aimed at two lists.
+
+func (m Model) handleArchivedSessionsMsg(msg archivedSessionsMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("failed to list the archive: %v", msg.err)
+		return m, nil
+	}
+	items := make([]pickerItem, 0, len(msg.sessions))
+	for _, s := range msg.sessions {
+		label := s.Title
+		if label == "" {
+			label = s.ID
+		}
+		// No "(current)" marker: the conversation you are in is never in
+		// this list, which is the whole point of it.
+		detail := s.Agent
+		if s.ArchivedAt != nil {
+			detail += ", archived " + s.ArchivedAt.Local().Format("2006-01-02 15:04")
+		}
+		items = append(items, pickerItem{id: s.ID, label: label, detail: detail})
+	}
+	cmd := m.openPicker(&picker{
+		title:  "Archived",
+		items:  items,
+		onPick: func(m *Model, it pickerItem) tea.Cmd { return m.retrieveSession(it.id) },
+	}, "No archived conversations.")
+	return m, cmd
+}
+
+func (m Model) handleSessionArchived(msg sessionArchivedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		// The daemon's refusal names what is still running and says to
+		// wait for it or cancel it, which is the useful part; passed
+		// through rather than summarised.
+		m.errMsg = fmt.Sprintf("failed to archive: %v", msg.err)
+		return m, nil
+	}
+	m.appendLocal("Archived this conversation. It keeps everything: use /retrieve to bring it back.")
+	// Where to go is decided from a list fetched now, after the archive
+	// succeeded. Counting first and archiving second is an interval
+	// another client can delete the fallback inside.
+	return m, m.fetchLanding()
+}
+
+func (m Model) handleSessionRetrieved(msg sessionRetrievedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("failed to retrieve: %v", msg.err)
+		return m, nil
+	}
+	m.appendLocal(fmt.Sprintf("Retrieved %s. It is back in the session list; /session switches to it.", msg.id))
+	return m, nil
+}
+
+func (m Model) handleLandingSessions(msg landingSessionsMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("archived, but could not find another conversation to open: %v", msg.err)
+		return m, nil
+	}
+	for _, s := range msg.sessions {
+		if s.ID != m.sessionID {
+			return m, m.openSession(s.ID)
+		}
+	}
+	// Nothing left. Refusing would strand the reader: the TUI has no
+	// "/new", and the pre-TUI picker is behind a restart.
+	m.appendLocal("That was the only conversation, so a new one is starting.")
+	return m, m.createAndOpenSession()
+}
+
+// createAndOpenSession starts a conversation and opens it. The TUI's first
+// use of CreateSession: until now it only ever opened one the picker in
+// cmd/localcode had already made.
+//
+// Two steps rather than one, because opening is what attaches the event
+// stream and that is openSession's job. The created id comes back as its
+// own message, which the handler turns into an open.
+func (m Model) createAndOpenSession() tea.Cmd {
+	return call(m.client.NewSessionFn(), func(id string, err error) tea.Msg {
+		return sessionCreatedMsg{id: id, err: err}
+	})
+}
+
+func (m Model) handleSessionCreated(msg sessionCreatedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("failed to start a new conversation: %v", msg.err)
+		return m, nil
+	}
+	return m, m.openSession(msg.id)
 }

@@ -145,6 +145,50 @@ func (c *Client) RenameSession(ctx context.Context, sessionID, title string) (se
 // DeleteSession removes sessionID (and its persisted log, if any)
 // entirely. Fails with a conflict error if the session has a turn in
 // progress.
+// NewSessionFn adapts CreateSession to the one-return shape the TUI's
+// call helper takes. The default agent, since a conversation started
+// because the last one was archived has no reason to be anything else.
+func (c *Client) NewSessionFn() func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		sess, err := c.CreateSession(ctx, "")
+		return sess.ID, err
+	}
+}
+
+// ListArchivedSessions is the other half of the session list: the
+// conversations that have been put away. Same endpoint and same row shape
+// as ListSessions, told apart by the query, so a client cannot end up with
+// two ideas of what a session is.
+func (c *Client) ListArchivedSessions(ctx context.Context) ([]session.Session, error) {
+	var out []session.Session
+	err := c.doJSON(ctx, http.MethodGet, "/api/sessions?archived=1", nil, &out)
+	return out, err
+}
+
+// ArchiveSession puts a conversation away. Everything it had is kept and
+// RetrieveSession brings it back; what changes is that it leaves the list
+// and nothing new starts in it.
+//
+// Refused with a conflict error while a turn, a background task or a
+// scheduled run is going in it. The error names what is running, because
+// the answer is to wait for it or cancel it.
+func (c *Client) ArchiveSession(ctx context.Context, sessionID string) (*session.Session, error) {
+	var out session.Session
+	if err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/archive", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RetrieveSession brings an archived conversation back into the list.
+func (c *Client) RetrieveSession(ctx context.Context, sessionID string) (*session.Session, error) {
+	var out session.Session
+	if err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/retrieve", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/api/sessions/"+sessionID, nil, nil)
 }

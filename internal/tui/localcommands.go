@@ -118,6 +118,24 @@ func localCommands() []localCommand {
 			},
 		},
 		{
+			name: "/archive",
+			help: "put this conversation away; it keeps everything and /retrieve brings it back",
+			run: func(m *Model, _ string) tea.Cmd {
+				return m.archiveSession(m.sessionID)
+			},
+		},
+		{
+			name:     "/retrieve",
+			takesArg: true,
+			help:     "bring an archived conversation back; /retrieve <id> retrieves it directly",
+			run: func(m *Model, arg string) tea.Cmd {
+				if arg != "" {
+					return m.retrieveSession(arg)
+				}
+				return m.fetchArchivedSessions()
+			},
+		},
+		{
 			name: "/commands",
 			help: "list registered custom commands",
 			run: func(m *Model, _ string) tea.Cmd {

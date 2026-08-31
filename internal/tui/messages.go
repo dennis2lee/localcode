@@ -93,3 +93,31 @@ type sessionSwitchedMsg struct {
 }
 
 type spinTickMsg struct{}
+
+// The archive. archivedSessionsMsg is what "/retrieve" with no argument
+// builds its picker from; landingSessionsMsg is deliberately not
+// sessionsMsg, which opens the switch-to picker instead of switching.
+type archivedSessionsMsg struct {
+	sessions []session.Session
+	err      error
+}
+
+type sessionArchivedMsg struct {
+	id  string
+	err error
+}
+
+type sessionRetrievedMsg struct {
+	id  string
+	err error
+}
+
+type sessionCreatedMsg struct {
+	id  string
+	err error
+}
+
+type landingSessionsMsg struct {
+	sessions []session.Session
+	err      error
+}
