@@ -91,6 +91,12 @@ type Model struct {
 	streamCancel context.CancelFunc
 	streamGen    uint64
 
+	// lastSeq is the highest event sequence this client has received for
+	// the session it is attached to. It is the resume point a re-attach
+	// asks from, and it is reset when the session changes, because a
+	// sequence means nothing outside the log it came from.
+	lastSeq uint64
+
 	// transcript holds every line ever shown, as structured entries rather
 	// than one flat pre-rendered string — styling lives in view.go's
 	// renderTranscript, not baked in at append time, and refreshViewport can

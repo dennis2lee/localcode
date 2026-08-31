@@ -783,6 +783,25 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			usage.cacheWrite = ev.CacheWriteTokens
 
 		case provider.EventError:
+			// The answer so far is closed as a message before the error
+			// is recorded, in that order because that is the order it
+			// happened in.
+			//
+			// Without it the reply reaches the log as deltas and no
+			// message.part.end, and an unterminated reply is one the
+			// replay filter later deletes: collapseFinishedDeltas drops
+			// every delta lying before the last part.end in the range, so
+			// the moment any later message completes, the half-written
+			// answer stops being drawn by anything. The bytes stay in the
+			// log and no client ever reads them again.
+			//
+			// This is the record, which is a different question from the
+			// history — that stays as it was, since a failed response is
+			// not a turn and must not be sent back as one. The model did
+			// say these words, and the session is where that is kept.
+			if text.Len() > 0 {
+				l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String()})
+			}
 			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": ev.Err.Error()})
 			// Whatever had already been said comes back with the error.
 			// Nothing is appended to the history from it — a failed

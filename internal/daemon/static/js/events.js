@@ -6,7 +6,7 @@ import { app, session } from './state.js';
 import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
-  appendReview, appendThinking, endThinking,
+  appendReview, appendThinking, endThinking, clearTranscript, showEarlierBanner,
 } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
@@ -364,21 +364,77 @@ export function applyEvent(ev) {
 // a headless DOM, and more in a real one.
 const TRANSCRIPT_TAIL = 400;
 
+// wantWholeTranscript is set by the banner below and cleared whenever a
+// session is opened, so a conversation still opens at its end and stays
+// whole only for as long as somebody is reading back through it.
+let wantWholeTranscript = false;
+
+// sawFirstSeq guards the banner to the first persisted event of a
+// connection: that event's sequence is what says whether anything was cut
+// off, and every later one would answer the same question again.
+let sawFirstSeq = false;
+
+// noticeTruncation says so when the transcript on screen does not start at
+// the start of the conversation.
+//
+// The first persisted event of a connection carries the answer: sequences
+// begin at 1, so anything higher means the daemon cut to a tail and the
+// events before it were never sent. They are still in the log — nothing
+// deletes them but deleting the session — and the banner is the request
+// that goes and gets them.
+//
+// Transient events (Store.Broadcast) carry no sequence and say nothing
+// about position, so they are skipped rather than counted as the first.
+function noticeTruncation(ev) {
+  if (sawFirstSeq || wantWholeTranscript) return;
+  const seq = Number(ev && ev.seq);
+  if (!Number.isFinite(seq) || seq <= 0) return;
+  sawFirstSeq = true;
+  if (seq > 1) showEarlierBanner(openWholeTranscript);
+}
+
+export function openWholeTranscript() {
+  wantWholeTranscript = true;
+  clearTranscript();
+  connectEvents();
+}
+
+// resetTranscriptWindow puts the next connection back to opening at the
+// end. Called when the session changes, because "show me all of it" was
+// said about a particular conversation.
+export function resetTranscriptWindow() {
+  wantWholeTranscript = false;
+  sawFirstSeq = false;
+}
+
 export function connectEvents() {
   if (eventSource) eventSource.close();
   setConnected(false);
+  sawFirstSeq = false;
   // ?tail= so opening a long conversation shows its end straight away
   // rather than rebuilding the whole thing first. The daemon moves the
   // cut back to a turn boundary, and a reconnect ignores it in favour of
   // Last-Event-ID, so nothing is skipped after the first load.
-  eventSource = new EventSource(`/api/sessions/${session.sessionID}/events?tail=${TRANSCRIPT_TAIL}`);
+  //
+  // Omitting it asks from the beginning of the log. That is what the
+  // banner does, and it is the only way the browser has ever had to see
+  // past the cut: the record is complete on disk and this is the request
+  // that fetches all of it.
+  const url = wantWholeTranscript
+    ? `/api/sessions/${session.sessionID}/events`
+    : `/api/sessions/${session.sessionID}/events?tail=${TRANSCRIPT_TAIL}`;
+  eventSource = new EventSource(url);
   eventSource.onopen = () => setConnected(true);
   eventSource.onmessage = (e) => {
     // An event arriving is itself proof the stream is up, which matters
     // because onopen doesn't fire again after an auto-reconnect in every
     // browser.
     setConnected(true);
-    try { applyEvent(JSON.parse(e.data)); } catch (err) { console.error('bad event', err); }
+    try {
+      const ev = JSON.parse(e.data);
+      noticeTruncation(ev);
+      applyEvent(ev);
+    } catch (err) { console.error('bad event', err); }
   };
   eventSource.onerror = () => {
     // EventSource auto-reconnects using Last-Event-ID, so there's nothing to

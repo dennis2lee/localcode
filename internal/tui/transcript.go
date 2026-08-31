@@ -146,15 +146,33 @@ func (m *Model) appendModelDelta(text string) {
 	}
 }
 
-// endModelStream closes the currently-open model entry, if any, so the next
-// message.part.delta starts a new paragraph instead of continuing this one.
 // endModelStream closes one model message. text is the whole reply as the
-// daemon recorded it, and is drawn here when no deltas arrived for it —
-// which is the case on replay, where the daemon drops the fragments of
-// replies that have already finished and sends only this. See
-// collapseFinishedDeltas in the daemon.
+// daemon recorded it, and it is authoritative: it is written over whatever
+// the deltas drew.
+//
+// Closing without redrawing was the bug. Deltas can be missed — an SSE
+// reconnect resumes from the last id the browser or the TUI saw, and a
+// reconnect in the middle of a reply means the fragments sent while the
+// connection was down are simply not replayed. What was drawn from the
+// deltas that did arrive is then the reply with a hole in it, and since
+// the entry was already open this closed it and kept the hole for the
+// life of the process.
+//
+// The daemon has the whole reply and sends it here, so there is never a
+// reason to prefer the fragments. When nothing was missed this writes
+// back exactly what is already on screen.
+//
+// The other case is replay, where the daemon drops the fragments of
+// replies that have already finished and sends only this — there the
+// entry is not open and the text starts one. See collapseFinishedDeltas
+// in the daemon.
 func (m *Model) endModelStream(text string) {
-	if !m.streamOpen && text != "" {
+	switch {
+	case text == "":
+	case m.streamOpen && len(m.transcript) > 0:
+		m.transcript[len(m.transcript)-1].text = text
+		m.transcriptRev++
+	default:
 		m.appendModelDelta(text)
 	}
 	m.streamOpen = false

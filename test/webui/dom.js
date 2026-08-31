@@ -241,6 +241,30 @@ class Element {
     return node;
   }
 
+  // The first child, or null. Only meaningful next to insertBefore, which
+  // is the one caller: "put this at the top" is spelled
+  // insertBefore(node, parent.firstChild) and needs the null case to mean
+  // "there is nothing here yet, so append".
+  get firstChild() {
+    return this.childNodes[0] || null;
+  }
+
+  insertBefore(node, ref) {
+    if (node.parentNode) node.parentNode.removeChild(node);
+    node.parentNode = this;
+    const i = ref ? this.childNodes.indexOf(ref) : -1;
+    if (i < 0) {
+      // A null ref means "at the end", which is the DOM's own rule and is
+      // also what an empty parent gives. A ref that is not a child of this
+      // node is a bug in the caller rather than something to paper over,
+      // but there is nothing better to do with it here than the same.
+      this.childNodes.push(node);
+    } else {
+      this.childNodes.splice(i, 0, node);
+    }
+    return node;
+  }
+
   removeChild(node) {
     const i = this.childNodes.indexOf(node);
     if (i >= 0) this.childNodes.splice(i, 1);

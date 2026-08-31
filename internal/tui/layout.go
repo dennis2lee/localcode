@@ -21,7 +21,27 @@ func (m *Model) resizeLayout() {
 	if vh < 3 {
 		vh = 3
 	}
+	// Whether the reader was following the newest output has to survive the
+	// resize, and it does not survive on its own.
+	//
+	// SetHeight leaves the offset alone, but the offset's ceiling is the
+	// content height minus the visible height — so shrinking the viewport,
+	// which is what growing the prompt box does, moves the bottom down and
+	// away from wherever the offset is. Someone who was following output
+	// was then silently no longer at the bottom, and refreshViewport only
+	// follows while AtBottom() is true: the transcript stopped moving and
+	// looked frozen, with no key to unfreeze it because until recently
+	// there were no scroll keys either.
+	//
+	// Following, so follow. Otherwise re-clamp, since the ceiling can
+	// equally have come down and left the offset above it.
+	atBottom := m.viewport.AtBottom()
 	m.viewport.SetHeight(vh)
+	if atBottom {
+		m.viewport.GotoBottom()
+	} else {
+		m.viewport.SetYOffset(m.viewport.YOffset())
+	}
 }
 
 // scrollInputToTop pulls the prompt box's internal viewport back to the

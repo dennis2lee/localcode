@@ -277,6 +277,31 @@ main {
 }
 #transcript .msg-tool { color: var(--muted); font-style: italic; }
 #transcript .msg-error { color: var(--err); font-weight: 600; }
+/* The notice at the top of a transcript that opened at its end, with the
+   control that fetches the rest. Quiet: it is a statement about the view
+   rather than a part of the conversation, and it sits above the oldest
+   message that did load. */
+#transcript .msg-earlier {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+}
+#transcript .earlier-btn {
+  font: inherit;
+  color: var(--text);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+#transcript .earlier-btn:hover { border-color: var(--border-strong); }
 /* The model's working, not its answer. Quieter than the reply and set
    apart from it, because a reader who is not following along live should
    be able to skip the whole block at a glance. */

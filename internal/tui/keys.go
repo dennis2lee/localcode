@@ -69,6 +69,36 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		// textarea, which is what someone typing wanted from it.
 		return m, nil, false
 
+	// Reading back through the conversation.
+	//
+	// Until these existed there was no way to do it at all. The viewport
+	// holds the whole transcript, but Update was never called on it, so
+	// its own key bindings — the ones bubbles ships for exactly this —
+	// never saw a keypress; and the frame sets AltScreen, which takes
+	// away the terminal's own scrollback as well. Between them, anything
+	// that had scrolled off the top was gone for the life of the process
+	// while sitting in memory the whole time.
+	//
+	// PgUp/PgDn and shift+arrows, because those are the keys with nothing
+	// else to do here. Plain Up and Down belong to history recall and the
+	// prompt box, and taking them would trade a thing people do every
+	// minute for one they do occasionally.
+	case "pgup":
+		m.viewport.PageUp()
+		return m, nil, true
+
+	case "pgdown":
+		m.viewport.PageDown()
+		return m, nil, true
+
+	case "shift+up":
+		m.viewport.ScrollUp(1)
+		return m, nil, true
+
+	case "shift+down":
+		m.viewport.ScrollDown(1)
+		return m, nil, true
+
 	case "up":
 		// Recall only when the cursor can't move any further up inside the
 		// box, so Up still navigates a multi-line prompt normally and only

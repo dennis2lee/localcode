@@ -139,32 +139,59 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush() // send headers immediately even if there's no backlog to write yet
 
 	lastSeq := since
+	// send writes one event. resume is the value the client should come
+	// back with after a dropped connection, and it is the largest sequence
+	// sent so far rather than this event's own — see the backlog loop.
+	// Zero means no `id:` line at all.
+	send := func(ev events.Event, resume uint64) {
+		payload, err := json.Marshal(ev)
+		if err != nil {
+			return
+		}
+		if resume == 0 {
+			fmt.Fprintf(w, "data: %s\n\n", payload)
+		} else {
+			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", resume, payload)
+		}
+		flusher.Flush()
+	}
 	writeSSE := func(ev events.Event) {
 		if ev.Seq == 0 {
 			// A transient event (Store.Broadcast): true only right now,
 			// never part of the log. It gets no `id:` and does not move
 			// lastSeq — either would corrupt the resume point the browser
 			// sends back after a dropped connection.
-			if payload, err := json.Marshal(ev); err == nil {
-				fmt.Fprintf(w, "data: %s\n\n", payload)
-				flusher.Flush()
-			}
+			send(ev, 0)
 			return
 		}
 		if ev.Seq <= lastSeq {
 			return // already sent via backlog or an earlier live event
 		}
 		lastSeq = ev.Seq
-		payload, err := json.Marshal(ev)
-		if err != nil {
-			return
-		}
-		fmt.Fprintf(w, "id: %d\ndata: %s\n\n", ev.Seq, payload)
-		flusher.Flush()
+		send(ev, ev.Seq)
 	}
 
+	// The backlog is sent as it comes, without the guard above.
+	//
+	// Its membership was already decided, by Store.Events selecting the
+	// events after `since`. Deciding it a second time here against a
+	// running maximum drops any event whose sequence fails to exceed the
+	// one before it — and while sequences normally ascend, a log where
+	// they do not is not hypothetical: two daemons sharing one session
+	// directory keep independent counters, and their appends interleave
+	// into a file whose sequences repeat and go backwards. Filtering such
+	// a file loses conversation that is sitting in it, on every attach,
+	// with nothing said. Sending it whole is the only reading of "the
+	// record is what happened" that survives a damaged log.
+	//
+	// The resume id still only ever climbs, so a reconnect cannot be sent
+	// backwards by one of those repeats. On an ordinary log every id here
+	// is the event's own sequence, exactly as before.
 	for _, ev := range collapseFinishedDeltas(backlog) {
-		writeSSE(ev)
+		if ev.Seq > lastSeq {
+			lastSeq = ev.Seq
+		}
+		send(ev, lastSeq)
 	}
 
 	// A heartbeat, because a stream that says nothing is indistinguishable

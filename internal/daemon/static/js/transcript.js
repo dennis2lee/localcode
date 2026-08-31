@@ -173,6 +173,37 @@ export function jumpToTurn(direction) {
 export function appendTool(text) { return appendDiv('msg-tool', text); }
 export function appendError(err) { return appendDiv('msg-error', 'Error: ' + String(err)); }
 
+// showEarlierBanner puts a line at the very top of the transcript saying
+// that what is on screen does not start at the beginning, with the control
+// that fetches the rest.
+//
+// It exists because the transcript opens at its end — a long conversation
+// would otherwise spend its first second rendering thousands of messages
+// nobody asked to see — and until now that cut was silent and permanent:
+// the browser asked for a tail, drew it, and had no way to ever ask for
+// anything before it. The conversation was whole on disk and unreachable
+// from here.
+//
+// Inserted rather than appended, and it is the one thing in this file that
+// goes to the top. Scroll position is left alone: the reader is at the
+// bottom looking at the newest message, and yanking them upward to show
+// them a notice would be worse than the notice is worth.
+export function showEarlierBanner(onOpen) {
+  if (transcriptEl.querySelector('.msg-earlier')) return;
+  const div = document.createElement('div');
+  div.className = 'msg-earlier';
+  const label = document.createElement('span');
+  label.textContent = 'Showing the end of this conversation.';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'earlier-btn';
+  button.textContent = 'Load the whole conversation';
+  button.addEventListener('click', () => onOpen());
+  div.appendChild(label);
+  div.appendChild(button);
+  transcriptEl.insertBefore(div, transcriptEl.firstChild);
+}
+
 // appendToolLines renders a client-side command's multi-line reply (e.g.
 // /help, /agent) as one bubble with <br> breaks between lines — the one
 // place that still needs literal markup, since textContent would collapse
@@ -339,8 +370,24 @@ export function appendModelText(text) {
 // about to replace, and meant a "last 400 events" window could be filled
 // entirely by one long answer. So on replay this is the only place the
 // text arrives, and it has to be drawn here.
+// It is also authoritative while a reply is open, and is written over
+// whatever the deltas drew. Closing without redrawing was a defect: an
+// SSE reconnect resumes from the last id this page saw, so a reconnect
+// in the middle of a reply means the fragments sent while it was away
+// are never replayed, and what is on screen is the reply with a hole in
+// it. The daemon has the whole thing and sends it here, so there is
+// never a reason to keep the fragments. When nothing was missed this
+// redraws the same characters.
 export function endModelText(text) {
-  if (!session.currentModelEl && text) appendModelText(text);
+  if (text && session.currentModelEl) {
+    const el = session.currentModelEl;
+    follower.keeping(() => {
+      session.currentModelBuffer = text;
+      el.innerHTML = renderMarkdown(text);
+    });
+  } else if (text) {
+    appendModelText(text);
+  }
   session.currentModelEl = null;
   session.currentModelBuffer = '';
 }

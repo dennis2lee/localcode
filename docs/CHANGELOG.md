@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.77.0
+
+Reported as "a session's old conversation disappears", with the principle attached: the context window may be bounded for the model's sake, but the record must survive until the session is deleted.
+
+The record was never the thing being lost. Compaction only ever replaced the in-memory history and never touched the log; the log is append-only and is removed only by deleting the session. Every defect below is in the reading of it, and there were six.
+
+* **A reply cut off by a provider stream error was deleted from every later replay.** When a stream died mid-answer the loop returned without appending the `message.part.end` that closes a reply, so the text reached the log as fragments and nothing else. An unterminated reply is one the replay filter then deletes — `collapseFinishedDeltas` drops every fragment lying before the last `part.end` in the range — so the half-written answer was on screen while it happened and gone from every attach afterwards, the moment any later message completed. The bytes stayed in the log and no client read them again. The reply is now closed before the error is recorded. The model's history still excludes the failed turn, which is a different question and was never the problem.
+
+* **The Web UI could not see past the last 400 events.** It opened every conversation with `?tail=400` and had no request, control or gesture that could ask for anything earlier — the whole log was on disk and unreachable from the browser. It now says so above the oldest message it loaded, and offers **Load the whole conversation**, which reopens the stream from the first event. Opening another session goes back to opening at the end.
+
+* **The TUI transcript could not be scrolled at all.** The viewport held everything, but `Update` was never called on it, so the scroll bindings bubbles ships never saw a keypress — and the frame sets AltScreen, which takes the terminal's own scrollback away too. Anything past the last screenful was unreachable for the life of the process. `PgUp`/`PgDn` and `Shift+Up`/`Shift+Down` now scroll it. The USAGE claim that "both clients" keep their place when scrolled up had been false for one of them since it was written.
+
+* **A reply that lost fragments to a reconnect stayed truncated.** `message.part.end` carries the whole reply as the daemon recorded it, and both clients threw it away whenever the message was still open — which is exactly the case where fragments went missing, since a reconnect resumes from the last id the client saw and never replays what it missed. The daemon's copy is authoritative and is now written over whatever the fragments drew; when nothing was missed it redraws the same characters.
+
+* **After a failed session switch the TUI went permanently deaf.** Re-attaching asked to resume from `^uint64(0)`, meaning "replay nothing". That number does not survive the trip: the daemon seeds its live filter with it and then drops every event whose sequence fails to exceed it, and no sequence can exceed the maximum. The stream came up healthy and delivered nothing for as long as the client stayed on that session. It now resumes from the last sequence it actually received, which also replays what it missed while the stream was down.
+
+* **A log whose sequences repeat lost conversation on every attach.** The backlog was filtered a second time on the way out, against a running maximum, so an event whose sequence failed to exceed the one before it was silently dropped. Ordinary logs ascend and never hit this; a log written by two daemons sharing one session directory does not, because their counters are independent and their appends interleave. The backlog is now sent as `Store.Events` selected it, while the resume id still only ever climbs so a reconnect cannot be sent backwards by one of those repeats.
+
 ## v0.76.1
 
 * **A command whose exit status was an answer was reported as a failure.** Reported from a transcript: a sweep of `grep -n` calls across a file list, a third of them marked failed with no output, and then the entire sweep run again from the top, twice. Every one of the "failures" was a file that did not contain the symbol. `grep` exits 1 when it looked and found nothing, and the bash tool turned every non-zero status into a tool error whose whole content was `(exit error: exit status 1)` — so "this file has no matches" and "your command broke" arrived as the same result, and a model's recovery for a broken command is to run it again.

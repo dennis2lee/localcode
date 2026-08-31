@@ -175,6 +175,13 @@ func (m Model) handleSpinTick() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleServerEvent(msg eventMsg) (tea.Model, tea.Cmd) {
+	// Where this client has got to in the log, so a re-attach can ask for
+	// what it missed instead of naming a position it has to invent. Only
+	// persisted events carry a sequence; a Store.Broadcast has none and
+	// must not move it. See reopenCurrent.
+	if msg.ev.Seq > m.lastSeq {
+		m.lastSeq = msg.ev.Seq
+	}
 	m.applyEvent(msg.ev)
 	cmds := []tea.Cmd{listenForEvent(m.events, m.streamGen)}
 	if cmd := m.dequeue(); cmd != nil {
@@ -342,6 +349,10 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.transcript = nil
 	m.transcriptRev++
 	m.streamOpen = false
+	// A sequence numbers one session's log and means nothing in another,
+	// so the resume point starts over with the conversation. The stream
+	// opened above already asked from zero.
+	m.lastSeq = 0
 	m.history = nil
 	m.historyIdx = 0
 	m.draft = ""
@@ -369,13 +380,22 @@ func (m *Model) reopenCurrent() tea.Cmd {
 	m.streamGen++
 	gen := m.streamGen
 	c, id, agent := m.client, m.sessionID, m.currentAgent
+	since := m.lastSeq
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
-		// Replay nothing: the transcript on screen is still this
-		// session's, and a re-attach that replayed it would show every
-		// line a second time. The events that matter are the ones that
-		// have not happened yet.
-		ch := c.StreamEvents(ctx, id, ^uint64(0))
+		// Resume from where this client actually got to, so the backlog
+		// holds what it missed while the stream was down and nothing it
+		// has already drawn.
+		//
+		// This used to ask for ^uint64(0) to mean "replay nothing", and
+		// that number does not survive the trip. The daemon seeds its
+		// live filter with it — `lastSeq := since`, then every event is
+		// dropped unless `ev.Seq > lastSeq` — and no sequence can ever
+		// exceed the maximum, so the connection came up healthy and then
+		// delivered nothing, for as long as the client stayed on this
+		// session. A resume point has to be a position in the log rather
+		// than a word meaning "none".
+		ch := c.StreamEvents(ctx, id, since)
 		return sessionSwitchedMsg{sessionID: id, agent: agent, events: ch, cancel: cancel, gen: gen, reattach: true}
 	}
 }

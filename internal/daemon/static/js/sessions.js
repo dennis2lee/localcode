@@ -5,7 +5,7 @@ import { appendError, appendTool, clearTranscript } from './transcript.js';
 import { formatTime, shortenPath } from './format.js';
 import { renderTasks, renderStatusBar, setCurrentAgent, renderWorkspace } from './render.js';
 import { setWaiting, setInputLocked, renderCommDot } from './composer.js';
-import { connectEvents } from './events.js';
+import { connectEvents, resetTranscriptWindow } from './events.js';
 import { loadWorkspace } from './loaders.js';
 import { loadSessionPermissions } from './modals.js';
 import { loadSchedules } from './schedules.js';
@@ -313,6 +313,9 @@ export function selectSession(id, agent, workspace) {
   // Opening it is reading it.
   app.unreadSessions.delete(id);
   resetSession(id);
+  // A conversation opens at its end, including one opened again after
+  // somebody asked to see all of a different one.
+  resetTranscriptWindow();
   renderSessionHeader();
   clearTranscript();
   renderTasks();
