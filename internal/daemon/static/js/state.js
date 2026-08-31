@@ -28,6 +28,12 @@ export const app = {
   autoDelegateMatch: [],      // glob patterns that qualify a prompt for delegation
   smartAgent: false,
   orchestrate: false,         // the Orchestrate tool, a separate switch
+  // The archive, kept apart from app.sessions rather than flagged inside
+  // it. Four places read app.sessions as "a conversation you can be in",
+  // and a flag would need a filter added to each of them, one of which
+  // would be forgotten. Loaded lazily, when the section is first opened.
+  archivedSessions: [],
+  archiveOpen: false,
   smartAgentRoster: [],       // the specialist names the daemon build ships
   // The daemon default for skip_all, from config.json. What a new
   // conversation starts with; see sessionPermissions for the open one.

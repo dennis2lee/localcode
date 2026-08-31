@@ -22,7 +22,7 @@ import { refreshTaskViewStatus } from './taskview.js';
 // only ever called from inside a function body, never read at module-
 // evaluation time, so the cycle is safe — see MDN's notes on circular ES
 // module imports.
-import { loadSessions, renderSessionList } from './sessions.js';
+import { loadSessions, renderSessionList, loadArchived, selectSession } from './sessions.js';
 
 let eventSource = null;
 
@@ -266,6 +266,21 @@ const handlers = {
   'session.forked': (d) => {
     appendTool(`[this is a fork of "${d.from_title || d.from || 'another session'}" — the original is untouched]`);
   },
+    'session.archived': async (d) => {
+      // The list this client is showing has changed, whoever changed it.
+      await loadSessions();
+      if (app.archiveOpen) await loadArchived();
+      if (d && d.session === session.sessionID && d.archived) {
+        // Move first, then say so. selectSession clears the transcript on
+        // its way in, so a notice appended before the switch is wiped by
+        // it and the page changes conversation with no explanation.
+        if (app.sessions.length > 0) {
+          const next = app.sessions[0];
+          selectSession(next.id, next.agent, next.workspace);
+        }
+        appendError('That conversation was archived elsewhere. Retrieve it to work in it again.');
+      }
+    },
   'session.renamed': () => {
     loadSessions();
   },

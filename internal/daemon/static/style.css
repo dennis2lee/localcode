@@ -1035,3 +1035,42 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #settings-modal .check-row input[type="checkbox"] { margin-top: 3px; flex: 0 0 auto; }
 /* A note that has to be noticed rather than merely available. */
 #settings-modal .note.warn { color: var(--warn); }
+
+/* The archive.
+
+   Sticky at the bottom of the panel, because it is also the drop target
+   for dragging a conversation in: a target that scrolls out of view the
+   moment the session list is longer than the panel is one you cannot
+   reach, and native drag auto-scroll is not dependable across engines. */
+#archive-section {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding-top: 6px;
+}
+.archive-header {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--fg-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.archive-header:hover { color: var(--fg); }
+/* Dashed, and distinct from the rows' drop line, so the two drop
+   behaviours never look like the same one. */
+#archive-toggle.drag-over {
+  border: 1px dashed var(--select);
+  color: var(--fg);
+}
+/* An archived row is not one you can be in: muted, and with no pointer,
+   since nothing happens when you click it. */
+.session-item.archived {
+  opacity: 0.72;
+  cursor: default;
+}
+.session-item.archived:hover { background: none; }

@@ -1,7 +1,7 @@
-import { sessionListEl, sessionIdEl } from './dom.js';
+import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl } from './dom.js';
 import { app, session, resetSession, forgetHistory } from './state.js';
 import * as apiClient from './api.js';
-import { appendError, clearTranscript } from './transcript.js';
+import { appendError, appendTool, clearTranscript } from './transcript.js';
 import { formatTime, shortenPath } from './format.js';
 import { renderTasks, renderStatusBar, setCurrentAgent, renderWorkspace } from './render.js';
 import { setWaiting, setInputLocked, renderCommDot } from './composer.js';
@@ -118,6 +118,16 @@ export function renderSessionList() {
     renameBtn.textContent = 'rename';
     renameBtn.addEventListener('click', (e) => { e.stopPropagation(); renameSessionPrompt(s); });
     actions.appendChild(renameBtn);
+
+    const archiveBtn = document.createElement('button');
+    archiveBtn.textContent = 'archive';
+    archiveBtn.title = 'put this conversation away; it keeps everything and can be retrieved';
+    // Not a danger-btn. The outlined red is reserved for the one action
+    // that cannot be undone, and using it here would say the opposite of
+    // what this does. No confirm either, for the same reason: a confirm on
+    // a reversible action teaches people to click through confirms.
+    archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); archiveSessionNow(s); });
+    actions.appendChild(archiveBtn);
 
     const delBtn = document.createElement('button');
     delBtn.textContent = 'delete';
@@ -351,4 +361,172 @@ export async function deleteAllSessions() {
     return;
   }
   await createNewSession();
+}
+
+// The archive.
+//
+// Archiving is not deleting and the panel says so in every way it can: no
+// confirm, no red, and the conversation stays one click from coming back.
+// What it is for is a list that has grown past the point of being scannable
+// without anybody wanting to lose anything.
+
+export async function archiveSessionNow(s) {
+  try {
+    await apiClient.archiveSession(s.id);
+  } catch (err) {
+    // 409 with a body naming the tasks or schedules still going. Shown as
+    // it came: "wait for them or cancel them first" is the useful part and
+    // it is already in the message.
+    appendError(`failed to archive: ${err}`);
+    return;
+  }
+  // An unread mark on a session no longer in the list can never be
+  // cleared by opening it, so it would sit there forever.
+  app.unreadSessions.delete(s.id);
+  await loadSessions();
+  if (app.archiveOpen) await loadArchived();
+  if (s.id === session.sessionID) await moveOffArchivedSession();
+}
+
+export async function retrieveSessionNow(s) {
+  try {
+    await apiClient.retrieveSession(s.id);
+  } catch (err) {
+    appendError(`failed to retrieve: ${err}`);
+    return;
+  }
+  await loadSessions();
+  await loadArchived();
+}
+
+// Where to go when the conversation on screen has just left the list.
+// Fetched after the move, never before it: counting sessions and then
+// archiving is a window another client can archive or delete the fallback
+// inside.
+async function moveOffArchivedSession() {
+  // Both branches clear the transcript on their way in, so anything worth
+  // saying has to be said after the switch, not before it.
+  if (app.sessions.length > 0) {
+    const next = app.sessions[0];
+    selectSession(next.id, next.agent, next.workspace);
+  } else {
+    await createNewSession();
+    appendTool('[that was the only conversation, so a new one was started]');
+  }
+}
+
+export async function loadArchived() {
+  try {
+    app.archivedSessions = await apiClient.getArchivedSessions();
+  } catch {
+    app.archivedSessions = [];
+  }
+  renderArchiveList();
+}
+
+function renderArchiveList() {
+  const n = (app.archivedSessions || []).length;
+  archiveToggleEl.textContent = app.archiveOpen || n > 0 ? `Archive (${n})` : 'Archive';
+  archiveToggleEl.setAttribute('aria-expanded', app.archiveOpen ? 'true' : 'false');
+  archiveListEl.hidden = !app.archiveOpen;
+  archiveListEl.innerHTML = '';
+  if (!app.archiveOpen) return;
+
+  if (n === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'meta';
+    empty.textContent = 'Nothing archived. Drag a conversation here, or use its archive button.';
+    archiveListEl.appendChild(empty);
+    return;
+  }
+
+  for (const s of app.archivedSessions) {
+    const div = document.createElement('div');
+    // No session-led, no click handler and no draggable: an archived
+    // conversation is not one you can be in, and offering the gestures
+    // that open one would be a promise the daemon then refuses.
+    div.className = 'session-item archived';
+
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = s.title || s.id;
+    div.appendChild(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = `archived ${formatTime(s.archived_at)}`;
+    div.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+
+    const retrieveBtn = document.createElement('button');
+    retrieveBtn.textContent = 'retrieve';
+    retrieveBtn.title = 'bring this conversation back into the session list';
+    retrieveBtn.addEventListener('click', (e) => { e.stopPropagation(); retrieveSessionNow(s); });
+    actions.appendChild(retrieveBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.textContent = 'delete';
+    delBtn.className = 'danger-btn';
+    delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteSessionConfirm(s); });
+    actions.appendChild(delBtn);
+
+    div.appendChild(actions);
+    archiveListEl.appendChild(div);
+  }
+}
+
+export async function toggleArchive() {
+  app.archiveOpen = !app.archiveOpen;
+  try { localStorage.setItem('archiveOpen', app.archiveOpen ? '1' : ''); } catch { /* private window */ }
+  if (app.archiveOpen) {
+    await loadArchived();
+  } else {
+    renderArchiveList();
+  }
+}
+
+// Dragging a session onto the archive.
+//
+// The header is itself the drop zone, rather than the section around it: a
+// zone with element children needs the drop to bubble, and this page's own
+// test DOM has no bubbling, so a container zone would look right in a
+// browser and be untestable here.
+//
+// One way only. Retrieve is a button, not a drag back out, which keeps
+// draggingID the single drag-state variable: a second one would need every
+// active row's dragover to reject the wrong kind, and the row drop handler
+// calls stopPropagation unconditionally.
+export function wireArchiveDrop() {
+  archiveToggleEl.addEventListener('click', toggleArchive);
+  // The collapsed state is drawn rather than assumed from the markup, so
+  // the label and aria-expanded have one owner and cannot disagree with
+  // what the section is actually doing.
+  renderArchiveList();
+
+  archiveToggleEl.addEventListener('dragover', (e) => {
+    if (!draggingID) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    archiveToggleEl.classList.add('drag-over');
+    // The label changes as well as the border, so the live state is
+    // readable without having to perceive a colour.
+    archiveToggleEl.textContent = 'drop to archive';
+  });
+  archiveToggleEl.addEventListener('dragleave', () => {
+    archiveToggleEl.classList.remove('drag-over');
+    renderArchiveList();
+  });
+  archiveToggleEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = draggingID;
+    draggingID = null;
+    archiveToggleEl.classList.remove('drag-over');
+    clearDropMarkers();
+    const s = (app.sessions || []).find((x) => x.id === id);
+    if (s) archiveSessionNow(s);
+    else renderArchiveList();
+  });
 }

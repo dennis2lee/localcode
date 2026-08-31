@@ -21,7 +21,7 @@ import {
   navigatingHistory, endHistoryNavigation,
 } from './composer.js';
 import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
-import { loadSessions, selectSession, createNewSession, deleteAllSessions } from './sessions.js';
+import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, loadArchived } from './sessions.js';
 import {
   openScheduleDialog, closeScheduleDialog, saveSchedule, previewWhen,
 } from './schedules.js';
@@ -288,6 +288,17 @@ async function init() {
   // reads both the settings and the agent list, and whichever of those two
   // landed second would otherwise decide what it shows.
   renderStatusBar();
+
+  // The archive is loaded only when it is opened, so a panel nobody uses
+  // costs one remembered boolean and no request. The section stays
+  // collapsed by default: it is where things go to be out of the way.
+  wireArchiveDrop();
+  try {
+    if (localStorage.getItem('archiveOpen')) {
+      app.archiveOpen = true;
+      await loadArchived();
+    }
+  } catch { /* private window, or storage refused: stay collapsed */ }
 
   if (!app.sessions || app.sessions.length === 0) {
     await createNewSession();

@@ -91,6 +91,19 @@
       <div id="session-list"></div>
       <button class="icon-btn danger-btn" id="delete-all-sessions-btn" title="delete all sessions" style="width:100%">delete all sessions</button>
     </div>
+    <!--
+      The archive.
+      Its own section rather than a row in the list, because an archived
+      conversation is not one you can be in: it has no click-to-open, no
+      drag, and a different pair of actions. The header doubles as the drop
+      target for dragging a session in, which is why it is a button rather
+      than a heading: it has to be reachable by keyboard too.
+    -->
+    <div class="side-section" id="archive-section">
+      <button class="side-header archive-header" id="archive-toggle" aria-expanded="false"
+              title="conversations you have put away">Archive</button>
+      <div id="archive-list" hidden></div>
+    </div>
   </aside>
   <div class="resizer" id="resize-left" title="drag to resize"></div>
   <div id="transcript-pane">
