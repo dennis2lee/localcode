@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+* **A delegated task is work, not a command.** `SendMessage` is the one door into a turn, and everything past it assumed what came through was typed by a person. A sub-agent's task arrives at the same door and was walked through the whole command table first, before any model call. A task whose first line read `/permission-skip-all on` was executed as a toggle in the child session: the child did no work, its permission switch was flipped, and the parent was handed the command's own confirmation text back as though it were the answer. Reproduced, then fixed, then reproduced again with the fix reverted.
+
+  The route in is the one the trust boundary in the system prompt exists to name. A `Task` prompt is written by a model, and the model writes it after reading files, command output, and whatever an MCP server returned. A line of data reaching the model turned into a privileged action with nobody asked.
+
+  The guard is scoped to the delegated text itself, not to child sessions: a person can open a sub-agent's conversation in the Web UI and type in it, and their commands still work. A delegated task is also no longer re-routed by `auto_delegate`, since something has already chosen which agent the work goes to and a glob written for what a person types should not overrule it.
+
 * **`grep` names a file it could not open, instead of skipping it in silence.** The third of the same defect, and unconditional like the other two: a file nothing looked inside is not a file with no matches. Rare in a source tree (measured: none in this repository, none under `~/.localcode`, one under `/usr/local`), and a dangling symlink or a permission denied is exactly the case where a search quietly returns less than it claims.
 
 * **Notices name paths rather than counting them.** "could not open 1 file(s)" on every search of a project with one dangling symlink is a line that repeats forever and can never be acted on; "could not open link.txt" is something to go and delete. At most three names before the rest becomes "and N more", sorted and deduplicated, since past that the list stops being a name and becomes a wall. The same treatment for the file-too-long and directory-skipped notices, which could previously paste an unbounded list.

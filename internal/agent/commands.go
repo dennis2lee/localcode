@@ -50,19 +50,50 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		}
 	}
 
+	// A delegated task is work, not a command.
+	//
+	// SendMessage is the one door, and everything below it assumes what
+	// came through was typed by a person. A sub-agent's task arrives at
+	// the same door, and used to be walked through the whole command table
+	// first: a task whose first line read "/permission-skip-all on" was
+	// executed as a toggle in the child session, the child did no work,
+	// and the parent was handed the command's own confirmation text back
+	// as though it were an answer.
+	//
+	// The route in is short, and it is the one the trust boundary in the
+	// system prompt exists to name. A Task prompt is written by a model,
+	// and the model writes it after reading files, command output and
+	// whatever an MCP server returned. Data reaching the model turned into
+	// a privileged action with nobody asked.
+	//
+	// Scoped to the delegated text itself rather than to child sessions,
+	// because a person can open a sub-agent's conversation and type in it,
+	// and their commands must still work. Same comparison the opening
+	// message uses to tag its own source. See withDelegatedTask.
+	delegated := false
+	if d, ok := delegatedTaskFrom(ctx); ok && d.task == text {
+		delegated = true
+	}
+
 	// Tried in order; the first match wins. This order is the precedence
 	// contract: built-in commands, then custom commands, then skills, then
 	// auto-delegation, then an ordinary model turn — nothing user-facing
 	// can be shadowed by a later entry. See commandRoutes.
-	for _, route := range l.commandRoutes(ctx, sessionID, agentName, text) {
-		if handled, err := route(); handled {
-			return err
+	if !delegated {
+		for _, route := range l.commandRoutes(ctx, sessionID, agentName, text) {
+			if handled, err := route(); handled {
+				return err
+			}
 		}
 	}
 
 	// Everything above is a command of some kind. What's left is an
 	// ordinary prompt, the only thing worth handing to a cheaper agent.
-	if target, ok := l.delegateTarget(sessionID, agentName, text); ok {
+	//
+	// Not a delegated task, though: something has already chosen which
+	// agent this work goes to, and routing it again on a glob match
+	// overrules that choice with a rule written for what a person types.
+	if target, ok := l.delegateTarget(sessionID, agentName, text); ok && !delegated {
 		return l.delegatePrompt(ctx, sessionID, target, text)
 	}
 

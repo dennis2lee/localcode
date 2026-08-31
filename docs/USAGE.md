@@ -1527,6 +1527,8 @@ Everything a turn reads arrives as text, and not all of it deserves the same sta
 
 This is labelling, not enforcement, and it is not claimed as more: a model can still be talked into something by a sufficiently crafted input. What it changes is the default — the model has been told which sources rank where before the crafted input arrives. The permission system stays the enforcement layer: every MCP tool call still asks, whatever its description says.
 
+**A delegated task is not a command.** A sub-agent's task text reaches the same entry point a typed message does, and used to be matched against the slash-command table first. A task whose first line was `/permission-skip-all on` flipped that switch in the child session, did no work, and handed the command's own output back to the parent as the answer. The task text is now treated as work. The guard is on the delegated text itself, not on child sessions, so opening a sub-agent's conversation and typing a command in it still works. A delegated task is also not re-routed by `auto_delegate`.
+
 **MCP servers are pinned on first use.** Tool descriptions steer the model, and a server whose descriptions change between runs changes what the model is told it can do, silently. Each server's advertised surface — every tool's name, description and schema — is fingerprinted into `~/.localcode/mcp-pins.json` on first connect, and a change since the last run is reported as a startup warning naming the server. Warn once, not refuse: tools also change because somebody upgraded the server, and the person who did not upgrade it is the one the warning is for. The pin file works with Smart Agent on or off, since it guards startup rather than a turn.
 
 #### The prompt is written for the model
