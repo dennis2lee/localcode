@@ -1053,19 +1053,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-align: left;
   background: none;
   border: 1px solid transparent;
-  color: var(--fg-dim);
+  color: var(--muted);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 6px 8px;
   cursor: pointer;
 }
-.archive-header:hover { color: var(--fg); }
+.archive-header:hover { color: var(--text); }
 /* Dashed, and distinct from the rows' drop line, so the two drop
    behaviours never look like the same one. */
 #archive-toggle.drag-over {
   border: 1px dashed var(--select);
-  color: var(--fg);
+  color: var(--text);
 }
 /* An archived row is not one you can be in: muted, and with no pointer,
    since nothing happens when you click it. */
