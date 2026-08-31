@@ -593,3 +593,39 @@ func (l *Loop) setHistory(sessionID string, msgs []provider.Message) {
 	defer l.mu.Unlock()
 	l.messages[sessionID] = msgs
 }
+
+// ClaimSessionTree is claimSessionTree for a caller outside this package
+// that needs the tree held still without stopping anything in it.
+//
+// Archiving is the case. It is not a delete: nothing is being removed, and
+// the work already running is deliberately left alone and refused rather
+// than killed. What it does need is the same guarantee the delete path
+// gets, that no admission slips in between reading the tree and acting on
+// it, and that is exactly what the claim is.
+//
+// The caller must hold the release until it has finished writing, for the
+// reason StopSessionTree's does: releasing between the read and the write
+// reopens admission into a tree that is half changed.
+func (l *Loop) ClaimSessionTree(sessionID string) ([]string, func()) {
+	return l.claimSessionTree(sessionID)
+}
+
+// ReleaseSessionMemory drops what this process is holding for a session
+// that has been put away, without touching anything that cannot be rebuilt.
+//
+// Deliberately not ClearSessionState, which is the delete path's and also
+// calls Tasks.forgetSession: that discards the answers of background tasks
+// that finished and were never collected, and those exist nowhere else.
+// Archiving is reversible, so it must not be the thing that loses them.
+//
+// Everything dropped here comes back from the event log if the
+// conversation is ever retrieved. See RehydrateSession.
+func (l *Loop) ReleaseSessionMemory(sessionID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.messages, sessionID)
+	delete(l.usage, sessionID)
+	delete(l.cumulativeUsage, sessionID)
+	delete(l.turnRate, sessionID)
+	delete(l.pendingDebate, sessionID)
+}

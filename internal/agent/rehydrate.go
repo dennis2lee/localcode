@@ -16,6 +16,17 @@ import (
 // after sessions have been loaded via session.LoadAllFromDisk.
 func (l *Loop) RehydrateAll() {
 	for _, s := range l.Store.AllSessions() {
+		// An archived conversation is not replayed. Archiving releases the
+		// history it was holding, and rebuilding it at every restart would
+		// hand it straight back: a shelf that costs the same as the shelf
+		// being empty is not one. Retrieving replays it.
+		//
+		// Only the conversation itself. Its task children are visible:false
+		// and carry no flag of their own, so they are still replayed;
+		// narrowing that would mean a parent walk per session at startup.
+		if s.ArchivedAt != nil {
+			continue
+		}
 		l.RehydrateSession(s.ID)
 	}
 }

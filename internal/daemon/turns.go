@@ -29,6 +29,17 @@ type turnTracker struct {
 	// decided to finish would sit in the queue forever.
 	pending map[string][]string
 
+	// noInject names the sessions whose slot is held by something that is
+	// not a turn: an archive, and in time anything else that needs the
+	// session to itself for a moment.
+	//
+	// It exists because inject is the fallback when begin loses, and a
+	// message handed to a holder that will never run it is a message
+	// dropped in silence. Under the same lock as cancels for the reason
+	// pending is: "who holds this" and "may text be given to them" are one
+	// question.
+	noInject map[string]bool
+
 	// onChange is called when a session starts or stops being busy, so
 	// clients can show which conversations are working without polling.
 	// Set once at construction; nil in tests that only exercise the
@@ -38,8 +49,9 @@ type turnTracker struct {
 
 func newTurnTracker() turnTracker {
 	return turnTracker{
-		cancels: map[string]context.CancelFunc{},
-		pending: map[string][]string{},
+		cancels:  map[string]context.CancelFunc{},
+		pending:  map[string][]string{},
+		noInject: map[string]bool{},
 	}
 }
 
@@ -53,6 +65,29 @@ func (t *turnTracker) begin(id string, cancel context.CancelFunc) bool {
 		return false
 	}
 	t.cancels[id] = cancel
+	t.mu.Unlock()
+	t.changed(id, true)
+	return true
+}
+
+// beginExclusive takes the session's slot for something that is not a
+// turn, so nothing else can start one while it runs.
+//
+// Deciding and registering in one step, which is the whole point: asking
+// "is a turn running" and then archiving is the check-then-act interval a
+// turn can start inside. The caller must call end.
+//
+// Unlike begin, the slot refuses injection. A message arriving while an
+// archive holds it must not be queued for a turn that will never exist;
+// the caller answers it properly instead.
+func (t *turnTracker) beginExclusive(id string, cancel context.CancelFunc) bool {
+	t.mu.Lock()
+	if _, held := t.cancels[id]; held {
+		t.mu.Unlock()
+		return false
+	}
+	t.cancels[id] = cancel
+	t.noInject[id] = true
 	t.mu.Unlock()
 	t.changed(id, true)
 	return true
@@ -77,6 +112,7 @@ func (t *turnTracker) changed(id string, busy bool) {
 func (t *turnTracker) end(id string) {
 	t.mu.Lock()
 	delete(t.cancels, id)
+	delete(t.noInject, id)
 	delete(t.pending, id)
 	t.mu.Unlock()
 	t.changed(id, false)
@@ -89,6 +125,12 @@ func (t *turnTracker) inject(id, text string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if _, running := t.cancels[id]; !running {
+		return false
+	}
+	// The slot is held by something that is not a turn, so there is nobody
+	// to hand this to. Reporting false sends the caller back to its own
+	// refusal, which knows what is actually going on.
+	if t.noInject[id] {
 		return false
 	}
 	t.pending[id] = append(t.pending[id], text)
@@ -143,6 +185,7 @@ func (t *turnTracker) finishOrTake(id string) (string, bool) {
 		return text, true
 	}
 	delete(t.cancels, id)
+	delete(t.noInject, id)
 	delete(t.pending, id)
 	t.mu.Unlock()
 	t.changed(id, false)
@@ -250,6 +293,13 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	// Cheap and early, so an ordinary client that has not refreshed gets
+	// the right answer without the daemon doing any work. It is not the
+	// authoritative one: the flag can move between here and the claim
+	// below, which is why it is asked again after.
+	if refuseArchived(w, sess) {
+		return
+	}
 
 	var req struct {
 		Text string `json:"text"`
@@ -297,6 +347,21 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "injected"})
 			return
 		}
+	}
+
+	// The authoritative read. An archive holds the session's slot for its
+	// whole duration and refuses injection, so losing the loop above can
+	// mean an archive rather than a turn, and the flag can have moved
+	// since the early check either way. Asked after the claim is settled,
+	// which is the only point at which the answer stops changing.
+	if fresh, err := d.Loop.Store.Get(id); err == nil && fresh.ArchivedAt != nil {
+		if started {
+			d.turns.end(id)
+		}
+		cancel()
+		release()
+		refuseArchived(w, fresh)
+		return
 	}
 	// Committed, or not starting. Either way the window is done with; the
 	// turn itself runs long after this returns and is covered from here on

@@ -50,10 +50,12 @@ const (
 	ScheduleDone = "done"
 	// ScheduleFailed ran and did not get there.
 	ScheduleFailed = "failed"
-	// ScheduleMissed is the honest outcome of a moment that passed while
-	// localcode was not running. Not fired late: the request was for a
-	// time, and a report at breakfast about work nobody did is worth more
-	// than the same work done at breakfast without being asked.
+	// ScheduleMissed is the honest outcome of a moment that passed with
+	// the work not done: localcode was not running, or the conversation
+	// had been archived by the time it came round. Not fired late: the
+	// request was for a time, and a report at breakfast about work nobody
+	// did is worth more than the same work done at breakfast without
+	// being asked. Retrieving the conversation does not re-run it.
 	ScheduleMissed = "missed"
 )
 
@@ -131,8 +133,15 @@ const maxPendingPerSession = 16
 // Add books a prompt. at must be in the future; the caller has already
 // parsed and echoed it (see internal/when).
 func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time) (Scheduled, error) {
-	if _, err := s.loop.Store.Get(sessionID); err != nil {
+	parent, err := s.loop.Store.Get(sessionID)
+	if err != nil {
 		return Scheduled{}, fmt.Errorf("schedule: %w", err)
+	}
+	// Beside the daemon's own refusal rather than instead of it, so the
+	// endpoint and the scheduler cannot disagree about what a booking
+	// into an archived conversation does.
+	if parent.ArchivedAt != nil {
+		return Scheduled{}, fmt.Errorf("schedule: this conversation is archived; retrieve it first")
 	}
 	s.mu.Lock()
 	pending := 0
@@ -310,9 +319,19 @@ func (s *Scheduler) fire(sessionID, id string) {
 	delete(s.timers, k)
 	s.mu.Unlock()
 
-	// The parent may have been deleted between booking and firing.
-	if _, err := s.loop.Store.Get(sessionID); err != nil {
+	// The parent may have been deleted, or put away, between booking and
+	// firing.
+	parent, err := s.loop.Store.Get(sessionID)
+	if err != nil {
 		s.finish(sessionID, id, "", ScheduleFailed, "the conversation this was scheduled in no longer exists")
+		return
+	}
+	// Missed rather than failed: the moment passed without the work being
+	// done, which is what missed means, and nothing went wrong. Retrieving
+	// the conversation does not re-run it, for the reason a missed
+	// schedule is never fired late.
+	if parent.ArchivedAt != nil {
+		s.finish(sessionID, id, "", ScheduleMissed, "the conversation this was scheduled in is archived")
 		return
 	}
 
@@ -332,7 +351,7 @@ func (s *Scheduler) fire(sessionID, id string) {
 	// Unattended: nobody is watching this turn, so a permission request
 	// it raises must not wait forever. See WithUnattended.
 	ctx := WithUnattended(s.rootCtx)
-	err := s.loop.SendMessage(ctx, runID, agentName, prompt)
+	err = s.loop.SendMessage(ctx, runID, agentName, prompt)
 	if err != nil {
 		s.finish(sessionID, id, runID, ScheduleFailed, err.Error())
 		return
@@ -591,4 +610,30 @@ func unattendedRefusal(ask tools.Ask) string {
 	return fmt.Sprintf(
 		"not run: this turn is scheduled work with nobody watching, it needed permission for %q, and nobody answered within %s",
 		ask.Description, unattendedPermissionWait)
+}
+
+// RunningIn reports which of this conversation's booked prompts are
+// actually mid-turn.
+//
+// Read for archiving, which refuses while one is going. A schedule that
+// commits to running in the microseconds between this read and the archive
+// completing its write finishes its turn and reports into a conversation
+// that is by then archived: the log still accepts it, so nothing is lost,
+// and that residual is written down in docs/USAGE.md rather than papered
+// over. Closing it properly would mean suspending the timers, which is a
+// second mutex protocol and a rollback question for one line of report.
+func (s *Scheduler) RunningIn(sessionID string) []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var running []string
+	for _, entry := range s.entries {
+		if entry.SessionID == sessionID && entry.Status == ScheduleRunning {
+			running = append(running, entry.ID)
+		}
+	}
+	sort.Strings(running)
+	return running
 }

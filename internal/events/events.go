@@ -68,6 +68,17 @@ const (
 	// on load and keep it current from these.
 	TypeSessionActivity Type = "session.activity"
 
+	// TypeSessionArchived reports that a conversation moved between the
+	// active list and the archive, in either direction: archived is the
+	// flag, so one type covers both the way session.activity does.
+	//
+	// Daemon-wide rather than an entry in the session's own log, because
+	// the clients that need it are the ones whose session list is about
+	// to change, and a session-log event reaches only those already
+	// looking at the conversation that is leaving the list. A client that
+	// missed one is corrected by re-reading the list.
+	TypeSessionArchived Type = "session.archived"
+
 	// TypeSettingsChanged reports the daemon-wide switches after one of
 	// them moved, whoever moved it: a toggle typed at a prompt, the
 	// settings window, another client entirely.

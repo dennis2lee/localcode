@@ -97,6 +97,9 @@ func (d *Daemon) handleBookSchedule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	if refuseArchived(w, sess) {
+		return
+	}
 	var req struct {
 		When   string `json:"when"`
 		Prompt string `json:"prompt"`

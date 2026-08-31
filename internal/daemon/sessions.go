@@ -250,12 +250,145 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		session.Session
 		Busy bool `json:"busy"`
 	}
+	// ?archived=1 asks for the other list. One handler and one row shape,
+	// so there is one place membership is decided and a client cannot get
+	// two answers that disagree about what a session is. Nothing is ever
+	// busy in the archive, and saying so costs nothing.
 	sessions := d.Loop.Store.ListVisible()
+	if r.URL.Query().Get("archived") != "" {
+		sessions = d.Loop.Store.ListArchived()
+	}
 	out := make([]listed, 0, len(sessions))
 	for _, s := range sessions {
 		out = append(out, listed{Session: s, Busy: busy[s.ID]})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// Archiving and retrieving.
+//
+// The order below is the whole of the correctness, and every step of it is
+// a claim rather than a check. Deciding that nothing is running and then
+// archiving leaves an interval a turn can start inside, which is the shape
+// of defect internal/agent/lifecycle.go exists to have removed.
+//
+//  1. admitTopLevel, so an archive cannot interleave with delete-all and
+//     write a meta file for a session whose files have just been removed.
+//     restoreOne opens the log with O_CREATE, so such a file comes back at
+//     the next restart as an empty conversation.
+//  2. beginExclusive, which takes the session's turn slot and refuses
+//     injection, so no turn can start and no message can be queued for a
+//     turn that will never exist.
+//  3. ClaimSessionTree, so a spawn already past its parent check cannot be
+//     missed, and released only after the flag is written.
+//  4. and 5. Refuse, rather than stop, while a background task or a
+//     scheduled run is going. Delete kills that work because the records
+//     are about to go away; archiving has no such excuse, and killing work
+//     nobody asked to kill is exactly the silent side effect this codebase
+//     refuses elsewhere.
+func (d *Daemon) handleArchiveSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	release, ok := d.admitTopLevel(w)
+	if !ok {
+		return
+	}
+	defer release()
+
+	_, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	if !d.turns.beginExclusive(id, cancel) {
+		writeError(w, http.StatusConflict, fmt.Errorf(
+			"session %s has a turn in progress; answer or cancel it first", id))
+		return
+	}
+	defer d.turns.end(id)
+
+	ids, releaseTree := d.Loop.ClaimSessionTree(id)
+	defer releaseTree()
+
+	if d.Tasks != nil {
+		if running := d.Tasks.RunningIn(ids); len(running) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": fmt.Sprintf("session %s has %d background task(s) still running; "+
+					"wait for them or cancel them first", id, len(running)),
+				"tasks": running,
+			})
+			return
+		}
+	}
+	if d.Loop.Schedules != nil {
+		if running := d.Loop.Schedules.RunningIn(id); len(running) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": fmt.Sprintf("session %s has %d scheduled run(s) in progress; "+
+					"wait for them to finish", id, len(running)),
+				"schedules": running,
+			})
+			return
+		}
+	}
+
+	sess, err := d.Loop.Store.Archive(id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	// The memory an idle conversation was holding. Recoverable: the
+	// history is replayed from the event log if it is ever retrieved.
+	d.Loop.ReleaseSessionMemory(id)
+	d.announceArchived(id, true)
+	writeJSON(w, http.StatusOK, sess)
+}
+
+func (d *Daemon) handleRetrieveSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	release, ok := d.admitTopLevel(w)
+	if !ok {
+		return
+	}
+	defer release()
+
+	// Nothing can be running in an archived session, so this is not
+	// guarding against a turn. It serialises against a concurrent archive,
+	// which costs one mutex and removes the only way the two could cross.
+	_, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	if !d.turns.beginExclusive(id, cancel) {
+		writeError(w, http.StatusConflict, fmt.Errorf("session %s is busy", id))
+		return
+	}
+	defer d.turns.end(id)
+
+	sess, err := d.Loop.Store.Retrieve(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	// The history archiving released. Rebuilt from the event log, which is
+	// why releasing it was safe.
+	d.Loop.RehydrateSession(id)
+	d.announceArchived(id, false)
+	writeJSON(w, http.StatusOK, sess)
+}
+
+// announceArchived tells every client that a conversation moved between
+// the two lists.
+//
+// Daemon-wide rather than an entry in the session's own log, because the
+// clients that need to know are the ones whose session list is about to
+// change, and a session-log event reaches only those already looking at
+// the conversation that is disappearing from it.
+func (d *Daemon) announceArchived(id string, archived bool) {
+	d.daemonEvents.send(events.Event{
+		Type: events.TypeSessionArchived,
+		Data: map[string]any{"session": id, "archived": archived},
+	})
 }
 
 func (d *Daemon) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -453,8 +586,12 @@ func (d *Daemon) handleReorderSessions(w http.ResponseWriter, r *http.Request) {
 // selector, and the /agent slash command in both.
 func (d *Daemon) handleSwitchAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := d.Loop.Store.Get(id); err != nil {
+	sess, err := d.Loop.Store.Get(id)
+	if err != nil {
 		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if refuseArchived(w, sess) {
 		return
 	}
 
@@ -470,7 +607,7 @@ func (d *Daemon) handleSwitchAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := d.Loop.Store.SetAgent(id, req.Agent)
+	sess, err = d.Loop.Store.SetAgent(id, req.Agent)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -598,4 +735,22 @@ func (d *Daemon) handleListCommands(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, out)
+}
+
+// refuseArchived answers a request aimed at a conversation that has been
+// put away, and reports whether it did.
+//
+// 403 and never 409, which is the whole reason this is one function rather
+// than five copies of a status code. Both clients key on the status alone:
+// client.IsBusy and the Web UI's api.js both read 409 as "a turn is
+// running", and both respond by queueing the prompt and waiting for a
+// turn.done that an archived session will never produce. A 409 here would
+// reproduce a defect this changelog already records once.
+func refuseArchived(w http.ResponseWriter, sess *session.Session) bool {
+	if sess == nil || sess.ArchivedAt == nil {
+		return false
+	}
+	writeError(w, http.StatusForbidden,
+		fmt.Errorf("this conversation is archived; retrieve it before working in it"))
+	return true
 }

@@ -514,3 +514,23 @@ func agentNamesOf(agents map[string]config.AgentConfig) []string {
 	sort.Strings(names)
 	return names
 }
+
+// RunningIn reports which of these sessions have a background task still
+// going, without stopping any of them.
+//
+// StopSession's first half, and separate because the answer archiving
+// wants is different from the answer deleting wants. A delete is removing
+// the records the work writes to, so it has to stop the work; an archive
+// is not, so it refuses instead and leaves the tasks alone. Killing work
+// nobody asked to kill is the silent side effect that would be.
+func (tm *TaskManager) RunningIn(ids []string) []string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	var running []string
+	for _, id := range ids {
+		if _, ok := tm.cancels[id]; ok {
+			running = append(running, id)
+		}
+	}
+	return running
+}

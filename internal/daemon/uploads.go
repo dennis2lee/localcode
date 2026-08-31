@@ -20,8 +20,12 @@ const maxUploadBytes = 32 << 20 // 32MB
 // no separate "attachment" concept in the wire protocol).
 func (d *Daemon) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := d.Loop.Store.Get(id); err != nil {
+	sess, err := d.Loop.Store.Get(id)
+	if err != nil {
 		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if refuseArchived(w, sess) {
 		return
 	}
 

@@ -36,6 +36,13 @@ func (d *Daemon) handleResolvePermission(w http.ResponseWriter, r *http.Request)
 
 func (d *Daemon) handleSpawnTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// A task started in a conversation that has been put away is work
+	// nobody will come back for. The store refuses it too, under its own
+	// mutex, which is the check that cannot be raced; this is the one that
+	// produces a message worth reading.
+	if sess, err := d.Loop.Store.Get(id); err == nil && refuseArchived(w, sess) {
+		return
+	}
 	var req struct {
 		Agent  string `json:"agent"`
 		Prompt string `json:"prompt"`

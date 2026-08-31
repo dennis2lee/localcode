@@ -41,6 +41,24 @@ type Session struct {
 	// that was arranged before it existed.
 	Order     int       `json:"order,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	// ArchivedAt is when this conversation was put away, or nil while it
+	// is active. Archiving is not deleting: everything here is kept, the
+	// event log included, and Retrieve puts it back.
+	//
+	// A pointer rather than a bool, for two reasons. Nil is the zero
+	// value, so every meta file written before this field existed loads
+	// as an active session and there is no migration; a bare time.Time
+	// would defeat omitempty and stamp 0001-01-01 into every one of them.
+	// And the archive wants an order of its own, which is when things
+	// were put away rather than when they were created.
+	//
+	// Not Visible, which already means something else: false marks a
+	// background task's session. Three places read it that way, including
+	// the permission broker looking for a visible ancestor to show an
+	// unattended prompt in, so reusing it would make an archived
+	// conversation indistinguishable from every task ever run and would
+	// leave a child's permission question with nowhere to appear.
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 	// Permissions is how this conversation answers permission questions,
 	// where it differs from the daemon's defaults. See Permissions.
 	Permissions Permissions `json:"permissions,omitempty"`
@@ -205,6 +223,23 @@ func (s *Store) CreateSessionIn(id, parentID, agent, workspace string, visible b
 
 	if _, exists := s.sessions[id]; exists {
 		return nil, fmt.Errorf("session %s already exists", id)
+	}
+
+	// Nothing new starts under an archived conversation, and this one
+	// check is most of the enforcement.
+	//
+	// Every way work begins in a session ends up here: a Task spawn, a
+	// synchronous delegation, a scheduled run. Each of those could have
+	// its own "is it archived" test, and each would be a check-then-act
+	// with an interval an archive could land in. This shares the store's
+	// mutex with Archive's write, so a child cannot be created under a
+	// conversation being archived and an archive cannot slip past a
+	// creation already committed. The callers keep their own checks for
+	// the message they produce; this is the one that cannot be raced.
+	if parentID != "" {
+		if parent, ok := s.sessions[parentID]; ok && parent.meta.ArchivedAt != nil {
+			return nil, fmt.Errorf("session %s is archived", parentID)
+		}
 	}
 
 	meta := Session{
@@ -488,15 +523,15 @@ func (s *Store) DeleteTree(sessionID string) error {
 	return s.Delete(sessionID)
 }
 
-// ListVisible returns all top-level (visible:true) sessions — i.e. the
-// ones a user picks from when resuming, not background tasks — newest
-// first.
+// ListVisible returns all top-level (visible:true) sessions that are not
+// archived — i.e. the ones a user picks from when resuming, not
+// background tasks and not the ones put away — newest first.
 func (s *Store) ListVisible() []Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []Session
 	for _, st := range s.sessions {
-		if st.meta.Visible {
+		if st.meta.Visible && st.meta.ArchivedAt == nil {
 			out = append(out, st.meta)
 		}
 	}
@@ -532,6 +567,12 @@ func (s *Store) SetOrder(ids []string) error {
 		if !ok {
 			return fmt.Errorf("session %s not found", id)
 		}
+		if st.meta.ArchivedAt != nil {
+			// Its own message, because the fix is its own: retrieve it,
+			// rather than wonder why a conversation you can see is "not in
+			// the session list".
+			return fmt.Errorf("session %s is archived", id)
+		}
 		if !st.meta.Visible {
 			return fmt.Errorf("session %s is not in the session list", id)
 		}
@@ -544,7 +585,7 @@ func (s *Store) SetOrder(ids []string) error {
 	// it under the user's hands is the one thing a reorder must not do.
 	var rest []Session
 	for id, st := range s.sessions {
-		if st.meta.Visible && at[id] == 0 {
+		if st.meta.Visible && st.meta.ArchivedAt == nil && at[id] == 0 {
 			rest = append(rest, st.meta)
 		}
 	}
@@ -936,4 +977,154 @@ func (s *Store) TailSince(sessionID string, n int) (uint64, error) {
 	// The seq *before* the first event to send: Events(since) is
 	// exclusive, and this is fed straight to it.
 	return st.log[start-1].Seq, nil
+}
+
+// Archiving.
+//
+// A shelf, not a bin. Everything a session has is kept: its title, its
+// workspace, its permissions, its effort, its place in the list, its event
+// log, the open file handle and the subscribers reading it. What changes is
+// that it leaves the list, and that nothing new starts in it — which is
+// enforced under this mutex by CreateSessionIn, not by a test each caller
+// remembers to make.
+//
+// Appending still works, deliberately. A background task that outlives the
+// archive still writes its status, a schedule still records that it was
+// missed, and a client reading the transcript keeps reading it. The store
+// refuses to start work, never to record what happened.
+
+// Archive puts a conversation away and returns it. Archiving one that is
+// already archived keeps the first timestamp and is not an error: two
+// clients pressing the button is not a conflict worth an error page.
+func (s *Store) Archive(sessionID string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	// A task's session is in no list, so archiving it hides nothing, and
+	// its parent's turn is waiting on it.
+	if !st.meta.Visible {
+		return nil, fmt.Errorf("session %s is a background task, not a conversation", sessionID)
+	}
+	if st.meta.ArchivedAt != nil {
+		metaCopy := st.meta
+		return &metaCopy, nil
+	}
+	now := time.Now().UTC()
+	st.meta.ArchivedAt = &now
+	metaCopy := st.meta
+	if s.dir != "" {
+		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
+			st.meta.ArchivedAt = nil // the file is the record; do not claim a write that failed
+			return nil, err
+		}
+	}
+	return &metaCopy, nil
+}
+
+// Retrieve brings a conversation back and returns it. Retrieving one that
+// is not archived is a no-op success, and leaves the order alone.
+//
+// The rank comes back, not the number. A session archived from third place
+// returns to third place if the list has not moved; if it has, it lands as
+// close as the remaining information allows, because the number it was
+// holding may now belong to something else. Exact would require recording
+// what the whole list looked like at archive time, which is a snapshot that
+// is wrong the moment anything else is dragged.
+func (s *Store) Retrieve(sessionID string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	if st.meta.ArchivedAt == nil {
+		metaCopy := st.meta
+		return &metaCopy, nil
+	}
+	want := st.meta.Order
+	was := st.meta.ArchivedAt
+	st.meta.ArchivedAt = nil
+
+	// The active list as it now stands, without this one, in list order.
+	active := make([]Session, 0, len(s.sessions))
+	for id, other := range s.sessions {
+		if id != sessionID && other.meta.Visible && other.meta.ArchivedAt == nil {
+			active = append(active, other.meta)
+		}
+	}
+	sort.Slice(active, func(i, j int) bool {
+		if active[i].Order != active[j].Order {
+			return active[i].Order < active[j].Order
+		}
+		return active[i].CreatedAt.After(active[j].CreatedAt)
+	})
+
+	// Order 0 means it was never placed by hand, and those sort to the
+	// top, so that is where it goes back.
+	at := max(min(want, len(active)+1), 1)
+	if want == 0 {
+		at = 1
+	}
+	order := make([]string, 0, len(active)+1)
+	for i := range len(active) + 1 {
+		if i == at-1 {
+			order = append(order, sessionID)
+		}
+		if i < len(active) {
+			order = append(order, active[i].ID)
+		}
+	}
+	if err := s.renumberLocked(order); err != nil {
+		// A write failed partway. Put the flag back rather than report a
+		// session as retrieved when its meta file may still say otherwise:
+		// the file is the record, and the next restart reads it.
+		st.meta.ArchivedAt = was
+		return nil, err
+	}
+	metaCopy := s.sessions[sessionID].meta
+	return &metaCopy, nil
+}
+
+// renumberLocked writes a dense 1..N order over the ids given, which the
+// caller has already established are exactly the active sessions. Factored
+// out of SetOrder so "dense over the active list" is defined once and
+// Retrieve cannot drift from it.
+func (s *Store) renumberLocked(order []string) error {
+	for i, id := range order {
+		st, ok := s.sessions[id]
+		if !ok {
+			continue
+		}
+		st.meta.Order = i + 1
+		if s.dir != "" {
+			if err := writeSessionMeta(s.dir, st.meta); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ListArchived returns the archived conversations, most recently put away
+// first. Order is the active list's arrangement and means nothing here, so
+// the archive sorts by when things were shelved.
+func (s *Store) ListArchived() []Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Session
+	for _, st := range s.sessions {
+		if st.meta.Visible && st.meta.ArchivedAt != nil {
+			out = append(out, st.meta)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].ArchivedAt.Equal(*out[j].ArchivedAt) {
+			return out[i].ArchivedAt.After(*out[j].ArchivedAt)
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out
 }
