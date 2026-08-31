@@ -25,6 +25,11 @@ type TaskManager struct {
 	sem     chan struct{}
 	rootCtx context.Context
 
+	// lanes is the per-provider bound, taken before sem. Nil when no
+	// provider declared one, which is every configuration that existed
+	// before the field did. See lanes.go.
+	lanes lanes
+
 	mu      sync.Mutex
 	counter int
 	cancels map[string]context.CancelFunc
@@ -53,6 +58,7 @@ func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *Tas
 	tm := &TaskManager{
 		loop:    loop,
 		sem:     make(chan struct{}, maxConcurrent),
+		lanes:   newLanes(loop.Config),
 		rootCtx: rootCtx,
 		cancels: map[string]context.CancelFunc{},
 		waiters: map[string]chan struct{}{},
@@ -251,6 +257,23 @@ func (tm *TaskManager) run(ctx context.Context, taskID, parentSessionID, agentNa
 			cancel()
 		}
 	}()
+
+	// The endpoint's lane first, then the daemon's slot.
+	//
+	// That order is the point of having two. A task waiting on a busy local
+	// server must not be holding a global slot while it waits, or one
+	// saturated endpoint bounds every other provider on the machine: the
+	// hosted task that could have run right now queues behind a local one
+	// that cannot. See lanes.go.
+	releaseLane, ok := tm.lanes.take(ctx, tm.loop.providerFor(ctx, agentName))
+	if !ok {
+		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
+			"task_id": taskID,
+			"status":  "cancelled",
+		})
+		return
+	}
+	defer releaseLane()
 
 	select {
 	case tm.sem <- struct{}{}:

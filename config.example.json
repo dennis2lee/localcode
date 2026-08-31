@@ -13,7 +13,9 @@
     "local": {
       "type": "openai-compat",
       "//base_url": "Any string in this file may reference the environment, read when the file is read. Two forms, written here without their braces so that this file loads with nothing set: env:NAME is required and refuses to load when the variable is unset, and env:NAME:-fallback is optional. The values below use the optional form, which is why copying this file works before you have exported anything. See docs/USAGE.md.",
-      "base_url": "{env:LOCALCODE_LLM_URL:-http://localhost:1234/v1}"
+      "base_url": "{env:LOCALCODE_LLM_URL:-http://localhost:1234/v1}",
+      "//max_concurrent_tasks": "Background tasks allowed against this endpoint at once. Contention lives here rather than in one daemon-wide number: one local model on one GPU serves one request at a time whatever that number says, while a hosted provider on the same machine would take more. 0 or absent means no per-provider limit, which is what every provider was before this key existed. Taken before the daemon-wide limit, so a task queued on a busy endpoint is not holding a slot another provider could use.",
+      "max_concurrent_tasks": 1
     }
   },
   "//profiles": "The models, one entry per model you can reach. This is the part that matters for orchestration: with smart_agent on you do not declare the specialists, localcode creates all six and points each at whichever profile suits the work it does. What it needs from you is profiles to choose between, and three is the useful number because the roster sorts into three kinds of work. quick: explore and verify, searching and running a build. balanced: implement, making one self-contained change. deep: plan, oracle and librarian, the judgement work. The names below are the explicit form: a profile called smart-quick, smart-balanced or smart-deep pins that category by hand and no heuristic gets a vote after that. Without those names localcode guesses the class from the model id, which works and is worth not relying on. With one profile everything runs on it and orchestration still works; it just costs the same everywhere, which is most of the point of having a roster. See docs/USAGE.md.",
@@ -123,7 +125,7 @@
       ]
     }
   },
-  "//max_concurrent_tasks": "How many delegated sub-agents may run at once, across all conversations. 5 when unset.",
+  "//max_concurrent_tasks": "How many delegated sub-agents may run at once in the background, across all conversations. 1 when unset, so background tasks queue rather than run together; synchronous Task delegation is not bounded by this. A provider may set a max_concurrent_tasks of its own, which bounds that one endpoint and is taken first: see the local provider above.",
   "max_concurrent_tasks": 5,
   "//auto_delegate": "A different feature from smart_agent, and worth not confusing with it: this sends whole prompts of yours to a cheaper agent before your own model sees them, matched by glob against what you typed. It is about cost, not about orchestration. Off unless enabled; \"/auto-delegate\" toggles it. See docs/USAGE.md.",
   "auto_delegate": {

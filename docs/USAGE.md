@@ -201,7 +201,7 @@ The point is a config.json that can be committed to a repository, copied between
 | `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. Bedrock AWS configuration is loaded lazily on its first request. |
 | `profiles` | A named provider and model pairing. `max_tokens`, `temperature`, `context_window` and `keep_going` are optional. |
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
-| `max_concurrent_tasks` | Caps how many **background** tasks run at once. Unset means 1, so background tasks queue rather than run together. Synchronous `Task` delegation is not counted against it, because a caller that is blocked cannot start a second one and holding a slot while waiting for a nested child would deadlock against itself. |
+| `max_concurrent_tasks` | Caps how many **background** tasks run at once. Unset means 1, so background tasks queue rather than run together. Synchronous `Task` delegation is not counted against it, because a caller that is blocked cannot start a second one and holding a slot while waiting for a nested child would deadlock against itself. A provider may also declare a `max_concurrent_tasks` of its own; that one bounds a single endpoint and is taken first, so a task queued on a busy local server is not holding a daemon-wide slot that a hosted provider's task could use. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
 | `update_url` | Where the update button looks instead of GitHub: an https address at which the current installers are published. Unset means GitHub. See [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
@@ -318,6 +318,7 @@ asks, and names "it is already complete" as an answer.
 | `anthropic.base_url` | Defaults to `api.anthropic.com`. Override it to go through a corporate proxy. |
 | `openai-compat.base_url` | The URL prefix in front of `/chat/completions` |
 | `openai-compat.api_key` | Optional, usually unnecessary for a local server. Sent as `Authorization: Bearer <key>`. |
+| `<type>.max_concurrent_tasks` | Any provider type. Background tasks allowed against this one endpoint at once, taken **before** the daemon-wide `max_concurrent_tasks`, so a task queued on a busy local server is not holding a slot a hosted provider's task could use. 0 or absent means no per-provider limit, which is what every provider was before this key existed. Bounded at 64 and checked at load, so a typo is a startup error naming the provider. |
 
 See [MODELS.md](MODELS.md) for real model IDs, region prefixes, and Bedrock troubleshooting.
 

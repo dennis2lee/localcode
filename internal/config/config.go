@@ -293,6 +293,25 @@ type ProviderConfig struct {
 	// instead — so a project-local config.json naming an "anthropic"
 	// provider doesn't need to embed the key itself.
 	APIKey string `json:"api_key,omitempty"`
+
+	// MaxConcurrentTasks caps how many background tasks may run against
+	// this endpoint at once. Zero, the default, means no lane: this
+	// provider is bounded only by the daemon-wide max_concurrent_tasks,
+	// which is exactly what it was before this field existed.
+	//
+	// Deliberately the same name as the top-level setting, one scope
+	// down, because it is the same quantity: that one bounds tasks on the
+	// daemon, this one bounds tasks at one endpoint. Contention is not a
+	// single global integer. One local model on one GPU serves one
+	// request at a time whatever the daemon-wide number says, so eight
+	// background tasks against it are a queue however they were admitted,
+	// while a hosted provider on the same daemon is held to the same
+	// small number for no reason.
+	//
+	// Read once, when the task manager is built, like the daemon-wide one
+	// beside it. A provider block already needs a restart to take effect,
+	// since the clients themselves are constructed at startup.
+	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
 }
 
 type ProviderType string
@@ -384,6 +403,12 @@ type Profile struct {
 // model that has not finished is going to.
 const maxKeepGoing = 10
 
+// maxProviderConcurrency caps a provider's own max_concurrent_tasks. The
+// number is not the interesting part: what matters is that the field is
+// bounded at load, so a typo is a startup error naming the provider rather
+// than a lane the width of an int.
+const maxProviderConcurrency = 64
+
 // AgentConfig defines one named agent role: which model profile it runs
 // on, and optionally a scoped system prompt and a restricted tool set —
 // the same idea as oh-my-opencode's per-agent model/prompt matching (a
@@ -415,6 +440,17 @@ func (c *Config) Validate() error {
 	if c.DefaultProfile != "" {
 		if _, ok := c.Profiles[c.DefaultProfile]; !ok {
 			return fmt.Errorf("default_profile %q not found in profiles", c.DefaultProfile)
+		}
+	}
+
+	// Bounded where it is read, for the reason keep_going is: a stray
+	// number here is not one anybody meant, and failing at load says so at
+	// the moment it can still be fixed rather than in the middle of a
+	// fan-out.
+	for name, p := range c.Providers {
+		if p.MaxConcurrentTasks < 0 || p.MaxConcurrentTasks > maxProviderConcurrency {
+			return fmt.Errorf("provider %q: max_concurrent_tasks is %d, outside 0..%d (0 means no per-provider limit)",
+				name, p.MaxConcurrentTasks, maxProviderConcurrency)
 		}
 	}
 

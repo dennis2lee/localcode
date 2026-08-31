@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+* **Concurrency is bounded per endpoint, not only per daemon.** `max_concurrent_tasks` bounded background tasks across every conversation on the machine, which is the wrong shape in both directions at once: one local model on one GPU serves one request at a time whatever that number says, so tasks aimed at it are a queue however they were admitted, while a hosted provider on the same daemon is held to the same small number because the local endpoint needed it small.
+
+  A provider entry may now carry its own `max_concurrent_tasks`. It is taken **before** the daemon-wide slot, and that ordering is the point: a task waiting on a busy local server must not be sitting on a global slot that a hosted task could have used, or one saturated endpoint bounds every other provider on the machine. There is a test that fails if the two are ever swapped.
+
+  0 or absent means no per-provider limit, which is what every provider was before the key existed, so nothing changes for a configuration that does not use it. The value is bounded at 64 and checked at load, so a typo names the provider at startup instead of appearing as a lane the width of an int. The daemon-wide default stays 1: raising it would let five sub-agents run where one ran before, which is a bill nobody agreed to by taking an update.
+
+  Deliberately not a scheduler. An earlier design grouped consecutive grants by profile to keep a local server's prefix cache warm, on the reasoning that a profile determines the cached prefix. It does not: a profile fixes the model and the sampling parameters, while the system prompt is assembled per *agent*, so two tasks on one profile routinely carry different prefixes. Grouping on the wrong key buys nothing and costs a queue, a starvation bound and three tests whose correctness is not obvious.
+
+* **`config.example.json` said `max_concurrent_tasks` was "5 when unset".** The code defaults it to 1 and `docs/USAGE.md` said 1. The comment was the wrong one of the three.
+
 * **One `verify_command` at a time per directory.** The `check` tool is the one way a read-only agent can find out whether the code actually runs, and the argument for giving it to a reviewer is entirely about *what* runs: one line, written by the person, fixed before any model saw it. Nothing in that argument says how many of it run at once, and the answer was "as many as there are agents".
 
   A debate panel is concurrent by construction, `check` is in the reviewers' read-only tool list, and every child session inherits the parent's workspace. Three reviewers each deciding to check the work is three `go test ./...` runs in one tree at the same time, sharing a build cache, test binaries and output files, each on its own five-minute clock, on a machine already busy running the model. Measured before the fix: four concurrent calls all entered before any of them left.
