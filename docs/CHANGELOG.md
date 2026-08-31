@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+* **Nothing was checking that a new command could be completed.** Right arrow walks `/`-completions in both clients, and it draws on four lists: skills, custom commands, the commands the daemon answers, and the few each client answers itself. The third of those is hand-written, and the three tests beside it all run from the list outwards: everything in it is answered by a route, has a description, and appears in the docs. All three are silent about the failure that actually happens, which is a command added to the router and forgotten in the list. Nothing breaks, nothing fails, and the command is simply uncompletable in both clients until somebody notices. `/orchestrate` was one keystroke from being that.
+
+  The list cannot be derived from the router, which holds closures and no names, so the new guard reads the source: every string literal shaped like a command, in every non-test file of the agent package, must be in the list. The technique is the one the process-spawn walk already uses, and a comment cannot be a literal, so prose about a command does not count as one. It finds 22 today, all of them listed, and needs no allowlist.
+
+  With tests in both clients for the other half of it: that the list is actually fetched and completed from, rather than each client hard-coding the names it knows.
+
 ## v0.74.0
 
 * **Orchestration: a plan of delegated stages, run by localcode rather than decided step by step by the model.** Off by default behind its own switch, `/orchestrate on`.

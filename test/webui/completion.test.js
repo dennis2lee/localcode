@@ -137,6 +137,53 @@ test('the daemon\'s own commands complete like a skill does', async () => {
     'the three switches got a command each so they could be reached from a prompt');
 });
 
+// The list the daemon offers is the one the clients complete from, so a
+// command added to the router and not to that list is uncompletable in
+// both of them at once, with nothing failing. There is a guard on the Go
+// side for the list being incomplete; this is the guard for the list
+// being fetched and used at all.
+test('a command the daemon added today completes without the page knowing about it', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/slash-commands': [
+        { name: 'orchestrate', description: 'turn the Orchestrate tool on or off' },
+        { name: 'smart-agent', description: 'turn the Smart Agent bundle on or off' },
+      ],
+    },
+  });
+  const input = typeAt(app, '/or');
+
+  app.press('ArrowRight');
+  assert.equal(input.value, '/orchestrate',
+    'the page completes only what it hard-codes, so a new daemon command is unreachable');
+});
+
+// And an ambiguous prefix walks rather than guessing, across the kinds:
+// somebody typing "/s" is not thinking about which list a name is in.
+test('the walk crosses skills, custom commands and daemon commands alike', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/skills': [{ name: 'summarise' }],
+      'GET /api/slash-commands': [
+        { name: 'schedule', description: 'book a prompt for later' },
+        { name: 'smart-agent', description: 'the bundle' },
+      ],
+    },
+  });
+  const input = typeAt(app, '/s');
+
+  const seen = [];
+  for (let i = 0; i < 4; i++) {
+    app.press('ArrowRight');
+    seen.push(input.value);
+  }
+  assert.ok(seen.includes('/summarise'), `a skill was skipped: ${seen}`);
+  assert.ok(seen.includes('/schedule'), `a daemon command was skipped: ${seen}`);
+  assert.ok(seen.includes('/smart-agent'), `a daemon command was skipped: ${seen}`);
+  // The text typed is the last stop, so the walk is never a trap.
+  assert.ok(seen.includes('/s'), `the walk never came back to what was typed: ${seen}`);
+});
+
 test('a name shared by a skill and a command is offered once', async () => {
   const app = await load({
     routes: {

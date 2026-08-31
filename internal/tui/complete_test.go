@@ -197,3 +197,41 @@ func TestASharedNameIsOfferedOnce(t *testing.T) {
 		t.Errorf("walk gave %q then %q, want the name once and then what was typed", first, m.input.Value())
 	}
 }
+
+// The same question for the TUI: a command the daemon added is
+// completable without this client knowing its name.
+//
+// The candidate list is built from four sources and this is the one that
+// arrives over the wire, so it is the one that can silently be empty:
+// a client that failed to fetch the list completes skills perfectly and
+// no commands at all, which looks like the feature working.
+func TestADaemonCommandCompletesWithoutTheClientKnowingIt(t *testing.T) {
+	m := Model{
+		slashList: []client.SlashCommandInfo{
+			{Name: "orchestrate"}, {Name: "smart-agent"}, {Name: "schedule"},
+		},
+		skillsList: []client.SkillInfo{{Name: "summarise"}},
+	}
+	cands := m.completionCandidates()
+
+	got := completionsFor(cands, "/or")
+	if len(got) != 1 || got[0] != "/orchestrate" {
+		t.Errorf("completionsFor(\"/or\") = %v, want [/orchestrate]", got)
+	}
+
+	// An ambiguous prefix walks every kind, because somebody typing "/s"
+	// is not thinking about which list a name is in.
+	walk := completionsFor(cands, "/s")
+	var haveSkill, haveDaemon bool
+	for _, c := range walk {
+		if c == "/summarise" {
+			haveSkill = true
+		}
+		if c == "/schedule" || c == "/smart-agent" {
+			haveDaemon = true
+		}
+	}
+	if !haveSkill || !haveDaemon {
+		t.Errorf("the walk over %q does not cross both kinds", walk)
+	}
+}
