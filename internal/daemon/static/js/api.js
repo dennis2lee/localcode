@@ -98,6 +98,7 @@ export const resolvePermissionRequest = (sessionID, id, allow, scope) =>
 
 export const setAutoDelegate = (patch) => api('POST', '/api/settings/auto-delegate', patch);
 export const setSmartAgent = (enabled) => api('POST', '/api/settings/smart-agent', { enabled });
+export const setOrchestrate = (enabled) => api('POST', '/api/settings/orchestrate', { enabled });
 // The daemon-wide default, still written to config.json. What a
 // conversation that has not answered for itself follows.
 export const setSkipPermissions = (enabled) => api('POST', '/api/permissions/skip', { enabled });

@@ -104,6 +104,8 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 
     **No pipeline.** Every stage is a barrier for the next, so one slow item holds up the whole stage. Letting an item walk the remaining stages on its own buys wall clock and costs a per-item state machine; worth it only once the phase display and a ledger exist to make it legible.
 
+    A fourth thing, now closed rather than open: the switch had no settings-window toggle and nothing told the model when to reach for the tool. Both shipped. The second was the one that mattered, because a capability nothing points at is indistinguishable from one nobody turned on.
+
     Two smaller gaps that a run makes visible rather than causes. A 32-agent run puts 32 child sessions on disk and 32 rows in `/tasks`, and nothing cleans them up. And when several stages ask for a permission at once, the broker can represent it but no client says how it is presented, so a run can sit on all four of its slots waiting for a person who is looking at one question.
 
 ## UI ideas

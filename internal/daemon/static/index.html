@@ -236,6 +236,26 @@
     </div>
 
     <!--
+      Orchestration.
+      Its own section under Smart Agent rather than a line inside it,
+      because the thing being opted into is a different size: Smart Agent
+      lets the model hand one question to a specialist, this lets it
+      commit to a shape and spend up to 32 agent turns on it. It needs a
+      roster to delegate to, which is why it sits under that switch, and
+      the note says so when there is nobody to delegate to.
+    -->
+    <h4 class="settings-section">Orchestration</h4>
+
+    <div class="settings-field">
+      <div class="check-row">
+        <input type="checkbox" id="orchestrate-checkbox">
+        <label for="orchestrate-checkbox">Let the model commit to a plan: several sub-agents at once, in stages, with what each stage keeps decided by localcode rather than by the model remembering to</label>
+      </div>
+      <p class="note" id="orchestrate-note"></p>
+      <p class="note warn" id="orchestrate-warn" hidden></p>
+    </div>
+
+    <!--
       Keep going.
 
       One family's fix with one family's scope. The label says the scope,

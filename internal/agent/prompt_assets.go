@@ -31,6 +31,14 @@ const (
 	// AssetOrchestration is the Smart Agent policy, for the turn that is
 	// doing the orchestrating and no other.
 	AssetOrchestration = "smart.orchestration"
+
+	// AssetPlanPolicy is what a turn is told about the Orchestrate tool:
+	// when a plan is worth its cost, and when Task is the answer instead.
+	// Behind its own switch, hence its own asset rather than a paragraph
+	// folded into the orchestration policy: the two can be on separately,
+	// and a manifest that showed one string for two switches could not say
+	// which of them a request carried.
+	AssetPlanPolicy = "smart.plan_policy"
 	// AssetTrustBoundary names which sources are instructions and which
 	// are data, for every agent in the bundle.
 	AssetTrustBoundary = "smart.trust_boundary"
@@ -63,6 +71,7 @@ const (
 	valProjectRules = "project_rules"
 	valAgentPrompt  = "agent_prompt"
 	valOrchestrator = "orchestration"
+	valPlanPolicy   = "plan_policy"
 	valModelQuirk   = "model_quirk"
 	valSkillsIndex  = "skills_index"
 	valMemoryPolicy = "memory_policy"
@@ -232,6 +241,27 @@ func promptRegistry() *prompt.Registry {
 			return true, "this turn orchestrates"
 		},
 		Render: func(a prompt.ActivationContext) string { return a.Value(valOrchestrator) },
+	})
+
+	// After the orchestration policy, and gated separately. A turn can
+	// orchestrate without being allowed to plan, which is the ordinary
+	// case: Smart Agent on, orchestrate off.
+	r.Add(prompt.Asset{
+		ID:         AssetPlanPolicy,
+		Kind:       prompt.KindModeInstruction,
+		Provenance: prompt.FromProduct,
+		Trust:      prompt.TrustSystem,
+		Placement:  prompt.PlaceSystem,
+		Cache:      prompt.CacheSessionDynamic,
+		Order:      41,
+		Version:    "1",
+		Active: func(a prompt.ActivationContext) (bool, string) {
+			if a.Value(valPlanPolicy) == "" {
+				return false, "orchestration is off, or this turn has nobody to delegate a stage to"
+			}
+			return true, "this turn may run a plan"
+		},
+		Render: func(a prompt.ActivationContext) string { return a.Value(valPlanPolicy) },
 	})
 
 	// The boundary rides with the whole bundle, orchestrator and

@@ -278,3 +278,34 @@ func (l *Loop) orchestrationFor(ctx context.Context, sessionID, agentName, model
 	}
 	return smart.OrchestrationPrompt(model)
 }
+
+// planPolicyFor is what this turn is told about the Orchestrate tool, or
+// "" when it is not offered one.
+//
+// The conditions are the tool's own, restated: a switch, somebody to
+// delegate to, and a turn that is not itself a stage. Restated rather
+// than shared, because these two answer different questions — hiddenTools
+// decides what the request carries, this decides what the prompt says
+// about it — and the failure worth avoiding is a prompt that describes a
+// tool the model was not given.
+//
+// A capability nothing tells the model when to use is one it reaches for
+// by accident or not at all, and the second is the quiet failure: a run
+// that never happens looks exactly like a switch nobody turned on.
+func (l *Loop) planPolicyFor(ctx context.Context, sessionID, agentName, model string) string {
+	if !config.OrchestrateFor(ctx, l.Config) || inOrchestration(ctx) {
+		return ""
+	}
+	if _, specialist := l.smartAgents(ctx)[agentName]; specialist {
+		return ""
+	}
+	if l.Store != nil {
+		if sess, err := l.Store.Get(sessionID); err == nil && sess.ParentID != "" {
+			return ""
+		}
+	}
+	if len(l.delegatableAgents(ctx)) < 2 {
+		return ""
+	}
+	return smart.PlanPolicy(model)
+}

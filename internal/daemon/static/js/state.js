@@ -27,6 +27,7 @@ export const app = {
   autoDelegateAgent: '',      // '' when config.json has no auto_delegate block
   autoDelegateMatch: [],      // glob patterns that qualify a prompt for delegation
   smartAgent: false,
+  orchestrate: false,         // the Orchestrate tool, a separate switch
   smartAgentRoster: [],       // the specialist names the daemon build ships
   // The daemon default for skip_all, from config.json. What a new
   // conversation starts with; see sessionPermissions for the open one.

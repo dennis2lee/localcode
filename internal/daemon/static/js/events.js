@@ -15,7 +15,7 @@ import {
   applySessionPermissions,
 } from './modals.js';
 import { applyScheduleEvent } from './schedules.js';
-import { refreshSmartAgentIfOpen, refreshKeepGoingIfOpen } from './settings.js';
+import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen } from './settings.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
@@ -212,9 +212,13 @@ const handlers = {
     // panel is only redrawn if it happens to be open — there is no status
     // bar pill for this one, deliberately: it is a way of working that is
     // chosen once, not a thing to flip between messages.
+    if (typeof d.orchestrate === 'boolean') {
+      app.orchestrate = d.orchestrate;
+    }
     if (typeof d.smart_agent === 'boolean') {
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
+      refreshOrchestrateIfOpen();
     }
   },
   // Daemon-wide, and the live half of every switch: a toggle typed at
@@ -234,9 +238,13 @@ const handlers = {
       renderAutoDelegate();
       refreshDelegatePanelIfOpen();
     }
+    if (typeof d.orchestrate === 'boolean') {
+      app.orchestrate = d.orchestrate;
+    }
     if (typeof d.smart_agent === 'boolean') {
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
+      refreshOrchestrateIfOpen();
     }
     if (typeof d.keep_going === 'boolean') {
       app.keepGoing = d.keep_going;

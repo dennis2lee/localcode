@@ -8,6 +8,7 @@
 import {
   settingsModalEl, settingsBtn, settingsCloseBtn,
   smartAgentCheckbox, smartAgentNoteEl, smartAgentWarnEl,
+  orchestrateCheckbox, orchestrateNoteEl, orchestrateWarnEl,
   keepGoingCheckbox, keepGoingWarnEl,
   updateCheckBtn, updateInstallBtn, updateNoteEl,
 } from './dom.js';
@@ -23,6 +24,7 @@ export function openSettings() {
   updateNoteEl.textContent = '';
   updateInstallBtn.hidden = true;
   renderSmartAgent();
+  renderOrchestrate();
   renderKeepGoing();
   settings.open();
 }
@@ -85,6 +87,58 @@ function renderSmartAgent(warning) {
     `On. ${agents}Also turns on fallback to another model when one will not answer, prompt cache breakpoints, `
     + 'the turn log under ~/.localcode/trace, and guards on credential files and paths outside the workspace. '
     + 'Expect more model calls per request.';
+}
+
+// Orchestration.
+//
+// A separate switch from Smart Agent, and the note carries why: a plan
+// needs somewhere to delegate its stages to, so with one agent configured
+// this is on and inert. The daemon reports the roster alongside both
+// switches, which is what lets the panel say so instead of the endpoint
+// refusing.
+
+function renderOrchestrate(warning) {
+  orchestrateCheckbox.checked = !!app.orchestrate;
+  orchestrateWarnEl.textContent = warning || '';
+  orchestrateWarnEl.hidden = !warning;
+  if (!app.orchestrate) {
+    orchestrateNoteEl.textContent =
+      'Off. The model delegates one question at a time, deciding each time whether to delegate again.';
+    return;
+  }
+  const roster = (app.smartAgentRoster || []).length;
+  if (!app.smartAgent && roster) {
+    orchestrateNoteEl.textContent =
+      'On, but there is nobody to delegate to unless you have agents of your own in config.json. '
+      + 'Turn on Smart Agent above for the built-in roster.';
+    return;
+  }
+  orchestrateNoteEl.textContent =
+    'On. The model can commit to a plan: fan out over a list or over what an earlier stage found, '
+    + 'check each finding with agents that cannot see each other, and come back together at the end. '
+    + 'A plan that would not work is refused before anything runs, and every run asks first and shows '
+    + 'its ceilings: at most 8 stages and 32 agent turns, 10 minutes a stage and 30 for the run.';
+}
+
+export function refreshOrchestrateIfOpen() {
+  if (settings.isOpen) renderOrchestrate();
+}
+
+async function toggleOrchestrate() {
+  const enabled = orchestrateCheckbox.checked;
+  orchestrateCheckbox.disabled = true;
+  try {
+    const res = await apiClient.setOrchestrate(enabled);
+    app.orchestrate = res && 'orchestrate' in res ? !!res.orchestrate : enabled;
+    renderOrchestrate(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
+  } catch (err) {
+    orchestrateCheckbox.checked = !enabled;
+    orchestrateNoteEl.textContent = `Not changed: ${err}`;
+  } finally {
+    orchestrateCheckbox.disabled = false;
+  }
 }
 
 // refreshSmartAgentIfOpen redraws the switch when the setting was changed
@@ -234,6 +288,7 @@ export function initSettings() {
   settingsBtn.addEventListener('click', openSettings);
   settingsCloseBtn.addEventListener('click', () => settings.close());
   smartAgentCheckbox.addEventListener('change', toggleSmartAgent);
+  orchestrateCheckbox.addEventListener('change', toggleOrchestrate);
   keepGoingCheckbox.addEventListener('change', toggleKeepGoing);
   updateCheckBtn.addEventListener('click', checkForUpdate);
   updateInstallBtn.addEventListener('click', installUpdate);

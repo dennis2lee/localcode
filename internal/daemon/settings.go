@@ -31,6 +31,7 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"auto_compact_percent": d.Loop.CompactPercent(),
 		"keep_going":           d.Loop.KeepGoingEnabled(),
 		"smart_agent":          d.Loop.SmartAgentEnabled(),
+		"orchestrate":          d.Loop.OrchestrateEnabled(),
 		"smart_agent_roster":   smart.Names(),
 		"show_tps":             d.Loop.ShowTPS(),
 		"auto_delegate":        d.Loop.AutoDelegateEnabled(),
@@ -158,6 +159,40 @@ func (d *Daemon) handleSetSmartAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetSmartAgentInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
+			resp["persisted"] = false
+			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSetOrchestrate turns the Orchestrate tool on or off live and, when
+// a config.json path is known, persists it. The same two-part answer as
+// handleSetSmartAgent above, for the same reason: applied and saved are
+// different questions, and a client that treats an unsaved change as a
+// refused one shows the opposite of the state the daemon is in.
+//
+// Nothing is validated here either. Turning it on with one agent
+// configured is legal and inert, because a plan needs somewhere to
+// delegate a stage to; GET /api/settings reports the roster alongside the
+// switch so a client can say so rather than the endpoint refusing.
+func (d *Daemon) handleSetOrchestrate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	d.Loop.SetOrchestrateEnabled(req.Enabled)
+	d.announceSettings()
+	resp := map[string]any{
+		"orchestrate": req.Enabled,
+		"applied":     true,
+		"persisted":   true,
+	}
+	if d.Broker.ConfigPath != "" {
+		if err := config.SetOrchestrateInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
 			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
 		}

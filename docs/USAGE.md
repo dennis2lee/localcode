@@ -1269,11 +1269,36 @@ Delegation deeper than 3 levels is refused automatically, so agents cannot recur
 
 ### Orchestration
 
-Off by default, its own switch: `/orchestrate on`, or `"orchestrate": true` in config.json.
+Off by default, its own switch, in three places that are the same switch:
+
+| Where | |
+|---|---|
+| `/orchestrate on\|off` | Answered by the daemon, so both clients have it. Saved to config.json. |
+| Settings window | The Orchestration section, under Smart Agent. |
+| `"orchestrate": true` | In config.json. |
+
+It needs at least two agents to delegate a stage to, so in practice Smart Agent on as well. Turning it on with one agent configured is legal and inert, and every surface says so rather than letting it read as a change that took effect.
 
 `Task` already lets a model delegate. What it cannot do is commit to a shape in advance. Every fan out is the model deciding, one step at a time, whether to delegate again, and both failure modes are ordinary: a model that says it will check each finding with three independent reviewers checks the first two and reports, and a model told to repeat until nothing new turns up stops at the third round. Neither is dishonesty. A stated procedure is a request.
 
 So the plan is data, and localcode runs it. The model authors it by filling in the `Orchestrate` tool's input schema, which means the whole plan is checked before a single token is spent: every agent name against the roster the turn was admitted with, every reference against a stage that really precedes it, every count against a ceiling. A plan that would not work is refused with the reason and nothing runs.
+
+#### What the model is told
+
+A switch that adds a tool and says nothing else is a switch whose effect is invisible: a run that never happens looks exactly like a switch nobody turned on. So with orchestration on, an orchestrating turn's system prompt gains a policy saying when a plan is worth its cost.
+
+What it conveys is a threshold, not an enthusiasm. `Orchestrate` is strictly more expensive than `Task` for one question, so the policy names the three shapes it is for (one thing examined along several independent dimensions, every item of a list checked by agents that cannot see each other, a survey whose answers have to come back in a form you can act on) and says to delegate once when delegating once would do.
+
+Written per model family, for the reason the orchestration prompt already is, because the failure modes are opposite:
+
+| Family | What is added |
+|---|---|
+| Default | The policy as above. |
+| gpt, o3, o4 | A stopping rule. This family runs a capable procedure, including on work it should simply have done. |
+| gemini | A concrete threshold, because it will otherwise reason through the whole thing itself. |
+| Local open weight models | Shorter, and pointed at one shape only: a single fanout over a list. Authoring a plan is what these get wrong, and a refused plan costs one tool call, but a model that keeps producing refused plans is worse than one that never tries. |
+
+Only an orchestrating turn gets it. A stage inside a run does not, because it is refused the tool anyway and describing a tool the model was not given costs a round trip to discover.
 
 #### A plan
 

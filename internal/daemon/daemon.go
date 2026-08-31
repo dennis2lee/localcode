@@ -166,6 +166,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
 	d.mux.HandleFunc("POST /api/settings/auto-delegate", d.handleSetAutoDelegate)
 	d.mux.HandleFunc("POST /api/settings/smart-agent", d.handleSetSmartAgent)
+	d.mux.HandleFunc("POST /api/settings/orchestrate", d.handleSetOrchestrate)
 	d.mux.HandleFunc("POST /api/settings/keep-going", d.handleSetKeepGoing)
 	d.mux.HandleFunc("POST /api/permissions/skip", d.handleSetSkipPermissions)
 	d.mux.HandleFunc("POST /api/permissions/rules", d.handleAddPermissionRule)

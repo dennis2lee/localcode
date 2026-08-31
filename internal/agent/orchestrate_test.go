@@ -1,9 +1,16 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"localcode/internal/config"
+	"localcode/internal/smart"
 )
 
 // The validator is the whole argument for a plan being data.
@@ -196,6 +203,132 @@ func TestKeepDropsWhatIsFalseOrEmpty(t *testing.T) {
 	} {
 		if got := truthy(tc.v); got != tc.want {
 			t.Errorf("truthy(%#v) = %v, want %v", tc.v, got, tc.want)
+		}
+	}
+}
+
+// The plan policy is the other half of the switch: a tool nothing tells
+// the model when to reach for is one it reaches for by accident or not at
+// all, and the second failure is the quiet one. A run that never happens
+// looks exactly like a switch nobody turned on.
+func TestThePlanPolicyFollowsItsOwnSwitch(t *testing.T) {
+	m := &scriptedModel{reply: func(string) (string, map[string]any) { return "ok", nil }}
+	loop := orchestrateLoop(t, m.server(t).URL)
+
+	loop.SetOrchestrateEnabled(false)
+	if got := loop.planPolicyFor(loop.pinSmart(context.Background()), "main", "oracle", "claude-opus-5"); got != "" {
+		t.Errorf("a turn was told about a tool it was not given:\n%s", got)
+	}
+
+	loop.SetOrchestrateEnabled(true)
+	on := loop.pinSmart(context.Background())
+	got := loop.planPolicyFor(on, "main", "oracle", "claude-opus-5")
+	if got == "" {
+		t.Fatal("orchestration is on and the turn was told nothing about it")
+	}
+	if !strings.Contains(got, "Orchestrate") || !strings.Contains(got, "Task instead for a single question") {
+		t.Errorf("the policy does not say when to use it, or when not to:\n%s", got)
+	}
+
+	// Not inside a run: a stage is not an orchestrator, and telling it
+	// about a tool it is refused is a round trip spent discovering that.
+	if got := loop.planPolicyFor(withInOrchestration(on), "main", "oracle", "m"); got != "" {
+		t.Error("a stage inside a run was told to write plans")
+	}
+
+	// Not with nobody to delegate to.
+	solo := orchestrateLoop(t, m.server(t).URL)
+	solo.Config.Agents = map[string]config.AgentConfig{"only": {Profile: "m"}}
+	solo.SetOrchestrateEnabled(true)
+	if got := solo.planPolicyFor(solo.pinSmart(context.Background()), "main", "only", "m"); got != "" {
+		t.Error("a config with one agent was told to write plans anyway")
+	}
+}
+
+// Written per model family for the same reason the orchestration prompt
+// is: the failure modes are opposite. A small local model gets plan
+// authoring wrong, so it is pointed at the one shape that is hard to get
+// wrong rather than at the whole grammar.
+func TestThePlanPolicyIsWrittenForTheModel(t *testing.T) {
+	base := smart.PlanPolicy("claude-opus-5")
+	local := smart.PlanPolicy("qwen3-30b-a3b")
+	gpt := smart.PlanPolicy("gpt-5")
+
+	if local == base {
+		t.Error("a 30B local model got the policy written for a frontier one")
+	}
+	if len(local) >= len(base) {
+		t.Error("the local policy is not shorter, which is the whole reason it is separate")
+	}
+	if !strings.Contains(local, "fanout") || strings.Contains(local, "$stage") {
+		t.Errorf("the local policy should point at one simple shape, not the whole grammar:\n%s", local)
+	}
+	if gpt == base || !strings.Contains(gpt, "Do not plan the work you could simply do") {
+		t.Error("the gpt policy is missing its stopping rule")
+	}
+	if smart.PlanPolicy("something-nobody-has-characterised") != base {
+		t.Error("an unrecognised model did not get the base policy")
+	}
+}
+
+// The plan in the documentation has to be a plan that runs.
+//
+// Written after the example in docs/USAGE.md was refused by this
+// validator: a reference fanout was priced at its ceiling, so the one
+// shape the feature exists for could not validate. The example was right
+// and the ceiling was wrong, and nothing said so because nothing had ever
+// fed the documentation to the code.
+func TestThePlanInTheDocumentationValidates(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "USAGE.md"))
+	if err != nil {
+		t.Fatalf("read USAGE.md: %v", err)
+	}
+	body := string(doc)
+	start := strings.Index(body, "#### A plan")
+	if start < 0 {
+		t.Fatal("USAGE.md has no plan section, so this test is guarding nothing")
+	}
+	rest := body[start:]
+	open := strings.Index(rest, "```json")
+	if open < 0 {
+		t.Fatal("the plan section has no json example")
+	}
+	rest = rest[open+len("```json"):]
+	end := strings.Index(rest, "```")
+	if end < 0 {
+		t.Fatal("the json example is not closed")
+	}
+	example := rest[:end]
+
+	var p Plan
+	if err := json.Unmarshal([]byte(example), &p); err != nil {
+		t.Fatalf("the documented plan does not parse: %v\n%s", err, example)
+	}
+	// The roster the docs write against: the built-in specialists.
+	if err := p.Validate(roster("explore", "librarian", "oracle", "plan", "implement", "verify")); err != nil {
+		t.Errorf("the plan in USAGE.md would be refused: %v", err)
+	}
+}
+
+// The numbers in the documentation are the numbers in the code.
+func TestTheDocumentedCeilingsAreTheRealOnes(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "USAGE.md"))
+	if err != nil {
+		t.Fatalf("read USAGE.md: %v", err)
+	}
+	body := string(doc)
+	for _, want := range []string{
+		fmt.Sprintf("%d stages", maxStages),
+		fmt.Sprintf("%d items per fanout", maxFanout),
+		fmt.Sprintf("%d copies", maxCopies),
+		fmt.Sprintf("%d agent turns per run", maxRunAgents),
+		fmt.Sprintf("%d declared fields per stage", maxReturnFields),
+		fmt.Sprintf("%d agents at once", maxParallel),
+		fmt.Sprintf("%d minutes per stage", int(stageTimeout.Minutes())),
+		fmt.Sprintf("%d minutes per run", int(runTimeout.Minutes())),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("USAGE.md does not say %q, so the documented ceiling is not the enforced one", want)
 		}
 	}
 }
