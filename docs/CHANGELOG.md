@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.75.1
 
 * **The prompt now says which directory the conversation is working in.** Nothing did, and that was a defect with a clear shape: a model had to learn the directory from tool output, from a `pwd`, a glob result or a path in an earlier answer. That knowledge then lived in the conversation history, and moving the workspace does not rewrite history. The model went on prefixing every shell command with `cd <the old path> &&` and went on writing to absolute paths under it, so files appeared in the project the person had just left, while every question about the workspace was answered correctly with the new one. The two were never out of step: only the model was working from a remembered directory.
 
