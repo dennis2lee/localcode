@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+* **Orchestration: a plan of delegated stages, run by localcode rather than decided step by step by the model.** Off by default behind its own switch, `/orchestrate on`.
+
+  `Task` already lets a model delegate. What it cannot do is commit to a shape in advance. Every fan out is the model deciding, one step at a time, whether to delegate again, and both failure modes are ordinary rather than dishonest: a model that says it will check each finding with three independent reviewers checks the first two and reports, and a model told to repeat until nothing new turns up stops at the third round. A stated procedure is a request. This repository already answers that elsewhere with a tool allowlist instead of a sentence and a Go loop instead of an instruction, and `runDebate` is the same argument already made once for one fixed protocol.
+
+  So the program is data. The model authors it by filling in the `Orchestrate` tool's input schema, which means the whole plan is checked before a token is spent: every agent name against the roster the turn was admitted with, every `$stage.field` reference against a stage that really precedes it, every count against a ceiling. A plan that would not work is refused with the reason and nothing runs, which is the thing a script could never do.
+
+  Three stage kinds, and no more: `step`, `fanout` (over a list you write or over an earlier stage's results, times `copies`), and `barrier`. A stage that declares `returns` is given an `Answer` tool in exactly that shape, recovered from the child's own event log the way the debate verdict already is. `keep` names one returned field and drops every result where it is false or empty, which is the whole adversarial filter with no expression language anywhere: skeptics declaring `{"survives":"bool"}` and keeping `survives`. `unanswered` is a first-class outcome (`skip`, `keep`, `fail`), because a skeptic that did not answer must neither kill a finding nor save one.
+
+  A stage names a **role** (`readonly`, `builder`, `runner`) and cannot enumerate tools, so a plan can never be the way `bash` reaches a reviewer; the role is intersected with the agent's own restriction, so a plan can never widen what an agent may do.
+
+  Every stage runs as a synchronous child, which is what makes Esc stop the whole run including the stage in flight. The background path was the alternative and is exactly wrong here: it roots children in the daemon's context so they outlive the turn, which would leave a fan out running, spending, and writing into the workspace after the person who started it had stopped watching.
+
+  Ceilings, all refusals rather than truncations: 8 stages, 16 items per fanout, 8 copies, 32 agent turns per run, 5 declared fields per stage, 4 agents at once. Timeouts of 10 minutes per stage and 30 per run, which is the first wall-clock bound on a single turn anywhere in localcode. The permission prompt shows those ceilings rather than an estimate, because a fanout over an earlier stage's findings has a width nobody knows yet. The report is composed by localcode from what happened rather than summarised by a model, and it names what did not run.
+
+  Nesting is refused: a plan that can run plans turns a ceiling into an exponent.
+
+  Not in this version, and said rather than left to be discovered: pipelining an item through later stages without waiting for the rest of its own stage, `repeat_until` loops, resuming a run, and plans saved on disk.
+
 * **Concurrency is bounded per endpoint, not only per daemon.** `max_concurrent_tasks` bounded background tasks across every conversation on the machine, which is the wrong shape in both directions at once: one local model on one GPU serves one request at a time whatever that number says, so tasks aimed at it are a queue however they were admitted, while a hosted provider on the same daemon is held to the same small number because the local endpoint needed it small.
 
   A provider entry may now carry its own `max_concurrent_tasks`. It is taken **before** the daemon-wide slot, and that ordering is the point: a task waiting on a busy local server must not be sitting on a global slot that a hosted task could have used, or one saturated endpoint bounds every other provider on the machine. There is a test that fails if the two are ever swapped.

@@ -185,6 +185,9 @@ func (c *Config) merge(other *Config) {
 	if other.WriteOutsideWorkspace != nil {
 		c.WriteOutsideWorkspace = other.WriteOutsideWorkspace
 	}
+	if other.Orchestrate != nil {
+		c.Orchestrate = other.Orchestrate
+	}
 	if other.SmartAgent != nil {
 		c.SmartAgent = other.SmartAgent
 	}

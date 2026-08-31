@@ -10,7 +10,7 @@
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
-| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
+| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
 ## Part 1. Getting started
@@ -910,6 +910,7 @@ Settings that can be toggled while running. They apply daemon wide rather than p
 | `/config show_tps on\|off` | The tokens per second reading under the prompt |
 | `/config auto_delegate on\|off` | Sending matching prompts to a cheaper sub agent, see [Auto delegation](#auto-delegation) |
 | `/config smart_agent on\|off` | The built-in specialist roster and the orchestration prompt, see [Smart Agent](#smart-agent). Reports the roster it turned on, or says why it is empty. |
+| `/orchestrate on\|off` | The Orchestrate tool: a plan of delegated stages, run by localcode rather than decided step by step by the model. Off by default. Says so when there is nobody to delegate to. See [Orchestration](#orchestration). |
 
 Each change records a `config.changed` event on that session and the Web UI updates its status bar right away. A newly opened client reads current values from `GET /api/settings`.
 
@@ -963,6 +964,7 @@ These settings change how every turn behaves, and each has a command of its own.
 | Command | Setting | What it does |
 |---|---|---|
 | `/smart-agent` | `smart_agent` | The specialist roster, the fallback chain, the trace, the prompt cache markers and the guards. See [Smart Agent](#smart-agent). |
+| `/orchestrate` | `orchestrate` | The Orchestrate tool. Needs at least two agents to delegate to, so in practice Smart Agent as well. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `/keep-going` | `keep_going` | The carry-on nudge for muse models. See [A model that stops mid-task](#a-model-that-stops-mid-task). The settings window has the same switch as a checkbox. |
 | `/auto-compact` | `auto_compact_enabled`, `auto_compact_percent` | Auto-compaction. A number sets the threshold and turns it on: `/auto-compact 70` compacts past 70% of the context window. The default threshold is 50%. |
@@ -1221,6 +1223,8 @@ If the turn happens to finish in the instant between your pressing Enter and the
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only when there are 2 or more agents to delegate to, which [Smart Agent](#smart-agent) is one way to arrange. |
 | `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [Smart Agent](#smart-agent) on. |
 | `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [Smart Agent](#smart-agent) on. |
+| `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. |
+| `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 
 ### Combining agents
 
@@ -1262,6 +1266,75 @@ Declaring a name the built-in roster already uses, as `explore` does here, repla
 3. `explore`'s final answer text is returned as the tool result, and the delegating agent continues from it.
 
 Delegation deeper than 3 levels is refused automatically, so agents cannot recurse into each other forever. The depth travels with the delegation, including into a background task, so no mixture of `Task` and `TaskBackground` gets a fresh allowance.
+
+### Orchestration
+
+Off by default, its own switch: `/orchestrate on`, or `"orchestrate": true` in config.json.
+
+`Task` already lets a model delegate. What it cannot do is commit to a shape in advance. Every fan out is the model deciding, one step at a time, whether to delegate again, and both failure modes are ordinary: a model that says it will check each finding with three independent reviewers checks the first two and reports, and a model told to repeat until nothing new turns up stops at the third round. Neither is dishonesty. A stated procedure is a request.
+
+So the plan is data, and localcode runs it. The model authors it by filling in the `Orchestrate` tool's input schema, which means the whole plan is checked before a single token is spent: every agent name against the roster the turn was admitted with, every reference against a stage that really precedes it, every count against a ceiling. A plan that would not work is refused with the reason and nothing runs.
+
+#### A plan
+
+| Field | Meaning |
+|---|---|
+| `goal` | What the run is for. It reaches every agent, because none of them can see your conversation. |
+| `stages` | In order. Each is a barrier for the next. |
+
+A stage is one of three kinds:
+
+| Kind | What it does |
+|---|---|
+| `step` | Its agent runs once. |
+| `fanout` | Its agent runs once per item in `over`, times `copies`, all at once. |
+| `barrier` | Its agent runs once, handed everything the stages before it kept. |
+
+| Stage field | Meaning |
+|---|---|
+| `name` | Lowercase, no spaces. How a later stage refers to this one. |
+| `agent` | Which delegatable agent runs it. Checked against the roster the turn was admitted with. |
+| `role` | The tool allowlist: `readonly` (default), `builder`, `runner`. A stage names a role and cannot enumerate tools, so a plan can never hand `bash` to a reviewer. Intersected with the agent's own restriction, so a plan cannot widen what an agent may do. |
+| `prompt` | Stands on its own. Three substitutions and no others: `{{task}}`, `{{item}}` in a fanout, `{{input}}` for what earlier stages kept. |
+| `over` | Fanout only. A list you write, or one entry of the form `$stage.field` naming an earlier stage and one of its `strings` fields. |
+| `copies` | Fanout only. Independent agents per item. This is the adversarial pattern: several agents that cannot see each other answering the same question. |
+| `returns` | Field name to type (`string`, `bool`, `number`, `strings`). A stage that declares this gets an `Answer` tool in exactly that shape. |
+| `keep` | One returned field. Results where it is false or empty are dropped. |
+| `unanswered` | What to do when an agent does not answer in the declared shape: `skip` (default), `keep`, `fail`. |
+
+`keep` is the quorum mechanism, and there is no expression language anywhere: a stage of skeptics declaring `{"survives": "bool"}` and keeping `survives` is an adversarial filter.
+
+```json
+{
+  "goal": "Find real problems in the change on this branch.",
+  "stages": [
+    { "name": "find", "kind": "fanout", "agent": "oracle", "role": "readonly",
+      "over": ["correctness", "error handling", "concurrency"],
+      "prompt": "Review the change for problems of one kind only: {{item}}.",
+      "returns": { "findings": "strings" } },
+    { "name": "kill", "kind": "fanout", "agent": "oracle", "copies": 2,
+      "over": ["$find.findings"],
+      "prompt": "Try to refute this finding: {{item}}. Default to refuted if unsure.",
+      "returns": { "survives": "bool", "why": "string" },
+      "keep": "survives", "unanswered": "skip" },
+    { "name": "report", "kind": "barrier", "agent": "plan",
+      "prompt": "Write up what survived:\n{{input}}" }
+  ]
+}
+```
+
+#### What it does and does not promise
+
+| | |
+|---|---|
+| Ceilings | 8 stages, 16 items per fanout, 8 copies, 32 agent turns per run, 5 declared fields per stage, 4 agents at once. Every one is a refusal at validation, not a truncation while running. |
+| Timeouts | 10 minutes per stage, 30 minutes per run. Nothing else in localcode bounds a single turn's wall clock; a fan out is where that stops being tolerable. |
+| Cancellation | Every stage is a synchronous child, so Esc stops the whole run including the stage in flight. |
+| Permission | Every run asks, always. The prompt shows the ceilings rather than an estimate, because a `$stage.field` fanout's width is however many findings the earlier stage returns and nobody knows that yet. |
+| The report | Composed by localcode from what happened, not summarised by a model. A run must not report a success nobody observed. |
+| Nesting | Refused. A plan that can run plans turns a ceiling into an exponent. |
+
+Not in this version, and named rather than left to be discovered: pipelining an item through later stages without waiting for the rest of its own stage; `repeat_until` loops; resuming a run; plans saved on disk.
 
 ### Smart Agent
 

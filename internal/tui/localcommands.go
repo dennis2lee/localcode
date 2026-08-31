@@ -204,6 +204,7 @@ const serverSideHelpText = `  /skill              list registered skills
   /config auto_delegate on|off  send matching prompts to a cheaper sub-agent
   /config smart_agent on|off    turn the Smart Agent bundle on or off
   /smart-agent [on|off]  toggle the Smart Agent bundle, and save the choice
+  /orchestrate [on|off]  toggle the Orchestrate tool, and save the choice
   /auto-delegate [on|off]  toggle auto-delegation, and save the choice
   /permission-skip-all [on|off]  allow every prompt in this conversation
   /permission-skip-tools [on|off]  allow tool prompts, still ask before leaving the project

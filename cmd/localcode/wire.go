@@ -261,6 +261,12 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	registry.Register(agent.NewTaskTool(tasks, loop.DelegatableAgents))
 	registry.Register(agent.NewTaskBackgroundTool(tasks, loop.DelegatableAgents))
 	registry.Register(agent.NewTaskCollectTool(tasks))
+	// The orchestrator and the tool a stage answers with. Registered
+	// unconditionally, like the delegation tools beside them: whether they
+	// are offered is a per-turn question (see Loop.hiddenTools), and a
+	// registry read at startup cannot answer a switch that moves.
+	registry.Register(agent.NewOrchestrateTool(loop))
+	registry.Register(agent.NewAnswerTool())
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
 

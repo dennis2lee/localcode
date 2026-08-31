@@ -83,6 +83,38 @@ func (l *Loop) routeSmartAgent(sessionID, text string) (bool, error) {
 	return true, l.replyText(sessionID, b.String())
 }
 
+// routeOrchestrate answers "/orchestrate [on|off]".
+func (l *Loop) routeOrchestrate(sessionID, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/orchestrate")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+
+	want, valid := toggleArg(arg, l.OrchestrateEnabled())
+	if !valid {
+		return true, l.replyText(sessionID, "usage: /orchestrate [on|off]")
+	}
+	l.SetOrchestrateEnabled(want)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "orchestrate: %s", onOff(want))
+	// Turning it on with nowhere to delegate is inert, and saying so beats
+	// letting it read as a change that took effect. The same courtesy the
+	// other two switches already pay.
+	if want {
+		if n := len(l.delegatableAgents(context.Background())); n < 2 {
+			b.WriteString("\n(there is only one agent configured, so a plan would have nobody to delegate a stage to: turn on Smart Agent for the built-in roster, or declare agents in config.json)")
+		} else {
+			fmt.Fprintf(&b, "\nThe Orchestrate tool is offered now: a plan of up to %d stages and %d agent turns, run by localcode rather than step by step by the model. Every run asks before it starts.", maxStages, maxRunAgents)
+		}
+	}
+	b.WriteString(l.persist(func(path string) error { return config.SetOrchestrateInFile(path, want) }))
+
+	l.announceConfig(sessionID)
+	return true, l.replyText(sessionID, b.String())
+}
+
 // routeAutoDelegate answers "/auto-delegate [on|off]".
 func (l *Loop) routeAutoDelegate(sessionID, text string) (bool, error) {
 	arg, ok := matchToggleCommand(text, "/auto-delegate")
@@ -285,6 +317,7 @@ func (l *Loop) announceConfig(sessionID string) {
 		"show_tps":             l.ShowTPS(),
 		"auto_delegate":        l.AutoDelegateEnabled(),
 		"smart_agent":          l.SmartAgentEnabled(),
+		"orchestrate":          l.OrchestrateEnabled(),
 	})
 	l.announceSettings()
 }
@@ -339,6 +372,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "memory", Description: "show the auto-memory directory and index"},
 		{Name: "config", Description: "show settings, or change one with /config <name> on|off"},
 		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off"},
+		{Name: "orchestrate", Description: "turn the Orchestrate tool on or off"},
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off"},
 		{Name: "permission-skip-all", Description: "allow every prompt in this conversation, the workspace boundary included"},
 		{Name: "permission-skip-tools", Description: "allow every tool prompt, but still ask before leaving the workspace"},

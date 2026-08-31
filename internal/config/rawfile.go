@@ -280,6 +280,24 @@ func SetSmartAgentInFile(path string, enabled bool) error {
 	})
 }
 
+// SetOrchestrateInFile writes the top-level "orchestrate" key, leaving
+// every other key untouched.
+//
+// A top-level boolean rather than a block, deliberately: everything a run
+// is bounded by is a constant in the code and stated in the tool's own
+// description, so there is nothing here for a file to configure and no
+// nested object for a writer to get wrong.
+func SetOrchestrateInFile(path string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal orchestrate: %w", err)
+		}
+		raw["orchestrate"] = encoded
+		return nil
+	})
+}
+
 // SetKeepGoingInFile writes the top-level "keep_going" key, leaving
 // everything else in the file alone.
 func SetKeepGoingInFile(path string, enabled bool) error {

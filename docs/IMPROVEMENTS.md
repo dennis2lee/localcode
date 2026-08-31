@@ -96,6 +96,16 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
     **Nothing stops an edit to a file that changed since it was read.** Enforcing a read before a write is the usual answer, and it collides with a feature this repository documents: a `post_tool_use` hook that reformats after an edit makes every following edit look stale. Doing it properly means distinguishing a change localcode caused from one it did not, which is a per-session read register, not a timestamp comparison.
 
 
+36. **Orchestration ships without the three things that would make a run repeatable.** The plan, the validator, the runner and the structured returns are in; what is not, and what a second version would need:
+
+    **No resume.** A run that fails on its last stage repeats every stage before it. A ledger keyed on each unit's (stage, item, copy) would let an unchanged prefix replay from cache, which is what makes iterating on a plan affordable. It needs the answers to be durable beyond the child sessions, and a rule for what a write step invalidates.
+
+    **No loop.** `repeat_until` is the form that turns a fan out into a search: keep going until two rounds find nothing new. It is deliberately absent because an unbounded loop is the shape a small model gets wrong most often and the one that is indistinguishable from progress while it is happening, so it needs a mandatory `max_rounds` and a report that names the round it stopped on.
+
+    **No pipeline.** Every stage is a barrier for the next, so one slow item holds up the whole stage. Letting an item walk the remaining stages on its own buys wall clock and costs a per-item state machine; worth it only once the phase display and a ledger exist to make it legible.
+
+    Two smaller gaps that a run makes visible rather than causes. A 32-agent run puts 32 child sessions on disk and 32 rows in `/tasks`, and nothing cleans them up. And when several stages ask for a permission at once, the broker can represent it but no client says how it is presented, so a run can sit on all four of its slots waiting for a person who is looking at one question.
+
 ## UI ideas
 
 ### Web UI

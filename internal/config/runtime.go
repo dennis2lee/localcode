@@ -137,3 +137,19 @@ func (c *Config) SetSmartAgentRuntime(v bool) {
 	defer c.permMu.Unlock()
 	c.SmartAgent = &v
 }
+
+// OrchestrateLive reports whether the Orchestrate tool is on right now,
+// read the same way and for the same reasons as SmartAgentLive.
+func (c *Config) OrchestrateLive() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.Orchestrate != nil && *c.Orchestrate
+}
+
+// SetOrchestrateRuntime changes the live setting. The in-memory
+// counterpart to SetOrchestrateInFile.
+func (c *Config) SetOrchestrateRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.Orchestrate = &v
+}

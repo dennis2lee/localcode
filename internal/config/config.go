@@ -81,6 +81,22 @@ type Config struct {
 	// settings panel.
 	SmartAgent *bool `json:"smart_agent,omitempty"`
 
+	// Orchestrate turns on the Orchestrate tool: a plan of delegated
+	// stages, authored by filling in that tool's input schema and run by a
+	// Go loop rather than by the model deciding one step at a time. See
+	// internal/agent/orchestrate.go.
+	//
+	// Its own switch rather than part of Smart Agent, although it needs
+	// that roster to have anywhere to delegate to, because the thing being
+	// opted into is a different size. A Task call is one extra model turn;
+	// a run is up to thirty-two, and somebody who wants the specialists
+	// without that should be able to have exactly that.
+	//
+	// Nil means unset, which is OFF, for the reason smart_agent is: it
+	// spends money the ordinary path does not. Also runtime-toggleable via
+	// "/orchestrate on|off".
+	Orchestrate *bool `json:"orchestrate,omitempty"`
+
 	// TraceMaxAgeDays and TraceMaxTotalMB bound the structured turn log
 	// under ~/.localcode/trace/. Unset means the default age (30 days)
 	// and no size cap; the age cannot be turned off, because a log that

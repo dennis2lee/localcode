@@ -125,6 +125,8 @@
       ]
     }
   },
+  "//orchestrate": "The Orchestrate tool: a plan of delegated stages (fan out over a list, check each finding with agents that cannot see each other, come back together at a barrier), authored by the model filling in that tool's schema and run by localcode rather than decided step by step by the model. Its own switch rather than part of smart_agent because the size of what is opted into differs: a Task call is one extra model turn, a run is up to 32. It needs at least two agents to delegate to, so in practice smart_agent on as well. Off unless set; \"/orchestrate\" toggles it, and every run asks before it starts. See docs/USAGE.md.",
+  "orchestrate": false,
   "//max_concurrent_tasks": "How many delegated sub-agents may run at once in the background, across all conversations. 1 when unset, so background tasks queue rather than run together; synchronous Task delegation is not bounded by this. A provider may set a max_concurrent_tasks of its own, which bounds that one endpoint and is taken first: see the local provider above.",
   "max_concurrent_tasks": 5,
   "//auto_delegate": "A different feature from smart_agent, and worth not confusing with it: this sends whole prompts of yours to a cheaper agent before your own model sees them, matched by glob against what you typed. It is about cost, not about orchestration. Off unless enabled; \"/auto-delegate\" toggles it. See docs/USAGE.md.",

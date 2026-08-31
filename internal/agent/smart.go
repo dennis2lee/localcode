@@ -47,21 +47,36 @@ func (l *Loop) smartOn(ctx context.Context) bool { return l.Config.SmartAgentFor
 // was admitted as a read-only specialist would resolve again, minutes
 // later, against a roster that no longer contains it.
 //
-// Two keys are set, not one: the config-side pin that the roster, the
-// fallback chain and the guards read, and the tools-side one that the
-// agent-computer interface reads (see internal/tools/aci.go). They are set
-// here together and nowhere else, which is the whole reason there can be
-// two of them — internal/tools does not import internal/config, and a
-// second setter is how they would come apart, leaving a turn whose tools
-// were advertised with paging and windows but which executes them without.
+// Three keys are set, not one, and they are set here and nowhere else,
+// which is the whole reason there can be more than one of them. A second
+// setter is how they would come apart.
+//
+//   - The config-side Smart Agent pin, read by the roster, the fallback
+//     chain and the guards.
+//   - The tools-side one, read by the agent-computer interface, which
+//     exists separately only because internal/tools does not import
+//     internal/config. A turn whose tools were advertised with paging and
+//     windows must not execute them without.
+//   - The orchestration pin, read by the Orchestrate tool and by every
+//     stage inside a run. A thirty-minute run must not have the switch
+//     move underneath it in the middle of a fanout.
 func (l *Loop) pinSmart(ctx context.Context) context.Context {
 	on, pinned := config.SmartAgentPinned(ctx)
 	if !pinned {
 		on = l.Config.SmartAgentLive()
 		ctx = config.WithSmartAgent(ctx, on)
 	}
+	if _, pinned := config.OrchestratePinned(ctx); !pinned {
+		ctx = config.WithOrchestrate(ctx, l.Config.OrchestrateLive())
+	}
 	return tools.WithSmartAgent(ctx, on)
 }
+
+// OrchestrateEnabled reports whether the Orchestrate tool is on, and
+// SetOrchestrateEnabled changes it. Live, like Smart Agent, and pinned per
+// turn by pinSmart above.
+func (l *Loop) OrchestrateEnabled() bool     { return l.Config.OrchestrateLive() }
+func (l *Loop) SetOrchestrateEnabled(v bool) { l.Config.SetOrchestrateRuntime(v) }
 
 // SetSmartAgentEnabled changes the live Smart Agent setting. It takes
 // effect on the next turn: the specialists, the orchestration prompt and
@@ -213,6 +228,15 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	if !l.smartOn(ctx) {
 		hidden[smart.ToolSpawn] = true
 		hidden[smart.ToolCollect] = true
+	}
+	// Answer belongs to one role in one situation: a stage that declared
+	// what it returns, which is given it explicitly through the pinned
+	// allowlist. Offered to anyone else it is a tool that can only refuse.
+	hidden[answerToolName] = true
+	// Orchestrate is off unless its own switch is on, and never inside a
+	// run: a plan that can run plans turns a ceiling into an exponent.
+	if !config.OrchestrateFor(ctx, l.Config) || inOrchestration(ctx) {
+		hidden[orchestrateToolName] = true
 	}
 	if len(l.delegatableAgents(ctx)) < 2 {
 		for _, name := range smart.DelegationTools {
