@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+* **The Windows update did not apply.** Pressing update started `msiexec /i` at full UI, and full UI asks the package for an `MsiRMFilesInUse` dialog so it can offer to close whatever is holding the files. This package has none: `wixl` cannot author dialogs at all, verified by building `build/localcode.wxs` with it and finding no `Dialog`, `Control` or `ControlEvent` table in the result. The documented fallback for a missing dialog is that nothing is shown and the install continues with a reboot scheduled instead. So localcode went on holding `localcode.exe`, nothing was replaced, the panel reported success, and the new version arrived only if the machine happened to be restarted later.
+
+  The installer starts at basic UI now (`/qb`), which has a built-in files-in-use dialog that needs no authoring. The Restart Manager closes localcode, which for a console program is a `CTRL_C_EVENT` that Go delivers as `SIGINT` and the TUI shuts down on with the terminal restored, and the install completes. Not `/qn`: replacing the program somebody is using is not something to do behind a progress bar they cannot see or cancel.
+
+  The flags are now a list in a file with no build tag, with a test that runs on every platform, because they are the whole of what makes an update apply and this is not a machine that can run them.
+
+* **What a Windows update cannot do, said rather than left implied.** It does not restart localcode, and no mechanism available can. The Restart Manager restarts a console application in a *new* console, which is not the terminal the person is sitting in front of; a custom action in the package and a detached helper process reach the same place for the same reason. The reply says the installer will close localcode and to start it again, which is now true rather than a guess.
+
+## Unreleased
+
 * **The archive's count went stale.** Reported: archiving works, the conversation moves, and the number beside "Archive" does not change. Retrieving had it too, and reproducing it turned up a third case.
 
   The count was read from a list the page only fetched while the section was expanded, so the number on a collapsed header was a claim about data that had deliberately not been loaded. Archiving with the section closed left it showing whatever it last happened to see, which on a fresh page is nothing at all. The same conditional sat in the handler for a move made by another client, so an archive or a retrieve from a second window was exactly as stale. And an empty archive read "Archive (0)", which is a count of nothing and reads as a fault.

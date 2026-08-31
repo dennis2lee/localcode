@@ -208,6 +208,14 @@ func restartPlan(out update.Outcome, canRestart bool) (detail string, restarting
 		// Either nothing was replaced (a .deb, a Windows zip, a bundle) or
 		// an installer is running and will do it. Both already say what
 		// happens next in their own words.
+		//
+		// The installer case does not become a restart even though it now
+		// reliably closes localcode. On Windows the Restart Manager brings
+		// a console program back in a NEW console, which is not the
+		// terminal the person is sitting in, and no flag, custom action or
+		// helper process changes that. Saying "restarting localcode now"
+		// and then opening a window somewhere else would be worse than
+		// saying nothing.
 		return out.Detail, false
 	}
 	if canRestart {

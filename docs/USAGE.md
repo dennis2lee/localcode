@@ -2072,12 +2072,26 @@ with two buttons, and neither does anything until it is clicked.
 | Button | What it does |
 | --- | --- |
 | Check for updates | Asks GitHub for the latest release of `dennis2lee/localcode` and compares it against this build — or asks `update_url` instead, when config.json sets one. See [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
-| Download and install | Downloads the file for this platform, verifies it, and either installs it and restarts localcode or starts the platform's installer — see [What installing does](#checking-for-updates) below. Appears only when there is a newer release *and* this localcode can install it. |
+| Download and install | Downloads the file for this platform, verifies it, and either installs it and restarts localcode or starts the platform's installer — see [What installing does, per platform](#what-installing-does-per-platform) below. Appears only when there is a newer release *and* this localcode can install it. |
 
 Nothing checks on a timer or on opening the panel. A check is an outbound
 request that tells GitHub which version this machine is running, which is
 a thing to ask for rather than assume, and an update replaces the program
 while someone is using it.
+
+#### What installing does, per platform
+
+What "install" means is not the same everywhere, and neither is whether localcode comes back on its own.
+
+| Install shape | What happens | Comes back on its own |
+|---|---|---|
+| A binary somewhere you can write (`~/.local/bin`, and the same on macOS and Linux tarballs) | localcode writes the new binary over the running one | Yes, in the terminal. It re-executes itself, so the same terminal, the same process id and the same arguments come back. |
+| Windows `.msi` | The installer runs at basic UI. Windows asks the Restart Manager which processes hold the files, its built-in dialog offers to close them, localcode is closed cleanly with the terminal restored, and the install completes | No. Start localcode again. |
+| Windows `.zip`, macOS `.app`, Linux `.deb` | Downloaded, with what to do next | No. |
+
+**Why a Windows update cannot restart localcode.** The Restart Manager can put an application back, but it restarts a *console* application in a new console, which is not the terminal you are sitting in front of. A custom action inside the package and a helper process that outlives localcode both reach the same place for the same reason: nothing outside a terminal can hand a process back into it. So the reply says the installer will close localcode and to start it again, rather than promising a restart it cannot perform.
+
+**Basic UI rather than full.** At full UI, Windows Installer looks for a files-in-use dialog authored into the package before it will offer to close anything, and this package has none, because the tool that builds it cannot author dialogs at all. The documented fallback is that nothing is shown and a reboot is scheduled instead: the update reported success and changed nothing until the machine was restarted. Basic UI has that dialog built in. Not silent: replacing the program you are using is not something to do behind a progress bar you cannot see or cancel.
 
 #### Updating from somewhere other than GitHub
 

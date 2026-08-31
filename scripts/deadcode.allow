@@ -37,3 +37,12 @@ internal/agent/schedule.go:unattendedWaitForTest
 # every other platform and called by nobody there, which is what "does
 # nothing outside Windows" means.
 internal/childproc/childproc_other.go:HideConsole
+
+# The other direction of the same shape. installerArgs is the msiexec
+# command line, and its only caller is startInstaller in
+# internal/update/install_windows.go, so it is unreachable on every
+# platform this gate runs on. It is deliberately NOT in that tagged file:
+# the flags decide whether a Windows update applies at all, and a fact
+# nobody can check from another machine is one that goes wrong quietly, so
+# it lives where TestTheInstallerIsStartedAtBasicUI can read it here.
+internal/update/install.go:installerArgs

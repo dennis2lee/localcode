@@ -11,11 +11,19 @@ import "fmt"
 // the shell before the new one has drawn anything, which for a TUI is a
 // worse answer than not restarting.
 //
-// It costs nothing either, because the case does not arise: the Windows
-// update is an MSI, msiexec cannot replace files localcode is holding
-// open, and so localcode has to exit for the install to happen at all.
-// The restart there is the user starting the program again, which they
-// are already doing.
+// It costs nothing either, because there is nothing better available. The
+// Windows update is an MSI, and the Restart Manager is what closes
+// localcode so the files can be replaced (see
+// internal/update/install_windows.go). The Restart Manager can also put an
+// application back, but it documents that a CONSOLE application is
+// restarted in a new console, which is not the terminal the person is
+// sitting in front of. A custom action in the package and a detached
+// helper process both reach the same place for the same reason: nothing
+// outside a terminal can hand a process back into it.
+//
+// So the terminal update ends with localcode closed and the person
+// starting it again, and the panel says so rather than promising a
+// restart it cannot perform.
 func execSelf() error {
 	return fmt.Errorf("localcode cannot restart itself on Windows")
 }

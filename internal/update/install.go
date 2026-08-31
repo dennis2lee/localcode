@@ -29,6 +29,16 @@ type Outcome struct {
 	Detail string `json:"detail"`
 }
 
+// installerArgs is the command line the Windows installer is started with.
+//
+// Here rather than beside startInstaller, which is behind a windows build
+// tag, because the flags are the whole of what makes an update apply and a
+// fact nobody can check from another machine is one that goes wrong
+// quietly. See install_windows.go for what each one is for.
+func installerArgs(path string) []string {
+	return []string{"/i", path, "/qb"}
+}
+
 // Apply installs a downloaded release.
 //
 // What it will not do is unpack an archive over an install it does not
@@ -62,7 +72,8 @@ func apply(path string, target func() (string, error)) (Outcome, error) {
 		return Outcome{
 			Started: true,
 			Path:    path,
-			Detail:  "the installer is running; localcode has to close for it to replace the files",
+			Detail: "the installer is running and will close localcode to replace its files; " +
+				"start it again when it has finished",
 		}, nil
 	}
 
