@@ -289,9 +289,9 @@ async function init() {
   // landed second would otherwise decide what it shows.
   renderStatusBar();
 
-  // The archive is loaded only when it is opened, so a panel nobody uses
-  // costs one remembered boolean and no request. The section stays
-  // collapsed by default: it is where things go to be out of the way.
+  // The section stays collapsed by default: it is where things go to be
+  // out of the way. What it does not do any more is stay unloaded, for
+  // the reason two lines below.
   wireArchiveDrop();
   try {
     app.archiveOpen = !!localStorage.getItem('archiveOpen');

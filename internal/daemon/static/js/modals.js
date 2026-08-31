@@ -12,7 +12,7 @@ import {
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
 import { appendError } from './transcript.js';
-import { setInputLocked } from './composer.js';
+import { setInputLocked, renderCommDot } from './composer.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace } from './render.js';
 import { Modal } from './modal.js';
 import { settings } from './settings.js';
@@ -325,6 +325,9 @@ export async function resolvePermission(allow, scope) {
   const id = session.pendingPermissionID;
   session.pendingPermissionID = null;
   permissionRequest.close();
+  // Answered, so the light stops being yours: back to blinking green if
+  // the turn it interrupted is still going, steady green if it is not.
+  renderCommDot();
   // Unlocked here, on the answer in hand, rather than waiting for the
   // permission.resolved event to come back. The lock exists to stop a
   // message being typed into an unanswered question; the question has

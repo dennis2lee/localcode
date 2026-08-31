@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+## v0.76.0
+
+* **`#<name>` refers to another conversation.** "check #S2 against the file here" now resolves S2 by id, by exact title, or by an unambiguous title prefix, and tells the model which conversation that is, where it was working, and how to read it.
+
+  What it deliberately does not do is fetch anything. Not one byte of the named conversation enters the message: a reference becomes a line of localcode's own text naming it, and the contents arrive only if the model asks for them through a new `session_read` tool. That split is the whole design. Splicing another conversation's transcript into a user-role message would put somebody else's typing, a model's own words, fetched pages and MCP output in one place where the only thing holding it down is a label, and a trust label is a declaration rather than a boundary. As a tool result the same text is held down by the shape of the code instead: it can reach history only as a `tool_result` block, which is hard-coded external with no argument a caller could pass; the tool is filtered by name in the registry; the result is capped before it is stored or sent; and a tool result never re-enters `SendMessage`, so a `#S3` inside the referenced transcript cannot resolve and a `/permission-skip-all on` inside it cannot reach the command router that once executed exactly that.
+
+  Resolution never refuses. Every outcome — several matches, no match at all, the conversation you are already in — is a notice, and the turn goes on. That is affordable only because a reference produces metadata rather than content: in a splice design a wrong resolution silently changes what the model was given, so it would have to refuse, and refusing would make `#include` in a pasted C snippet a failed turn. `#42` is an issue number and is inert; `# ` is a heading.
+
+  References are non-transitive, and by construction rather than by a check. A delegated turn does not resolve them, so a model cannot reach another conversation by writing the token into a sub-agent's prompt — and a delegated session is not offered `session_read` either, because one half without the other is decorative. Auto-delegation now declines a prompt that names another conversation rather than sending a sub-agent a bare `#S2` it cannot see.
+
+  A reference to a conversation in a different project says so, and says which directory is which. That is the v0.75.1 defect arriving by another route: a referenced transcript is full of paths relative to its own project, and following one from here writes into the project you are not in.
+
+  The right arrow completes a name in both clients, from the visible conversations and the archived ones alike — the one you put away last month being exactly the one whose name you cannot remember. Unlike a command, a reference sits inside a sentence, so the completion finds the token at the cursor and splices it back where it was instead of replacing the box, and the arrow is now a completion key at the end of any word rather than only at the end of the prompt.
+
+* **A tool name the model got slightly wrong is no longer a dead end.** Reported from a transcript: five identical calls to `bash.command`, each answered `tool "bash.command" is not available to this agent`, each followed by the same call again. The message named the mistake and nothing else — not what the tools are, not that `bash` is one of them, not what to do next — so there was nothing in it to act on and the model guessed the same thing every time.
+
+  A name that is unambiguously a decorated form of a real one now runs the tool it names, and the result says which spelling worked: `bash.command`, `functions.bash`, `readFile` for `read_file`. Anything else is refused with the roster attached. Resolution searches the tools the agent was actually offered, never the registry, so a misspelling cannot reach past a restriction, and an ambiguous name is listed rather than guessed at.
+
+  Fixed unconditionally rather than behind the Smart Agent switch, for the same reason grep's silent cap and edit's unexplained miss were: a tool result that reports a failure without reporting its cause is a turn the model cannot recover from. That is not a way of working somebody opts into.
+
+* **A streamed tool name arriving in pieces was truncated to the first piece.** The OpenAI streaming shape lets a function name arrive across deltas for one index, the way arguments do, and several local servers do exactly that. The adapter kept the first fragment and announced the call immediately, so `read_file` split in two became the tool `read_` — a name the registry then reported as one that does not exist. The name is accumulated now, and the call is announced once it can be known to be complete, which is when its arguments begin.
+
+* **Deleting an archived conversation left it on screen.** The archive rows carry a delete button of their own, and it went to the same handler the session list uses, which refreshes the session list and nothing else. So the conversation was really deleted and the panel went on drawing it, under a count that had not moved, with retrieve and delete buttons that would now 404. Delete all had the other half of it: it removes archived conversations too, and the header went on counting them.
+
+  The count fix in the previous round said the number is right whoever moved the conversation, and it was; deleting is not a move, which is exactly how both routes were missed. Both refresh the archive now.
+
+* **Delete all now says that it deletes the archive too.** It always did, and both confirmations said only "Delete ALL sessions? This cannot be undone." A shelf is where things go so they are not lost, so someone who put ten conversations away and then cleared the list is entitled to know before the click rather than after it. The TUI picker and the Web UI button both name it now.
+
+* **Green means the machine, amber means you.** Every light that says work is in flight now blinks green, and the only steady amber light in the product is a conversation stopped waiting for a permission answer. Before this, a running turn blinked amber and nothing else did, which put "the model is busy" and "the model is blocked on you" in one colour — the two states most worth telling apart, since exactly one of them is the one you can end.
+
+  The session list learned the state: the daemon reports which conversations are holding an unanswered question, counted rather than flagged, because one conversation collects the questions of every background task under it and a flag cleared by the first answer would unmark a session still blocked on the other two. Waiting is drawn in preference to running, since a permission request is raised from inside a turn and both are almost always true at once.
 
 * **The Windows update did not apply.** Pressing update started `msiexec /i` at full UI, and full UI asks the package for an `MsiRMFilesInUse` dialog so it can offer to close whatever is holding the files. This package has none: `wixl` cannot author dialogs at all, verified by building `build/localcode.wxs` with it and finding no `Dialog`, `Control` or `ControlEvent` table in the result. The documented fallback for a missing dialog is that nothing is shown and the install continues with a reboot scheduled instead. So localcode went on holding `localcode.exe`, nothing was replaced, the panel reported success, and the new version arrived only if the machine happened to be restarted later.
 
@@ -9,8 +39,6 @@
   The flags are now a list in a file with no build tag, with a test that runs on every platform, because they are the whole of what makes an update apply and this is not a machine that can run them.
 
 * **What a Windows update cannot do, said rather than left implied.** It does not restart localcode, and no mechanism available can. The Restart Manager restarts a console application in a *new* console, which is not the terminal the person is sitting in front of; a custom action in the package and a detached helper process reach the same place for the same reason. The reply says the installer will close localcode and to start it again, which is now true rather than a guess.
-
-## Unreleased
 
 * **The archive's count went stale.** Reported: archiving works, the conversation moves, and the number beside "Archive" does not change. Retrieving had it too, and reproducing it turned up a third case.
 

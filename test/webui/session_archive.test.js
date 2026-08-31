@@ -290,3 +290,61 @@ test('a move made elsewhere updates the count with the section collapsed', async
   await app.settle();
   assert.match(header(app), /Archive \(1\)/, 'a retrieve elsewhere left the count stale');
 });
+
+// Deleting, from either side of the panel.
+//
+// The count fix made archiving and retrieving refresh the archive
+// unconditionally, whoever moved the conversation. It missed the two
+// delete routes, and one of them is a button inside the archive itself:
+// the archived rows carry their own delete, so deleting an archived
+// conversation left it on screen under a count that had not moved.
+test('deleting an archived conversation takes it off the list and out of the count', async () => {
+  let archived = [
+    { id: 's-old', title: 'last month', agent: 'general-purpose', workspace: '/w', archived_at: '2026-08-20T09:00:00Z' },
+    { id: 's-older', title: 'last year', agent: 'general-purpose', workspace: '/w', archived_at: '2026-01-02T09:00:00Z' },
+  ];
+  const app = await load({
+    routes: {
+      'GET /api/sessions': (body, { query }) =>
+        query.get('archived') ? archived : [{ id: 's1', title: 'here', agent: 'general-purpose', workspace: '/w' }],
+      'DELETE /api/sessions/s-old': () => { archived = archived.filter(s => s.id !== 's-old'); return { status: 204 }; },
+    },
+    confirm: true,
+  });
+
+  await app.el('archive-toggle').click();
+  await app.settle();
+  assert.equal(app.el('archive-toggle').textContent, 'Archive (2)');
+
+  const rows = app.el('archive-list').querySelectorAll('.session-item');
+  const row = Array.from(rows).find(el => (el.textContent || '').includes('last month'));
+  assert.ok(row, 'the archived conversation is not on the list');
+  await buttonIn(row, 'delete').click();
+  await app.settle();
+
+  assert.equal(app.el('archive-toggle').textContent, 'Archive (1)',
+    'the count still describes a conversation that was deleted');
+  assert.ok(!(app.el('archive-list').textContent || '').includes('last month'),
+    'the deleted conversation is still drawn');
+});
+
+// Delete all removes the archived conversations too, which the README and
+// the confirmation both say. The header counting them has to follow.
+test('delete all empties the archive header as well', async () => {
+  let archived = [{ id: 's-old', title: 'last month', agent: 'general-purpose', workspace: '/w', archived_at: '2026-08-20T09:00:00Z' }];
+  const app = await load({
+    routes: {
+      'GET /api/sessions': (body, { query }) =>
+        query.get('archived') ? archived : [{ id: 's1', title: 'here', agent: 'general-purpose', workspace: '/w' }],
+      'DELETE /api/sessions': () => { archived = []; return { status: 204 }; },
+      'POST /api/sessions': { id: 's2', agent: 'general-purpose', workspace: '/w' },
+    },
+    confirm: true,
+  });
+
+  assert.equal(app.el('archive-toggle').textContent, 'Archive (1)');
+  await app.el('delete-all-sessions-btn').click();
+  await app.settle();
+  assert.equal(app.el('archive-toggle').textContent, 'Archive',
+    'the archive header still counts conversations delete-all removed');
+});

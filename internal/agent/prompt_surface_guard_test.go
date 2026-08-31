@@ -221,12 +221,13 @@ func emittedEntryPrefixes(t *testing.T) map[string]bool {
 		if perr != nil {
 			return nil
 		}
+		consts := stringConstants(file)
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok || len(call.Args) == 0 || !isRuntimeEntryCall(call.Fun) {
 				return true
 			}
-			if lit, ok := leadingStringLiteral(call.Args[0]); ok {
+			if lit, ok := leadingStringLiteral(call.Args[0], consts); ok {
 				out[idPrefix(lit)] = true
 			}
 			return true
@@ -255,7 +256,7 @@ func isRuntimeEntryCall(fun ast.Expr) bool {
 // leadingStringLiteral returns the literal an id expression starts with,
 // which for "prefix."+name is "prefix." and for a plain literal is the
 // whole of it.
-func leadingStringLiteral(e ast.Expr) (string, bool) {
+func leadingStringLiteral(e ast.Expr, consts map[string]string) (string, bool) {
 	for {
 		switch v := e.(type) {
 		case *ast.BasicLit:
@@ -264,12 +265,56 @@ func leadingStringLiteral(e ast.Expr) (string, bool) {
 			}
 			s, err := strconv.Unquote(v.Value)
 			return s, err == nil
+		case *ast.Ident:
+			// A named constant, which is how an id with a second use —
+			// a span, a lookup — is written, and which this walk used to
+			// skip in silence. Skipping it is not a smaller check, it is
+			// a hole exactly where the ids that matter most sit: an id
+			// worth naming is one something else refers to.
+			s, ok := consts[v.Name]
+			return s, ok
 		case *ast.BinaryExpr:
 			e = v.X
 		default:
 			return "", false
 		}
 	}
+}
+
+// stringConstants is every package-level string constant in one file,
+// so an id written as a name resolves to the id.
+//
+// Per file rather than per package, which is the conservative direction:
+// a constant declared in another file of the same package still reads as
+// unresolvable and is skipped, exactly as before. Nothing that used to be
+// found stops being found.
+func stringConstants(file *ast.File) map[string]string {
+	out := map[string]string{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				if s, err := strconv.Unquote(lit.Value); err == nil {
+					out[name.Name] = s
+				}
+			}
+		}
+	}
+	return out
 }
 
 // And the third direction: a row citing a test that does not exist.

@@ -90,6 +90,10 @@ const handlers = {
   'permission.request': (d) => {
     session.pendingPermissionID = d.id;
     session.pendingPermissionCanAlways = !!d.can_always;
+    // The light says what the modal says. Without this the dot went on
+    // blinking green — "working" — behind a dialog that had stopped the
+    // work to ask a question.
+    renderCommDot();
     permissionTextEl.textContent = `[${d.tool}] ${d.description || '(no description given)'}`;
     // A boundary question is a different question, so it gets different
     // buttons: a place is answered at one of two sizes, and "always

@@ -246,9 +246,15 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	for _, id := range d.turns.running() {
 		busy[id] = true
 	}
+	// Asking is the other half of "what is this session doing". Busy says
+	// the model is working; asking says it stopped and is waiting for a
+	// person, which is the one state a client should draw differently
+	// because it is the one the person can do something about.
+	asking := d.Broker.Asking()
 	type listed struct {
 		session.Session
-		Busy bool `json:"busy"`
+		Busy   bool `json:"busy"`
+		Asking bool `json:"asking"`
 	}
 	// ?archived=1 asks for the other list. One handler and one row shape,
 	// so there is one place membership is decided and a client cannot get
@@ -260,7 +266,7 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]listed, 0, len(sessions))
 	for _, s := range sessions {
-		out = append(out, listed{Session: s, Busy: busy[s.ID]})
+		out = append(out, listed{Session: s, Busy: busy[s.ID], Asking: asking[s.ID]})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

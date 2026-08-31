@@ -854,18 +854,49 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		}
 
 		started := time.Now()
-		if !tools.IsAllowed(allowedTools, tu.ToolName) {
+		// The name the model asked for, resolved against the roster it was
+		// actually shown.
+		//
+		// Two failures used to arrive here identically and be answered the
+		// same unhelpful way: a name that is a decorated form of a real
+		// tool ("bash.command" for bash), and a name for a tool this agent
+		// genuinely does not have. The first now runs, because the model
+		// asked for something that exists and spelled it with a decoration
+		// this repository can strip without inventing anything. The second
+		// is refused with the roster attached, so the model can pick a
+		// real name instead of guessing at the same wrong one — which is
+		// what it did, five times in a row, in the transcript that
+		// prompted this.
+		//
+		// Resolution is against NamesFor(allowedTools), never the whole
+		// registry: a restricted agent cannot reach a tool it was not
+		// offered by misspelling one, because the tool it wants is not in
+		// the set being searched.
+		name := tu.ToolName
+		offered := l.Tools.AllowedNames(allowedTools)
+		match, exact, candidates := tools.Nearest(offered, name)
+		switch {
+		case exact:
+			res = l.Tools.Call(ctx, name, tu.ToolInput, "")
+		case match != "":
+			// Said, not silent. A call that ran under a different name
+			// than the model wrote is a fact the transcript should carry,
+			// and a model told which spelling worked stops producing the
+			// other one.
+			name = match
+			res = l.Tools.Call(ctx, match, tu.ToolInput, "")
+			res.Content = fmt.Sprintf("(there is no tool %q; ran %q, which is what that names. Use %q.)\n\n%s",
+				tu.ToolName, match, match, res.Content)
+		default:
 			res = tools.Result{
-				Content: fmt.Sprintf("tool %q is not available to this agent", tu.ToolName),
+				Content: tools.NoSuchTool(offered, tu.ToolName, candidates),
 				IsError: true,
 			}
-		} else {
-			res = l.Tools.Call(ctx, tu.ToolName, tu.ToolInput, "")
 		}
 		// Timed around the call rather than around the execution, so a
 		// tool that spent four minutes waiting on a permission prompt
 		// reads as four minutes. That is where the time went.
-		l.traceTool(ctx, trace.ID(ctx), sessionID, tu.ToolName, time.Since(started), res.IsError, firstLine(res.Content))
+		l.traceTool(ctx, trace.ID(ctx), sessionID, name, time.Since(started), res.IsError, firstLine(res.Content))
 		// Capped here, before it becomes either a stored event or a
 		// message — a tool result is the one part of a conversation whose
 		// size nobody chose, and one `cat` of a log file could exceed the

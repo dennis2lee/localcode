@@ -303,6 +303,8 @@ func entryForSource(id, text string, delegated bool) (prompt.Entry, bool) {
 		return commandEntry(strings.TrimPrefix(id, "command."), text), true
 	case id == "injected.user":
 		return injectedEntry(text), true
+	case id == referenceNoticeID:
+		return referenceNoticeEntry(text), true
 	case strings.HasPrefix(id, "argument."):
 		return argumentEntry(strings.TrimPrefix(id, "argument."), text), true
 	case strings.HasPrefix(id, "file."):
@@ -449,6 +451,35 @@ func skillFrameEntry(name, text string) prompt.Entry {
 	return prompt.RuntimeEntry(
 		"skill.frame."+name, prompt.KindRuntimeReminder, prompt.FromProduct, prompt.TrustSystem,
 		prompt.PlaceMessage, text, "localcode's framing around the "+name+" skill")
+}
+
+// referenceNoticeID is the manifest id of the notice.
+//
+// One id for all of a message's notices rather than one each: they are a
+// single run of product text with a single classification, and numbering
+// them would put a count of how many conversations were named into the
+// manifest, which is content.
+//
+// Declared here rather than beside the code that builds the span, because
+// this file is where the entry is constructed and the inventory guard
+// resolves a named id only within the file that uses it. An id kept
+// somewhere else is an id the guard cannot see, which is how this entry
+// went a whole change without a row.
+const referenceNoticeID = "reference.notice"
+
+// referenceNoticeEntry describes what localcode says about a "#<name>"
+// reference: which conversation it is, where it worked, and how to read
+// it.
+//
+// Product text inside a message the person wrote, which is the same shape
+// as skill.frame and named for the same reason. What it carries is
+// metadata about another conversation and never a byte out of it: the
+// content arrives, if at all, as a session_read result, under its own
+// external entry.
+func referenceNoticeEntry(text string) prompt.Entry {
+	return prompt.RuntimeEntry(
+		referenceNoticeID, prompt.KindRuntimeReminder, prompt.FromProduct, prompt.TrustSystem,
+		prompt.PlaceMessage, text, "localcode naming the conversations this message referred to")
 }
 
 // injectedEntry describes something the person typed while the turn was

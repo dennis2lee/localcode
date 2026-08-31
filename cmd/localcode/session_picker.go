@@ -54,7 +54,7 @@ func pickOrCreateSessionFrom(ctx context.Context, c *client.Client, agentName st
 			return c.CreateSession(ctx, agentName)
 
 		case actionDeleteAll:
-			fmt.Fprint(out, "Delete ALL sessions? This cannot be undone. Type \"yes\" to confirm: ")
+			fmt.Fprint(out, "Delete ALL sessions, including archived ones? This cannot be undone. Type \"yes\" to confirm: ")
 			confirm, _ := reader.ReadString('\n')
 			if strings.TrimSpace(strings.ToLower(confirm)) != "yes" {
 				fmt.Fprintln(out, "Cancelled.")

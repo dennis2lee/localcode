@@ -32,6 +32,22 @@ func (l *Loop) delegateTarget(sessionID, agentName, text string) (string, bool) 
 	if sess, err := l.Store.Get(sessionID); err == nil && sess.ParentID != "" {
 		return "", false
 	}
+	// A prompt naming another conversation is answered here, by the agent
+	// the person is talking to.
+	//
+	// Not a preference. A delegated turn is a child session, and a child
+	// session does not resolve references — deliberately, so that a model
+	// writing "#X" into a sub-agent's prompt cannot reach another
+	// conversation through it. Delegating a prompt the *person* wrote with a
+	// reference in it therefore does not fail loudly; it sends the sub-agent
+	// a bare "#S2" with no notice attached and no session_read in its tool
+	// list, and the answer comes back confidently about a conversation
+	// nobody read. Auto-delegation is a cost optimisation, and the cheaper
+	// answer to a question that names something it cannot see is the wrong
+	// answer.
+	if names, _ := findSessionRefs(text); len(names) > 0 {
+		return "", false
+	}
 	if !cfg.MatchesPrompt(text) {
 		return "", false
 	}

@@ -76,6 +76,19 @@ type PermissionBroker struct {
 	mu      sync.Mutex
 	counter int
 	pending map[string]chan resolution
+	// asking counts the unanswered questions showing in each session, so
+	// a client can mark the conversations that are stopped waiting for a
+	// person rather than working.
+	//
+	// A count, not a flag: one session can hold several at once — a
+	// conversation with three background tasks collects all three of
+	// their questions — and a flag cleared by the first answer would
+	// unmark a session that is still blocked on the other two.
+	//
+	// Keyed by the session the question is *shown* in, which for a task
+	// is the conversation that spawned it. That is the session someone
+	// can answer from, and the task's own is not in any list.
+	asking map[string]int
 	// granted remembers ScopeSession (and ScopeAlways) approvals, keyed by
 	// session, then by the rule pattern that was approved. Keeping it here
 	// rather than in the config Resolver is deliberate: these grants are
@@ -101,6 +114,56 @@ type PermissionBroker struct {
 	onChanged func(sessionID string)
 }
 
+// mark and unmark move a session in and out of "waiting for an answer".
+//
+// Paired around the wait rather than around the event append, so the flag
+// covers exactly the span in which somebody could answer: it goes up
+// before the question is written and comes down on every way out — an
+// answer, the unattended timeout, and a cancelled turn — since a session
+// left marked would sit showing a light for a question nobody can see.
+func (b *PermissionBroker) mark(sessions []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, id := range sessions {
+		b.asking[id]++
+	}
+}
+
+func (b *PermissionBroker) unmark(sessions []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, id := range sessions {
+		if b.asking[id] <= 1 {
+			delete(b.asking, id)
+			continue
+		}
+		b.asking[id]--
+	}
+}
+
+// Asking reports which sessions are holding a question for the person.
+//
+// A snapshot, copied under the lock: the caller is an HTTP handler
+// building a list, and handing it the live map would be a race the
+// compiler cannot see.
+func (b *PermissionBroker) Asking() map[string]bool {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.asking) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(b.asking))
+	for id, n := range b.asking {
+		if n > 0 {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 // resolution is one answer to a permission request: whether to allow, and
 // how long that answer lasts.
 type resolution struct {
@@ -112,6 +175,7 @@ func NewPermissionBroker(store *session.Store) *PermissionBroker {
 	return &PermissionBroker{
 		store:   store,
 		pending: map[string]chan resolution{},
+		asking:  map[string]int{},
 		granted: map[string]map[string]bool{},
 		outside: map[string]map[tools.OutsideClass][]string{},
 	}
@@ -159,6 +223,8 @@ func (b *PermissionBroker) Func() tools.PermissionFunc {
 		// task it is also the conversation that spawned it, since nothing
 		// streams a task's own log.
 		where := b.audience(sessionID)
+		b.mark(where.all())
+		defer b.unmark(where.all())
 
 		for _, target := range where.mirrors {
 			b.store.Append(target, events.TypePermissionRequest, outsideFields(ask, map[string]any{

@@ -19,10 +19,17 @@ export function setInputLocked(locked, hint) {
   inputEl.placeholder = locked ? hint : defaultInputPlaceholder;
 }
 
-// renderCommDot draws the three-state light left of the status text: gray
+// renderCommDot draws the four-state light left of the status text: gray
 // when there's no live event stream to the daemon (so no path to the
 // model), solid green when there is, blinking green while work is
-// actually happening.
+// actually happening, and solid amber when the work has stopped and is
+// waiting for an answer from you.
+//
+// Amber is checked first and overrides the blink, because a permission
+// request is raised from inside a turn and the turn stays open while the
+// question sits there: both are true, and the one worth drawing is the
+// one the person can act on. It is also the only steady amber light in
+// the product, which is what makes it mean something on sight.
 //
 // "Work" is a turn OR a background task. A task deliberately outlives the
 // turn that launched it and holds no turn slot, so a conversation with
@@ -38,10 +45,14 @@ export function setInputLocked(locked, hint) {
 export function renderCommDot() {
   const turn = turnInFlight();
   const tasks = tasksInFlight();
+  const asking = !!session.pendingPermissionID;
   commDotEl.classList.toggle('connected', session.connected);
   commDotEl.classList.toggle('active', session.connected && (turn || tasks));
+  commDotEl.classList.toggle('asking', session.connected && asking);
   if (!session.connected) {
     commDotEl.title = 'not connected to the model (event stream is down)';
+  } else if (asking) {
+    commDotEl.title = 'waiting for you to answer a permission request';
   } else if (turn) {
     commDotEl.title = 'model is running your prompt';
   } else if (tasks) {

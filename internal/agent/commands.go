@@ -97,7 +97,26 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 		return l.delegatePrompt(ctx, sessionID, target, text)
 	}
 
-	err := l.sendWithModelText(ctx, sessionID, agentName, text, text, "", "")
+	// "#<name>" names another conversation. Resolving it adds a line of
+	// localcode's own text to the model's copy of the message and nothing
+	// to the transcript, which still shows exactly what was typed.
+	//
+	// Not for a delegated task: that text was composed by a model, and a
+	// model reaching into other conversations by writing a token into a
+	// sub-agent's prompt is the transitivity this design closes.
+	modelText, origin := text, messageOrigin{}
+	if !delegated {
+		if expanded, spans, notices := l.expandSessionRefs(sessionID, text); expanded != text {
+			modelText, origin.spans = expanded, spans
+			for _, n := range notices {
+				l.Store.Append(sessionID, events.TypeError, map[string]any{
+					"error": n, "recovered": true,
+				})
+			}
+		}
+	}
+
+	err := l.sendWithModelText(ctx, sessionID, agentName, text, modelText, "", "", origin)
 
 	// A debate the model asked for during that turn starts now, not
 	// during it: it drives turns in this same session, and the tool call

@@ -52,20 +52,39 @@ func (m Model) atInputBottom() bool {
 	return m.input.Line() == m.input.LineCount()-1 && info.RowOffset == info.Height-1
 }
 
-// atInputEnd reports whether the cursor sits after the last character of
-// the whole prompt, which is where Right has nothing else to do and can
-// mean completion instead.
+// cursorRune is where the cursor is, in runes from the start of the box.
 //
-// Only meaningful for the single-line, space-free prompts completion
-// applies to, which is why it compares against the whole value: on one
-// logical line the cursor's offset within it is its offset within the
-// text. LineInfo().Width is not the comparison to make, since it counts
-// a trailing slot the cursor never reaches.
-func (m Model) atInputEnd() bool {
+// A single line only, which is what the completions need: both of them
+// look backwards for a token, and a box with a newline in it is a pasted
+// block rather than a prompt being typed. Reporting -1 for the multi-line
+// case makes targetAt find nothing, which is the right answer there.
+//
+// CharOffset, not LineInfo().Width: Width counts a trailing slot the
+// cursor never reaches, so comparing against it puts the end of the text
+// one place past where it is.
+func (m Model) cursorRune() int {
 	if m.input.LineCount() != 1 {
+		return -1
+	}
+	return m.input.LineInfo().CharOffset
+}
+
+// cursorCompletable reports whether Right is completion rather than
+// cursor movement.
+//
+// "Nothing to the right" used to mean the end of the box, which was right
+// while "/" was the only thing completable — a command is the whole
+// prompt. A reference sits mid-sentence, so the rule is now the end of
+// the word: Right still walks through text, and only stops doing so where
+// the next character is a space or the box ends. Inside a word it is a
+// cursor key, as it always was.
+func (m Model) cursorCompletable() bool {
+	at := m.cursorRune()
+	if at < 0 {
 		return false
 	}
-	return m.input.LineInfo().CharOffset == len([]rune(m.input.Value()))
+	runes := []rune(m.input.Value())
+	return at == len(runes) || isSpace(runes[at])
 }
 
 // setInputTo replaces the prompt contents and parks the cursor at the end,
@@ -73,6 +92,16 @@ func (m Model) atInputEnd() bool {
 func (m *Model) setInputTo(text string) {
 	m.input.SetValue(text)
 	m.input.CursorEnd()
+	m.resizeLayout()
+}
+
+// setInputAt replaces the prompt contents and puts the cursor at a rune
+// offset, which is what a spliced completion needs: after a reference is
+// completed mid-sentence, the cursor belongs after the name rather than
+// at the end of a sentence the person has already written.
+func (m *Model) setInputAt(text string, at int) {
+	m.input.SetValue(text)
+	m.input.SetCursorColumn(at)
 	m.resizeLayout()
 }
 

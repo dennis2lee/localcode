@@ -1,6 +1,10 @@
 package update
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"strings"
 	"testing"
 )
@@ -56,4 +60,67 @@ func has(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// The call site, checked as source because it cannot be checked as code.
+//
+// installerArgs is pinned by the test above, and on its own that pins
+// nothing that ships: startInstaller is behind a windows build tag, so no
+// test on this machine can call it, and someone could inline the flags at
+// the call site and leave every test here passing. Reading the file is the
+// only check available, and this repository already uses the shape
+// elsewhere (the spawn-site walk in internal/agent, the stylesheet
+// property check) for the same reason: a guard that cannot run the code
+// can still read it.
+func TestTheWindowsCallSiteUsesTheFlagsThisFilePins(t *testing.T) {
+	src, err := os.ReadFile("install_windows.go")
+	if err != nil {
+		t.Fatalf("read the windows install file: %v", err)
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), "install_windows.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	var found bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Command" {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != "exec" {
+			return true
+		}
+		found = true
+
+		// Exactly two arguments: the program, and this file's flags
+		// spread into it. Anything else is flags written twice.
+		if len(call.Args) != 2 {
+			t.Errorf("exec.Command has %d arguments; the flags belong in installerArgs, not at the call site", len(call.Args))
+			return false
+		}
+		if lit, ok := call.Args[0].(*ast.BasicLit); !ok || lit.Value != `"msiexec"` {
+			t.Errorf("the program is %v, want msiexec", call.Args[0])
+		}
+		spread, ok := call.Args[1].(*ast.CallExpr)
+		if !ok {
+			t.Fatalf("the second argument is not a call: the flags are not coming from installerArgs")
+		}
+		if call.Ellipsis == token.NoPos {
+			t.Error("the flags are not spread, so installerArgs is not supplying the whole argument list")
+		}
+		name, ok := spread.Fun.(*ast.Ident)
+		if !ok || name.Name != "installerArgs" {
+			t.Errorf("the flags come from %v, not installerArgs, so the test above pins nothing that ships", spread.Fun)
+		}
+		return false
+	})
+	if !found {
+		t.Error("install_windows.go starts no command, so nothing here reaches msiexec")
+	}
 }

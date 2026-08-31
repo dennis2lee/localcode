@@ -86,11 +86,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 
 	case "right":
 		// Completion, but only where the key has nothing else to do:
-		// the cursor at the very end of a one-word "/name" prompt.
-		// Anywhere else Right moves the cursor, which is what it is for.
-		if m.pending == nil && m.atInputEnd() {
-			if next, ok := m.nextCompletion(m.input.Value()); ok {
-				m.setInputTo(next)
+		// the cursor at the end of a word. Inside one Right moves the
+		// cursor, which is what it is for.
+		if m.pending == nil && m.cursorCompletable() {
+			if next, at, ok := m.nextCompletion(m.input.Value(), m.cursorRune()); ok {
+				m.setInputAt(next, at)
 				return m, nil, true
 			}
 		}

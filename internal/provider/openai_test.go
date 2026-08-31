@@ -364,3 +364,32 @@ data: [DONE]
 		t.Errorf("tool_use ids: start %q, end %q — want one non-empty id used by both", startID, endID)
 	}
 }
+
+// A server that streams the function name in pieces.
+//
+// Allowed by the OpenAI streaming shape and done by several local
+// servers: the name arrives across deltas for one index, the way the
+// arguments do. Nothing here is hypothetical about the consequence — the
+// name is what picks which tool runs.
+func TestAToolNameSplitAcrossDeltasIsPutBackTogether(t *testing.T) {
+	evs := collect(t, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"read_"}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"file"}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"x\"}"}}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+`)
+	var name string
+	for _, ev := range evs {
+		if ev.Type == EventToolUseStart {
+			name = ev.ToolName
+		}
+	}
+	if name != "read_file" {
+		t.Errorf("tool name = %q, want read_file", name)
+	}
+}

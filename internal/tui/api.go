@@ -129,6 +129,26 @@ func (m Model) fetchSessions() tea.Cmd {
 	return call(m.client.ListSessions, func(s []session.Session, err error) tea.Msg { return sessionsMsg{sessions: s, err: err} })
 }
 
+// fetchReferenceNames refreshes what "#" can complete to.
+//
+// Two calls, merged, because the archive is where the conversation whose
+// name you cannot remember actually is — which is most of the reason to
+// complete a name at all. Either half failing leaves the other half's
+// names available rather than the list empty: a partial roster completes
+// fewer things, an absent one completes nothing.
+func (m Model) fetchReferenceNames() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		defer cancel()
+		live, err := m.client.ListSessions(ctx)
+		archived, aerr := m.client.ListArchivedSessions(ctx)
+		if err != nil && aerr != nil {
+			return referenceNamesMsg{err: err}
+		}
+		return referenceNamesMsg{sessions: append(live, archived...)}
+	}
+}
+
 func (m Model) fetchCommands() tea.Cmd {
 	return call(m.client.ListCommands, func(c []client.CommandInfo, err error) tea.Msg { return commandsMsg{commands: c, err: err} })
 }

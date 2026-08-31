@@ -144,7 +144,7 @@ export function renderStatusBar() {
   // so a line replaced by a completion hint is a line that stopped
   // saying a turn is running the moment you started typing the next
   // prompt, which is exactly when you are watching it.
-  const hint = completionHint(inputEl.value);
+  const hint = completionHint(inputEl.value, inputEl.selectionStart);
   if (hint) parts.push(hint);
   statusTextEl.textContent = parts.join('  ·  ');
 

@@ -52,14 +52,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		return m.handleSessionsMsg(msg)
 
+	case referenceNamesMsg:
+		// A failure is left silent. Nothing on screen depends on this, and
+		// an error line about a list nobody asked for is noise about a
+		// feature that has not been used yet.
+		if msg.err == nil {
+			m.refNames = msg.sessions
+		}
+		return m, nil
+
 	case archivedSessionsMsg:
 		return m.handleArchivedSessionsMsg(msg)
 
+	// Archiving and retrieving both change what "#" completes to — an
+	// archived conversation is still referable, a retrieved one is
+	// referable under a rank it did not have — so the cached names are
+	// refreshed alongside whatever the handler does with the screen.
 	case sessionArchivedMsg:
-		return m.handleSessionArchived(msg)
+		model, cmd := m.handleSessionArchived(msg)
+		return model, tea.Batch(cmd, m.fetchReferenceNames())
 
 	case sessionRetrievedMsg:
-		return m.handleSessionRetrieved(msg)
+		model, cmd := m.handleSessionRetrieved(msg)
+		return model, tea.Batch(cmd, m.fetchReferenceNames())
 
 	case landingSessionsMsg:
 		return m.handleLandingSessions(msg)

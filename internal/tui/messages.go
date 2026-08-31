@@ -97,6 +97,14 @@ type spinTickMsg struct{}
 // The archive. archivedSessionsMsg is what "/retrieve" with no argument
 // builds its picker from; landingSessionsMsg is deliberately not
 // sessionsMsg, which opens the switch-to picker instead of switching.
+// referenceNamesMsg refreshes the names "#" completes to. Distinct from
+// sessionsMsg, which means "open the switch-to picker": this one changes
+// nothing on screen.
+type referenceNamesMsg struct {
+	sessions []session.Session
+	err      error
+}
+
 type archivedSessionsMsg struct {
 	sessions []session.Session
 	err      error

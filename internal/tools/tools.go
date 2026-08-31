@@ -283,6 +283,26 @@ func (r *Registry) SpecsFor(ctx context.Context, allowed []string) []provider.To
 	return out
 }
 
+// AllowedNames is the tools this call may actually reach, in registration
+// order.
+//
+// NamesFor answers the same question by building every tool's description
+// and schema and then throwing all but the name away, which is the right
+// shape when the specs are wanted anyway and the wrong one here: this is
+// called once per tool call, and a turn making ten of them would rebuild
+// every schema ten times to look up a list of strings.
+func (r *Registry) AllowedNames(allowed []string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.order))
+	for _, name := range r.order {
+		if IsAllowed(allowed, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // Names lists every registered tool, in registration order.
 //
 // Used to turn "everything except these" into a concrete allowlist, which

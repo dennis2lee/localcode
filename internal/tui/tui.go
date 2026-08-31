@@ -16,6 +16,7 @@ import (
 
 	"localcode/internal/client"
 	"localcode/internal/events"
+	"localcode/internal/session"
 )
 
 var (
@@ -126,7 +127,17 @@ type Model struct {
 	agents           []client.AgentInfo
 	commandsList     []client.CommandInfo
 	skillsList       []client.SkillInfo
-	slashList        []client.SlashCommandInfo
+	// refNames is the conversations "#" can complete to: the visible ones
+	// and the archived ones together, since referring to a conversation is
+	// reading and archiving only ever refuses starting work.
+	//
+	// Cached rather than fetched on the keystroke, because the key has to
+	// answer instantly and this client cannot block in a key handler. A
+	// stale cache costs a completion that is not offered; it cannot cost a
+	// wrong reference, because the name is resolved by the daemon against
+	// the real list when the message is sent.
+	refNames  []session.Session
+	slashList []client.SlashCommandInfo
 
 	// picker is the open selection list, or nil. See picker.go.
 	picker *picker
@@ -206,5 +217,5 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents(), m.fetchCommands(), m.fetchSkills(), m.fetchSlashCommands())
+	return tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents(), m.fetchCommands(), m.fetchSkills(), m.fetchSlashCommands(), m.fetchReferenceNames())
 }

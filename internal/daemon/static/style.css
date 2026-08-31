@@ -722,10 +722,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #prompt-status.ctx-crit { color: var(--err); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 /* Three states, and only three: grey = no live connection to the model,
-   solid green = connected and idle, blinking amber = a turn is running.
-   Green answers "is it up?" and never means anything else; amber is
-   "something is in flight" and is the same amber the task panel uses for
-   a running task, so the two panels stop disagreeing about one fact. */
+   solid green = connected and idle, blinking green = work is in flight,
+   solid amber = stopped, waiting for an answer from you.
+
+   One rule across every light in the product: green is the machine's
+   colour and amber is yours. Blinking means something is happening;
+   steady amber means nothing is happening and will not until you act.
+   Work used to blink amber, which put "the model is busy" and "the model
+   is blocked on you" in the same colour — the two states a person most
+   needs to tell apart, since one of them is the one they can end. */
 .comm-dot {
   width: 8px;
   height: 8px;
@@ -735,7 +740,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex-shrink: 0;
 }
 .comm-dot.connected { background: var(--ok); }
-.comm-dot.connected.active { background: var(--run); animation: pulse 1s infinite; }
+.comm-dot.connected.active { background: var(--ok); animation: pulse 1s infinite; }
+/* Last, so it wins over .active: a session holding a question is often
+   also mid-turn, and the question is the part that needs answering. */
+.comm-dot.connected.asking { background: var(--warn); animation: none; }
 /* The status row's controls: each is a small outlined pill that names
    its own current state, so the row reads as a sentence about the
    session rather than a strip of icons to be decoded. */
@@ -969,9 +977,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   vertical-align: middle;
 }
 
-/* Working: amber and blinking, the same colour and the same beat as the
+/* Working: green and blinking, the same colour and the same beat as the
    status-bar light under the prompt. */
-.session-led.running { background: var(--run); animation: session-led-pulse 1.2s ease-in-out infinite; }
+.session-led.running { background: var(--ok); animation: session-led-pulse 1.2s ease-in-out infinite; }
+
+/* Waiting for you: amber and steady, and the only light in the product
+   that is. It is not an activity, so it does not blink; it is a job for
+   the person, so it is not green. Written after .running because a
+   session holding a permission request is usually mid-turn as well, and
+   of the two facts this is the one worth drawing. */
+.session-led.asking { background: var(--warn); animation: none; }
 
 /* Finished while you were elsewhere: steady, so it reads as a state
    rather than an activity. Blinking means "happening now"; this has

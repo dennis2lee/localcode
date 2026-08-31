@@ -1284,10 +1284,14 @@ func TestDaemonCreatedSessionRecordsWorkspace(t *testing.T) {
 // session put the workspace back — which made a switch the user had
 // actually made look like it had never taken.
 func TestDaemonSetWorkspaceRecordsItOnTheNamedSession(t *testing.T) {
-	// handleSetWorkspace calls os.Chdir, which is process-wide: without
-	// restoring it, every later test in this package that resolves a
-	// relative path (webui_test.go finds test/webui that way) would look
-	// for it under this test's temp dir.
+	// Belt and braces, and no longer describing the handler.
+	//
+	// handleSetWorkspace used to call os.Chdir, which is process-wide, so
+	// this restore was load-bearing: every later test in this package that
+	// resolves a relative path (webui_test.go finds test/webui that way)
+	// would have looked for it under this test's temp dir. The workspace
+	// became per-session in v0.39.0 and the handler chdirs nothing now, so
+	// this guards against a future one rather than against the current one.
 	orig, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)

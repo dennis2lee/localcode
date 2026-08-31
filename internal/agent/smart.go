@@ -233,6 +233,20 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	// what it returns, which is given it explicitly through the pinned
 	// allowlist. Offered to anyone else it is a tool that can only refuse.
 	hidden[answerToolName] = true
+	// Reading another conversation belongs to the conversation a person
+	// is in, not to work delegated out of one.
+	//
+	// This is what keeps a "#<name>" reference non-transitive. Resolution
+	// already skips a delegated turn, so a model cannot reach another
+	// conversation by writing the token into a sub-agent's prompt — but a
+	// sub-agent holding session_read could call it by name and get there
+	// anyway, which would make the resolution guard decorative. Both
+	// halves have to hold for either to mean anything.
+	if id, ok := SessionIDFromContext(ctx); ok && l.Store != nil {
+		if sess, err := l.Store.Get(id); err == nil && sess.ParentID != "" {
+			hidden[sessionReadToolName] = true
+		}
+	}
 	// Orchestrate is off unless its own switch is on, and never inside a
 	// run: a plan that can run plans turns a ceiling into an exponent.
 	if !config.OrchestrateFor(ctx, l.Config) || inOrchestration(ctx) {

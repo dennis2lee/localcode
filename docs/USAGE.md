@@ -8,7 +8,7 @@
 | [2. Configuration](#part-2-configuration) | [Config file (config.json)](#config-file-configjson), [Managing MCP servers](#managing-mcp-servers-with-localcode-mcp), [Permission rules](#fine-grained-permission-rules), [Permission settings panel](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt), [Switching the workspace directory](#switching-the-workspace-directory), [Hooks](#hooks), [Authenticating with /login](#authenticating-with-login) |
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [AGENTS.md](#agentsmd-project-rules), [Auto memory](#auto-memory) |
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
-| [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Archive](#archiving-a-conversation), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
+| [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Archive](#archiving-a-conversation), [Referring to another conversation](#referring-to-another-conversation-with-name), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
 | [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
@@ -833,7 +833,7 @@ The transcript keeps just the short command you typed. The full skill body goes 
 
 The walk comes back round to what you typed, so it is never a cycle you cannot leave. The line under the prompt box shows the first match and how many there are, which is what tells you whether the key is worth pressing. Editing the text ends the walk and the next press starts a fresh one from what is now in the box.
 
-The right arrow only completes at the very end of a one-word `/name`. Anywhere else it moves the cursor, and a prompt that already has arguments (`/pdf-tools merge a.pdf`) is past completing.
+A `/name` completes only at the very end of a one-word prompt: a command is the whole prompt, so a prompt that already has arguments (`/pdf-tools merge a.pdf`) is past completing. The same key also completes a `#<name>` reference, and that one is not a whole prompt but a word inside a sentence, so it completes wherever the cursor sits at the end of a word. See [Referring to another conversation](#referring-to-another-conversation-with-name). Inside a word the arrow moves the cursor, as it always did.
 
 Built-in commands complete too, so `/sm` finishes to `/smart-agent` and `/perm` to `/permission-skip-all`. Four lists feed it: the installed skills, the custom commands, the commands the daemon answers, and the few each client answers itself. A name in more than one list is offered once.
 
@@ -1051,10 +1051,10 @@ A shelf, not a bin. A conversation that has gone quiet leaves the session list w
 | Where | Archive | Retrieve |
 |---|---|---|
 | Web UI | The `archive` button on the card, or drag the card onto the Archive header at the bottom of the panel | Open the Archive section and press `retrieve` |
-
-The Archive header carries the count, and it is right whether or not the section is open and whoever moved the conversation. The list is read once at load and again on every move for exactly that reason: a number that only appears after the first expand is one nobody can trust.
 | TUI | `/archive` puts the conversation you are in away | `/retrieve` offers a picker of the archived ones; `/retrieve <id>` takes one directly |
 | API | `POST /api/sessions/{id}/archive` | `POST /api/sessions/{id}/retrieve` |
+
+The Archive header carries the count, and it is right whether or not the section is open and whoever moved the conversation. The list is read once at load and again on every move for exactly that reason: a number that only appears after the first expand is one nobody can trust.
 
 `GET /api/sessions?archived=1` is the archived list. Same endpoint and same row shape as the active one, told apart by the query, so nothing can end up with two ideas of what a session is.
 
@@ -1099,6 +1099,35 @@ One residual, stated rather than hidden: a scheduled run that commits to running
 | Restart | Archived stays archived. A session file written before this feature existed has no flag and loads as active. |
 | Memory | Archiving releases the conversation history this process was holding, and retrieving replays it from the log. Uncollected background task answers are deliberately **not** dropped: they exist nowhere else, and archiving is reversible. |
 | Delete all sessions | Removes archived conversations too. The confirmation says so. |
+
+### Referring to another conversation with `#<name>`
+
+A prompt can name another conversation on this daemon, and the model is told which one it is and how to read it.
+
+```
+#S2 has the final report. Check it against the file in this workspace.
+```
+
+Two forms, because a title routinely has spaces in it:
+
+| Form | Matches |
+|---|---|
+| `#S2` | a session id, or a title with no spaces |
+| `#"the parser rewrite"` | any title |
+
+A name is resolved in one order and never guessed at: exact id, then exact title, then a unique title prefix. Two conversations that both match are listed for you to pick between rather than one being chosen — nothing validates a title, and forking a conversation twice produces two called the same thing, so picking silently would be picking wrong half the time.
+
+**Nothing of the named conversation is put into your message.** A reference becomes a line of localcode's own text saying which conversation it is, where it was working, and that its contents can be read with the `session_read` tool. The model reads it only if it decides to, and what comes back arrives as a tool result — the least trusted kind of text there is, which is the right classification for a mixture of somebody else's typing, a model's own words, fetched pages and whatever an MCP server returned. Anything written inside that transcript is data: a `#S3` in it does not resolve, and a slash command in it does not run.
+
+Other things worth knowing:
+
+* **Nothing is ever refused.** A name that matches nothing, or matches several, or names the conversation you are already in, produces a notice and the turn carries on. `#42` is an issue number and is ignored; `# ` is a markdown heading.
+* **Archived conversations can be referred to.** Referring is reading, and archiving only ever refuses starting work.
+* **A conversation in another project says so.** The notice names both directories and warns that paths in the other transcript are relative to *its* project. Following one from here is how files end up in the wrong repository.
+* **Five per message.** The sixth is not dropped in silence: the notice says how many were skipped.
+* **Background tasks are not referable.** They belong to the conversation that started them; use `/tasks` for those.
+* **Delegated work cannot follow a reference.** A prompt sent to a sub-agent does not resolve `#<name>`, and a sub-agent is not given `session_read`. Auto delegation declines a prompt that names another conversation, so it is answered by the agent you are talking to.
+* **The right arrow completes a name**, in the TUI and the Web UI alike, from the live conversations and the archived ones. Unlike a command, a reference sits inside a sentence, so the completion replaces the word at the cursor and leaves the rest of what you typed alone.
 
 ### Renaming and deleting sessions
 
@@ -1179,7 +1208,7 @@ Every session on the daemon, newest first. Each card shows:
 
 | Line | Contents |
 |---|---|
-| Title | The session's title, or its ID if it has never been renamed, behind a light: **grey** — nothing is running here; **blinking amber** — a turn is running; **steady green** — a reply arrived while you were in another session and you have not opened it since. Amber is the same colour a running background task carries, and green means one thing everywhere: this is up. Every card has one, so an idle session says so rather than looking like a panel that does not draw lights. |
+| Title | The session's title, or its ID if it has never been renamed, behind a light: **grey** — nothing is running here; **blinking green** — a turn is running; **steady green** — a reply arrived while you were in another session and you have not opened it since; **steady amber** — the conversation has stopped and is waiting for you to answer a permission request. One rule across every light in the product: green is the machine's colour and amber is yours, blinking means something is happening, and steady amber means nothing is happening and will not until you act. Waiting is drawn in preference to running, because a permission request is raised from inside a turn and both are almost always true at once. Every card has one, so an idle session says so rather than looking like a panel that does not draw lights. |
 | Workspace | The directory the session was created in, shortened from the front (the full path is in the tooltip). This is what distinguishes two sessions that would otherwise look identical because they belong to different projects. |
 | Created | Local date and time |
 
@@ -1215,7 +1244,7 @@ One line directly below the input box:
 | Agent and model | Which agent answers the next message, and the model its profile resolves to. The model shows from the moment a session opens, taken from the agent's profile, and switches to whatever the provider actually reports once the first reply arrives. |
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Shown when `show_tps` is on. It is a **generation** rate: the clock runs from the first token to the last, so the wait before a model starts answering (prefill, and on a shared local server the queue in front of you) is not divided into the output. It covers the whole turn, not the last model call — a turn that uses tools is several calls, and the last is often a handful of tokens. A `~` prefix marks a live estimate made while the model is still talking, counted from stream chunks because the real token count only arrives when the stream ends; it is replaced by the exact figure at that point. A reply that arrives in a single chunk shows nothing at all: there is no interval to measure across. |
-| Activity light | Three states: **grey** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking amber** — work is happening in this session, either a turn or a background task. A task deliberately outlives the turn that launched it and holds no turn slot, so a conversation whose prompt box is free can still have several agents working in it; hovering the light says which of the two it is. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. "Running" is the daemon's own answer, not this page's memory of having sent something, so it agrees with the light on the session's row in the left panel however the turn started — from another client, or before this page was loaded. |
+| Activity light | Four states: **grey** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — work is happening in this session, either a turn or a background task; **steady amber** — the work has stopped and is waiting for you to answer a permission request, which is checked first because both are true at once while a question is on screen. A task deliberately outlives the turn that launched it and holds no turn slot, so a conversation whose prompt box is free can still have several agents working in it; hovering the light says which of the two it is. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. "Running" is the daemon's own answer, not this page's memory of having sent something, so it agrees with the light on the session's row in the left panel however the turn started — from another client, or before this page was loaded. |
 | Stop button | Appears while a turn is running, whoever started it. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
 | Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
 | Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
@@ -1281,12 +1310,15 @@ If the turn happens to finish in the instant between your pressing Enter and the
 | `bash` | Yes | Run a shell command, 2 minute default timeout. On Windows, a command whose interpreter is not on PATH is told so rather than left with a bare shell error: see [Python on Windows](#python-on-windows) |
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
 | `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
+| `session_read` | No | Read another conversation on this daemon: `mode=summary` for what it concluded and which files it touched, `mode=transcript` for its messages a page at a time. Not offered to a delegated sub agent. See [Referring to another conversation](#referring-to-another-conversation-with-name) |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server |
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only when there are 2 or more agents to delegate to, which [Smart Agent](#smart-agent) is one way to arrange. |
 | `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [Smart Agent](#smart-agent) on. |
 | `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [Smart Agent](#smart-agent) on. |
 | `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
+
+**A tool name that is nearly right.** A model sometimes decorates a name — `bash.command` for `bash`, `functions.bash`, `readFile` for `read_file`. When the decorated form unambiguously names one tool the agent actually has, the call runs and the result says which spelling worked. When it does not, the refusal lists the tools the agent does have, so the model can pick a real one instead of guessing at the same wrong name. Resolution only ever searches the tools that agent was offered, so a misspelling cannot reach past a `tools` restriction.
 
 ### Combining agents
 

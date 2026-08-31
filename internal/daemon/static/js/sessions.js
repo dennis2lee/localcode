@@ -68,10 +68,21 @@ export function renderSessionList() {
     // conversation, so a turn left running in another one was invisible
     // — including a turn stuck waiting on a permission request, which
     // blocks workspace switching for every session until it is answered.
-    // Three states, one dot, and every session has one:
+    // Four states, one dot, and every session has one:
+    //   waiting        amber, steady    — stopped, and only you can restart it
     //   running        green, blinking  — the model is working
     //   answer unread  green, steady    — it finished while you were elsewhere
     //   idle           grey, steady     — nothing is happening here
+    //
+    // Waiting is tested first because it is almost always true *alongside*
+    // running: a permission request is raised from inside a turn, and the
+    // turn stays open while the question sits there. Drawing the turn
+    // would be drawing the less useful of two true things — "busy" is
+    // something to wait out, "waiting for you" is something to do.
+    //
+    // Amber is reserved for it. Every other light in the product is green
+    // when something is happening and grey when nothing is, so amber
+    // means one thing everywhere: this one is yours.
     //
     // The idle dot is drawn rather than omitted. A row with no light and a
     // row whose light has not been noticed look the same, so an absent dot
@@ -79,13 +90,15 @@ export function renderSessionList() {
     // green states only mean something against a light that is reliably
     // there when nothing is going on.
     const unread = app.unreadSessions.has(s.id);
+    const state = s.asking ? 'asking' : s.busy ? 'running' : unread ? 'unread' : 'idle';
     const led = document.createElement('span');
-    led.className = 'session-led ' + (s.busy ? 'running' : unread ? 'unread' : 'idle');
-    led.title = s.busy
-      ? 'a turn is running in this session'
-      : unread
-        ? 'this session has a reply you have not looked at'
-        : 'nothing is running in this session';
+    led.className = 'session-led ' + state;
+    led.title = {
+      asking: 'this session is waiting for you to answer a permission request',
+      running: 'a turn is running in this session',
+      unread: 'this session has a reply you have not looked at',
+      idle: 'nothing is running in this session',
+    }[state];
     title.appendChild(led);
     title.appendChild(document.createTextNode(s.title ? s.title : s.id));
     div.appendChild(title);
@@ -271,6 +284,12 @@ export async function deleteSessionConfirm(s) {
     appendError(`failed to delete session: ${err}`);
     return;
   }
+  // Both lists, because this one button serves both. The archive rows
+  // carry a delete of their own (renderArchiveList), so deleting an
+  // archived conversation used to leave it on screen with the count
+  // unchanged: the same staleness the count fix was for, on the one path
+  // that fix did not reach.
+  await loadArchived();
   if (s.id === session.sessionID) {
     await loadSessions();
     if (app.sessions.length > 0) {
@@ -353,13 +372,20 @@ export async function createNewSession() {
 }
 
 export async function deleteAllSessions() {
-  if (!window.confirm('Delete ALL sessions? This cannot be undone.')) return;
+  // The archive is named because delete all empties it too, and a shelf
+  // is where things go precisely so they are not lost. Somebody who put
+  // ten conversations away and then cleared the list is entitled to know
+  // that before the click, not after it.
+  if (!window.confirm('Delete ALL sessions, including archived ones? This cannot be undone.')) return;
   try {
     await apiClient.deleteAllSessions();
   } catch (err) {
     appendError(`failed to delete all sessions: ${err}`);
     return;
   }
+  // Delete all removes the archived conversations too, so the header that
+  // counts them is describing a list that is now empty.
+  await loadArchived();
   await createNewSession();
 }
 

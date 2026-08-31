@@ -237,10 +237,19 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 
 		// Track partial tool_call argument accumulation per stream index,
 		// since providers send tool_calls incrementally across chunks.
+		// name is a builder, not a string, for the same reason args is:
+		// the OpenAI streaming shape lets a function name arrive across
+		// deltas for one index, and several local servers do exactly
+		// that. Assigning the last fragment — or, as this did, keeping
+		// the first — silently renames the tool, and the name is what
+		// picks which tool runs. "read_file" split in two arrived as
+		// "read_", which the registry then reported as a tool that does
+		// not exist.
 		type pending struct {
-			id, name string
-			args     strings.Builder
-			started  bool
+			id      string
+			name    strings.Builder
+			args    strings.Builder
+			started bool
 		}
 		calls := map[int]*pending{}
 		flushed := false
@@ -257,6 +266,27 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 				p.id = fmt.Sprintf("call_%d", index)
 			}
 			return p.id
+		}
+
+		// startCall announces a tool call once, with its whole name.
+		//
+		// Deferred until the name can be known to be complete, which in
+		// this format is when the arguments begin: a name and its
+		// arguments are separate fields, and no server sends the second
+		// before finishing the first. A call that never carries arguments
+		// is announced at the flush instead, so every End still has a
+		// Start to pair with.
+		startCall := func(index int, p *pending) bool {
+			if p.started {
+				return true
+			}
+			p.started = true
+			select {
+			case out <- StreamEvent{Type: EventToolUseStart, ToolUseID: callID(index, p), ToolName: p.name.String()}:
+				return true
+			case <-ctx.Done():
+				return false
+			}
 		}
 
 		// flushCalls closes out every tool call the reply asked for, in the
@@ -283,6 +313,9 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			sort.Ints(indexes)
 			for _, i := range indexes {
 				p := calls[i]
+				if !startCall(i, p) {
+					return false
+				}
 				select {
 				case out <- StreamEvent{Type: EventToolUseEnd, ToolUseID: callID(i, p), ToolInput: json.RawMessage(p.args.String())}:
 				case <-ctx.Done():
@@ -352,17 +385,12 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 					p.id = tc.ID
 				}
 				if tc.Function.Name != "" {
-					p.name = tc.Function.Name
-				}
-				if !p.started && p.name != "" {
-					p.started = true
-					select {
-					case out <- StreamEvent{Type: EventToolUseStart, ToolUseID: callID(tc.Index, p), ToolName: p.name}:
-					case <-ctx.Done():
-						return
-					}
+					p.name.WriteString(tc.Function.Name)
 				}
 				if tc.Function.Arguments != "" {
+					if !startCall(tc.Index, p) {
+						return
+					}
 					p.args.WriteString(tc.Function.Arguments)
 					select {
 					case out <- StreamEvent{Type: EventToolUseInputDelta, ToolUseID: callID(tc.Index, p), InputDelta: tc.Function.Arguments}:

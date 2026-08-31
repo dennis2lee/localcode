@@ -267,6 +267,10 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// registry read at startup cannot answer a switch that moves.
 	registry.Register(agent.NewOrchestrateTool(loop))
 	registry.Register(agent.NewAnswerTool())
+	// Reading another conversation. Registered unconditionally, like the
+	// tools beside it: whether it is offered is a per-turn question, and a
+	// registry read at startup cannot answer a roster that moves.
+	registry.Register(agent.NewSessionReadTool(loop))
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
 
