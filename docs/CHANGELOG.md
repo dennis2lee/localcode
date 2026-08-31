@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+* **The archive's count went stale.** Reported: archiving works, the conversation moves, and the number beside "Archive" does not change. Retrieving had it too, and reproducing it turned up a third case.
+
+  The count was read from a list the page only fetched while the section was expanded, so the number on a collapsed header was a claim about data that had deliberately not been loaded. Archiving with the section closed left it showing whatever it last happened to see, which on a fresh page is nothing at all. The same conditional sat in the handler for a move made by another client, so an archive or a retrieve from a second window was exactly as stale. And an empty archive read "Archive (0)", which is a count of nothing and reads as a fault.
+
+  The list is now fetched whenever it changes, whoever changed it, and once at load so the count is right from the first paint rather than only after the first expand. That is one extra request on a page that already makes several there, and it is the trade that makes the number worth showing at all. An empty archive reads "Archive".
+
 ## v0.75.1
 
 * **The prompt now says which directory the conversation is working in.** Nothing did, and that was a defect with a clear shape: a model had to learn the directory from tool output, from a `pwd`, a glob result or a path in an earlier answer. That knowledge then lived in the conversation history, and moving the workspace does not rewrite history. The model went on prefixing every shell command with `cd <the old path> &&` and went on writing to absolute paths under it, so files appeared in the project the person had just left, while every question about the workspace was answered correctly with the new one. The two were never out of step: only the model was working from a remembered directory.

@@ -1051,6 +1051,8 @@ A shelf, not a bin. A conversation that has gone quiet leaves the session list w
 | Where | Archive | Retrieve |
 |---|---|---|
 | Web UI | The `archive` button on the card, or drag the card onto the Archive header at the bottom of the panel | Open the Archive section and press `retrieve` |
+
+The Archive header carries the count, and it is right whether or not the section is open and whoever moved the conversation. The list is read once at load and again on every move for exactly that reason: a number that only appears after the first expand is one nobody can trust.
 | TUI | `/archive` puts the conversation you are in away | `/retrieve` offers a picker of the archived ones; `/retrieve <id>` takes one directly |
 | API | `POST /api/sessions/{id}/archive` | `POST /api/sessions/{id}/retrieve` |
 

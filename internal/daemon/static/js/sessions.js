@@ -384,7 +384,12 @@ export async function archiveSessionNow(s) {
   // cleared by opening it, so it would sit there forever.
   app.unreadSessions.delete(s.id);
   await loadSessions();
-  if (app.archiveOpen) await loadArchived();
+  // Unconditionally, not only when the section is open. The header shows
+  // a count, and a count read out of a list the page only fetches while
+  // the section is expanded is a claim about data it has not loaded: the
+  // conversation moved and the header went on showing the number it last
+  // happened to see.
+  await loadArchived();
   if (s.id === session.sessionID) await moveOffArchivedSession();
 }
 
@@ -425,8 +430,10 @@ export async function loadArchived() {
 }
 
 function renderArchiveList() {
+  // The number, whenever there is one. An empty archive is "Archive": a
+  // zero is a count of nothing and reads as a fault.
   const n = (app.archivedSessions || []).length;
-  archiveToggleEl.textContent = app.archiveOpen || n > 0 ? `Archive (${n})` : 'Archive';
+  archiveToggleEl.textContent = n > 0 ? `Archive (${n})` : 'Archive';
   archiveToggleEl.setAttribute('aria-expanded', app.archiveOpen ? 'true' : 'false');
   archiveListEl.hidden = !app.archiveOpen;
   archiveListEl.innerHTML = '';

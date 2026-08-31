@@ -294,11 +294,13 @@ async function init() {
   // collapsed by default: it is where things go to be out of the way.
   wireArchiveDrop();
   try {
-    if (localStorage.getItem('archiveOpen')) {
-      app.archiveOpen = true;
-      await loadArchived();
-    }
+    app.archiveOpen = !!localStorage.getItem('archiveOpen');
   } catch { /* private window, or storage refused: stay collapsed */ }
+  // Fetched once at load whether or not the section is open, because the
+  // header carries a count and a count that appears only after the first
+  // expand is one nobody can trust. One request, on a page that already
+  // makes several here.
+  await loadArchived();
 
   if (!app.sessions || app.sessions.length === 0) {
     await createNewSession();

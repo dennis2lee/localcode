@@ -269,7 +269,10 @@ const handlers = {
     'session.archived': async (d) => {
       // The list this client is showing has changed, whoever changed it.
       await loadSessions();
-      if (app.archiveOpen) await loadArchived();
+      // Unconditionally: the header's count is about the archive, and
+      // fetching it only while the section is open makes the number a
+      // claim about a list the page did not load.
+      await loadArchived();
       if (d && d.session === session.sessionID && d.archived) {
         // Move first, then say so. selectSession clears the transcript on
         // its way in, so a notice appended before the switch is wiped by

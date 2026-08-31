@@ -62,27 +62,32 @@ async function withArchive({ active = [ONE, TWO], inArchive = [], ...routes } = 
   });
 }
 
-test('the archive starts collapsed and costs no request', async () => {
-  const app = await withArchive();
+// Collapsed, and its contents are not rendered. The list is fetched once
+// at load anyway, which is a deliberate trade: the header carries a count,
+// and a count that appears only after the first expand is one nobody can
+// trust. One request against a page that already makes several here.
+test('the archive starts collapsed, with its count already known', async () => {
+  const app = await withArchive({ inArchive: [archivedRow(ONE)] });
   assert.equal(app.el('archive-list').hidden, true);
   assert.equal(app.el('archive-toggle').getAttribute('aria-expanded'), 'false');
-  assert.equal(app.callsTo('GET', '/api/sessions').filter((c) => c.query.get('archived')).length, 0,
-    'the archive was fetched before anybody asked for it');
+  assert.equal(app.el('archive-list').textContent, '', 'a collapsed section rendered its rows');
+  assert.match(app.el('archive-toggle').textContent, /Archive \(1\)/);
 });
 
-test('opening it fetches the archive and says when there is nothing in it', async () => {
+test('opening it shows the rows, and says when there is nothing in it', async () => {
   const app = await withArchive();
   await app.el('archive-toggle').click();
   await app.settle();
 
-  const archivedCalls = app.callsTo('GET', '/api/sessions').filter((c) => c.query.get('archived'));
-  assert.equal(archivedCalls.length, 1, 'the archive list was not fetched');
   assert.equal(app.el('archive-list').hidden, false);
   assert.equal(app.el('archive-toggle').getAttribute('aria-expanded'), 'true');
   assert.match(app.el('archive-list').textContent, /Nothing archived/);
   // The empty state names both ways in, since one of them is a gesture
   // nothing on screen would otherwise suggest.
   assert.match(app.el('archive-list').textContent, /Drag a conversation here/);
+  // And an empty archive is "Archive", not "Archive (0)": a count of
+  // nothing reads as a fault.
+  assert.equal(app.el('archive-toggle').textContent, 'Archive');
 });
 
 test('the archive button puts a conversation away and does not ask first', async () => {
@@ -200,4 +205,88 @@ test('being archived elsewhere moves this client off it, and says so', async () 
   // and the conversation changes under the reader with no explanation.
   assert.match(app.transcript(), /archived elsewhere/,
     'the conversation changed with nothing said about why');
+});
+
+// The count on the header.
+//
+// It is a number about the archive, and the archive was only fetched when
+// the section happened to be open, so the number was a claim about data
+// the page had deliberately not loaded. Archiving with the section
+// collapsed left the header saying whatever it last saw, which for a fresh
+// page is nothing at all.
+
+function header(app) {
+  return app.el('archive-toggle').textContent;
+}
+
+// A fixture whose archived list can move, since that is the whole subject.
+async function withMovingArchive() {
+  const state = { archived: [] };
+  const app = await load({
+    routes: {
+      'GET /api/sessions': (b, { query }) => (query.get('archived') ? state.archived : [ONE, TWO]),
+      'POST /api/sessions/s1/archive': ONE,
+      'POST /api/sessions/s1/retrieve': ONE,
+    },
+  });
+  return { app, state };
+}
+
+test('the count is right at load, before anybody opens the section', async () => {
+  const state = { archived: [archivedRow(ONE), archivedRow(TWO)] };
+  const app = await load({
+    routes: { 'GET /api/sessions': (b, { query }) => (query.get('archived') ? state.archived : [ONE]) },
+  });
+  assert.match(header(app), /Archive \(2\)/,
+    'the header cannot say how many are archived until somebody expands it');
+  assert.equal(app.el('archive-list').hidden, true, 'loading the count expanded the section');
+});
+
+test('archiving with the section collapsed still updates the count', async () => {
+  const { app, state } = await withMovingArchive();
+  assert.equal(header(app), 'Archive');
+
+  state.archived = [archivedRow(ONE)];
+  await buttonIn(activeRow(app, 'the one about parsers'), 'archive').click();
+  await app.settle();
+
+  assert.match(header(app), /Archive \(1\)/,
+    'the conversation moved to the archive and the header did not say so');
+});
+
+test('retrieving updates the count too', async () => {
+  const state = { archived: [archivedRow(ONE)] };
+  const app = await load({
+    routes: {
+      'GET /api/sessions': (b, { query }) => (query.get('archived') ? state.archived : [TWO]),
+      'POST /api/sessions/s1/retrieve': ONE,
+    },
+  });
+  await app.el('archive-toggle').click();
+  await app.settle();
+  assert.match(header(app), /Archive \(1\)/);
+
+  state.archived = [];
+  const row = app.el('archive-list').querySelectorAll('.session-item').item(0);
+  await buttonIn(row, 'retrieve').click();
+  await app.settle();
+
+  assert.equal(header(app), 'Archive',
+    'an empty archive should read "Archive", not "Archive (0)"');
+});
+
+// Another client moving a conversation either way, with the section
+// collapsed: the count is exactly as wrong there, and for the same reason.
+test('a move made elsewhere updates the count with the section collapsed', async () => {
+  const { app, state } = await withMovingArchive();
+
+  state.archived = [archivedRow(ONE), archivedRow(TWO)];
+  app.sse.emit({ type: 'session.archived', data: { session: 's2', archived: true } });
+  await app.settle();
+  assert.match(header(app), /Archive \(2\)/, 'an archive elsewhere left the count stale');
+
+  state.archived = [archivedRow(ONE)];
+  app.sse.emit({ type: 'session.archived', data: { session: 's2', archived: false } });
+  await app.settle();
+  assert.match(header(app), /Archive \(1\)/, 'a retrieve elsewhere left the count stale');
 });
