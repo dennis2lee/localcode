@@ -1210,11 +1210,12 @@ If the turn happens to finish in the instant between your pressing Enter and the
 |---|---|---|
 | `read_file` | No | Read a file with line numbers |
 | `glob` | No | Find files by pattern, `**` supported |
-| `grep` | No | Search file contents by regex |
+| `grep` | No | Search file contents by regex. Stops at 200 matches and says so; names any file it could not finish reading. See [Two grep answers that were wrong, not short](#two-grep-answers-that-were-wrong-not-short) |
 | `write_file` | Yes | Create or overwrite a file |
 | `edit` | Yes | Replace a specific string in a file |
 | `bash` | Yes | Run a shell command, 2 minute default timeout |
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
+| `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server |
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only when there are 2 or more agents to delegate to, which [Smart Agent](#smart-agent) is one way to arrange. |
 | `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [Smart Agent](#smart-agent) on. |
@@ -1287,7 +1288,7 @@ What it turns on is a way of working rather than a preference, which is why it i
 | Six specialist agents | `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. They exist without being configured, and disappear again when the switch is turned off. See [What the roster needs from your config](#what-the-roster-needs-from-your-config). |
 | An orchestration prompt | Appended to the system prompt of top level sessions only. It tells the model to work out what is being asked, send wide reading to a sub agent, do the narrow work itself, verify before reporting, and say what it checked. |
 | `TaskBackground` and `TaskCollect` | Launch several specialists at once and pick up the answers together, instead of waiting for each in turn. |
-
+| [Sharper file and search tools](#the-tools-get-sharper-too) | `read_file` pages through long files, `grep` and `glob` skip what is not source and account for it, and a failed `edit` says why it failed. Two of grep's fixes are not behind the switch. |
 | [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by retrying the same endpoint with a bounded backoff, then moving to the next profile, re-deriving the prompt for the model it moved to. |
 | [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
 | [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas, the system prompt and the tail of the conversation are marked, so the provider can serve the unchanged part of every request from cache. |
@@ -1333,6 +1334,39 @@ Two properties of that table are enforced rather than requested:
 Every specialist is also told to answer in under 300 words, with paths and line numbers rather than pasted output. That is the whole economy of the feature: a sub agent can read fifty thousand tokens in a context the main session never pays for, and hand back two hundred.
 
 An agent you have defined yourself under one of those names is left alone completely, prompt, model and tools. The roster is a starting point, not something that overwrites a deliberate choice.
+
+#### The tools get sharper too
+
+Four of the six specialists have nothing but `read_file`, `glob` and `grep`, and the roster's cheapest model is the one holding them. So Smart Agent changes the tools as well as who is using them. The switch covers both: the schema a turn was shown and the tool that then runs are resolved from the same pinned setting, so they cannot disagree.
+
+**Two of grep's are not behind the switch,** because they were defects rather than a way of working. See [Two grep answers that were wrong, not short](#two-grep-answers-that-were-wrong-not-short). Everything in the table below is. Off, the rest of the tools behave exactly as they did before, asserted string for string by a test.
+
+| Tool | With Smart Agent on |
+|---|---|
+| `read_file` | Takes `offset` and `limit`, and returns 800 lines at a time by default. The footer says which lines you got, how many the file has, and the offset to continue from, so a long file is never mistaken for a short one. A binary file is described rather than rendered as thousands of lines of mojibake. |
+| `grep` | Skips binary files and does not walk version control internals or package caches, naming both in the result. No single file may spend more than 30 of the 200 results, so one generated table cannot crowd out the rest of the tree. A very long matching line is clipped at 400 bytes, on a rune boundary. |
+| `glob` | The same directory skip list, named in the result the same way, capped at 500 paths. The part of a `**` pattern after the stars may name directories: it used to be compared against the filename alone, so `**/cmd/*.go` matched nothing whatever the tree held. |
+| `edit` | A failed match says why: whitespace only difference and the exact bytes at that line, CRLF line endings, the line numbers where the first line does appear, or that nothing resembling it is there. A non unique match gives the line numbers of every match. A successful edit hands back the changed lines, numbered, as they now stand on disk. |
+| `write_file` | Says whether it created the file or replaced one, and how many lines the replaced one had. |
+
+Three deliberate limits:
+
+* **A near miss is reported, never applied.** `edit` will tell you the only difference is whitespace; it will not edit past it. In Python, a Makefile or a YAML document, re indenting to make an edit apply changes the program.
+* **The skip list is short.** Version control directories and package caches only. `vendor`, `build`, `dist` and `target` are real source in some project, and a search that quietly refuses to look somewhere is the failure this is against.
+* **Nothing is capped silently.** Every limit above announces itself in the result. A short answer shaped exactly like a complete one is worse than no answer.
+
+#### Two grep answers that were wrong, not short
+
+These two apply whether Smart Agent is on or off, because they are not a better answer than the old one. They are a true answer instead of a false one, and nobody opts into that.
+
+| Was | Now |
+|---|---|
+| The search stopped at 200 matches and returned 200 lines, with no marker of any kind. That is not a truncated answer, it is a claim that the tree holds 200 matches | It says `[stopped at the 200-result limit ...]` and how to narrow the search |
+| A file whose line was longer than 64KB ended its own scan there. `bufio.Scanner` reports that through `Err()`, which nothing read, so the rest of the file was never searched and the file came back clean | Lines up to 1MB are read, and a file that still cannot be finished is named in the result rather than reported as having no matches |
+
+A search that withheld nothing still says nothing, so an ordinary result is still bare `file:line:text`.
+
+One silence is left in place on purpose: a file that cannot be opened at all is skipped, and only counted when Smart Agent is on. It is the same shape and a much rarer case, and widening the always on path is not something to do in passing.
 
 #### Which model each specialist runs on
 

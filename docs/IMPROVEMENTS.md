@@ -89,6 +89,13 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 
     And the Web UI suite runs entirely against `test/webui/dom.js`, a DOM written by hand; nothing in the gate opens the page in a browser. A fake that is *wider* than a browser passes code the browser then refuses: `querySelectorAll` returned an Array, so `.map()` over it worked in all 272 tests and threw `map is not a function` the moment a browser ran it, taking the whole module down at load — found in v0.72.0 by opening the page, not by the suite. That instance is closed (the fake returns a NodeList with exactly the browser's surface, and `previousElementSibling` was added for the same reason), but the class is not: every property the fake does not model is a place the same trade can be made again, and the only check that would catch it is running the page. `layout` is the standing example — `offsetTop` and `scrollTop` are plain numbers a test sets, so anything that depends on real geometry is asserted against a fixture rather than measured.
 
+35. **The agent-computer interface is sharper mostly with Smart Agent on, and two of its parts are still missing.** The tools now page, account for what they skipped, and diagnose a failed edit. That is all behind the switch except two grep fixes, which are unconditional because they were defects rather than a way of working: a match budget that ran out silently, and a long line that ended a file's scan and left the file looking clean. Two things a harness of this shape usually also has are deliberately absent.
+
+    **Nothing checks that an edit left the file valid.** The interface work this is modelled on refused an edit that did not parse and fed the linter's message back, and reports that class of interface change as decisive without breaking the gain down per feature. localcode cannot do the language-agnostic version of it honestly: it edits whatever project it is pointed at, and a bracket counter that does not understand strings and comments would refuse correct edits. The hook path already covers it for a project that wants it, since `post_tool_use` runs after an edit with the path in hand, but nothing ships that way and the hook cannot block, only react.
+
+    **Nothing stops an edit to a file that changed since it was read.** Enforcing a read before a write is the usual answer, and it collides with a feature this repository documents: a `post_tool_use` hook that reformats after an edit makes every following edit look stale. Doing it properly means distinguishing a change localcode caused from one it did not, which is a per-session read register, not a timestamp comparison.
+
+
 ## UI ideas
 
 ### Web UI

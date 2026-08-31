@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.73.0
+
+* **Smart Agent now changes the tools, not only who is holding them.** Published comparisons of one model across several coding harnesses spread by several points on the same benchmark with the model held fixed, and the reported causes are not clever ones: whether a search admits it stopped early, whether a failed edit says why, whether a read can ask for part of a file. Four of the six specialists have only the read-only set, `read_file`, `glob`, `grep` and `Skill`, and the roster's cheapest model is the one holding it, so this is where the switch was worth least and is now worth most.
+
+  Off, the rest of the tools answer exactly as they did before, asserted string for string by a test, because that is the whole contract of an opt in. The two `grep` fixes below are the deliberate exception.
+
+* **Two `grep` answers that were wrong rather than short, fixed with no switch involved.** Both are unconditional, and the line is worth stating: most of what follows makes an answer better, and a way of working is something to opt into, but neither of these is a better answer than the old one. They are a true answer instead of a false one.
+
+  The search stopped at 200 matches and returned 200 lines with no marker of any kind. That is not a truncated answer, it is a claim that the tree holds 200 matches, and it was measurable: a directory with a five hundred hit generated file, a `.git` directory and three source files returned 199 hits from the generated file, one from a `.git` pack object, and none of the source files, in a result shaped exactly like a complete one.
+
+  A file whose first line was longer than 64KB came back as "no matches" while containing the pattern twice. `bufio.Scanner` stops there and reports it through `Err()`, which nothing was reading, so the rest of the file was never searched. Lines up to a megabyte are read now, and a file that still cannot be finished is named in the result rather than reported as clean.
+
+  A search that withheld nothing still says nothing, so an ordinary result is still bare `file:line:text`. One silence is left alone on purpose: a file that cannot be opened at all is still skipped quietly unless Smart Agent is on. Same shape, much rarer, and not something to widen in passing.
+
+* **`read_file` pages.** `offset` and `limit`, 800 lines at a time by default, and a footer saying which lines you got out of how many and where to continue. Without it a model handed 800 lines cannot tell a file that is 800 lines long from one that is eight thousand, and answers about the part as though it were the whole. A binary file is described rather than rendered as numbered lines of mojibake, which stays in the history for the rest of the session once it is there.
+
+* **A failed `edit` says why it failed.** "old_string not found in file" is true and helps nobody, and it is the failure the whole edit-format literature is about. A model given only that either retries the same wrong string or falls back to `write_file`, which discards the rest of the file. Now it gets the cause: whitespace only difference with the exact bytes at that line, CRLF line endings against a plain newline string, the line numbers where the first line does appear, or that nothing resembling it is in the file. A non unique match gives every match's line number instead of a count.
+
+  A near miss is reported and never applied. Matching loosely and editing anyway would raise the apply rate and would be wrong in exactly the languages where whitespace is syntax.
+
+* **A successful `edit` hands back the lines it changed**, numbered, as they now stand on disk. It is the cheapest verification there is, and it is what the orchestration prompt already asks for in words: re read the file you edited. `write_file` says whether it created the file or replaced one and how many lines the replaced one had, because a model that reached for `write_file` when it meant `edit` has just discarded a file, and "wrote 412 bytes" looks exactly like success.
+
+* **Under Smart Agent, `grep` also stops wasting the budget.** No single file may take more than 30 of the 200 results, version control internals and package caches are not walked, binary files are skipped, and each of those is named in the result. A match inside a minified line is clipped at 400 bytes on a rune boundary, since a clip through the middle of a Hangul syllable is what the model then copies back out.
+
+* **`glob` matches directory names after the stars.** `**/cmd/*.go` compared `cmd/*.go` against `main.go` and matched nothing, which reads exactly like a project that has no such files. `**` now absorbs any leading run of directories, as it does everywhere else, so the pattern means what it says instead of nothing. The same directory skip list as `grep`, announced the same way, with a cap of 500 paths.
+
+* **One switch, two keys, one place that sets them.** `internal/tools` does not import `internal/config`, so the interface is pinned by its own context value, set only in `(*Loop).pinSmart` beside the config side pin. The schema a turn is shown and the tool it then calls resolve from the same snapshot, so a turn cannot be advertised paging and then executed without it, and a delegation keeps the interface it was admitted with after the switch has moved.
+
 ## v0.72.0
 
 * **A prompt is marked at its edges now, rather than by its font weight.** Your prompt and the model's reply sat in the same column at the same size, and 600 against 400 was the whole of the difference. That is not a signal the eye catches while scrolling back, which is the job the weight was chosen for.

@@ -5,6 +5,7 @@ import (
 
 	"localcode/internal/config"
 	"localcode/internal/smart"
+	"localcode/internal/tools"
 )
 
 // Smart Agent, from the loop's side.
@@ -45,11 +46,21 @@ func (l *Loop) smartOn(ctx context.Context) bool { return l.Config.SmartAgentFor
 // context, and re-reading the switch there is exactly the bug: work that
 // was admitted as a read-only specialist would resolve again, minutes
 // later, against a roster that no longer contains it.
+//
+// Two keys are set, not one: the config-side pin that the roster, the
+// fallback chain and the guards read, and the tools-side one that the
+// agent-computer interface reads (see internal/tools/aci.go). They are set
+// here together and nowhere else, which is the whole reason there can be
+// two of them — internal/tools does not import internal/config, and a
+// second setter is how they would come apart, leaving a turn whose tools
+// were advertised with paging and windows but which executes them without.
 func (l *Loop) pinSmart(ctx context.Context) context.Context {
-	if _, pinned := config.SmartAgentPinned(ctx); pinned {
-		return ctx
+	on, pinned := config.SmartAgentPinned(ctx)
+	if !pinned {
+		on = l.Config.SmartAgentLive()
+		ctx = config.WithSmartAgent(ctx, on)
 	}
-	return config.WithSmartAgent(ctx, l.Config.SmartAgentLive())
+	return tools.WithSmartAgent(ctx, on)
 }
 
 // SetSmartAgentEnabled changes the live Smart Agent setting. It takes
