@@ -23,6 +23,26 @@ import (
 const (
 	// AssetBaseSystem is the product's own description of itself.
 	AssetBaseSystem = "system.base"
+	// AssetWorkspace is where this conversation is working, stated to the
+	// model rather than left to be inferred.
+	//
+	// It was left to be inferred, and that was a defect with a clear
+	// shape. Nothing in the prompt named the directory, so a model learned
+	// it from tool output: a pwd, a glob result, the path in an earlier
+	// answer. That knowledge then lived in the conversation history, and
+	// moving the workspace does not rewrite history. The model went on
+	// prefixing every shell command with "cd <the old path> &&" and went
+	// on writing to absolute paths under it, while the daemon answered
+	// every question about the workspace with the new one. Files appeared
+	// in the project the person had just left.
+	//
+	// Bash is why nothing caught it: the workspace boundary is a check on
+	// paths, and a shell command is not a path, so "cd /old && touch x"
+	// is outside what that guard can see and always was.
+	//
+	// Re-derived every turn from the session's own directory, so it cannot
+	// go stale the way a remembered path does.
+	AssetWorkspace = "session.workspace"
 	// AssetProjectRules is the workspace speaking: AGENTS.md, CLAUDE.md
 	// and their imports, read from the session's own directory.
 	AssetProjectRules = "project.rules"
@@ -180,6 +200,39 @@ func promptRegistry() *prompt.Registry {
 	// wrote them, which is usually but not always the person running
 	// localcode, and that difference is exactly what a trust class is
 	// for.
+	// Before the project's own rules, which are read out of this
+	// directory: the place, then what the place says.
+	r.Add(prompt.Asset{
+		ID:         AssetWorkspace,
+		Kind:       prompt.KindModeInstruction,
+		Provenance: prompt.FromProduct,
+		Trust:      prompt.TrustSystem,
+		Placement:  prompt.PlaceSystem,
+		// Session-dynamic, not stable: the directory is a property of the
+		// conversation and it can move within one. A stable marker here
+		// would put a moved workspace behind a cache prefix that says it
+		// never moved.
+		Cache:   prompt.CacheSessionDynamic,
+		Order:   15,
+		Version: "1",
+		Active: func(a prompt.ActivationContext) (bool, string) {
+			if a.Workspace == "" {
+				return false, "this session has no recorded directory"
+			}
+			return true, "the directory this conversation works in"
+		},
+		Render: func(a prompt.ActivationContext) string {
+			return "You are working in " + a.Workspace + ". Relative paths in your tool calls " +
+				"resolve there, and every shell command starts there, so a bare relative path is " +
+				"the right way to name a file in this project.\n\n" +
+				"This can change during a conversation. If it does, this line changes with it and " +
+				"is the only thing that is current: absolute paths and \"cd\" prefixes from earlier " +
+				"in this conversation point at wherever the work was then, and following them " +
+				"writes to the project you have left. Do not carry a directory forward from an " +
+				"earlier message; read it here."
+		},
+	})
+
 	r.Add(prompt.Asset{
 		ID:         AssetProjectRules,
 		Kind:       prompt.KindProjectInstruction,

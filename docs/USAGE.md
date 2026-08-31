@@ -576,6 +576,12 @@ The folder icon beside the path opens that directory in a file-manager window â€
 
 **Delegated work inherits it.** A sub agent started by the `Task` tool, by `TaskBackground`, or through the tasks API works in the directory of the session that launched it, and so does anything it delegates in turn. The directory is taken at the moment the task starts and stays with it: moving the parent afterwards moves the parent, and the task finishes the instructions it was given where it was given them. Custom commands (`@file`, `` !`cmd` ``) and hooks resolve against the same directory.
 
+**The model is told where it is.** The system prompt names the session's directory and is re-derived every turn, so it follows a move rather than going stale. That line is the only current answer, and it says so: absolute paths and `cd` prefixes from earlier in the conversation point at wherever the work was then.
+
+That matters because of what a model does without it. Nothing used to name the directory, so it had to be learned from tool output, from a `pwd` or a glob result or a path in an earlier answer. That knowledge lives in the conversation history, and moving the workspace does not rewrite history: the model went on prefixing every shell command with `cd <the old path> &&`, and files appeared in the project you had just left while every question about the workspace was answered correctly with the new one. The two were never out of step; only the model was working from memory.
+
+The workspace boundary does not catch this, and cannot: it is a check on paths, and a shell command is not a path. A `write_file` to the old project would be asked about; `cd /old && touch x` is outside what that guard can see.
+
 Switching is refused only while *this* session has a turn in flight, since redirecting it mid-tool-call would change what an already-running command is operating on. A turn in some other session is not your business and no longer blocks anything.
 
 Omitting the session (a client that does not track them) sets the default instead: what a newly created session starts in, and what a session with no recorded workspace of its own falls back to.

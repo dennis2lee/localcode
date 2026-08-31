@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+* **The prompt now says which directory the conversation is working in.** Nothing did, and that was a defect with a clear shape: a model had to learn the directory from tool output, from a `pwd`, a glob result or a path in an earlier answer. That knowledge then lived in the conversation history, and moving the workspace does not rewrite history. The model went on prefixing every shell command with `cd <the old path> &&` and went on writing to absolute paths under it, so files appeared in the project the person had just left, while every question about the workspace was answered correctly with the new one. The two were never out of step: only the model was working from a remembered directory.
+
+  Bash is why nothing caught it. The workspace boundary is a check on paths, and a shell command is not a path, so `cd /old && touch x` is outside what that guard can see and always was. A `write_file` to the same place would have been asked about.
+
+  The directory is now its own prompt asset, re-derived every turn from the session's own record, so it cannot go stale the way a remembered path does. It says what it means for relative paths, and it says the part that matters after a move: that absolute paths and `cd` prefixes from earlier in the conversation point at wherever the work was then, and that the current directory is read from this line rather than carried forward.
+
+  Marked session-dynamic for the prompt cache rather than stable, since a stable marker would put a moved workspace behind a prefix that says it never moved.
+
 ## v0.75.0
 
 * **The activity light blinks while a background task is running.** It blinked for a turn only, and a background task deliberately outlives the turn that launched it: it holds no turn slot, so the daemon's busy flag goes false the moment the launching turn ends. The light then read "connected to the model, idle" about a conversation with several agents still working in it. Reproduced before the fix.
