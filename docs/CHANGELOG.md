@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.75.0
 
 * **The activity light blinks while a background task is running.** It blinked for a turn only, and a background task deliberately outlives the turn that launched it: it holds no turn slot, so the daemon's busy flag goes false the moment the launching turn ends. The light then read "connected to the model, idle" about a conversation with several agents still working in it. Reproduced before the fix.
 
