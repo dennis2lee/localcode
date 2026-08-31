@@ -1210,7 +1210,7 @@ If the turn happens to finish in the instant between your pressing Enter and the
 |---|---|---|
 | `read_file` | No | Read a file with line numbers |
 | `glob` | No | Find files by pattern, `**` supported |
-| `grep` | No | Search file contents by regex. Stops at 200 matches and says so; names any file it could not finish reading. See [Two grep answers that were wrong, not short](#two-grep-answers-that-were-wrong-not-short) |
+| `grep` | No | Search file contents by regex. Stops at 200 matches and says so; names any file it could not open or could not finish reading. See [Three grep answers that were wrong, not short](#three-grep-answers-that-were-wrong-not-short) |
 | `write_file` | Yes | Create or overwrite a file |
 | `edit` | Yes | Replace a specific string in a file |
 | `bash` | Yes | Run a shell command, 2 minute default timeout |
@@ -1288,7 +1288,7 @@ What it turns on is a way of working rather than a preference, which is why it i
 | Six specialist agents | `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. They exist without being configured, and disappear again when the switch is turned off. See [What the roster needs from your config](#what-the-roster-needs-from-your-config). |
 | An orchestration prompt | Appended to the system prompt of top level sessions only. It tells the model to work out what is being asked, send wide reading to a sub agent, do the narrow work itself, verify before reporting, and say what it checked. |
 | `TaskBackground` and `TaskCollect` | Launch several specialists at once and pick up the answers together, instead of waiting for each in turn. |
-| [Sharper file and search tools](#the-tools-get-sharper-too) | `read_file` pages through long files, `grep` and `glob` skip what is not source and account for it, and a failed `edit` says why it failed. Two of grep's fixes are not behind the switch. |
+| [Sharper file and search tools](#the-tools-get-sharper-too) | `read_file` pages through long files, `grep` and `glob` skip what is not source and account for it, and a failed `edit` says why it failed. Three of grep's fixes are not behind the switch. |
 | [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by retrying the same endpoint with a bounded backoff, then moving to the next profile, re-deriving the prompt for the model it moved to. |
 | [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
 | [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas, the system prompt and the tail of the conversation are marked, so the provider can serve the unchanged part of every request from cache. |
@@ -1339,7 +1339,7 @@ An agent you have defined yourself under one of those names is left alone comple
 
 Four of the six specialists have nothing but `read_file`, `glob` and `grep`, and the roster's cheapest model is the one holding them. So Smart Agent changes the tools as well as who is using them. The switch covers both: the schema a turn was shown and the tool that then runs are resolved from the same pinned setting, so they cannot disagree.
 
-**Two of grep's are not behind the switch,** because they were defects rather than a way of working. See [Two grep answers that were wrong, not short](#two-grep-answers-that-were-wrong-not-short). Everything in the table below is. Off, the rest of the tools behave exactly as they did before, asserted string for string by a test.
+**Three of grep's are not behind the switch,** because they were defects rather than a way of working. See [Three grep answers that were wrong, not short](#three-grep-answers-that-were-wrong-not-short). Everything in the table below is. Off, the rest of the tools behave exactly as they did before, asserted string for string by a test.
 
 | Tool | With Smart Agent on |
 |---|---|
@@ -1355,18 +1355,19 @@ Three deliberate limits:
 * **The skip list is short.** Version control directories and package caches only. `vendor`, `build`, `dist` and `target` are real source in some project, and a search that quietly refuses to look somewhere is the failure this is against.
 * **Nothing is capped silently.** Every limit above announces itself in the result. A short answer shaped exactly like a complete one is worse than no answer.
 
-#### Two grep answers that were wrong, not short
+#### Three grep answers that were wrong, not short
 
-These two apply whether Smart Agent is on or off, because they are not a better answer than the old one. They are a true answer instead of a false one, and nobody opts into that.
+These apply whether Smart Agent is on or off, because they are not a better answer than the old one. They are a true answer instead of a false one, and nobody opts into that.
 
 | Was | Now |
 |---|---|
 | The search stopped at 200 matches and returned 200 lines, with no marker of any kind. That is not a truncated answer, it is a claim that the tree holds 200 matches | It says `[stopped at the 200-result limit ...]` and how to narrow the search |
 | A file whose line was longer than 64KB ended its own scan there. `bufio.Scanner` reports that through `Err()`, which nothing read, so the rest of the file was never searched and the file came back clean | Lines up to 1MB are read, and a file that still cannot be finished is named in the result rather than reported as having no matches |
+| A file that could not be opened at all (a dangling symlink, a permission denied) was skipped in silence. A file nothing looked inside is not a file with no matches | It is named in the result |
+
+Notices name paths rather than counting them, at most three before the rest becomes "and N more". A count like "could not open 1 file(s)" repeats on every search of a project with one dangling symlink and can never be acted on; a name is something to go and delete.
 
 A search that withheld nothing still says nothing, so an ordinary result is still bare `file:line:text`.
-
-One silence is left in place on purpose: a file that cannot be opened at all is skipped, and only counted when Smart Agent is on. It is the same shape and a much rarer case, and widening the always on path is not something to do in passing.
 
 #### Which model each specialist runs on
 

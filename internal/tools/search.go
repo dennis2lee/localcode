@@ -304,9 +304,9 @@ func (Grep) Execute(ctx context.Context, input json.RawMessage) Result {
 
 // grepWalk is the search, in one function for both settings.
 //
-// Two of the things it does are not Smart Agent's and never were, because
-// they are not improvements to an answer, they are the difference between
-// an answer and a wrong one:
+// Three of the things it does are not Smart Agent's and never were,
+// because they are not improvements to an answer. Each is a place the
+// search did not look and did not say so:
 //
 //   - It says when the match budget ran out. Returning 200 lines with the
 //     shape of a complete result is a claim that the tree holds 200
@@ -314,12 +314,14 @@ func (Grep) Execute(ctx context.Context, input json.RawMessage) Result {
 //   - It reads lines up to maxLineBytes and reports a file it could not
 //     finish. A file with one very long line used to end its own scan with
 //     no error anybody checked, and the file came back clean.
+//   - It names a file it could not open. Rare, and the same shape: a file
+//     nothing looked inside is not a file with no matches.
 //
 // Everything else here is behind smart, and each of those is a judgement
 // about what is worth looking at rather than a correction: not walking
 // version-control internals, skipping binaries, bounding one file's share
 // of the budget, clipping an enormous matching line. Those change which
-// answer is best; the two above change whether the answer is true.
+// answer is best; the three above change whether the answer is true.
 func grepWalk(re *regexp.Regexp, root, base string, smart bool) (string, walkNotice, error) {
 	var b strings.Builder
 	var notice walkNotice
@@ -328,9 +330,7 @@ func grepWalk(re *regexp.Regexp, root, base string, smart bool) (string, walkNot
 
 	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			if smart {
-				notice.unreadable++
-			}
+			notice.unreadable = append(notice.unreadable, relName(base, path))
 			return nil
 		}
 		if d.IsDir() {
@@ -347,13 +347,11 @@ func grepWalk(re *regexp.Regexp, root, base string, smart bool) (string, walkNot
 
 		f, err := os.Open(path)
 		if err != nil {
-			// Best-effort: an unreadable file is skipped either way, and
-			// only counted under Smart Agent. It is the same class of
-			// silence as the two above and a much rarer one, and widening
-			// the always-on path is not something to do in passing.
-			if smart {
-				notice.unreadable++
-			}
+			// Skipped, and named. A permission-denied file or a dangling
+			// symlink is rare enough that this is quiet in a source tree,
+			// and when it does fire the name is the whole value of it:
+			// a count repeats forever and cannot be acted on.
+			notice.unreadable = append(notice.unreadable, relName(base, path))
 			return nil
 		}
 		defer f.Close()
@@ -362,7 +360,7 @@ func grepWalk(re *regexp.Regexp, root, base string, smart bool) (string, walkNot
 			head := make([]byte, binarySniff)
 			n, readErr := f.Read(head)
 			if readErr != nil && readErr != io.EOF {
-				notice.unreadable++
+				notice.unreadable = append(notice.unreadable, relName(base, path))
 				return nil
 			}
 			if looksBinary(head[:n]) {
@@ -370,7 +368,7 @@ func grepWalk(re *regexp.Regexp, root, base string, smart bool) (string, walkNot
 				return nil
 			}
 			if _, err := f.Seek(0, io.SeekStart); err != nil {
-				notice.unreadable++
+				notice.unreadable = append(notice.unreadable, relName(base, path))
 				return nil
 			}
 		}

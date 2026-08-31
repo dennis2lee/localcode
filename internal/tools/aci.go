@@ -38,16 +38,17 @@ import (
 // the roster is: a turn that was shown a tool's schema with the switch on
 // must not execute that tool with it off.
 //
-// Two things here are not behind it, and the line between them is worth
+// Three things here are not behind it, and the line between them is worth
 // stating because everything else in this file sits on one side of it.
 // Most of what follows makes an answer better: a window instead of a whole
 // file, a budget one generated table cannot monopolise, a diagnosis
 // instead of "not found". Those are a way of working, and a way of working
 // is something to opt into. But grep saying nothing when its match budget
-// ran out, and grep reporting a file as clean when a long line ended its
-// own scan, are not worse answers. They are answers that are not true, and
-// a defect does not become a feature by being fixed next to one. Both
-// apply with the switch off. See grepWalk.
+// ran out, when a long line ended a file's scan, or when a file could not
+// be opened at all, are not worse answers. They are a search that did not
+// look at part of the tree and did not say so, and a defect does not
+// become a feature by being fixed next to one. All three apply with the
+// switch off. See grepWalk.
 
 type smartKey struct{}
 
@@ -151,7 +152,7 @@ type walkNotice struct {
 	capped     bool // the total budget ran out
 	limit      int
 	binary     int      // files skipped for containing NUL bytes
-	unreadable int      // files that could not be opened
+	unreadable []string // files that could not be opened at all
 	tooLong    []string // files with a line past maxLineBytes
 	skipped    []string // directories not descended into
 }
@@ -164,21 +165,40 @@ func (n walkNotice) String() string {
 	if n.binary > 0 {
 		parts = append(parts, fmt.Sprintf("skipped %d binary file(s)", n.binary))
 	}
-	if n.unreadable > 0 {
-		parts = append(parts, fmt.Sprintf("could not open %d file(s)", n.unreadable))
+	if len(n.unreadable) > 0 {
+		parts = append(parts, "could not open "+nameList(n.unreadable))
 	}
 	if len(n.tooLong) > 0 {
-		sort.Strings(n.tooLong)
-		parts = append(parts, fmt.Sprintf("could not search %s — it has a line longer than %dKB", strings.Join(n.tooLong, ", "), maxLineBytes/1024))
+		parts = append(parts, fmt.Sprintf("could not search %s — it has a line longer than %dKB", nameList(n.tooLong), maxLineBytes/1024))
 	}
 	if len(n.skipped) > 0 {
-		sort.Strings(n.skipped)
-		parts = append(parts, "did not descend into "+strings.Join(dedupe(n.skipped), ", "))
+		parts = append(parts, "did not descend into "+nameList(n.skipped))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return "[" + strings.Join(parts, "; ") + "]"
+}
+
+// namesShown is how many paths a notice lists before it starts counting.
+//
+// Names rather than a count, because a count is not something anybody can
+// act on. "could not open 2 file(s)" on every search of a project with one
+// dangling symlink is a line that repeats forever and is never once useful;
+// "could not open link.txt" names a thing to go and delete. Three, because
+// past that the list stops being a name and becomes a wall, and the tail is
+// the same story as the head.
+const namesShown = 3
+
+// nameList renders paths, sorted and deduplicated, at most namesShown of
+// them.
+func nameList(in []string) string {
+	names := dedupe(append([]string(nil), in...))
+	sort.Strings(names)
+	if len(names) <= namesShown {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:namesShown], ", "), len(names)-namesShown)
 }
 
 func dedupe(in []string) []string {

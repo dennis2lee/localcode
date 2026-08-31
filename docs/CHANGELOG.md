@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+* **`grep` names a file it could not open, instead of skipping it in silence.** The third of the same defect, and unconditional like the other two: a file nothing looked inside is not a file with no matches. Rare in a source tree (measured: none in this repository, none under `~/.localcode`, one under `/usr/local`), and a dangling symlink or a permission denied is exactly the case where a search quietly returns less than it claims.
+
+* **Notices name paths rather than counting them.** "could not open 1 file(s)" on every search of a project with one dangling symlink is a line that repeats forever and can never be acted on; "could not open link.txt" is something to go and delete. At most three names before the rest becomes "and N more", sorted and deduplicated, since past that the list stops being a name and becomes a wall. The same treatment for the file-too-long and directory-skipped notices, which could previously paste an unbounded list.
+
 ## v0.73.0
 
 * **Smart Agent now changes the tools, not only who is holding them.** Published comparisons of one model across several coding harnesses spread by several points on the same benchmark with the model held fixed, and the reported causes are not clever ones: whether a search admits it stopped early, whether a failed edit says why, whether a read can ask for part of a file. Four of the six specialists have only the read-only set, `read_file`, `glob`, `grep` and `Skill`, and the roster's cheapest model is the one holding it, so this is where the switch was worth least and is now worth most.

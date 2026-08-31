@@ -142,6 +142,41 @@ func TestTheSearchBudgetSaysWhenItRanOut(t *testing.T) {
 	}
 }
 
+// A file nothing could open is not a file with no matches. Same shape as
+// the two above, rarer, and unconditional for the same reason.
+//
+// Named rather than counted: "could not open 1 file(s)" on every search of
+// a project with one dangling symlink is a line that repeats forever and
+// cannot be acted on. The name is a thing to go and delete.
+func TestAFileThatCouldNotBeOpenedIsNamed(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "ok.txt", "needle\n")
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), filepath.Join(dir, "dangling")); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+
+	for name, ctx := range map[string]context.Context{"off": plainCtx(dir), "on": smartCtx(dir)} {
+		got := grep(ctx, "needle").Content
+		if !strings.Contains(got, "ok.txt:1:needle") {
+			t.Errorf("with the switch %s, the readable file was lost:\n%s", name, got)
+		}
+		if !strings.Contains(got, "could not open dangling") {
+			t.Errorf("with the switch %s, the unopenable file was not named:\n%s", name, got)
+		}
+	}
+}
+
+// Past a few names the list stops being a name and becomes a wall.
+func TestALongListOfNamesIsCutShortRatherThanPastedWhole(t *testing.T) {
+	got := walkNotice{unreadable: []string{"e", "d", "c", "b", "a"}}.String()
+	if got != "[could not open a, b, c and 2 more]" {
+		t.Errorf("notice = %q", got)
+	}
+	if dup := (walkNotice{skipped: []string{"x", "x", "y"}}).String(); dup != "[did not descend into x, y]" {
+		t.Errorf("repeats were not folded: %q", dup)
+	}
+}
+
 // And a search that withheld nothing says nothing. A notice on every
 // result is a notice nobody reads, and it would also mean no plain grep
 // ever returns bare "file:line:text" again.
