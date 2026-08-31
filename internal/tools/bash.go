@@ -3,7 +3,10 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os/exec"
+	"strings"
 
 	"localcode/internal/shell"
 	"time"
@@ -70,18 +73,104 @@ func (b Bash) Execute(ctx context.Context, input json.RawMessage) Result {
 	// and the right fallback when nothing has said otherwise.
 	cmd.Dir = WorkingDir(ctx)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		// After the failure, never before it. On Windows, "python3: not
-		// found" carries a false implication that Python is absent, and
-		// the model's next move is to hunt for an interpreter one guess
-		// at a time. shell.MissingInterpreter adds what localcode can
+	if err == nil {
+		return Result{Content: withNotice(string(out), "")}
+	}
+
+	status, exited := exitStatus(err)
+	if !exited {
+		// Not a status the command chose: it could not be started at all,
+		// or it was killed before it could exit.
+		//
+		// MissingInterpreter comes after the failure, never before it. On
+		// Windows, "python3: not found" carries a false implication that
+		// Python is absent, and the model's next move is to hunt for an
+		// interpreter one guess at a time. It adds what localcode can
 		// actually observe, and nothing it cannot: it never names an
 		// interpreter as the project's. See internal/shell.
 		return Result{
-			Content: fmt.Sprintf("%s\n(exit error: %v)%s", out, err,
-				shell.MissingInterpreter(args.Command, true)),
+			Content: withNotice(string(out), killNotice(ctx, timeout, err)) +
+				shell.MissingInterpreter(args.Command, true),
 			IsError: true,
 		}
 	}
-	return Result{Content: string(out)}
+
+	// The command ran and answered with its status. Calling that an error
+	// is what sent a model back to re-run a search it had already
+	// completed — see shell.ExitAnswer for the report this comes from.
+	if answer := shell.ExitAnswer(args.Command, status); answer != "" {
+		return Result{Content: withNotice(string(out),
+			fmt.Sprintf("(exited with status %d: %s)", status, answer))}
+	}
+
+	// "exited with status", not "exit error". That a command exited
+	// non-zero is a fact; that it went wrong is an interpretation, and
+	// outside the table above localcode has no grounds for it. The number
+	// is what the model needs either way.
+	return Result{
+		Content: withNotice(string(out), fmt.Sprintf("(exited with status %d)", status)) +
+			shell.MissingInterpreter(args.Command, true),
+		IsError: true,
+	}
+}
+
+// killNotice explains a command that never got to choose an exit status.
+//
+// A command that ran past its timeout and a command the person cancelled
+// both arrive here as "signal: killed", and the two call for opposite
+// things: one that ran out of time wants narrowing and trying again, one
+// the person interrupted wants leaving alone. Told the same sentence for
+// both, a model retries both — which is the whole shape of the defect
+// this file's exit handling was rewritten for.
+//
+// localcode does not have to guess between them. It set the deadline and
+// it holds the context, so it knows which of the two happened, and says
+// which. Anything else — a command killed by the OOM killer, a shell
+// that could not start — leaves the context clean and keeps the raw
+// error, because then the error really is all that is known.
+func killNotice(ctx context.Context, timeout time.Duration, err error) string {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return fmt.Sprintf("(no exit status: killed after the %s timeout)", timeout)
+	case errors.Is(ctx.Err(), context.Canceled):
+		return "(no exit status: cancelled)"
+	}
+	return fmt.Sprintf("(exit error: %v)", err)
+}
+
+// exitStatus is the status a command chose to exit with, and whether it
+// chose one at all. A process killed by a signal reports -1, which is not
+// a status and must not be read as one.
+func exitStatus(err error) (int, bool) {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return 0, false
+	}
+	if code := ee.ExitCode(); code >= 0 {
+		return code, true
+	}
+	return 0, false
+}
+
+// withNotice keeps an empty result from looking like a lost one.
+//
+// A command that produced no output and a command whose output went
+// astray are the same empty string, and nothing downstream can tell them
+// apart. The other tools already refuse to do this: grep answers "no
+// matches" and glob "no files match" rather than returning nothing at
+// all. A shell command has no words of its own for it, so these are
+// localcode's.
+//
+// Output with no notice is passed through exactly as it came, so the
+// ordinary successful command is byte-for-byte what it always was.
+func withNotice(out, notice string) string {
+	switch {
+	case notice == "" && out != "":
+		return out
+	case notice == "" && out == "":
+		return "(no output)"
+	case out == "":
+		return notice
+	}
+	return strings.TrimRight(out, "\n") + "\n" + notice
 }

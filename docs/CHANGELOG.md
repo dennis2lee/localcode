@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.76.1
+
+* **A command whose exit status was an answer was reported as a failure.** Reported from a transcript: a sweep of `grep -n` calls across a file list, a third of them marked failed with no output, and then the entire sweep run again from the top, twice. Every one of the "failures" was a file that did not contain the symbol. `grep` exits 1 when it looked and found nothing, and the bash tool turned every non-zero status into a tool error whose whole content was `(exit error: exit status 1)` — so "this file has no matches" and "your command broke" arrived as the same result, and a model's recovery for a broken command is to run it again.
+
+  The status is now read where its meaning is a contract rather than a guess: `grep` 1 is no matches, `diff` and `cmp` 1 is the inputs differ, `test` and `[` 1 is the condition is false. Those are answers and are no longer errors. `grep` 2 — it could not read the file — stays one, because a search that never happened must not read like a search that came back clean.
+
+  Only where it is certain which program produced the status. `grep x f | head` exits with head's and `a && b` with whichever of them ran last, so neither is interpreted at all: a wrong explanation is worse than a bare number, since it would report a failed build as a search that found nothing.
+
+  Everything outside that table now reads `(exited with status N)` rather than `(exit error: …)`. That a command exited non-zero is a fact; that it went wrong is an interpretation, and there are no grounds for it. And a command that printed nothing now says `(no output)`, because an empty result and a lost one were previously the same string — which is the thing `grep`'s "no matches" and `glob`'s "no files match" already refuse to do.
+
+  This was found on a local model, where a wrong error is unrecoverable, but it was never a local-model fault: `diff` reporting that two files differ has been an error for every model since the tool was written. Fixed unconditionally rather than behind the Smart Agent switch, for the same reason the tool-name dead end and grep's silent cap were — the answer was not worse, it was false.
+
+* **A command that timed out and one the person interrupted were the same sentence.** Both arrived as `(exit error: signal: killed)`, and the two call for opposite things: a command that ran out of time wants narrowing and trying again, one the person cancelled with Esc wants leaving alone. Told the same thing for both, a model retries both. They now read `(no exit status: killed after the 2m0s timeout)` and `(no exit status: cancelled)` — localcode set the deadline and holds the context, so it never had to guess which of the two happened. A kill it did not cause, from the OOM killer or a shell that could not start, still reports the raw error, because there the error really is all that is known.
+
 ## v0.76.0
 
 * **`#<name>` refers to another conversation.** "check #S2 against the file here" now resolves S2 by id, by exact title, or by an unambiguous title prefix, and tells the model which conversation that is, where it was working, and how to read it.
