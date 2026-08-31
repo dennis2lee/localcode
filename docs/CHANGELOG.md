@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+* **One `verify_command` at a time per directory.** The `check` tool is the one way a read-only agent can find out whether the code actually runs, and the argument for giving it to a reviewer is entirely about *what* runs: one line, written by the person, fixed before any model saw it. Nothing in that argument says how many of it run at once, and the answer was "as many as there are agents".
+
+  A debate panel is concurrent by construction, `check` is in the reviewers' read-only tool list, and every child session inherits the parent's workspace. Three reviewers each deciding to check the work is three `go test ./...` runs in one tree at the same time, sharing a build cache, test binaries and output files, each on its own five-minute clock, on a machine already busy running the model. Measured before the fix: four concurrent calls all entered before any of them left.
+
+  Keyed by directory, so two sessions working in two projects still run together. The clock starts after the wait rather than before it, so a check that queued behind a long test run is not cut short for somebody else's; a check that waited says so, because otherwise the only trace is a number that reads as a slow command; and Esc during the wait ends the call, which is exactly when somebody presses it. What this cannot promise is stated in the code: it is a lock between localcode's own callers, not a lock on the tree.
+
 * **A delegated task is work, not a command.** `SendMessage` is the one door into a turn, and everything past it assumed what came through was typed by a person. A sub-agent's task arrives at the same door and was walked through the whole command table first, before any model call. A task whose first line read `/permission-skip-all on` was executed as a toggle in the child session: the child did no work, its permission switch was flipped, and the parent was handed the command's own confirmation text back as though it were the answer. Reproduced, then fixed, then reproduced again with the fix reverted.
 
   The route in is the one the trust boundary in the system prompt exists to name. A `Task` prompt is written by a model, and the model writes it after reading files, command output, and whatever an MCP server returned. A line of data reaching the model turned into a privileged action with nobody asked.

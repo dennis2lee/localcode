@@ -1215,7 +1215,7 @@ If the turn happens to finish in the instant between your pressing Enter and the
 | `edit` | Yes | Replace a specific string in a file |
 | `bash` | Yes | Run a shell command, 2 minute default timeout |
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
-| `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. |
+| `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server |
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only when there are 2 or more agents to delegate to, which [Smart Agent](#smart-agent) is one way to arrange. |
 | `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [Smart Agent](#smart-agent) on. |

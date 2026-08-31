@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"localcode/internal/shell"
@@ -84,6 +86,55 @@ func (c Check) command() string {
 	return strings.TrimSpace(c.Command())
 }
 
+// One at a time per directory.
+//
+// This tool is the one place a read-only agent can run the project's own
+// command, and the argument for that is entirely about *what* runs: one
+// line, written by the person, fixed before any model saw it. Nothing in
+// that argument says anything about how many of it run at once, and the
+// answer turned out to be "as many as there are agents".
+//
+// A debate panel is concurrent by construction, check is in the reviewers'
+// read-only list, and every child session inherits the parent's workspace.
+// So three reviewers each deciding to check the work is three `go test
+// ./...` runs in one tree at the same time, sharing a build cache, test
+// binaries and output files, each on its own five-minute clock, on a
+// machine already busy running the model. Measured before it was fixed: four
+// concurrent calls all entered before any of them left.
+//
+// Keyed by directory rather than globally, because two sessions working in
+// two projects have nothing to contend over and queueing them would be a
+// cost for no reason. A per-directory lock is also all this can honestly
+// promise: it does not stop the person running the same command in a
+// terminal, and it is not a lock on the tree.
+var checkRunning sync.Map // directory -> chan struct{}, a 1-deep semaphore
+
+// takeDirectory blocks until nothing else is running a check in dir, and
+// returns the release plus whether it had to wait. Reports false when ctx
+// ended first: waiting for a five-minute test run is exactly when somebody
+// presses Esc.
+func takeDirectory(ctx context.Context, dir string) (release func(), waited, ok bool) {
+	if dir == "" {
+		// The process's own working directory. One key, because that is one
+		// directory however many callers reached it with nothing set.
+		dir = "."
+	}
+	v, _ := checkRunning.LoadOrStore(filepath.Clean(dir), make(chan struct{}, 1))
+	sem := v.(chan struct{})
+
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, false, true
+	default:
+	}
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, true, true
+	case <-ctx.Done():
+		return func() {}, true, false
+	}
+}
+
 func (c Check) Execute(ctx context.Context, _ json.RawMessage) Result {
 	command := c.command()
 	if command == "" {
@@ -93,6 +144,20 @@ func (c Check) Execute(ctx context.Context, _ json.RawMessage) Result {
 		}
 	}
 
+	dir := WorkingDir(ctx)
+	release, waited, ok := takeDirectory(ctx, dir)
+	if !ok {
+		return Result{
+			Content: "cancelled while waiting for another check to finish in this directory",
+			IsError: true,
+		}
+	}
+	defer release()
+
+	// The clock starts after the wait, not before it. A check that queued
+	// behind a five-minute test run has not used any of its own five
+	// minutes, and cutting it short for somebody else's run would report a
+	// timeout as though the command were slow.
 	timeout := c.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Minute
@@ -100,8 +165,15 @@ func (c Check) Execute(ctx context.Context, _ json.RawMessage) Result {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Said out loud, because otherwise the only trace of the wait is a
+	// number that reads as a slow command.
+	note := ""
+	if waited {
+		note = " after waiting for another check in this directory to finish"
+	}
+
 	cmd := shell.Command(ctx, command)
-	cmd.Dir = WorkingDir(ctx)
+	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	// A failing check is not a failing tool. The exit status is the
 	// answer, and reporting it as an error made a red tool line for the
@@ -109,7 +181,7 @@ func (c Check) Execute(ctx context.Context, _ json.RawMessage) Result {
 	// turned the evidence that something is broken into the appearance
 	// that the reviewer is broken.
 	if err != nil {
-		return Result{Content: fmt.Sprintf("%s\n(%s failed: %v)", out, command, err)}
+		return Result{Content: fmt.Sprintf("%s\n(%s failed%s: %v)", out, command, note, err)}
 	}
-	return Result{Content: fmt.Sprintf("%s\n(%s passed)", out, command)}
+	return Result{Content: fmt.Sprintf("%s\n(%s passed%s)", out, command, note)}
 }
