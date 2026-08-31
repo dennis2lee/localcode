@@ -148,6 +148,8 @@ type stageReport struct {
 	// dropped is how many items of a reference fanout did not run because
 	// the run's agent ceiling was in the way. Named rather than silent.
 	dropped int
+	// merged is how many repeats of an item an earlier stage returned.
+	merged int
 	// answers is what a stage produced, in launch order.
 	answers []outcome
 }
@@ -169,7 +171,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 			return report
 		}
 
-		items := l.stageItems(stage, results)
+		items, merged := l.stageItems(stage, results)
 		copies := max(stage.Copies, 1)
 
 		// A fanout over an earlier stage's results is the one width nobody
@@ -193,7 +195,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 		}
 		if len(units) == 0 {
 			report.stages = append(report.stages, stageReport{
-				name: stage.Name, kind: stage.Kind, agent: stage.Agent, dropped: dropped,
+				name: stage.Name, kind: stage.Kind, agent: stage.Agent, dropped: dropped, merged: merged,
 			})
 			if dropped > 0 {
 				report.stopped = fmt.Sprintf("stopped at %s: the run had already launched %d of its %d agents, so none of its %d items could run",
@@ -219,7 +221,7 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 		got := l.runStage(ctx, sessionID, p, stage, units, brief)
 		report.launched += len(units)
 
-		sr := stageReport{name: stage.Name, kind: stage.Kind, agent: stage.Agent, launched: len(units), dropped: dropped}
+		sr := stageReport{name: stage.Name, kind: stage.Kind, agent: stage.Agent, launched: len(units), dropped: dropped, merged: merged}
 		var kept []outcome
 		for _, o := range got {
 			switch {
@@ -336,28 +338,45 @@ func stagePrompt(p Plan, stage Stage, item, carried string) string {
 
 // stageItems is what a fanout spreads over: the literal list, or the values
 // of an earlier stage's kept results.
-func (l *Loop) stageItems(stage Stage, results map[string][]outcome) []string {
+func (l *Loop) stageItems(stage Stage, results map[string][]outcome) ([]string, int) {
 	if stage.Kind != "fanout" {
-		return []string{""}
+		return []string{""}, 0
 	}
 	ref, isRef := planRef(stage.Over)
 	if !isRef {
-		return stage.Over
+		return stage.Over, 0
 	}
 	from, field, ok := splitRef(ref)
 	if !ok {
-		return nil
+		return nil, 0
 	}
+	// Merged, not concatenated. A fanout that reviews one change along
+	// four dimensions and then spreads over what it found gets the same
+	// finding back from every dimension that noticed it, so the skeptic
+	// stage was launching four agents on one item and calling it four
+	// findings. Measured on a two-dimension plan: two distinct findings
+	// became four items and eight launches, half the run spent twice.
+	//
+	// First-seen order, and the count of what was merged goes into the
+	// report: a silent merge is the same defect as a silent cap.
+	seen := map[string]bool{}
 	var items []string
+	merged := 0
 	for _, o := range results[from] {
 		for _, v := range asStrings(o.data[field]) {
+			key := strings.ToLower(strings.Join(strings.Fields(v), " "))
+			if seen[key] {
+				merged++
+				continue
+			}
+			seen[key] = true
 			items = append(items, v)
 			if len(items) >= maxFanout {
-				return items
+				return items, merged
 			}
 		}
 	}
-	return items
+	return items, merged
 }
 
 // carriedInput is what {{input}} expands to: every kept result so far,

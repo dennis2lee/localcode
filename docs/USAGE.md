@@ -1331,6 +1331,7 @@ A stage is one of three kinds:
 | Timeouts | 10 minutes per stage, 30 minutes per run. Nothing else in localcode bounds a single turn's wall clock; a fan out is where that stops being tolerable. |
 | Cancellation | Every stage is a synchronous child, so Esc stops the whole run including the stage in flight. |
 | Permission | Every run asks, always. The prompt shows the ceilings rather than an estimate, because a `$stage.field` fanout's width is however many findings the earlier stage returns and nobody knows that yet. |
+| Repeats | A fanout over an earlier stage's findings merges items that are the same once whitespace and case are set aside, and the report says how many. Reviewing one change along four dimensions returns the same finding from every dimension that noticed it; without this, four agents check what is one thing and the run calls it four findings. |
 | The report | Composed by localcode from what happened, not summarised by a model. A run must not report a success nobody observed. |
 | Nesting | Refused. A plan that can run plans turns a ceiling into an exponent. |
 

@@ -330,3 +330,65 @@ func TestARoleCannotWidenAnAgentsOwnRestriction(t *testing.T) {
 		t.Errorf("readonly allowlist = %v", free)
 	}
 }
+
+// A fanout over an earlier stage's findings merges repeats.
+//
+// Found by printing what a run actually produces rather than by reasoning
+// about it. A review stage fanned out over two dimensions returns the same
+// finding from every dimension that noticed it, so the skeptic stage was
+// launching four agents on what were two distinct findings and calling the
+// result four findings. Half the run, spent twice.
+func TestARepeatedFindingIsOneItem(t *testing.T) {
+	m := &scriptedModel{}
+	m.reply = func(prompt string) (string, map[string]any) {
+		if strings.Contains(prompt, "review for") {
+			// Both dimensions notice the same two things, spelled slightly
+			// differently the second time.
+			if strings.Contains(prompt, "concurrency") {
+				return "", map[string]any{"findings": []string{"A  nil deref in foo()", "a race in bar()"}}
+			}
+			return "", map[string]any{"findings": []string{"a nil deref in foo()", "a race in bar()"}}
+		}
+		return "", map[string]any{"survives": true}
+	}
+	loop := orchestrateLoop(t, m.server(t).URL)
+
+	report := runPlanJSON(t, loop, `{"goal":"g","stages":[
+	  {"name":"find","kind":"fanout","agent":"oracle","over":["correctness","concurrency"],
+	   "prompt":"review for {{item}}","returns":{"findings":"strings"}},
+	  {"name":"kill","kind":"fanout","agent":"oracle","copies":2,"over":["$find.findings"],
+	   "prompt":"refute {{item}}","returns":{"survives":"bool"},"keep":"survives"}]}`)
+
+	kill := report.stages[1]
+	if kill.launched != 4 {
+		t.Errorf("the skeptic stage launched %d agents; two distinct findings times two copies is 4", kill.launched)
+	}
+	if kill.merged != 2 {
+		t.Errorf("merged = %d, want 2", kill.merged)
+	}
+	// Not silent. A merge nobody is told about is the same defect as a cap
+	// nobody is told about.
+	if out := report.String(); !strings.Contains(out, "2 repeat(s) of an item merged") {
+		t.Errorf("the report does not say what it merged:\n%s", out)
+	}
+}
+
+// The permission prompt may not name a number the runner cannot reach.
+func TestThePermissionEstimateNeverExceedsTheRunCeiling(t *testing.T) {
+	var p Plan
+	json.Unmarshal([]byte(`{"goal":"g","stages":[
+	  {"name":"a","kind":"step","agent":"oracle","prompt":"x","returns":{"f":"strings"}},
+	  {"name":"b","kind":"fanout","agent":"oracle","copies":2,"over":["$a.f"],"prompt":"{{item}}"},
+	  {"name":"c","kind":"barrier","agent":"plan","prompt":"y"}]}`), &p)
+
+	if got := p.Launches(); got > maxRunAgents {
+		t.Errorf("Launches() = %d, which is more than the %d the runner allows: the prompt would ask for a yes to a number that cannot happen", got, maxRunAgents)
+	}
+
+	m := &scriptedModel{reply: func(string) (string, map[string]any) { return "ok", nil }}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	body, _ := json.Marshal(p)
+	if d := NewOrchestrateTool(loop).Describe(body); !strings.Contains(d, "at most 32 agent turns") {
+		t.Errorf("the permission prompt reads %q", d)
+	}
+}

@@ -300,10 +300,15 @@ func (p Plan) Validate(l Limits) error {
 	return nil
 }
 
-// Launches is the worst case this plan can cost, in agent turns. Used for
-// the permission prompt, where a ceiling is the honest number: the actual
-// count depends on how many findings a stage returns, which nobody knows
-// yet.
+// Launches is the worst case this plan can cost, in agent turns, and never
+// more than the run ceiling.
+//
+// Used for the permission prompt, where a ceiling is the honest number:
+// the real count depends on how many findings a stage returns, which
+// nobody knows yet. The clamp matters as much as the estimate. Without it
+// a plan with one reference fanout priced at 16 items times 2 copies asked
+// the person to approve "up to 35 agent turns" in a runner that stops at
+// 32, which is a number that cannot happen being used to get a yes.
 func (p Plan) Launches() int {
 	total := 0
 	for _, s := range p.Stages {
@@ -320,7 +325,7 @@ func (p Plan) Launches() int {
 		}
 		total += n
 	}
-	return total
+	return min(total, maxRunAgents)
 }
 
 // planRef reports whether a fanout's Over is a reference rather than a

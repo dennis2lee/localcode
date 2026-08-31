@@ -131,7 +131,7 @@ func (t *OrchestrateTool) Describe(input json.RawMessage) string {
 	}
 	sort.Strings(names)
 
-	return fmt.Sprintf("run an orchestration: %q, %d stages, up to %d agent turns across %s, %s per stage and %s for the run",
+	return fmt.Sprintf("run an orchestration: %q, %d stages, at most %d agent turns across %s, %s per stage and %s for the run",
 		firstLine(p.Goal), len(p.Stages), p.Launches(), strings.Join(names, ", "), stageTimeout, runTimeout)
 }
 
@@ -194,6 +194,9 @@ func (r runReport) String() string {
 		}
 		if s.failed > 0 {
 			fmt.Fprintf(&b, ", %d failed", s.failed)
+		}
+		if s.merged > 0 {
+			fmt.Fprintf(&b, ", %d repeat(s) of an item merged", s.merged)
 		}
 		if s.dropped > 0 {
 			fmt.Fprintf(&b, ", %d item(s) not run because the run's %d-agent ceiling was reached", s.dropped, maxRunAgents)

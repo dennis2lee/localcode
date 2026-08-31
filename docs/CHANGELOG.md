@@ -16,6 +16,8 @@
 
   Ceilings, all refusals rather than truncations: 8 stages, 16 items per fanout, 8 copies, 32 agent turns per run, 5 declared fields per stage, 4 agents at once. Timeouts of 10 minutes per stage and 30 per run, which is the first wall-clock bound on a single turn anywhere in localcode. The permission prompt shows those ceilings rather than an estimate, because a fanout over an earlier stage's findings has a width nobody knows yet. The report is composed by localcode from what happened rather than summarised by a model, and it names what did not run.
 
+  Two things found by printing what a run actually produces rather than by reasoning about it. A fanout over an earlier stage's findings now merges repeats, because a review spread over four dimensions returns the same finding from every dimension that noticed it: measured on a two-dimension plan, two distinct findings became four items and eight skeptic launches, half the run spent twice. And the permission prompt's estimate is clamped to the run ceiling, because a plan with one reference fanout was asking the person to approve "up to 35 agent turns" in a runner that stops at 32.
+
   Nesting is refused: a plan that can run plans turns a ceiling into an exponent.
 
   Not in this version, and said rather than left to be discovered: pipelining an item through later stages without waiting for the rest of its own stage, `repeat_until` loops, resuming a run, and plans saved on disk.
