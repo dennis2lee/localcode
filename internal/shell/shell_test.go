@@ -162,7 +162,11 @@ func TestStubMessageDependsOnWingetBeingAvailable(t *testing.T) {
 	if !is {
 		t.Fatal("the stub was not detected")
 	}
-	for _, want := range []string{"winget install", pythonWingetID, "winget search", "py -3"} {
+	// "py -3" used to be here and is deliberately gone: the launcher
+	// resolves PEP 514 PythonCore registrations, which a conda, miniforge
+	// or uv-managed interpreter is not, so on the machines this feature
+	// is most often needed the advice pointed at nothing.
+	for _, want := range []string{"winget install", pythonWingetID, "winget search", "absolute path"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("with winget present, the message is missing %q:\n%s", want, msg)
 		}

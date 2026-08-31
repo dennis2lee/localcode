@@ -10,7 +10,7 @@
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
-| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Local LLMs](#attaching-a-local-llm) |
+| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
 ## Part 1. Getting started
@@ -1216,7 +1216,7 @@ If the turn happens to finish in the instant between your pressing Enter and the
 | `grep` | No | Search file contents by regex. Stops at 200 matches and says so; names any file it could not open or could not finish reading. See [Three grep answers that were wrong, not short](#three-grep-answers-that-were-wrong-not-short) |
 | `write_file` | Yes | Create or overwrite a file |
 | `edit` | Yes | Replace a specific string in a file |
-| `bash` | Yes | Run a shell command, 2 minute default timeout |
+| `bash` | Yes | Run a shell command, 2 minute default timeout. On Windows, a command whose interpreter is not on PATH is told so rather than left with a bare shell error: see [Python on Windows](#python-on-windows) |
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
 | `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server |
@@ -1968,6 +1968,30 @@ Changing model inside one conversation is not supported yet. Add a new name to t
 ```bash
 localcode --agent quick-search
 ```
+
+### Python on Windows
+
+Two ways a `python` command fails on Windows, and localcode answers both rather than leaving a bare shell error.
+
+| What happened | What the model is told |
+|---|---|
+| The name resolves to a Microsoft Store app-execution-alias stub, which opens the Store instead of running Python | That every spelling hits the same stub, and the `winget` line that installs a real one. The install is handed back as a command rather than run, so it goes through the ordinary permission gate. |
+| The name is not on PATH at all | That this is a common way for it to fail rather than a sign Python is missing, and where to look. |
+
+The second is worth explaining because the plain reading of "python3: not found" is false on most Windows machines that have Python:
+
+* conda, miniforge and miniconda ship **no `python3.exe` at all**, only `python.exe`.
+* python.org's classic installers ship none either, and do not add themselves to PATH by default.
+* Each tool call gets a fresh shell, so `conda activate` or a venv activation does not carry over. An interpreter has to be called by absolute path.
+
+What it does not do, deliberately:
+
+* **It never names an interpreter as the project's.** When PATH does resolve a `python`, that path is reported as a fact about the machine, with the note that whether it suits this project is a separate question. Naming a conda base that cannot import the project turns one failed call into a wrong hypothesis to debug.
+* **It does not search the disk.** The places to look are handed back as a command for the model to run, the same way the install line is, rather than localcode walking install roots with nobody having approved anything.
+* **It runs after a failure, never before one.** A pre-flight check that guessed wrong would stop a command that was going to work, and no reading of PATH can be sure: a shell function, an alias or a shim is invisible to it.
+* **It is keyed on PATH lookup, not on the error text**, which is translated on every non-English Windows.
+
+Cases it does not cover, named rather than left to be discovered: a wrapped invocation (`env python3 x.py`, `xargs python3`) puts something else in the leading position, and widening the match is what would start refusing commands that were going to work.
 
 ### Attaching a local LLM
 

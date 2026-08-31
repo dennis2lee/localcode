@@ -23,6 +23,7 @@ package shell
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -173,7 +174,10 @@ func storeStub(goos, command string, lookPath func(string) (string, error)) (str
 		if len(fields) == 0 {
 			continue
 		}
-		name := strings.ToLower(strings.TrimSuffix(filepath.Base(fields[0]), ".exe"))
+		// Lowercased before the suffix is trimmed, not after: TrimSuffix is
+		// case-sensitive, so "PYTHON3.EXE" kept its extension and matched
+		// nothing.
+		name := strings.TrimSuffix(strings.ToLower(filepath.Base(fields[0])), ".exe")
 		if name != "python" && name != "python3" {
 			continue
 		}
@@ -222,17 +226,200 @@ func stubMessage(invoked string, lookPath func(string) (string, error)) string {
 		"If winget reports that id is not available, run `winget search Python.Python.3` and install " +
 		"the newest one listed. The install does not reach a shell that is already running, so call " +
 		"python in a later command rather than chaining it onto the install with &&; if it is still " +
-		"not found, `py -3` uses the launcher the installer adds. Prefer node or awk instead if this " +
+		"not found, look for it by absolute path (see below). Prefer node or awk instead if this " +
 		"task does not actually need Python."
 }
 
-// splitSegments breaks a command line at the operators that start a new
-// command (|, &&, ||, ;), so only the leading word of each command is
-// considered. "grep python3 notes.txt" must not trip the detector.
-func splitSegments(command string) []string {
-	replaced := command
-	for _, op := range []string{"&&", "||", "|", ";", "\n"} {
-		replaced = strings.ReplaceAll(replaced, op, "\x00")
+// Interpreter names that are worth explaining when they are not found.
+//
+// Short on purpose. Widening this is what creates false positives, and
+// the miss it accepts is named rather than hidden: "env python3 x.py",
+// "xargs python3" and "PYTHONPATH=. python3 x.py" all put something else
+// in the leading position and get nothing from this.
+var namedInterpreters = map[string]bool{
+	"python": true, "python3": true, "pip": true, "pip3": true,
+}
+
+// MissingInterpreter explains a Windows command that failed because its
+// interpreter is not on PATH, or "" when that is not what happened.
+//
+// The complement of StoreStub, and deliberately the other side of the
+// same test. StoreStub fires when LookPath SUCCEEDS and lands in the
+// Store alias directory; this fires when LookPath FAILS. The two cannot
+// both answer, and between them they cover the two ways "python" goes
+// wrong on Windows.
+//
+// LookPath is the whole gate, and it is chosen over reading the shell's
+// error text because that text is translated: cmd.exe says "is not
+// recognized as an internal or external command" in the machine's own
+// language, and MSYS bash follows the MSYS locale. The report this was
+// built from came from a machine whose model was writing Korean.
+//
+// This runs only after a command has already failed. A pre-flight check
+// that guessed wrong would stop a command that was going to work, and
+// there is no reading of PATH that can be sure: a shim, an alias or a
+// function inside the shell is invisible to LookPath.
+func MissingInterpreter(command string, failed bool) string {
+	return missingInterpreter(runtime.GOOS, command, failed, exec.LookPath, current().posix)
+}
+
+func missingInterpreter(goos, command string, failed bool, lookPath func(string) (string, error), posix bool) string {
+	if goos != "windows" || !failed {
+		return ""
 	}
-	return strings.Split(replaced, "\x00")
+	name := ""
+	for _, segment := range splitSegments(command) {
+		fields := strings.Fields(segment)
+		if len(fields) == 0 {
+			continue
+		}
+		lead := strings.TrimSuffix(strings.ToLower(filepath.Base(fields[0])), ".exe")
+		if !namedInterpreters[lead] {
+			continue
+		}
+		if _, err := lookPath(fields[0]); err != nil {
+			name = fields[0]
+			break
+		}
+	}
+	if name == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\n(%s is not on PATH on this machine, which is a common way for this to fail on "+
+		"Windows rather than a sign that Python is missing. ", name)
+
+	// A machine fact, when there is one: what PATH actually resolves. It
+	// is not a claim that this interpreter suits the project, and the
+	// wording keeps that line, because naming a conda base that cannot
+	// import the project turns one failed call into a wrong hypothesis.
+	if other, err := lookPath("python"); err == nil && !strings.Contains(strings.ToLower(other), `\microsoft\windowsapps\`) {
+		fmt.Fprintf(&b, "There is a python on PATH at %s; whether it is the one this project needs is a "+
+			"separate question. ", forShell(other, posix))
+	} else {
+		b.WriteString("The interpreter file is normally called python.exe: a conda, miniforge or " +
+			"miniconda install does not provide python3.exe at all, and neither do python.org's " +
+			"classic installers, and none of those put themselves on PATH by default. ")
+	}
+
+	b.WriteString("Each tool call gets a fresh shell, so an activated environment does not carry " +
+		"over: call the interpreter by its absolute path. To find one, run:\n\n    " +
+		huntCommand(posix) + "\n\nIf that finds nothing, Python really is absent.)")
+	return b.String()
+}
+
+// huntCommand is handed back for the model to run through the ordinary
+// permission gate, the way stubMessage hands back the winget line, rather
+// than localcode searching the disk itself. Searching would mean this
+// package spawning processes and walking install roots on a path where a
+// person has approved nothing, and it would still be answering "is there
+// any Python" when the question is "which Python can import this project".
+func huntCommand(posix bool) string {
+	if !posix {
+		return `dir /b /s "%UserProfile%\miniforge3\python.exe" "%UserProfile%\miniconda3\python.exe" ` +
+			`"%UserProfile%\anaconda3\python.exe" "%LocalAppData%\Programs\Python\python.exe" 2>nul`
+	}
+	return `ls -1 ~/miniforge3/python.exe ~/miniconda3/python.exe ~/anaconda3/python.exe ` +
+		`~/AppData/Local/Programs/Python/Python3*/python.exe ~/AppData/Local/Python/bin/python3.exe ` +
+		`./.venv/Scripts/python.exe ./venv/Scripts/python.exe 2>/dev/null`
+}
+
+// forShell renders a Windows path in the form the shell that will run it
+// accepts. A bare backslash path inside a bash -c string is eaten by bash
+// before MSYS ever sees it, so printing one under Git Bash hands the model
+// something that cannot be pasted back.
+func forShell(path string, posix bool) string {
+	if !posix {
+		return path
+	}
+	p := strings.ReplaceAll(path, `\`, "/")
+	if len(p) > 2 && p[1] == ':' {
+		return "/" + strings.ToLower(p[:1]) + p[2:]
+	}
+	return p
+}
+
+// splitSegments breaks a command line at the operators that start a new
+// command (|, &&, ||, ;, newline), so only the leading word of each
+// command is considered. "grep python3 notes.txt" must not trip the
+// detector.
+//
+// Quote-aware, which it was not, and the difference was a command that
+// never ran. Splitting the raw text on ";" finds one inside a quoted
+// string too, so
+//
+//	git commit -m "fix; python3 helper"
+//
+// produced a second segment beginning "python3", and on a machine where
+// the WindowsApps alias is enabled that made the git commit a Python
+// command: refused, unrun, and answered with instructions for installing
+// an interpreter it was never going to use. Measured, not imagined.
+//
+// The rules are the shell's own. A single quote protects everything up to
+// the next single quote. A double quote protects everything up to the
+// next unescaped double quote. A backslash outside single quotes protects
+// the next character. Nothing here has to interpret any of it, only
+// decline to split inside it, so this is a scanner rather than a parser
+// and an unbalanced quote simply means the rest of the line is one
+// segment, which is the safe direction: a missed split can only fail to
+// notice a python, and a wrong split refuses somebody's commit.
+func splitSegments(command string) []string {
+	var out []string
+	var cur strings.Builder
+	var quote byte // 0, '\'' or '"'
+
+	flush := func() {
+		out = append(out, cur.String())
+		cur.Reset()
+	}
+	for i := 0; i < len(command); i++ {
+		c := command[i]
+		switch {
+		case quote == '\'':
+			if c == '\'' {
+				quote = 0
+			}
+			cur.WriteByte(c)
+			continue
+		case quote == '"':
+			if c == '\\' && i+1 < len(command) {
+				cur.WriteByte(c)
+				i++
+				cur.WriteByte(command[i])
+				continue
+			}
+			if c == '"' {
+				quote = 0
+			}
+			cur.WriteByte(c)
+			continue
+		}
+
+		switch c {
+		case '\'', '"':
+			quote = c
+			cur.WriteByte(c)
+		case '\\':
+			cur.WriteByte(c)
+			if i+1 < len(command) {
+				i++
+				cur.WriteByte(command[i])
+			}
+		case ';', '\n':
+			flush()
+		case '&', '|':
+			// "&&" and "||" and a bare "|" all start a new command. A
+			// bare "&" does too under cmd.exe, and under a POSIX shell it
+			// backgrounds what came before, which also ends the segment.
+			if i+1 < len(command) && command[i+1] == c {
+				i++
+			}
+			flush()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return out
 }

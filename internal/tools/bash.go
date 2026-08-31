@@ -71,7 +71,17 @@ func (b Bash) Execute(ctx context.Context, input json.RawMessage) Result {
 	cmd.Dir = WorkingDir(ctx)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return Result{Content: fmt.Sprintf("%s\n(exit error: %v)", out, err), IsError: true}
+		// After the failure, never before it. On Windows, "python3: not
+		// found" carries a false implication that Python is absent, and
+		// the model's next move is to hunt for an interpreter one guess
+		// at a time. shell.MissingInterpreter adds what localcode can
+		// actually observe, and nothing it cannot: it never names an
+		// interpreter as the project's. See internal/shell.
+		return Result{
+			Content: fmt.Sprintf("%s\n(exit error: %v)%s", out, err,
+				shell.MissingInterpreter(args.Command, true)),
+			IsError: true,
+		}
 	}
 	return Result{Content: string(out)}
 }
