@@ -80,3 +80,66 @@ test('stop works on a turn this client did not start', async () => {
 
   assert.equal(app.callsTo('POST', '/api/sessions/sess-1/cancel').length, 1, 'stop sent nothing to the daemon');
 });
+
+// A background task keeps the light blinking after the turn that launched
+// it has ended.
+//
+// This is the case the light used to get wrong, and it got it wrong in the
+// direction that matters: a task deliberately outlives its turn and holds
+// no turn slot, so the daemon's busy flag goes false the moment the
+// launching turn ends. The light then read "connected to the model, idle"
+// about a conversation with several agents still working in it.
+test('the light blinks while a background task is still running', async () => {
+  const app = await load();
+  const dot = app.el('comm-dot');
+
+  app.sse.emit({ type: 'task.spawned', data: { task_id: 't1', agent: 'explore' } });
+  await app.settle();
+  assert.ok(dot.className.includes('active'),
+    'a launched task left the light solid, so a working conversation reads as idle');
+  assert.match(dot.title, /background task/);
+
+  app.sse.emit({ type: 'task.status', data: { task_id: 't1', status: 'running' } });
+  await app.settle();
+  assert.ok(dot.className.includes('active'), dot.className);
+
+  app.sse.emit({ type: 'task.status', data: { task_id: 't1', status: 'completed' } });
+  await app.settle();
+  assert.ok(!dot.className.includes('active'),
+    'the light kept blinking after the last task finished');
+  assert.match(dot.title, /idle/);
+});
+
+// A turn and a task at once: the turn is what the tooltip names, since it
+// is the one holding the prompt box.
+test('a turn takes precedence over a task in what the light says', async () => {
+  const app = await load();
+  const dot = app.el('comm-dot');
+
+  app.sse.emit({ type: 'task.spawned', data: { task_id: 't1', agent: 'explore' } });
+  app.state.waiting = true;
+  app.sse.emit({ type: 'task.status', data: { task_id: 't1', status: 'running' } });
+  await app.settle();
+
+  assert.ok(dot.className.includes('active'));
+  assert.match(dot.title, /running your prompt/);
+});
+
+// One task finishing while another is still going must not put the light
+// out: the question is whether any work is in flight, not the last event.
+test('the light stays lit while any task is still going', async () => {
+  const app = await load();
+  const dot = app.el('comm-dot');
+
+  app.sse.emit({ type: 'task.spawned', data: { task_id: 't1', agent: 'explore' } });
+  app.sse.emit({ type: 'task.spawned', data: { task_id: 't2', agent: 'oracle' } });
+  app.sse.emit({ type: 'task.status', data: { task_id: 't1', status: 'completed' } });
+  await app.settle();
+
+  assert.ok(dot.className.includes('active'),
+    'one task finishing put the light out while another was still running');
+
+  app.sse.emit({ type: 'task.status', data: { task_id: 't2', status: 'failed' } });
+  await app.settle();
+  assert.ok(!dot.className.includes('active'), dot.className);
+});

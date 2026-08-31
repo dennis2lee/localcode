@@ -118,6 +118,24 @@ export function turnInFlight() {
   return session.waiting || currentSessionBusy();
 }
 
+// tasksInFlight reports whether a background task launched from this
+// conversation is still going.
+//
+// A separate question from turnInFlight, because a background task
+// deliberately outlives the turn that launched it: it does not hold the
+// session's turn slot, so the daemon's busy flag goes false the moment the
+// launching turn ends while several agents are still working. The light
+// then said "idle" about a conversation with four models running in it.
+//
+// spawned as well as running: a task waiting on the concurrency lane has
+// not started yet, and it is still work in flight from the reader's side.
+export function tasksInFlight() {
+  for (const t of session.tasks.values()) {
+    if (t.status === 'spawned' || t.status === 'running') return true;
+  }
+  return false;
+}
+
 // Prompt recall is per conversation, and outlives a switch away from it.
 //
 // It used to live entirely inside the per-session state, which resetSession

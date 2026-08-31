@@ -342,7 +342,11 @@ export function applyEvent(ev) {
   const h = handlers[ev.type];
   if (!h) return;
   h(ev.data ?? {});
-  renderStatusBar(); // one place, instead of a hand-picked call site per case
+  // One place, instead of a hand-picked call site per case. The light
+  // reads the task list as well as the turn now, so every event that can
+  // move a task's status has to be able to move it.
+  renderStatusBar();
+  renderCommDot();
 }
 
 // How much of a long conversation to load when opening it. Enough that

@@ -1,5 +1,5 @@
 import { inputEl, sendBtn, commDotEl } from './dom.js';
-import { session, turnInFlight, historyLimit } from './state.js';
+import { session, turnInFlight, tasksInFlight, historyLimit } from './state.js';
 import * as apiClient from './api.js';
 import { appendTool, appendError, appendPendingUser, resolvePendingUser } from './transcript.js';
 import { renderStatusBar } from './render.js';
@@ -21,8 +21,13 @@ export function setInputLocked(locked, hint) {
 
 // renderCommDot draws the three-state light left of the status text: gray
 // when there's no live event stream to the daemon (so no path to the
-// model), solid green when there is, blinking green while a turn is
-// actually running.
+// model), solid green when there is, blinking green while work is
+// actually happening.
+//
+// "Work" is a turn OR a background task. A task deliberately outlives the
+// turn that launched it and holds no turn slot, so a conversation with
+// four agents still working reported itself idle the moment the launching
+// turn ended.
 //
 // "Running" is turnInFlight(), not session.waiting: this light and the one
 // on the session's row in the left panel report the same turn, and they
@@ -31,13 +36,20 @@ export function setInputLocked(locked, hint) {
 // into a working conversation, an error the loop recovered from — showed
 // this dot solid while that one blinked.
 export function renderCommDot() {
-  const working = turnInFlight();
+  const turn = turnInFlight();
+  const tasks = tasksInFlight();
   commDotEl.classList.toggle('connected', session.connected);
-  commDotEl.classList.toggle('active', session.connected && working);
+  commDotEl.classList.toggle('active', session.connected && (turn || tasks));
   if (!session.connected) {
     commDotEl.title = 'not connected to the model (event stream is down)';
-  } else if (working) {
+  } else if (turn) {
     commDotEl.title = 'model is running your prompt';
+  } else if (tasks) {
+    // Blinking for a different reason, so it says a different thing. The
+    // light means "work is happening here"; which work is the tooltip's
+    // job, and a background task is the case where the prompt box is free
+    // and something is still running.
+    commDotEl.title = 'a background task is still running';
   } else {
     commDotEl.title = 'connected to the model, idle';
   }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **The activity light blinks while a background task is running.** It blinked for a turn only, and a background task deliberately outlives the turn that launched it: it holds no turn slot, so the daemon's busy flag goes false the moment the launching turn ends. The light then read "connected to the model, idle" about a conversation with several agents still working in it. Reproduced before the fix.
+
+  It blinks for either now, and says which: a turn is "model is running your prompt", a task on its own is "a background task is still running". A turn wins the wording, since it is the one holding the prompt box. `spawned` counts as well as `running`, because a task waiting on its provider's concurrency lane has not started yet and is still work in flight from the reader's side.
+
 * **Sessions can be archived.** A conversation that has gone quiet leaves the list without losing anything, and comes back the moment you want it. The `archive` button on a card, or drag the card onto the Archive header at the bottom of the panel; `/archive` and `/retrieve` in the TUI; `POST /api/sessions/{id}/archive` and `/retrieve`, with `GET /api/sessions?archived=1` for the other list.
 
   A shelf, not a bin. The title, workspace, permissions, effort, place in a hand arranged list and the whole event log are kept, and an archived conversation is still readable, which is the point of keeping it. Its log is still written to as well: a background task that outlives the archive still records that it finished, and a schedule still records that it was missed. The store refuses to *start* work in an archived conversation, never to record what happened in it.
