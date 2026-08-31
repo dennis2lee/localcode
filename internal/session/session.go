@@ -24,14 +24,22 @@ type Session struct {
 	Visible  bool   `json:"visible"`
 	Agent    string `json:"agent,omitempty"`
 	Title    string `json:"title,omitempty"`
-	// Workspace is the directory this session is working in. The daemon has
-	// one live workspace at a time (see daemon.handleSetWorkspace), so this
-	// is not an independent per-session setting — it's this session's
-	// record of where it currently is, which is what lets a session list
-	// distinguish two sessions that otherwise look identical because they
-	// are in different projects, and what selecting a session restores the
-	// workspace to. It is set at creation and moved by SetWorkspace
-	// whenever the workspace changes while this session is the open one.
+	// Workspace is the directory this session works in, and it is the
+	// session's own: two conversations on one daemon can be in two
+	// projects at once. Every relative path and every shell command in a
+	// turn resolves against the directory of the session it belongs to
+	// (see agent.SessionDir and tools.WithWorkingDir), and it is what the
+	// model is told in its prompt.
+	//
+	// This description used to say the opposite, that the daemon has one
+	// live workspace at a time and this is only a record of where the
+	// session currently is. That was true until v0.39.0, when the
+	// workspace stopped being one os.Chdir for the process and became a
+	// property of the session; handleSetWorkspace has taken a session_id
+	// ever since. Left as it was, the comment described the mechanism a
+	// reader would then go and look for.
+	//
+	// It is set at creation and moved by SetWorkspace.
 	// Empty for sessions created before this field existed.
 	Workspace string `json:"workspace,omitempty"`
 	// Order is where this session sits in the session panel, when someone
