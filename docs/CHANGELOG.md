@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.74.0
 
 * **Orchestration: a plan of delegated stages, run by localcode rather than decided step by step by the model.** Off by default behind its own switch, `/orchestrate on`.
 
