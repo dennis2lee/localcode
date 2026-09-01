@@ -1,0 +1,123 @@
+<title>Coding agents on one model</title>
+<style>
+:root{
+  --bg:#fbfbfa; --panel:#fff; --ink:#1c1b18; --muted:#6b6862; --line:#e4e1da;
+  --accent:#4a5d3a; --warn-bg:#fdf6e6; --warn-line:#e0c987; --warn-ink:#6b5417;
+  --pass:#3f6b3f; --fail:#a04a3c; --code:#f3f1ec;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16181a; --panel:#1d2023; --ink:#e6e4e0; --muted:#9a978f; --line:#2f3337;
+    --accent:#9db584; --warn-bg:#2a2314; --warn-line:#5c4a20; --warn-ink:#e2cd96;
+    --pass:#8fbf8f; --fail:#e08d7c; --code:#24282b;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16181a; --panel:#1d2023; --ink:#e6e4e0; --muted:#9a978f; --line:#2f3337;
+  --accent:#9db584; --warn-bg:#2a2314; --warn-line:#5c4a20; --warn-ink:#e2cd96;
+  --pass:#8fbf8f; --fail:#e08d7c; --code:#24282b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.65 ui-serif,Georgia,"Times New Roman",serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:920px;margin:0 auto;padding:48px 24px 96px}
+h1{font-size:2.1rem;line-height:1.2;margin:0 0 .3em;letter-spacing:-.01em}
+h2{font-size:1.35rem;margin:2.6em 0 .7em;padding-bottom:.3em;
+  border-bottom:1px solid var(--line);letter-spacing:-.005em}
+h3{font-size:1.05rem;margin:1.9em 0 .5em}
+p{margin:0 0 1em}
+.lede{font-size:1.12rem;color:var(--muted);margin-bottom:2em}
+.meta{font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);
+  border-left:2px solid var(--line);padding-left:14px;margin:0 0 2.4em}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:1.2em 0}
+table{border-collapse:collapse;width:100%;font-size:.9rem;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Helvetica Neue",sans-serif}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);
+  white-space:nowrap}
+th{font-weight:600;font-size:.78rem;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted)}
+tbody tr:hover{background:var(--panel)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.pass{color:var(--pass);font-weight:600}
+.fail{color:var(--fail)}
+.win{font-weight:700}
+.note{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);
+  border-radius:6px;padding:16px 20px;margin:1.6em 0}
+.note strong{display:block;margin-bottom:.3em}
+.note p:last-child{margin-bottom:0}
+code{background:var(--code);padding:.12em .38em;border-radius:3px;
+  font:.87em ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--code);padding:14px 18px;border-radius:6px;overflow-x:auto;
+  font:.84rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+pre code{background:none;padding:0}
+ul{padding-left:1.3em;margin:0 0 1em}
+li{margin-bottom:.5em}
+.small{font-size:.87rem;color:var(--muted)}
+a{color:var(--accent)}
+footer{margin-top:4em;padding-top:1.4em;border-top:1px solid var(--line);
+  font-size:.85rem;color:var(--muted)}
+</style>
+<div class="wrap">
+<h1>Does the coding agent matter, or only the model?</h1>
+<p class="lede">Claude Code, opencode and localcode were given the same 25 SWE-bench Verified issues, the same model, the same budget and the same open permissions. Only the agent around the model differed.</p>
+<div class="meta">model &nbsp;claude-sonnet-5<br>Claude Code &nbsp;2.1.252 (Claude Code)<br>opencode &nbsp;1.18.25<br>localcode &nbsp;0.79.2<br>benchmark &nbsp;SWE-bench Verified, 25 of 500 instances, one run each</div>
+<h2>Result</h2>
+<div class="scroll"><table><thead><tr><th>Agent</th><th>Resolved</th><th>Avg sec</th><th>Avg tool calls</th><th>Avg output tokens</th><th>Avg cost</th><th>Total cost</th></tr></thead><tbody>
+<tr><td>Claude Code</td><td class="num">19 / 25</td><td class="num">110</td><td class="num">17.6</td><td class="num">4,975</td><td class="num">$0.26</td><td class="num">$6.52</td></tr>
+<tr><td class="win">localcode</td><td class="num" class="win">22 / 25</td><td class="num">142</td><td class="num">28.3</td><td class="num">9,000</td><td class="num">not reported</td><td class="num">not reported</td></tr>
+<tr><td>opencode</td><td class="num">19 / 25</td><td class="num">521</td><td class="num">26.8</td><td class="num">6,780</td><td class="num">$0.29</td><td class="num">$7.34</td></tr>
+</tbody></table></div>
+<div class="note"><strong>opencode's figure is a floor, not a measurement.</strong><p>Five of its runs were cut short: its own event stream shows it going quiet 10&ndash;22 seconds in and then emitting nothing until the 30-minute budget expired. Re-run one at a time, two of those five finished normally in 76 and 161 seconds. The same command exits cleanly on the host, so this is an instability inside the emulated x86-64 container rather than a property of the tool. Claude Code and localcode stalled zero times under identical conditions.</p></div>
+<div class="note"><strong>localcode cannot be priced.</strong><p>It reports token counts but no cache split, and an input token costs roughly ten times more when it is not a cache read. There is no honest way to derive a dollar figure from what it emits, so the cell is blank rather than estimated. That is an observability gap, not a performance result &mdash; and the cheapest of the findings here to close.</p></div>
+<h2>Every instance</h2>
+<div class="scroll"><table><thead><tr><th>Instance</th><th>Repository</th><th>Difficulty</th><th>Claude Code</th><th>localcode</th><th>opencode</th></tr></thead><tbody>
+<tr><td><code>astropy__astropy-13453</code></td><td>astropy/astropy</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>astropy__astropy-7336</code></td><td>astropy/astropy</td><td>&lt;15 min fix</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>django__django-12193</code></td><td>django/django</td><td>&lt;15 min fix</td><td class="fail">fail</td><td class="fail">fail</td><td class="fail">fail</td></tr>
+<tr><td><code>django__django-13809</code></td><td>django/django</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="pass">pass</td><td class="fail">stalled</td></tr>
+<tr><td><code>django__django-16100</code></td><td>django/django</td><td>&lt;15 min fix</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>matplotlib__matplotlib-24026</code></td><td>matplotlib/matplotlib</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="pass">pass</td><td class="fail">stalled</td></tr>
+<tr><td><code>matplotlib__matplotlib-24570</code></td><td>matplotlib/matplotlib</td><td>&lt;15 min fix</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>mwaskom__seaborn-3187</code></td><td>mwaskom/seaborn</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="fail">fail</td><td class="pass">pass</td></tr>
+<tr><td><code>pallets__flask-5014</code></td><td>pallets/flask</td><td>&lt;15 min fix</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>psf__requests-1142</code></td><td>psf/requests</td><td>&lt;15 min fix</td><td class="pass">pass</td><td class="pass">pass</td><td class="fail">stalled</td></tr>
+<tr><td><code>psf__requests-1766</code></td><td>psf/requests</td><td>&lt;15 min fix</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>psf__requests-2931</code></td><td>psf/requests</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>pydata__xarray-3095</code></td><td>pydata/xarray</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>pydata__xarray-3993</code></td><td>pydata/xarray</td><td>1-4 hours</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>pydata__xarray-4356</code></td><td>pydata/xarray</td><td>&lt;15 min fix</td><td class="pass">pass</td><td class="pass">pass</td><td class="fail">stalled</td></tr>
+<tr><td><code>pylint-dev__pylint-4551</code></td><td>pylint-dev/pylint</td><td>1-4 hours</td><td class="fail">fail</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>pylint-dev__pylint-7080</code></td><td>pylint-dev/pylint</td><td>15 min - 1 hour</td><td class="fail">fail</td><td class="fail">fail</td><td class="pass">pass</td></tr>
+<tr><td><code>pytest-dev__pytest-10051</code></td><td>pytest-dev/pytest</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>pytest-dev__pytest-10356</code></td><td>pytest-dev/pytest</td><td>1-4 hours</td><td class="fail">fail</td><td class="pass">pass</td><td class="fail">stalled</td></tr>
+<tr><td><code>pytest-dev__pytest-5631</code></td><td>pytest-dev/pytest</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>scikit-learn__scikit-learn-10844</code></td><td>scikit-learn/scikit-learn</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>scikit-learn__scikit-learn-25102</code></td><td>scikit-learn/scikit-learn</td><td>1-4 hours</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>scikit-learn__scikit-learn-25747</code></td><td>scikit-learn/scikit-learn</td><td>15 min - 1 hour</td><td class="fail">fail</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>sphinx-doc__sphinx-8056</code></td><td>sphinx-doc/sphinx</td><td>15 min - 1 hour</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+<tr><td><code>sympy__sympy-13798</code></td><td>sympy/sympy</td><td>15 min - 1 hour</td><td class="fail">fail</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+</tbody></table></div>
+<h2>Where all three failed the same way</h2>
+<p>Only one instance defeated every agent: <code>django__django-12193</code>. It reads as a rendering bug in Django's <code>SplitArrayWidget</code>, but the cause is <code>CheckboxInput.get_context</code> mutating the <code>attrs</code> dictionary it is handed. All three agents patched the call site instead:</p>
+<pre><code>- self.widget.get_context(name + '_%s' % i, widget_value, final_attrs)
++ self.widget.get_context(name + '_%s' % i, widget_value, final_attrs.copy())</code></pre>
+<p>That removes the symptom the issue describes and leaves the cause. The hidden test exercises <code>CheckboxInput</code> directly, so none of them passed it. Three different harnesses making the same mistake at the same layer is evidence about the model, not about the agents around it &mdash; which is the sharpest thing a fixed-model comparison can show.</p>
+<h2>How it was measured</h2>
+<p>Two phases, deliberately separate. In phase A each agent works inside that instance's own official SWE-bench evaluation image, so the repository's test environment is already installed; only the resulting <code>git diff</code> is kept. In phase B the official SWE-bench harness applies the dataset's own <code>test_patch</code> before running anything, then runs the <code>FAIL_TO_PASS</code> and <code>PASS_TO_PASS</code> sets. An agent that edits tests to make them pass gains nothing, because its edits are overwritten. That property is the reason scoring is not something the agent container reports about itself.</p>
+<p>What is held equal:</p><ul><li>One model id for all three, over the Anthropic API directly &mdash; no proxy in front of any agent.</li><li>A fresh <code>HOME</code> per run, so no host config, plugin, hook or prior memory reaches any agent.</li><li>The same unprivileged user for all three. Claude Code refuses to bypass permissions as root, so rather than special-case one agent, none of them run as root.</li><li>The same prompt, the same 30-minute budget, and permissions fully open. An agent that stopped to ask would otherwise score zero for being careful.</li><li>Delegation off in all three. Claude Code's subagents, localcode's Smart Agent and Orchestrate: none were enabled, so this measures the single-agent path each ships with.</li></ul>
+<h2>What the harness had to fix first</h2>
+<p>Most of the work was not running the benchmark but establishing that it measured anything. Four faults produced plausible-looking numbers that were wrong, and each would have been reported as agent quality:</p><ul>
+<li><strong>opencode was never given the chance to work.</strong> Its own permission layer denied every <code>FileSystem.writeFile</code>, and <code>--auto</code> does not cover that. It spent whole budgets searching the filesystem for what was blocking it &mdash; <code>find / ... grep -l "blocklist\|denylist"</code> &mdash; and once tried to delete the file it could not edit. It needed a permission rule in config, which is what the other two got as command-line flags.</li>
+<li><strong>opencode does not exit.</strong> Inside the eval images it prints its final message and hangs, where the same command exits in three seconds on the host. Charging it the full timeout would have reported a run it finished in a minute as a 30-minute failure. The harness now stops it on its own completion marker and records which of exit, marker or timeout ended every run.</li>
+<li><strong>localcode died on every multi-turn conversation.</strong> Sonnet 5 returns thinking blocks with empty text by default; localcode's <code>omitempty</code> tag dropped the field on replay and the API rejected the request. Fixed upstream in v0.79.2 with a dedicated marshaller for thinking blocks.</li>
+<li><strong>The scorer silently compared against the wrong task list.</strong> Its <code>--tasks</code> default pointed at the pilot file, so scoring the 20-instance run without naming its task file produced a clean <em>0 resolved</em> for all three &mdash; indistinguishable from three agents that solved nothing. It now refuses when a predictions file holds instances the task list does not.</li></ul>
+<p class="small">A benchmark that cannot tell its own bugs from its subject's is not measuring the subject. Every one of these was found by reading what the agents actually emitted, not by looking at the scores.</p>
+<h2>What this does not establish</h2>
+<p>Twenty-five instances at one run each. These agents are stochastic: the same agent on the same instance does not always produce the same patch, and this design cannot measure that spread. A three-instance gap between the best and the rest is suggestive and is not significance. Separating &ldquo;better&rdquo; from &ldquo;luckier&rdquo; needs repeats &mdash; at least three per instance &mdash; which the harness supports and this run did not use.</p>
+<p>The instances were also weighted harder than SWE-bench Verified's own mix, so these rates are not comparable to published leaderboard numbers.</p>
+<h2>Running now: does delegation earn its cost?</h2>
+<p>Both arms are mid-run at the time of writing: 25 instances with Smart Agent and Orchestrate off, and the same 25 with both on, on localcode v0.80.1. Results will be added here when the run completes.</p>
+<p>Until v0.80.0 the question could not be asked through the CLI at all: the switches could be set but the one-shot run registered no <code>Task</code> tool, so a model told to delegate went looking for a tool it had not been given. Both arms now run through the same <code>localcode run</code> command, and the two configs are written to differ in delegation and nothing else &mdash; same version, same reply cap, same effort, same permissions.</p>
+<footer>Harness, task selection and raw results: <a href="https://github.com/dennis2lee/coding-agent-vs">coding-agent-vs</a>. Every figure on this page is generated from the result files rather than transcribed.</footer>
+</div>
