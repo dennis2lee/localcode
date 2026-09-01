@@ -63,8 +63,60 @@ type anthContentBlock struct {
 
 	// thinking. The signature is the API's attestation of the block, and
 	// a continuation that sends the text without it is refused.
+	//
+	// omitempty here is right for every other block type, which never set
+	// these — and wrong for a thinking block, which has to send both
+	// whatever they hold. MarshalJSON below is what settles that; these
+	// two tags only ever apply to the blocks that are not thinking.
 	Thinking  string `json:"thinking,omitempty"`
 	Signature string `json:"signature,omitempty"`
+}
+
+// anthThinkingBlock is the wire shape of a thinking block.
+//
+// Its own type because its two fields are required and may be empty,
+// which is the opposite of what every other block type needs from the
+// same struct. On the current Claude models the reasoning text routinely
+// *is* empty: `display` defaults to omitting it on Fable 5, Opus 5, Opus
+// 4.8, Opus 4.7 and Sonnet 5, so the thinking happens and is billed and
+// only the words are withheld.
+//
+// A thinking block has to go back unchanged on the next turn, and
+// omitempty dropped that empty text on the way out — so the continuation
+// carried {"type":"thinking","signature":"..."} and the API refused the
+// whole request with "messages.N.content.0.thinking.thinking: Field
+// required". The first turns of a conversation worked, because they had
+// no thinking block to replay yet.
+type anthThinkingBlock struct {
+	Type      string `json:"type"`
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
+	// A thinking block is the last block of its message when it is the
+	// only one — the model thought and then said nothing — which is a
+	// place markConversationCache lands a breakpoint.
+	CacheControl *anthCacheControl `json:"cache_control,omitempty"`
+}
+
+// MarshalJSON sends a thinking block through its own shape and everything
+// else through the shared one.
+//
+// Dispatching here rather than at the call site because the blocks travel
+// as one []anthContentBlock, which cannot hold two types — and because
+// the rule is about what the wire requires, which belongs next to the
+// wire types rather than in the conversion that fills them.
+func (b anthContentBlock) MarshalJSON() ([]byte, error) {
+	if b.Type == "thinking" {
+		return json.Marshal(anthThinkingBlock{
+			Type:         b.Type,
+			Thinking:     b.Thinking,
+			Signature:    b.Signature,
+			CacheControl: b.CacheControl,
+		})
+	}
+	// A defined type with no methods of its own, or this would call
+	// itself.
+	type plain anthContentBlock
+	return json.Marshal(plain(b))
 }
 
 type anthTool struct {

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.79.2
+
+* **Every multi-turn conversation on Sonnet 5 failed with a 400 after the first few turns.**
+
+  ```
+  messages.5.content.0.thinking.thinking: Field required
+  ```
+
+  A thinking block has to go back to the model unchanged on the next turn, and on the current Claude models its visible text is routinely empty: `display` defaults to omitting the reasoning on Fable 5, Opus 5, Opus 4.8, Opus 4.7 and Sonnet 5, so the thinking happens and is billed and only the words are withheld. What arrives is a signed block whose text is `""`.
+
+  `omitempty` dropped that field on the way back out, so the continuation carried `{"type":"thinking","signature":"..."}` and the API refused the whole request. The first turns worked because they had no thinking block to replay yet — which is why this looked like a conversation that went wrong partway rather than a request that was always malformed.
+
+  Not fixed by dropping `omitempty`: one struct carries every block type, so an unconditional `json:"thinking"` would put `"thinking":""` on text, tool_use and tool_result blocks, which the API rejects just as firmly in the other direction. A thinking block now marshals through a shape of its own, which also carries the cache breakpoint — a thinking block is the last block of its message when it is the only one, and that is a place `markConversationCache` lands one.
+
+  The signature is emitted unconditionally for the same reason. It cannot currently be empty on a block that is sent, since `toAnthropicMessages` drops unsigned blocks, but a wire shape should not depend on a guard in another function to be correct.
+
+  Two other paths were checked and are not affected. Rehydration never reconstructs a thinking block at all: `thinking.delta` and `thinking.end` are broadcast and never written to a session log, so a restarted daemon has none to replay. Bedrock carries reasoning through its own types, where `Text` is a `*string` the SDK marks required — `aws.String("")` is a non-nil pointer and serialises as `"text":""`. Both now have tests, since the reason each is safe is worth pinning rather than remembering.
+
 ## v0.79.1
 
 * **`localcode run --session` keeps the conversation.** Without it a run is thrown away, which is what makes a thousand benchmark runs cost nothing; with it the conversation can be picked up in the TUI or the Web UI afterwards.

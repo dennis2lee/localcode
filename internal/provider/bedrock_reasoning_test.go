@@ -300,3 +300,49 @@ func TestTheWholeBedrockRequestIsUnchangedWhenNobodyAsked(t *testing.T) {
 		t.Error("an ordinary request lost its temperature")
 	}
 }
+
+// The same empty-text case that broke the Anthropic path, checked here
+// because this adapter carries reasoning through its own types rather
+// than through anthContentBlock.
+//
+// It is not affected, and the reason is worth pinning rather than
+// remembering: Text is *string on ReasoningTextBlock and the SDK marks it
+// required, so aws.String("") is a non-nil pointer that serialises as
+// "text":"" — where a json tag with omitempty on a plain string would
+// have dropped the field and produced the same refusal.
+func TestBedrockKeepsReasoningTextThatIsEmpty(t *testing.T) {
+	msgs := []Message{
+		{Role: RoleUser, Content: []Block{TextBlock("hello")}},
+		{Role: RoleAssistant, Content: []Block{
+			{Type: BlockThinking, Text: "", Signature: "sig-abc"},
+			TextBlock("hi"),
+		}},
+	}
+	out, err := toBedrockMessages(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, block := range out[1].Content {
+		rc, ok := block.(*types.ContentBlockMemberReasoningContent)
+		if !ok {
+			continue
+		}
+		rt, ok := rc.Value.(*types.ReasoningContentBlockMemberReasoningText)
+		if !ok {
+			t.Fatalf("reasoning arrived as %T", rc.Value)
+		}
+		found = true
+		if rt.Value.Text == nil {
+			t.Error("the text is a nil pointer, which the SDK omits and the API then rejects")
+		} else if *rt.Value.Text != "" {
+			t.Errorf("text = %q, want the empty string it arrived as", *rt.Value.Text)
+		}
+		if rt.Value.Signature == nil || *rt.Value.Signature != "sig-abc" {
+			t.Errorf("signature = %v", rt.Value.Signature)
+		}
+	}
+	if !found {
+		t.Fatal("the reasoning block was dropped entirely")
+	}
+}
