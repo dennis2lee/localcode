@@ -421,6 +421,11 @@ func (s *Store) SetEffort(sessionID, effort string) (*Session, error) {
 // Delete removes one session from the store and, if persisted, deletes its
 // on-disk JSONL log. It does not cascade: see DeleteTree for the operation
 // a user's "delete this conversation" actually means.
+// Dir is where sessions are persisted, or "" for a store that keeps
+// nothing on disk. Exported for the checkpoint sidecar, which lives
+// beside the logs and has to go when they do.
+func (s *Store) Dir() string { return s.dir }
+
 func (s *Store) Delete(sessionID string) error {
 	s.mu.Lock()
 	st, ok := s.sessions[sessionID]
@@ -444,6 +449,12 @@ func (s *Store) Delete(sessionID string) error {
 	s.mu.Unlock()
 
 	if dir != "" {
+		// The rewind pre-images go with the log they belong to. Left
+		// behind they are unreachable — nothing but this session's own
+		// events names them — and they are copies of the user's files.
+		if err := os.RemoveAll(filepath.Join(dir, sessionID+".checkpoints")); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove session checkpoints: %w", err)
+		}
 		if err := os.Remove(filepath.Join(dir, sessionID+".jsonl")); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove session log: %w", err)
 		}

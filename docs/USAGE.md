@@ -1002,6 +1002,47 @@ Compacts the conversation immediately instead of waiting for the automatic thres
 
 With nothing to compact, on an empty session, it records an error event and does nothing. On success it records a `compacted` event just like automatic compaction, marked `manual: true`, and shows a confirmation.
 
+### `/clear`
+
+Starts the model fresh. It keeps none of this conversation; the conversation keeps all of it.
+
+That split is the whole command. Compaction replaces the history with a summary, `/clear` replaces it with nothing, and **neither removes anything**: every message stays on screen, stays in the session's log, and is still there when you reopen the conversation tomorrow. What changes is only what the next request carries.
+
+| | `/compact` | `/clear` |
+|---|---|---|
+| What the model gets next | a summary of the conversation | nothing |
+| What the transcript shows | everything, plus a marker | everything, plus a marker |
+| Costs a model call | yes | no |
+
+Cumulative `/usage` totals are deliberately unchanged: those tokens were spent, and a number that goes down when you clear is one nobody can reconcile with a bill. The context gauge does reset, because it is a reading of a history that no longer exists.
+
+Claude Code's `/clear` starts a new session and leaves the old one to be resumed by id, which is why its rewind menu carries a **previous session** entry. Here the conversation stays in front of you, so there is nothing to go back and find.
+
+### `/rewind`
+
+Undoes the last turn: the exchange, and the files that turn changed.
+
+| | |
+|---|---|
+| The conversation | the model no longer has that exchange; it stays in the transcript and the log |
+| Files | every path `write_file` or `edit` changed is put back as it was before the turn's first write; a file the turn created is removed |
+| Again | run it again to go back another turn |
+
+**What it does not cover, and says so every time.** The scope is [Claude Code's](https://code.claude.com/docs/en/checkpointing), and it is enforced by which tools are hooked rather than promised in a sentence:
+
+* **A shell command.** Anything `bash` wrote, moved or deleted. `rm`, `mv`, `cp`, a build that regenerated a file.
+* **A background sub-agent.** Its writes are checkpointed into its own session, not this one.
+* **Your own edits.** A file you changed by hand after the turn is restored to the turn's pre-image, losing that edit — which is why the reply lists every path it touched.
+* **A symlink or a large file.** A symlinked path is skipped, because writing through it changes a target the turn may never have touched. A file over 8 MiB is recorded but not copied. Both are counted in the reply as *left alone*.
+
+**It is not a substitute for version control.** It is session-level undo for the common case: the model went the wrong way and you want the last few minutes back.
+
+It refuses in two situations, each for a reason: in a scheduled run or a `localcode run` pipe, because it writes to a real project with nobody watching; and while a background sub-agent from this conversation is still working, because undoing the turn that launched it leaves it running against files it no longer agrees with.
+
+Both `/clear` and `/rewind` wait for a turn in progress. A message typed mid-turn is delivered to that turn as text rather than run as a command, so these two are refused with the reason instead of reaching the model as a prompt that says `/clear`.
+
+**A built-in name wins.** A custom command at `.localcode/commands/clear.md`, or a skill called `rewind`, is shadowed by these — the built-in routes are tried first. Rename yours if it collides.
+
 ### `/usage`
 
 Shows cumulative token counts per model for the current session, with no model call. **Token counts only, never dollar figures.**

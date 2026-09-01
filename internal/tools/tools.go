@@ -196,7 +196,30 @@ type Registry struct {
 	// forget, e.g. auto-formatting a file after an edit — its block
 	// decision is a no-op since the tool has already run) around Call.
 	Hooks hooks.Config
+
+	// BeforeWrite, if set, is told the resolved path a file-editing tool
+	// is about to change, just before it changes it. It is how "/rewind"
+	// takes a copy of what was there.
+	//
+	// Here rather than inside write_file and edit because the path they
+	// act on is the resolved one, and resolve is unexported: only code in
+	// this package can produce the path the write actually lands on, and
+	// a checkpoint of a different path is worse than none. Called after
+	// the pre_tool_use hook and after the permission decision, so a call
+	// that was blocked or denied leaves nothing behind to "restore".
+	//
+	// Two tool names, deliberately, and not a capability check: bash can
+	// change a file too, and this must not appear to cover it. See the
+	// limits in docs/USAGE.md, which are Claude Code's own.
+	BeforeWrite func(ctx context.Context, tool, path string)
 }
+
+// writeTools are the tools BeforeWrite is called for.
+//
+// A fixed set rather than an interface a tool can implement, because the
+// point is the boundary: something that opts in later, quietly, would
+// widen what "/rewind" claims to cover without anybody deciding to.
+var writeTools = map[string]bool{"write_file": true, "edit": true}
 
 func NewRegistry(permission PermissionFunc) *Registry {
 	return &Registry{tools: map[string]Tool{}, permission: permission}
@@ -417,6 +440,13 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		if !allowed {
 			return Result{Content: "denied by user", IsError: true, Refused: true}
 		}
+	}
+
+	// The last moment at which the file is still as it was. Everything
+	// that could have stopped this call — the hook, a deny rule, an
+	// unanswered permission question — is above.
+	if r.BeforeWrite != nil && writeTools[name] && subject != "" {
+		r.BeforeWrite(ctx, name, resolve(ctx, subject))
 	}
 
 	result := t.Execute(ctx, input)

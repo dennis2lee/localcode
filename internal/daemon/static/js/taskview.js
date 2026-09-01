@@ -173,6 +173,14 @@ function applyTaskEvent(ev) {
       currentEl = null;
       line('msg-tool', `[the task's history was summarized to save context]`);
       break;
+    case 'cleared':
+      currentEl = null;
+      line('msg-tool', '[cleared: the model starts fresh from here]');
+      break;
+    case 'rewound':
+      currentEl = null;
+      line('msg-tool', `[rewound one turn${d.turn_text ? ': ' + d.turn_text : ''}]`);
+      break;
     // The end of the work, which had no marker at all: the last reply
     // simply stopped and you were left guessing whether more was coming.
     case 'turn.done':

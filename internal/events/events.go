@@ -107,6 +107,42 @@ const (
 	// full text (not just its length) so a restart can restore the exact
 	// post-compaction history — see agent.rehydrateHistory.
 	TypeCompacted Type = "compacted"
+
+	// The two ways a conversation's history is cut back on purpose, both
+	// of them markers rather than edits: the log is append-only and the
+	// record survives until the session is deleted. What changes is what
+	// the model is sent, which is a different thing from what happened.
+	//
+	// TypeCleared marks "/clear": the model remembers nothing from here
+	// back. No payload — the absence is the whole message, and a summary
+	// would be an invented one. Deliberately not TypeCompacted with an
+	// empty summary: rehydrateHistory only treats that as a barrier when
+	// the summary is non-empty, so an empty one is skipped and a restart
+	// replays the entire log, which is the failure the barrier exists to
+	// prevent.
+	TypeCleared Type = "cleared"
+
+	// TypeRewound marks "/rewind": {"from_seq","turn_text","restored",
+	// "skipped","created"}. from_seq is the sequence of the user message
+	// that opened the undone turn, so replay can drop exactly the events
+	// from there up to this marker — see agent.applyRewinds. The rest is
+	// what the reader needs and cannot get anywhere else: the first line
+	// of the prompt that was undone, and how many files were put back,
+	// removed, or left alone.
+	TypeRewound Type = "rewound"
+
+	// TypeCheckpoint records one file as it stood before a turn changed
+	// it: {"tool","path","sha256","mode","existed","too_large"}. Written
+	// by the write_file/edit path, once per path per turn, and read only
+	// by "/rewind".
+	//
+	// The bytes are not here. A session's whole log is held in memory and
+	// replayed to every reconnecting client, so a file's contents in an
+	// event would be paid for on every reconnect; the content lives
+	// content-addressed beside the log and this names it by hash.
+	// "existed" false means the turn created the path, which restores as
+	// a deletion rather than as a write of nothing.
+	TypeCheckpoint Type = "checkpoint"
 	// TypeConfigChanged reports a live settings change from "/config":
 	// {"auto_compact_enabled","show_tps"}.
 	TypeConfigChanged Type = "config.changed"

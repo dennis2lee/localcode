@@ -46,9 +46,20 @@ func (l *Loop) RehydrateSession(sessionID string) {
 		return
 	}
 
-	if history := rehydrateHistory(evs); len(history) > 0 {
-		l.setHistory(sessionID, history)
-	}
+	// Set unconditionally, empty included. The guard used to be "only if
+	// there is something to set", which reads as caution and is the bug
+	// that "/clear" would have shipped with: a cleared conversation
+	// rehydrates to no messages, the guard skips the call, and whatever
+	// was in memory stays. Harmless at startup, where memory is empty;
+	// wrong everywhere else this is called from, which now includes a
+	// rewind and a session coming back off the shelf.
+	//
+	// Filtered, and only here. applyRewinds removes the events an undone
+	// turn produced so the existing replay never sees them; rehydrateUsage
+	// below reads the unfiltered log on purpose, because a rewound turn's
+	// tokens were still spent and a total that forgets them is wrong in
+	// the direction nobody checks.
+	l.setHistory(sessionID, rehydrateHistory(applyRewinds(evs)))
 
 	latest, haveUsage, cum := rehydrateUsage(evs)
 
@@ -164,6 +175,20 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 				resetPending()
 			}
 
+		case events.TypeCleared:
+			// The barrier with nothing behind it. Compaction replaces the
+			// history with a summary; this replaces it with nothing, which
+			// is the whole difference between the two commands.
+			out = nil
+			resetPending()
+			// skipNextReply is deliberately left alone. The "/clear" line
+			// itself is a local user message, which set the flag one event
+			// ago so the command's own confirmation is not replayed as
+			// something the model said. Clearing it here put that
+			// confirmation back into the history of every restarted
+			// session — a cleared conversation that came back holding one
+			// assistant message reading "Cleared."
+
 		case events.TypeUserMessage:
 			// An injected message is not a turn boundary: it went to the
 			// model as trailing text inside the tool_result message of
@@ -269,12 +294,18 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			}
 			addModelTotals(cum, dataString(ev.Data, "model"), latest.InputTokens, latest.OutputTokens)
 
-		case events.TypeCompacted:
-			// clearUsage() runs live right after a successful compaction,
-			// so the snapshot shouldn't carry forward past this point —
-			// but cumulative totals never get cleared by compaction, and
-			// the compaction call itself is billed too (if it reported
-			// usage).
+		case events.TypeCompacted, events.TypeCleared, events.TypeRewound:
+			// clearUsage() runs live right after each of these, so the
+			// snapshot shouldn't carry forward past this point — but the
+			// cumulative totals are never cleared by any of them, and the
+			// compaction call itself is billed too (if it reported usage).
+			//
+			// This is why the rewind filter is not applied to the usage
+			// pass. The snapshot is what the context gauge shows and it is
+			// right to reset; the totals are what a turn cost, and a turn
+			// that was undone still cost it. A number that goes down when
+			// you undo something is a number nobody can reconcile with a
+			// bill.
 			haveUsage = false
 			if model := dataString(ev.Data, "model"); model != "" {
 				addModelTotals(cum, model, dataInt(ev.Data, "input_tokens"), dataInt(ev.Data, "output_tokens"))

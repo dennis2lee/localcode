@@ -142,6 +142,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		userMsgData["auto"] = true
 	}
 	l.Store.Append(sessionID, events.TypeUserMessage, userMsgData)
+	// A new turn: forget which files the last one had already copied, so
+	// this one takes its own pre-images. See checkpoint.go.
+	l.beginTurn(sessionID)
 
 	l.appendHistory(sessionID, provider.Message{
 		Role: provider.RoleUser,

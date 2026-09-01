@@ -73,6 +73,17 @@ func (m *Model) applyEvent(ev events.Event) {
 			from, _ = ev.Data["from"].(string)
 		}
 		m.appendTool("[this is a fork of \"" + from + "\" — the original is untouched]")
+	case events.TypeCleared:
+		// Nothing else in the transcript says the model stopped seeing
+		// what is above this line, because everything above it is still
+		// there — which is the point, and is exactly why it needs saying.
+		m.appendTool("[cleared: the model starts fresh from here. Everything above stays in this conversation]")
+	case events.TypeRewound:
+		what, _ := ev.Data["turn_text"].(string)
+		if what != "" {
+			what = ": " + what
+		}
+		m.appendTool("[rewound one turn" + what + rewoundFiles(ev.Data) + "]")
 	case events.TypeSessionScheduled:
 		// Opened on its own, a run session is a conversation that starts
 		// with an instruction nobody in it typed, at a moment nobody was
@@ -253,4 +264,33 @@ func scheduledHead(data map[string]any) string {
 		}
 	}
 	return b.String()
+}
+
+// rewoundFiles is the file half of a rewind marker, or "" when that turn
+// changed no files through write_file or edit.
+//
+// Counted rather than listed: the full list went out in the command's own
+// reply, which is directly below this line, and repeating it here would
+// put the same paths on screen twice.
+func rewoundFiles(data map[string]any) string {
+	num := func(key string) int {
+		v, _ := data[key].(float64)
+		return int(v)
+	}
+	var parts []string
+	for _, p := range []struct {
+		key, label string
+	}{
+		{"restored", "restored"},
+		{"created", "removed"},
+		{"skipped", "left alone"},
+	} {
+		if n := num(p.key); n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, p.label))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " — " + strings.Join(parts, ", ")
 }

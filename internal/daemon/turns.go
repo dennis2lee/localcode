@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"localcode/internal/events"
+	"strings"
 )
 
 // turnTracker records which sessions currently have a turn in flight and
@@ -336,11 +337,28 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	//
 	// Retrying is the whole fix. Nothing is running at that point, so the
 	// next begin is the one that should have happened.
+	// Two commands must not ride in on the injection path. A message
+	// typed mid-turn is handed to the running turn as trailing text and
+	// never walks the command table, so "/clear" would reach the model as
+	// a prompt that says "/clear", and "/rewind" would arrive as a
+	// suggestion to undo the very turn that is writing the files it would
+	// restore. Decided here rather than before the loop, so it is the
+	// same begin that answers "is anything running" for both.
+	held := heldUntilIdle(req.Text)
+
 	started := false
 	for range sendRetries {
 		if d.turns.begin(id, cancel) {
 			started = true
 			break
+		}
+		if held != "" {
+			cancel()
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": held + " decides what this conversation is, so it does not go to a turn already running. " +
+					"Stop the turn, or send it again once it has finished.",
+			})
+			return
 		}
 		if d.turns.inject(id, req.Text) {
 			cancel()
@@ -446,4 +464,22 @@ func (d *Daemon) handleCancelTurn(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	running := d.turns.cancel(id)
 	writeJSON(w, http.StatusOK, map[string]bool{"cancelled": running})
+}
+
+// heldUntilIdle names the command in text that must not be injected into
+// a running turn, or "".
+//
+// Only these two. Every other local command either reads something
+// ("/usage") or flips a switch the next turn will notice, and arriving as
+// trailing text is a harmless oddity. These two rewrite what the model is
+// holding, and one of them writes to the working tree — the tree the turn
+// in progress is still editing.
+func heldUntilIdle(text string) string {
+	switch first, _, _ := strings.Cut(strings.TrimSpace(text), " "); first {
+	case "/clear":
+		return "/clear"
+	case "/rewind":
+		return "/rewind"
+	}
+	return ""
 }

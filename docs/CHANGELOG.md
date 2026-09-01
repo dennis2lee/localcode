@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.81.0
+
+* **`/clear` starts the model fresh and keeps the conversation.** It holds none of the history; the transcript and the log hold all of it. Compaction replaces the history with a summary, this replaces it with nothing, and neither removes anything: scroll up after a `/clear` and every message is still there, still in the log, still there when the conversation is reopened tomorrow.
+
+  It is a barrier appended to the log rather than an edit of it, for the reason this project has already had to write down once: the context window is bounded for the model's sake, and a session's own record must survive until the session is deleted. That also means it survives a restart, which an in-memory change would not — the daemon replays the whole log on startup.
+
+  Deliberately not a compaction event with an empty summary. That barrier only fires when the summary is non-empty, so an empty one is skipped and a restart replays the entire conversation, which is the exact failure the barrier exists to prevent.
+
+  Cumulative `/usage` totals are unchanged, because those tokens were spent and a number that goes down when you clear is one nobody can reconcile with a bill. The context gauge does reset: it is a reading of a history that no longer exists.
+
+* **`/rewind` undoes the last turn, the files with it.** The exchange leaves the model's history, and every path `write_file` or `edit` changed in that turn is put back as it stood before the turn's first write. A file the turn created is removed. Run it again to go back another turn.
+
+  The scope is [Claude Code's checkpointing](https://code.claude.com/docs/en/checkpointing), copied deliberately, and it is enforced by which tools are hooked rather than promised in a sentence: **a shell command's writes are not covered**, nor a background sub-agent's, nor your own edits, and a symlinked path or a file over 8 MiB is left alone and counted as such. The reply says all of this every time. A restore that quietly puts back three of the five files a turn changed would be worse than one that puts back none.
+
+  Pre-images live content-addressed beside the session log, not inside it — a session's whole log is held in memory and replayed to every reconnecting client, so a file's bytes in an event would be paid for on every reconnect. They are deleted with the session.
+
+  It refuses in a scheduled run or a `localcode run` pipe, because it writes to a real project with nobody watching, and while a background sub-agent from the conversation is still working, because undoing the turn that launched it leaves it running against files it no longer agrees with.
+
+* **Neither command can arrive mid-turn.** A message typed while a turn is running is handed to that turn as trailing text and never walks the command table, so `/clear` would have reached the model as a prompt that says `/clear`, and `/rewind` as a suggestion to undo the turn currently writing the files it would restore. Both are now refused with the reason until the turn finishes.
+
+* **A restored session no longer keeps history the log does not justify.** `RehydrateSession` set the rebuilt history only when it was non-empty. That reads as caution and was a latent bug: a conversation that rebuilds to nothing left whatever was in memory in place. Harmless at startup, where memory is empty, and wrong everywhere else it is called from — which now includes a rewind and a session coming back off the shelf.
+
+* **A built-in name wins.** A custom command at `.localcode/commands/clear.md`, or a skill named `rewind`, is shadowed by these: the built-in routes are tried before the custom-command and skill routes. Rename yours if it collides.
+
 ## v0.80.1
 
 * **A turn nobody is watching is no longer told it is scheduled work.** The refusal a tool gets when it needs permission and there is nobody to ask named one of its two callers: *this turn is scheduled work with nobody watching*. A `localcode run` in a pipe is the other, and it waits not at all, so the same sentence also read "nobody answered within 0s" — which describes somebody having been asked. Both halves now say what is true of either caller, and the no-wait case says there was nobody to ask rather than reporting a wait that did not happen.

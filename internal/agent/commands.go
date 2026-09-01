@@ -159,6 +159,13 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeResetMCP(sessionID, text) },
 		func() (bool, error) { return l.routeResetSkills(sessionID, text) },
 		func() (bool, error) { return l.routeCompact(ctx, sessionID, agentName, text) },
+		// Beside compaction, which is the command they are variations of:
+		// all three decide what the model is sent without touching what
+		// happened. Ahead of the custom-command and skill routes at the
+		// bottom, so a built-in name wins — see the note on shadowing in
+		// docs/USAGE.md.
+		func() (bool, error) { return l.routeClear(sessionID, text) },
+		func() (bool, error) { return l.routeRewind(ctx, sessionID, text) },
 		func() (bool, error) { return l.routeUsage(sessionID, text) },
 		func() (bool, error) { return l.routeContext(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeCustomCommand(ctx, sessionID, agentName, text) },

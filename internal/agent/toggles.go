@@ -387,6 +387,8 @@ func SlashCommands() []SlashCommand {
 		{Name: "reset-mcp", Description: "reconnect MCP servers and pick up config changes without a restart"},
 		{Name: "reset-skills", Description: "reload skills from disk without a restart"},
 		{Name: "compact", Description: "summarize the conversation now, optionally with instructions"},
+		{Name: "clear", Description: "start the model fresh: it keeps none of this conversation, and the conversation keeps all of it"},
+		{Name: "rewind", Description: "undo the last turn, and the files write_file and edit changed in it"},
 		{Name: "usage", Description: "cumulative token usage per model"},
 		{Name: "context", Description: "what the next request is made of; /context all, /context <id>"},
 	}

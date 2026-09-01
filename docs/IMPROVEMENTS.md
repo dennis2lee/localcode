@@ -117,6 +117,11 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
     Debate's version of this was closed in v0.80.0 by hiding the tool where `debateRefusal` structurally refuses. The same fix does not transfer, because this refusal is not structural: `skip_all`, `skip_tools`, and an `allow` rule in config.json each make the call go through, and only the resolver knows. Answering it properly means asking the resolver at turn time, which `hiddenTools` currently has no handle on. Until then the flag is documented in USAGE and pinned by a test rather than left to be found in a transcript.
 
 
+39. **`/rewind` has no `/redo`, and three things it cannot see.** Restoring takes no pre-image of what it overwrites, so a rewind is one-way: the turn's own copy goes back and whatever was there a moment ago is gone. That is the honest shape for a first version, and it is the reason the reply lists every path it touched rather than reporting a count.
+
+    Three gaps in what it captures, each stated in the reply rather than hidden. Hard links are not detected: Claude Code documents skipping them, and `Nlink` is not reachable portably on Windows, which this repository targets, so a hard-linked path is restored like any other and the link's other name follows. Write tools registered by an MCP filesystem server go through the same registry and are not in the two-name capture set. And a turn that spawned a background task leaves its `task.spawned` inside the removed range while `task.status` keeps arriving after the marker, so those later events refer to a spawn the replay no longer produces; refusing while a child is live narrows this and does not close it.
+
+
 ## UI ideas
 
 ### Web UI

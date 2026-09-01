@@ -201,6 +201,17 @@ const handlers = {
   usage: (d) => {
     session.lastUsage = { ...(session.lastUsage || {}), ...d };
   },
+  cleared: () => {
+    appendTool('[system] cleared: the model starts fresh from here. Everything above is still in this conversation.');
+  },
+  rewound: (d) => {
+    const files = [];
+    if (d.restored) files.push(`${d.restored} file(s) restored`);
+    if (d.created) files.push(`${d.created} removed`);
+    if (d.skipped) files.push(`${d.skipped} left alone`);
+    const what = d.turn_text ? `: ${d.turn_text}` : '';
+    appendTool(`[system] rewound one turn${what}${files.length ? ' — ' + files.join(', ') : ''}.`);
+  },
   compacted: (d) => {
     appendTool(`[system] conversation compacted to save context (summary: ${d.summary_length || 0} chars).`);
   },

@@ -256,6 +256,11 @@ type Loop struct {
 	usage           map[string]sessionUsage           // sessionID -> latest known usage
 	cumulativeUsage map[string]map[string]modelTotals // sessionID -> model -> running totals, see /usage
 	turnRate        map[string]turnRate               // sessionID -> this turn's tokens/generation time
+	// turnCheckpoints is which paths this turn has already taken a copy
+	// of, per session — the dedupe behind "one pre-image per path per
+	// turn". Reset when a turn opens; see beginTurn in checkpoint.go.
+	turnCheckpoints map[string]map[string]bool
+
 	// pendingDebate holds a debate the Debate tool asked for, until the
 	// turn that asked is over. See DebateTool.Execute: a debate runs turns
 	// in the session it belongs to, and the tool call is itself inside one

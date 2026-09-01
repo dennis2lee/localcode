@@ -167,6 +167,12 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.ProjectDir = e.cwd
 	loop.ConfigPath = configFilePath
 	loop.MemoryDir = memDir
+	// "/rewind" needs a copy of a file as it was before the turn changed
+	// it, and the only place the resolved path exists is inside
+	// internal/tools. Wired here rather than in buildOneShot: a run prints
+	// one answer and exits, so there is no later turn to rewind from, and
+	// its store keeps nothing on disk for a pre-image to live beside.
+	registry.BeforeWrite = loop.CheckpointWrite
 	// The structured turn log. Opened whatever the setting says, because
 	// the setting is live and a daemon started with Smart Agent off can
 	// have it turned on ten minutes later; nothing is written until then
