@@ -29,7 +29,6 @@ internal/smart/smart.go:Builtins
 # Both are set by a test and read by the code under test, so no static
 # call site exists in either direction.
 internal/agent/fallback.go:setRetryWaitBarrier
-internal/agent/schedule.go:unattendedWaitForTest
 
 # --- build-tag variant ------------------------------------------------
 # The non-Windows no-op half of a pair. The Windows file's HideConsole has

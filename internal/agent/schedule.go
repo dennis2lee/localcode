@@ -886,10 +886,20 @@ func Unattended(ctx context.Context) bool {
 // it; nothing else writes to it.
 var unattendedPermissionWait = 5 * time.Minute
 
-// unattendedWaitForTest shortens the wait and returns a restore. Test
-// only, and here rather than in a _test file so the var above has exactly
-// one writer.
-func unattendedWaitForTest(d time.Duration) func() {
+// SetUnattendedWait changes how long an unattended turn waits, and
+// returns a func that puts it back.
+//
+// Two callers want opposite things, which is why this is settable at all.
+// A scheduled run fires while localcode is running, which usually means
+// somebody is at the desk: the question is mirrored into the conversation
+// that booked the work, and five minutes is long enough to notice it. A
+// one-shot "localcode run" is a pipe, and a pipe has no desk — it waits
+// not at all and refuses at once. Tests move it to avoid waiting either
+// amount.
+//
+// Here rather than in a _test file so the var above has exactly one
+// writer, and one place saying why it moves.
+func SetUnattendedWait(d time.Duration) func() {
 	prev := unattendedPermissionWait
 	unattendedPermissionWait = d
 	return func() { unattendedPermissionWait = prev }

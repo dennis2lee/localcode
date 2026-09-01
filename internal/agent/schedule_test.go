@@ -250,7 +250,7 @@ func TestAnUnattendedTurnDoesNotWaitForeverForPermission(t *testing.T) {
 
 	// Short enough to test, long enough that the real one gives somebody
 	// at the desk a chance: see unattendedPermissionWait.
-	restore := unattendedWaitForTest(50 * time.Millisecond)
+	restore := SetUnattendedWait(50 * time.Millisecond)
 	defer restore()
 
 	ctx := WithUnattended(WithSessionID(context.Background(), "s1"))
@@ -293,7 +293,7 @@ func TestAnAttendedTurnStillWaits(t *testing.T) {
 	store, _ := session.NewStore("")
 	store.CreateSession("s1", "", "general-purpose", true)
 	broker := NewPermissionBroker(store)
-	restore := unattendedWaitForTest(20 * time.Millisecond)
+	restore := SetUnattendedWait(20 * time.Millisecond)
 	defer restore()
 
 	ctx := WithSessionID(context.Background(), "s1")

@@ -24,6 +24,7 @@ var version = "dev"
 var subcommands = map[string]func(args []string) error{
 	"login":   runLogin,
 	"mcp":     runMCP,
+	"run":     runOneShot,
 	"version": runVersionCommand,
 }
 

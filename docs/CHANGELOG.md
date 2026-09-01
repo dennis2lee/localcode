@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.79.0
+
+* **`localcode run` answers one prompt and exits.** Every other way in ended in something that stays — a TUI, a desktop window, or a daemon serving an API — and none of them can be put in a pipe, which is what a benchmark harness, a git hook and a shell script all want. The absence showed up as a row of "no one-shot CLI mode" in somebody's comparison of coding agents, and the row was correct.
+
+  In-process rather than through the daemon. The daemon is the right answer for something you attach clients to and the wrong one here: it binds a port, it outlives the answer, and two of them sharing a session directory is a hazard this project has already had to write down. A run leaves nothing in `~/.localcode/sessions` either — the conversation is in memory and goes when the process does, so a thousand benchmark runs leave a thousand of nothing.
+
+  It is the same wiring the daemon uses, not a second copy: `loadConfig`, `buildProviders`, `buildRegistry` and `buildSystemPrompt` are where the rules live, and what differs is only the composition — no session directory, no rehydration, no scheduler, no task manager, no trace.
+
+* **`--format text | json | stream-json`.** `text` streams the answer as it arrives, because a one-shot that prints nothing for ninety seconds is indistinguishable from one that hung. `json` prints one object with the result, the usage and any error. `stream-json` prints one event per line — the event stream itself rather than a new schema, so a harness written against it is written against the thing every other client reads instead of a summary that could drift from it.
+
+* **`--profile` and `--model`.** The config is loaded fresh for the process and never written back, so pointing an agent at another profile and overriding that profile's model is a local edit nothing else will ever see — a great deal simpler than threading an override through the turn. A name that is not configured is refused with the list of ones that are, since a benchmark run against the wrong model is a result nobody can tell is wrong.
+
+* **`--bare` loads nothing but the base prompt.** No `AGENTS.md`/`CLAUDE.md`, no skills index, no memory index, no custom commands, no hooks, no MCP. Each of those is real context in ordinary use and an unfair advantage in a comparison against a tool that was not given it. It creates no directories either, which the ordinary path does for its memory index.
+
+* **Nobody is watching a pipe.** A tool needing permission is refused at once with the reason rather than waiting for an answer that is not coming — the same rule a scheduled run follows, minus the five minutes it waits for somebody at the desk, since a pipe has no desk. `--skip-permissions` sets this run's skip-all switch, the same one `/permission-skip-all` sets. A failed run exits non-zero, and `--format json` carries the reason rather than leaving it on stderr only.
+
 ## v0.78.0
 
 * **Scheduled tasks can repeat.** `매일 9시`, `every 2 hours`, `1시간마다`, `매주 월요일 저녁`. The rule comes off the front of the time and what is left is the first run; with no time of day in it the first run is one step from now, which is a reading rather than a guess — picking nine in the morning for "매일" would be the guess.

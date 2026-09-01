@@ -31,7 +31,40 @@ localcode --agent general-purpose
 | `--gui` | on for a `-tags gui` build, off otherwise | Open the native desktop window instead of the TUI. `--gui=false` forces the TUI on a build that has the window. |
 | `-version`, `--version` | `false` | Print the build version and exit |
 
+Subcommands: `run` (below), `login`, `mcp`, `version`.
+
 `localcode version` works the same as `-version`.
+
+### One prompt, no window: `localcode run`
+
+Every other way in ends in something that stays — a TUI, a desktop window, or a daemon serving an API — and none of those can be put in a pipe. `run` answers one prompt and exits.
+
+```
+localcode run "what does this repo do?"
+echo "summarise the last commit" | localcode run
+localcode run --format json --bare --model qwen3:32b "fix the failing test"
+```
+
+**In-process.** No port is bound, nothing outlives the answer, and nothing is written to `~/.localcode/sessions` — a run does not appear in the session list, so a benchmark that makes a thousand of them leaves a thousand of nothing. The conversation is in memory and goes when the process does.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--format` | `text` | `text` streams the answer as it arrives; `json` prints one object at the end; `stream-json` prints one event per line, the same events every other client reads |
+| `--agent <name>` | `general-purpose` | Which agent from config answers |
+| `--profile <name>` | the agent's own | Which model profile to use |
+| `--model <id>` | the profile's own | Override the model id inside that profile |
+| `--bare` | `false` | Load nothing but the base prompt |
+| `--skip-permissions` | `false` | Run tools without asking |
+| `--timeout <duration>` | none | Give up after this long, e.g. `90s` |
+| `--config <path>` | none | Same as the top-level flag |
+
+The prompt may be an argument or come from stdin, which is how one with newlines and quotes in it survives the trip.
+
+**`--bare` is for comparing tools fairly.** Without it a run carries everything a session normally opens with, and each of those is real context in ordinary use and an unfair advantage in a benchmark: the project's `AGENTS.md`/`CLAUDE.md`, the skills index, the memory index, custom commands, and any hooks in config. `--bare` silences all of them and leaves the base system prompt, the workspace, and the tools. It creates no directories either, which the ordinary path does for its memory index.
+
+**Nobody is watching a pipe.** A tool that needs permission is refused immediately, with the reason, rather than waiting for an answer that is not coming — the same rule a scheduled run follows, minus the five minutes it waits for somebody at the desk. `--skip-permissions` sets this run's skip-all switch, exactly as `/permission-skip-all` would.
+
+**A failed run is a failed process.** The exit status is non-zero, and `--format json` carries the reason in an `error` field rather than leaving it on stderr only.
 
 Three useful combinations:
 

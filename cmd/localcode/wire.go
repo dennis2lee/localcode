@@ -194,7 +194,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	}
 	// Per turn, for the directory that turn is working in — see
 	// Loop.WorkspaceRules. e.home is the only thing fixed at startup here.
-	loop.WorkspaceRules = func(dir string) string { return rules.Load(dir, e.home) }
+	loop.WorkspaceRules = workspaceRules(e)
 	// Ask the server how big a window it is serving, rather than guessing
 	// from the model's name. Only the openai-compatible clients implement
 	// it: a hosted model's name identifies it exactly, while a local
@@ -517,4 +517,13 @@ func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]
 		}
 	}
 	return out, nil
+}
+
+// workspaceRules is the AGENTS.md/CLAUDE.md loader a Loop is given.
+//
+// Named rather than written inline at each call site, because there are
+// two of them now — the daemon and "localcode run" — and "what the
+// project's rules are" must not be able to differ between them.
+func workspaceRules(e env) func(string) string {
+	return func(dir string) string { return rules.Load(dir, e.home) }
 }
