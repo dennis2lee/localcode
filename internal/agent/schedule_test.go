@@ -268,8 +268,17 @@ func TestAnUnattendedTurnDoesNotWaitForeverForPermission(t *testing.T) {
 		if !errorsAs(err, &refused) {
 			t.Fatalf("err = %v, want a refusal that carries its reason", err)
 		}
-		if !strings.Contains(refused.Reason, "nobody answered") {
-			t.Errorf("the reason is %q, which does not say why the tool did not run", refused.Reason)
+		// What it wanted, and the fact that is true of every unattended
+		// turn rather than of one of the two kinds. The sentence used to
+		// call every such turn "scheduled work", which a one-shot run in
+		// a pipe is not.
+		for _, want := range []string{"not run", "write /tmp/x", "nobody is watching this turn"} {
+			if !strings.Contains(refused.Reason, want) {
+				t.Errorf("the reason is %q, which does not say %q", refused.Reason, want)
+			}
+		}
+		if strings.Contains(refused.Reason, "scheduled") {
+			t.Errorf("the reason calls this scheduled work: %q", refused.Reason)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("an unattended turn waited forever for a permission answer")
@@ -637,5 +646,48 @@ func TestTheSchedulePromptNamesTheResolvedTime(t *testing.T) {
 	bad, _ := json.Marshal(map[string]string{"when": "나중에", "prompt": "x"})
 	if !strings.Contains(tool.Describe(bad), "unreadable") {
 		t.Errorf("Describe on a bad time = %q", tool.Describe(bad))
+	}
+}
+
+// A pipe waits not at all, and "nobody answered within 0s" describes
+// somebody having been asked. The two callers differ only in the waiting,
+// so the sentence says which of the two happened.
+func TestAPipeIsToldThereWasNobodyToAskRatherThanThatNobodyAnswered(t *testing.T) {
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	broker := NewPermissionBroker(store)
+
+	// What cmd/localcode's one-shot sets: no desk, so no wait.
+	restore := SetUnattendedWait(0)
+	defer restore()
+
+	ctx := WithUnattended(WithSessionID(context.Background(), "s1"))
+	done := make(chan error, 1)
+	go func() {
+		_, err := broker.Func()(ctx, tools.Ask{
+			Tool: "write_file", Subject: "/tmp/x", Description: "write /tmp/x",
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		var refused *tools.RefusedError
+		if !errorsAs(err, &refused) {
+			t.Fatalf("err = %v, want a refusal that carries its reason", err)
+		}
+		if !strings.Contains(refused.Reason, "nobody to ask") {
+			t.Errorf("the reason is %q; with no wait, nothing was asked", refused.Reason)
+		}
+		if strings.Contains(refused.Reason, "0s") {
+			t.Errorf("the reason reports a wait that did not happen: %q", refused.Reason)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a turn with no wait configured waited anyway")
 	}
 }

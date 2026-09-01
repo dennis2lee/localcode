@@ -908,9 +908,21 @@ func SetUnattendedWait(d time.Duration) func() {
 // unattendedRefusal is what the model is told when nobody answered. It
 // says the tool was not run and why, so the turn can end honestly rather
 // than reporting a step it never took.
+//
+// It used to name one of its two callers: "this turn is scheduled work
+// with nobody watching". A one-shot run in a pipe is the other, and it
+// waits not at all, so the sentence also read "nobody answered within 0s"
+// — which describes somebody being asked. Both halves now say what is
+// actually true of either caller, since the fact is the same one and only
+// the waiting differs.
 func unattendedRefusal(ask tools.Ask) string {
+	if unattendedPermissionWait <= 0 {
+		return fmt.Sprintf(
+			"not run: %q needs permission, and nobody is watching this turn, so there was nobody to ask",
+			ask.Description)
+	}
 	return fmt.Sprintf(
-		"not run: this turn is scheduled work with nobody watching, it needed permission for %q, and nobody answered within %s",
+		"not run: %q needs permission, nobody is watching this turn, and no answer came within %s",
 		ask.Description, unattendedPermissionWait)
 }
 

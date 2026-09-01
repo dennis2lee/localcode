@@ -71,6 +71,18 @@ The prompt may be an argument or come from stdin, which is how one with newlines
 
 **[Smart Agent](#smart-agent) works here.** With `smart_agent` on, a run gets the same six specialists and the same orchestration prompt the TUI and the Web UI get, and the three tools that prompt names: `Task`, `TaskBackground`, `TaskCollect`. [Orchestration](#orchestration) is here too, with `orchestrate` on, since a plan finishes inside the turn that starts it.
 
+**A plan needs permission a pipe cannot answer.** `Orchestrate` asks every time, by design: a run is up to 32 agent turns and half an hour, and that is not a thing to start without being asked. A pipe has nobody to ask, so the model writes the plan and gets a refusal for it, and nothing runs. Two ways through, and the second is the one for a machine that does this regularly:
+
+```
+localcode run --skip-permissions "..."
+```
+
+```json
+"permission": { "Orchestrate": "allow" }
+```
+
+Delegation with `Task` is unaffected either way, since starting a sub-agent has no effect of its own and every tool it then calls is gated in that sub-agent's own session.
+
 Three tools are left out, because this mode cannot honour them, and a tool that can only refuse is a turn spent finding that out. `Schedule` books work for a time after the process has exited. `session_read` has only this run's own conversation to look at. And a [debate](#debate) can only be started from a conversation somebody is having, which a pipe is not.
 
 Anything still running in the background when the answer is done is **waited for, not killed** — a sub-agent was told to keep working, and this process is the only place it could keep working in. The wait is announced on stderr so a quiet pipe is not mistaken for a hung one, and `--timeout` bounds it as it bounds everything else.

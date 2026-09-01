@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -216,5 +217,109 @@ func TestARunWaitsForTheSubAgentsItLaunched(t *testing.T) {
 	}
 	if !ran {
 		t.Error("the run returned while a background sub-agent it launched was still working")
+	}
+}
+
+// delegatingSyncModel calls Task once and then answers. The sub-agent's
+// own turn is told apart by its system prompt, since the two overlap in
+// neither time nor identity but do share this one server.
+type delegatingSyncModel struct {
+	mu         sync.Mutex
+	childTools []string
+	childAsked string
+	results    []string
+}
+
+func (d *delegatingSyncModel) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+			Tools []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tools"`
+		}
+		_ = json.Unmarshal(raw, &body)
+		var names []string
+		for _, tl := range body.Tools {
+			names = append(names, tl.Function.Name)
+		}
+		system, user, spoken := "", "", false
+		for _, m := range body.Messages {
+			var s string
+			_ = json.Unmarshal(m.Content, &s)
+			switch m.Role {
+			case "system":
+				system = s
+			case "user":
+				user = s
+			case "tool":
+				spoken = true
+				d.mu.Lock()
+				d.results = append(d.results, s)
+				d.mu.Unlock()
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		defer w.(http.Flusher).Flush()
+
+		if strings.Contains(system, "You are the explore agent") {
+			d.mu.Lock()
+			d.childTools, d.childAsked = names, user
+			d.mu.Unlock()
+			writeText(w, "it is in run.go, line 12")
+			return
+		}
+		if !spoken {
+			writeToolCall(w, "Task", `{"agent":"explore","prompt":"find the thing"}`)
+			return
+		}
+		writeText(w, "the answer")
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Smart Agent's headline, end to end in a pipe: the orchestrator hands a
+// question to a specialist, the specialist runs in a context of its own,
+// and its answer comes back as the tool result. Offering the tool is not
+// the same as the delegation working, and only the first was covered.
+func TestAOneShotDelegatesAndGetsTheAnswerBack(t *testing.T) {
+	d := &delegatingSyncModel{}
+	smartHome(t, d.server(t).URL, smartOn)
+
+	if _, err := doRun(t, runOptions{format: formatText, agent: "general-purpose"}, "where is it?"); err != nil {
+		t.Fatal(err)
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.childAsked != "find the thing" {
+		t.Fatalf("the explore agent was asked %q, want the orchestrator's own prompt", d.childAsked)
+	}
+	if len(d.results) != 1 || !strings.Contains(d.results[0], "it is in run.go, line 12") {
+		t.Errorf("the specialist's answer did not come back as the tool result: %q", d.results)
+	}
+
+	// The restriction is half of what Smart Agent is: four of the six
+	// specialists read and nothing else, and a read-only agent with a
+	// shell is not read-only. Enforced by the allowlist rather than by a
+	// line of prompt, so it is worth asserting on the request itself.
+	for _, banned := range []string{"bash", "write_file", "edit", "Task"} {
+		if contains(d.childTools, banned) {
+			t.Errorf("the explore agent was offered %q; its tools were %v", banned, d.childTools)
+		}
+	}
+	for _, want := range []string{"read_file", "glob", "grep"} {
+		if !contains(d.childTools, want) {
+			t.Errorf("the explore agent was not offered %q; its tools were %v", want, d.childTools)
+		}
 	}
 }

@@ -112,6 +112,11 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 
     The awkward part is `--profile` and `--model`. A specialist's profile is chosen by routing its category against the profiles you have, and there is nowhere to write an override that does not also stop it being a specialist: adopting it into `config.Agents` is what `smart.Agents` uses to mean "the user defined their own", so the adopted copy would be handed the orchestration prompt it is deliberately denied. An override hook in `internal/smart` is the honest fix, and it is a design change rather than a wiring one.
 
+38. **A permission that cannot be answered is discovered after the plan is written, not before.** `Orchestrate` requires permission on every call, which is right: a run is up to 32 agent turns and half an hour. But whether the answer can be obtained is knowable at the start of the turn, and the tool is offered anyway. On an unattended turn without `skip_all` or `skip_tools` the model authors an entire plan, pays for it, and receives a refusal.
+
+    Debate's version of this was closed in v0.80.0 by hiding the tool where `debateRefusal` structurally refuses. The same fix does not transfer, because this refusal is not structural: `skip_all`, `skip_tools`, and an `allow` rule in config.json each make the call go through, and only the resolver knows. Answering it properly means asking the resolver at turn time, which `hiddenTools` currently has no handle on. Until then the flag is documented in USAGE and pinned by a test rather than left to be found in a transcript.
+
+
 ## UI ideas
 
 ### Web UI

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.80.1
+
+* **A turn nobody is watching is no longer told it is scheduled work.** The refusal a tool gets when it needs permission and there is nobody to ask named one of its two callers: *this turn is scheduled work with nobody watching*. A `localcode run` in a pipe is the other, and it waits not at all, so the same sentence also read "nobody answered within 0s" — which describes somebody having been asked. Both halves now say what is true of either caller, and the no-wait case says there was nobody to ask rather than reporting a wait that did not happen.
+
+* **`Orchestrate` in a pipe needs permission a pipe cannot answer, and USAGE now says so.** The tool asks every time, by design: a run is up to 32 agent turns and half an hour. A pipe has nobody to answer, so the model writes an entire plan and receives a refusal for it, and nothing runs. Two ways through: `--skip-permissions` on the run, or `"permission": {"Orchestrate": "allow"}` in config.json, which is the one for a machine that does this regularly. Both are now covered by tests, since a setting somebody puts in a file and relies on should not be advice. `Task` delegation is unaffected either way, because starting a sub-agent has no effect of its own and every tool it then calls is gated in that sub-agent's own session.
+
+* **Smart Agent and orchestration are now release gates rather than things to check by hand.** Six tests, each verified to fail when the code it covers is removed.
+
+  The one that matters most compares a run's tool roster against the daemon's and fails on any tool the daemon registers and a run does not, unless that name carries a written reason. That is the shape of the v0.80.0 defect exactly: a tool added to `buildDaemon`, `buildOneShot` left untouched, and nobody deciding anything. It now cannot pass without somebody either adding the tool or writing down why a run cannot have it.
+
+  The others cover what was verified only by argument: a plan really running its stages through a real turn and answering in its declared shape; a plan refused with no stage started when nothing has answered for it, and run when a config rule has; a `Task` delegation making the round trip, with the specialist's read-only restriction asserted on the request itself; and a run not exiting while a sub-agent it launched is still working.
+
 ## v0.80.0
 
 * **Smart Agent works in `localcode run`.** With `smart_agent` on, a one-shot run was sent the orchestration prompt — *send the wide reading to a sub-agent via the `Task` tool* — and was never given the `Task` tool. `buildOneShot` deliberately left out the task manager, which is what the delegation tools are built on, and the prompt did not follow that decision.
