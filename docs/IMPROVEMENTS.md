@@ -108,6 +108,10 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
 
     Two smaller gaps that a run makes visible rather than causes. A 32-agent run puts 32 child sessions on disk and 32 rows in `/tasks`, and nothing cleans them up. And when several stages ask for a permission at once, the broker can represent it but no client says how it is presented, so a run can sit on all four of its slots waiting for a person who is looking at one question.
 
+37. **A Smart Agent specialist can be delegated to, but never answered as.** The roster is derived per turn from a switch rather than merged into `config.json`, which is what lets the switch move mid-session; the cost is that the six specialists are in nobody's picklist. `GET /api/agents` returns `config.Agents` only, so the TUI's Tab and the Web UI's agent menu do not offer them, and `localcode run --agent oracle "review this diff"` is refused with a list that does not mention `oracle`. Every client is consistent about this, so it is a gap rather than a regression, and it became visible when `localcode run` learned to delegate to them in v0.80.0.
+
+    The awkward part is `--profile` and `--model`. A specialist's profile is chosen by routing its category against the profiles you have, and there is nowhere to write an override that does not also stop it being a specialist: adopting it into `config.Agents` is what `smart.Agents` uses to mean "the user defined their own", so the adopted copy would be handed the orchestration prompt it is deliberately denied. An override hook in `internal/smart` is the honest fix, and it is a design change rather than a wiring one.
+
 ## UI ideas
 
 ### Web UI

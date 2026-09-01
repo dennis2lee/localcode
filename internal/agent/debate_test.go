@@ -948,3 +948,35 @@ func registerDebateTool(t *testing.T, loop *Loop) {
 	t.Helper()
 	loop.Tools.Register(NewDebateTool(loop))
 }
+
+// A debate can only be started from a conversation somebody is having,
+// and debateRefusal names three things that are not one. Two of them were
+// refused after being offered: a scheduled run and a one-shot in a pipe
+// are both unattended, and a sub-agent's turn is delegated. Each was a
+// tool advertised to a turn that could only be told no by it.
+func TestOnlyAConversationSomebodyIsHavingIsOfferedADebate(t *testing.T) {
+	script := &debateScript{approveAt: 1, authorWorks: true}
+	srv := script.server(t)
+	defer srv.Close()
+
+	loop := newDebateLoop(t, srv.URL)
+	registerDebateTool(t, loop)
+	ctx := WithSessionID(context.Background(), startDebateSession(t, loop))
+
+	if hidden := loop.hiddenTools(ctx); hidden[debateToolName] {
+		t.Fatal("an ordinary turn was not offered the Debate tool, so this proves nothing")
+	}
+	if hidden := loop.hiddenTools(WithUnattended(ctx)); !hidden[debateToolName] {
+		t.Error("an unattended turn is offered a Debate tool that debateRefusal will refuse")
+	}
+
+	// A sub-agent's turn: a child session, which is what a delegation runs
+	// in. Same refusal, same reason it should not have been offered.
+	if _, err := loop.Store.CreateSession("child-of-debate", "boy-session", "girl", false); err != nil {
+		t.Fatal(err)
+	}
+	child := WithSessionID(context.Background(), "child-of-debate")
+	if hidden := loop.hiddenTools(child); !hidden[debateToolName] {
+		t.Error("a delegated turn is offered a Debate tool that debateRefusal will refuse")
+	}
+}

@@ -295,6 +295,44 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 
 	loop := agent.New(store, registry, providers, cfg)
 	loop.ProjectDir = e.cwd
+
+	// Somewhere to delegate to.
+	//
+	// Smart Agent is a roster of sub-agents plus a prompt telling the model
+	// to use them, and the prompt was already being sent from here: a run
+	// with smart_agent on was told to send its wide reading to a Task tool
+	// this process had never registered. That is worse than not shipping
+	// the feature at all — a policy describing a tool the model was not
+	// given is a turn spent looking for it, which is exactly what it looked
+	// like from outside (a model grepping in a loop, delegating nothing).
+	//
+	// Not everything the daemon registers, and the line is the mode's own.
+	// Three are left out because a run cannot honour them, and each would
+	// otherwise be a tool that can only refuse — a turn the model spends
+	// discovering it. Booking work for later needs something to still be
+	// here when the time comes. Reading another conversation needs another
+	// conversation, and a one-shot's store holds its own session and
+	// nothing else. And a debate can only be started from a conversation
+	// somebody is having, which a pipe is definitionally not: every turn
+	// here is unattended, and that is the first thing debateRefusal checks.
+	//
+	// Background delegation is the near case and it is in, because it earns
+	// its place inside a single turn: three independent questions launched
+	// at once cost what one costs, which is most of what Smart Agent is for
+	// and the whole of what a harness measures. What it needs is for the
+	// run not to exit while a sub-agent is still writing — see the cleanup
+	// below.
+	tasks := agent.NewTaskManager(ctx, loop, cfg.MaxConcurrentTasks)
+	registry.Register(agent.NewTaskTool(tasks, loop.DelegatableAgents))
+	registry.Register(agent.NewTaskBackgroundTool(tasks, loop.DelegatableAgents))
+	registry.Register(agent.NewTaskCollectTool(tasks))
+	// Orchestrate and the tool a stage answers with. Both run inline, in
+	// the tool call that asked for them (see orchestrate_run.go), so a plan
+	// is finished before the turn is. Its policy text is sent from here
+	// already too, which makes leaving the tool out the same defect again.
+	registry.Register(agent.NewOrchestrateTool(loop))
+	registry.Register(agent.NewAnswerTool())
+
 	if !o.bare {
 		// The workspace speaking, and the two indexes a session normally
 		// opens with. All three are what --bare exists to silence: they
@@ -313,7 +351,21 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 		loop.Commands = cmdList
 		loop.MemoryDir = memDir
 	}
-	return loop, agentName, func() {}, nil
+	return loop, agentName, func() {
+		// The run does not end before the work it started does. A background
+		// sub-agent was told to keep going after the turn that launched it;
+		// in a daemon there is a process for it to keep going in, and here
+		// the only one is this. Returning now would kill it mid-edit, having
+		// already reported to the model that it was under way.
+		//
+		// Said before waiting rather than after, on stderr so it stays out
+		// of the answer a script is parsing: a pipe that goes quiet is
+		// indistinguishable from one that hung.
+		if n := tasks.Outstanding(); n > 0 {
+			fmt.Fprintf(os.Stderr, "waiting for %d background sub-agent(s) to finish\n", n)
+		}
+		tasks.Drain(ctx)
+	}, nil
 }
 
 // applyModelChoice resolves --agent, --profile and --model against the

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.80.0
+
+* **Smart Agent works in `localcode run`.** With `smart_agent` on, a one-shot run was sent the orchestration prompt — *send the wide reading to a sub-agent via the `Task` tool* — and was never given the `Task` tool. `buildOneShot` deliberately left out the task manager, which is what the delegation tools are built on, and the prompt did not follow that decision.
+
+  That is worse than not shipping the feature. A policy describing a tool the model was not given is a turn spent looking for it, and from outside it looked like a model that would not delegate: repeated `grep` calls, no `task.spawned` events, a tool pattern indistinguishable from Smart Agent off, and no change even when the run was told in as many words to use `Task`.
+
+  A run now registers `Task`, `TaskBackground` and `TaskCollect`, and, with `orchestrate` on, `Orchestrate` and the tool a stage answers with. Background delegation is in rather than deferred because it earns its place inside one turn: three independent questions launched at once cost what one costs, which is most of what Smart Agent is for and the whole of what a harness measures.
+
+  Three tools are still left out, and each would otherwise be one that can only refuse. `Schedule` books work for a time after the process has exited. `session_read` has only this run's own conversation to look at. And a debate can only be started from a conversation somebody is having, which a pipe is not.
+
+* **A run waits for the sub-agents it launched.** A background task is rooted in the task manager's context rather than the launching turn's, precisely so that it outlives the turn — which needs somewhere to outlive into. A daemon is that; a one-shot run is not. Exiting would have killed an `implement` sub-agent mid-edit, having already told the model the work was under way. The wait is announced on stderr, so a pipe that goes quiet after the answer is not mistaken for one that hung, and `--timeout` bounds it as it bounds everything else.
+
+* **A scheduled run and a sub-agent are no longer offered a Debate tool that will refuse them.** `debateRefusal` names three kinds of turn that are not a conversation somebody is having — unattended, delegated, and already inside a debate — and only the third was being kept out of the offering. Found while deciding whether `Debate` belonged in a one-shot: it does not, because every turn in a pipe is unattended, which also meant the daemon had been advertising it to every scheduled run.
+
 ## v0.79.2
 
 * **Every multi-turn conversation on Sonnet 5 failed with a 400 after the first few turns.**

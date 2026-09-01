@@ -29,6 +29,7 @@ type fakeModel struct {
 	mu       sync.Mutex
 	model    string
 	system   string
+	tools    []string
 	requests int
 	fail     bool
 }
@@ -39,13 +40,23 @@ func (f *fakeModel) server(t *testing.T) *httptest.Server {
 		var body struct {
 			Model    string           `json:"model"`
 			Messages []map[string]any `json:"messages"`
+			Tools    []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tools"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		blob, _ := json.Marshal(body.Messages)
+		names := make([]string, 0, len(body.Tools))
+		for _, t := range body.Tools {
+			names = append(names, t.Function.Name)
+		}
 
 		f.mu.Lock()
 		f.model = body.Model
 		f.system = string(blob)
+		f.tools = names
 		f.requests++
 		fail := f.fail
 		f.mu.Unlock()
@@ -74,6 +85,15 @@ func (f *fakeModel) sawSystem() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.system
+}
+
+// sawTools is the tool roster the last request actually carried. What the
+// model was offered, rather than what a config said it should have been:
+// the whole of the Smart Agent defect was the distance between those two.
+func (f *fakeModel) sawTools() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.tools...)
 }
 
 // runHome lays down a config and a project with an AGENTS.md in it, and

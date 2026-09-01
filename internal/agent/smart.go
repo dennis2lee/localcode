@@ -219,10 +219,17 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 //     approved, which is the one thing a review must not be.
 func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	hidden := map[string]bool{verdictToolName: true}
-	// Not from inside a debate. The tool would refuse anyway, and an
-	// offered tool that always refuses is a call the model spends a turn
-	// discovering it cannot make.
-	if inDebate(ctx) {
+	// A debate can only be started from a conversation somebody is having.
+	// The tool would refuse anyway, and an offered tool that always refuses
+	// is a call the model spends a turn discovering it cannot make.
+	//
+	// debateRefusal names three turns that are not a conversation somebody
+	// is having, and only one of the three was being kept out of the
+	// offering. Unattended is the omission that mattered: a scheduled run
+	// and a one-shot in a pipe are both unattended, and both were handed a
+	// tool that could only say no. The third — a delegated session — is
+	// below, where the session is already being looked up.
+	if inDebate(ctx) || Unattended(ctx) {
 		hidden[debateToolName] = true
 	}
 	if !l.smartOn(ctx) {
@@ -245,6 +252,10 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	if id, ok := SessionIDFromContext(ctx); ok && l.Store != nil {
 		if sess, err := l.Store.Get(id); err == nil && sess.ParentID != "" {
 			hidden[sessionReadToolName] = true
+			// The third of the three above: a sub-agent starting a debate
+			// of its own is a tree of them nobody asked for, which
+			// debateRefusal already turns down.
+			hidden[debateToolName] = true
 		}
 	}
 	// Orchestrate is off unless its own switch is on, and never inside a

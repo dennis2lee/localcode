@@ -515,6 +515,48 @@ func agentNamesOf(agents map[string]config.AgentConfig) []string {
 	return names
 }
 
+// Outstanding is how many background tasks this manager still has going,
+// and Drain waits for them to unwind.
+//
+// For a process that ends. A background task is deliberately rooted in the
+// manager's context rather than the launching turn's, so that it outlives
+// the turn — which needs somewhere to outlive into. A daemon is that; a
+// one-shot run is not. It prints one answer and exits, and exiting is what
+// kills a sub-agent halfway through an edit, having already told the model
+// the work was under way.
+//
+// Two calls rather than one, so the caller can say it is waiting before it
+// waits: a pipe that goes quiet after the answer is indistinguishable from
+// one that hung. The count can be stale by the time Drain runs, which is
+// fine for a notice and is why the wait does not use it.
+//
+// Nothing is cancelled here. The caller's own deadline is what bounds
+// this — a child runs under rootCtx, so a run that gives up gives up on
+// its sub-agents too, and one that does not waits for the work it asked
+// for.
+func (tm *TaskManager) Outstanding() int {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return len(tm.done)
+}
+
+func (tm *TaskManager) Drain(ctx context.Context) {
+	tm.mu.Lock()
+	waits := make([]chan struct{}, 0, len(tm.done))
+	for _, ch := range tm.done {
+		waits = append(waits, ch)
+	}
+	tm.mu.Unlock()
+
+	for _, ch := range waits {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // RunningIn reports which of these sessions have a background task still
 // going, without stopping any of them.
 //

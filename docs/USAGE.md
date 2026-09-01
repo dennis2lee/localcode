@@ -69,6 +69,12 @@ The prompt may be an argument or come from stdin, which is how one with newlines
 
 **A failed run is a failed process.** The exit status is non-zero, and `--format json` carries the reason in an `error` field rather than leaving it on stderr only.
 
+**[Smart Agent](#smart-agent) works here.** With `smart_agent` on, a run gets the same six specialists and the same orchestration prompt the TUI and the Web UI get, and the three tools that prompt names: `Task`, `TaskBackground`, `TaskCollect`. [Orchestration](#orchestration) is here too, with `orchestrate` on, since a plan finishes inside the turn that starts it.
+
+Three tools are left out, because this mode cannot honour them, and a tool that can only refuse is a turn spent finding that out. `Schedule` books work for a time after the process has exited. `session_read` has only this run's own conversation to look at. And a [debate](#debate) can only be started from a conversation somebody is having, which a pipe is not.
+
+Anything still running in the background when the answer is done is **waited for, not killed** — a sub-agent was told to keep working, and this process is the only place it could keep working in. The wait is announced on stderr so a quiet pipe is not mistaken for a hung one, and `--timeout` bounds it as it bounds everything else.
+
 **`--session` keeps the conversation.** Without it the run is thrown away and the session directory is not touched at all. With it, where the conversation is written depends on whether a daemon is already listening:
 
 | | Where it runs | When it appears |
@@ -1969,7 +1975,7 @@ The approval is a **tool call**, not a sentence: the reviewer sets a boolean, be
 
 **Models agreeing is not evidence that the code is right.** It is two or three readings instead of one. The tests are the evidence, which is what `verify_command` is for.
 
-A debate can only be started from a conversation somebody is having: not from a sub-agent, not from a scheduled run, and not from inside a debate. Nobody is watching those, and a tree of debates has no ceiling on it.
+A debate can only be started from a conversation somebody is having: not from a sub-agent, not from a scheduled run, not from a `localcode run` in a pipe, and not from inside a debate. Nobody is watching those, and a tree of debates has no ceiling on it. On those turns the tool is **not offered**, rather than offered and then refused — a tool that can only say no is a turn the model spends finding that out.
 
 ### Effort
 
