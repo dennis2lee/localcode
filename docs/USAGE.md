@@ -993,7 +993,7 @@ Two more commands book work for later. See [Scheduled tasks](#scheduled-tasks):
 
 | Command | What it does |
 |---|---|
-| `/schedule` | `/schedule <when> <what to do>` books a prompt; `/schedule cancel <id>` removes one. |
+| `/schedule` | `/schedule <when> <what to do>` books a prompt; `/schedule cancel <id>` removes one. A repeating time works too, with `--times`, `--until` and `--keep` after the request. |
 | `/show-scheduled-task` | Lists this conversation's booked tasks. |
 | `/write-outside` | `write_outside` | Writing outside the workspace. `mem-clear` likewise. |
 
@@ -2007,7 +2007,8 @@ The particle belongs to the time, not to the request: `내일 아침에 테스�
 | Input | Answer |
 |---|---|
 | `나중에`, `곧`, `later today` | Not a time. Nobody has picked a moment, and a scheduler must not pick one for you. |
-| `매일 9시`, `1시간마다`, `every day at 9am` | Repeats are not supported — one prompt, one moment. |
+| `매달 1일`, `monthly` | Repeats by the month. A month is not a fixed length and the 31st is not in every one, so there is no reading of it that is not a guess. |
+| `10초마다`, `every 5 seconds` | Too often to book — a run is a whole session and a model call. Minutes or longer. |
 | Anything else it cannot read | Refused with the examples above. |
 
 The reply echoes what was read, in full, because a misread time is worth catching before the work is booked rather than after it fails to happen.
@@ -2019,14 +2020,38 @@ The reply echoes what was read, in full, because a misread time is worth catchin
 | Where | What you get |
 |---|---|
 | ⏰ Schedule button | Two fields — when, and what to do — with the time echoed back as you type it. |
-| Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. Click the row to read the result; **rename** names it and **delete** removes it along with the run's transcript, the same two buttons a session row carries. |
+| Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. **Click** the row to read the result; **double-click** it to see the booking itself. **rename** names it and **delete** removes it along with the run's transcript, the same two buttons a session row carries. |
 | `/show-scheduled-task` | The same list as text, for the TUI. |
 | `/schedule cancel <id>` | Removes one. Ids are short and belong to the conversation: `s1`, `s2`. |
 | `/schedule rename <id> <name>` | Labels one; an empty name clears it. |
 
 **Naming a task.** A booked prompt is a paragraph and a row is one truncated line, so two rows that both start "run the tests and report the fail…" are two rows nobody can tell apart at the moment they need to. A name is a label for the row — cosmetic, like a session's title, and nothing resolves by it. The prompt stays visible underneath, so naming a task adds a label rather than hiding what it will actually run.
 
-One prompt, one moment: there are no repeats. A repeating job needs a failure policy and a stop condition of its own, and shipping it without them is how an expired credential becomes five hundred identical failed sessions.
+**Reading the booking itself.** Every field on the row is one line with an ellipsis, so the rest of that paragraph had nowhere to be read. **Double-click the row** and it opens in the window Settings uses: when it runs, its status and name, the whole prompt with its line breaks, the agent it will run as, and the error if it failed. It is read-only — rename and delete stay on the row, since a window you opened to check something is the wrong place to change it by accident. A task that has already run offers **Open the run** from there, which is the same window a single click opens. Both gestures sit on the same row, so a single click on a finished task waits a moment to see whether a second one is coming; a task that has not run has no result window to open and shows its booking immediately.
+
+### Repeating tasks
+
+`매일 9시`, `every 2 hours`, `1시간마다`, `매주 월요일 저녁`, `hourly`. The rule comes off the front of the time and what is left is the first run: "매일 9시 run the tests" is the daily rule plus nine o'clock. With no time of day in it — "1시간마다 check the build" — the first run is one step from now. The confirmation echoes both back before anything is booked.
+
+Repeats were refused for a long time, and the refusal named its price: *a repeat needs a stop condition and a policy for what happens when it fails*. Both exist now, and both are stated every time you book one.
+
+**Three ways to stop.**
+
+| Say | It runs |
+|---|---|
+| `--times 10`, or **Stop after** in the dialog | ten times, then it is done |
+| `--until 2026-12-01`, or **or stop on** | until that moment passes |
+| neither | until you delete it |
+
+**It stops itself if three runs in a row fail.** This is the failure policy, and it is what makes the third row above safe to offer. An expired credential fails identically every time, and an unattended turn that needs a permission nobody answers waits five minutes on *every* occurrence — so without this, one wrong booking is a machine that wakes up forever to do nothing. The row turns steady amber, says how many failed and what the last error was, and stops. A run that works clears the count, so a series that survives a blip is not punished for it two hours later.
+
+**Each run is its own session**, and its transcript opens with a line saying which booking made it, which run it is, and when — a run session is otherwise a conversation that begins with an instruction nobody in it typed.
+
+**`--keep` decides how many of those transcripts to hold on to.** `-1` keeps every one, `0` keeps none, and a number keeps that many of the most recent; the default is ten. Keeping none really does delete the run that has just finished — for a booking whose result is its status, the transcript is the part nobody reads, and an hourly job is twenty-four sessions a day. What is never deleted is the record of whether each run worked: that lives on the conversation's own log, so a booking with `--keep 0` still shows its failures.
+
+**A missed moment is not caught up.** Three days of the machine being off does not fire an hourly job seventy-two times; the series moves to the next moment in the future and carries on. Same reason a one-off is reported as missed rather than run late.
+
+Repeats by the month are refused, because a month is not a fixed length and the 31st is not in every one — `매주` or `every 30 days` says what you mean. So is anything shorter than a minute: a run is a whole session and a model call.
 
 ### Background tasks
 

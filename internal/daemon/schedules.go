@@ -103,13 +103,22 @@ func (d *Daemon) handleBookSchedule(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		When   string `json:"when"`
 		Prompt string `json:"prompt"`
+		// The limits on a repeating booking. Ignored when `when` names no
+		// repeat; the endpoint says so rather than booking a single run
+		// somebody thinks will happen ten times.
+		Times int    `json:"times"`
+		Until string `json:"until"`
+		// Keep is a pointer because 0 is a real answer — keep no
+		// transcripts at all — and has to be told apart from the field
+		// being absent, which means the default.
+		Keep *int `json:"keep"`
 	}
 	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	now := time.Now()
-	at, err := when.ParseTime(req.When, now)
+	at, rule, err := when.ParseTime(req.When, now)
 	if err != nil {
 		// 400 with the parser's own sentence: it names which kind of no
 		// this is, which is the half a status code cannot carry.
@@ -120,11 +129,16 @@ func (d *Daemon) handleBookSchedule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("say what to do at that time"))
 		return
 	}
+	opts, err := agent.BuildRepeatOptions(rule, at, now, req.Times, req.Until, req.Keep)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	agentName := sess.Agent
 	if agentName == "" {
 		agentName = "general-purpose"
 	}
-	entry, err := d.Loop.Schedules.Add(id, agentName, strings.TrimSpace(req.Prompt), at)
+	entry, err := d.Loop.Schedules.Add(id, agentName, strings.TrimSpace(req.Prompt), at, opts)
 	if err != nil {
 		writeError(w, http.StatusConflict, err)
 		return
@@ -132,6 +146,7 @@ func (d *Daemon) handleBookSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"schedule":  entry,
 		"human":     when.Format(at, now),
+		"repeat":    agent.DescribeRepeat(opts),
 		"workspace": d.Loop.SessionDir(id),
 	})
 }
@@ -154,7 +169,7 @@ func (d *Daemon) handlePreviewSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	at, err := when.ParseTime(req.When, now)
+	at, rule, err := when.ParseTime(req.When, now)
 	if err != nil {
 		// 200 with the reason: this is a preview of something being
 		// typed, and a red status code for a half-typed word is noise.
@@ -165,6 +180,9 @@ func (d *Daemon) handlePreviewSchedule(w http.ResponseWriter, r *http.Request) {
 		"ok":    true,
 		"at":    at,
 		"human": when.Format(at, now),
+		// So the dialog can show the repeat fields only when the time
+		// somebody is typing actually asks for one.
+		"repeat": rule.String(),
 	})
 }
 

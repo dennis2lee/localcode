@@ -73,6 +73,11 @@ func (m *Model) applyEvent(ev events.Event) {
 			from, _ = ev.Data["from"].(string)
 		}
 		m.appendTool("[this is a fork of \"" + from + "\" — the original is untouched]")
+	case events.TypeSessionScheduled:
+		// Opened on its own, a run session is a conversation that starts
+		// with an instruction nobody in it typed, at a moment nobody was
+		// there for. This is where it came from.
+		m.appendTool("[" + scheduledHead(ev.Data) + "]")
 	case events.TypeTurnDone:
 		// The daemon's real turn boundary, emitted after its busy flag is
 		// cleared — safe to stop waiting and let the queue drain.
@@ -219,4 +224,33 @@ func (m *Model) applyEvent(ev events.Event) {
 	if m.transcriptRev != rev {
 		m.refreshViewport()
 	}
+}
+
+// scheduledHead is the line at the top of a run session's transcript.
+//
+// It names the booking the way its row does — by name when it has one and
+// by id otherwise — and says which run this is out of however many were
+// asked for, because "run 3" and "run 3 of 5" are different amounts of
+// reassurance when you are looking at a series.
+func scheduledHead(data map[string]any) string {
+	name, _ := data["name"].(string)
+	if name == "" {
+		id, _ := data["schedule"].(string)
+		name = "scheduled task " + id
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "created by %s", name)
+	if run := intField(data, "run"); run > 0 {
+		if total := intField(data, "run_total"); total > 0 {
+			fmt.Fprintf(&b, ", run %d of %d", run, total)
+		} else if repeat, _ := data["repeat"].(string); repeat != "" {
+			fmt.Fprintf(&b, ", run %d (%s)", run, repeat)
+		}
+	}
+	if at, _ := data["at"].(string); at != "" {
+		if t, err := time.Parse(time.RFC3339, at); err == nil {
+			fmt.Fprintf(&b, ", %s", t.Local().Format("2006-01-02 15:04"))
+		}
+	}
+	return b.String()
 }

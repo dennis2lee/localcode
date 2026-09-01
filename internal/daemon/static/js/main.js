@@ -6,6 +6,7 @@ import {
   delegateMatchAddBtn, delegateMatchInput,
   permissionStatusBtn, permissionSettingsCloseBtn, skipPermissionsCheckbox, ruleAddBtn,
   scheduleBtn, scheduleCancelBtn, scheduleSaveBtn, scheduleWhenInput, schedulePromptInput,
+  scheduleDetailsCloseBtn,
   debateBtn, debateCancelBtn, debateStartBtn, debateRoundsInput, debateTaskInput,
   workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, stopBtn,
   workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskDeleteBtn, taskCloseBtn,
@@ -24,6 +25,7 @@ import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, 
 import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, loadArchived } from './sessions.js';
 import {
   openScheduleDialog, closeScheduleDialog, saveSchedule, previewWhen,
+  closeScheduleDetails,
 } from './schedules.js';
 import {
   openDebateDialog, closeDebateDialog, startDebate, renderDebatePreview,
@@ -188,6 +190,7 @@ delegateMatchInput.addEventListener('keydown', (e) => {
 scheduleBtn.addEventListener('click', openScheduleDialog);
 scheduleCancelBtn.addEventListener('click', closeScheduleDialog);
 scheduleSaveBtn.addEventListener('click', saveSchedule);
+scheduleDetailsCloseBtn.addEventListener('click', closeScheduleDetails);
 scheduleWhenInput.addEventListener('input', previewWhen);
 // Enter in the When field moves on rather than submitting: the request
 // is still empty at that point, and submitting would only produce the
@@ -323,7 +326,7 @@ export { HELP_TEXT, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
 export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
-export { renderSchedules, applyScheduleEvent, loadSchedules } from './schedules.js';
+export { renderSchedules, applyScheduleEvent, loadSchedules, openScheduleDetails } from './schedules.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
 export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';

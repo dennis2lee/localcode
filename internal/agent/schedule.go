@@ -11,6 +11,7 @@ import (
 
 	"localcode/internal/events"
 	"localcode/internal/tools"
+	"localcode/internal/when"
 )
 
 // Work booked for later.
@@ -35,12 +36,15 @@ import (
 //     be a promise the program cannot keep. A schedule whose moment
 //     passed while the daemon was down is reported as missed, in those
 //     words, rather than fired late as though nothing happened.
-//   - Repeats. One prompt, one moment. A repeating job needs a failure
-//     policy and a stop condition of its own, and shipping it without
-//     them is how an expired credential becomes five hundred identical
-//     failed sessions.
+// Repeats were on that list for a long time, with the reason attached: a
+// repeating job needs a failure policy and a stop condition of its own,
+// and shipping it without them is how an expired credential becomes five
+// hundred identical failed sessions. Both exist now. The stop conditions
+// are StopAt, StopAfter, and neither — a series that runs until somebody
+// deletes it. The failure policy is maxConsecutiveFailures, and it is
+// what makes the third of those safe to offer at all.
 
-// Schedule statuses. Five, and each is a different thing to look at.
+// Schedule statuses. Six, and each is a different thing to look at.
 const (
 	// SchedulePending is booked and waiting. The panel blinks for this.
 	SchedulePending = "pending"
@@ -50,6 +54,13 @@ const (
 	ScheduleDone = "done"
 	// ScheduleFailed ran and did not get there.
 	ScheduleFailed = "failed"
+	// ScheduleSuspended is a repeat stopped because it kept failing. It
+	// is not the series ending on its own terms — that is done or failed
+	// — but localcode refusing to go on waking up for something that has
+	// not worked the last maxConsecutiveFailures times. The row says the
+	// count and the last error, so the fix is visible without opening
+	// anything.
+	ScheduleSuspended = "suspended"
 	// ScheduleMissed is the honest outcome of a moment that passed with
 	// the work not done: localcode was not running, or the conversation
 	// had been archived by the time it came round. Not fired late: the
@@ -84,7 +95,71 @@ type Scheduled struct {
 	// to read, grey once it has been read.
 	Seen  bool   `json:"seen"`
 	Error string `json:"error,omitempty"`
+
+	// Repeat is the step between runs; the zero value runs once, which is
+	// most bookings. See internal/when.
+	Repeat when.Repeat `json:"repeat,omitzero"`
+	// StopAt ends the series on a date, and StopAfter ends it on a count.
+	// Both zero is a series with no end of its own — it runs until it is
+	// deleted, or until Suspend stops it. Either may be set; whichever
+	// comes first wins.
+	StopAt    time.Time `json:"stop_at,omitzero"`
+	StopAfter int       `json:"stop_after,omitempty"`
+	// Keep is how many run transcripts to hold on to.
+	//
+	// -1 keeps every one, 0 keeps none, and n keeps the most recent n.
+	// It exists because a repeat makes a session per run and nothing was
+	// ever going to prune them: hourly is twenty-four a day, and the
+	// session list becomes a log of a job nobody is reading. Zero is a
+	// real answer for a booking whose result is its status — the row
+	// still says whether each run worked, since that lives on this
+	// conversation's log rather than in the run's transcript.
+	Keep int `json:"keep"`
+	// Runs is how many times this has fired, and Fails how many of those
+	// failed in a row. Both are counted from the log on a restart rather
+	// than stored, since every run already appends a status event.
+	Runs  int `json:"runs,omitempty"`
+	Fails int `json:"fails,omitempty"`
+	// History is the run sessions still on disk, oldest first. What Keep
+	// prunes from the back.
+	History []string `json:"history,omitempty"`
 }
+
+// RepeatOptions is everything about a booking that repeats, so Add keeps
+// one parameter for the subject rather than five.
+type RepeatOptions struct {
+	Rule      when.Repeat
+	StopAt    time.Time
+	StopAfter int
+	Keep      int
+}
+
+// maxConsecutiveFailures suspends a repeat that keeps failing.
+//
+// This is the half of the old refusal that the stop conditions do not
+// answer: "a repeat needs a stop condition and a policy for what happens
+// when it fails". An expired credential fails identically every time, and
+// an unattended turn that needs a permission nobody answers spends
+// unattendedPermissionWait on every single occurrence — so without this,
+// one wrong booking is a machine that wakes up forever to do nothing.
+//
+// Three rather than one, because the failure worth suspending for is the
+// one that will not clear on its own, and a single network blip is not
+// it. A success resets the count, so a series that recovers keeps going
+// without anybody being told.
+const maxConsecutiveFailures = 3
+
+// defaultKeep is how many run transcripts a repeat holds on to when
+// nobody says.
+//
+// Not -1. A booking left to run all year would fill the session list with
+// a conversation an hour, and a default nobody chose should not be the
+// one that grows without limit. Not 0 either: deleting what somebody did
+// not ask to have deleted is the worse mistake of the two, and a default
+// that silently throws away every result would be exactly that. Ten is
+// enough to look back over a few days of a daily job and see what
+// changed.
+const defaultKeep = 10
 
 // Scheduler holds the timers and the books.
 type Scheduler struct {
@@ -132,7 +207,7 @@ const maxPendingPerSession = 16
 
 // Add books a prompt. at must be in the future; the caller has already
 // parsed and echoed it (see internal/when).
-func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time) (Scheduled, error) {
+func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time, rep RepeatOptions) (Scheduled, error) {
 	parent, err := s.loop.Store.Get(sessionID)
 	if err != nil {
 		return Scheduled{}, fmt.Errorf("schedule: %w", err)
@@ -161,6 +236,8 @@ func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time) (Sche
 	entry := &Scheduled{
 		ID: id, SessionID: sessionID, At: at, Prompt: prompt,
 		Agent: agentName, Status: SchedulePending,
+		Repeat: rep.Rule, StopAt: rep.StopAt, StopAfter: rep.StopAfter,
+		Keep: rep.Keep,
 	}
 	s.entries[key(sessionID, id)] = entry
 	s.mu.Unlock()
@@ -168,9 +245,24 @@ func (s *Scheduler) Add(sessionID, agentName, prompt string, at time.Time) (Sche
 	// Recorded on the conversation's own log, which is what makes the
 	// row in the panel survive a reload — the same reason a background
 	// task's row is built from task.spawned rather than from memory.
-	if _, err := s.loop.Store.Append(sessionID, events.TypeScheduleCreated, map[string]any{
+	created := map[string]any{
 		"id": id, "at": at.Format(time.RFC3339), "prompt": prompt, "agent": agentName,
-	}); err != nil {
+	}
+	// The rule and its limits go on the event, because Restore rebuilds
+	// the books from this log and a field that is not written here does
+	// not survive a restart.
+	if rep.Rule.On() {
+		created["repeat_every"] = rep.Rule.Every
+		created["repeat_unit"] = rep.Rule.Unit
+		created["keep"] = rep.Keep
+		if !rep.StopAt.IsZero() {
+			created["stop_at"] = rep.StopAt.Format(time.RFC3339)
+		}
+		if rep.StopAfter > 0 {
+			created["stop_after"] = rep.StopAfter
+		}
+	}
+	if _, err := s.loop.Store.Append(sessionID, events.TypeScheduleCreated, created); err != nil {
 		s.forget(sessionID, id)
 		return Scheduled{}, fmt.Errorf("schedule: %w", err)
 	}
@@ -316,6 +408,8 @@ func (s *Scheduler) fire(sessionID, id string) {
 	}
 	entry.Status = ScheduleRunning
 	agentName, prompt := entry.Agent, entry.Prompt
+	entryName, stopAfter := entry.Name, entry.StopAfter
+	repeatWords := entry.Repeat.String()
 	delete(s.timers, k)
 	s.mu.Unlock()
 
@@ -337,8 +431,13 @@ func (s *Scheduler) fire(sessionID, id string) {
 
 	// The conversation's id is in it, because a short id is only unique
 	// inside one conversation and a session id has to be unique in the
-	// store.
-	runID := sessionID + "-" + id + "-run"
+	// store. The run number is in it because a repeat runs more than
+	// once: a fixed id made the second occurrence fail outright, since
+	// creating a session that already exists is an error.
+	s.mu.Lock()
+	runNo := entry.Runs + 1
+	s.mu.Unlock()
+	runID := fmt.Sprintf("%s-%s-run%d", sessionID, id, runNo)
 	// Under the parent's workspace and, through the parent, its
 	// permission switches: the work was booked in a project and by
 	// somebody who had already decided what may happen without asking.
@@ -347,6 +446,19 @@ func (s *Scheduler) fire(sessionID, id string) {
 		return
 	}
 	s.status(sessionID, id, ScheduleRunning, runID, "")
+	// At the head of the run's own transcript, before the prompt: opened
+	// on its own, a run session is a conversation that starts with an
+	// instruction nobody in it typed. The same thing session.forked does
+	// for a copied conversation, and for the same reason.
+	s.loop.Store.Append(runID, events.TypeSessionScheduled, map[string]any{
+		"schedule":  id,
+		"name":      entryName,
+		"run":       runNo,
+		"at":        time.Now().Format(time.RFC3339),
+		"repeat":    repeatWords,
+		"from":      sessionID,
+		"run_total": stopAfter,
+	})
 
 	// Unattended: nobody is watching this turn, so a permission request
 	// it raises must not wait forever. See WithUnattended.
@@ -361,6 +473,143 @@ func (s *Scheduler) fire(sessionID, id string) {
 
 func (s *Scheduler) finish(sessionID, id, runID, status, errText string) {
 	s.status(sessionID, id, status, runID, errText)
+	s.advance(sessionID, id, status, errText)
+}
+
+// advance is what happens to a repeating booking after one run: arm the
+// next one, or end the series and say which of the four reasons it was.
+//
+// A booking that does not repeat falls straight out, which is most of
+// them and is why this is the only place the repeat logic lives.
+func (s *Scheduler) advance(sessionID, id, status, errText string) {
+	s.mu.Lock()
+	entry, ok := s.entries[key(sessionID, id)]
+	if !ok || !entry.Repeat.On() {
+		s.mu.Unlock()
+		return
+	}
+	// A run that never happened is not a run. "missed" means the moment
+	// passed with the work not done — an archived conversation, or a
+	// parent that is gone — and neither is something the next occurrence
+	// would do any better, so the series ends rather than counting it as
+	// a failure and retrying twice more.
+	if status == ScheduleMissed {
+		s.mu.Unlock()
+		return
+	}
+
+	entry.Runs++
+	if status == ScheduleFailed {
+		entry.Fails++
+	} else {
+		entry.Fails = 0
+	}
+	if entry.RunSession != "" {
+		entry.History = append(entry.History, entry.RunSession)
+	}
+	runs, fails, keep := entry.Runs, entry.Fails, entry.Keep
+	rule, stopAt, stopAfter := entry.Repeat, entry.StopAt, entry.StopAfter
+	from := entry.At
+	history := append([]string(nil), entry.History...)
+	s.mu.Unlock()
+
+	// Pruning happens whatever comes next, including when the series is
+	// ending: the transcripts a finished series leaves behind are the
+	// same clutter as the ones a running one does.
+	s.prune(sessionID, id, history, keep)
+
+	switch {
+	case fails >= maxConsecutiveFailures:
+		// The policy the old refusal named. Whatever is wrong has been
+		// wrong three times running and is not going to be fixed by
+		// waking up again.
+		s.stop(sessionID, id, ScheduleSuspended, fmt.Sprintf(
+			"stopped after %d runs in a row failed. Last error: %s", fails, errText))
+		return
+	case stopAfter > 0 && runs >= stopAfter:
+		s.stop(sessionID, id, status, "")
+		return
+	}
+
+	next := rule.Next(from, time.Now())
+	if !stopAt.IsZero() && next.After(stopAt) {
+		s.stop(sessionID, id, status, "")
+		return
+	}
+
+	s.mu.Lock()
+	if e, ok := s.entries[key(sessionID, id)]; ok {
+		e.At, e.Status, e.Seen = next, SchedulePending, false
+	}
+	s.mu.Unlock()
+	s.loop.Store.Append(sessionID, events.TypeScheduleStatus, map[string]any{
+		"id": id, "status": SchedulePending, "at": next.Format(time.RFC3339),
+		"runs": runs,
+	})
+	s.arm(sessionID, id, next)
+}
+
+// stop ends a series without arming another run.
+func (s *Scheduler) stop(sessionID, id, status, errText string) {
+	s.mu.Lock()
+	entry, ok := s.entries[key(sessionID, id)]
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+	entry.Status = status
+	if errText != "" {
+		entry.Error = errText
+	}
+	runs := entry.Runs
+	s.mu.Unlock()
+	data := map[string]any{"id": id, "status": status, "runs": runs, "ended": true}
+	if errText != "" {
+		data["error"] = errText
+	}
+	s.loop.Store.Append(sessionID, events.TypeScheduleStatus, data)
+}
+
+// prune deletes the run transcripts a repeat has outgrown.
+//
+// keep is -1 for all of them, 0 for none, and n for the most recent n.
+// Zero really does delete the run that has just finished: for a booking
+// whose result is its status — a health check, a nightly build kick —
+// the transcript is the part nobody reads, and a session per hour is how
+// the session list stops being a list of conversations.
+//
+// What is not deleted is the record of whether each run worked. That
+// lives on this conversation's own log as schedule.status events, so a
+// booking with keep 0 still shows its failures.
+func (s *Scheduler) prune(sessionID, id string, history []string, keep int) {
+	if keep < 0 {
+		return
+	}
+	cut := len(history) - keep
+	if cut <= 0 {
+		return
+	}
+	for _, runID := range history[:cut] {
+		// DeleteTree rather than Delete: a run may have spawned
+		// background tasks of its own, and leaving those behind would
+		// prune the parent and keep the children.
+		if err := s.loop.Store.DeleteTree(runID); err != nil {
+			// Nothing to escalate to. The next prune tries again, since
+			// the id stays in the history until it is really gone.
+			continue
+		}
+	}
+	s.mu.Lock()
+	if e, ok := s.entries[key(sessionID, id)]; ok {
+		e.History = append([]string(nil), history[cut:]...)
+		// The row points at the newest kept run, or at nothing when none
+		// are kept. A link to a transcript that has been deleted is worse
+		// than no link.
+		if len(e.History) == 0 {
+			e.RunSession = ""
+		}
+	}
+	s.mu.Unlock()
 }
 
 // status updates one entry and tells the conversation it belongs to.
@@ -415,19 +664,47 @@ func (s *Scheduler) Restore(sessions []string, now time.Time) {
 				if terr != nil {
 					continue
 				}
-				byID[id] = &Scheduled{
+				e := &Scheduled{
 					ID: id, SessionID: sessionID, At: at,
 					Prompt: str(ev.Data["prompt"]), Agent: str(ev.Data["agent"]),
 					Status: SchedulePending,
 				}
+				// The rule and its limits, if this one repeats. Rebuilt
+				// from the log rather than stored anywhere else, which is
+				// the same thing that makes the row survive a reload.
+				if every := num(ev.Data["repeat_every"]); every > 0 {
+					e.Repeat = when.Repeat{Every: every, Unit: str(ev.Data["repeat_unit"])}
+					e.Keep = num(ev.Data["keep"])
+					e.StopAfter = num(ev.Data["stop_after"])
+					if t, terr := time.Parse(time.RFC3339, str(ev.Data["stop_at"])); terr == nil {
+						e.StopAt = t
+					}
+				}
+				byID[id] = e
 				order = append(order, id)
 			case events.TypeScheduleStatus:
 				if e := byID[id]; e != nil {
 					e.Status = str(ev.Data["status"])
 					if rs := str(ev.Data["run_session"]); rs != "" {
 						e.RunSession = rs
+						// One entry per run, oldest first, which is what
+						// prune walks. Duplicates are skipped because a
+						// single run appends its id twice: once when it
+						// starts running and once when it finishes.
+						if n := len(e.History); n == 0 || e.History[n-1] != rs {
+							e.History = append(e.History, rs)
+						}
 					}
 					e.Error = str(ev.Data["error"])
+					// A repeat's next moment travels on the status event
+					// that re-arms it, so a restart finds the occurrence
+					// it is actually waiting for rather than the first one.
+					if t, terr := time.Parse(time.RFC3339, str(ev.Data["at"])); terr == nil {
+						e.At = t
+					}
+					if r := num(ev.Data["runs"]); r > 0 {
+						e.Runs = r
+					}
 				}
 			case events.TypeScheduleSeen:
 				if e := byID[id]; e != nil {
@@ -475,6 +752,21 @@ func (s *Scheduler) Restore(sessions []string, now time.Time) {
 func str(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// num reads a whole number back off an event.
+//
+// float64 first, because that is what a number becomes once the log has
+// been through JSON — which every value here has, since Restore reads
+// the file rather than remembering what it wrote.
+func num(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	}
+	return 0
 }
 
 // ForgetSession drops a deleted conversation's schedules, timers and all,

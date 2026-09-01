@@ -591,12 +591,20 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 /* Scheduled tasks. The same row as a background task, because they are
    the same thing at a different moment, plus a light for the state and a
    delete that does not open the row it sits in. */
-.sched { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; cursor: pointer; }
+/* user-select: none because double-clicking a row is a gesture here — it
+   opens the booking — and a double-click on text otherwise selects the
+   word under it, leaving the row highlighted for no reason the reader
+   asked for. The prompt is selectable in the window that opens, which is
+   where copying it out of would actually work. */
+.sched { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; cursor: pointer; user-select: none; }
 .sched:hover { border-color: var(--border-strong); }
 .sched .head { display: flex; align-items: center; gap: 6px; }
 .sched .when { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched .prompt { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* How often it repeats and how far in. Clipped like everything else on
+   the row; the window opened by double-clicking says it in full. */
+.sched .repeat { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched .err { color: var(--err); font-size: 11px; }
 /* The same buttons a session row has, on their own line and wrapping the
    same way: two panels doing the same two jobs should not ask somebody to
@@ -972,6 +980,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   animation: led-blink 1s steps(1, end) infinite;
 }
 .led-disconnected { background: var(--muted); }
+/* Steady amber: this one is waiting for a person. The same thing the
+   session list's asking dot means, and the only other place a light says
+   "nothing will happen here until you act". */
+.led-asking { background: var(--warn); animation: none; }
 @keyframes led-blink {
   50% { opacity: 0.15; }
 }
@@ -1043,9 +1055,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    the section heading and the per-field grouping, which exist so that
    adding a setting later is adding a block rather than rebalancing a
    layout. */
-#settings-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; }
-#settings-modal.open { display: flex; align-items: center; justify-content: center; }
-#settings-modal .box {
+/* The scheduled-task details window is the Settings window's shape: the
+   request was for "the window Settings opens in", and matching it here
+   rather than restating it is what keeps the two from drifting. Its own
+   rules are only the ones about content Settings has none of — a
+   read-only field and a prompt that may be a paragraph. */
+#settings-modal, #schedule-details-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; }
+#settings-modal.open, #schedule-details-modal.open { display: flex; align-items: center; justify-content: center; }
+#settings-modal .box, #schedule-details-modal .box {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1054,8 +1071,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   max-height: 86vh;
   overflow-y: auto;
 }
-#settings-modal h3 { margin-top: 0; }
-#settings-modal h4.settings-section {
+#settings-modal h3, #schedule-details-modal h3 { margin-top: 0; }
+#settings-modal h4.settings-section,
+#schedule-details-modal h4.settings-section {
   margin: 18px 0 10px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
@@ -1064,6 +1082,26 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-weight: 600;
 }
 #settings-modal .settings-field { margin-bottom: 16px; }
+/* A read-only value. Not an input: nothing here is editable, and a
+   disabled box would say "you could change this elsewhere" about fields
+   that are set once when the task is booked. */
+#schedule-details-modal .sched-detail { margin: 0; color: var(--text); }
+/* The prompt keeps its own line breaks and wraps rather than scrolling
+   sideways — it is prose somebody wrote, and the reason this window
+   exists is that the panel row shows only its first few words. */
+#schedule-details-modal .sched-detail.prompt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+#schedule-details-modal .note.err { color: var(--err); font-size: 12px; margin-top: 8px; }
+#schedule-details-modal .note.err[hidden] { display: none; }
 #settings-modal select,
 #settings-modal input[type="text"] { width: 100%; }
 /* Two controls that belong together on one line — the update panel's

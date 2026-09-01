@@ -270,6 +270,22 @@ const handlers = {
   'session.forked': (d) => {
     appendTool(`[this is a fork of "${d.from_title || d.from || 'another session'}" — the original is untouched]`);
   },
+  // Opened on its own, a run session is a conversation that starts with an
+  // instruction nobody in it typed, at a moment nobody was there for. The
+  // same job session.forked does, for the same reason.
+  'session.scheduled': (d) => {
+    const who = d.name || `scheduled task ${d.schedule || ''}`.trim();
+    let line = `created by ${who}`;
+    if (d.run > 0) {
+      // "run 3" and "run 3 of 5" are different amounts of reassurance
+      // when you are looking at a series.
+      if (d.run_total > 0) line += `, run ${d.run} of ${d.run_total}`;
+      else if (d.repeat) line += `, run ${d.run} (${d.repeat})`;
+    }
+    const at = d.at ? new Date(d.at) : null;
+    if (at && !isNaN(at)) line += `, ${at.toLocaleString()}`;
+    appendTool(`[${line}]`);
+  },
     'session.archived': async (d) => {
       // The list this client is showing has changed, whoever changed it.
       await loadSessions();

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.78.0
+
+* **Scheduled tasks can repeat.** `매일 9시`, `every 2 hours`, `1시간마다`, `매주 월요일 저녁`. The rule comes off the front of the time and what is left is the first run; with no time of day in it the first run is one step from now, which is a reading rather than a guess — picking nine in the morning for "매일" would be the guess.
+
+  Repeats were refused for years and the refusal named its own price: *a repeat needs a stop condition and a policy for what happens when it fails, and neither exists yet*. Both exist now. Three ways to stop — a count (`--times 10`), a date (`--until`), or neither, which runs until you delete it — and **three consecutive failures suspend it**. That last part is what makes "until you delete it" safe to offer at all: an expired credential fails identically every time, and an unattended turn that needs a permission nobody answers waits five minutes on every occurrence, so without it one wrong booking is a machine that wakes up forever to do nothing. A run that works clears the count.
+
+  The rule is a step and a unit rather than a duration, because a day is not 24 hours twice a year — "매일 9시" across a daylight-saving boundary stays at nine rather than walking to eight and carrying on walking. A missed stretch is not caught up: three days of the machine being off moves an hourly series to the next moment in the future rather than firing it seventy-two times.
+
+  Repeats by the month are refused, since a month is not a fixed length and the 31st is not in every one; so is anything under a minute, since a run is a whole session and a model call.
+
+* **Each run of a repeating task is its own session, and says so at the top.** The run session id used to be fixed per booking, so a second occurrence would have failed outright — creating a session that already exists is an error. Each run now has its own, and its transcript opens with a line naming the booking, the run number and the moment, the way `session.forked` names what a copy was copied from: opened on its own, a run session is otherwise a conversation that begins with an instruction nobody in it typed.
+
+* **`--keep` bounds what a repeat leaves behind.** `-1` keeps every run's transcript, `0` keeps none, a number keeps that many of the most recent, and the default is ten. Nothing was ever going to prune these — an hourly job is twenty-four sessions a day — and a default nobody chose should not be the one that grows without limit, nor the one that silently throws everything away. Keeping none really does delete the run that has just finished; what survives either way is the record of whether each run worked, which lives on the conversation's own log rather than in the run's transcript.
+
+* **Double-clicking a scheduled task opens the booking.** Every field on the panel row is one line with an ellipsis — the time, the name and the prompt alike — so a booking whose prompt is a paragraph showed its first few words and had nowhere to show the rest. Since the prompt is the whole of what the task will do, the panel could not answer the one question worth asking of it. The row now opens in the window Settings uses: when it runs, its status and name, the whole prompt with its line breaks, the agent, and the error if it failed. Read-only, because rename and delete are on the row already and a window opened to check something is the wrong place to change it by accident.
+
+  A single click still opens the result, so the two gestures share a row: a click on a task that has run waits briefly to see whether a second one is coming, and a task that has not run yet has no result window to wait for and shows its booking at once. Double-clicking a row no longer selects the text under the pointer, since the gesture means something here now.
+
 ## v0.77.0
 
 Reported as "a session's old conversation disappears", with the principle attached: the context window may be bounded for the model's sake, but the record must survive until the session is deleted.

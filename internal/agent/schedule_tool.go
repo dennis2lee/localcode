@@ -48,13 +48,19 @@ func (ScheduleTool) Description() string {
 		"\"금요일 저녁에\"). Pass the user's own words for the time in `when` — do not convert them " +
 		"to a date or a timestamp yourself — and the work to do in `prompt`, written so it stands " +
 		"on its own, since the scheduled run will not see this conversation. " +
+		"A repeating request works too — pass the user's own words for it, \"매일 9시\", " +
+		"\"every 2 hours\", \"1시간마다\" — and say how long it goes on for in `times` or " +
+		"`until` whenever the user did. Without either it repeats until the user deletes it, " +
+		"so ask rather than assume when they have not said. " +
 		"It runs only while localcode is running. Use this instead of doing the work now."
 }
 
 func (ScheduleTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{` +
 		`"when":{"type":"string","description":"the time in the user's own words, e.g. \"tomorrow 9am\", \"30분 뒤\", \"금요일 저녁\""},` +
-		`"prompt":{"type":"string","description":"self-contained instructions for the scheduled run; it cannot see this conversation"}},` +
+		`"prompt":{"type":"string","description":"self-contained instructions for the scheduled run; it cannot see this conversation"},` +
+		`"times":{"type":"integer","description":"for a repeating booking, how many runs in total; omit if the user did not say"},` +
+		`"until":{"type":"string","description":"for a repeating booking, when to stop, in the user's own words e.g. \"next friday\"; omit if the user did not say"}},` +
 		`"required":["when","prompt"]}`)
 }
 
@@ -82,9 +88,16 @@ func (t ScheduleTool) Subject(input json.RawMessage) string {
 func (t ScheduleTool) Describe(input json.RawMessage) string {
 	args := t.parse(input)
 	now := time.Now()
-	at, err := when.ParseTime(args.When, now)
+	at, rule, err := when.ParseTime(args.When, now)
 	if err != nil {
 		return fmt.Sprintf("schedule %q (unreadable time: %s)", promptSummary(args.Prompt), args.When)
+	}
+	if opts, oerr := args.repeatOptions(rule, at, now); oerr == nil && rule.On() {
+		// The commitment, not just the first moment. A repeat confirmed
+		// as "schedule for 9am tomorrow" is a person agreeing to one run
+		// and getting a standing job.
+		return fmt.Sprintf("schedule for %s, %s: %s",
+			when.Format(at, now), describeLimits(opts), promptSummary(args.Prompt))
 	}
 	return fmt.Sprintf("schedule for %s: %s", when.Format(at, now), promptSummary(args.Prompt))
 }
@@ -92,6 +105,8 @@ func (t ScheduleTool) Describe(input json.RawMessage) string {
 type scheduleArgs struct {
 	When   string `json:"when"`
 	Prompt string `json:"prompt"`
+	Times  int    `json:"times"`
+	Until  string `json:"until"`
 }
 
 func (ScheduleTool) parse(input json.RawMessage) scheduleArgs {
@@ -127,12 +142,16 @@ func (t ScheduleTool) Execute(ctx context.Context, input json.RawMessage) tools.
 		return tools.Result{Content: "say what to do at that time, in `prompt`", IsError: true}
 	}
 	now := time.Now()
-	at, err := when.ParseTime(args.When, now)
+	at, rule, err := when.ParseTime(args.When, now)
 	if err != nil {
 		// The parser's own sentence, which names which kind of no this
-		// is — a vague time, a repeat, or one it cannot read. Handed back
-		// so the model can ask the user for the missing half rather than
-		// inventing one.
+		// is — a vague time, one it cannot read, or a repeat with no
+		// reading that is not a guess. Handed back so the model can ask
+		// the user for the missing half rather than inventing one.
+		return tools.Result{Content: err.Error(), IsError: true}
+	}
+	opts, err := args.repeatOptions(rule, at, now)
+	if err != nil {
 		return tools.Result{Content: err.Error(), IsError: true}
 	}
 
@@ -140,7 +159,7 @@ func (t ScheduleTool) Execute(ctx context.Context, input json.RawMessage) tools.
 	if agentName == "" {
 		agentName = "general-purpose"
 	}
-	entry, err := t.loop.Schedules.Add(sessionID, agentName, args.Prompt, at)
+	entry, err := t.loop.Schedules.Add(sessionID, agentName, args.Prompt, at, opts)
 	if err != nil {
 		return tools.Result{Content: err.Error(), IsError: true}
 	}
@@ -150,4 +169,26 @@ func (t ScheduleTool) Execute(ctx context.Context, input json.RawMessage) tools.
 			"the task is reported as missed rather than run late.\n"+
 			"Tell the user when it will run, and that it needs localcode to be running.",
 		entry.ID, when.Format(at, now), t.loop.SessionDir(sessionID))}
+}
+
+// repeatOptions turns the tool's two optional fields into the booking's
+// limits.
+//
+// keep is not among them. How many transcripts to hold on to is
+// housekeeping about somebody's disk, which is not a thing to have a
+// model form a view on; the default applies and the person can change it
+// in the panel.
+func (a scheduleArgs) repeatOptions(rule when.Repeat, at, now time.Time) (RepeatOptions, error) {
+	var lim scheduleLimits
+	if a.Times > 0 {
+		lim.stopAfter = a.Times
+	}
+	if strings.TrimSpace(a.Until) != "" {
+		stop, _, err := when.ParseTime(a.Until, now)
+		if err != nil {
+			return RepeatOptions{}, fmt.Errorf("until: %w", err)
+		}
+		lim.stopAt = stop
+	}
+	return lim.options(rule, at)
 }

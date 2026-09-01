@@ -96,7 +96,7 @@ func TestParse(t *testing.T) {
 		{"2026-09-01 ship it", time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC), "ship it"},
 	} {
 		t.Run(tt.in, func(t *testing.T) {
-			at, rest, err := Parse(tt.in, now)
+			at, _, rest, err := Parse(tt.in, now)
 			if err != nil {
 				t.Fatalf("Parse(%q): %v", tt.in, err)
 			}
@@ -128,16 +128,14 @@ func TestParseRefuses(t *testing.T) {
 		{"나중에 정리해줘", "nobody has picked a time"},
 		{"곧 확인해줘", "the same, one word shorter"},
 		{"later today check it", "the English one"},
-		// A repeat asked for and silently turned into a single job at the
-		// wrong time is the worst of the three outcomes. "1시간마다" used
-		// to book one run at one in the morning with "간마다 확인" as the
-		// request.
-		{"매일 아침 9시에 리포트", "a repeat"},
-		{"1시간마다 확인", "a repeat, half-parsed"},
-		{"every day at 9am report", "the English repeat"},
+		// Repeats parse now — see TestARepeatIsReadAsARuleAndAFirstRun.
+		// What is still refused is a repeat by the month, and one so
+		// frequent that each run costs more than it reports.
+		{"매달 1일 리포트", "a repeat by the month"},
+		{"10초마다 확인", "a repeat by the second"},
 	} {
 		t.Run(tt.because, func(t *testing.T) {
-			if _, _, err := Parse(tt.in, now); err == nil {
+			if _, _, _, err := Parse(tt.in, now); err == nil {
 				t.Errorf("Parse(%q) succeeded; it should refuse because it is %s", tt.in, tt.because)
 			}
 		})
@@ -147,7 +145,7 @@ func TestParseRefuses(t *testing.T) {
 // The error a person actually reads has to show them the way out, so it
 // carries examples rather than only a complaint.
 func TestTheRefusalShowsExamples(t *testing.T) {
-	_, _, err := Parse("run the tests", now)
+	_, _, _, err := Parse("run the tests", now)
 	if err == nil {
 		t.Fatal("expected a refusal")
 	}
@@ -176,15 +174,16 @@ func TestFormatSaysWhenInTermsAPersonChecks(t *testing.T) {
 
 // A refusal has to say which kind of no it is. "Could not read a time"
 // sends somebody looking for a spelling mistake when the real answer is
-// that repeats do not exist, or that they have not chosen a moment yet.
+// that they have not chosen a moment yet, or that the repeat they asked
+// for has no reading that is not a guess.
 func TestTheRefusalSaysWhichKindOfNo(t *testing.T) {
 	for _, tt := range []struct{ in, want string }{
-		{"매일 9시에 리포트", "repeating"},
-		{"1시간마다 확인", "repeating"},
+		{"매달 1일 리포트", "by the month"},
+		{"10초마다 확인", "Use minutes or longer"},
 		{"나중에 정리해줘", "is not a time"},
 		{"later check it", "is not a time"},
 	} {
-		_, _, err := Parse(tt.in, now)
+		_, _, _, err := Parse(tt.in, now)
 		if err == nil {
 			t.Fatalf("Parse(%q) succeeded", tt.in)
 		}
@@ -201,7 +200,7 @@ func TestOrdinaryWordsAreNotSwallowed(t *testing.T) {
 		{"30분 뒤 everything in the queue", "everything in the queue"},
 		{"내일 아침 경로 정리", "경로 정리"},
 	} {
-		_, rest, err := Parse(tt.in, now)
+		_, _, rest, err := Parse(tt.in, now)
 		if err != nil {
 			t.Fatalf("Parse(%q): %v", tt.in, err)
 		}

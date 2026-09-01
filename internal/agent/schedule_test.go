@@ -63,7 +63,7 @@ func TestAScheduledPromptRunsAndLeavesItsAnswerBehind(t *testing.T) {
 	}
 	sched := NewScheduler(context.Background(), loop)
 
-	entry, err := sched.Add(sid, "general-purpose", "run the tests", time.Now().Add(30*time.Millisecond))
+	entry, err := sched.Add(sid, "general-purpose", "run the tests", time.Now().Add(30*time.Millisecond), RepeatOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestBookingAndFinishingAreRecordedOnTheConversation(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	sched := NewScheduler(context.Background(), loop)
-	entry, err := sched.Add(sid, "general-purpose", "run the tests", time.Now().Add(30*time.Millisecond))
+	entry, err := sched.Add(sid, "general-purpose", "run the tests", time.Now().Add(30*time.Millisecond), RepeatOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestCancellingAScheduledTaskStopsItAndRemovesTheRow(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	sched := NewScheduler(context.Background(), loop)
-	entry, err := sched.Add(sid, "general-purpose", "run the tests", time.Now().Add(time.Hour))
+	entry, err := sched.Add(sid, "general-purpose", "run the tests", time.Now().Add(time.Hour), RepeatOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestSeenIsTheThirdState(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	sched := NewScheduler(context.Background(), loop)
-	entry, _ := sched.Add(sid, "general-purpose", "run the tests", time.Now().Add(30*time.Millisecond))
+	entry, _ := sched.Add(sid, "general-purpose", "run the tests", time.Now().Add(30*time.Millisecond), RepeatOptions{})
 	done := waitForStatus(t, sched, sid, entry.ID, ScheduleDone)
 	if done.Seen {
 		t.Error("a task that has just finished is already marked read")
@@ -321,11 +321,11 @@ func TestBookingIsBounded(t *testing.T) {
 	loop.Store.CreateSession(sid, "", "general-purpose", true)
 	sched := NewScheduler(context.Background(), loop)
 	for i := 0; i < maxPendingPerSession; i++ {
-		if _, err := sched.Add(sid, "general-purpose", "x", time.Now().Add(time.Hour)); err != nil {
+		if _, err := sched.Add(sid, "general-purpose", "x", time.Now().Add(time.Hour), RepeatOptions{}); err != nil {
 			t.Fatalf("Add %d: %v", i, err)
 		}
 	}
-	if _, err := sched.Add(sid, "general-purpose", "x", time.Now().Add(time.Hour)); err == nil {
+	if _, err := sched.Add(sid, "general-purpose", "x", time.Now().Add(time.Hour), RepeatOptions{}); err == nil {
 		t.Error("booking past the ceiling was allowed")
 	}
 }
@@ -357,7 +357,7 @@ func TestRenamingAScheduledTask(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	sched := NewScheduler(context.Background(), loop)
-	entry, err := sched.Add(sid, "general-purpose", "run the tests and report the failures", time.Now().Add(time.Hour))
+	entry, err := sched.Add(sid, "general-purpose", "run the tests and report the failures", time.Now().Add(time.Hour), RepeatOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestAnOverlongNameIsCutToWhatARowCanShow(t *testing.T) {
 	const sid = "s1"
 	loop.Store.CreateSession(sid, "", "general-purpose", true)
 	sched := NewScheduler(context.Background(), loop)
-	entry, _ := sched.Add(sid, "general-purpose", "x", time.Now().Add(time.Hour))
+	entry, _ := sched.Add(sid, "general-purpose", "x", time.Now().Add(time.Hour), RepeatOptions{})
 
 	got, _ := sched.Rename(sid, entry.ID, strings.Repeat("가", 300))
 	if n := len([]rune(got.Name)); n > maxScheduleName {
@@ -449,14 +449,14 @@ func TestIdsAreShortAndPerConversation(t *testing.T) {
 	sched := NewScheduler(context.Background(), loop)
 	at := time.Now().Add(time.Hour)
 
-	first, _ := sched.Add("a", "general-purpose", "one", at)
-	second, _ := sched.Add("a", "general-purpose", "two", at)
+	first, _ := sched.Add("a", "general-purpose", "one", at, RepeatOptions{})
+	second, _ := sched.Add("a", "general-purpose", "two", at, RepeatOptions{})
 	if first.ID != "s1" || second.ID != "s2" {
 		t.Errorf("ids = %q, %q; want s1, s2", first.ID, second.ID)
 	}
 	// Each conversation counts for itself, so the first task in any
 	// conversation is s1.
-	other, _ := sched.Add("b", "general-purpose", "one", at)
+	other, _ := sched.Add("b", "general-purpose", "one", at, RepeatOptions{})
 	if other.ID != "s1" {
 		t.Errorf("the first task of another conversation is %q, want s1", other.ID)
 	}
@@ -476,7 +476,7 @@ func TestIdsAreShortAndPerConversation(t *testing.T) {
 	// s1 where a cancelled s1 used to be is the one way a short id can
 	// mislead.
 	sched.Cancel("a", "s1")
-	third, _ := sched.Add("a", "general-purpose", "three", at)
+	third, _ := sched.Add("a", "general-purpose", "three", at, RepeatOptions{})
 	if third.ID != "s3" {
 		t.Errorf("after cancelling s1, the next id is %q; want s3, not a reused number", third.ID)
 	}
@@ -498,7 +498,7 @@ func TestIdsDoNotRestartAfterARestart(t *testing.T) {
 
 	sched := NewScheduler(context.Background(), loop)
 	sched.Restore([]string{sid}, time.Now())
-	next, err := sched.Add(sid, "general-purpose", "new one", at)
+	next, err := sched.Add(sid, "general-purpose", "new one", at, RepeatOptions{})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -516,8 +516,8 @@ func TestTwoConversationsRunTheirOwnS1(t *testing.T) {
 	}
 	sched := NewScheduler(context.Background(), loop)
 	soon := time.Now().Add(30 * time.Millisecond)
-	sched.Add("a", "general-purpose", "one", soon)
-	sched.Add("b", "general-purpose", "one", soon)
+	sched.Add("a", "general-purpose", "one", soon, RepeatOptions{})
+	sched.Add("b", "general-purpose", "one", soon, RepeatOptions{})
 
 	ra := waitForStatus(t, sched, "a", "s1", ScheduleDone)
 	rb := waitForStatus(t, sched, "b", "s1", ScheduleDone)
@@ -579,7 +579,10 @@ func TestTheScheduleToolPassesTheRefusalBack(t *testing.T) {
 
 	for _, tt := range []struct{ when, want string }{
 		{"나중에", "is not a time"},
-		{"매일 아침", "repeating"},
+		// Repeats parse now; these two are the shapes that still have no
+		// reading which is not a guess.
+		{"매달 1일", "by the month"},
+		{"10초마다", "Use minutes or longer"},
 		{"소풍 갈 때쯤", "could not read a time"},
 	} {
 		input, _ := json.Marshal(map[string]string{"when": tt.when, "prompt": "x"})

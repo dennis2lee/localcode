@@ -37,19 +37,31 @@ import (
 //     moment in the past would be a request nothing can honour.
 //   - A bare time with no request after it is not a schedule. There is
 //     nothing to run, and reporting that is better than booking silence.
-func Parse(text string, now time.Time) (at time.Time, rest string, err error) {
+func Parse(text string, now time.Time) (at time.Time, rep Repeat, rest string, err error) {
 	s := strings.TrimSpace(text)
 	if s == "" {
-		return time.Time{}, "", fmt.Errorf("say when, and what to do: %s", Examples)
+		return time.Time{}, Repeat{}, "", fmt.Errorf("say when, and what to do: %s", Examples)
 	}
 	if word, ok := leadingWord(s, vagueWords); ok {
 		// "나중에", "later", "soon". A scheduler cannot pick a moment on
 		// somebody's behalf, and picking one anyway is worse than saying
 		// so: the work would happen at a time nobody chose.
-		return time.Time{}, "", fmt.Errorf("%q is not a time. Say when: %s", word, Examples)
+		return time.Time{}, Repeat{}, "", fmt.Errorf("%q is not a time. Say when: %s", word, Examples)
 	}
-	if word, ok := leadingWord(s, repeatWords); ok {
-		return time.Time{}, "", repeatRefusal(word)
+	// The repeat comes off the front first, and what is left is the first
+	// occurrence read by the ordinary rules: "매일 9시 run the tests" is
+	// the daily rule plus "9시 run the tests".
+	rep, s, err = TakeRepeat(s)
+	if err != nil {
+		return time.Time{}, Repeat{}, "", err
+	}
+	if rep.On() && startsWithRequest(s, now) {
+		// A repeat with no time of day in it: "1시간마다 check the build",
+		// "매일 report". One step from now, for every unit alike — that is
+		// a reading rather than a guess, and the confirmation echoes the
+		// first run back before anything is booked. Picking nine in the
+		// morning for "매일" would be the guess.
+		return now.Add(rep.step(now).Sub(now)).Truncate(time.Second), rep, s, requireRequest(s)
 	}
 
 	for _, try := range []func(string, time.Time) (time.Time, string, bool){
@@ -67,25 +79,41 @@ func Parse(text string, now time.Time) (at time.Time, rest string, err error) {
 			// prompt, which is worse than a refusal because nothing looks
 			// wrong until the answer arrives.
 			rest = strings.TrimSpace(stripParticle(rest))
-			if word, ok := leadingWord(rest, repeatMarkers); ok {
-				// "1시간마다" parsed as one hour with "마다" left over,
-				// and booked a single run at the wrong time. A repeat
-				// asked for and silently turned into something else is
-				// the one outcome worth refusing outright.
-				return time.Time{}, "", repeatRefusal(word)
-			}
 			if rest == "" {
-				return time.Time{}, "", fmt.Errorf("that says when but not what to do. Add the request after the time, e.g. %q", "30분 뒤 run the tests")
+				return time.Time{}, Repeat{}, "", fmt.Errorf("that says when but not what to do. Add the request after the time, e.g. %q", "30분 뒤 run the tests")
 			}
 			if !at.After(now) {
 				// Only reachable for an absolute date in the past, since
 				// the clock forms roll forward on their own.
-				return time.Time{}, "", fmt.Errorf("%s is in the past", at.Format("2006-01-02 15:04"))
+				return time.Time{}, Repeat{}, "", fmt.Errorf("%s is in the past", at.Format("2006-01-02 15:04"))
 			}
-			return at, rest, nil
+			return at, rep, rest, nil
 		}
 	}
-	return time.Time{}, "", fmt.Errorf("could not read a time from %q. %s", firstWords(s, 4), Examples)
+	return time.Time{}, Repeat{}, "", fmt.Errorf("could not read a time from %q. %s", firstWords(s, 4), Examples)
+}
+
+// startsWithRequest reports whether what follows a repeat rule is the
+// request rather than a time — "1시간마다 check" against "매일 9시 check".
+// Asked by trying the time parsers and seeing whether any of them bite.
+func startsWithRequest(s string, now time.Time) bool {
+	for _, try := range []func(string, time.Time) (time.Time, string, bool){
+		parseAbsolute, parseRelative, parseWordNumber, parseWeekday, parseDayAndClock,
+	} {
+		if _, _, ok := try(s, now); ok {
+			return false
+		}
+	}
+	return true
+}
+
+// requireRequest is the "you said when but not what" check, for the path
+// that never reaches the loop.
+func requireRequest(rest string) error {
+	if strings.TrimSpace(rest) == "" {
+		return fmt.Errorf("that says when but not what to do. Add the request after the time, e.g. %q", "1시간마다 check the build")
+	}
+	return nil
 }
 
 // Examples is the one line shown whenever a time could not be read. It is
@@ -577,29 +605,6 @@ var vagueWords = []string{
 	"later today", "later on", "later", "soon", "sometime", "in a bit", "shortly", "whenever",
 }
 
-// repeatWords open a repeating request, and repeatMarkers are what is
-// left over when one was half-parsed as a single time ("1시간마다" reads
-// as one hour with "마다" behind it).
-//
-// Both are refused. There are no repeats, and the reason they cannot
-// simply be ignored is what "1시간마다 확인" did before this: it booked
-// one run at one in the morning with "간마다 확인" as the request. A
-// repeat that quietly becomes a different single job is the worst of the
-// three possible outcomes.
-var repeatWords = []string{
-	"매일", "매주", "매시간", "매달", "매월", "매분", "날마다", "주마다",
-	"every", "each day", "each week", "daily", "weekly", "hourly", "repeat",
-}
-
-var repeatMarkers = []string{"마다", "간마다"}
-
-func repeatRefusal(word string) error {
-	return fmt.Errorf(
-		"%q asks for a repeating task, and localcode books one run at one moment. "+
-			"A repeat needs a stop condition and a policy for what happens when it fails, "+
-			"and neither exists yet. Say a single time instead: %s", word, Examples)
-}
-
 // leadingWord reports whether s opens with one of words, matched
 // case-insensitively and only at a boundary — so "에러" is not the
 // particle "에" and "everything" is not "every".
@@ -656,15 +661,15 @@ func stripParticle(rest string) string {
 // that field is for. So the two entry points differ in one thing and
 // share everything else, which is what keeps "내일 아침" meaning the same
 // moment whether it was typed at a prompt or into a box.
-func ParseTime(text string, now time.Time) (time.Time, error) {
-	at, rest, err := Parse(strings.TrimSpace(text)+" "+timeOnlyFiller, now)
+func ParseTime(text string, now time.Time) (time.Time, Repeat, error) {
+	at, rep, rest, err := Parse(strings.TrimSpace(text)+" "+timeOnlyFiller, now)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, Repeat{}, err
 	}
 	if strings.TrimSpace(rest) != timeOnlyFiller {
-		return time.Time{}, fmt.Errorf("%q has more in it than a time. Put the request in the other field", strings.TrimSpace(text))
+		return time.Time{}, Repeat{}, fmt.Errorf("%q has more in it than a time. Put the request in the other field", strings.TrimSpace(text))
 	}
-	return at, nil
+	return at, rep, nil
 }
 
 // timeOnlyFiller stands in for the request Parse insists on, so ParseTime

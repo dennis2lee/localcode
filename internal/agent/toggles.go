@@ -560,17 +560,34 @@ func (l *Loop) routeSchedule(sessionID, agentName, text string) (bool, error) {
 	}
 
 	now := time.Now()
-	at, prompt, err := when.Parse(arg, now)
+	at, rule, prompt, err := when.Parse(arg, now)
 	if err != nil {
 		return true, l.replyText(sessionID, err.Error())
 	}
-	entry, err := l.Schedules.Add(sessionID, agentName, prompt, at)
+	prompt, lim, err := takeLimits(prompt, now)
+	if err != nil {
+		return true, l.replyText(sessionID, err.Error())
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return true, l.replyText(sessionID, "that says when but not what to do")
+	}
+	opts, err := lim.options(rule, at)
+	if err != nil {
+		return true, l.replyText(sessionID, err.Error())
+	}
+	entry, err := l.Schedules.Add(sessionID, agentName, prompt, at, opts)
 	if err != nil {
 		return true, l.replyText(sessionID, err.Error())
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "scheduled for %s\n  %s\n  %s", when.Format(at, now), promptSummary(prompt), entry.ID)
+	// What "repeating" actually committed to. Named every time, because
+	// the difference between ten runs and every day until it is deleted
+	// is the whole of what somebody needs to have agreed to.
+	if d := describeLimits(opts); d != "" {
+		fmt.Fprintf(&b, "\n  %s", d)
+	}
 	// Said every time, because it is the one promise this feature does
 	// not make and the one people assume it does.
 	b.WriteString("\n\nIt runs only while localcode is running. If this machine is asleep or" +

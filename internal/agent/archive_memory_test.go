@@ -100,7 +100,7 @@ func TestASchedulePointingAtAnArchivedConversationIsMissed(t *testing.T) {
 	loop.Schedules = sched
 	loop.Store.CreateSession("s1", "", "general-purpose", true)
 
-	booked, err := sched.Add("s1", "general-purpose", "run the tests", time.Now().Add(50*time.Millisecond))
+	booked, err := sched.Add("s1", "general-purpose", "run the tests", time.Now().Add(50*time.Millisecond), RepeatOptions{})
 	if err != nil {
 		t.Fatalf("book: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestBookingIntoAnArchivedConversationIsRefused(t *testing.T) {
 	loop.Store.CreateSession("s1", "", "general-purpose", true)
 	loop.Store.Archive("s1")
 
-	if _, err := sched.Add("s1", "general-purpose", "run the tests", time.Now().Add(time.Hour)); err == nil {
+	if _, err := sched.Add("s1", "general-purpose", "run the tests", time.Now().Add(time.Hour), RepeatOptions{}); err == nil {
 		t.Error("a prompt was booked into an archived conversation")
 	} else if !strings.Contains(err.Error(), "archived") {
 		t.Errorf("error = %q, which does not say why", err)

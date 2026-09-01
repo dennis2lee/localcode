@@ -22,7 +22,7 @@ func TestParseTimeAcceptsATimeWithNothingAfterIt(t *testing.T) {
 		{"금요일 저녁", time.Date(2026, 8, 28, 18, 0, 0, 0, time.UTC)},
 		{"2026-09-01 14:30", time.Date(2026, 9, 1, 14, 30, 0, 0, time.UTC)},
 	} {
-		at, err := ParseTime(tt.in, now)
+		at, _, err := ParseTime(tt.in, now)
 		if err != nil {
 			t.Errorf("ParseTime(%q): %v", tt.in, err)
 			continue
@@ -38,7 +38,7 @@ func TestParseTimeAcceptsATimeWithNothingAfterIt(t *testing.T) {
 func TestParseTimeRefusesAWholeSentence(t *testing.T) {
 	now := time.Date(2026, 8, 26, 16, 30, 0, 0, time.UTC)
 	for _, in := range []string{"30분 뒤 run the tests", "내일 아침에 테스트 돌려줘", "나중에"} {
-		if _, err := ParseTime(in, now); err == nil {
+		if _, _, err := ParseTime(in, now); err == nil {
 			t.Errorf("ParseTime(%q) accepted a field that is not only a time", in)
 		}
 	}

@@ -179,12 +179,76 @@
          reason parsing is allowed to guess: a misread moment is caught
          here rather than by the work not happening. -->
     <p class="note" id="schedule-when-note"></p>
+    <!--
+      The limits on a repeat, and they appear only when the When field
+      actually asks for one — "매일 9시", "every 2 hours", "1시간마다".
+      Three boxes on a form that is otherwise two fields would be three
+      boxes almost nobody ever needs, since most bookings run once.
+    -->
+    <div id="schedule-repeat" hidden>
+      <p class="note" id="schedule-repeat-note"></p>
+      <div class="repeat-row">
+        <label class="field-label" for="schedule-times">Stop after</label>
+        <input type="number" id="schedule-times" min="1" placeholder="runs (blank: no limit)">
+        <label class="field-label" for="schedule-until">or stop on</label>
+        <input type="text" id="schedule-until" placeholder="2026-12-01 / 다음주 금요일 (blank: no limit)" autocomplete="off">
+      </div>
+      <label class="field-label" for="schedule-keep">Keep transcripts</label>
+      <input type="number" id="schedule-keep" min="-1" placeholder="10">
+      <!-- Said rather than assumed: 0 really does delete the run that has
+           just finished, and -1 really does keep every one of them. -->
+      <p class="note" id="schedule-keep-note">-1 keeps every run, 0 keeps none, a number keeps that many of the most recent.</p>
+    </div>
     <label class="field-label" for="schedule-prompt">What to do</label>
     <textarea id="schedule-prompt" rows="4" placeholder="run the tests and report the failures"></textarea>
     <p class="note" id="schedule-note"></p>
     <div class="close-row">
       <button id="schedule-cancel">Cancel</button>
       <button id="schedule-save">Schedule it</button>
+    </div>
+  </div>
+</div>
+
+<!--
+  What one scheduled task actually says.
+
+  The panel row is one line per field and clips all three of them, so a
+  booking whose prompt is a paragraph shows its first few words and no
+  way to read the rest. This is that way: the same window shape Settings
+  uses, opened by double-clicking the row.
+
+  Read-only on purpose. Renaming and deleting are on the row itself,
+  where they were, and a window you opened to check something should not
+  be one where a stray keypress changes it.
+-->
+<div id="schedule-details-modal">
+  <div class="box">
+    <h3>Scheduled task</h3>
+
+    <h4 class="settings-section">When</h4>
+    <p class="sched-detail" id="schedule-details-when"></p>
+
+    <h4 class="settings-section">Status</h4>
+    <p class="sched-detail" id="schedule-details-status"></p>
+    <p class="note err" id="schedule-details-error" hidden></p>
+
+    <!-- Only for a booking that repeats, which is the minority. -->
+    <div id="schedule-details-repeat" hidden>
+      <h4 class="settings-section">Repeats</h4>
+      <p class="sched-detail" id="schedule-details-rule"></p>
+    </div>
+
+    <h4 class="settings-section">What it runs</h4>
+    <pre class="sched-detail prompt" id="schedule-details-prompt"></pre>
+
+    <h4 class="settings-section">Agent</h4>
+    <p class="sched-detail" id="schedule-details-agent"></p>
+
+    <div class="close-row">
+      <!-- Only shown once there is a run to read, since that is the only
+           time it leads anywhere. -->
+      <button id="schedule-details-open" hidden>Open the run</button>
+      <button id="schedule-details-close">Close</button>
     </div>
   </div>
 </div>

@@ -171,6 +171,17 @@ const (
 	// Purely a note for the reader: rehydration ignores it, so the model
 	// is not told it is talking to a copy.
 	TypeSessionForked Type = "session.forked"
+	// TypeSessionScheduled opens the log of a session created by a
+	// scheduled task, naming which one and which run:
+	// {"schedule","name","run","run_total","at","repeat","from"}.
+	//
+	// The same job session.forked does, for the same reason. Opened on
+	// its own — from the session list, or from the run before it in a
+	// repeating series — a run session is a conversation that begins with
+	// an instruction nobody in it typed, at a moment nobody was there
+	// for. This says where it came from, written where it is read.
+	// Rehydration ignores it, so the model is not told about it.
+	TypeSessionScheduled Type = "session.scheduled"
 	// TypeDelegated marks a turn answered by a sub-agent on its own model
 	// instead of the session's own: {"agent", "prompt"}. Clients show it so
 	// a cheaper model answering is visible rather than silent.
