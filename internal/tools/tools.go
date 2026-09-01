@@ -26,6 +26,23 @@ type Result struct {
 	// carry on: after a refusal, a model that stops has stopped for the
 	// right reason.
 	Refused bool
+	// EndsTurn marks a tool whose call is the end of the work, so the
+	// loop stops instead of asking the model what to do next.
+	//
+	// A few tools are terminal by definition: a debate reviewer that has
+	// recorded its verdict has nothing left to say, and an orchestration
+	// stage that has answered in its declared shape is done. Both used to
+	// say so in the result text — "the debate ends here; nothing further
+	// is needed from you" — which is a request, and a model that does not
+	// take it calls the same tool again on the next iteration, and the
+	// one after that. The turn loop has no other reason to stop, so the
+	// session stayed busy and every message typed afterwards was injected
+	// into the turn that would not end.
+	//
+	// Set by the tool rather than inferred from its name, because whether
+	// a call is terminal can depend on the call: a verdict recorded with
+	// no findings is not, and asks to be called again.
+	EndsTurn bool
 	// Sources names the material inside Content that came from
 	// somewhere other than this tool, with the span of Content each one
 	// occupies.

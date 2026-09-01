@@ -198,6 +198,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// a file or re-runs the build, and that used to count as work and buy
 	// another nudge. See keepGoing.
 	madeCalls := map[string]bool{}
+	// Consecutive steps that asked for nothing this turn had not already
+	// asked for. See the ceiling at the bottom of the loop.
+	repeats := 0
 
 	for {
 		history := l.history(sessionID)
@@ -574,12 +577,49 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 
 		if newWork(madeCalls, toolUses) {
 			nudgedSinceWork = false
+			repeats = 0
+		} else {
+			repeats++
 		}
-		resultBlocks, refused := l.runTools(ctx, sessionID, toolUses, allowedTools, l.contextWindow(ctx, run.profile))
+		resultBlocks, refused, ended := l.runTools(ctx, sessionID, toolUses, allowedTools, l.contextWindow(ctx, run.profile))
 		ranTools = true
 		lastRefused = refused
 		resultBlocks = append(resultBlocks, l.takeInjected(sessionID)...)
 		l.appendHistory(sessionID, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
+
+		// A tool that was the end of the work. The results are in the
+		// history first, so the record and the model's copy both show the
+		// call that finished it.
+		if ended {
+			return nil
+		}
+
+		// A model that will not stop.
+		//
+		// The loop above has exactly one reason to end: the model stops
+		// asking for tools. A model that asks for the same tool with the
+		// same arguments, forever, is therefore unbounded — and it is not
+		// hypothetical, it is what a debate reviewer did after recording
+		// its verdict, for a thousand requests, holding the session busy
+		// so that everything typed afterwards was injected into a turn
+		// that would never finish.
+		//
+		// Repetition rather than a step count is the signal, because a
+		// long turn doing real work is ordinary and must not be cut off.
+		// newWork already tracks every (tool, arguments) pair this turn
+		// has made; a step that adds none of them is a step that did
+		// nothing new, and several in a row is a loop rather than work.
+		// Re-running one command after an edit is not caught: the edit is
+		// itself new work and resets the count.
+		if repeats >= maxRepeatSteps {
+			l.Store.Append(sessionID, events.TypeError, map[string]any{
+				"error": fmt.Sprintf(
+					"stopped: the model called the same tools with the same arguments %d times in a row without doing anything new. "+
+						"Whatever it was trying is not working; the turn was ended rather than left running.", repeats),
+				"recovered": true,
+			})
+			return nil
+		}
 	}
 }
 
@@ -847,7 +887,7 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 // plus whether any of them was refused rather than run — a deny rule, a
 // blocking hook, or the person at the keyboard clicking Deny. See
 // keepGoing for what that second value decides.
-func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block, allowedTools []string, window int) (blocks []provider.Block, refused bool) {
+func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block, allowedTools []string, window int) (blocks []provider.Block, refused, ended bool) {
 	ctx = WithSessionID(ctx, sessionID)
 	// Every tool in this turn resolves relative paths, and runs shell
 	// commands, in this session's own directory. This is what replaced
@@ -958,8 +998,15 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		if res.Refused {
 			refused = true
 		}
+		// A terminal tool ends the turn even when it was one of several
+		// called in the same step: the others still ran and still get
+		// their result blocks, and the loop stops after this batch rather
+		// than asking the model what to do next. See tools.Result.EndsTurn.
+		if res.EndsTurn {
+			ended = true
+		}
 	}
-	return results, refused
+	return results, refused, ended
 }
 
 // firstLine is a tool result cut down to something a log line can carry:

@@ -113,7 +113,10 @@ func (AnswerTool) Execute(ctx context.Context, input json.RawMessage) tools.Resu
 			IsError: true,
 		}
 	}
-	return tools.Result{Content: "recorded"}
+	// A stage that has answered in its declared shape is finished. Left
+	// to itself a model may call Answer again with the same fields, and
+	// the loop would have no reason to stop asking it what to do next.
+	return tools.Result{Content: "recorded", EndsTurn: true}
 }
 
 func describeReturns(returns map[string]string) string {

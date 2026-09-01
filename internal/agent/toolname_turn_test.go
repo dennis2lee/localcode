@@ -46,7 +46,7 @@ func toolNameLoop(t *testing.T) (*Loop, *namedFake) {
 
 func TestADecoratedToolNameRunsTheToolAndSaysItDid(t *testing.T) {
 	loop, fake := toolNameLoop(t)
-	blocks, refused := loop.runTools(context.Background(), "s1", []provider.Block{{
+	blocks, refused, _ := loop.runTools(context.Background(), "s1", []provider.Block{{
 		Type: provider.BlockToolUse, ToolUseID: "t1",
 		ToolName: "bash.command", ToolInput: json.RawMessage(`{"command":"ls"}`),
 	}}, nil, 100000)
@@ -75,7 +75,7 @@ func TestADecoratedToolNameRunsTheToolAndSaysItDid(t *testing.T) {
 
 func TestAnUnknownToolNameComesBackWithTheRoster(t *testing.T) {
 	loop, _ := toolNameLoop(t)
-	blocks, _ := loop.runTools(context.Background(), "s1", []provider.Block{{
+	blocks, _, _ := loop.runTools(context.Background(), "s1", []provider.Block{{
 		Type: provider.BlockToolUse, ToolUseID: "t1",
 		ToolName: "nonesuch", ToolInput: json.RawMessage(`{}`),
 	}}, []string{"bash"}, 100000)
@@ -98,7 +98,7 @@ func TestAnUnknownToolNameComesBackWithTheRoster(t *testing.T) {
 func TestARestrictedAgentCannotSpellItsWayToAToolItLacks(t *testing.T) {
 	loop, fake := toolNameLoop(t)
 	loop.Tools.Register(&namedFake{name: "read"})
-	blocks, _ := loop.runTools(context.Background(), "s1", []provider.Block{{
+	blocks, _, _ := loop.runTools(context.Background(), "s1", []provider.Block{{
 		Type: provider.BlockToolUse, ToolUseID: "t1",
 		ToolName: "bash.command", ToolInput: json.RawMessage(`{"command":"rm -rf /"}`),
 	}}, []string{"read"}, 100000)

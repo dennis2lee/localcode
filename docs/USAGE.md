@@ -1430,6 +1430,8 @@ If the turn happens to finish in the instant between your pressing Enter and the
 | `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 
+**A turn that will not end.** The loop has one ordinary reason to stop: the model stops asking for tools. A model that asks for the same tool with the same arguments over and over would therefore run without limit, which is not hypothetical — it is what a debate reviewer did after recording its verdict. Two things stop it now. A tool that is the end of the work (`Verdict`, `Answer`) ends the turn when it runs. And a turn that takes three steps in a row asking for nothing it has not already asked for is ended with a line in the transcript saying so. Repetition rather than a step count is the signal, so a long turn doing real work is untouched: re-running one command after an edit is not a repeat, because the edit is itself new work.
+
 **A tool name that is nearly right.** A model sometimes decorates a name — `bash.command` for `bash`, `functions.bash`, `readFile` for `read_file`. When the decorated form unambiguously names one tool the agent actually has, the call runs and the result says which spelling worked. When it does not, the refusal lists the tools the agent does have, so the model can pick a real one instead of guessing at the same wrong name. Resolution only ever searches the tools that agent was offered, so a misspelling cannot reach past a `tools` restriction.
 
 ### Combining agents
@@ -2023,6 +2025,8 @@ The change report is a real diff where there is a repository to ask: `git diff H
 | `rounds` | The budget ran out with no approval. The work stands; read it before trusting it. |
 | `stalled` | Two rounds running in which the author called no tool at all. That is a standoff, and the rounds left would only restate it. |
 | `stopped` | You pressed Stop. What was done is kept. |
+
+**A recorded verdict ends that reviewer's turn.** The tool used to say so and hope — *the debate ends here; nothing further is needed from you* — which is a request, and a model that did not take it called `Verdict` again on the next step, and the one after that. The turn loop had no other reason to stop, so the session stayed busy and every message typed afterwards was delivered into a debate that would never finish. The loop now ends the turn when the tool that ran was the end of the work. The one verdict that does not end a turn is one recorded with no findings, because it asks to be called again.
 
 The approval is a **tool call**, not a sentence: the reviewer sets a boolean, because "did it approve" cannot be read reliably out of prose in two languages. A model that will not call tools can end its reply with a line that is exactly `APPROVED`. Anything else — silence, an unreadable call, a reply with the word inside a sentence — is *not approved*, because ending a debate a round early on a misread stops the work being looked at while the transcript says somebody signed it off. The verdict tool is hidden from every turn that is not a review, so no model is ever in a position to mark its own homework.
 

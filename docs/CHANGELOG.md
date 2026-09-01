@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.81.1
+
+* **A debate could leave a session that never finished its turn, and every message after it went into that turn.** Reported as: after using `/debate`, ordinary prompts run as debates too.
+
+  The turn loop has one ordinary reason to stop — the model stops asking for tools — so a model that asks for the same tool forever is unbounded. `Verdict` was relying on prose to stop it: the tool result reads *"Recorded: approved. The debate ends here; nothing further is needed from you."* A model that did not take that called `Verdict` again, and again. Reproduced against a real daemon: **one `/debate` produced over a thousand model requests** and a message list 1996 long, with the session busy throughout. A daemon hands a message typed during a running turn to that turn as text rather than starting a new one, which is why the next ordinary prompt looked like part of the debate.
+
+  A sentence asking a model to stop is a request. Two mechanisms replace it.
+
+  A tool can now declare that its call was the end of the work, and the loop ends the turn when one runs. `Verdict` does, except when it is recorded with no findings, which asks to be called again. `Answer` does too, for the same reason one step over: an orchestration stage that has answered in its declared shape is finished, and left alone a model calls `Answer` again with the same fields.
+
+  And a turn that takes three steps in a row asking for nothing it has not already asked for is ended, with a line in the transcript saying so rather than a silence that looks like a finished turn. Repetition rather than a step count is the signal, so a long turn doing real work is untouched: re-running one command after an edit is not a repeat, because the edit is new work and resets the count.
+
+  The same scenario now costs two model requests, and the message after it starts a turn of its own.
+
 ## v0.81.0
 
 * **`/clear` starts the model fresh and keeps the conversation.** It holds none of the history; the transcript and the log hold all of it. Compaction replaces the history with a summary, this replaces it with nothing, and neither removes anything: scroll up after a `/clear` and every message is still there, still in the log, still there when the conversation is reopened tomorrow.

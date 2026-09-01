@@ -68,13 +68,18 @@ func (VerdictTool) Execute(ctx context.Context, input json.RawMessage) tools.Res
 		return tools.Result{Content: "invalid input: " + err.Error(), IsError: true}
 	}
 	// The debate reads the findings out of this call and frames them
-	// itself; what goes back here is only the confirmation, so a model
-	// that would otherwise carry on reviewing after it has reported
-	// stops. It says the findings are what travels, because that is true
-	// and because a reviewer that saves its argument for a closing
-	// message would have the argument dropped.
+	// itself; what goes back here is only the confirmation. It says the
+	// findings are what travels, because that is true and because a
+	// reviewer that saves its argument for a closing message would have
+	// the argument dropped.
+	//
+	// EndsTurn is what actually stops the reviewer. The sentence below
+	// used to be the whole mechanism, and a sentence is a request: a
+	// model that did not take it called Verdict again, and again, and the
+	// turn loop had no other reason to stop. The one branch that is not
+	// terminal is the one that asks to be called again.
 	if args.Approved {
-		return tools.Result{Content: "Recorded: approved. The debate ends here; nothing further is needed from you."}
+		return tools.Result{Content: "Recorded: approved. The debate ends here; nothing further is needed from you.", EndsTurn: true}
 	}
 	if strings.TrimSpace(args.Findings) == "" {
 		return tools.Result{
@@ -82,5 +87,5 @@ func (VerdictTool) Execute(ctx context.Context, input json.RawMessage) tools.Res
 				"call Verdict again with `findings` filled in.",
 		}
 	}
-	return tools.Result{Content: "Recorded: changes requested. The author will be given your findings."}
+	return tools.Result{Content: "Recorded: changes requested. The author will be given your findings.", EndsTurn: true}
 }

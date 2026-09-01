@@ -197,3 +197,15 @@ func newWork(seen map[string]bool, toolUses []provider.Block) bool {
 	}
 	return fresh
 }
+
+// maxRepeatSteps is how many steps in a row may ask for nothing new
+// before the turn is ended.
+//
+// Deliberately small. A step that repeats every call it has already made
+// has, by construction, changed nothing, so the next one has the same
+// input and no reason to differ; three of them is not a model working
+// slowly, it is a model that will not stop. The cost of being wrong in
+// this direction is one ended turn with a message saying why. The cost of
+// the other direction was measured: a thousand requests and a session
+// that could never be spoken to again.
+const maxRepeatSteps = 3
