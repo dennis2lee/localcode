@@ -57,6 +57,9 @@ localcode run --format json --bare --model qwen3:32b "fix the failing test"
 | `--skip-permissions` | `false` | Run tools without asking |
 | `--timeout <duration>` | none | Give up after this long, e.g. `90s` |
 | `--config <path>` | none | Same as the top-level flag |
+| `--session` | `false` | Keep the conversation so it can be continued in the TUI or Web UI. Prints its id on stderr |
+| `--server <url>` | none | Daemon to run a kept conversation through. Only meaningful with `--session` |
+| `--listen <host:port>` | `127.0.0.1:4096` | Where to look for a running daemon, for `--session` |
 
 The prompt may be an argument or come from stdin, which is how one with newlines and quotes in it survives the trip.
 
@@ -65,6 +68,17 @@ The prompt may be an argument or come from stdin, which is how one with newlines
 **Nobody is watching a pipe.** A tool that needs permission is refused immediately, with the reason, rather than waiting for an answer that is not coming — the same rule a scheduled run follows, minus the five minutes it waits for somebody at the desk. `--skip-permissions` sets this run's skip-all switch, exactly as `/permission-skip-all` would.
 
 **A failed run is a failed process.** The exit status is non-zero, and `--format json` carries the reason in an `error` field rather than leaving it on stderr only.
+
+**`--session` keeps the conversation.** Without it the run is thrown away and the session directory is not touched at all. With it, where the conversation is written depends on whether a daemon is already listening:
+
+| | Where it runs | When it appears |
+|---|---|---|
+| A daemon is listening | On the daemon | Immediately, in the TUI and Web UI |
+| Nothing is listening | Here, written to disk | Next time a daemon starts |
+
+That split is not for convenience. A daemon reads the session directory **once, at startup, and never looks again**, so a conversation written straight to disk beside a running one is real and invisible until it restarts. Routing through the daemon also leaves exactly one process writing to that directory.
+
+The shaping flags — `--bare`, `--profile`, `--model`, `--skip-permissions` — describe a turn *this* process builds, and a daemon builds its own. Passing one alongside `--session` runs it here and says so, rather than refusing: a script that works on a machine with no daemon and fails on one with a daemon is the worse surprise. The cost is the second row of the table.
 
 Three useful combinations:
 

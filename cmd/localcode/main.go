@@ -39,6 +39,12 @@ func subcommandNames() string {
 	return strings.Join(names, ", ")
 }
 
+// defaultAddr is where a daemon listens unless told otherwise, and
+// therefore where anything looking for one looks first. Named because two
+// places now need to agree on it: the daemon that binds it, and
+// "localcode run --session", which asks whether anybody already has.
+const defaultAddr = "127.0.0.1:4096"
+
 func runVersionCommand(args []string) error {
 	fmt.Println(version)
 	return nil
@@ -63,7 +69,7 @@ func main() {
 func run() error {
 	configPath := flag.String("config", "", "path to a single config.json (default: merge ~/.localcode/config.json + ./.localcode/config.json)")
 	agentName := flag.String("agent", "general-purpose", "agent/task type name to resolve a model profile for")
-	listen := flag.String("listen", "127.0.0.1:4096", "address the daemon listens on (also where the Web UI is served)")
+	listen := flag.String("listen", defaultAddr, "address the daemon listens on (also where the Web UI is served)")
 	server := flag.String("server", "", "connect the TUI to an already-running daemon at this URL instead of starting one locally (e.g. http://localhost:4096, or an SSH-tunneled remote core)")
 	headless := flag.Bool("headless", false, "run only the daemon (HTTP API + Web UI), no TUI — for a remote box you'll attach to over SSH or the network")
 	useGUI := flag.Bool("gui", gui.Available(), "open a native desktop window instead of the TUI (macOS and Windows only, and only in a build made with -tags gui; defaults to on for such a build, pass --gui=false to force the TUI instead). There is no desktop window on Linux: run without it and open the Web UI in a browser")

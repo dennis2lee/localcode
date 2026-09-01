@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -342,4 +343,97 @@ func contains(hay []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// Keeping the conversation.
+//
+// Two paths, and which one runs is decided by whether a daemon is already
+// listening — not for convenience but because a daemon reads the session
+// directory once, at startup, and never looks again. A conversation
+// written straight to disk beside a running daemon is real and invisible.
+
+func TestAKeptRunIsWrittenToDiskWhenNoDaemonIsListening(t *testing.T) {
+	f := &fakeModel{}
+	home := runHome(t, f.server(t).URL)
+
+	o := runOptions{format: formatText, agent: "general-purpose", session: true, listen: freeAddr(t)}
+	if _, err := doRun(t, o, "x"); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := filepath.Glob(filepath.Join(home, ".localcode", "sessions", "run-*.jsonl"))
+	if err != nil || len(kept) != 1 {
+		t.Fatalf("kept %d session logs, want 1 (%v)", len(kept), err)
+	}
+}
+
+// The default is still to leave nothing behind, which is what makes a
+// thousand benchmark runs cost nothing.
+func TestAnUnkeptRunTouchesNoSessionDirectory(t *testing.T) {
+	f := &fakeModel{}
+	home := runHome(t, f.server(t).URL)
+
+	o := runOptions{format: formatText, agent: "general-purpose", listen: freeAddr(t)}
+	if _, err := doRun(t, o, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".localcode", "sessions")); err == nil {
+		t.Error("a run without --session created the session directory")
+	}
+}
+
+// A kept conversation needs an id nothing else will ever pick, since it
+// goes into a directory a daemon also writes to.
+func TestKeptRunsDoNotShareAnID(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		id := oneShotSessionID(runOptions{session: true})
+		if seen[id] {
+			t.Fatalf("two kept runs picked the same id %q", id)
+		}
+		seen[id] = true
+		time.Sleep(time.Millisecond)
+	}
+	if got := oneShotSessionID(runOptions{}); got != "run" {
+		t.Errorf("an unkept run is called %q; it never leaves this process, so it can be anything stable", got)
+	}
+}
+
+// --server is about where a kept conversation goes, so it means nothing
+// without one — and meaning nothing quietly is how somebody ends up
+// believing they routed a run somewhere they did not.
+func TestServerWithoutSessionIsRefused(t *testing.T) {
+	err := runOneShot([]string{"--server", "http://localhost:4096", "x"})
+	if err == nil {
+		t.Error("--server was accepted without --session")
+	}
+}
+
+// The flags that shape a turn cannot travel to a daemon, which builds its
+// own. They are honoured here rather than refused: a script that works on
+// a machine with no daemon and fails on one with a daemon is the worse
+// surprise.
+func TestTheShapingFlagsAreRecognisedAsSuch(t *testing.T) {
+	for _, o := range []runOptions{
+		{bare: true}, {profile: "fast"}, {model: "m"}, {skip: true},
+	} {
+		if !o.shapesTheTurn() {
+			t.Errorf("%+v does not count as shaping the turn", o)
+		}
+	}
+	if (runOptions{agent: "general-purpose", format: formatJSON, session: true}).shapesTheTurn() {
+		t.Error("asking what to do was mistaken for shaping how")
+	}
+}
+
+// freeAddr is an address nothing is listening on, so the daemon probe
+// answers "nobody" without depending on what is running on this machine.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
 }

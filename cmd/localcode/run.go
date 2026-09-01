@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"localcode/internal/agent"
+	"localcode/internal/client"
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/session"
@@ -43,6 +45,17 @@ type runOptions struct {
 	skip    bool
 	timeout time.Duration
 	config  string
+	// session keeps the conversation instead of throwing it away, so it
+	// can be picked up in the TUI or the Web UI afterwards.
+	session bool
+	// server is the daemon to route a kept conversation through, when
+	// there is one. Empty means "look at the default address".
+	server string
+	// listen is the address to look for a daemon at. A flag rather than a
+	// constant because somebody running one on another port would
+	// otherwise get a second writer on their session directory, which is
+	// the one outcome this whole path exists to avoid.
+	listen string
 }
 
 // Output formats. Three, because the three callers want different things:
@@ -66,6 +79,9 @@ func runOneShot(args []string) error {
 	fs.BoolVar(&o.skip, "skip-permissions", false, "run tools without asking; without this a tool that needs permission is refused, since nobody is watching")
 	fs.DurationVar(&o.timeout, "timeout", 0, "give up after this long (e.g. 90s); zero waits indefinitely")
 	fs.StringVar(&o.config, "config", "", "path to a single config.json")
+	fs.BoolVar(&o.session, "session", false, "keep the conversation so it can be continued in the TUI or Web UI; prints its id")
+	fs.StringVar(&o.server, "server", "", "daemon to run a kept conversation through, e.g. http://localhost:4096")
+	fs.StringVar(&o.listen, "listen", defaultAddr, "address to look for a running daemon at, for --session")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: localcode run [flags] \"prompt\"\n\n"+
 			"Answers one prompt and exits. The prompt may also come from stdin:\n"+
@@ -82,6 +98,9 @@ func runOneShot(args []string) error {
 		return fmt.Errorf("unknown --format %q: use text, json or stream-json", o.format)
 	}
 
+	if o.server != "" && !o.session {
+		return errors.New("--server is for --session: a conversation that is thrown away has no reason to go through a daemon")
+	}
 	prompt, err := readPrompt(fs.Args())
 	if err != nil {
 		return err
@@ -116,6 +135,34 @@ func oneShot(ctx context.Context, o runOptions, prompt string, out io.Writer) er
 		ctx, cancel = context.WithTimeout(ctx, o.timeout)
 		defer cancel()
 	}
+	// A kept conversation goes through a daemon when there is one.
+	//
+	// Not for convenience: two processes appending to one session
+	// directory is how a log ends up with sequences that repeat and go
+	// backwards, which this project has already had to fix the reading
+	// side of. Routing through the daemon leaves exactly one writer, and
+	// it is also the only way the conversation shows up without
+	// restarting anything — a daemon reads the session directory once, at
+	// startup, and never looks again.
+	if o.session {
+		url := runDaemonURL(o)
+		switch {
+		case url != "" && !o.shapesTheTurn():
+			return throughDaemon(ctx, o, url, prompt, out)
+		case url != "":
+			// The shaping flags describe a turn this process builds and a
+			// daemon builds its own, so the two cannot both be honoured.
+			// Honouring the flags and saying what it costs beats refusing:
+			// a script that works on a machine with no daemon and fails on
+			// one with a daemon is the worse surprise, and the cost here is
+			// only that a daemon reads the session directory at startup and
+			// never looks again.
+			fmt.Fprintf(os.Stderr,
+				"note: --bare/--profile/--model/--skip-permissions shape a turn this process builds, "+
+					"so this runs here rather than on the daemon at %s. "+
+					"The conversation is written to disk and appears there when it next starts.\n", url)
+		}
+	}
 
 	loop, agentName, cleanup, err := buildOneShot(ctx, o)
 	if err != nil {
@@ -123,13 +170,19 @@ func oneShot(ctx context.Context, o runOptions, prompt string, out io.Writer) er
 	}
 	defer cleanup()
 
-	// An in-memory store. A one-shot leaves nothing behind: it does not
-	// belong in the session list, it must not collide with a daemon's
-	// session directory, and a benchmark that ran a thousand prompts
-	// would otherwise leave a thousand conversations to scroll past.
-	const sid = "run"
-	if _, err := loop.Store.CreateSession(sid, "", agentName, false); err != nil {
+	// Visible in the session list only when it is being kept. A thrown-away
+	// run has no business in a list of conversations, and a benchmark that
+	// ran a thousand of them would otherwise leave a thousand to scroll
+	// past.
+	sid := oneShotSessionID(o)
+	if _, err := loop.Store.CreateSession(sid, "", agentName, o.session); err != nil {
 		return fmt.Errorf("start a session to run in: %w", err)
+	}
+	if o.session {
+		// Said on stderr, so it does not land in the answer a script is
+		// parsing. It is the one thing a person needs from this run that
+		// is not the answer.
+		fmt.Fprintf(os.Stderr, "session %s\n", sid)
 	}
 	if o.skip {
 		// The session's own switch, the same one "/permission-skip-all"
@@ -218,7 +271,19 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 	if err != nil {
 		return nil, "", nil, err
 	}
-	store, err := session.NewStore("")
+	// In memory unless the conversation is being kept. A run that is
+	// thrown away must not touch the session directory at all: that is
+	// what makes it safe to run a thousand times, and safe to run beside
+	// a daemon.
+	//
+	// When it is kept, this path is only reached because no daemon
+	// answered — so this process is the only writer, which is the
+	// property that matters.
+	storeDir := ""
+	if o.session {
+		storeDir = filepath.Join(e.home, ".localcode", "sessions")
+	}
+	store, err := session.NewStore(storeDir)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -419,4 +484,92 @@ func sortedProfiles(m map[string]config.Profile) []string {
 func sortStrings(in []string) []string {
 	sort.Strings(in)
 	return in
+}
+
+// shapesTheTurn reports whether any flag describes how this process would
+// build the turn, as opposed to what to ask. Those cannot travel to a
+// daemon, which builds its own.
+func (o runOptions) shapesTheTurn() bool {
+	return o.bare || o.profile != "" || o.model != "" || o.skip
+}
+
+// oneShotSessionID names the conversation.
+//
+// A kept one needs an id nothing else will ever pick, since it is going
+// into a directory the daemon also writes to; a thrown-away one lives and
+// dies in this process and can be called anything.
+func oneShotSessionID(o runOptions) string {
+	if !o.session {
+		return "run"
+	}
+	return fmt.Sprintf("run-%d", time.Now().UnixNano())
+}
+
+// runDaemonURL is the daemon to route a kept conversation through, or ""
+// when there is nobody to route to.
+//
+// --server names one outright. Otherwise the default address is asked
+// whether a localcode daemon is there, using the same probe that decides
+// whether starting up should attach instead of binding — so the two
+// cannot disagree about what counts as a daemon being present.
+func runDaemonURL(o runOptions) string {
+	if o.server != "" {
+		return strings.TrimRight(o.server, "/")
+	}
+	if _, ok := daemonWorkspace(o.listen); ok {
+		return "http://" + o.listen
+	}
+	return ""
+}
+
+// throughDaemon runs the prompt in a session the daemon owns.
+//
+// The answer comes back over the same event stream every other client
+// reads, so the three formats print exactly what they print for a run of
+// this process's own.
+func throughDaemon(ctx context.Context, o runOptions, url, prompt string, out io.Writer) error {
+	c := client.New(url)
+	sess, err := c.CreateSession(ctx, o.agent)
+	if err != nil {
+		return fmt.Errorf("create a session on %s: %w", url, err)
+	}
+	fmt.Fprintf(os.Stderr, "session %s on %s\n", sess.ID, url)
+
+	// Subscribed from the start of the log, so nothing between creating
+	// the session and sending the prompt is missed.
+	stream := c.StreamEvents(ctx, sess.ID, 0)
+	w := newRunWriter(o.format, out)
+	done := make(chan error, 1)
+	go func() { done <- c.SendMessage(ctx, sess.ID, prompt) }()
+
+	for {
+		select {
+		case ev, ok := <-stream:
+			if !ok {
+				return w.finish(sess.ID, <-done)
+			}
+			w.event(ev)
+		case err := <-done:
+			// Drain what the daemon has already sent for this turn.
+			deadline := time.NewTimer(2 * time.Second)
+			defer deadline.Stop()
+			for {
+				select {
+				case ev, ok := <-stream:
+					if !ok {
+						return w.finish(sess.ID, err)
+					}
+					w.event(ev)
+					if ev.Type == events.TypeTurnDone {
+						return w.finish(sess.ID, err)
+					}
+					continue
+				case <-deadline.C:
+					return w.finish(sess.ID, err)
+				}
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("gave up after %s", o.timeout)
+		}
+	}
 }

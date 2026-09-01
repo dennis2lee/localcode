@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.79.1
+
+* **`localcode run --session` keeps the conversation.** Without it a run is thrown away, which is what makes a thousand benchmark runs cost nothing; with it the conversation can be picked up in the TUI or the Web UI afterwards.
+
+  Where it is written depends on whether a daemon is already listening, and that split is not a convenience. A daemon reads the session directory once, at startup, and never looks again — so a conversation written straight to disk beside a running daemon is real and invisible until it restarts. When one is listening the run goes through it and the session appears at once; when nothing is, the run happens here and is written to disk. Either way exactly one process is writing to that directory, which is the condition this project has already had to fix the reading side of.
+
+  `--server` names a daemon outright, and `--listen` says where to look for one; the probe is the same one that decides whether starting up should attach instead of binding, so the two cannot disagree about what counts as a daemon being present.
+
+  The flags that shape a turn — `--bare`, `--profile`, `--model`, `--skip-permissions` — cannot travel to a daemon, which builds its own. Passing one alongside `--session` runs it here and says what that costs, rather than refusing: a script that works on a machine with no daemon and fails on one with a daemon is the worse surprise.
+
 ## v0.79.0
 
 * **`localcode run` answers one prompt and exits.** Every other way in ended in something that stays — a TUI, a desktop window, or a daemon serving an API — and none of them can be put in a pipe, which is what a benchmark harness, a git hook and a shell script all want. The absence showed up as a row of "no one-shot CLI mode" in somebody's comparison of coding agents, and the row was correct.
