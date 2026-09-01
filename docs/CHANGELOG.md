@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.82.0
+
+* **A local model's reasoning is shown instead of being dropped.** Reported as: muse glimmer runs tools with no explanation and then says it is done. The work was right; the thinking that led to it never reached the screen.
+
+  It never reached the process either. The OpenAI API has no field for reasoning, so every runtime that streams it invented one — `reasoning_content` on DeepSeek, vLLM, SGLang, LM Studio, llama.cpp and Ollama, `reasoning` on OpenRouter and others — and the openai-compatible adapter's stream shape had neither. The bytes arrived and were discarded by `encoding/json` before any of localcode saw them.
+
+  Both clients already knew what to do with it. `EventThinkingDelta` has existed since the Anthropic adapter got one, the TUI has said **thinking** in its status line for as long, and the Web UI has a handler that renders the text. There was simply never an event for them to receive: across 94 sessions of real use, not one thinking event had ever been written.
+
+  Both spellings are read, since which one a server sends is not something the person running it chose. The block closes on the first content or tool call, because this protocol has no end-of-reasoning marker — the field just stops appearing — and also on a finish reason or a closed stream, so a reply that reasons and then says nothing does not leave the status line stuck.
+
+  Reasoning is watched and then forgotten: broadcast to the clients, never written to the session log, and never sent back. That last part was already true by accident — `toOpenAIMessages` has no case for a thinking block — and is now pinned by a test, because a later default branch that started serialising them would put a field on the way back in that most servers reject.
+
+  A reply with no reasoning produces exactly the events it did before.
+
 ## v0.81.1
 
 * **A debate could leave a session that never finished its turn, and every message after it went into that turn.** Reported as: after using `/debate`, ordinary prompts run as debates too.

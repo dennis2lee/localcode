@@ -82,8 +82,25 @@ type oaStreamOptions struct {
 type oaStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content string `json:"content"`
+			// Reasoning, under both names it arrives with.
+			//
+			// Not in the OpenAI API and in most of what speaks its
+			// protocol: DeepSeek introduced reasoning_content and vLLM,
+			// SGLang, LM Studio, llama.cpp and Ollama followed it, while
+			// OpenRouter and a few others send reasoning. A server sends
+			// one or the other, never both, so reading both costs nothing
+			// and is the difference between seeing a local model think
+			// and watching it run tools in silence.
+			//
+			// It is displayed and then forgotten: broadcast to the
+			// clients, never written to the session log, and never sent
+			// back — toOpenAIMessages has no case for a thinking block,
+			// which is what keeps a reply that reasoned from growing a
+			// field on the way back in.
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
@@ -253,6 +270,22 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		}
 		calls := map[int]*pending{}
 		flushed := false
+		// Whether reasoning is currently open, so it can be closed once.
+		reasoned := false
+
+		// endReasoning closes the reasoning block. No text travels with
+		// it: the deltas were the whole of it, and the block a thinking
+		// end produces is dropped by toOpenAIMessages rather than sent
+		// back, which is what makes carrying the text here pointless and
+		// carrying a signature impossible — this protocol has none.
+		endReasoning := func() bool {
+			select {
+			case out <- StreamEvent{Type: EventThinkingEnd}:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 
 		// callID is the id this tool call will be answered under.
 		//
@@ -367,6 +400,29 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			}
 			choice := chunk.Choices[0]
 
+			if reasoning := choice.Delta.ReasoningContent + choice.Delta.Reasoning; reasoning != "" {
+				reasoned = true
+				select {
+				case out <- StreamEvent{Type: EventThinkingDelta, ThinkingDelta: reasoning}:
+				case <-ctx.Done():
+					return
+				}
+			}
+
+			// The reasoning is over the moment anything else arrives.
+			//
+			// There is no end-of-reasoning marker in this protocol — the
+			// field simply stops appearing — so the first content or tool
+			// call is the signal. Closing it matters to the clients: the
+			// TUI's status line says "thinking" until it is told
+			// otherwise, and the Web UI leaves the block open.
+			if reasoned && (choice.Delta.Content != "" || len(choice.Delta.ToolCalls) > 0) {
+				reasoned = false
+				if !endReasoning() {
+					return
+				}
+			}
+
 			if choice.Delta.Content != "" {
 				select {
 				case out <- StreamEvent{Type: EventTextDelta, TextDelta: choice.Delta.Content}:
@@ -401,6 +457,16 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			}
 
 			if choice.FinishReason != "" {
+				// A reply that reasoned and then stopped without saying
+				// anything closes here. Rare, and the cost of missing it
+				// is a status line stuck on "thinking" for the rest of
+				// the session.
+				if reasoned {
+					reasoned = false
+					if !endReasoning() {
+						return
+					}
+				}
 				hadCalls := flushCalls()
 				// A reply that asked for tools asked for tools, whatever
 				// the server called the reason it stopped. "stop"
@@ -421,6 +487,13 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		if err := scanner.Err(); err != nil {
 			emitErr(fmt.Errorf("read stream: %w", err))
 			return
+		}
+		// And the same for a stream that simply ended.
+		if reasoned {
+			reasoned = false
+			if !endReasoning() {
+				return
+			}
 		}
 		// The stream ended without a finish_reason ever arriving. Whatever
 		// the server meant by that, the tool calls it streamed are still

@@ -2237,6 +2237,12 @@ Cases it does not cover, named rather than left to be discovered: a wrapped invo
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
+**Reasoning is shown.** A local model that thinks before it answers streams that reasoning in a field the OpenAI API does not have, so every runtime invented one: `reasoning_content` on DeepSeek, vLLM, SGLang, LM Studio, llama.cpp and Ollama, and `reasoning` on OpenRouter and others. Both are read. The TUI says **thinking** in its status line while it arrives; the Web UI shows the text above the answer.
+
+It is watched and then forgotten: never written to the session log, so a reload does not bring it back, and never sent back to the model — the answer is what the transcript keeps. A model that reasons and then goes straight to a tool call, saying nothing, is the case this exists for. Before it, that looked from the screen like a model running tools with nothing to say.
+
+Reasoning written into the answer itself, between `<think>` tags, is not separated out: it arrives as content, so it is shown and kept as content.
+
 ### Checking for updates
 
 The settings window (⚙ under the prompt) has one section, **Updates**,
