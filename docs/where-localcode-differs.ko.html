@@ -133,7 +133,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <li><a href="#local-models">로컬 모델과 페일오버</a></li>
 <li><a href="#prompt-inventory">프롬프트 인벤토리</a></li>
 <li><a href="#trace">트레이스</a></li>
-<li><a href="#model-commands">모델이 실행하는 명령</a></li>
+<li><a href="#model-commands">model_invocable</a></li>
 </ol>
 <p class="toc-part">2부 &mdash; 클라이언트</p>
 <ol start="10">
@@ -168,8 +168,8 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <div class="scroll"><table>
 <thead><tr><th>기능</th><th>localcode</th><th>일반적인 경우</th></tr></thead>
 <tbody>
-<tr><td class="nw">교차 검증</td><td>서로 다른 모델 3개까지 리뷰어로, 각 라운드마다 자기 서브세션을 유지, 전원 승인(불리언) 필요</td><td>같은 컨텍스트 안에서 모델이 자기 출력을 스스로 검토</td></tr>
-<tr><td class="nw">예약 작업</td><td>자연어 예약, 시각은 하버스가 파싱, 놓친 시각은 놓쳤다고 보고</td><td>없음. 프롬프트는 보낸 시점에 실행됨</td></tr>
+<tr><td class="nw">모델 간 교차 검증</td><td>서로 다른 모델 3개까지 리뷰어로, 각 라운드마다 자기 서브세션을 유지, 전원 승인(불리언) 필요</td><td>같은 컨텍스트 안에서 모델이 자기 출력을 스스로 검토</td></tr>
+<tr><td class="nw">예약 작업</td><td>자연어 예약, 시각은 localcode가 파싱, 놓친 시각은 놓쳤다고 보고</td><td>없음. 프롬프트는 보낸 시점에 실행됨</td></tr>
 <tr><td class="nw">멀티 에이전트 계획</td><td>도구 스키마에 계획을 작성, 실행 전 전체 검증, 단계·턴·소요 시간에 상한</td><td>모델이 말로 서술하고 중간에 그만둘 수 있는 자유 형식 위임</td></tr>
 <tr><td class="nw">다른 대화 참조</td><td><code>#&lt;이름&gt;</code>으로 모델이 다른 세션의 메시지를 읽음. 프롬프트에 붙이지 않고 신뢰도가 가장 낮은 도구 결과로 전달</td><td>세션 간 수동 복사·붙여넣기</td></tr>
 <tr><td class="nw">프롬프트 감사</td><td><code>/context</code>가 조립된 모든 조각을 출처·신뢰 등급·토큰 추정치와 함께 보고. 모델 호출 없음</td><td>조립된 프롬프트를 볼 수 없음</td></tr>
@@ -223,9 +223,9 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <ul>
 <li><strong>분리</strong> &mdash; 모델은 시각과 작업을 분리하고, 시각은 localcode가 해석합니다.</li>
 <li><strong>확인</strong> &mdash; 모델이 넘긴 말이 아니라, localcode가 읽어낸 시각을 그대로 보여줍니다.</li>
-<li><strong>인식하는 형식</strong> &mdash; 상대·시계·명명·요일·절대 형식을 한국어와 영어 모두. 조사는 작업이 아니라 시각에 붙는 것으로 처리하고, 시각만 있으면 가장 가까운 그 시각을 뜻합니다.</li>
+<li><strong>인식하는 형식</strong> &mdash; 상대·시계·명칭·요일·절대 형식을 한국어와 영어 모두 인식합니다. 조사는 작업이 아니라 시각에 붙는 것으로 처리하고, 시각만 있으면 가장 가까운 그 시각을 뜻합니다.</li>
 <li><strong>이름을 대는 거절</strong> &mdash; 모호한 시각(<code>나중에</code>)과 반복(<code>매일</code>)은 추측하지 않고 각각 거절합니다.</li>
-<li><strong>실행</strong> &mdash; 자기 세션에서, 그 대화의 workspace와 권한 스위치를 따라.</li>
+<li><strong>실행</strong> &mdash; 자기 세션에서, 그 대화의 workspace와 권한 스위치를 따릅니다.</li>
 <li><strong>결과</strong> &mdash; 오른쪽 패널의 행 하나와 표시등. 대기 중에는 깜빡이고, 읽지 않은 답이 있으면 켜지고, 읽으면 회색이 됩니다.</li>
 </ul>
 </div>
@@ -256,7 +256,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <ul>
 <li><strong>1단계, 팬아웃</strong> &mdash; 리뷰 관점 목록에 대해 관점마다 에이전트 하나.</li>
 <li><strong>2단계, 발견 사항 위의 팬아웃</strong> &mdash; 1단계의 발견 사항마다 독립된 사본 N개. 각각 반환할 형태를 선언합니다.</li>
-<li><strong>필터</strong> &mdash; <code>keep</code>이 지정된 필드가 false인 결과를 모두 버립니다. 이것이 교차 검증 필터이며, 어디에도 수식 언어는 없습니다.</li>
+<li><strong>필터</strong> &mdash; <code>keep</code>이 지정된 필드가 false인 결과를 모두 버립니다. 이것이 발견 사항을 걸러내는 검증 필터이며, 어디에도 수식 언어는 없습니다.</li>
 <li><strong>3단계, 배리어</strong> &mdash; 살아남은 전부를 봅니다.</li>
 <li><strong>보고서</strong> &mdash; 모델의 요약이 아니라, 실제로 일어난 일로부터 localcode가 작성합니다.</li>
 </ul>
@@ -294,7 +294,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 </ul>
 </div>
 
-<p>다른 프로젝트에 속한 대화는 그렇다고 표시되고 양쪽 디렉터리를 함께 알려줍니다. <code>#42</code>는 여전히 이슈 번호입니다. 오른쪽 방향키가 명령을 완성하듯 대화 이름도 완성해 주는데, 이 때문에 대화 이름을 잘 지어둘 값어치가 생깁니다.</p>
+<p>다른 프로젝트에 속한 대화는 그렇다고 표시되고 양쪽 디렉터리를 함께 알려줍니다. <code>#42</code>는 여전히 이슈 번호입니다. 오른쪽 방향키가 명령을 완성하듯 대화 이름도 완성해 주는데, 그래서 대화 이름을 잘 지어둘 이유가 됩니다.</p>
 
 <h2 id="smart-agent">5. 질문 하나에 답하려고 읽은 파일 50개</h2>
 <p class="kicker">Smart Agent</p>
@@ -314,7 +314,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 </table></div>
 
 <ul>
-<li><strong>컨텍스트 비용</strong> &mdash; 전문가가 읽은 파일 50개가 본 대화에서는 한 문단 값입니다.</li>
+<li><strong>컨텍스트 비용</strong> &mdash; 전문가가 읽은 파일 50개가 본 대화에서는 한 문단 분량으로 끝납니다.</li>
 <li><strong>전문가별 모델</strong> &mdash; 빌드에 박아 넣는 게 아니라 이미 config.json에 있는 프로파일로부터 결정됩니다. <code>smart-quick</code>, <code>smart-balanced</code>, <code>smart-deep</code>이라는 이름의 프로파일이 있으면 손으로 고정됩니다.</li>
 <li><strong>재귀 없음</strong> &mdash; 어떤 전문가도 위임할 수 없습니다. 프롬프트 한 줄이 아니라 도구 허용 목록으로 막습니다.</li>
 <li><strong>병렬</strong> &mdash; <code>TaskBackground</code>와 <code>TaskCollect</code>가 여러 개를 동시에 돌립니다.</li>
@@ -371,7 +371,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 </ul>
 
 <h2 id="model-commands">9. 모델이 실행할 수 있는 명령</h2>
-<p class="kicker">모델이 실행하는 명령</p>
+<p class="kicker">model_invocable</p>
 
 <p>v0.83.0에 들어갔고 기본은 꺼짐입니다. 켜면 모델이 내장 명령, 커스텀 명령, 스킬을 직접 실행할 수 있고, 각각 같은 대화 안에서 자기 턴으로 돕니다.</p>
 
@@ -383,7 +383,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <li><strong>내장 명령</strong> &mdash; <code>model_commands</code>에 슬래시를 붙여 이름을 적습니다.</li>
 <li><strong>커스텀 명령과 스킬</strong> &mdash; 각자의 frontmatter에 <code>model_invocable: true</code>로 스스로 참여합니다.</li>
 <li><strong>와일드카드 없음</strong> &mdash; 적으면 <code>/permission-skip-all</code>까지 들어가는 목록이므로, 파일에 이름을 적는 행위여야 합니다.</li>
-<li><strong>셸 스플라이스 제외</strong> &mdash; 백틱 셸 스플라이스를 포함한 명령은 절대 model-invocable이 될 수 없고, 그 거절은 조용히가 아니라 이름을 대며 이루어집니다.</li>
+<li><strong>셸 스플라이스 제외</strong> &mdash; 백틱으로 셸 명령을 끼워 넣는 구문이 든 명령은 절대 model-invocable이 될 수 없고, 그 거절은 조용히가 아니라 이름을 대며 이루어집니다.</li>
 </ul>
 </div>
 
@@ -436,11 +436,11 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 
 <figure>
 <img src="img/webui-completion.png" alt="프롬프트 창에 'read the mail, then run /s'가 입력되어 있고, 그 아래 줄에 agent: general-purpose 다음 화살표와 /skill, 그리고 4 matches, 화살표로 순환이라고 표시되어 있다.">
-<figcaption>창 아래 줄이 첫 후보와 후보 개수를 키를 누르기 전에 알려줍니다.</figcaption>
+<figcaption>키를 누르기 전에, 창 아래 줄이 첫 후보와 후보 개수를 알려줍니다.</figcaption>
 </figure>
 
 <ul>
-<li><strong>추측이 아니라 순회</strong> &mdash; 누를 때마다 다음 후보를 제시하고, 마지막 정거장은 처음 친 그 텍스트입니다. 빠져나올 수 없는 순환이 되지 않습니다. 여기서 최장 공통 접두사로 완성하는 방식은 쓸모가 없습니다. 스킬은 하는 일로 이름이 붙어서 <code>pdf-tools</code>와 <code>pptx</code>의 공통 접두사는 한 글자입니다.</li>
+<li><strong>추측이 아니라 순회</strong> &mdash; 누를 때마다 다음 후보를 제시하고, 마지막 후보는 처음 친 그 텍스트입니다. 빠져나올 수 없는 순환이 되지 않습니다. 여기서 최장 공통 접두사로 완성하는 방식은 쓸모가 없습니다. 스킬은 하는 일로 이름이 붙어서 <code>pdf-tools</code>와 <code>pptx</code>의 공통 접두사는 한 글자입니다.</li>
 <li><strong>문장 중간</strong> &mdash; 명령 이름은 창 맨 앞이 아니라 <strong>쓰인 자리에서</strong> 완성됩니다. <code>read the mail, then run /tid</code>가 완성되고 양쪽 문장은 그대로 남습니다.</li>
 <li><strong>경로는 건드리지 않음</strong> &mdash; 단어를 여는 슬래시가 아니면 명령이 아닙니다. <code>internal/tui/co</code>와 <code>/Users/me/co</code>는 무시됩니다.</li>
 <li><strong>대화 이름도</strong> &mdash; 같은 키가 <code>#&lt;이름&gt;</code> 참조를 문장 안에 끼워 넣으며 완성합니다.</li>
@@ -452,7 +452,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="case">
 <h4>사용 사례 &mdash; 마흔 턴 전에 내가 뭘 물었는지 찾기</h4>
 <ul>
-<li><strong><kbd>Alt</kbd>+<kbd>↑</kbd>와 <kbd>Alt</kbd>+<kbd>↓</kbd></strong>는 <em>화면</em>을 내가 보낸 턴에서 다음 턴으로 옮깁니다. 사이에 모델이 쓴 것은 전부 건너뜁니다. 턴이 쉰 개인 세션에서 프롬프트를 찾는 방법입니다. 브라우저 화면 전용이고, 터미널은 같은 턴 표시는 그리지만 이 키는 연결하지 않았습니다.</li>
+<li><strong><kbd>Alt</kbd>+<kbd>↑</kbd>와 <kbd>Alt</kbd>+<kbd>↓</kbd></strong>는 <em>화면</em>을 내가 보낸 턴에서 다음 턴으로 옮깁니다. 사이에 모델이 쓴 것은 전부 건너뜁니다. 턴이 쉰 개인 세션에서 프롬프트를 찾는 방법입니다. 브라우저 화면 전용이고, 터미널은 같은 턴 표시를 그리지만 이 키는 연결하지 않았습니다.</li>
 <li><strong><kbd>↑</kbd>와 <kbd>↓</kbd></strong>는 별개이고 <em>텍스트</em>를 옮깁니다. 이전 프롬프트를 대화별로 창에 불러옵니다. 세션을 열 때 대화 내용에서 목록을 다시 채우므로, 대화를 다시 열면 예전에 무엇을 물었는지 그대로 불러올 수 있습니다.</li>
 <li><strong>왜 둘인가</strong> &mdash; 내가 물었던 것을 <em>되읽는</em> 일과 <em>고쳐서 다시 묻는</em> 일은 다른 작업이고, 키 하나가 둘 다 하려면 다른 하나를 빼앗아야 합니다.</li>
 </ul>
@@ -535,7 +535,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <tr><td class="nw">거의 맞는 도구 이름</td><td>장식이 붙었지만 그 에이전트가 실제로 가진 도구 하나를 명확히 가리키는 이름은 실행하고 어느 철자가 맞았는지 알려줍니다. 해석은 그 에이전트에게 제공된 도구 안에서만 이루어지므로, 오타가 <code>tools</code> 제한을 넘어설 수 없습니다.</td></tr>
 <tr><td class="nw">모델별 습성</td><td>모델 id를 기준으로만 적용하고 다른 어디에도 적용하지 않습니다. 작업 중간에 멈추는 muse 계열에는 계속하라는 신호를, Gemma에는 LaTeX 벗기기를.</td></tr>
 <tr><td class="nw">환경변수 설정</td><td>config.json의 모든 문자열이 <code>{env:NAME}</code> 또는 <code>{env:NAME:-fallback}</code>일 수 있습니다. 없는 변수는 그 변수와 요구한 필드를 지목하는 오류이지, 나중에 401로 실패하는 빈 문자열이 아닙니다.</td></tr>
-<tr><td class="nw">이벤트 전달</td><td>뒤처진 클라이언트는 조용히 건너뛰어지지 않고 그 사실을 통보받습니다. 스트림이 끝나고, 다시 연결해, 놓친 부분을 세션 로그에서 재생합니다. 빠짐도 중복도 없습니다.</td></tr>
+<tr><td class="nw">이벤트 전달</td><td>뒤처진 클라이언트를 조용히 건너뛰지 않고 그 사실을 알려줍니다. 스트림이 끝나고, 다시 연결해, 놓친 부분을 세션 로그에서 재생합니다. 빠짐도 중복도 없습니다.</td></tr>
 <tr><td class="nw">Linux 설치</td><td>root 없이. 정적 바이너리를 <code>~/.local/bin</code>에 두고 <code>$HOME</code> 밖에는 아무것도 쓰지 않습니다. root를 쓸 수 있으면 <code>.deb</code>와 이식 가능한 tarball도 있습니다.</td></tr>
 </tbody>
 </table></div>
