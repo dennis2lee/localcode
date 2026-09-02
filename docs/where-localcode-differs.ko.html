@@ -131,12 +131,13 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <li><a href="#reference">다른 대화 참조</a></li>
 <li><a href="#smart-agent">Smart Agent</a></li>
 <li><a href="#local-models">로컬 모델과 페일오버</a></li>
+<li><a href="#model-switch">대화 도중 모델 전환</a></li>
 <li><a href="#prompt-inventory">프롬프트 인벤토리</a></li>
 <li><a href="#trace">트레이스</a></li>
 <li><a href="#model-commands">model_invocable</a></li>
 </ol>
 <p class="toc-part">2부 &mdash; 클라이언트</p>
-<ol start="10">
+<ol start="11">
 <li><a href="#front-ends">하나의 데몬, 세 가지 화면</a></li>
 <li><a href="#prompt-box">프롬프트 창</a></li>
 <li><a href="#conversations">이름 변경, 순서 변경, 보관, 복원</a></li>
@@ -152,7 +153,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 
 <div class="bluf">
 <h2>결론부터</h2>
-<p>기능 13가지, 두 부분입니다. 1부는 <strong>하나의 작업이 무엇이 될 수 있는가</strong>, 2부는 <strong>매일 쓰는 경험</strong>입니다. 이 중 셋은 작업의 형태 자체를 바꿉니다.</p>
+<p>기능 14가지, 두 부분입니다. 1부는 <strong>하나의 작업이 무엇이 될 수 있는가</strong>, 2부는 <strong>매일 쓰는 경험</strong>입니다. 이 중 셋은 작업의 형태 자체를 바꿉니다.</p>
 <ul>
 <li><strong>모델 간 교차 검증</strong> &mdash; 리뷰어 최대 3개, 각각 자기 모델 프로파일을 가진 별개의 에이전트, 각각 자기 세션. 전원이 승인해야 루프가 끝납니다.</li>
 <li><strong>시각을 지정한 작업</strong> &mdash; 시각이 적힌 프롬프트는 실행이 아니라 예약됩니다. 시각은 모델이 아니라 localcode가 해석합니다.</li>
@@ -178,6 +179,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <tr><td class="nw">엔드포인트별 동시성</td><td>provider마다 <code>max_concurrent_tasks</code>, 데몬 전역 제한보다 먼저 적용</td><td>전역 동시성 숫자 하나, 또는 없음</td></tr>
 <tr><td class="nw">페일오버</td><td>프로파일별 <code>fallback</code> 체인. 새 모델 계열에 맞게 요청을 다시 구성</td><td>같은 엔드포인트 재시도 후 실패</td></tr>
 <tr><td class="nw">로컬 모델</td><td>런타임 6종의 reasoning 필드를 모두 읽고, 컨텍스트 창을 서버에서 조회, 계열별 동작 교정</td><td>호스팅 API 우선, 로컬은 범용 OpenAI 호환 껍데기</td></tr>
+<tr><td class="nw">모델 전환</td><td>한 대화 안에서, provider를 가로질러 모델 변경. 호스팅 모델과 내 기계의 모델이 같은 대화의 두 지점</td><td>한 벤더의 목록에서 모델 선택</td></tr>
 <tr><td class="nw">클라이언트 구조</td><td>데몬 하나에 화면 셋(터미널·브라우저·네이티브 창), 같은 세션에 동시에 여러 개 접속 가능</td><td>클라이언트마다 프로세스 하나</td></tr>
 <tr><td class="nw">턴 이동</td><td><kbd>Alt</kbd>+방향키로 내가 보낸 턴 사이를 이동. 프롬프트 히스토리 호출과 별개</td><td>스크롤백 검색, 또는 스크롤</td></tr>
 <tr><td class="nw">workspace 경계</td><td>심볼릭 링크를 해석한 뒤 모든 경로를 판정. 프로젝트를 벗어나는지는 도구 권한과 별개의 질문</td><td>디렉터리 허용 목록 하나</td></tr>
@@ -342,7 +344,30 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 
 <p>401이나 없는 모델 id는 대기를 건너뜁니다. 시간이 해결해 주는 문제가 아니기 때문입니다. 형식이 잘못된 요청은 어디에도 재시도하지 않습니다.</p>
 
-<h2 id="prompt-inventory">7. 감사할 수 있는 프롬프트</h2>
+<h2 id="model-switch">7. 호스팅 모델과 로컬 모델을 한 대화 안에서</h2>
+<p class="kicker">대화 도중 모델 전환</p>
+
+<p>에이전트는 프로파일을, 프로파일은 provider와 모델을 지정합니다. 에이전트를 바꾸면 모델이 바뀌고, 대화는 그대로 남습니다. 다음 메시지는 그때까지 오간 내용 전부를, 앞 모델이 한 답변까지 포함해서 들고 새 모델로 갑니다.</p>
+
+<p>평범하지 않은 부분은 그 범위입니다. 한 대화 안의 에이전트들이 서로 다른 <em>provider</em>에 있을 수 있습니다. Bedrock의 Claude와 책상 밑 기계의 모델이 같은 map의 두 항목이고, 같은 대화의 두 지점입니다.</p>
+
+<div class="case">
+<h4>사용 사례 &mdash; 판단은 호스팅 모델에게, 분량은 로컬 모델에게</h4>
+<pre><code>"agents": {
+  "general-purpose": { "profile": "smart-deep" },   // Bedrock을 통한 Claude
+  "on-the-laptop":   { "profile": "local-qwen" }    // localhost의 llama.cpp
+}</code></pre>
+<ul>
+<li><strong>바뀌는 것</strong> &mdash; 모델, 시스템 프롬프트, 도구 범위. 다음 메시지부터입니다. 셋 다 에이전트에 속한 것들입니다.</li>
+<li><strong>넘어가는 것</strong> &mdash; 대화 전체. 이어받는 모델은 앞 모델이 무엇을 받았고 무엇이라 답했는지 읽습니다.</li>
+<li><strong>방법</strong> &mdash; TUI에서는 <kbd>Tab</kbd>으로 순환, 양쪽 클라이언트에서 <code>/agent &lt;이름&gt;</code>, TUI의 <code>/model</code>은 에이전트마다 어떤 모델로 해석되는지 함께 보여주고, Web UI는 헤더에 선택기가 있습니다.</li>
+<li><strong>기록됨</strong> &mdash; 전환은 세션 로그의 이벤트입니다. 재시작해도 남고, 앞뒤 메시지와 순서대로 다시 읽힙니다.</li>
+</ul>
+</div>
+
+<p>대가는 프롬프트 캐시입니다. 요청에서 캐시 대상으로 표시되는 부분은 시스템 프롬프트와 도구 스키마인데 둘 다 에이전트에 속하므로, 전환 후 첫 턴은 읽을 접두사가 없어 새로 값을 치릅니다.</p>
+
+<h2 id="prompt-inventory">8. 감사할 수 있는 프롬프트</h2>
 <p class="kicker">프롬프트 인벤토리</p>
 
 <p>시스템 프롬프트는 이어 붙이는 게 아니라 선언된 인벤토리에서 조립됩니다. 각 조각은 고정된 id, 출처, <strong>지시로 따라도 되는지를 말하는 신뢰 등급</strong>, 요청 안에서의 위치, 그리고 언제 적용되는지를 말하는 조건을 갖습니다.</p>
@@ -361,7 +386,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 
 <p>같은 매니페스트 id가 트레이스에도 나타납니다. 그래서 실패한 모델의 프롬프트를 그대로 재사용한 페일오버는, 모델 계열이 바뀌었는데 매니페스트 id가 그대로인 형태로 드러납니다.</p>
 
-<h2 id="trace">8. 무엇이 얼마를 썼고 누가 했는지</h2>
+<h2 id="trace">9. 무엇이 얼마를 썼고 누가 했는지</h2>
 <p class="kicker">트레이스</p>
 
 <p>Smart Agent가 켜져 있으면 일어난 일마다 JSON 한 줄이 <code>~/.localcode/trace/</code>에 기록됩니다.</p>
@@ -372,7 +397,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <li><strong>실시간</strong> &mdash; 세션이 열려 있는 동안 <code>GET /api/trace</code>가 꼬리를 따라갑니다.</li>
 </ul>
 
-<h2 id="model-commands">9. 모델이 실행할 수 있는 명령</h2>
+<h2 id="model-commands">10. 모델이 실행할 수 있는 명령</h2>
 <p class="kicker">model_invocable</p>
 
 <p>v0.83.0에 들어갔고 기본은 꺼짐입니다. 켜면 모델이 내장 명령, 커스텀 명령, 스킬을 직접 실행할 수 있고, 각각 같은 대화 안에서 자기 턴으로 돕니다.</p>
@@ -396,7 +421,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 
 <p>모든 세션은 데몬 하나가 들고 있습니다. 거기에 무엇을 붙일지는 선택이고, 같은 세션에 여러 개가 동시에 붙을 수 있습니다. 아래 스크린샷은 localcode 0.84.0의 실제 화면입니다.</p>
 
-<h2 id="front-ends">10. 터미널, 브라우저 탭, 네이티브 창</h2>
+<h2 id="front-ends">11. 터미널, 브라우저 탭, 네이티브 창</h2>
 <p class="kicker">하나의 데몬, 세 가지 화면</p>
 
 <figure>
@@ -429,7 +454,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="note"><strong>인증 토큰이 없습니다</strong>
 <p>listen 주소에 닿을 수 있는 사람은 셸 실행을 포함한 API 전체를 얻습니다. 위처럼 loopback에 바인딩하고 SSH 터널로 공유하십시오. 신뢰할 수 없는 네트워크에서 <code>0.0.0.0</code>에 바인딩하지 마십시오.</p></div>
 
-<h2 id="prompt-box">11. 프롬프트 창</h2>
+<h2 id="prompt-box">12. 프롬프트 창</h2>
 <p class="kicker">자동완성과 턴 이동</p>
 
 <h3>명령 자동완성</h3>
@@ -462,7 +487,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 
 <p>위로 스크롤하면 모델이 아래에 아무리 써도 화면은 그 자리에 머뭅니다. 양쪽 클라이언트에서, 그리고 백그라운드 작업 자체의 창에서도 그렇습니다. 맨 아래로 다시 스크롤하면 최신 출력 따라가기가 재개됩니다.</p>
 
-<h2 id="conversations">12. 길어진 대화 목록을 쓸 만하게 유지하기</h2>
+<h2 id="conversations">13. 길어진 대화 목록을 쓸 만하게 유지하기</h2>
 <p class="kicker">이름 변경, 순서 변경, 보관, 복원</p>
 
 <figure class="narrow">
@@ -492,7 +517,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 </ul>
 </div>
 
-<h2 id="workspace-boundary">13. 프로젝트를 벗어나는 경로</h2>
+<h2 id="workspace-boundary">14. 프로젝트를 벗어나는 경로</h2>
 <p class="kicker">workspace 경계</p>
 
 <p>세션 자신의 workspace를 벗어나는 경로는 그 자체로 별개의 질문이며, 도구를 써도 되는지와 다릅니다. "이 에이전트가 파일을 읽어도 된다"에 예라고 답한 것이 "<code>~/.ssh</code>를 읽어도 된다"에 답한 것은 아닙니다.</p>

@@ -137,12 +137,13 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <li><a href="#reference">Cross-conversation reference</a></li>
 <li><a href="#smart-agent">Smart Agent</a></li>
 <li><a href="#local-models">Local models and failover</a></li>
+<li><a href="#model-switch">Switching models mid-conversation</a></li>
 <li><a href="#prompt-inventory">Prompt inventory</a></li>
 <li><a href="#trace">Trace</a></li>
 <li><a href="#model-commands">Model-invocable commands</a></li>
 </ol>
 <p class="toc-part">Part 2 &mdash; The clients</p>
-<ol start="10">
+<ol start="11">
 <li><a href="#front-ends">Three front ends, one daemon</a></li>
 <li><a href="#prompt-box">The prompt box</a></li>
 <li><a href="#conversations">Rename, reorder, archive, retrieve</a></li>
@@ -158,7 +159,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <div class="bluf">
 <h2>Bottom line</h2>
-<p>Thirteen capabilities, in two parts. Part 1 is what a single task can be; part 2 is what working in localcode is like day to day. Three of them change the shape of the work itself:</p>
+<p>Fourteen capabilities, in two parts. Part 1 is what a single task can be; part 2 is what working in localcode is like day to day. Three of them change the shape of the work itself:</p>
 <ul>
 <li><strong>Adversarial review across models</strong> &mdash; up to three reviewers, each a separate agent on its own model profile, each in its own session, all of which must approve before the loop ends.</li>
 <li><strong>Time-shifted work</strong> &mdash; a prompt naming a time is booked rather than run, with the time parsed by localcode instead of the model.</li>
@@ -184,6 +185,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <tr><td class="nw">Per-endpoint concurrency</td><td><code>max_concurrent_tasks</code> per provider, taken before the daemon-wide limit</td><td>One global concurrency number, or none</td></tr>
 <tr><td class="nw">Failover</td><td>Per-profile <code>fallback</code> chain with the request re-derived for the new model family</td><td>Retry on the same endpoint, then fail</td></tr>
 <tr><td class="nw">Local models</td><td>Reasoning read from six runtime spellings, context window read from the server, per-family behaviour corrections</td><td>Hosted APIs first, local endpoints as a generic OpenAI shim</td></tr>
+<tr><td class="nw">Model switching</td><td>Change model inside one conversation, across providers: a hosted model and one on your own machine are two stops in the same conversation</td><td>A model picked from one vendor's list</td></tr>
 <tr><td class="nw">Client shape</td><td>One daemon, three front ends (terminal, browser, native window), any number attached to the same session at once</td><td>One process per client</td></tr>
 <tr><td class="nw">Turn navigation</td><td><kbd>Alt</kbd> and the arrows move the view between your own turns, separately from prompt history recall</td><td>Scrollback search, or scrolling</td></tr>
 <tr><td class="nw">Workspace boundary</td><td>Every path judged after symlink resolution; leaving the project is its own permission question, separate from the tool's</td><td>A single allow list of directories</td></tr>
@@ -348,7 +350,30 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>A 401 or an unknown model id skips the wait, because time does not fix those, and a malformed request retries nowhere.</p>
 
-<h2 id="prompt-inventory">7. A prompt you can audit</h2>
+<h2 id="model-switch">7. A hosted model and a local one, in one conversation</h2>
+<p class="kicker">Switching models mid-conversation</p>
+
+<p>An agent names a profile; a profile names a provider and a model. Switching the agent switches the model, and the conversation is left alone: the next message goes to the new model carrying everything said before it, the previous model's own answers included.</p>
+
+<p>The part that is not ordinary is the range. The agents in one conversation can sit on different <em>providers</em>, so a Claude on Bedrock and a model on the machine under your desk are two entries in the same map and two stops in the same conversation.</p>
+
+<div class="case">
+<h4>Use case &mdash; a hosted model for the judgement, a local one for the bulk</h4>
+<pre><code>"agents": {
+  "general-purpose": { "profile": "smart-deep" },   // Claude, through Bedrock
+  "on-the-laptop":   { "profile": "local-qwen" }    // llama.cpp on localhost
+}</code></pre>
+<ul>
+<li><strong>What changes</strong> &mdash; the model, the system prompt and the tool scope, from the next message on. All three belong to the agent.</li>
+<li><strong>What carries</strong> &mdash; the whole conversation. The model taking over reads what the previous one was asked and what it answered.</li>
+<li><strong>How</strong> &mdash; <kbd>Tab</kbd> cycles in the TUI, <code>/agent &lt;name&gt;</code> in both clients, <code>/model</code> in the TUI lists every agent with the model it resolves to, and the Web UI has a selector in its header.</li>
+<li><strong>Recorded</strong> &mdash; the switch is an event in the session log, so it survives a restart and reads back in order with the messages around it.</li>
+</ul>
+</div>
+
+<p>The cost is the prompt cache. What a request marks as cacheable is the system prompt and the tool schemas, and both belong to the agent, so the first turn after a switch has no prefix to read and pays for one.</p>
+
+<h2 id="prompt-inventory">8. A prompt you can audit</h2>
 <p class="kicker">Prompt inventory</p>
 
 <p>The system prompt is assembled from a declared inventory rather than concatenated. Each piece carries a stable id, a source, a trust class saying whether it may be followed as instruction at all, a place in the request, and a condition saying when it applies.</p>
@@ -367,7 +392,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>The same manifest ids appear in the trace, so a failover that reused the failed model's prompt is visible as an unchanged manifest id on a changed model family.</p>
 
-<h2 id="trace">8. Knowing what a run cost and who did it</h2>
+<h2 id="trace">9. Knowing what a run cost and who did it</h2>
 <p class="kicker">Trace</p>
 
 <p>With Smart Agent on, one JSON line per event is written to <code>~/.localcode/trace/</code>.</p>
@@ -378,7 +403,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <li><strong>Live</strong> &mdash; <code>GET /api/trace</code> tails it while the session is open.</li>
 </ul>
 
-<h2 id="model-commands">9. Commands the model may run</h2>
+<h2 id="model-commands">10. Commands the model may run</h2>
 <p class="kicker">Model-invocable commands</p>
 
 <p>Shipped in v0.83.0, off by default. On, the model may run a built-in, a custom command or a skill itself, each as a turn of its own in the same conversation.</p>
@@ -402,7 +427,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>One daemon holds every session. What attaches to it is a choice, and more than one thing can attach to the same session at the same time. The screenshots below are of localcode 0.84.0.</p>
 
-<h2 id="front-ends">10. A terminal, a browser tab, and a native window</h2>
+<h2 id="front-ends">11. A terminal, a browser tab, and a native window</h2>
 <p class="kicker">Three front ends, one daemon</p>
 
 <figure>
@@ -435,7 +460,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="note"><strong>There is no authentication token</strong>
 <p>Anyone who can reach the listen address gets the entire API, shell execution included. Bind to loopback and share through an SSH tunnel, as above. Do not bind <code>0.0.0.0</code> on an untrusted network.</p></div>
 
-<h2 id="prompt-box">11. The prompt box</h2>
+<h2 id="prompt-box">12. The prompt box</h2>
 <p class="kicker">Completion and turn navigation</p>
 
 <h3>Command completion</h3>
@@ -468,7 +493,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 
 <p>Scrolling up holds the view where you put it, however much the model writes underneath, in both clients and in a background task's own window. Following the newest output resumes when you scroll back to the bottom.</p>
 
-<h2 id="conversations">12. Keeping a long list of conversations usable</h2>
+<h2 id="conversations">13. Keeping a long list of conversations usable</h2>
 <p class="kicker">Rename, reorder, archive, retrieve</p>
 
 <figure class="narrow">
@@ -498,7 +523,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 </ul>
 </div>
 
-<h2 id="workspace-boundary">13. Paths that leave the project</h2>
+<h2 id="workspace-boundary">14. Paths that leave the project</h2>
 <p class="kicker">Workspace boundary</p>
 
 <p>A path that leaves the session's own workspace is its own question, separate from whether the tool is allowed at all. Answering "yes, this agent may read files" is not answering "yes, it may read <code>~/.ssh</code>".</p>

@@ -2229,17 +2229,35 @@ A task still running offers **Stop this task**. One that has finished offers **D
 
 ### Switching models
 
-Changing model inside one conversation is not supported yet. Add a new name to the `agents` map and restart with `--agent <name>`.
+Changing model inside one conversation is supported, and has been since the
+agent switch became a session-level event rather than a start-up flag. An
+agent names a profile, a profile names a provider and a model, so switching
+agent switches model. The conversation is untouched: only the model, the
+system prompt and the tool scope used for the **next** message change.
 
 ```json
 "agents": {
-  "quick-search": { "profile": "cheap" }
+  "general-purpose": { "profile": "smart-deep" },
+  "on-the-laptop":   { "profile": "local-qwen" }
 }
 ```
 
-```bash
-localcode --agent quick-search
-```
+| Where | How |
+|---|---|
+| TUI | `Tab` cycles, `/agent <name>` switches, `/model` lists every agent with the model it resolves to |
+| Web UI | The selector in the header, or `/agent <name>` |
+| Either | The switch is appended to the session log, so it survives a restart |
+
+The two agents do not have to be on one provider. A Claude on Bedrock and a
+local llama.cpp endpoint are two entries in the map and two stops in one
+conversation; the model taking over is sent what the previous one was asked
+and what it answered.
+
+What a switch costs is the prompt cache. The cacheable half of a request is
+the system prompt plus the tool schemas, both of which belong to the agent,
+so the first turn after a switch has no prefix to read.
+
+`--agent <name>` still picks the agent a **new** session starts on.
 
 ### Python on Windows
 
