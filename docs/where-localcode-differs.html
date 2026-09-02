@@ -160,7 +160,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <h2>Bottom line</h2>
 <p>Thirteen capabilities, in two parts. Part 1 is what a single task can be; part 2 is what working in localcode is like day to day. Three of them change the shape of the work itself:</p>
 <ul>
-<li><strong>Adversarial review across models</strong> &mdash; up to three reviewers, each on a different model, each in its own session, all of which must approve before the loop ends.</li>
+<li><strong>Adversarial review across models</strong> &mdash; up to three reviewers, each a separate agent on its own model profile, each in its own session, all of which must approve before the loop ends.</li>
 <li><strong>Time-shifted work</strong> &mdash; a prompt naming a time is booked rather than run, with the time parsed by localcode instead of the model.</li>
 <li><strong>Plans validated before execution</strong> &mdash; a multi-agent plan is authored as structured data and rejected in full if any stage would not work.</li>
 </ul>
@@ -174,7 +174,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <div class="scroll"><table>
 <thead><tr><th>Capability</th><th>localcode</th><th>Common elsewhere</th></tr></thead>
 <tbody>
-<tr><td class="nw">Adversarial review</td><td>Up to 3 reviewers on 3 different models, each with its own persistent sub-session per round, unanimous boolean approval required</td><td>One model reviewing its own output, in the same context</td></tr>
+<tr><td class="nw">Adversarial review</td><td>Up to 3 reviewers, each a separate agent with its own model profile and its own sub-session per round, unanimous boolean approval required</td><td>One model reviewing its own output, in the same context</td></tr>
 <tr><td class="nw">Scheduled work</td><td>Natural-language booking, time parsed by the harness, missed times reported as missed</td><td>None; a prompt runs when it is sent</td></tr>
 <tr><td class="nw">Multi-agent plans</td><td>Plan authored into a tool schema, validated whole before execution, hard ceilings on stages, turns and wall time</td><td>Free-form delegation the model narrates and may abandon</td></tr>
 <tr><td class="nw">Cross-conversation reference</td><td><code>#&lt;name&gt;</code> lets the model read another session's messages, delivered as an untrusted tool result rather than spliced into the prompt</td><td>Manual copy and paste between sessions</td></tr>
@@ -196,7 +196,9 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <h2 id="debate">1. A decision you do not want one model to make alone</h2>
 <p class="kicker">Debate</p>
 
-<p>One model reviewing its own work agrees with itself. Debate puts the work in front of reviewers that are different models, running in separate contexts, and does not accept the result until every one of them approves.</p>
+<p>One model reviewing its own work agrees with itself. Debate puts the work in front of reviewers that are separate agents, each on whatever model its own profile names and each running in its own context, and does not accept the result until every one of them approves.</p>
+
+<p>Pointing those profiles at different models is the point of the feature, and nothing forces it: a panel is only as independent as the profiles behind it.</p>
 
 <div class="case">
 <h4>Use case &mdash; a schema change before it reaches main</h4>
@@ -205,7 +207,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <li><strong>Author</strong> &mdash; this conversation's agent, keeping its history and its prompt cache.</li>
 <li><strong>Reviewers</strong> &mdash; <code>girl</code> and <code>tom</code>, each on its own model, running at the same time and unable to see each other.</li>
 <li><strong>Reviewer memory</strong> &mdash; one sub-session per reviewer per round, so a reviewer in round four still knows what it asked for in round one.</li>
-<li><strong>Reviewer powers</strong> &mdash; reading, plus the project's own <code>verify_command</code> from config.json, with no arguments. No writing at all, <code>bash</code> included.</li>
+<li><strong>Reviewer powers</strong> &mdash; reading, plus the project's own <code>verify_command</code> from config.json, with no arguments, where the project has set one. No writing at all, <code>bash</code> included.</li>
 <li><strong>Evidence</strong> &mdash; <code>git diff HEAD</code> where there is a repository, the tool-call list where there is not.</li>
 <li><strong>Approval</strong> &mdash; a boolean each reviewer sets. Anything that is not an explicit approval is not one.</li>
 <li><strong>Termination</strong> &mdash; unanimous approval, the round budget, or a two-round standoff in which the author called no tool. The closing line names which.</li>
@@ -513,7 +515,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <tr><td>A symlink inside the workspace pointing at <code>~/.aws</code></td><td>Outside. Judged on physical paths, so the link does not launder the destination</td></tr>
 <tr><td>A file about to be created</td><td>Judged by where its link leads, before it exists</td></tr>
 <tr><td>A path that cannot be resolved at all</td><td>Costs one question, rather than one blind allow</td></tr>
-<tr><td>A credential store: <code>.env</code>, <code>*.pem</code>, <code>id_rsa</code>, <code>~/.ssh</code>, <code>~/.aws/credentials</code>, <code>.netrc</code></td><td>Refused outright with Smart Agent on. Deny class, so no skip unlocks it</td></tr>
+<tr><td>A credential store: <code>.env</code>, <code>*.pem</code>, <code>id_rsa</code>, <code>~/.ssh</code>, <code>~/.aws/credentials</code>, <code>.netrc</code></td><td>Refused outright with Smart Agent on. Deny class, so no skip unlocks it; a rule for the same tool in config.json does, which is how a project that must edit a <code>.env</code> says so</td></tr>
 <tr><td>A shell command that leaves the workspace</td><td>Not covered by these two, and the dialog says so: a shell command is not a path. <code>bash</code> asks on its own terms</td></tr>
 </tbody>
 </table></div>
@@ -533,7 +535,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="scroll"><table>
 <thead><tr><th>Area</th><th>What differs</th></tr></thead>
 <tbody>
-<tr><td class="nw">Search results</td><td>A 200-match cap, a line over 64KB and an unreadable file are each named in the output. Paths, at most three, rather than a count. No single file may take more than 30 of grep's 200 results.</td></tr>
+<tr><td class="nw">Search results</td><td>A 200-match cap, a line over 1MB and an unreadable file are each named in the output. Paths, at most three, rather than a count. No single file may take more than 30 of grep's 200 results.</td></tr>
 <tr><td class="nw">Lifecycle hooks</td><td>Beyond tool hooks: <code>pre_model</code> (block a request, or inject a fact the model could not look up), <code>post_model</code>, <code>delegate</code> (refuse a sub-agent, which a prompt cannot do), <code>compact</code>, <code>retry</code>.</td></tr>
 <tr><td class="nw">Per-session workspace</td><td>Two sessions in two projects on one daemon. Only that session's own turn blocks its own switch.</td></tr>
 <tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>, per profile or per conversation. Unset sends nothing, so an unchanged setup produces byte-identical requests.</td></tr>

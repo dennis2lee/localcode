@@ -154,7 +154,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <h2>결론부터</h2>
 <p>기능 13가지, 두 부분입니다. 1부는 <strong>하나의 작업이 무엇이 될 수 있는가</strong>, 2부는 <strong>매일 쓰는 경험</strong>입니다. 이 중 셋은 작업의 형태 자체를 바꿉니다.</p>
 <ul>
-<li><strong>모델 간 교차 검증</strong> &mdash; 리뷰어 최대 3개, 각각 다른 모델, 각각 자기 세션. 전원이 승인해야 루프가 끝납니다.</li>
+<li><strong>모델 간 교차 검증</strong> &mdash; 리뷰어 최대 3개, 각각 자기 모델 프로파일을 가진 별개의 에이전트, 각각 자기 세션. 전원이 승인해야 루프가 끝납니다.</li>
 <li><strong>시각을 지정한 작업</strong> &mdash; 시각이 적힌 프롬프트는 실행이 아니라 예약됩니다. 시각은 모델이 아니라 localcode가 해석합니다.</li>
 <li><strong>실행 전에 검증되는 계획</strong> &mdash; 멀티 에이전트 계획을 구조화된 데이터로 작성하게 하고, 한 단계라도 성립하지 않으면 계획 전체를 거절합니다.</li>
 </ul>
@@ -168,7 +168,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <div class="scroll"><table>
 <thead><tr><th>기능</th><th>localcode</th><th>일반적인 경우</th></tr></thead>
 <tbody>
-<tr><td class="nw">모델 간 교차 검증</td><td>서로 다른 모델 3개까지 리뷰어로, 각 라운드마다 자기 서브세션을 유지, 전원 승인(불리언) 필요</td><td>같은 컨텍스트 안에서 모델이 자기 출력을 스스로 검토</td></tr>
+<tr><td class="nw">모델 간 교차 검증</td><td>리뷰어 3개까지, 각각 자기 모델 프로파일을 가진 별개의 에이전트로 각 라운드마다 자기 서브세션 유지, 전원 승인(불리언) 필요</td><td>같은 컨텍스트 안에서 모델이 자기 출력을 스스로 검토</td></tr>
 <tr><td class="nw">예약 작업</td><td>자연어 예약, 시각은 localcode가 파싱, 놓친 시각은 놓쳤다고 보고</td><td>없음. 프롬프트는 보낸 시점에 실행됨</td></tr>
 <tr><td class="nw">멀티 에이전트 계획</td><td>도구 스키마에 계획을 작성, 실행 전 전체 검증, 단계·턴·소요 시간에 상한</td><td>모델이 말로 서술하고 중간에 그만둘 수 있는 자유 형식 위임</td></tr>
 <tr><td class="nw">다른 대화 참조</td><td><code>#&lt;이름&gt;</code>으로 모델이 다른 세션의 메시지를 읽음. 프롬프트에 붙이지 않고 신뢰도가 가장 낮은 도구 결과로 전달</td><td>세션 간 수동 복사·붙여넣기</td></tr>
@@ -190,7 +190,9 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <h2 id="debate">1. 모델 하나에게 맡기고 싶지 않은 결정</h2>
 <p class="kicker">Debate</p>
 
-<p>자기 작업을 스스로 검토하는 모델은 자기 자신에게 동의합니다. Debate는 결과물을 <strong>다른 모델</strong>인 리뷰어들 앞에 놓고, 각각을 분리된 컨텍스트에서 돌리며, 전원이 승인하기 전에는 결과를 받아들이지 않습니다.</p>
+<p>자기 작업을 스스로 검토하는 모델은 자기 자신에게 동의합니다. Debate는 결과물을 <strong>별개의 에이전트</strong>인 리뷰어들 앞에 놓습니다. 각 리뷰어는 자기 프로파일이 지정한 모델로 자기 컨텍스트에서 돌고, 전원이 승인하기 전에는 결과를 받아들이지 않습니다.</p>
+
+<p>그 프로파일들을 서로 다른 모델로 향하게 하는 것이 이 기능의 핵심이고, 그것을 강제하지는 않습니다. 패널의 독립성은 뒤에 있는 프로파일만큼입니다.</p>
 
 <div class="case">
 <h4>사용 사례 &mdash; main에 들어가기 전의 스키마 변경</h4>
@@ -199,7 +201,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <li><strong>작성자</strong> &mdash; 이 대화의 에이전트. 자기 히스토리와 프롬프트 캐시를 그대로 유지합니다.</li>
 <li><strong>리뷰어</strong> &mdash; <code>girl</code>과 <code>tom</code>. 각자 자기 모델로, 동시에 실행되며, 서로를 볼 수 없습니다.</li>
 <li><strong>리뷰어의 기억</strong> &mdash; 리뷰어마다 라운드마다 서브세션 하나. 4라운드의 리뷰어도 1라운드에서 자기가 무엇을 요구했는지 알고 있습니다.</li>
-<li><strong>리뷰어의 권한</strong> &mdash; 읽기, 그리고 config.json의 <code>verify_command</code>를 인자 없이 실행하는 것까지. 쓰기는 <code>bash</code>를 포함해 일절 없습니다.</li>
+<li><strong>리뷰어의 권한</strong> &mdash; 읽기, 그리고 프로젝트가 설정해 둔 경우 config.json의 <code>verify_command</code>를 인자 없이 실행하는 것까지. 쓰기는 <code>bash</code>를 포함해 일절 없습니다.</li>
 <li><strong>근거</strong> &mdash; 저장소가 있으면 <code>git diff HEAD</code>, 없으면 도구 호출 목록.</li>
 <li><strong>승인</strong> &mdash; 리뷰어가 설정하는 불리언 값. 명시적 승인이 아닌 것은 승인이 아닙니다.</li>
 <li><strong>종료</strong> &mdash; 전원 승인, 라운드 예산 소진, 또는 작성자가 도구를 한 번도 호출하지 않은 채 두 라운드가 지난 교착. 마지막 줄이 어느 쪽인지 밝힙니다.</li>
@@ -507,7 +509,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <tr><td>workspace 안에 있지만 <code>~/.aws</code>를 가리키는 심볼릭 링크</td><td>바깥으로 판정. 물리 경로로 판단하므로 링크가 목적지를 세탁하지 못함</td></tr>
 <tr><td>이제 막 생성될 파일</td><td>존재하기 전에, 그 링크가 어디로 이어지는지로 판정</td></tr>
 <tr><td>아예 해석할 수 없는 경로</td><td>맹목적 허용 하나가 아니라 질문 하나를 치름</td></tr>
-<tr><td>자격증명 파일: <code>.env</code>, <code>*.pem</code>, <code>id_rsa</code>, <code>~/.ssh</code>, <code>~/.aws/credentials</code>, <code>.netrc</code></td><td>Smart Agent가 켜져 있으면 즉시 거절. deny 등급이라 어떤 skip으로도 열리지 않음</td></tr>
+<tr><td>자격증명 파일: <code>.env</code>, <code>*.pem</code>, <code>id_rsa</code>, <code>~/.ssh</code>, <code>~/.aws/credentials</code>, <code>.netrc</code></td><td>Smart Agent가 켜져 있으면 즉시 거절. deny 등급이라 어떤 skip으로도 열리지 않음. 같은 도구에 대한 config.json의 규칙은 이를 덮으며, <code>.env</code>를 반드시 편집해야 하는 프로젝트는 그렇게 말하면 됨</td></tr>
 <tr><td>workspace를 벗어나는 셸 명령</td><td>이 두 스위치의 적용 대상이 아니고, 대화상자가 그렇게 밝힘. 셸 명령은 경로가 아니며 <code>bash</code>는 자기 기준으로 따로 물음</td></tr>
 </tbody>
 </table></div>
@@ -527,7 +529,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="scroll"><table>
 <thead><tr><th>영역</th><th>다른 점</th></tr></thead>
 <tbody>
-<tr><td class="nw">검색 결과</td><td>200개 상한, 64KB를 넘는 줄, 읽지 못한 파일을 각각 출력에 명시합니다. 개수가 아니라 경로를, 최대 세 개까지. 한 파일이 grep 결과 200개 중 30개를 넘게 차지할 수 없습니다.</td></tr>
+<tr><td class="nw">검색 결과</td><td>200개 상한, 1MB를 넘는 줄, 읽지 못한 파일을 각각 출력에 명시합니다. 개수가 아니라 경로를, 최대 세 개까지. 한 파일이 grep 결과 200개 중 30개를 넘게 차지할 수 없습니다.</td></tr>
 <tr><td class="nw">라이프사이클 훅</td><td>도구 훅 외에 <code>pre_model</code>(요청 차단, 또는 모델이 찾을 수 없는 사실 주입), <code>post_model</code>, <code>delegate</code>(서브 에이전트 거절. 프롬프트로는 못 하는 일), <code>compact</code>, <code>retry</code>.</td></tr>
 <tr><td class="nw">세션별 workspace</td><td>데몬 하나에서 두 프로젝트의 두 세션. 자기 세션의 턴만 자기 전환을 막습니다.</td></tr>
 <tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>를 프로파일별 또는 대화별로. 설정하지 않으면 아무것도 보내지 않으므로, 손대지 않은 환경의 요청은 바이트까지 그대로입니다.</td></tr>
