@@ -280,6 +280,19 @@ func (m *Model) openSession(id string) tea.Cmd {
 		m.appendLocal("Already in this session.")
 		return nil
 	}
+	// What is in the box was typed into this conversation, so it stays
+	// with it. Stashed and not cleared: the switch can still fail, and a
+	// client that is going nowhere must not have emptied the prompt box on
+	// the way. handleSessionSwitched is where the box actually changes
+	// hands, on the one path that got somewhere.
+	if v := m.input.Value(); v != "" {
+		if m.drafts == nil {
+			m.drafts = map[string]string{}
+		}
+		m.drafts[m.sessionID] = v
+	} else {
+		delete(m.drafts, m.sessionID)
+	}
 	if m.streamCancel != nil {
 		m.streamCancel()
 		m.streamCancel = nil
@@ -356,6 +369,11 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.history = nil
 	m.historyIdx = 0
 	m.draft = ""
+	// The conversation being opened gets its own half-typed prompt back,
+	// which is usually nothing. Taken rather than read, so a draft cannot
+	// come back a second time after being sent.
+	m.setInputTo(m.drafts[msg.sessionID])
+	delete(m.drafts, msg.sessionID)
 	m.queue = nil
 	m.pending = nil
 	m.pendingHintShown = false

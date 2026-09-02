@@ -1,10 +1,10 @@
-import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl } from './dom.js';
-import { app, session, resetSession, forgetHistory } from './state.js';
+import { sessionListEl, sessionIdEl, archiveToggleEl, archiveListEl, inputEl } from './dom.js';
+import { app, session, resetSession, forgetHistory, stashDraft, draftFor, forgetDraft } from './state.js';
 import * as apiClient from './api.js';
 import { appendError, appendTool, clearTranscript } from './transcript.js';
 import { formatTime, shortenPath } from './format.js';
 import { renderTasks, renderStatusBar, setCurrentAgent, renderWorkspace } from './render.js';
-import { setWaiting, setInputLocked, renderCommDot } from './composer.js';
+import { setWaiting, setInputLocked, renderCommDot, autoResizeInput } from './composer.js';
 import { connectEvents, resetTranscriptWindow } from './events.js';
 import { loadWorkspace } from './loaders.js';
 import { loadSessionPermissions } from './modals.js';
@@ -280,6 +280,7 @@ export async function deleteSessionConfirm(s) {
     // The conversation is gone; its recall list has nothing left to be
     // about.
     forgetHistory(s.id);
+    forgetDraft(s.id);
   } catch (err) {
     appendError(`failed to delete session: ${err}`);
     return;
@@ -312,7 +313,16 @@ export async function deleteSessionConfirm(s) {
 export function selectSession(id, agent, workspace) {
   // Opening it is reading it.
   app.unreadSessions.delete(id);
+  // What is in the box was typed into the conversation being left, so it
+  // goes with it. Read before resetSession, which is where sessionID stops
+  // naming that conversation.
+  stashDraft(session.sessionID, inputEl.value);
   resetSession(id);
+  // And the one being opened gets back whatever it was holding, which is
+  // usually nothing. Set unconditionally: an empty draft has to clear the
+  // box, or the stash would only ever add text and never take it away.
+  inputEl.value = draftFor(id);
+  autoResizeInput();
   // A conversation opens at its end, including one opened again after
   // somebody asked to see all of a different one.
   resetTranscriptWindow();

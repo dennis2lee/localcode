@@ -172,6 +172,36 @@ export function forgetHistory(id) {
   promptHistories.delete(id);
 }
 
+// A prompt half typed belongs to the conversation it was typed in.
+//
+// There is one prompt box and many conversations, and switching rebuilds
+// everything around the box — transcript, tasks, permission switches,
+// booked work — so leaving the text in it was the one thing that followed
+// you out. A sentence composed in one project arrived in another, where
+// the next Enter would have sent it to a different model in a different
+// directory.
+//
+// Stashed rather than dropped, for the same reason recall is kept per
+// session: the detour into another conversation is exactly when a half
+// written prompt is worth still having when you come back.
+//
+// In memory only, like the recall lists. A reload is not a switch.
+const drafts = new Map(); // sessionID -> text typed but not sent
+
+export function stashDraft(id, text) {
+  if (!id) return;
+  if (text) drafts.set(id, text);
+  else drafts.delete(id);
+}
+
+export function draftFor(id) {
+  return (id && drafts.get(id)) || '';
+}
+
+export function forgetDraft(id) {
+  drafts.delete(id);
+}
+
 export function resetSession(id) {
   Object.assign(session, freshSessionState(id));
   // The array is shared with promptHistories rather than copied: everything

@@ -161,3 +161,45 @@ test('a live reply is not duplicated by the message.part.end that closes it', as
   const text = app.el('transcript').textContent;
   assert.equal((text.match(/It is 4\./g) || []).length, 1, `the reply appears twice: ${text}`);
 });
+
+// A prompt half typed belongs to the conversation it was typed in.
+//
+// The box is one element shared by every session, and switching sessions
+// rebuilt everything around it — transcript, task list, permission
+// switches, booked work — and left whatever was in the box sitting there.
+// So a sentence typed in one project and not sent followed you into
+// another one, where the next Enter would have sent it to a different
+// model in a different directory.
+test('an unsent prompt stays with the session it was typed in', async () => {
+  const app = await load();
+  const input = app.el('input');
+  const first = app.state.sessionID;
+
+  input.value = 'delete the build directory';
+
+  app.selectSession('s2', 'general-purpose', '');
+  assert.equal(input.value, '', 'the draft followed the switch into another conversation');
+
+  app.selectSession(first, 'general-purpose', '');
+  assert.equal(
+    input.value,
+    'delete the build directory',
+    'coming back to the session lost what was being composed in it',
+  );
+});
+
+test('each session keeps its own unsent prompt', async () => {
+  const app = await load();
+  const input = app.el('input');
+  const first = app.state.sessionID;
+
+  input.value = 'in the first session';
+  app.selectSession('s2', 'general-purpose', '');
+  input.value = 'in the second session';
+
+  app.selectSession(first, 'general-purpose', '');
+  assert.equal(input.value, 'in the first session');
+
+  app.selectSession('s2', 'general-purpose', '');
+  assert.equal(input.value, 'in the second session');
+});

@@ -165,6 +165,17 @@ type Model struct {
 	// started, so walking back down past the newest entry returns it
 	// instead of losing it.
 	draft string
+	// drafts parks the same thing per conversation, for the other way of
+	// leaving a half-typed prompt behind: opening a different session.
+	//
+	// One box serves every session and a switch rebuilds everything around
+	// it, which left the text in it as the one thing that followed you
+	// out — a sentence composed in one project arriving in another, where
+	// the next Enter would send it to a different model in a different
+	// directory. Stashed rather than dropped for the same reason the
+	// recall draft above is: the detour is exactly when a half-written
+	// prompt is worth still having on the way back.
+	drafts map[string]string
 
 	// runningTool is the tool currently executing, shown in the busy
 	// indicator below the prompt box. Tool activity is deliberately NOT
@@ -219,6 +230,7 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 		events:       eventCh,
 		currentAgent: agentName,
 		tasks:        map[string]taskState{},
+		drafts:       map[string]string{},
 	}
 }
 
