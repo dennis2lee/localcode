@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.84.1
+
+Five fixes from four reports. One of them was found while reviewing the others, and turned out to be the real cause of a symptom an earlier fix had explained with a guess.
+
+* **A prompt sent after `/compact` arrived glued to the end of the summary.** On an OpenAI-compatible endpoint, and only there. Compaction replaces the history with a single message holding the summary, so the next prompt is a second message in the same role, and the two are merged to keep the alternation Anthropic and Bedrock require. This adapter is the one that has to flatten a message's several blocks into the one string the wire format gives it, and it was joining them with nothing at all:
+
+  ```
+  ...they discussed three files.fourth question, after the compaction
+  ```
+
+  The question the person asked reached the model as the tail of a sentence about something else. Blocks are now separated by a blank line; a message with one block is byte-identical to what it was, which is every ordinary turn. Anthropic and Bedrock were never affected: both keep the blocks apart on the wire.
+
+* **`/compact` did not say what it had done.** It changes what is sent and leaves the screen exactly as it was, so "Conversation compacted." with no number in it is indistinguishable from a command that did nothing, and was reported as one. It now names how many messages left the model's context, and repeats the half people do not expect, the way `/clear` already does: this is not a delete.
+
+* **A debate left its rounds in the conversation.** The rounds run in this session because the author needs the history and the cached prefix it has been building. That is a reason for them to be there while they run and none at all for afterwards. A round brief is localcode's own text in a message from you, and it ends in an instruction — "Fix what you agree with ... Do not ask for another review: it happens on its own when your turn ends" — that is false the moment the debate is over, with nothing in the request to say so. Three rounds of three reviewers is also several kilobytes of review text on every message sent afterwards, for a panel that has finished.
+
+  A debate now costs the conversation what a delegation costs it: the result. When it ends, the model's context holds the task and the work as it now stands. The rounds stay on screen and in the log, and the closing line says so. A debate that produced no answer leaves nothing, since the opening was localcode's message on the author's behalf and keeping it alone would end the history on a message nothing answered.
+
+  The collapse is a function of the history alone, so the live path and the one that rebuilds a session from its log cannot disagree about the same debate, and it confirms the position it is about to collapse against the debate's own opening message rather than trusting an offset that auto-compaction is allowed to invalidate.
+
+* **A debate could start from a prompt with no `/debate` in it.** The Web UI's debate dialog sends its command through the prompt box, which is right: the transcript records the command that started the debate, and every guard the box already has applies. But it wrote over whatever was being composed there. On the sending path that draft was gone. On the path where a command cannot go — one will not run while a turn is in flight, so it is refused and deliberately left in the box to retry — the person was left holding a command they never typed. The next thing typed landed after it and went out as `/debate girl 3 review the parserwhat is 2+2`. The dialog now borrows the box and gives it back.
+
+* **An unsent prompt followed you into another conversation.** One prompt box serves every session, and switching rebuilt everything around it — transcript, tasks, resume point, recall, permission switches, booked work — while leaving the text in it exactly where it was. A sentence composed in one project arrived in another, where the next Enter would have sent it to a different model in a different directory. Drafts now belong to the conversation they were typed in, and are stashed rather than dropped: the detour into another session is exactly when a half-written prompt is worth still having on the way back. Both clients.
+
 ## v0.84.0
 
 * **A `/command` completes where it is written, not only at the start of the box.** The right arrow finished a `/name` only when the name was the whole prompt: a command *was* the prompt, so `/pdf-tools merge a.pdf` was past completing. That stopped being true in v0.83.0, when a prompt could start mentioning a command rather than being one, and a name inside a sentence is exactly where it is hardest to remember. `read the mail, then run /tid` now finishes to `/tidy-context` and leaves the sentence on both sides of it alone.
