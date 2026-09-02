@@ -89,4 +89,12 @@ follow [RELEASING.md](RELEASING.md) in full. In particular, each release:
 
 ## Doc style
 
-English only. Prefer tables and bullet lists over prose. No em dashes; use `*` for bullets; hyphens only inside literal flags/IDs.
+* English only, except files explicitly maintained as translations.
+* BLUF structure: conclusion or required action first, supporting detail later.
+* Direct engineering language. No metaphors, promotional phrasing, filler, or implied claims.
+* One statement per sentence. Keep the subject and condition explicit.
+* Prefer short noun phrases, `*` bullets, and tables for repeated fields or comparisons.
+* Use prose only when sequence, rationale, or constraints need explanation.
+* No em dashes. Use a period, colon, comma, or parentheses as appropriate.
+* Hyphens only inside literal flags, IDs, compound terms, and quoted source text.
+* Preserve audit records. Style edits must not change a historical finding, disposition, date, or cited evidence.

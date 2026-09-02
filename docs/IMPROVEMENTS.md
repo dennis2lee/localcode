@@ -1,164 +1,413 @@
 # Improvements
 
-Findings from a code review on 2026-07-18. Items marked done were fixed on the spot and shipped in the version noted. The rest are candidates for later work.
+## Summary
+
+Open and partial work remains in security, orchestration, and client behavior. The numbered records below retain completed fixes and their release versions.
+
+| Area | Recorded remaining work |
+|---|---|
+| Security | Network destination controls and structural source provenance in summaries |
+| Orchestration | Resume, loops, per-item pipelines, child-session retention, and permission feasibility |
+| Agent selection | Direct selection of dynamic Smart Agent specialists |
+| Client behavior | Rewind recovery, multiline TUI completion, and the UI items below |
+
+Original review: 2026-07-18. Item numbers and recorded version statuses are preserved.
 
 ## Shipped in v0.12.0
 
-| Item | What changed |
+| Item | Change |
 |---|---|
-| Conversation context lost on daemon restart | Session metadata now saves to a separate `<id>.meta.json` via `session.LoadAllFromDisk`, and `agent.Loop.RehydrateAll()` rebuilds model history and token usage from the event log at daemon start. |
-| Local command replies leaking into history | Found during live verification of the restart work. Confirmation text from commands that never call the model (`/compact`, `/usage`) was being replayed as if the model had said it. `message.user` events now carry `"local": true` so rehydration skips them. |
-| Startup logo | The TUI prints a "LOCALCODE" block banner at startup, the way opencode does. `--headless` skips it. |
+| Conversation context lost on daemon restart | Session metadata persists in `<id>.meta.json`. `session.LoadAllFromDisk` loads it at startup. `agent.Loop.RehydrateAll()` rebuilds model history and token usage from the event log. |
+| Local command replies included in model history | Replies from `/compact`, `/usage`, and other commands that do not call the model are excluded from replay. Their `message.user` events carry `"local": true`. The defect was found during live restart verification. |
+| Startup logo | TUI startup prints the LOCALCODE banner. `--headless` suppresses it. |
 
 ## Shipped in v0.11.1
 
-| Item | What changed |
+| Item | Change |
 |---|---|
-| `localcode mcp add/remove` dropped unknown config.json fields | The whole file was being round tripped through the Config struct, so any key not in the struct (a typo, a field from a future version) silently vanished. Only the `mcp_servers` key is rewritten now, everything else stays as raw JSON. `remove` also no longer reformats the file when the name is not found. |
-| Hook matcher matched partial names | A `"bash"` matcher also caught tools that merely contained bash, such as `mcp__server__run_bash`. Matchers are anchored to the full tool name now. Patterns like `"bash\|edit"` and `"mcp__github__.*"` work as before. |
-| Compaction tokens missing from `/usage` | The summarization call is a billed API call, but it was not counted. |
-| Compaction summary truncated at 1,024 tokens | Summaries of long sessions could get cut off mid sentence. Raised to 4,096, the default turn budget. |
+| `localcode mcp add/remove` dropped unknown config fields | Only `mcp_servers` is rewritten. Other values remain raw JSON. Removing a nonexistent entry leaves formatting unchanged. |
+| Hook matcher accepted partial names | Matchers now apply to the full tool name. A `"bash"` matcher no longer matches `mcp__server__run_bash`. Patterns such as `"bash\|edit"` and `"mcp__github__.*"` remain supported. |
+| Compaction tokens missing from `/usage` | Token accounting now includes the summarization API call. |
+| Compaction summary truncated at 1,024 tokens | Summary output limit raised to 4,096 tokens, the default turn budget. |
 
 ## Remaining work, highest value first
 
-1. ~~**`sh -c` dependency on Windows.**~~ Done in v0.23.0. Shell execution now resolves per OS in `internal/shell`: `sh` on PATH, then Git for Windows' `bash.exe` at known install paths, then `cmd /c`, and the bash tool's description warns the model when it is talking to `cmd`.
-2. **Partially done: turn serialization.** The daemon does hold a per session busy flag and returns 409 while a turn is running, and since v0.24.0 a client that gets that 409 queues the message and retries on `turn.done` instead of erroring, so two clients on one session no longer interleave or lose a message. What is still missing is the same treatment for `/compact`, which can overlap a running turn. As of v0.37.0 both clients at least say so instead of doing nothing: a command typed mid-turn is refused out loud, since handing it to the running turn would deliver it to the model as chat.
-3. ~~**Bash permission globs are too coarse.**~~ Done in v0.20.0. A bash command is split on `&&`, `||`, `;`, `|`, and newlines (quote aware), every segment has to earn `allow` on its own, any `deny` anywhere denies the whole line, and command substitution or output redirection never auto-allows.
-4. **Hook timeout is not configurable.** The timeout is fixed at 30 seconds. A per hook `timeout` field would help. (Which shell runs hooks is resolved per OS as of v0.23.0; as of v0.37.0 every shell command runs in a process group that is killed whole, so children no longer outlive it; as of v0.62.1 a hook runs in the workspace of the session whose event triggered it, not in the directory the daemon was started in. Only the timeout is still fixed.)
-5. ~~**MCP is stdio only.**~~ Done in v0.29.0. All three transports connect: `stdio`, `http` (streamable), and `sse`, chosen by an entry's `type` or inferred from whether it carries a url. `localcode mcp add --transport http|sse <name> <url>` registers one, `-H "Key: Value"` attaches an auth header, and `import-claude` brings Claude Code's remote servers across too. What's still missing is OAuth: a server that wants an interactive authorization flow rather than a static token can't be set up from here (the SDK exposes a hook for it, `StreamableClientTransport.OAuthHandler`).
-6. **Partially done: switching to a long session shows only its tail.** A conversation opens at its end rather than replaying the whole log — measured at 1.63MB/751ms of client work for a 7,680-event session, against 0.08MB/4ms for the tail. v0.37.0 fixed what made that window far smaller than it looked: it counted streamed text fragments, so one long reply used it up and the conversation above it vanished. Replies that have finished now replay whole. What is still open is scrolling *back*: there is no "load earlier" control, so the beginning of a long conversation is only reachable from the session's `.jsonl`. The daemon already takes `?since=`, so the missing part is a client one.
-7. ~~**`localcode mcp list` shows a static list.**~~ Done in v0.28.0. `mcp list` now starts each registered server, handshakes, lists its tools, and reports `connection: OK (N tools)` or `connection: FAILED — <reason>` per entry, bounded by a 20s timeout; `--no-test` keeps the old instant listing. Querying a *running* daemon's `GET /api/mcp-servers` instead of starting a throwaway process is still an opening, and would be faster when a daemon happens to be up.
-8. ~~**Compaction can fail when history already exceeds the context.**~~ Done in v0.37.0. The summarization request is trimmed to fit before it is sent, dropping whole messages from the oldest end (never opening on a tool result whose tool call went with them), and the prompt says what was left out. If the server refuses it anyway, it shrinks and re-sends rather than giving up. A turn refused for being too long summarizes and retries, then forces a trim, shrinking each round until it is accepted. Each round aims at two thirds of what the conversation *measures* rather than of the window, because the character estimate runs about 4x low on Korean and Japanese, so a budget taken from the window alone would decide a just-refused request already fits and cut nothing. Tool results are capped at a quarter of the window as they arrive, which closes the one case none of the above could reach: a single message larger than the window.
-9. ~~**A local model's context window had to be configured by hand.**~~ Done in v0.38.0. The server is asked (`GET /v1/models`, `/props` on llama.cpp) instead of the window being guessed from the model's name, which for a local server cannot be right in principle: it serves whatever was loaded and is nearly always started with a smaller window than the model supports. Config still overrides, and a server that does not answer falls back to the guess. What is still open is the *output* cap: `max_tokens` cannot be discovered the same way, because no server reports how long an answer you want, so it stays a config value with a 4096 default.
-10. **Config key order is not preserved.** When `localcode mcp` rewrites the file, top level keys come back alphabetically sorted. No data is lost, but diffs get noisy. Minor.
-11. **`/usage` has no cross session or daily totals.** It reports one session. Daily or weekly reporting across sessions needs separate aggregation.
-12. ~~**Deny rules can be evaded by shell quoting.**~~ Done in v0.33.4. Each command is matched both as written and with its shell quoting removed, and the stricter of the two answers wins — so `"curl" …`, `cu''rl …` and `c\url …` all meet a `curl *` deny, while unquoting can never widen an allow (that needs both readings to match).
-13. ~~**Dictation has no engine-side VAD.**~~ Dictation was removed in v0.53.0, along with the speech engine, the model download the Windows installer ran, and everything below.
-14. ~~**Partially done: Whisper partials re-read the whole utterance.**~~ Dictation was removed in v0.53.0, along with the speech engine, the model download the Windows installer ran, and everything below.
-15. **Done in v0.55.0: file tools are not confined to the workspace.** v0.54.0 added the boundary check this entry asked for, as an escalation rather than a refusal: with `smart_agent` on, a path that resolves outside the session's own workspace turns an `allow` into an `ask`, `..` included, and `read_file` gained a permission subject so a rule can match a read at all. That settles the "behaviour change" question the entry was waiting on, by putting it behind a switch and asking rather than refusing. The symlink gap closed in v0.55.0: the comparison is now between physical paths, resolved on both sides, with a not-yet-existing file judged by its closest existing ancestor and an unresolvable path (a link loop) treated as outside — one question rather than one blind allow. A round 10 review found the one direction that construction still missed: a symlink whose own target does not exist reports the same error as a missing file, and was judged by where it sits instead of where it points — exactly the case a write boundary must get right, since writing through the link creates the external file. Resolution now Lstats a missing component and follows it when it is a link, with a bounded hop count so a cycle of dangling links stays unresolvable. The last of it closed in v0.63.0. The boundary no longer depends on `smart_agent`, because it is a safety property rather than an orchestration feature; `grep` and `glob` gained permission subjects, without which no rule and no boundary could see them at all; reading and writing outside got a switch each, since they are not the same risk; and the question is answered by place — this directory for the session, or anywhere — rather than by tool call, because a model told to read a sibling project reads forty files in it. `permission-skip-tools` exists for the same reason: the only way to stop being interrupted used to be turning off the guard that matters most.
-16. **A `pre_tool_use` hook that hangs is killed at 30s and the tool then runs.** Fail-open is the current, documented behaviour, and it is the wrong default for a hook whose job is to block something. Needs a per-hook `timeout` and a `fail_closed` flag, plus a decision about which way the default goes.
-17. **Compaction summaries sit in the event log as plain text.** v0.12.0 started storing the full summary in the `compacted` event so restarts can restore it. If a session contained sensitive material, the summary of it now lives in the log file too. Worth reviewing log file permissions and retention against that.
-18. ~~**The desktop window still has a Windows caption.**~~ Done in v0.44.0 and actually working in v0.45.1, the way this entry said it would have to be: the window procedure is subclassed for `WM_NCCALCSIZE` and `WM_NCHITTEST`, and the page draws the buttons. It took two more rounds on the reporter's machine to work: the caption needed `WS_CAPTION` cleared as well as the `WM_NCCALCSIZE` answer, and the hit test turned out to be unreachable — WebView2's child window owns the mouse, so the page has to ask the window to move and resize rather than the window working it out. **None of it can be run from this repository's own machine**, which is developed from a Mac; the CI job builds the binary without opening a window. `LOCALCODE_TITLEBAR=1` exists as the way back to the system frame precisely because of that. The geometry the two halves share is guarded by a test (`internal/gui/chrome_test.go`), but nothing can guard the hit test itself except trying it.
-19. ~~**Whisper's hallucination guard now rests entirely on localcode's own VAD.**~~ Dictation was removed in v0.53.0, along with the speech engine, the model download the Windows installer ran, and everything below.
-20. **Updating cannot undo itself, and the installer half is still untested from here.** Mostly closed in v0.50.0: an install localcode owns the file of, which is every copy unpacked into a directory the user can write, is now replaced by localcode itself (unpacked beside the old one, checked that it runs, renamed into place), and since v0.53.0 localcode restarts onto it as well — the replacement had been landing correctly and leaving the old image running, which read as an update that did nothing. What is left needs someone else to do the installing: a `/usr/bin` copy gets the `apt install` line, `LocalCode.app` is replaced as a bundle, Windows arm64 has no MSI, and Windows amd64 runs `msiexec`. There is no rollback: if the new version is worse, the way back is the previous release's installer or tarball. And the download is checked against the SHA-256 GitHub records for the asset, which proves it arrived intact but is not a signature; a release is trusted because it came from the repository over TLS. **The `msiexec` path has never been run from this repository's own machine**, which is a Mac; `internal/update` is tested against a server it controls.
+Completed findings remain in this list to preserve item numbers and release history.
 
-21. ~~**localcode publishes no speech engine for macOS or Linux.**~~ Dictation was removed in v0.53.0, along with the speech engine, the model download the Windows installer ran, and everything below.
-22. ~~**Partially done: nothing appears while you speak against a slow remote engine.**~~ Dictation was removed in v0.53.0, along with the speech engine, the model download the Windows installer ran, and everything below.
+1. **Windows shell execution. Done in v0.23.0.**
 
-23. **A stalled turn cannot be told from a finished one.** v0.48.0 recovers from a model that ends its turn describing the next step instead of taking it: the families known to do it are asked not to, and `keep_going` carries the turn on up to N times. What it cannot do is *know*. A turn that ends after tool use has the same shape whether the model finished or gave up, so the carry-on is bounded by a budget and by "prose twice means finished" rather than by a judgement, and a finished task on a model with a budget costs one extra turn. A model outside the quirk table that stalls still needs `keep_going` set by hand. A real answer needs a signal the harness does not have — the model saying it is done, in a way that is not prose.
+   * `internal/shell` selects `sh` on PATH, then Git for Windows' `bash.exe` at known paths, then `cmd /c`.
+   * The bash tool description identifies use of `cmd`.
 
-24. **Cancelling a turn leaves the transcript claiming a discarded message was delivered.** Text typed mid-turn is drawn as `[sent — the model will pick this up at its next step]`, and `turnTracker.cancel` throws the queue away by design — but the Web UI's `turn.cancelled` handler clears the queue, the running tool and the spinner without touching that row, so it stands there permanently asserting something that never happened. Carried over from the August 2026 review as M19, re-checked against v0.48.0 and still open. The fix is small (resolve or rewrite the placeholders on `turn.cancelled`); it is here rather than done because it is a behaviour question — the row should probably say the message was discarded rather than vanish silently.
+2. **Turn serialization. Partially done.**
 
-25. **Done in v0.55.0: prompt caching stops at the system prompt.** v0.54.0 marks the stable prefix — the tool schemas and the system prompt — as a cache breakpoint on the Anthropic API and on Bedrock, which is the largest fixed cost in a request and the one that is byte-identical every turn. v0.55.0 marks the conversation too: the last block of each of the last two messages, on the Anthropic API and Bedrock. The history is append-only, so each request reads the previous one's marked prefix at the cache rate and writes only its own suffix at the premium — incremental, not the whole-history rewrite the earlier note worried about; two moving marks bound how far a miss can reach when one long tool round outruns the lookup window. Four marks total, the API's limit. Nothing is sent on openai-compatible endpoints, which is correct for a local server doing its own prefix caching and still leaves hosted OpenAI-compatible providers with explicit cache controls unserved — that residue is the open part.
+   * The daemon's per-session busy flag rejects concurrent turns with HTTP 409.
+   * Since v0.24.0, clients queue a rejected message and retry on `turn.done`.
+   * Remaining: `/compact` can overlap a running turn.
+   * Since v0.37.0, both clients explicitly refuse commands entered during a turn. Commands are not queued as model input.
 
-26. **Done in v0.55.0: the turn log grows without a retention policy.** Files past the retention age are removed once the configured bounds are installed at startup and again at each day rotation — never before: a round 10 review caught the first prune running under the default 30 days before `trace_max_age_days` was applied, which could irreversibly delete traces a longer configured retention was about to protect. `Open` deletes nothing now. `trace_max_age_days` adjusts the age (zero or below means the default, never "keep forever"), and `trace_max_total_mb` optionally bounds the directory's total size, oldest files first, never touching today's. Retention is read from the file names rotation itself wrote, not from mtime. Not done: compression (a month of line-JSON is small enough that bounding beats compressing), and tracing still cannot be turned on without the rest of Smart Agent.
+3. **Bash permission matching. Done in v0.20.0.**
 
-27. **Done in v0.55.0: a fallback moves to another model without first retrying this one.** Exactly the split this entry asked for: transient causes (429, 5xx, dropped connections) get up to two same-endpoint retries with a 1s-then-2s backoff before the chain is consulted, "this endpoint cannot serve you" causes (401, model not found, DNS) go straight to it, and request defects retry nowhere. Each endpoint in the chain gets its own allowance, every retry is in the transcript and the turn log (`retry` span, `retries` on `turn.end`), and the wait is cancelled with the turn.
+   * Quote-aware splitting on `&&`, `||`, `;`, `|`, and newlines.
+   * Each segment requires an allow decision.
+   * Any deny decision rejects the complete command.
+   * Command substitution and output redirection never receive automatic approval.
 
+4. **Configurable hook timeout. Open.**
 
-28. **Partially done, most recently in v0.56.0: nothing distinguishes trusted from untrusted instruction sources.** The labelling half exists now, with Smart Agent on: every turn's system prompt — orchestrator and specialist — states which sources are instructions (the user, the system prompt, the project's rules) and which are data (every tool result, MCP output included), and MCP tool output additionally arrives framed as external content naming its server — error results included, because the server controls both its text and its error flag, and an unlabelled error path would just be the label's off switch. v0.56.0 made provenance structural on the prompt side: every piece of the system prompt now carries a declared trust class, separate from its source and from the message role it lands in, and external content is a class that may never be followed as instruction. The compaction summary re-enters the conversation behind a header saying it is machine written and that quoted content keeps the authority it originally had. What none of this is is enforcement: a statement in the prompt raises the bar and is not claimed as more, the permission gate stays the actual control, and a mechanism that structurally prevents tool output from steering the model does not exist here or in the harnesses this is modelled on. Nor is provenance preserved *inside* a summary, where several sources become one rendering. v0.57.0 made the declaration last as long as the text it describes: a request names every dynamic source in the messages it is sending rather than only the ones the running call created, so external content stays labelled across later turns and across a restart, and a task an orchestrator wrote for a sub-agent is a source of its own rather than the product's words with the user's authority. v0.58.0 scoped that authority to the request it belongs in, since the same task is also in the parent's own history and a model's own words must not instruct it, and stopped a custom command's `@path` and shell splices from arriving as the person's direct instruction. v0.76.0 added a source that could only be built one way because of all this: a `#<name>` reference to another conversation resolves to metadata and never to content, and the content arrives, if the model asks for it, as a tool result. Splicing the transcript into the message would have put a mixture of somebody else's typing, a model's own words, fetched pages and MCP output behind a label, which this entry has twice said is a declaration rather than a boundary; as a tool result it is held down by the shape of the code instead, and decisively by the fact that a tool result never re-enters the message path, so a reference or a slash command written inside the read conversation cannot act. **What is still not enforcement is still not enforcement**: that argument is about where text can arrive from, not about whether a model heeds a label once it has arrived.
+   * Fixed timeout: 30 seconds.
+   * Proposed setting: per-hook `timeout`.
+   * Completed prerequisites: OS-specific shell selection in v0.23.0, process-group termination in v0.37.0, and session-workspace execution in v0.62.1.
 
-29. **There is no network egress policy.** Permission rules cover which tools may run and on which paths. What a shell command or an MCP server does over the network once it is running is outside them: `curl` is a bash command like any other, and an MCP server is a process localcode started. A destination allowlist or a deny-by-default egress rule would be a separate mechanism from path permissions and is not one localcode has.
+5. **Remote MCP transports. Done in v0.29.0; OAuth remains open.**
 
-30. **Mostly done in v0.55.0: MCP servers are trusted because they are configured.** Each server's advertised surface — every tool's name, description and schema — is fingerprinted into `~/.localcode/mcp-pins.json` on first connect, and a change since the last run is a startup warning naming the server, after which the pin moves (warn once, not refuse: tools also change because somebody upgraded the server). The file records first-seen and last-changed times, so it is the audit record that did not exist. Not done: a registry of known servers, and pinning to a declared version — the fingerprint pins what a server *says*, not what it *is*, and a server that keeps its descriptions stable while changing its behaviour is invisible to it.
+   * Supported transports: `stdio`, streamable `http`, and `sse`.
+   * Selection: explicit `type`, or URL-based inference.
+   * Registration: `localcode mcp add --transport http|sse <name> <url>`.
+   * Static authentication headers: `-H "Key: Value"`.
+   * `import-claude` imports remote server entries.
+   * Remaining: interactive OAuth setup. The SDK exposes `StreamableClientTransport.OAuthHandler`.
 
+6. **Long-session replay. Partially done.**
 
-31. ~~**A debate is two agents reading, and only one of them can run anything.**~~ All four parts done in v0.69.0. A reviewer can run the project's own check (`verify_command`, no arguments, so the model chooses whether to run it and never what it runs); the brief carries `git diff HEAD` where there is a repository and says so where there is not; up to three reviewers run independently and all must approve; and the natural-language tool and the ⚖️ button joined the command, so the three doors scheduling has are the three doors this has.
+   * Sessions open with recent events rather than the complete log.
+   * Recorded measurement for 7,680 events: 1.63 MB and 751 ms for full replay; 0.08 MB and 4 ms for recent events.
+   * v0.37.0 changed replay accounting so completed replies remain whole instead of consuming the window as individual streamed fragments.
+   * Remaining: a client control to load earlier events. Earlier content is otherwise available only in the session's `.jsonl`.
+   * The daemon already supports `?since=`.
 
-    What is still open, and it is smaller than what closed:
+7. **MCP connection checks. Done in v0.28.0.**
 
-    * **The check is one command.** A project whose tests and linter are separate runs still declares one line, and a reviewer that wants only the tests cannot ask for only the tests. Several named checks would be a better shape; one was chosen because the argument that makes this safe is that the model picks nothing.
-    * **No diff outside git.** The fallback is the tool-call list, honestly labelled, and it still misses whatever the shell did. A workspace snapshot would close it and costs a tree hash per round.
-    * **Nothing reconciles a split panel.** Two reviewers that disagree with each other, rather than with the author, produce two findings and no ruling; the author is left to decide, and the round budget is what stops it. A tie-break would need a fourth model or a rule, and both are worse than the person reading it.
+   * `localcode mcp list` starts each server, performs the handshake, lists tools, and reports success with a tool count or failure with a reason.
+   * Per-server timeout: 20 seconds.
+   * `--no-test` retains the static listing.
+   * Remaining optimization: query a running daemon's `GET /api/mcp-servers` instead of starting a temporary server process.
 
-32. ~~**Effort does not reach Bedrock.**~~ Done in v0.71.0. Reasoning goes out through `additionalModelRequestFields` (merged with the million-token beta rather than overwriting it) and comes back as content blocks that return on the one message a continuation needs them on. The same work fixed two failures v0.70.0 had shipped on the other adapters: a budget larger than `max_tokens`, and a temperature alongside thinking, both of which are a 400 rather than a worse answer.
+8. **Compaction above the context limit. Done in v0.37.0.**
 
-    What is still open, and the first one is the reason a rejection explains itself:
+   * Summarization input is trimmed before submission.
+   * Trimming removes complete oldest messages and avoids an initial tool result without its call.
+   * The prompt identifies omitted content.
+   * A rejected summarization request is reduced and retried.
+   * A normal turn rejected for context length is summarized and retried, then forcibly trimmed if needed.
+   * Each reduction targets two thirds of the measured conversation size. The character estimate was approximately four times too low for Korean and Japanese.
+   * Incoming tool results are capped at one quarter of the context window.
 
-    * **Which spelling Bedrock accepts is unverified.** Converse models that document as opaque passthrough, so nothing in the SDK, the repository, or any test pins the literal key. The choice is Anthropic's own name, on the evidence of `anthropic_beta` going through the same field on the same API in this same adapter and working. If an account refuses it, the error now names the setting and how to turn it off, and the fix is one constant — but it is a guess with good evidence rather than a fact.
-    * **`adaptive` on Bedrock is unverified for the same reason.** The newest families take it on the direct API; whether Bedrock's passthrough has caught up is not determinable from here.
-    * **Reasoning is shown live and never stored**, so a reload loses it and `/context` cannot account for what it cost.
+9. **Local-model context discovery. Done in v0.38.0.**
 
-33. **CI runs no tests.** The only workflow is `gui-windows.yml`, and its steps are checkout, resolve version, build, smoke check, upload — no `go test`, no `go vet`, no build of the pure-Go tree. So no test in this repository has ever been enforced by anything except a person running it.
+   * Discovery uses `GET /v1/models` and llama.cpp's `/props`.
+   * Explicit configuration takes precedence.
+   * A server that does not report its window uses the model-name estimate.
+   * Remaining: `max_tokens` stays configurable with a 4,096 default. Servers do not report the desired answer length.
 
-    `make check` plus the stamp the release preflight reads closes that for **releases**: a release cannot now be cut on a tree the gate has not passed. It does not close it for commits, and it cannot — the stamp is local state on one machine. A workflow running the gate on push would, and would also cover the case this repository has no coverage for at all: whether the tree builds and passes on a machine that is not this one. It is not built because this project is developed and released from a single machine, so the marginal value is smaller than it looks, and a second workflow is a second thing to keep working.
+10. **Config key ordering. Open; minor.**
 
-34. **Resolved: five functions nothing calls.** All five were traced to a specific completed migration rather than an undecided one, and removed. `turnTracker.anyRunning` / `whileIdle` were the process-wide turn guard from before workspaces became per-session in v0.39.0; `turnTracker.busy` duplicated `anyBusy` with no unique behavior, so its one caller (a test) was moved onto `anyBusy` instead. `turnTracker.running`, which both dead functions were built on, is not dead — `handleListSessions` calls it directly — and had been removed by mistake on the first pass; restored once `go build` caught it. `Loop.systemPromptFor` built a system prompt by string concatenation, superseded by the activation/prompt-assets system (`internal/agent/prompt_assets.go`), which composes it from typed pieces instead. `dataStrings` was superseded by the more specific `dataSources`, added in the same v0.57.0 change that made `dataStrings` redundant without removing it. `memory.SystemPromptSection` — flagged here as "the same shape one step further along" — was the pre-v0.57.0-trust-split wrapper around `PolicySection` + `IndexSection`; the two tests that only ever exercised the wrapper now test those two functions directly, since they are what `cmd/localcode/wire.go` actually calls, and a third test in `internal/agent` that duplicated the memory package's own test with no unique assertion was deleted rather than migrated. `scripts/deadcode.allow` is down to seven, all in the two accepted categories (reachable only from tests, and the build-tag pair).
+    * `localcode mcp` sorts top-level keys when rewriting configuration.
+    * Values are preserved, but diffs include ordering changes.
 
-    Three narrower gaps sit under it. The `.deb` acceptance test skips when `dpkg-deb` is absent, which is always true on the macOS box every release is cut from, so the authoritative check on package validity structurally never runs in the release path. The Web UI suite is doubly conditional — it skips without `node` and under `-short` — though the preflight now refuses to release on a machine without `node` at all.
+11. **Cross-session usage totals. Open.**
 
-    And the Web UI suite runs entirely against `test/webui/dom.js`, a DOM written by hand; nothing in the gate opens the page in a browser. A fake that is *wider* than a browser passes code the browser then refuses: `querySelectorAll` returned an Array, so `.map()` over it worked in all 272 tests and threw `map is not a function` the moment a browser ran it, taking the whole module down at load — found in v0.72.0 by opening the page, not by the suite. That instance is closed (the fake returns a NodeList with exactly the browser's surface, and `previousElementSibling` was added for the same reason), but the class is not: every property the fake does not model is a place the same trade can be made again, and the only check that would catch it is running the page. `layout` is the standing example — `offsetTop` and `scrollTop` are plain numbers a test sets, so anything that depends on real geometry is asserted against a fixture rather than measured.
+    * `/usage` reports one session.
+    * Daily or weekly totals require separate aggregation.
 
-35. **The agent-computer interface is sharper mostly with Smart Agent on, and two of its parts are still missing.** The tools now page, account for what they skipped, and diagnose a failed edit. That is all behind the switch except four fixes, which are unconditional because they were defects rather than a way of working: a match budget that ran out silently, a long line that ended a file's scan and left the file looking clean, a file that could not be opened at all being skipped without a word, and, in v0.76.0, a tool name the model got slightly wrong being refused with no statement of what the tools actually are. The fourth is the same shape as the other three and was found the same way, from a transcript rather than from a test: five identical calls to `bash.command`, each answered "not available to this agent", each followed by the same call again. A result that reports a failure without reporting its cause is a turn the model cannot recover from, which is not a preference somebody opts into. Underneath it was a plain bug the sharper message would have masked: the OpenAI streaming format lets a function name arrive across deltas, and the adapter kept the first fragment, so a server that split `read_file` in two called a tool named `read_`. Two things a harness of this shape usually also has are deliberately absent.
+12. **Quoted shell commands bypassing deny rules. Done in v0.33.4.**
 
-    **Nothing checks that an edit left the file valid.** The interface work this is modelled on refused an edit that did not parse and fed the linter's message back, and reports that class of interface change as decisive without breaking the gain down per feature. localcode cannot do the language-agnostic version of it honestly: it edits whatever project it is pointed at, and a bracket counter that does not understand strings and comments would refuse correct edits. The hook path already covers it for a project that wants it, since `post_tool_use` runs after an edit with the path in hand, but nothing ships that way and the hook cannot block, only react.
+    * Commands are matched both as written and after shell quoting is removed.
+    * The stricter decision applies.
+    * A `curl *` deny matches `"curl"`, `cu''rl`, and `c\url` spellings.
+    * Both representations must match before quoting removal can preserve an allow decision.
 
-    **Nothing stops an edit to a file that changed since it was read.** Enforcing a read before a write is the usual answer, and it collides with a feature this repository documents: a `post_tool_use` hook that reformats after an edit makes every following edit look stale. Doing it properly means distinguishing a change localcode caused from one it did not, which is a per-session read register, not a timestamp comparison.
+13. **Engine-side dictation VAD. Closed by removal in v0.53.0.**
 
+    * Dictation, the speech engine, and the Windows installer model download were removed.
 
-36. **Orchestration ships without the three things that would make a run repeatable.** The plan, the validator, the runner and the structured returns are in; what is not, and what a second version would need:
+14. **Whisper partials rereading complete utterances. Closed by removal in v0.53.0.**
 
-    **No resume.** A run that fails on its last stage repeats every stage before it. A ledger keyed on each unit's (stage, item, copy) would let an unchanged prefix replay from cache, which is what makes iterating on a plan affordable. It needs the answers to be durable beyond the child sessions, and a rule for what a write step invalidates.
+    * Dictation, the speech engine, and the Windows installer model download were removed.
 
-    **No loop.** `repeat_until` is the form that turns a fan out into a search: keep going until two rounds find nothing new. It is deliberately absent because an unbounded loop is the shape a small model gets wrong most often and the one that is indistinguishable from progress while it is happening, so it needs a mandatory `max_rounds` and a report that names the round it stopped on.
+15. **Workspace boundary checks for file tools. Done in v0.55.0; extended through v0.63.0.**
 
-    **No pipeline.** Every stage is a barrier for the next, so one slow item holds up the whole stage. Letting an item walk the remaining stages on its own buys wall clock and costs a per-item state machine; worth it only once the phase display and a ledger exist to make it legible.
+    | Version or review | Change |
+    |---|---|
+    | v0.54.0 | With `smart_agent` enabled, paths outside the session workspace changed from allow to ask. The check included `..`. `read_file` gained a permission subject. |
+    | v0.55.0 | Both sides of the comparison use resolved physical paths. New paths use their closest existing ancestor. Unresolvable paths are treated as outside the workspace. |
+    | Round 10 | Missing components are checked with `Lstat`. Dangling symlinks are followed instead of being classified by their containing directory. A bounded hop count handles cycles. |
+    | v0.63.0 | Boundary checks became independent of `smart_agent`. `grep` and `glob` gained permission subjects. External reads and writes gained separate switches. Approvals can cover a directory for the session or all locations. |
 
-    A fourth thing, now closed rather than open: the switch had no settings-window toggle and nothing told the model when to reach for the tool. Both shipped. The second was the one that mattered, because a capability nothing points at is indistinguishable from one nobody turned on.
+    * `permission-skip-tools` provides a way to reduce repeated prompts without disabling the other permission controls.
 
-    Two smaller gaps that a run makes visible rather than causes. A 32-agent run puts 32 child sessions on disk and 32 rows in `/tasks`, and nothing cleans them up. And when several stages ask for a permission at once, the broker can represent it but no client says how it is presented, so a run can sit on all four of its slots waiting for a person who is looking at one question.
+16. **Hook timeout failure policy. Open.**
 
-37. **A Smart Agent specialist can be delegated to, but never answered as.** The roster is derived per turn from a switch rather than merged into `config.json`, which is what lets the switch move mid-session; the cost is that the six specialists are in nobody's picklist. `GET /api/agents` returns `config.Agents` only, so the TUI's Tab and the Web UI's agent menu do not offer them, and `localcode run --agent oracle "review this diff"` is refused with a list that does not mention `oracle`. Every client is consistent about this, so it is a gap rather than a regression, and it became visible when `localcode run` learned to delegate to them in v0.80.0.
+    * A `pre_tool_use` hook terminated after 30 seconds does not block the tool.
+    * Current documented behavior: fail open.
+    * Required decisions: per-hook `timeout`, a `fail_closed` option, and the default failure policy.
 
-    The awkward part is `--profile` and `--model`. A specialist's profile is chosen by routing its category against the profiles you have, and there is nowhere to write an override that does not also stop it being a specialist: adopting it into `config.Agents` is what `smart.Agents` uses to mean "the user defined their own", so the adopted copy would be handed the orchestration prompt it is deliberately denied. An override hook in `internal/smart` is the honest fix, and it is a design change rather than a wiring one.
+17. **Sensitive content in compaction logs. Open.**
 
-38. **A permission that cannot be answered is discovered after the plan is written, not before.** `Orchestrate` requires permission on every call, which is right: a run is up to 32 agent turns and half an hour. But whether the answer can be obtained is knowable at the start of the turn, and the tool is offered anyway. On an unattended turn without `skip_all` or `skip_tools` the model authors an entire plan, pays for it, and receives a refusal.
+    * Since v0.12.0, the `compacted` event stores the full summary for restart recovery.
+    * A summary may retain sensitive session content.
+    * Review needed: log permissions and retention.
 
-    Debate's version of this was closed in v0.80.0 by hiding the tool where `debateRefusal` structurally refuses. The same fix does not transfer, because this refusal is not structural: `skip_all`, `skip_tools`, and an `allow` rule in config.json each make the call go through, and only the resolver knows. Answering it properly means asking the resolver at turn time, which `hiddenTools` currently has no handle on. Until then the flag is documented in USAGE and pinned by a test rather than left to be found in a transcript.
+18. **Windows desktop caption. Done in v0.44.0; working behavior confirmed in v0.45.1.**
 
+    * Custom framing uses `WM_NCCALCSIZE`, `WM_NCHITTEST`, and page-rendered controls.
+    * Follow-up fixes cleared `WS_CAPTION` and routed move/resize requests from the page because WebView2's child window receives mouse input.
+    * `LOCALCODE_TITLEBAR=1` restores the system frame.
+    * `internal/gui/chrome_test.go` checks shared geometry.
+    * Limitation: the development machine is a Mac. CI builds the Windows binary without opening a window. Hit testing still requires Windows runtime verification.
 
-39. **`/rewind` has no `/redo`, and three things it cannot see.** Restoring takes no pre-image of what it overwrites, so a rewind is one-way: the turn's own copy goes back and whatever was there a moment ago is gone. That is the honest shape for a first version, and it is the reason the reply lists every path it touched rather than reporting a count.
+19. **Whisper hallucination filtering dependent on local VAD. Closed by removal in v0.53.0.**
 
-    Three gaps in what it captures, each stated in the reply rather than hidden. Hard links are not detected: Claude Code documents skipping them, and `Nlink` is not reachable portably on Windows, which this repository targets, so a hard-linked path is restored like any other and the link's other name follows. Write tools registered by an MCP filesystem server go through the same registry and are not in the two-name capture set. And a turn that spawned a background task leaves its `task.spawned` inside the removed range while `task.status` keeps arriving after the marker, so those later events refer to a spawn the replay no longer produces; refusing while a child is live narrows this and does not close it.
+    * Dictation, the speech engine, and the Windows installer model download were removed.
 
+20. **Update rollback and installer verification. Mostly closed in v0.50.0; remaining gaps open.**
 
-40. **Completion is single-line in the TUI and mid-sentence in the Web UI.** Both clients complete a `/command` or a `#reference` wherever it is written, except that the TUI declines the moment the prompt box holds more than one line. That is the text widget's API rather than a decision: `SetCursorColumn` names a column within whatever line the cursor is already on, and there is no setter for the line. `CursorDown` steps a *visual* row, so a line that soft-wraps makes "move down two lines" mean something other than two presses, and putting the cursor back after a splice is exactly what a completion has to do.
+    * Writable binary installations are unpacked beside the existing binary, execution-checked, and renamed into place.
+    * Since v0.53.0, localcode restarts into the replacement.
+    * `/usr/bin` installations receive an `apt install` command.
+    * `LocalCode.app` is replaced as a bundle.
+    * Windows amd64 uses `msiexec`. Windows arm64 has no MSI.
+    * No automatic rollback. Recovery requires a previous release installer or archive.
+    * Download integrity uses the asset SHA-256 recorded by GitHub. This is not a signature. Release trust depends on the repository and TLS.
+    * The `msiexec` path has not been run from the Mac development machine. `internal/update` tests use a controlled server.
 
-    `cursorRune` reports -1 for a multi-line box, which makes the scan find nothing, which is the right answer until the row can be named. The Web UI has no such limit: a textarea's `selectionStart` is an absolute offset and completing on the third line of a prompt works there today. Closing it means either an upstream setter or tracking the row ourselves against a widget that also tracks it.
+21. **Published speech engines for macOS and Linux. Closed by removal in v0.53.0.**
 
+    * Dictation, the speech engine, and the Windows installer model download were removed.
+
+22. **Partial output from a slow remote speech engine. Closed by removal in v0.53.0.**
+
+    * Dictation, the speech engine, and the Windows installer model download were removed.
+
+23. **Distinguishing stalled and completed turns. Open.**
+
+    * v0.48.0 added bounded continuation for models that describe a next step without executing it.
+    * Known model families receive an instruction and a `keep_going` budget.
+    * Termination uses the budget and a two-consecutive-prose-response heuristic.
+    * A completed task with a continuation budget can cost one extra turn.
+    * Models outside the quirk table require manual `keep_going` configuration.
+    * Remaining: an explicit completion signal. Tool-use history alone does not distinguish completion from abandonment.
+
+24. **Cancelled queued messages retain a sent indication. Open.**
+
+    * Source: August 2026 review, M19. Rechecked against v0.48.0.
+    * Mid-turn input is displayed as sent with a promise of delivery at the next model step.
+    * `turnTracker.cancel` discards the queue.
+    * The Web UI's `turn.cancelled` handler clears queue and activity state but leaves the sent placeholder.
+    * Required behavior decision: replace the placeholder with a discarded status or remove it.
+
+25. **Conversation prompt caching. Done in v0.55.0; provider coverage remains partial.**
+
+    * v0.54.0 added cache breakpoints for tool schemas and the system prompt on Anthropic and Bedrock.
+    * v0.55.0 added breakpoints on the final block of each of the last two conversation messages.
+    * Append-only history permits reuse of the previous prefix and a cache write for the new suffix.
+    * Two moving conversation markers limit cache misses when a long tool round exceeds the lookup window.
+    * Total: four markers, the API limit.
+    * OpenAI-compatible requests receive no explicit cache controls. Local servers may cache prefixes themselves. Hosted providers with explicit controls remain unsupported.
+
+26. **Turn-log retention. Done in v0.55.0; compression and independent tracing remain open.**
+
+    * Pruning runs after configured limits are applied at startup and at daily rotation.
+    * Round 10 found pruning under the default 30-day limit before `trace_max_age_days` was applied. `Open` now deletes nothing.
+    * `trace_max_age_days`: zero or negative values select the default, not unlimited retention.
+    * `trace_max_total_mb`: optional total-size limit, deleting oldest files first.
+    * Today's file is never deleted.
+    * Retention uses rotation-generated filenames rather than mtime.
+    * Remaining: compression and enabling tracing independently of Smart Agent.
+
+27. **Retrying an endpoint before fallback. Done in v0.55.0.**
+
+    | Failure | Behavior |
+    |---|---|
+    | HTTP 429, HTTP 5xx, dropped connection | Up to two same-endpoint retries with 1-second and 2-second waits |
+    | HTTP 401, model not found, DNS failure | Immediate fallback |
+    | Request defect | No retry |
+
+    * Each fallback endpoint has its own retry allowance.
+    * Retries appear in the transcript and turn log: `retry` spans and `retries` on `turn.end`.
+    * Turn cancellation interrupts the wait.
+
+28. **Instruction-source trust classification. Partially done.**
+
+    | Version | Change |
+    |---|---|
+    | v0.56.0 | Prompt pieces carry declared trust classes separate from source and message role. |
+    | v0.57.0 | Each request identifies dynamic sources from all included messages. Labels survive later turns and restarts. Delegated tasks have their own source class. |
+    | v0.58.0 | Delegated authority is scoped to the receiving request. Custom-command `@path` and shell expansions no longer appear as direct user instructions. |
+    | v0.76.0 | `#<name>` conversation references resolve to metadata. Transcript content is retrieved only as a tool result. |
+
+    * With Smart Agent enabled, orchestrator and specialist prompts distinguish instructions from tool-result data.
+    * MCP results identify the external server, including error results.
+    * Compaction summaries identify machine-generated content and state that quoted content retains its original authority.
+    * Conversation tool results do not reenter the user-message processing path. Embedded references and slash commands therefore do not execute through that path.
+    * Remaining: structural provenance inside compaction summaries.
+    * Trust labels are declarations, not enforcement. They do not guarantee that a model ignores instructions in external content.
+    * Permission checks remain the enforcement mechanism.
+
+29. **Network egress policy. Open.**
+
+    * Permission rules control tools and paths.
+    * They do not restrict network destinations used by an executing shell command or MCP server.
+    * Destination allowlists or deny-by-default egress require a separate mechanism.
+
+30. **MCP server trust records. Mostly done in v0.55.0.**
+
+    * Tool names, descriptions, and schemas are fingerprinted in `~/.localcode/mcp-pins.json` on first connection.
+    * A changed fingerprint produces a startup warning naming the server, then updates the stored fingerprint.
+    * The record includes first-seen and last-changed timestamps.
+    * Remaining: a known-server registry and declared-version pinning.
+    * Fingerprints describe the advertised interface. They cannot detect behavior changes that leave that interface unchanged.
+
+31. **Debate review capabilities. Four planned parts completed in v0.69.0.**
+
+    * Reviewers can run the configured `verify_command` without arguments. The model cannot choose the command contents.
+    * Review briefs include `git diff HEAD` in a repository. Other workspaces use an explicitly labelled tool-call list.
+    * Up to three reviewers run independently. All must approve.
+    * Entry points: command, natural-language tool, and debate button.
+
+    | Remaining gap | Constraint |
+    |---|---|
+    | One verification command | Tests and linters cannot be selected independently. Named checks would require a constrained selection interface. |
+    | No diff outside Git | The tool-call list misses shell changes. Workspace snapshots would require a tree hash per round. |
+    | Reviewer disagreement | The author resolves conflicting findings within the round budget. No additional model or automatic tie-breaking rule is configured. |
+
+32. **Bedrock reasoning effort. Done in v0.71.0; API compatibility remains unverified in part.**
+
+    * Reasoning configuration uses `additionalModelRequestFields` and merges with the million-token beta field.
+    * Returned reasoning blocks are sent back on the assistant message required for continuation.
+    * The change also fixed two v0.70.0 defects in other adapters: reasoning budgets above `max_tokens` and temperature supplied with thinking. Both caused HTTP 400 responses.
+    * Unverified: the accepted Bedrock parameter name. The implementation uses Anthropic's name based on working `anthropic_beta` passthrough behavior.
+    * Rejection messages identify the setting and how to disable it. The parameter name is defined by one constant.
+    * Unverified: Bedrock support for `adaptive`, which newer families accept through the direct API.
+    * Reasoning is streamed but not stored. Reload loses it, and `/context` does not account for its cost.
+
+33. **CI test enforcement. Open for commits; enforced for releases.**
+
+    * `gui-windows.yml` performs checkout, version resolution, build, smoke check, and upload.
+    * It does not run `go test`, `go vet`, or a pure-Go build.
+    * `make check` records a local verification stamp. Release preflight requires a matching stamp.
+    * The stamp does not enforce checks on commits or verify another machine.
+    * A push-triggered workflow could provide both checks.
+    * The recorded decision was to defer that workflow because development and releases use one machine and another workflow adds maintenance.
+
+34. **Unused functions. Resolved; test-environment gaps remain.**
+
+    * Five functions were removed after their replacement paths were identified.
+    * `turnTracker.anyRunning` and `whileIdle`: obsolete process-wide guard after per-session workspaces in v0.39.0.
+    * `turnTracker.busy`: duplicate of `anyBusy`; its test caller now uses `anyBusy`.
+    * `Loop.systemPromptFor`: replaced by typed prompt assets in `internal/agent/prompt_assets.go`.
+    * `dataStrings`: replaced by `dataSources` in v0.57.0.
+    * `turnTracker.running` remains required by `handleListSessions`. It was restored after an initial removal caused `go build` to fail.
+    * The obsolete `memory.SystemPromptSection` wrapper was also removed. Its two tests now exercise `PolicySection` and `IndexSection`, which `cmd/localcode/wire.go` calls.
+    * A duplicate memory assertion in `internal/agent` was removed.
+    * `scripts/deadcode.allow` contains seven entries in the accepted categories: test-only reachability and build-tag variants.
+
+    | Remaining verification gap | Evidence or constraint |
+    |---|---|
+    | Debian package acceptance | The test skips without `dpkg-deb`, which is absent from the Mac release machine. |
+    | Conditional Web UI suite | Tests skip without `node` and under `-short`. Release preflight requires `node`. |
+    | No browser execution in the verification suite | Tests use `test/webui/dom.js`, a handwritten DOM. |
+    | DOM fidelity | In v0.72.0, all 272 tests passed while browser startup failed because the test double returned an Array from `querySelectorAll`. It now returns a NodeList. `previousElementSibling` was also added. |
+    | Layout coverage | `offsetTop` and `scrollTop` are fixture values, not browser measurements. |
+
+35. **Tool-interface validation. Partial; most enhancements require Smart Agent.**
+
+    * Smart Agent adds paging, omission accounting, and edit-failure diagnostics.
+    * Four unconditional fixes address silent match-budget exhaustion, long-line scan termination, unreadable-file omission, and unhelpful unknown-tool errors.
+    * The unknown-tool fix shipped in v0.76.0 after a transcript showed five repeated `bash.command` calls with no recovery guidance.
+    * A related OpenAI streaming defect retained only the first function-name delta. A split `read_file` name could become `read_`.
+
+    | Missing capability | Constraint |
+    |---|---|
+    | Validate edited syntax | Language-independent bracket checks would reject valid strings and comments. A project can use `post_tool_use` for validation, but no validator ships by default and the hook cannot block an edit. |
+    | Reject stale edits | A per-session read register must distinguish external changes from formatter changes made by localcode hooks. Timestamp comparison alone is insufficient. |
+
+36. **Repeatable orchestration. Partial.**
+
+    * Implemented: plan, validator, runner, and structured results.
+    * Completed follow-up: settings toggle and model instructions describing when to use the tool.
+
+    | Missing capability | Required design |
+    |---|---|
+    | Resume | Durable results keyed by stage, item, and copy. Write-step invalidation rules. An unchanged completed prefix could then be reused. |
+    | Loop | `repeat_until` with mandatory `max_rounds` and a report of the stopping round. |
+    | Pipeline | Per-item state tracking so a slow item does not block every later stage. This also requires phase visibility and a run ledger. |
+    | Child-session retention | A 32-agent run creates 32 stored sessions and 32 `/tasks` rows. No cleanup policy exists. |
+    | Concurrent permission display | The broker represents concurrent requests, but client presentation is unspecified. All four execution slots can wait while the user sees one request. |
+
+37. **Direct selection of Smart Agent specialists. Open.**
+
+    * Specialists are available for delegation but absent from direct selection.
+    * `GET /api/agents` returns only `config.Agents`. TUI Tab, the Web UI menu, and `localcode run --agent oracle` therefore cannot select the six dynamic specialists.
+    * The gap became visible when one-shot delegation shipped in v0.80.0.
+    * Specialists are derived each turn so the Smart Agent switch can change mid-session.
+    * Profile routing currently has no specialist override for `--profile` or `--model`.
+    * Adding a specialist to `config.Agents` marks it as user-defined in `smart.Agents`. That changes its prompt assignment to the orchestration prompt.
+    * Required design: an override interface in `internal/smart` that preserves specialist identity.
+
+38. **Orchestration permission feasibility. Open.**
+
+    * `Orchestrate` requires permission for every call.
+    * A run can contain up to 32 agent turns and last half an hour.
+    * Unattended turns can generate a complete plan before discovering that permission cannot be obtained.
+    * `skip_all`, `skip_tools`, or an allow rule can authorize the call.
+    * `hiddenTools` cannot currently query the permission resolver at turn preparation time.
+    * Debate's structural refusal was handled by hiding its tool in v0.80.0. Orchestration needs a resolver-aware check instead.
+    * Until then, the required flag is documented in USAGE and covered by a test.
+
+39. **Rewind recovery and capture coverage. Partial.**
+
+    * `/rewind` has no `/redo`.
+    * Restore does not capture the content it overwrites. The reply therefore lists every affected path.
+
+    | Capture gap | Effect |
+    |---|---|
+    | Hard links | Not detected. `Nlink` is not portable to the Windows target. Restoring one path also affects its linked names. The original comparison noted that Claude Code documents skipping hard links. |
+    | MCP filesystem writes | Tools outside the two-name capture set are not captured, even when registered through the same registry. |
+    | Background-task events | Rewind can remove `task.spawned` while later `task.status` events remain. Refusing rewind while a child is live reduces but does not eliminate the inconsistency. |
+
+40. **Multiline TUI completion. Open.**
+
+    * Both clients complete commands and references within a sentence.
+    * The TUI disables completion when the input contains more than one line.
+    * `SetCursorColumn` selects a column in the current line. The widget exposes no line setter.
+    * `CursorDown` moves by visual row, which differs from logical lines after wrapping.
+    * `cursorRune` returns `-1` for multiline input, disabling the completion scan.
+    * The Web UI uses the textarea's absolute `selectionStart` offset and supports multiline completion.
+    * Required change: an upstream line setter or local row tracking consistent with the widget.
 
 ## UI ideas
 
 ### Web UI
 
-| Idea | Why |
+| Idea | Status and scope |
 |---|---|
-| ~~Markdown rendering~~ | Done in v0.27.0. A small dependency-free renderer handles headers, bold/italic, inline code, fenced code blocks, lists, blockquotes, links, and rules, in both the Web UI and the GUI window. No syntax highlighting inside code blocks yet — still an opening if that matters more than the current plain monospace block. |
-| Collapsible tool call cards | Show tool input and output as a folded card that expands on click. Long sessions become much easier to follow. |
-| Diff viewer | Render `edit` and `write_file` results as a before and after diff. |
-| ~~"Always allow" on permission prompts~~ | Done in v0.20.0. Prompts now offer allow once, allow for session, and always allow, the last of which writes the matching rule into config.json. |
-| `/usage` visualization | Bars for tokens per model, a gauge for context use. |
-| ~~No sign that another session finished~~ | Done in v0.40.0. The per-session light is green now (matching the status light under the prompt), blinks while the model is working, and goes steady for a reply that arrived while you were elsewhere, clearing when you open the session. The claim that it matches the light under the prompt only became true in v0.42.0: the two read different sources, and the one under the prompt sat solid through any turn this page had not started itself. Running turned amber in v0.52.0, in both lights and in the task panel, which had been calling the same state a third colour; green now means only that a session is up. |
-| Session search and filter | The session list in the left panel needs title (and workspace) search once it gets long. Dragging cards into an order of your own arrived in v0.43.0 and helps up to a point; past a screenful, search is what is missing. |
-| ~~Scroll control~~ | Done. The TUI in v0.31.0 and the Web UI in v0.51.0: both follow the newest output only when the view was already at the bottom, measured before the content changes. The Web UI also has the jump-to-bottom control, which appears only while the view is away from the bottom. A background task's own window works the same way. |
-| ~~Workspace is process-wide~~ | Done in v0.39.0, the way this entry said it would have to be: relative paths resolve per session at the tool layer and `os.Chdir` is gone. Each turn carries its session's directory on the context; read/write/edit join onto it, glob and grep search inside it, bash gets it as `cmd.Dir`. Two clients on one daemon can now work in two projects, and only *this* session's own turn blocks its own switch. |
-| ~~Per-session workspace~~ | Done in v0.28.0, and per-session for real as of v0.39.0. Selecting a session works in the directory that session belongs to; the workspace is no longer shared underneath, so one client switching sessions no longer moves another's. |
-| Dark and light theme toggle | Plus a responsive layout for mobile. The groundwork landed in v0.52.0: every colour is a custom property named for its role, so a light palette is a second block of token values rather than an edit to 800 lines of rules. Nothing reads a colour that is not defined, and a test keeps it that way. |
-| MCP server status | A connected or failed dot next to each MCP server in the right panel, with a reconnect button. |
+| Markdown rendering | Done in v0.27.0. The dependency-free renderer supports headings, emphasis, code, lists, blockquotes, links, and rules in the Web UI and GUI. Code syntax highlighting remains open. |
+| Collapsible tool-call cards | Open. Expandable tool input and output. |
+| Diff viewer | Open. Before-and-after views for `edit` and `write_file` results. |
+| Persistent permission approval | Done in v0.20.0. Options: allow once, allow for session, and always allow. The last option writes a matching config rule. |
+| Usage visualization | Open. Per-model token bars and context-use indicator. |
+| Session completion indication | Done in v0.40.0. The session light identifies running work and unread completed replies. Cross-client activity sources were aligned in v0.42.0. Running indicators became amber in v0.52.0 across the session list, prompt status, and task panel. Green indicates an available session. |
+| Session search and filter | Open. Search by title and workspace. Manual card ordering shipped in v0.43.0. |
+| Scroll control | Done in TUI v0.31.0 and Web UI v0.51.0. Output follows only when the view was already at the bottom before an update. Web UI and background-task windows provide a jump-to-bottom control. |
+| Workspace is process-wide | Done in v0.39.0. Relative paths resolve per session. `os.Chdir` was removed. File tools use the session directory and bash uses `cmd.Dir`. Only the session's own running turn blocks its workspace switch. |
+| Per-session workspace | Added in v0.28.0; underlying isolation completed in v0.39.0. Switching one client's session no longer changes another client's workspace. |
+| Dark/light theme and mobile layout | Open. v0.52.0 introduced role-based color properties with a test for undefined properties. A light theme still requires another value set. |
+| MCP server status | Open. Connection status and reconnect controls. |
 
 ### TUI
 
-| Idea | Why |
+| Idea | Status and scope |
 |---|---|
-| Markdown and code block rendering | A renderer such as glamour would make replies far easier to read. |
-| ~~Session picker inside the TUI~~ | Done in v0.59.0. `/session` opens an arrow-key list of conversations without leaving the program, which is what the startup prompt could never be: it ran before the screen existed, so switching afterwards meant restarting. `/model` is the same list for agents. The startup prompt is still there and still deletes sessions, which the in-program picker deliberately does not. |
-| ~~Tool progress display~~ | Done in v0.25.0, extended in v0.32.11. An animated line below the prompt box names the running tool, the queue depth, and the background-task count, and clears at the turn boundary; each tool call also gets a transcript line that survives the turn. Elapsed time is still not shown. |
-| Context gauge | Turn the percentage in the status line into a colored bar, yellow at 70%, red at 85%. |
-| History scroll and search | Search earlier output in long sessions with the `/` key. |
+| Markdown and code rendering | Open. Consider a renderer such as glamour. |
+| In-program session picker | Done in v0.59.0. `/session` selects a conversation without restart. `/model` provides agent selection. Session deletion remains in the startup picker, not the in-program picker. |
+| Tool progress | Done in v0.25.0; extended in v0.32.11. Displays the running tool, queue depth, and background-task count. Transcript tool-call entries persist. Elapsed time remains open. |
+| Context indicator | Open. Proposed bar thresholds: yellow at 70%, red at 85%. |
+| History search | Open. Search earlier output with the `/` key. |
 
 ### Both clients
 
-| Idea | Why |
+| Idea | Status and scope |
 |---|---|
-| Serve `/help` from the daemon | The TUI and Web UI each hardcode their own help string, so adding a command means editing two places. A single source such as `GET /api/commands/help` would keep them in sync. Half done in v0.60.0: `GET /api/slash-commands` reports the daemon's own commands with descriptions, and both clients read it for completion. The help strings still do not, but as of the release-gate work they can no longer drift silently: a test per client requires every entry in `SlashCommands()` to be named in that client's help. Both were failing when written, the TUI by one command and the Web UI by eight. |
-| ~~Mixed Korean and English error messages~~ | Done in v0.13.0. All program output is English now, and the documentation followed in v0.19.0. |
+| Daemon-provided help | Partial in v0.60.0. `GET /api/slash-commands` supplies command names and descriptions for completion. Help strings remain client-owned. Release-verification tests require both help strings to include every `SlashCommands()` entry. Initial tests found one missing TUI command and eight missing Web UI commands. A shared endpoint such as `GET /api/commands/help` remains a proposal. |
+| English program output | Done in v0.13.0. Documentation followed in v0.19.0. |

@@ -1,18 +1,27 @@
 # Installation
 
-Building from source is below, but a release is published for every platform and does not need a Go toolchain.
+Use a published release unless you need a source build or distribution package. Published releases require no Go toolchain.
+
+| Platform and scope | Recommended package |
+|---|---|
+| Linux or command line macOS, current user | Installation script, no root |
+| Ubuntu or Debian, all users | `.deb`, root required |
+| Windows AMD64 | `.msi` |
+| Windows ARM64 | Portable `.zip` |
+| macOS desktop | `.app` archive |
+| Other supported systems | Portable archive |
 
 ## 0. Install a published release
 
-**Linux and macOS, without root:**
+**Linux and macOS, current user, no root:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dennis2lee/localcode/main/scripts/install.sh | sh
 ```
 
-One static binary into `~/.local/bin/localcode`, nothing written outside `$HOME`, no password asked for. This is the one to use on Ubuntu when you are not an administrator of the machine. Details, options and the upgrade path are under [Install on Linux](#install-on-linux).
+The script verifies and installs one static binary at `~/.local/bin/localcode`. It writes nothing outside `$HOME` and requests no password. See [Install on Linux](#install-on-linux) for options and upgrades.
 
-Everything else comes off the [releases page](https://github.com/dennis2lee/localcode/releases): a `.deb` for Ubuntu and Debian, an `.msi` for Windows, a `.app` bundle for macOS, and portable archives for the rest. Jump to [Install on Linux](#install-on-linux), [Install on Windows](#install-on-windows), or [Install on macOS](#install-on-macos).
+Other packages are on the [releases page](https://github.com/dennis2lee/localcode/releases). Platform instructions: [Linux](#install-on-linux), [Windows](#install-on-windows), and [macOS](#install-on-macos).
 
 ## 1. Build from source
 
@@ -25,9 +34,9 @@ Everything else comes off the [releases page](https://github.com/dennis2lee/loca
 | `zip` | Windows zip | Ships with macOS and Linux |
 | `msitools` | Windows `.msi` | `brew install msitools` |
 
-`msitools` builds the `.msi` on macOS or Linux, so you do not need a Windows machine. The Linux `.deb` needs nothing at all: it is written by `./build/deb` (see `internal/debpkg`), not by `dpkg-deb`, so a release can be cut from a Mac.
+`msitools` builds the `.msi` on macOS or Linux. The Linux `.deb` is written by `./build/deb` through `internal/debpkg`, without `dpkg-deb`. Both packages can be built on macOS.
 
-The version in go.mod is the floor. `go build` refuses an older toolchain rather than producing a binary that misbehaves.
+The version in go.mod is the minimum. `go build` rejects older toolchains.
 
 ### Build
 
@@ -37,7 +46,7 @@ cd localcode
 go build -o localcode ./cmd/localcode
 ```
 
-Run it right away:
+Run the source build:
 
 ```bash
 ./localcode --agent general-purpose
@@ -45,7 +54,10 @@ Run it right away:
 
 ## 2. Build distribution packages
 
+Run `make check` first. `make dist` requires a successful check stamp that matches the current tree.
+
 ```bash
+make check
 make dist VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe   # everything
 make dist-mac VERSION=x.y.z        # macOS binary and .app
 make dist-mac-gui VERSION=x.y.z    # macOS desktop-window .app
@@ -54,7 +66,7 @@ make dist-windows VERSION=x.y.z    # Windows zips only
 make dist-msi VERSION=x.y.z GUI_EXE=...   # Windows msi only
 ```
 
-`VERSION` is stamped into the binary and into every filename; leaving it out builds everything as `0.1.0`. `make dist` also runs `scripts/release-preflight.sh`, which refuses to build when the docs are stale for that version — see [RELEASING.md](../RELEASING.md). `GUI_EXE` must point at a Windows-built `localcode-gui.exe`, which is CGo and comes from CI (`gui-windows.yml`), not from a Mac.
+`VERSION` is included in each binary and filename. The default is `0.1.0`. `make dist` runs `scripts/release-preflight.sh` and rejects stale version documentation. See [RELEASING.md](../RELEASING.md). `GUI_EXE` must reference a Windows build of `localcode-gui.exe`. This CGo artifact comes from CI (`gui-windows.yml`) and cannot be built on macOS.
 
 Output:
 
@@ -76,24 +88,24 @@ Output:
 tar xzf dist/mac/LocalCode-<version>-darwin-universal-app.tar.gz -C /Applications
 ```
 
-The `.app` is not signed or notarized with an Apple Developer ID. If Gatekeeper blocks the first launch:
+The `.app` has no Apple Developer ID signature or notarization. If Gatekeeper blocks the first launch:
 
 1. Right click `LocalCode.app` in Finder and choose Open.
 2. Click Open again in the warning dialog.
 
-To sign it for distribution, run `codesign --sign "Developer ID Application: ..." LocalCode.app` and then notarize with `xcrun notarytool submit`. Both need an Apple Developer account.
+Distribution signing requires an Apple Developer account, `codesign --sign "Developer ID Application: ..." LocalCode.app`, and `xcrun notarytool submit`.
 
 ### Install on Linux
 
-**No root: one command, everything under your home directory**
+**Current user, no root**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dennis2lee/localcode/main/scripts/install.sh | sh
 ```
 
-This is the right one on a machine where you are not an administrator, which on a managed or shared Ubuntu box is most of them. It downloads the release tarball for your architecture, checks it against the SHA-256 GitHub publishes for that file, and puts one static binary in `~/.local/bin/localcode`. Nothing is written outside `$HOME`, no package manager is involved, and you are never asked for a password.
+The script downloads the release for the current architecture, verifies the published SHA-256, and installs one static binary at `~/.local/bin/localcode`. It writes nothing outside `$HOME`, uses no package manager, and requests no password.
 
-`~/.local/bin` is the directory Ubuntu's own `~/.profile` puts on PATH when it exists, so a new login finds it. The script prints the line to add to `~/.bashrc` if this shell does not have it yet.
+Ubuntu `~/.profile` adds an existing `~/.local/bin` to PATH after login. The script prints a `~/.bashrc` entry when the current shell does not include it.
 
 Options go after `-s --`:
 
@@ -103,30 +115,30 @@ curl -fsSL .../install.sh | sh -s -- --dir ~/bin        # somewhere else
 curl -fsSL .../install.sh | sh -s -- --uninstall        # remove it again
 ```
 
-Installing again over an existing copy is the upgrade: the new binary is renamed into place, so a localcode running at that moment keeps the file it started from. `--uninstall` removes the binary and leaves `~/.localcode` (your config and sessions) alone.
+Run the installer again to upgrade. The new binary is renamed into place, so an active process continues with its original file. `--uninstall` removes the binary and preserves `~/.localcode`, including configuration and sessions.
 
-It works on macOS too, for a command-line install with no `.app`.
+The same script provides a command line macOS install without the `.app`.
 
-**Debian package: Ubuntu, Debian, and anything else with `apt`, if you have root**
+**Debian package: Ubuntu, Debian, and other systems with `apt`; root required**
 
 ```bash
 sudo apt install ./localcode-<version>-linux-amd64.deb
 ```
 
-Tested against Ubuntu 24.04. It installs `/usr/bin/localcode`, so it is on PATH for every user on the machine, and upgrades in place when you install a newer one. `sudo apt remove localcode` takes it off. Use this when localcode is for everyone on the box; use the script above when it is for you.
+Tested on Ubuntu 24.04. The package installs `/usr/bin/localcode` for all users. Installing a newer package upgrades in place. Remove it with `sudo apt remove localcode`. Use the script for a current user install.
 
-There is no `Depends:` line and nothing to satisfy: the binary is built with `CGO_ENABLED=0`, so it is static and needs no libc, no runtime, and no Node or Python. On ARM64 machines use the `-linux-arm64.deb`.
+The `CGO_ENABLED=0` static binary requires no libc, runtime, Node, or Python. The package has no `Depends:` entry. ARM64 systems require the `-linux-arm64.deb` package.
 
-The package is unsigned and is not in any apt repository, so `apt` installs it from the file path you give it. `apt update` will never offer an upgrade; localcode checks GitHub itself (see [USAGE.md](USAGE.md#checking-for-updates)).
+The unsigned package is not in an apt repository. Install it from a local path. `apt update` does not offer upgrades; localcode can check GitHub directly. See [USAGE.md](USAGE.md#checking-for-updates).
 
-Two ways this goes wrong, both with an unhelpful message:
+Common errors:
 
 | What apt says | What happened |
 |---|---|
-| `E: Unable to locate package localcode-0.50.0-linux-amd64.deb` | The `./` is missing. Without a `/` in it, apt reads the argument as a package name to look up in a repository, not as a file. Write `./localcode-...deb`, or an absolute path. |
-| `dpkg: error processing archive ... (--unpack)`, `package architecture (amd64) does not match system (arm64)` | The wrong file for this machine. `dpkg --print-architecture` says which one it wants; ARM machines (including a Linux VM on an Apple Silicon Mac) need the `-linux-arm64.deb`. |
+| `E: Unable to locate package localcode-0.50.0-linux-amd64.deb` | Missing `./`. Without a slash, apt treats the argument as a repository package name. Use `./localcode-...deb` or an absolute path. |
+| `dpkg: error processing archive ... (--unpack)`, `package architecture (amd64) does not match system (arm64)` | Wrong architecture. Check with `dpkg --print-architecture`. ARM systems, including Linux virtual machines on Apple Silicon, require `-linux-arm64.deb`. |
 
-Both are verified against Ubuntu 24.04, as is everything above: the `.deb` installs on amd64 and arm64, `localcode` lands on PATH, and `localcode version` reports the version installed.
+Ubuntu 24.04 verification covers both errors, AMD64 and ARM64 package installation, PATH registration, and `localcode version` output.
 
 **Tarball, portable, any distribution**
 
@@ -135,34 +147,34 @@ tar xzf localcode-<version>-linux-amd64.tar.gz
 ./localcode --agent general-purpose
 ```
 
-One static binary. This is what the install script downloads; unpack it yourself if you would rather not pipe a script into a shell.
+The archive contains the same static binary used by the installation script. Manual extraction avoids piping a downloaded script into a shell.
 
-The desktop window is not built for Linux. It links a native webview through CGo, and on Linux that means WebKitGTK and a build per distribution; the daemon, the TUI and the Web UI in a browser are all there and are what a Linux install is.
+Linux has no desktop window. Its native webview would require CGo, WebKitGTK, and distribution specific builds. Linux supports the daemon, TUI, and browser Web UI.
 
 ### Install on Windows
 
 **MSI, recommended, amd64**
 
-Double click `localcode-<version>-windows-amd64.msi` and follow the wizard. It installs to `C:\Program Files\LocalCode\`, adds a Start menu shortcut, and registers PATH so `localcode` works from any directory. Reinstalling upgrades the previous version in place, because the MSI `UpgradeCode` is fixed.
+Open `localcode-<version>-windows-amd64.msi` and follow the installer. It installs to `C:\Program Files\LocalCode\`, adds a Start menu shortcut, and registers PATH. A fixed MSI `UpgradeCode` supports upgrades in place.
 
-The MSI is unsigned, so SmartScreen may show "Windows protected your PC". Choose More info and then Run, or sign it with a code signing certificate before distributing. Use `signtool sign` on Windows, or `osslsigncode` for a cross platform signing step.
+The MSI is unsigned. SmartScreen may show "Windows protected your PC". Choose More info and then Run, or sign the package before distribution. Use `signtool sign` on Windows or `osslsigncode` on another platform.
 
 **Zip, portable, amd64 and arm64**
 
-Unzip, put `localcode.exe` wherever you want, and run it. There is no installer and no PATH registration.
+Extract `localcode.exe` to the required directory and run it. The archive provides no installer or PATH registration.
 
-ARM64 ships as a zip only. The `wixl` 0.106 build used here rejects `-a arm64`, so there is no ARM64 MSI yet.
+ARM64 is available only as a zip. `wixl` 0.106 rejects `-a arm64`, so the project cannot build an ARM64 MSI.
 
 ## 3. Prepare the config file
 
-localcode needs a config.json before it runs. See [USAGE.md](USAGE.md) for every field.
+Create config.json before running localcode. See [USAGE.md](USAGE.md) for field definitions.
 
 ```bash
 mkdir -p ~/.localcode
 cp config.example.json ~/.localcode/config.json
 ```
 
-Then edit `~/.localcode/config.json` and fill in your real Bedrock region and model IDs, or the address of your local LLM.
+Edit `~/.localcode/config.json`. Set the Bedrock region and model IDs, or the local LLM address.
 
 ## 4. AWS credentials, if you use a Bedrock profile
 
@@ -177,6 +189,11 @@ Model access for the Claude models you plan to use must be enabled in the Bedroc
 
 ## 5. MCP servers, optional
 
-A server listed under `mcp_servers` with a `command` is launched over stdio using that executable. For example, `npx -y @modelcontextprotocol/server-github` requires Node.js and npm to be installed. A server with a `url` instead is a remote one (`http` or `sse`) and needs nothing installed locally. See [USAGE.md](USAGE.md#managing-mcp-servers-with-localcode-mcp) for `localcode mcp add`, which writes these entries for you.
+| MCP configuration | Local requirements |
+|---|---|
+| `mcp_servers` entry with `command` | Executable and its dependencies for stdio transport. Example: `npx -y @modelcontextprotocol/server-github` requires Node.js and npm. |
+| Entry with `url` | No local server installation for remote `http` or `sse` transport. |
+
+Use `localcode mcp add` to write entries. See [USAGE.md](USAGE.md#managing-mcp-servers-with-localcode-mcp).
 
 See [USAGE.md](USAGE.md#config-file-configjson) for the full configuration.

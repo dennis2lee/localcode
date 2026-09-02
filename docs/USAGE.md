@@ -1,5 +1,16 @@
 # Usage
 
+LocalCode supports interactive TUI, Web UI, desktop, daemon, and one-shot CLI workflows. Start with `localcode` for local interactive use. Use `localcode run` for scripts and `--server` for an existing daemon.
+
+| Goal | Command |
+|---|---|
+| Start a local daemon and TUI | `localcode` |
+| Open the Web UI | Run `localcode`, then open `http://127.0.0.1:4096` |
+| Run one prompt and exit | `localcode run "<prompt>"` |
+| Start a daemon without a TUI | `localcode --headless` |
+| Connect a TUI to an existing daemon | `localcode --server <url>` |
+| Open the desktop window | `localcode-gui` |
+
 ## Contents
 
 | Part | Sections |
@@ -14,6 +25,8 @@
 | [Known limitations](#known-limitations) | |
 
 ## Part 1. Getting started
+
+Default operation: one local daemon, one attached TUI, and a Web UI on the same sessions. Other modes cover scripts, remote daemons, and the experimental desktop window.
 
 ### Run modes
 
@@ -31,13 +44,11 @@ localcode --agent general-purpose
 | `--gui` | on for a `-tags gui` build, off otherwise | Open the native desktop window instead of the TUI. `--gui=false` forces the TUI on a build that has the window. |
 | `-version`, `--version` | `false` | Print the build version and exit |
 
-Subcommands: `run` (below), `login`, `mcp`, `version`.
-
-`localcode version` works the same as `-version`.
+Subcommands: `run`, `login`, `mcp`, `version`. `localcode version` is equivalent to `-version`.
 
 ### One prompt, no window: `localcode run`
 
-Every other way in ends in something that stays — a TUI, a desktop window, or a daemon serving an API — and none of those can be put in a pipe. `run` answers one prompt and exits.
+`localcode run` answers one prompt and exits. It is intended for scripts, pipes, and benchmarks.
 
 ```
 localcode run "what does this repo do?"
@@ -45,7 +56,12 @@ echo "summarise the last commit" | localcode run
 localcode run --format json --bare --model qwen3:32b "fix the failing test"
 ```
 
-**In-process.** No port is bound, nothing outlives the answer, and nothing is written to `~/.localcode/sessions` — a run does not appear in the session list, so a benchmark that makes a thousand of them leaves a thousand of nothing. The conversation is in memory and goes when the process does.
+Default execution characteristics:
+
+* In-process execution with no bound port
+* In-memory conversation removed at process exit
+* No files under `~/.localcode/sessions`
+* No session-list entry
 
 | Flag | Default | What it does |
 |---|---|---|
@@ -61,17 +77,15 @@ localcode run --format json --bare --model qwen3:32b "fix the failing test"
 | `--server <url>` | none | Daemon to run a kept conversation through. Only meaningful with `--session` |
 | `--listen <host:port>` | `127.0.0.1:4096` | Where to look for a running daemon, for `--session` |
 
-The prompt may be an argument or come from stdin, which is how one with newlines and quotes in it survives the trip.
+The prompt may be an argument or stdin. Use stdin for prompts that contain newlines or quotes.
 
-**`--bare` is for comparing tools fairly.** Without it a run carries everything a session normally opens with, and each of those is real context in ordinary use and an unfair advantage in a benchmark: the project's `AGENTS.md`/`CLAUDE.md`, the skills index, the memory index, custom commands, and any hooks in config. `--bare` silences all of them and leaves the base system prompt, the workspace, and the tools. It creates no directories either, which the ordinary path does for its memory index.
-
-**Nobody is watching a pipe.** A tool that needs permission is refused immediately, with the reason, rather than waiting for an answer that is not coming — the same rule a scheduled run follows, minus the five minutes it waits for somebody at the desk. `--skip-permissions` sets this run's skip-all switch, exactly as `/permission-skip-all` would.
-
-**A failed run is a failed process.** The exit status is non-zero, and `--format json` carries the reason in an `error` field rather than leaving it on stderr only.
-
-**[Smart Agent](#smart-agent) works here.** With `smart_agent` on, a run gets the same six specialists and the same orchestration prompt the TUI and the Web UI get, and the three tools that prompt names: `Task`, `TaskBackground`, `TaskCollect`. [Orchestration](#orchestration) is here too, with `orchestrate` on, since a plan finishes inside the turn that starts it.
-
-**A plan needs permission a pipe cannot answer.** `Orchestrate` asks every time, by design: a run is up to 32 agent turns and half an hour, and that is not a thing to start without being asked. A pipe has nobody to ask, so the model writes the plan and gets a refusal for it, and nothing runs. Two ways through, and the second is the one for a machine that does this regularly:
+| Behavior | Detail |
+|---|---|
+| `--bare` | Loads only the base system prompt, workspace, and tools. Excludes `AGENTS.md`, `CLAUDE.md`, skills, memory, custom commands, and hooks. Creates no memory-index directory. Suitable for controlled comparisons. |
+| Permission request | Refused immediately because no interactive client can answer it. `--skip-permissions` is equivalent to `/permission-skip-all` for the run. |
+| Failure | Non-zero exit status. JSON output includes an `error` field. |
+| Smart Agent | Supports the six specialists plus `Task`, `TaskBackground`, and `TaskCollect` when `smart_agent` is enabled. |
+| Orchestration | Available when `orchestrate` is enabled, but every plan requires permission. Use one of the following settings for unattended execution. |
 
 ```
 localcode run --skip-permissions "..."
@@ -81,91 +95,101 @@ localcode run --skip-permissions "..."
 "permission": { "Orchestrate": "allow" }
 ```
 
-Delegation with `Task` is unaffected either way, since starting a sub-agent has no effect of its own and every tool it then calls is gated in that sub-agent's own session.
+`Task` delegation remains available. Each delegated session applies its own tool permissions.
 
-Three tools are left out, because this mode cannot honour them, and a tool that can only refuse is a turn spent finding that out. `Schedule` books work for a time after the process has exited. `session_read` has only this run's own conversation to look at. And a [debate](#debate) can only be started from a conversation somebody is having, which a pipe is not.
+Unavailable tools:
 
-Anything still running in the background when the answer is done is **waited for, not killed** — a sub-agent was told to keep working, and this process is the only place it could keep working in. The wait is announced on stderr so a quiet pipe is not mistaken for a hung one, and `--timeout` bounds it as it bounds everything else.
+* `Schedule`: the process exits before scheduled execution
+* `session_read`: no other conversation is available
+* Debate: requires an interactive conversation
 
-**`--session` keeps the conversation.** Without it the run is thrown away and the session directory is not touched at all. With it, where the conversation is written depends on whether a daemon is already listening:
+The process waits for outstanding background tasks before exit. The wait is reported on stderr and remains subject to `--timeout`.
 
-| | Where it runs | When it appears |
+`--session` preserves the conversation:
+
+| Daemon state | Where it runs | When it appears |
 |---|---|---|
 | A daemon is listening | On the daemon | Immediately, in the TUI and Web UI |
 | Nothing is listening | Here, written to disk | Next time a daemon starts |
 
-That split is not for convenience. A daemon reads the session directory **once, at startup, and never looks again**, so a conversation written straight to disk beside a running one is real and invisible until it restarts. Routing through the daemon also leaves exactly one process writing to that directory.
+The daemon reads the session directory only at startup. Routing a kept session through a running daemon provides immediate visibility and avoids concurrent writers.
 
-The shaping flags — `--bare`, `--profile`, `--model`, `--skip-permissions` — describe a turn *this* process builds, and a daemon builds its own. Passing one alongside `--session` runs it here and says so, rather than refusing: a script that works on a machine with no daemon and fails on one with a daemon is the worse surprise. The cost is the second row of the table.
+`--bare`, `--profile`, `--model`, and `--skip-permissions` apply to the local `run` process. When any of these flags is combined with `--session`, the turn runs locally even if a daemon is available. The command reports this choice.
 
-Three useful combinations:
+Common commands:
 
 | Command | What it does |
 |---|---|
 | `localcode` | Starts a local daemon and attaches the TUI. Open `http://127.0.0.1:4096` in a browser to use the Web UI on the same sessions at the same time. |
 | `localcode --headless --listen 0.0.0.0:4096` | Daemon only. Meant for a remote server. |
+| `localcode --server http://host:4096` | TUI only, attached to an existing daemon. |
+| `localcode-gui` | Experimental native desktop window. Built with `-tags gui`. See [Desktop window](#desktop-window-experimental). |
 
 #### When the port is already taken
 
-Running `localcode` starts a daemon and attaches the TUI to it, so it needs the address in `--listen`. When something already has it, what happens depends on what that something is:
+`localcode` needs the `--listen` address for its daemon. Address conflicts are handled as follows:
 
 | What holds the address | What happens |
 |---|---|
-| A localcode daemon working in **this** directory | The TUI attaches to it and says so. The daemon is a shared core and this is one of its clients, so a second terminal on the same project is the normal case, not a conflict. You get that daemon's sessions in the picker. |
-| A localcode daemon working in **another** directory | Not attached to. It starts its own daemon on a free port and says which project the other one is in. |
-| Anything else | The daemon binds a free port on the same host instead and prints where the Web UI went. The terminal still works, which is the point. |
-| Anything else, and you typed `--listen` yourself | An error naming the address, because you asked for that one and serving somewhere else would answer a different request. Stop what is using it, or pass a different `--listen`. |
+| A localcode daemon in the same directory | Attach the TUI and use that daemon's sessions. |
+| A localcode daemon in another directory | Start a new daemon on a free port and report both workspaces. |
+| Another process, implicit default address | Bind a free port and report the Web UI address. |
+| Another process, explicit `--listen` | Return an error. Stop the process or choose another address. |
 
-The directory matters because a daemon stamps its own onto every session created on it. Attaching from another project would open a conversation that edits the first project's files while the terminal sits in the second, so sharing a daemon is a convenience and working where you are is the promise. Two spellings of one directory are one directory: a symlink and its target match, which is why `/tmp` and `/private/tmp` on macOS do not start two daemons.
+Workspace matching uses resolved physical paths. A symlink and its target count as the same directory, including `/tmp` and `/private/tmp` on macOS.
 
-The daemon is asked what it is before the TUI attaches to it: a `GET /api/version` that has to answer as localcode, then a `GET /api/workspace` for where it is working. A web server on 4096 that is not localcode gets out of the way like anything else rather than being handed a client, and a localcode that will not say where it works is treated as working somewhere else, since the cost of that is one extra daemon and the cost of guessing the other way is a session in the wrong project.
+Before attachment, the TUI verifies `GET /api/version` and `GET /api/workspace`. A non-localcode server is treated as another process. A localcode server that does not report its workspace is treated as a different workspace.
 
-This does not apply to the desktop window, which has never had the problem: nobody types its address, so it binds whatever port the OS gives it.
-| `localcode --server http://host:4096` | TUI only, attached to a daemon that is already running. |
-| `localcode-gui` | A native desktop window instead of the TUI. Experimental, built with `-tags gui`, opens by default on such a build (no `--gui` needed). See [Desktop window](#desktop-window-experimental). |
+The desktop window uses an OS-assigned private port and does not have this conflict.
 
 ### Desktop window (experimental)
 
-Instead of the TUI or a browser, localcode can open its Web UI in a native desktop window, so it is one app to launch rather than a server to start and a browser tab to open.
+The desktop build runs the Web UI in a native window on a private loopback port.
 
 ```bash
 ./localcode-gui
 ```
 
-A `-tags gui` build defaults `--gui` to on, so no flag is needed — running the binary opens the window directly. Pass `--gui=false` to force the TUI on that same build instead.
+A `-tags gui` build enables GUI mode by default. Use `--gui=false` for the TUI. The native views are WKWebView on macOS and WebView2 on Windows.
 
-It starts the daemon in-process on a private loopback port and shows the same Web UI in an OS native window (WKWebView on macOS, WebView2 on Windows). Nothing is exposed off the machine and there is no fixed port to collide with.
+Startup behavior:
 
-**Startup screen.** The window opens immediately, before the daemon exists, showing the app icon and a status line naming the step in progress: reading config, opening providers, loading sessions, connecting to each MCP server by name, restoring history. Starting up takes a few seconds with several MCP servers configured, and one that is slow or dead holds up everything behind it, so the line names the server being waited on rather than a generic "loading". Opening providers does not read AWS configuration. Bedrock opens the AWS config and credential chain only when the first request actually uses that provider, so a stale or unused Bedrock entry cannot stop a local-only daemon. The screen is replaced by the app as soon as it is ready.
+* Immediate startup screen with current phase and MCP server name
+* Lazy AWS configuration and credential loading on the first Bedrock request
+* Persistent error screen on startup failure
+* No console output requirement for `localcode-gui.exe`
 
-If startup fails, the reason is shown on that screen and the window stays open. `localcode-gui.exe` has no console (see below), so this is the only place a startup error can be read.
+Platform support:
 
-**Not on Linux.** There is no desktop window there and none is planned: the webview links WebKitGTK through CGo, which is a build per distribution rather than a build flag. `--gui` on a Linux build says so and stops. What a Linux install has instead is the same interface in a browser tab: run `localcode` and open `http://127.0.0.1:4096` (or whatever `--listen` says). The Web UI and the window are the same page.
+| Platform | Support and build |
+|---|---|
+| macOS | `make dist-mac-gui` builds universal `LocalCode.app`. `make gui-mac` builds `localcode-gui`. WKWebView is part of macOS. |
+| Windows | `.github/workflows/gui-windows.yml` builds `localcode-gui.exe` on Windows. The MSI installs it with `localcode.exe`, adds a **LocalCode (Desktop)** shortcut, and runs the WebView2 Evergreen Bootstrapper when needed. Missing network access, an existing runtime, or a non-reinstalled bootstrapper does not fail installation. |
+| Linux | No desktop build. `--gui` returns an error. Use the browser Web UI. WebKitGTK would require a distribution-specific CGo build. |
 
-The window links a native webview through CGo, which cannot be cross compiled the way the pure Go daemon and TUI are, so it's built per OS:
+`localcode-gui.exe` is linked with `-H windowsgui`. Launching it from `cmd` returns the prompt immediately and Explorer shows no console window. Run console-only subcommands such as `version`, `mcp`, and `login` through `localcode.exe`.
 
-* macOS: `make dist-mac-gui` produces a double-clickable `LocalCode.app` (universal, arm64 + amd64). `make gui-mac` builds just the bare `localcode-gui` binary. macOS always has WKWebView.
-* Windows: built in CI by `.github/workflows/gui-windows.yml` on a Windows runner (CGo cannot cross compile from macOS), which uploads `localcode-gui.exe` as an artifact. It is linked with `-H windowsgui`, so starting it from `cmd` opens the window and **gives the prompt straight back** instead of tying up the console until the window closes (and launching it from Explorer doesn't flash an empty console box). The trade-off is that a GUI-subsystem process has no console of its own, so the console-only subcommands — `version`, `mcp`, `login` — print nowhere useful from `localcode-gui.exe`; run those from `localcode.exe`, which the same MSI installs. The Windows MSI (`make dist-msi VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe`) installs it alongside the TUI binary with its own Start Menu shortcut ("LocalCode (Desktop)"), and runs Microsoft's WebView2 Evergreen Bootstrapper silently during install so the runtime is there even on older Windows 10 systems that do not ship it already. That install step is skipped quietly (not a failed install) if there is no network access at install time, if the runtime is already present, or if the bootstrapper itself isn't being reinstalled (which is the normal case when upgrading over an existing version).
+Window chrome:
 
-**Title bar.** There isn't one on either platform, by two different routes.
+| Platform | Behavior |
+|---|---|
+| macOS | Transparent native title bar with hidden title text. Native drag and window controls remain available. |
+| Windows | Frameless window with a 28px drag area, six-pixel resize edges, double-click maximize, and page-provided window buttons. Alt+F4 and taskbar Close remain available. |
 
-* **macOS**: the bar is drawn transparent over the window's own background and the title text is hidden, so the app is one surface from the top down with the close/minimise/zoom buttons floating on it. The bar itself is still there, which is what still lets the window be dragged and closed.
-* **Windows** (v0.44.0, working in v0.45.1): the frame is genuinely removed, and everything it did is put back by hand. A 28px strip across the top drags the window and maximises it on a double-click, six-pixel edges around the window resize it, and the page draws its own minimise/maximise/close buttons at the right-hand end of the strip. Those are all page controls that ask the window to do the work — WebView2 puts the page in a child window, so the window's own hit test never sees the mouse, which is why v0.44.0 shipped a bar that could not be dragged. Alt+F4 and the taskbar's own Close work as always, whatever else does not.
+Build an MSI containing the GUI with `make dist-msi VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe`.
 
-Every launch writes `%LOCALAPPDATA%\localcode\gui-frame.log` saying whether the frame was actually removed, what the window style was before and after, and whether the messages the drag and resize regions depend on arrived. It is a handful of lines, replaced each time, and it is the thing to look at (or send) when the window does not behave.
+Windows writes `%LOCALAPPDATA%\localcode\gui-frame.log` on every launch. The file records frame removal, window-style changes, and drag or resize messages. It is replaced on each launch.
 
-If the Windows window misbehaves — it cannot be moved, an edge will not resize, the buttons do nothing — start it with `LOCALCODE_TITLEBAR=1` and it keeps the ordinary Windows frame instead, with nothing else about the app changed:
+For Windows frame, drag, resize, or button problems, enable the standard title bar:
 
 ```
 set LOCALCODE_TITLEBAR=1
 localcode-gui.exe
 ```
 
-The macOS `.app` is unsigned, so Gatekeeper needs a right click then Open the first time, same as the TUI app.
+The unsigned macOS `.app` requires right-click and **Open** on first launch. A non-GUI build accepts `--gui` and returns a clear error; GUI mode remains disabled by default. Other run modes are unchanged.
 
-A build made without `-tags gui` still accepts `--gui` but returns an error saying so, rather than failing to build (and `--gui` defaults to off on such a build, so the TUI still starts normally with no flags at all). The daemon, TUI, and browser modes are unchanged.
-
-The window shows the current workspace directory at the top; clicking it opens the OS folder picker — see [Switching the workspace directory](#switching-the-workspace-directory).
+Click the workspace path at the top of the window to open the OS folder picker. See [Switching the workspace directory](#switching-the-workspace-directory).
 
 ### Remote daemon over an SSH tunnel
 
@@ -183,9 +207,14 @@ localcode --server http://localhost:4096   # terminal
 
 ## Part 2. Configuration
 
+Configuration uses a global file plus an optional project override. Use `config.example.json` as the complete reference. Runtime controls can change selected settings without a restart.
+
 ### Config file (config.json)
 
-Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/config.json` for a project override that wins over the global file.
+| Scope | Path | Precedence |
+|---|---|---|
+| Global | `~/.localcode/config.json` | Base settings |
+| Project | `<project>/.localcode/config.json` | Overrides global settings |
 
 ```json
 {
@@ -210,27 +239,24 @@ Either `~/.localcode/config.json` for global settings, or `<project>/.localcode/
 }
 ```
 
-One file in the repository is worth copying from:
-
 | File | What it is |
 |---|---|
-| `config.example.json` | Every key this program reads, with a note on each — and a worked orchestration setup that runs as it stands: three providers, the three `smart-*` profiles, the switch on, and the six specialists with their prompts written out. |
-
-It was two files until they were merged. `config.sample.json` held the orchestration setup and the example held the reference, which meant the install instructions pointed at the one that did not orchestrate, and its `agents` block shadowed two of the six specialists it never mentioned. One file answers both questions and cannot disagree with itself.
+| `config.example.json` | Complete key reference plus a working orchestration setup with three providers, three `smart-*` profiles, Smart Agent, and six specialist definitions. |
 
 #### Comments: the file is JSONC
 
-`//` to the end of a line, `/* */` across lines, and a trailing comma before a `}` or `]`. A config is a thing you write by hand, and a thing written by hand wants to say why.
+Supported JSONC syntax:
 
-**Comments survive the writes localcode makes.** Saving a permission rule, or typing `/smart-agent on`, rewrites config.json, and a rewrite that dropped your comments would eat the very thing they are for. So a file with comments in it is edited one key at a time, in place: the value changes and every other byte, including the comments and your own indentation and key order, stays exactly as it was.
+* `//` line comments
+* `/* */` block comments
+* Trailing commas before `}` or `]`
+* Literal `//` inside strings, including `https://example.com/v1`
 
-One case is refused rather than guessed at: adding a key that is not already in a commented file. There is no span to replace, and choosing a position would mean deciding which side of one of your comments it belongs on. localcode says so, the change still applies for the run, and you can add the key by hand.
-
-A `//` inside a string is not a comment, so a `base_url` of `https://example.com/v1` means what it says.
+LocalCode preserves comments, indentation, key order, and unrelated bytes when updating an existing key. It refuses to add a missing key to a commented file because there is no unambiguous insertion point. The runtime change still applies, and the key can be added manually.
 
 #### Values from the environment: `{env:NAME}`
 
-Any string value in config.json may be `{env:NAME}`, and is replaced by that environment variable when the file is read. It is the same spelling opencode uses, so a config written for that works here.
+Any string value may include an environment placeholder. The syntax is compatible with opencode.
 
 ```json
 {
@@ -251,13 +277,15 @@ Any string value in config.json may be `{env:NAME}`, and is replaced by that env
 | `{env:NAME}` | Required. The variable must be set and non-empty, or the config does not load. |
 | `{env:NAME:-fallback}` | Optional. The text after `:-` is used when the variable is unset or empty. |
 
-* **Every string, not just keys.** A base_url, a model id, an MCP server's own environment, an `Authorization` header: anything that differs between machines can come from the environment instead of being edited per machine.
-* **A placeholder may be part of a value**, and a value may contain several: `"Bearer {env:TOKEN}"`, `"https://{env:HOST}/mcp"`.
-* **A missing variable is an error that names it**, along with the field that asked for it and the file it is in. An empty `api_key` would otherwise fail much later as a 401 that says nothing about config.json.
-* **What is on disk stays a placeholder.** localcode rewrites config.json one key at a time from the file itself, so saving a setting from the UI ("always allow") or running `localcode mcp add` never turns `{env:ANTHROPIC_API_KEY}` into the key it stands for.
-* Only a real variable name counts, so ordinary text with a brace in it (`{envelope}`, `{env: something}`) is left alone.
+Rules:
 
-The point is a config.json that can be committed to a repository, copied between machines, or pasted into an issue without carrying a secret in it. For Anthropic and Bedrock specifically there is also [`localcode login`](#authenticating-with-login), which stores the credential outside config.json entirely.
+* Valid in every string, including URLs, model IDs, MCP environments, and headers
+* Multiple placeholders and embedded placeholders supported
+* Missing required variable reported with its field and source file
+* Placeholder retained on disk during LocalCode updates
+* Invalid placeholder-like text such as `{envelope}` or `{env: something}` left unchanged
+
+Use placeholders for portable configuration without embedded secrets. [`localcode login`](#authenticating-with-login) stores Anthropic and Bedrock credentials outside config.json.
 
 #### Top level fields
 
@@ -266,7 +294,7 @@ The point is a config.json that can be committed to a repository, copied between
 | `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. Bedrock AWS configuration is loaded lazily on its first request. |
 | `profiles` | A named provider and model pairing. `max_tokens`, `temperature`, `context_window` and `keep_going` are optional. |
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
-| `max_concurrent_tasks` | Caps how many **background** tasks run at once. Unset means 1, so background tasks queue rather than run together. Synchronous `Task` delegation is not counted against it, because a caller that is blocked cannot start a second one and holding a slot while waiting for a nested child would deadlock against itself. A provider may also declare a `max_concurrent_tasks` of its own; that one bounds a single endpoint and is taken first, so a task queued on a busy local server is not holding a daemon-wide slot that a hosted provider's task could use. |
+| `max_concurrent_tasks` | Maximum concurrent background tasks. Default: 1. Synchronous `Task` calls do not consume slots. Provider-specific limits are acquired first so waiting on one endpoint does not occupy a daemon-wide slot. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
 | `update_url` | Where the update button looks instead of GitHub: an https address at which the current installers are published. Unset means GitHub. See [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
@@ -291,48 +319,24 @@ The point is a config.json that can be committed to a repository, copied between
 |---|---|
 | `provider` | Key into `providers` |
 | `model` | Model id, as the provider names it |
-| `max_tokens` | Cap on one reply, 4096 if unset. Unlike `context_window` this cannot be discovered: it is a choice about how long an answer you want, not a fact about the server. Reduced automatically when the conversation leaves less room than this in the window, so a generous ceiling is safe, and a reply that runs into it says so rather than just stopping. |
+| `max_tokens` | Maximum output tokens per reply. Default: 4096. Reduced to fit remaining context space. Reaching the cap is reported. This is a configured limit, not a discovered model property. |
 | `temperature` | Sampling temperature |
-| `keep_going` | How many times one turn may be told to carry on after the model stops with the task unfinished. Only ever applies to muse models; on them `0` (default) means `3` out of the box and `-1` forces it off. See [below](#a-model-that-stops-mid-task). |
+| `keep_going` | Maximum automatic continuations for Muse models. Zero or unset: 3. `-1`: disabled. Ignored for other model families. See [Continuation behavior](#a-model-that-stops-mid-task). |
 | `fallback` | Other profile names to try, in order, when a request to this one fails for a reason another model could survive. Read only with [Smart Agent](#smart-agent) on. See [Fallback chains](#fallback-chains-when-a-model-will-not-answer). |
-| `context_window` | The model's total input+output token limit. Usually unnecessary: an openai-compatible server is asked directly (`GET /v1/models`, or `/props` on llama.cpp), and only when it does not answer is the limit guessed from the model name, falling back to 128k for anything unrecognised. Set it when the server reports nothing and the name gives no clue, or to override both. Guessing high is the harmful direction, since this number is what keeps a request inside the real limit. |
+| `context_window` | Total input and output limit. Discovery uses `GET /v1/models` or llama.cpp `/props`, then model-ID matching, then 128k. An explicit value overrides discovery. Do not exceed the model's actual limit. |
 
 #### A model that stops mid-task
 
-Some models — local ones, mostly — end a turn by writing down what still
-has to happen rather than doing it: a build fails, the model reads the
-error, says "`global_init.cpp` also has to be updated", and stops.
-Typing "carry on" makes it pick up and finish that step, and then it
-stops again. The person is being used as the model's own loop.
+`keep_going` continues an incomplete Muse-model turn by submitting `carry on`. It does not apply to other model families.
 
-Two things address it, and they are separate on purpose.
+| Control | Scope | Behavior |
+|---|---|---|
+| `/keep-going` or GUI checkbox | Daemon | Enables or disables the feature and saves the value to config.json |
+| Profile `keep_going` | Profile | Maximum continuations per turn |
+| Unset or `0` on a Muse model | Profile | Default budget of 3 |
+| `-1` on a Muse model | Profile | Disabled for that profile |
 
-**A note in the system prompt**, for the models this has been reported
-against, telling them to take the next step in the same turn. It costs a
-paragraph, applies to nothing else, and needs no configuration. It is
-also not a guarantee, which is why there is a second thing.
-
-**`keep_going`**, which is localcode typing "carry on" for you, at most
-N times per turn.
-
-**It exists for muse models and reaches nothing else.** Any model whose
-id contains `muse` (case does not matter, so `Muse-Glimmer-30B` and
-`my-muse-variant` both count) gets a budget of 3 out of the box —
-installing the release is the whole fix, no config key required. On any
-other model the feature does not exist, whatever is configured: the
-habit it compensates for is this family's, and a nudge sent to a model
-without it is localcode second-guessing a finished answer. This used to
-be keyed on `glimmer`, which was a live bug — a muse variant without
-that word in its id got a budget of zero, and the feature built for
-these models was off for most of them.
-
-Two controls:
-
-* **`/keep-going`** toggles it for the whole daemon (the GUI settings
-  window has the same switch as a checkbox — one switch, two homes, kept
-  in step). The choice is saved to config.json.
-* A muse profile's own `keep_going` number adjusts the budget, and `-1`
-  turns it off for that profile alone:
+Model matching is case-insensitive and requires `muse` anywhere in the model ID, including `Muse-Glimmer-30B` and `my-muse-variant`.
 
 ```json
 {
@@ -343,35 +347,18 @@ Two controls:
 }
 ```
 
-The rules it carries on under, each of which is a case where stopping
-was right:
+No continuation occurs in the following cases:
 
 | Not carried on when | Because |
 |---|---|
-| No tool ran in this turn | It was a question and its answer, not a task |
-| The last tool call was refused | The model stopped because someone said no |
-| The reply ends in a question | The model is asking, not stalling |
-| The reply hit `max_tokens` | It needs a bigger cap, not another turn — and that is already reported |
-| The last carry-on produced no *new* work | The model is going over what it has already done, which is it saying it has finished |
-| You have already typed something | Your message reaches the model as soon as this turn ends, and it beats an invented one |
+| No tool ran | The turn may be a completed answer |
+| Last tool call refused | Further work lacks approval |
+| Reply ends with a question | User input is required |
+| Reply reached `max_tokens` | The output cap must be increased |
+| Previous continuation produced no new tool call | The task is complete or repeating work |
+| User message already queued | The user message takes precedence |
 
-That last rule is what keeps the setting cheap: a finished task costs one
-extra turn, not `keep_going` of them. Each carry-on appears in the
-transcript as a note saying what happened, so a turn that continues by
-itself never looks like one that never stopped.
-
-**"New" is doing real work in that rule**, and it was the fault reported
-in v0.52.0: with muse, a task that was already finished got run again and
-again. The rule used to count *any* tool call as work. But a model told it
-has not finished does not argue — it goes and finds something to do,
-re-reading the file it just wrote or re-running the build it just ran, and
-every one of those bought another carry-on until the budget ran out. A
-call now counts only if this turn has not already made it, arguments and
-all: re-running a build after fixing the file that broke it is work,
-because the fix is a call of its own; re-running it to admire the result
-is not. The prompt was the other half — it used to open by telling the
-model it had not finished, which localcode has no way of knowing. It now
-asks, and names "it is already complete" as an answer.
+A tool call counts as new only when the same arguments have not already appeared in the turn. A build repeated after a file edit counts as new work because the intervening edit is new. Each automatic continuation is recorded in the transcript.
 
 #### Provider fields
 
@@ -383,7 +370,7 @@ asks, and names "it is already complete" as an answer.
 | `anthropic.base_url` | Defaults to `api.anthropic.com`. Override it to go through a corporate proxy. |
 | `openai-compat.base_url` | The URL prefix in front of `/chat/completions` |
 | `openai-compat.api_key` | Optional, usually unnecessary for a local server. Sent as `Authorization: Bearer <key>`. |
-| `<type>.max_concurrent_tasks` | Any provider type. Background tasks allowed against this one endpoint at once, taken **before** the daemon-wide `max_concurrent_tasks`, so a task queued on a busy local server is not holding a slot a hosted provider's task could use. 0 or absent means no per-provider limit, which is what every provider was before this key existed. Bounded at 64 and checked at load, so a typo is a startup error naming the provider. |
+| `<type>.max_concurrent_tasks` | Concurrent background-task limit for one provider endpoint. Acquired before the global limit. Zero or unset: unlimited. Maximum: 64. Validated at startup. |
 
 See [MODELS.md](MODELS.md) for real model IDs, region prefixes, and Bedrock troubleshooting.
 
@@ -400,7 +387,7 @@ See [Combining agents](#combining-agents) for the full picture.
 
 #### MCP notes
 
-* Three transports are supported, the same ones Claude Code writes: `stdio` (a local child process), `http` (streamable HTTP), and `sse` (the older HTTP+SSE). Tools appear as `mcp__<server>__<tool>` whichever transport they came over.
+Supported transports: `stdio` for a local child process, `http` for streamable HTTP, and `sse` for legacy HTTP+SSE. All tools use the name `mcp__<server>__<tool>`.
 
 ```json
 {
@@ -412,20 +399,18 @@ See [Combining agents](#combining-agents) for the full picture.
 }
 ```
 
-* `type` may be omitted: an entry with a `url` is treated as `http`, anything else as `stdio`. Set `"type": "sse"` explicitly for a server that still speaks the older protocol — a bare url will not infer it.
-* `headers` is where a remote server's API token goes. Its **values are never printed** by `mcp list` or `mcp get`, only the key names, since that output routinely lands in a scrollback or a pasted bug report. They are also only ever *added* to a request, never overriding a header the protocol itself sets.
-* A remote server has no request timeout (a tool call may legitimately run long), but a server that accepts a connection and then never answers is given up on after 60 seconds.
-* **MCP tools always require permission confirmation.** A server claiming its own tool is read only through annotations is not trusted.
-* If one server fails to connect — a bad command, a crash, an unreachable endpoint, a rejected token — only that server is skipped. The rest register normally and the daemon still starts, logging a warning.
+* Omitted `type`: `http` when `url` exists, otherwise `stdio`. Legacy SSE requires explicit `"type": "sse"`.
+* Remote credentials: `headers`. `mcp list` and `mcp get` print header names but never values. User headers cannot replace protocol headers.
+* Timeout: no general request timeout; 60-second limit when a connected server never answers.
+* Permission: every MCP tool call requires confirmation, regardless of server annotations.
+* Connection failure: only the affected server is skipped. The daemon starts and logs a warning.
 * If a connected server's session dies, the next call retries the connection once.
 
-A broken config, such as a profile pointing at a provider that does not exist, fails at startup with an error instead of running.
+Invalid configuration, including a profile with a missing provider, stops startup with an error.
 
 ### Managing MCP servers with `localcode mcp`
 
-The same role `claude mcp` plays in Claude Code. It registers, lists, and removes servers without hand editing the `mcp_servers` JSON.
-
-This is a plain CLI subcommand that runs immediately without starting the daemon or TUI, the same way `localcode login` does. It edits config.json only, so **a running daemon picks up changes at its next start or reconnect.**
+`localcode mcp` manages the `mcp_servers` map without starting the daemon or TUI. A running daemon applies changes after restart or reconnect.
 
 ```bash
 # register a stdio MCP server, global by default in ~/.localcode/config.json
@@ -456,16 +441,16 @@ localcode mcp import-claude
 |---|---|
 | `-t`, `--transport` | `stdio` (the default), `http`, or `sse`. With `http`/`sse` the single positional argument after the name is the server's url instead of a command. |
 | `-e`, `--env KEY=VALUE` | Repeatable. stdio servers only. |
-| `-H`, `--header "Key: Value"` | Repeatable. Remote servers only — this is where an auth token goes. |
+| `-H`, `--header "Key: Value"` | Repeatable. Remote servers only. Use for authentication headers. |
 | `-s`, `--scope` | `global`, the default, or `project` |
 | `--` | Everything after it is the command and its arguments. Always use it so flags meant for the server, such as `-y`, do not get read as flags for `localcode mcp` itself. |
 | `remove` without `-s` | If the same name exists in both global and project, nothing is deleted and you get an ambiguity error. Say which with `-s global` or `-s project`. |
 
-These commands only read and write the `mcp_servers` map, so editing config.json by hand works exactly the same. The CLI is a convenience.
+The commands modify only `mcp_servers`. Manual JSON edits remain supported.
 
 #### `mcp list` tests each connection
 
-Being registered in config.json says nothing about whether a server's command exists, its endpoint is reachable, or either speaks MCP. So `localcode mcp list` brings each one up for real — starting the process or dialing the URL, completing the MCP handshake, listing its tools — and prints **one line per server**: its name, which scope it is registered in, and whether it answered.
+`localcode mcp list` starts or connects to every server, completes the MCP handshake, lists tools, and prints one status line per server.
 
 ```
 github         global    ok (26 tools)
@@ -476,15 +461,13 @@ weather        project   failed: connect (node): fork/exec node: no such file or
 1 of 4 server(s) failed to connect.
 ```
 
-That is the whole output — no config file paths, no command lines or urls, no env or header keys. This is a status view; `localcode mcp get <name>` is where a server's full definition lives.
+Output excludes config paths, commands, URLs, environment keys, and header keys. Use `localcode mcp get <name>` for the full definition.
 
-A failure is reported, not returned as an error — the listing itself succeeded, and a server being down is information about that server. Each check is bounded by a 20 second timeout, so an unresponsive server delays the listing rather than hanging it. Servers with expensive startup (an `npx` package that isn't cached yet) make this noticeably slower than a plain listing; `--no-test` skips the connecting entirely and just names what is registered.
+Connection failures are status results, not command failures. Each check has a 20-second timeout. Use `--no-test` to list registrations without starting or connecting to servers.
 
 #### Importing from Claude Code
 
-`localcode mcp import-claude` reads every MCP server a Claude Code install already knows about for the current directory — this project's checked-in `./.mcp.json`, plus `~/.claude.json`'s global servers and its per-project block — and registers them the same way `mcp add` would. Project-scoped Claude entries win over global ones on a name collision, matching Claude Code's own precedence.
-
-Local and remote servers both import: an entry's `type`, `url`, and `headers` carry across unchanged alongside `command`/`args`/`env`, because localcode's own config uses the same field names.
+`localcode mcp import-claude` imports servers from project `./.mcp.json`, global `~/.claude.json`, and its current-project block. Project entries override global entries with the same name. Local and remote fields are copied without conversion: `type`, `url`, `headers`, `command`, `args`, and `env`.
 
 ```bash
 localcode mcp import-claude                  # into ~/.localcode/config.json (global, the default)
@@ -492,9 +475,7 @@ localcode mcp import-claude -s project       # into ./.localcode/config.json ins
 localcode mcp import-claude --skip-existing  # leave servers that already exist under that name alone
 ```
 
-Re-running it is the common case — a Claude Code setup changed, or the first run only partially matched what's local — so by default it **overwrites** a server already registered under the same name with the freshly imported definition, the same way `mcp add` does. Pass `--skip-existing` to leave those alone instead.
-
-An entry that says neither how to start a process nor where to connect can't be imported by any build, and is listed by name with the reason rather than silently dropped.
+Default behavior overwrites existing names. `--skip-existing` preserves them. Entries without a command or URL are reported by name and skipped.
 
 ### Fine grained permission rules
 
@@ -506,9 +487,7 @@ Default behavior without any rules:
 | `bash` running a `git` command | Runs immediately (built in default, see below) |
 | `write_file`, `edit`, `bash` running anything else, MCP tools | Always asks |
 
-**git runs without asking by default.** Any `git` subcommand through the `bash` tool is auto-allowed out of the box, no config needed, because an agent that has to ask before every `git status` is unusable and git is close to always either read only or recoverable through the reflog. Add your own `bash` rule for `git` in `permission` (see below) to turn this back into ask or deny.
-
-Adding a `permission` block gives you opencode style per tool and per pattern control, so safe commands run automatically, dangerous ones are blocked outright, and only the rest prompt. A rule you write for a tool always overrides that tool's built in default, including the git one.
+Git commands run without confirmation by default. An explicit `bash` rule for Git can change the decision to `ask` or `deny`. Any explicit tool rule overrides its built-in default.
 
 ```json
 {
@@ -538,14 +517,16 @@ What each pattern matches:
 | Tool | Match target |
 |---|---|
 | `bash` | The full command string |
-| `write_file`, `edit` | The target file path |
-| Anything else, including MCP tools | No pattern, only the `"*"` rule applies |
+| `read_file`, `write_file`, `edit` | Target file path |
+| `grep`, `glob` | Search directory |
+| `check` | Configured verification command |
+| Other tools, including MCP tools | No subject; use a flat decision or `*` pattern |
 
 Patterns are globs where `*` is zero or more characters and `?` is exactly one.
 
 #### The four switches
 
-Four switches decide which prompts you see. **Each belongs to the conversation, not to the daemon**: two conversations on one daemon are two projects, and "do not ask me about this one" is a sentence about a project. Flipping one in a scratch experiment used to flip it in the window editing something that mattered.
+Permission switches belong to each conversation. Configuration values provide the initial defaults.
 
 | Switch | Command | What it allows without asking |
 |---|---|---|
@@ -554,7 +535,7 @@ Four switches decide which prompts you see. **Each belongs to the conversation, 
 | `read_outside` | `/read-outside` | Reading outside the workspace (`read_file`, `grep`, `glob`) |
 | `write_outside` | `/write-outside` | Writing outside the workspace (`write_file`, `edit`) |
 
-`skip_tools` is the one most people want: work head-down in one repository without being interrupted, and still be asked before anything reaches another project. Before it existed the only way to stop the interruptions was to turn off the guard that matters most.
+Use `skip_tools` to suppress tool prompts while retaining workspace-boundary prompts.
 
 config.json holds the **defaults** for a conversation that has not answered for itself:
 
@@ -567,11 +548,9 @@ config.json holds the **defaults** for a conversation that has not answered for 
 }
 ```
 
-The Permissions panel and the four commands set the conversation you are in and save the answer with the session, so reopening it reopens it configured the way you left it. A background task follows the conversation that started it, live: turning a switch off reaches work already running.
+The panel and commands save changes with the session. Background tasks follow their parent conversation's current settings.
 
-With `skip_all` on, the model writes files and runs shell commands with no confirmation at all, anywhere on the machine. Turn it on only where that is acceptable: a scratch repository, a container, a machine whose state you do not mind losing.
-
-`deny` rules still deny. Skipping confirmations is a convenience; overriding a rule written specifically to forbid something would be a different and much worse promise. Pairing the two is a reasonable middle ground:
+> `skip_all` allows file writes and shell commands anywhere on the machine without confirmation. Use it only in an acceptable isolation boundary. Explicit `deny` rules remain effective.
 
 ```json
 {
@@ -583,83 +562,77 @@ With `skip_all` on, the model writes files and runs shell commands with no confi
 `deny` can block tools that never needed confirmation. For example, this blocks reading `.env` files while leaving every other read alone:
 
 ```json
-{ "read_file": [{ "match": "*.env", "decision": "deny" }, { "match": "*", "decision": "allow" }] }
+{ "read_file": [{ "match": "*", "decision": "allow" }, { "match": "*.env", "decision": "deny" }] }
 ```
 
-**A `bash` rule matches per command, not per line.** `git status && rm -rf ~` is not treated as one string matched against `git *` — the line is split on `&&`, `||`, `;`, `|`, and newlines (quoted separators, like one inside a commit message, are left alone), and every resulting command has to earn `allow` on its own. Any `deny` anywhere in the line denies the whole thing. This is why allowing `git *` (or relying on the built in git default) is safe: it cannot be used to smuggle an unrelated command through alongside a git one.
+`bash` rules apply to each command segment. LocalCode splits unquoted `&&`, `||`, `;`, `|`, and newlines. Every segment must resolve to `allow`; any `deny` rejects the full line. Quoted separators remain part of their command.
 
-Command substitution and output redirection (`$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, `>>`) never auto-allow, even inside an otherwise-allowed command, since they can run a nested command or write to an arbitrary file that the per-segment check never sees. Those always fall back to asking, unless an explicit `deny` rule matches, in which case deny still wins.
+Command substitution and output redirection never auto-allow: `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, and `>>`. These forms require confirmation unless an explicit rule denies them.
 
 ### Answering a permission prompt: once, this session, or always
 
-An ordinary permission prompt offers four answers. A prompt raised by the workspace boundary offers a different set, because it is a different question: see [Leaving the project](#leaving-the-project).
-
-A permission prompt offers four answers:
+Ordinary tool prompts provide the following choices. Workspace-boundary prompts use the choices in [Leaving the project](#leaving-the-project).
 
 | Answer | TUI key | Effect |
 |---|---|---|
 | Allow once | `y` | Approves exactly this call. Asks again next time. |
 | Deny | `n` | Refuses this call. Asks again next time. |
-| Allow for session | `s` | Approves this call and every later call in the current session that matches the same rule pattern (e.g. any `npm *` command), without asking again — until the session ends or the daemon restarts. Nothing is written to disk. |
+| Allow for session | `s` | Approves this call and later matching calls until session deletion or daemon restart. Writes nothing to disk. |
 | Always allow | `a` (only shown when available) | Everything "allow for session" does, plus writes a matching rule to config.json, so the same pattern is auto-allowed in every future session too. |
 
 The Web UI shows the same four as buttons: Deny, Allow for session, Always allow, Allow once.
 
-For a `bash` call, the rule an "allow for session" or "always allow" grants is generalized to the command's first word — approving `npm test` grants `npm *`, not just that exact command — since approving a shell command usually means approving that program. Every other tool (file paths, MCP tools) grants the exact subject rather than widening it, so approving one file doesn't silently approve a whole directory. The prompt always shows the exact pattern before you answer, so nothing is granted invisibly.
+For `bash`, session and permanent grants generalize the first word. Approving `npm test` grants `npm *`. File and MCP grants use the exact subject. The prompt shows the resulting pattern.
 
-"Always allow" writes to whichever config.json the daemon loaded: the file passed via `--config`, or the global `~/.localcode/config.json` if none was given — never the project-local override, so an approval survives switching projects. It edits only the `permission` key, preserving every other key and value in the file byte for byte, the same careful merge `localcode mcp` uses. If the daemon has no writable config.json to target, "always allow" isn't offered — only once, session, and deny are.
+"Always allow" updates the file passed through `--config`, or global `~/.localcode/config.json` when no explicit file is set. It never updates the project override. Only the `permission` key changes. Without a writable config target, this option is unavailable.
 
 Session grants are forgotten when a session is deleted, and when the daemon restarts. Permanent ("always") grants live in config.json and survive both.
 
-**A permission modal locks the prompt box while it's open**, in the Web UI, with a placeholder pointing back at it — typing an answer into the chat box instead of clicking a button no longer silently queues as a follow-up message. The TUI equivalent doesn't lock (its permission line is already a separate prompt), but prints a one-time hint if Enter is pressed while a request is pending, rather than doing nothing with no explanation.
+The Web UI locks the prompt box while the permission modal is open. The TUI keeps its separate permission line and shows a one-time hint if Enter is pressed while a request is pending.
 
 ### Viewing and changing permission settings without waiting for a prompt
 
-A pill under the prompt box (Web UI and the GUI window, same page) always shows the open conversation's permission state: `permissions: ask (N rules)`, `permissions: tools skipped`, or `permissions: skip` in warn color. Click it to open a panel that:
+The permission pill shows the current conversation state: `permissions: ask (N rules)`, `permissions: tools skipped`, or `permissions: skip`. Click it to open controls for:
 
 * shows the four switches for the conversation you are in, and says where each answer came from: this conversation, the one that started it, or config.json
 * lists the directories this conversation has approved leaving the project for, each with a **forget** button (the same thing `/read-outside mem-clear` does)
 * lists every rule currently in `permission`, with a remove button per rule
 * adds a new rule by tool name, match pattern, and decision (allow/ask/deny)
 
-Every change applies immediately (the running daemon's decisions reflect it on the very next tool call) and is written to config.json the same way "always allow" is — the daemon needs a config.json path to persist to (see `--config` above); if it doesn't have one, the panel still shows the current state but the controls are disabled with a note explaining why.
+Changes apply on the next tool call. Rule changes use the same config target as "Always allow." Without a config path, persistent controls are disabled and the panel explains why.
 
 ### Switching the workspace directory
 
-The workspace is the directory every relative file path and bash command resolves against. A session starts in whichever directory the daemon was given at startup, and from then on the workspace belongs to the session. It is shown at the top of the GUI window and in the Web UI's header, and can be changed without restarting by clicking it.
+Each session has its own workspace. Relative file paths and shell commands resolve from that directory. Click the workspace path in the GUI or Web UI to change it without restarting.
 
 What that click does depends on where you are:
 
 | Where | Clicking the workspace |
 |---|---|
-| GUI window | Opens the operating system's own folder picker (macOS `choose folder`, Windows' folder browser, zenity/kdialog on Linux), starting in the current workspace. Choosing a folder applies it immediately; dismissing the dialog changes nothing. |
-| Browser | Opens a box to type an absolute path into. The web platform gives no way to get a real filesystem path out of a file dialog — neither `<input webkitdirectory>` nor `showDirectoryPicker()` exposes one — and a daemon you reached over the network would open its dialog on the *server*, so the picker is deliberately offered only in the desktop window. |
+| GUI window | Opens the native folder picker at the current workspace. Selection applies immediately; cancel leaves the workspace unchanged. |
+| Browser | Accepts an absolute server path. Browser directory APIs do not expose a usable server path. |
 
-The folder icon beside the path opens that directory in a file-manager window — Explorer on Windows, Finder (brought to the front) on macOS, whatever `xdg-open` is registered to elsewhere. Offered only in the desktop window, for the same reason as the picker: over the network the window would open on the daemon's machine.
+The folder icon opens the current directory in Explorer, Finder, or the configured `xdg-open` handler. This action is available only in the desktop window because it operates on the daemon host.
 
-**Each session has its own workspace.** Every relative file path and every bash command resolves against the directory of the session it belongs to, so two sessions can work in two different projects at the same time, on the same daemon, without disturbing each other. It is a property of the session, not of the localcode process, which is why reopening a conversation about another project puts you back in that project rather than wherever the daemon happens to have been started.
+Session workspaces are independent. Reopening a session restores its recorded directory.
 
-**Delegated work inherits it.** A sub agent started by the `Task` tool, by `TaskBackground`, or through the tasks API works in the directory of the session that launched it, and so does anything it delegates in turn. The directory is taken at the moment the task starts and stays with it: moving the parent afterwards moves the parent, and the task finishes the instructions it was given where it was given them. Custom commands (`@file`, `` !`cmd` ``) and hooks resolve against the same directory.
+Delegated tasks inherit the parent's workspace at task start. This applies to `Task`, `TaskBackground`, tasks API calls, and nested delegation. Later parent moves do not affect running tasks. Custom-command `@file`, command substitutions, and hooks use the session workspace.
 
-**The model is told where it is.** The system prompt names the session's directory and is re-derived every turn, so it follows a move rather than going stale. That line is the only current answer, and it says so: absolute paths and `cd` prefixes from earlier in the conversation point at wherever the work was then.
+The system prompt is rebuilt each turn with the current workspace. Absolute paths and `cd` prefixes from earlier turns remain historical data.
 
-That matters because of what a model does without it. Nothing used to name the directory, so it had to be learned from tool output, from a `pwd` or a glob result or a path in an earlier answer. That knowledge lives in the conversation history, and moving the workspace does not rewrite history: the model went on prefixing every shell command with `cd <the old path> &&`, and files appeared in the project you had just left while every question about the workspace was answered correctly with the new one. The two were never out of step; only the model was working from memory.
+A workspace move does not rewrite conversation history. Check commands that contain an earlier absolute path before approving them.
 
-The workspace boundary does not catch this, and cannot: it is a check on paths, and a shell command is not a path. A `write_file` to the old project would be asked about; `cd /old && touch x` is outside what that guard can see.
+The workspace boundary checks file-tool paths, not shell semantics. A `write_file` call to an old workspace prompts. A shell command such as `cd /old && touch x` is governed only by shell permission rules.
 
-Switching is refused only while *this* session has a turn in flight, since redirecting it mid-tool-call would change what an already-running command is operating on. A turn in some other session is not your business and no longer blocks anything.
+Workspace changes are refused while that session has a turn in progress. Work in other sessions does not block the change.
 
-Omitting the session (a client that does not track them) sets the default instead: what a newly created session starts in, and what a session with no recorded workspace of its own falls back to.
-
-Before v0.39.0 this was process-wide — one `os.Chdir` for the whole daemon — which is why a workspace change used to be refused whenever *any* session was busy, including one nobody was watching and one parked forever on an unanswered permission request.
+A request without a session changes the default for new sessions and for sessions without a recorded workspace.
 
 ### Hooks
 
-The same concept as Claude Code hooks. Run a shell command at a specific point, and block that point if you want.
+Hooks run shell commands at lifecycle events. Blocking hooks can prevent the associated action.
 
-Hooks are a separate layer from `permission`. Permission decides whether a tool call is allowed, denied, or confirmed. Hooks splice an arbitrary shell command in around it, or at points that have nothing to do with tools.
-
-With both enabled, `pre_tool_use` runs first, and if it does not block, the `permission` check follows. A `pre_tool_use` hook allowing something does **not** skip an ask or deny from `permission`.
+Hooks and permissions are separate checks. `pre_tool_use` runs first. A successful hook does not bypass an `ask` or `deny` permission decision.
 
 ```json
 {
@@ -694,18 +667,19 @@ Every payload also carries **`cwd`**: the workspace of the session the event is 
 
 Other details:
 
-* **A hook runs in that `cwd`.** Not in the directory localcode was started in, which is what it used to be: a `git status`, a `./scripts/check.sh`, a formatter looking for the project's own config all now see the project whose turn triggered them, including a delegated sub agent's, and including a session that was moved to another directory after it was created. `cwd` is on stdin as well as being the working directory, for a hook that shells out somewhere else or appends to a log shared by several projects.
-* **`pre_model` can inject context.** Print `{"context":"..."}` on stdout and that text is appended to the system prompt for that one call. Useful for facts the model cannot look up: an incident in progress, a freeze window, who is on call. It costs the session its system prompt cache for every call the hook injects on, since the cached prefix is exactly the part being changed.
-* **matcher** only means something for `pre_tool_use` and `post_tool_use`. It is a regex against the tool name, **anchored to the whole name**, so `"bash"` hits only the `bash` tool. Alternation such as `"bash|edit"` and patterns such as `"mcp__github__.*"` both work. Omit it to run on every tool call.
-* **To block**, print `{"decision":"block","reason":"..."}` on stdout, or exit with code **2**, in which case stderr becomes the reason. Any other non zero exit is treated as a warning and execution continues.
-* Each hook has a 30 second timeout. Multiple hooks on one event run in registration order and stop at the first block.
-* A project config's `hooks` replaces the global config per event rather than merging, matching how the rest of the config merges.
+* Hooks run in the event session's `cwd`, including delegated and moved sessions.
+* `pre_model` may print `{"context":"..."}` to append context to one model call. This changes the cached system-prompt prefix.
+* `matcher` applies only to `pre_tool_use` and `post_tool_use`. It is a full-name regular expression. Examples: `bash|edit`, `mcp__github__.*`. Omit it for every tool.
+* Blocking result: `{"decision":"block","reason":"..."}` on stdout, or exit 2 with the reason on stderr.
+* Other non-zero exits produce a warning and allow execution to continue.
+* Timeout: 30 seconds per hook. Multiple hooks run in registration order and stop at the first block.
+* Project hooks replace global hooks per event.
 
 ### Authenticating with `/login`
 
-`localcode login <bedrock|anthropic>` walks through cloud provider authentication interactively. Run it in a terminal before starting the daemon or TUI. It removes the need to paste an `api_key` into config.json or to install the AWS CLI first.
+Run `localcode login <bedrock|anthropic>` in a terminal before starting the daemon. Credentials remain outside config.json. Bedrock login does not require the AWS CLI.
 
-> **Signing in with a claude.ai Pro or Max subscription is not supported.** Claude Code can do that because it uses a private OAuth client Anthropic issued specifically for it, and those credentials and scopes are not public. A third party tool imitating them would risk violating the Anthropic terms of service, so it is not implemented. Both methods below use only the official published flows from AWS and Anthropic.
+> claude.ai Pro and Max subscription login is not supported. LocalCode uses published AWS and Anthropic authentication flows, not Claude Code's private OAuth client.
 
 #### `localcode login bedrock`
 
@@ -733,6 +707,8 @@ config.json then needs only `"providers": {"anthropic": {"type":"anthropic"}}`. 
 
 ## Part 3. Project context
 
+Project rules, skills, and auto memory supply reusable context. Rules load each turn. Skill bodies load on demand. Auto memory stores project notes across sessions.
+
 ### Skills
 
 Put a skill at `~/.localcode/skills/<name>/SKILL.md` for global scope, or `<project>/.localcode/skills/<name>/SKILL.md` for a project scoped one that wins on a name collision.
@@ -748,7 +724,7 @@ Write the real instructions here. This whole body is what gets
 returned when the model calls the `Skill` tool with this name.
 ```
 
-Only each skill's `name` and `description` go into the system prompt at startup, costing a few dozen tokens per skill. The body loads only when the skill is actually invoked, so unused skills are nearly free.
+Only skill names and descriptions enter the initial system prompt. The full body loads when the skill is invoked.
 
 To reference other files such as `scripts/*.py` from the body, write relative paths and let the model read them with `read_file` or `bash`.
 
@@ -756,13 +732,13 @@ Run a skill directly by its own name with `/<skill name>`. See [Running a skill]
 
 ### AGENTS.md project rules
 
-The same convention opencode and Claude Code use. Put an `AGENTS.md` at the project root, or any parent directory up to the git repository root, and it is appended to the system prompt.
+Project rules in `AGENTS.md` are appended to the system prompt. LocalCode searches the workspace and parent directories up to the Git repository root.
 
 `CLAUDE.md` is recognized as a fallback in the same places, so an existing Claude Code file is reused as is.
 
-`~/.localcode/AGENTS.md` and `~/.claude/CLAUDE.md` both apply your personal rules to every project — both are loaded when both exist, so setting localcode up after Claude Code does not silently retire the file you already wrote. Project rules and global rules are combined, not overwritten.
+Both `~/.localcode/AGENTS.md` and `~/.claude/CLAUDE.md` apply globally when present. Global and project rules are combined.
 
-Which project's rules apply is decided per session, from the workspace that session is in, and re-read at the start of every turn. So two sessions in two projects each get their own `AGENTS.md`, moving a session's workspace moves the rules with it, and editing the file takes effect on your next message rather than on the next restart. (Before v0.43.0 they were read once at startup from the directory the daemon happened to be launched in — which for a desktop build opened from Finder or the Start Menu is not a project at all.)
+Rules are resolved from the session workspace and reread at each turn. Workspace moves and rule edits apply on the next message.
 
 ```markdown
 # AGENTS.md
@@ -791,39 +767,19 @@ Personal workflow: @~/.localcode/my-workflow.md
 
 ### Per-model formatting notes
 
-A model's habits are not always right for this window, and a few are wrong
-in a way the user pays for. Gemma writes symbols and names as LaTeX
-(`$\rightarrow$`, `$\text{Bla-Bla}$`), which a client with MathJax renders
-as an arrow and a name, and this one shows as the dollars and backslashes
-they are.
+Per-model prompt notes address known output-format and continuation behavior.
 
-So a model whose id contains `gemma` gets one extra paragraph in its
-system prompt: this interface renders Markdown only, write the character
-itself.
+* Model IDs containing `gemma`: request Markdown and literal Unicode characters instead of LaTeX commands.
 
-There is a second entry, for a different kind of habit. A model whose id
-contains `glimmer` is asked to finish the task before ending its turn
-rather than writing down what still has to happen and stopping — the
-stall [`keep_going`](#a-model-that-stops-mid-task) recovers from, said in
-words as well. Nothing is added for any other model.
+* Model IDs containing `muse`: request completion of the task within the current turn. See [`keep_going`](#a-model-that-stops-mid-task).
 
-The Web UI also unwraps the ones that arrive anyway, so a reply already in
-a transcript reads properly. It handles symbols (`\rightarrow`, `\sim`,
-Greek letters, relations) and the font commands that carry words rather
-than maths (`\text`, `\mathbf`, `\mathrm`, `\boldsymbol` and the rest),
-including when those are nested in each other: `$\mathbf{\text{ vs }}$`
-is the word "vs". That half is deliberately narrow: a `$` span is only
-touched when it contains a LaTeX command, so `$PATH`, `$5` and a real
-formula are left alone.
+The Web UI converts supported LaTeX symbols and text-format commands to readable text. Supported forms include `\rightarrow`, `\sim`, Greek letters, relations, `\text`, `\mathbf`, `\mathrm`, and `\boldsymbol`, including nested commands. Only dollar spans containing a LaTeX command are converted. `$PATH`, `$5`, and ordinary formulas remain unchanged.
 
-The table is `modelQuirks` in `internal/agent/quirks.go`, matched as a
-lowercased substring of the model id. An entry can also carry a default
-`keep_going` budget, which is how the second note above comes with a
-mechanism rather than only a request.
+Matching uses lowercase model-ID substrings in `modelQuirks`, defined in `internal/agent/quirks.go`. Entries may also set a default `keep_going` budget.
 
 ### Auto memory
 
-The same idea as Claude Code's auto memory. Where `AGENTS.md` is written by a person, auto memory is **written by the model as it works**, so build commands, facts discovered while debugging, and stated preferences such as "use pnpm" survive into the next session.
+Auto memory stores model-written project notes across sessions. Typical contents include build commands, debugging findings, and user preferences.
 
 * Each project gets `~/.localcode/projects/<slug>/memory/` automatically. The slug comes from the git repository root path, so multiple worktrees or subdirectories of one repository share a single memory directory. Outside a git repository, the working directory is used instead.
 * `MEMORY.md` in that directory is the index, loaded into the system prompt at the start of every session, capped at 200 lines or 25KB, the same limits Claude Code uses. Anything past that is not loaded.
@@ -839,6 +795,8 @@ Turn it off with:
 
 ## Part 4. Commands and screen controls
 
+Use commands for explicit session actions and settings. Use Esc to cancel a turn. Ordinary messages can redirect the model at a tool boundary.
+
 ### Screen controls
 
 Common to the TUI and Web UI:
@@ -847,7 +805,7 @@ Common to the TUI and Web UI:
 |---|---|
 | Send a message | **Enter**. The Web UI also has a Send button. |
 | Insert a newline | **Ctrl+J** in the TUI, **Shift+Enter** in the Web UI |
-| Answer a permission prompt | `y`, `n`, `s`, or `a` in the TUI; buttons in the Web UI — see [answering a permission prompt](#answering-a-permission-prompt-once-this-session-or-always) |
+| Answer a permission prompt | `y`, `n`, `s`, or `a` in the TUI; buttons in the Web UI. See [answering a permission prompt](#answering-a-permission-prompt-once-this-session-or-always) |
 | Cancel the running turn | **Esc**, in either client |
 | Recall a previous prompt | **Up** and **Down**, in either client |
 | Jump between your own prompts | **Alt+Up** and **Alt+Down**, Web UI only. Moves the view to the previous or next turn of yours and marks where it landed; it does not touch what is in the prompt box, which is what plain Up and Down are for. The TUI marks turns the same way but has no key for this. |
@@ -862,29 +820,29 @@ Other behavior:
 * The TUI places the real terminal cursor at the insertion point inside the prompt box, so IME composition for Korean, Japanese, and Chinese renders in the box while you type rather than below it.
 * **Running work shows below the prompt box, not in the conversation.** While a turn is in flight the TUI animates a line naming what it is doing (the running tool's name, or `working`), the queue depth, and how many background tasks are going. It disappears the moment the turn ends. The Web UI shows the same information in its status bar. Tool starts and finishes no longer write `[tool] ...` lines into the transcript.
 
-**Scrolling up stays scrolled up.** Both clients follow the newest output only while the view is already at the bottom of the transcript. Scroll up while a turn is running and the view stays exactly where you put it, however much the model writes underneath; scroll back down and following resumes on its own, since being at the bottom is the whole condition. There is nothing to turn on and nothing to remember. The Web UI shows a **&darr; latest** control in the corner of the transcript while the view is away from the bottom, which jumps back and resumes following. Sending a prompt or opening a session goes to the bottom whatever the view was doing, because that is what you just asked for. A background task's own window behaves the same way.
+Both clients follow new output only while the transcript is at the bottom. Scrolling up pauses following. Returning to the bottom resumes it. In the Web UI, **↓ latest** jumps to the bottom. Sending a prompt or opening a session also moves to the bottom. Background-task windows use the same behavior.
 
-**Scrolling the TUI transcript** is `PgUp`/`PgDn` by the screenful and `Shift+Up`/`Shift+Down` by the line. Plain Up and Down are left to prompt recall and to moving around a multi-line prompt, which is what they are wanted for far more often. Growing the prompt box while you are following the newest output keeps you following it, rather than leaving the view behind the bottom and looking frozen.
+TUI transcript scrolling: `PgUp` and `PgDn` by screen, `Shift+Up` and `Shift+Down` by line. Plain arrows move within the prompt or recall history. Resizing the prompt box preserves transcript following.
 
-**The transcript opens at the end, and the whole conversation is one click away.** A long session would otherwise spend the first second of every switch rendering thousands of messages, so the Web UI asks the daemon for the last stretch of it. When that leaves anything out it now says so, above the oldest message it did load, with a **Load the whole conversation** control that reopens the stream from the very first event. Opening a different session goes back to opening at the end.
+The Web UI initially loads the most recent events. If earlier events are omitted, **Load the whole conversation** reloads from the first event. Switching sessions returns to the default recent-event view.
 
-**Nothing but deleting a session removes any of it.** Compaction shortens what the *model* is sent and never touches the log; the log is append-only, one file per session, and every client reads the whole of it on request. If a conversation looks shorter than you remember, it is the view and not the record — see the control above.
+Compaction changes model context, not the append-only session log. The full transcript remains available until the session is deleted.
 
-**Esc cancels whatever is running.** Press it while the model is answering (the status line says "esc to cancel") to stop that turn immediately. Cancelling also clears anything waiting in the prompt queue — the point of cancelling is to stop, so letting a queued message fire right after would defeat it. A `[cancelled]` line marks where it stopped; nothing about it is treated as an error. Pressing Esc with nothing running does nothing.
+Esc cancels the current turn and clears queued messages. The transcript records `[cancelled]`. Esc has no effect while idle.
 
-**Up and Down recall previous prompts**, the way a shell's history does. Up walks back through what you have already sent, newest first, and Down walks forward again. Stepping forward past the newest entry restores whatever you had half-typed before you started recalling, so reaching for history never costs you a draft.
+Up recalls older prompts and Down recalls newer prompts. Moving beyond the newest entry restores the draft that was present before recall.
 
-Recall *starts* at the edges of the prompt box: the cursor has to already be on the first line before Up reaches for history, and on the last line before Down does. Inside a multi-line prompt the arrows just move the cursor as usual. Once a walk is under way both keys keep walking wherever the cursor has landed, so Up, Up, Up goes three prompts back; editing what was recalled ends the walk, and the next Up starts again from the newest entry. Repeating the same message twice in a row stores it once.
+Recall starts with Up on the first prompt line or Down on the last line. Inside a multiline prompt, arrows move the cursor. Once recall starts, arrows continue through history. Editing a recalled prompt ends recall. Consecutive duplicate prompts are stored once.
 
-**A half-typed prompt belongs to the conversation too.** Opening another session takes what is in the box with it and gives the new one back whatever it was holding, which is usually nothing. Both clients. Before this the box was the one thing a switch left alone, so a sentence composed in one project followed you into another, where the next Enter would have sent it to a different model in a different directory.
-
-**The list belongs to the conversation.** Each session has its own, and switching away and back finds it as you left it. It is filled from two places: what you send, and the prompts in the transcript the daemon replays when the session opens — so reopening a session (or reattaching the TUI to one) recalls what was asked in it before, including prompts sent from another client. Nothing is stored on disk for this; the replayed transcript is the record.
+Prompt history belongs to the session. It combines newly sent prompts with prompts replayed from the session log, including messages from other clients. No separate history file is written.
 
 Up to 200 entries per session are kept.
 
-**Messages sent while a turn is still running are queued.** This covers the whole turn, tool execution included, not just while text is streaming. The prompt appears in the transcript immediately (the TUI marks it `[queued] <text>`) and the status line shows `(N queued)`. The first queued message sends automatically the moment the turn actually ends, and several stack up and go out in order. If a send does slip through while the daemon is busy (for example, a turn started from another client on the same session), it is queued and retried rather than shown as an error.
+Unsent drafts also belong to the conversation. Switching sessions in either client restores the selected conversation's draft.
 
-Commands starting with `/` are not queued, and since v0.37.0 they are not silently ignored either: both clients refuse them out loud — "can't run while a turn is in progress — wait for it to finish, or press Esc to cancel it." Queueing one would mean replaying it after the turn, by which time a second turn may have started, and it would reach the model as ordinary text instead of running. `exit` and `:q` still work mid-turn in the TUI: quitting is not something to make someone wait for.
+Messages sent during a turn appear immediately and are delivered at the next tool boundary. Multiple messages retain their order. If the turn ends before delivery, the message starts the next turn. See [Redirecting a turn](#redirecting-a-turn-while-it-runs).
+
+Slash commands are refused while a turn is running. Wait for completion or press Esc to cancel. TUI `exit` and `:q` remain available.
 
 ### Running a skill
 
@@ -904,18 +862,18 @@ The transcript keeps just the short command you typed. The full skill body goes 
 /p     ->  /pdf-tools  ->  /plan-review  ->  /pptx  ->  /p
 ```
 
-The walk comes back round to what you typed, so it is never a cycle you cannot leave. The line under the prompt box shows the first match and how many there are, which is what tells you whether the key is worth pressing. Editing the text ends the walk and the next press starts a fresh one from what is now in the box.
+Completion cycles through matches and then restores the original prefix. The hint below the prompt shows the first match and match count. Editing the text restarts completion.
 
-A `/name` completes wherever it is written, not only at the start of the box. That is a change: a command used to be the whole prompt, so `/pdf-tools merge a.pdf` was past completing. It stopped being true once [the model could run one](#model-invocable), because a prompt can now *mention* a command rather than be one — `read the mail, then run /tidy-context` — and a name inside a sentence is exactly where it is hardest to remember. So a command is a word now, like a `#<name>` reference, and the key works the same on both: it completes the word at the cursor and leaves the rest of the sentence alone.
+Completion applies to the word at the cursor, including command names inside a sentence. The rest of the prompt remains unchanged. Example: `read the mail, then run /tidy-context`.
 
-Two limits come with that, and both are the arrow keeping its day job:
+Completion limits:
 
-* **Inside a word the arrow moves the cursor**, as it always did. It is completion only at the end of a word — where the next character is a space, or the box ends.
-* **A Korean particle attaches with no space**, so `/tidy-context를` is one word and going back to complete a name already written that way puts the cursor inside it. Typing in the order people actually type in does not hit this: the name is completed first and the particle typed onto the end of it.
+* Inside a word, Right moves the cursor. Completion requires the cursor at the word's end.
+* Complete a command before adding a Korean particle. For example, the cursor inside `/tidy-context를` does not trigger completion.
 
-What a slash does *not* start is a path. The scan takes the nearest slash before the cursor and requires it to open a word, so `internal/tui/co` and `/Users/me/co` both stop on a slash with a letter in front of it. What is left — `read /u`, which is a path being typed and also the prefix of `/usage` — is left to the candidate list: a prefix matching no command offers nothing at all, and where one does match, the last stop on the walk is the text as you typed it.
+Path components such as `internal/tui/co` and `/Users/me/co` do not trigger command completion. An ambiguous prefix such as `read /u` may match a command. The final completion candidate restores the original text.
 
-Built-in commands complete too, so `/sm` finishes to `/smart-agent` and `/perm` to `/permission-skip-all`. Four lists feed it: the installed skills, the custom commands, the commands the daemon answers, and the few each client answers itself. A name in more than one list is offered once.
+Completion includes skills, custom commands, daemon commands, and client commands. Duplicate names appear once. Examples: `/sm` → `/smart-agent`, `/perm` → `/permission-skip-all`.
 
 When two things share a name, precedence is:
 
@@ -929,7 +887,7 @@ A `/name` matching none of them is sent to the model as ordinary text.
 
 ### `/init`
 
-The same as opencode's `/init`. Scans the repository with `Glob`, `Grep`, and `Read`, then creates or improves an `AGENTS.md` at the project root covering build, lint, and test commands, an architecture overview, and code conventions.
+`/init` scans the repository with `Glob`, `Grep`, and `Read`, then creates or updates root `AGENTS.md`. The result covers build, lint, tests, architecture, and code conventions.
 
 The transcript shows only `/init`. Because it writes a file, expect a `write_file` or `edit` permission prompt the first time.
 
@@ -978,9 +936,9 @@ Background tasks produce no transcript lines. Inspect them here instead.
 
 A running task also appears in the indicator below the prompt box, and in the Web UI's right panel.
 
-**A permission request raised inside a task is asked in this session.** Nothing streams a task's own log, so a request written only there could never be answered, and the task waited on it forever while holding one of the concurrency slots. The request now appears here, prefixed with the task it came from, and answering it releases the task.
+Task permission requests appear in the parent session with the task identifier. Answering the request allows the task to continue.
 
-**A background task does not block the prompt.** Tasks run in their own child sessions, so the session you are typing in stays free: a new prompt goes out immediately rather than queuing. Only a turn in *this* session queues what you type.
+Background tasks run in child sessions and do not occupy the parent's turn. A new parent prompt can run while tasks continue.
 
 ### `/memory`
 
@@ -997,7 +955,7 @@ Settings that can be toggled while running. They apply daemon wide rather than p
 | `/config show_tps on\|off` | The tokens per second reading under the prompt |
 | `/config auto_delegate on\|off` | Sending matching prompts to a cheaper sub agent, see [Auto delegation](#auto-delegation) |
 | `/config smart_agent on\|off` | The built-in specialist roster and the orchestration prompt, see [Smart Agent](#smart-agent). Reports the roster it turned on, or says why it is empty. |
-| `/orchestrate on\|off` | The Orchestrate tool: a plan of delegated stages, run by localcode rather than decided step by step by the model. Off by default. Says so when there is nobody to delegate to. See [Orchestration](#orchestration). |
+| `/orchestrate on\|off` | Enable or disable validated stage plans. Default: off. Requires delegation targets. See [Orchestration](#orchestration). |
 
 Each change records a `config.changed` event on that session and the Web UI updates its status bar right away. A newly opened client reads current values from `GET /api/settings`.
 
@@ -1010,58 +968,59 @@ Compacts the conversation immediately instead of waiting for the automatic thres
 | `/compact` | Compacts with the default summarization prompt |
 | `/compact <instructions>` | Adds your instructions for that one summarization, for example `/compact keep only file paths` |
 
-With nothing to compact, on an empty session, it records an error event and does nothing. On success it records a `compacted` event just like automatic compaction, marked `manual: true`.
+An empty session records an error and remains unchanged. Success records a `compacted` event with `manual: true`. The confirmation reports the previous and current context message counts. Full transcript content remains visible and logged. Compaction token usage is included in `/usage`.
 
-**The confirmation carries the count**, because compaction changes what is sent and leaves the screen exactly as it was, so a reply with no number in it is indistinguishable from a command that did nothing:
+Example confirmation:
 
-```
+```text
 Compacted. The model opens the next message with a summary of this conversation rather than the whole of it.
 12 message(s) in its context replaced by 1.
 Everything above stays in this conversation and in its log: scroll up, or reopen it later, and it is all still there. Summarizing is itself a model call, so the compaction's own tokens are in /usage.
 ```
 
-**The next message is a paragraph of its own.** The summary replaces the history as a single message, so the prompt after it is a second message in the same role, and the two are merged to keep the alternation Anthropic and Bedrock require. On an OpenAI-compatible endpoint, where a message is one string rather than a list of blocks, they used to be joined with nothing at all: the question arrived spliced onto the end of the summary's last sentence. They are separated by a blank line.
+For OpenAI-compatible providers, a blank line separates the summary and next user prompt when adjacent messages with the same role are merged.
 
 ### `/clear`
 
-Starts the model fresh. It keeps none of this conversation; the conversation keeps all of it.
+`/clear` removes the model's conversation history without deleting the transcript or session log. It does not call a model.
 
-That split is the whole command. Compaction replaces the history with a summary, `/clear` replaces it with nothing, and **neither removes anything**: every message stays on screen, stays in the session's log, and is still there when you reopen the conversation tomorrow. What changes is only what the next request carries.
+Use `/compact` to retain a summary. Use `/clear` to start the next request without earlier conversation context.
 
-| | `/compact` | `/clear` |
+| Effect | `/compact` | `/clear` |
 |---|---|---|
 | What the model gets next | a summary of the conversation | nothing |
 | What the transcript shows | everything, plus a marker | everything, plus a marker |
 | Costs a model call | yes | no |
 
-Cumulative `/usage` totals are deliberately unchanged: those tokens were spent, and a number that goes down when you clear is one nobody can reconcile with a bill. The context gauge does reset, because it is a reading of a history that no longer exists.
+Cumulative `/usage` totals remain unchanged. The context gauge resets.
 
-Claude Code's `/clear` starts a new session and leaves the old one to be resumed by id, which is why its rewind menu carries a **previous session** entry. Here the conversation stays in front of you, so there is nothing to go back and find.
+LocalCode keeps the same session and visible transcript after `/clear`.
 
 ### `/rewind`
 
-Undoes the last turn: the exchange, and the files that turn changed.
+`/rewind` removes the last exchange from model context and restores files changed through `write_file` or `edit` during that turn.
 
-| | |
+| Target | Result |
 |---|---|
 | The conversation | the model no longer has that exchange; it stays in the transcript and the log |
 | Files | every path `write_file` or `edit` changed is put back as it was before the turn's first write; a file the turn created is removed |
 | Again | run it again to go back another turn |
 
-**What it does not cover, and says so every time.** The scope is [Claude Code's](https://code.claude.com/docs/en/checkpointing), and it is enforced by which tools are hooked rather than promised in a sentence:
+Coverage follows [Claude Code's checkpointing scope](https://code.claude.com/docs/en/checkpointing). The command reports excluded changes:
 
-* **A shell command.** Anything `bash` wrote, moved or deleted. `rm`, `mv`, `cp`, a build that regenerated a file.
-* **A background sub-agent.** Its writes are checkpointed into its own session, not this one.
-* **Your own edits.** A file you changed by hand after the turn is restored to the turn's pre-image, losing that edit — which is why the reply lists every path it touched.
-* **A symlink or a large file.** A symlinked path is skipped, because writing through it changes a target the turn may never have touched. A file over 8 MiB is recorded but not copied. Both are counted in the reply as *left alone*.
+* Shell changes: files written, moved, deleted, or generated by `bash`
+* Background-agent changes: checkpointed in the child session
+* Later user edits: overwritten if the same path is restored; the response lists affected paths
+* Symlinks: skipped
+* Files over 8 MiB: recorded but not copied; reported as unchanged
 
-**It is not a substitute for version control.** It is session-level undo for the common case: the model went the wrong way and you want the last few minutes back.
+Use version control for recovery beyond this tool-level checkpoint scope.
 
-It refuses in two situations, each for a reason: in a scheduled run or a `localcode run` pipe, because it writes to a real project with nobody watching; and while a background sub-agent from this conversation is still working, because undoing the turn that launched it leaves it running against files it no longer agrees with.
+Rewind is refused in scheduled runs and `localcode run` pipes. It is also refused while a background child of the conversation is running.
 
-Both `/clear` and `/rewind` wait for a turn in progress. A message typed mid-turn is delivered to that turn as text rather than run as a command, so these two are refused with the reason instead of reaching the model as a prompt that says `/clear`.
+Both `/clear` and `/rewind` are refused while the session has a turn in progress. They are not delivered to the model as text.
 
-**A built-in name wins.** A custom command at `.localcode/commands/clear.md`, or a skill called `rewind`, is shadowed by these — the built-in routes are tried first. Rename yours if it collides.
+Built-in commands take precedence over custom commands and skills with the same name. Rename a conflicting `clear` or `rewind` command.
 
 ### `/model-invocable`
 
@@ -1072,9 +1031,9 @@ Whether the model may run this session's commands itself. **Off by default.**
 /model-invocable off
 ```
 
-A command is what a person types. Turning this on lets the model type one — a built-in, a custom command, or a skill — and each runs **as a turn of its own** in this same conversation, immediately after the turn that asked for it. Not inside that turn: a command drives turns in the session it belongs to, and the tool call that asked is inside one of them.
+When enabled, the model may request an opted-in built-in command, custom command, or skill. The command runs as a separate turn in the same conversation after the requesting turn ends.
 
-**Two levels, and they answer different questions.** This switch is *whether*. What it reaches is *which*, and that is written down separately so turning the switch off does not throw away the choices:
+Both the session switch and a per-command opt-in are required:
 
 | Kind | How it opts in |
 |---|---|
@@ -1082,21 +1041,21 @@ A command is what a person types. Turning this on lets the model type one — a 
 | Custom command | `model_invocable: true` in its own frontmatter |
 | Skill | `model_invocable: true` in its own frontmatter |
 
-**There is no wildcard.** The list includes `/permission-skip-all` if you write it, and that should be a deliberate act with a name in a file rather than something a `*` could sweep in.
+Wildcards are not supported. Sensitive commands such as `/permission-skip-all` require an explicit entry.
 
-**The name carries its slash.** The model calls `/tidy-context`, not `tidy-context`, and a call without one is refused rather than repaired: a model that wrote `compact` may have meant the word, and one that wrote `/compact` meant the command. It is also what you type, so there is one spelling for the thing.
+Names must include the leading slash, such as `/tidy-context`. A name without the slash is refused.
 
-**A command containing `` !`shell command` `` cannot be model-invocable.** That splice runs at render time, through neither the `bash` tool nor the permission gate — which is fine when a person typed the command's name, because they wrote the file and chose to run it. A model calling it would be running a shell command nobody was asked about. The command still works when you type it; only the automatic invocation is refused, and `/model-invocable on` names each one it refused and why.
+Commands containing `` !`shell command` `` cannot be model-invocable. The substitution executes during rendering, outside the `bash` permission check. Manual invocation remains available. Enabling `/model-invocable` lists refused commands and reasons.
 
-**Read this before turning it on.** The model decides when to run a command from what it has read: files, command output, and whatever an MCP server returned. Anything on the list is therefore reachable from text the model did not write. That is the same route localcode already closed once — a delegated task whose first line read `/permission-skip-all on` used to flip the child's permission switch — and this reopens it deliberately, under a switch and a list you control.
+> The model can select commands based on untrusted file contents, command output, or MCP results. Enable only commands whose automatic execution is acceptable. The switch and allowlist are not a prompt-injection guarantee.
 
-A command run this way cannot run another: one booking the next is a loop with nothing bounding it.
+A model-invoked command cannot invoke another command.
 
 ### `/usage`
 
 Shows cumulative token counts per model for the current session, with no model call. **Token counts only, never dollar figures.**
 
-Unlike the context percentage in the status bar, which is a snapshot of the most recent call, `/usage` sums every API call since the session started. Each call is billed for the entire history it resends, so a sum rather than a snapshot is the correct answer to "how much has this session used".
+`/usage` sums every API call since session creation, including repeatedly sent history. The status-bar context percentage describes the latest request instead.
 
 With no calls yet, it just says so.
 
@@ -1104,27 +1063,28 @@ With no calls yet, it just says so.
 
 Shows what is actually in the request this session would send next, and what is not, with no model call.
 
-The prompt a turn sends is assembled from a declared inventory rather than concatenated: every piece has a stable id, a source, a trust class, a place in the request, and a condition saying when it applies. `/context` reports the assembly for the next turn, which is the one you are deciding whether to send:
+Each prompt asset has a stable ID, source, trust class, request position, and inclusion condition. `/context` reports:
 
-* which assets are included, with the size of each and the reason it applies,
-* a per category total, because "the prompt is 4,000 tokens" is not actionable and "the project's rules are 3,200 of it" is,
-* whether the request carries external content, which is data and never instruction,
-* warnings, such as an unstable asset sitting ahead of a stable one and spoiling the cache prefix behind it,
-* and the rest of what fills a window: the tool definitions, counted separately for built-in tools and for each MCP server, the conversation so far, and the room reserved for the answer, against the window itself.
+* Included assets, sizes, and inclusion reasons
+* Totals by category
+* External content classified as data
+* Cache-order warnings
+* Tool schemas by built-in group and MCP server
+* Conversation size, reserved answer space, and context-window limit
 
-`/context all` also lists what was left out and why, which is the form that answers "why are my project's rules not in there". It is also the form that lists the conversation's own sources one by one: a request carries an entry for every tool result it is still sending, and past a dozen the short form folds them into a count rather than printing a transcript index.
+`/context all` adds excluded assets and reasons. It lists individual conversation sources. The short form groups tool-result sources into a count after twelve entries.
 
-Identities, sizes and reasons only: the bodies are never printed. The assets include the workspace's own instructions and anything a hook injected, and the transcript is a durable log.
+Only identities, sizes, and reasons are printed. Asset bodies, project instructions, and hook-injected content are not printed.
 
-Token figures are estimated from character counts. About right for English, and a floor for Korean and Japanese, which run several times denser.
+Token counts are character-based estimates. Korean and Japanese may use substantially more tokens than the estimate.
 
-The same assembly is recorded in the turn log as `prompt_manifest`, `prompt_assets` and `prompt_untrusted`, and the full record is kept beside the trace under `~/.localcode/manifests/`, aged by the same retention. `/context <id>` reads one back: the request that actually went out, with its inclusion and exclusion reasons, hashes, warnings and any provider lowering. That is the difference between the two forms, and it is worth stating plainly: bare `/context` describes the hypothetical next turn, `/context <id>` describes a call that happened.
+The turn log records `prompt_manifest`, `prompt_assets`, and `prompt_untrusted`. Full records are stored in `~/.localcode/manifests/` with trace retention. `/context <id>` reads a past request's inclusion reasons, exclusions, hashes, warnings, and provider lowering. Bare `/context` describes the next request; `/context <id>` describes a recorded request.
 
-A fallback that reports the same manifest id on a different model family reused a prompt written for the model that failed, which is what the id makes visible.
+The same manifest ID on a different model family indicates reuse of the same prompt assembly.
 
 ### The switches
 
-These settings change how every turn behaves, and each has a command of its own. They are answered by the daemon rather than by a client, so the TUI and the Web UI both have them and both say the same thing about them.
+The following daemon commands work in both clients.
 
 **Daemon-wide**, saved to config.json:
 
@@ -1133,7 +1093,7 @@ These settings change how every turn behaves, and each has a command of its own.
 | `/smart-agent` | `smart_agent` | The specialist roster, the fallback chain, the trace, the prompt cache markers and the guards. See [Smart Agent](#smart-agent). |
 | `/orchestrate` | `orchestrate` | The Orchestrate tool. Needs at least two agents to delegate to, so in practice Smart Agent as well. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
-| `/keep-going` | `keep_going` | The carry-on nudge for muse models. See [A model that stops mid-task](#a-model-that-stops-mid-task). The settings window has the same switch as a checkbox. |
+| `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also available in settings. |
 | `/auto-compact` | `auto_compact_enabled`, `auto_compact_percent` | Auto-compaction. A number sets the threshold and turns it on: `/auto-compact 70` compacts past 70% of the context window. The default threshold is 50%. |
 
 **Per conversation**, saved with the session. config.json holds their defaults. See [The four switches](#the-four-switches):
@@ -1142,7 +1102,8 @@ These settings change how every turn behaves, and each has a command of its own.
 |---|---|---|
 | `/permission-skip-all` | `skip_all` | Everything, the workspace boundary included. |
 | `/permission-skip-tools` | `skip_tools` | Every tool prompt, and not a path that leaves the workspace. |
-| `/read-outside` | `read_outside` | Reading outside the workspace. `mem-clear` forgets the directories approved at a prompt. |
+| `/read-outside` | `read_outside` | Reading outside the workspace. `mem-clear` forgets approved directories. |
+| `/write-outside` | `write_outside` | Writing outside the workspace. `mem-clear` forgets approved directories. |
 
 Two more commands book work for later. See [Scheduled tasks](#scheduled-tasks):
 
@@ -1150,13 +1111,12 @@ Two more commands book work for later. See [Scheduled tasks](#scheduled-tasks):
 |---|---|
 | `/schedule` | `/schedule <when> <what to do>` books a prompt; `/schedule cancel <id>` removes one. A repeating time works too, with `--times`, `--until` and `--keep` after the request. |
 | `/show-scheduled-task` | Lists this conversation's booked tasks. |
-| `/write-outside` | `write_outside` | Writing outside the workspace. `mem-clear` likewise. |
 
-With no argument each one flips: `/smart-agent` turns it on if it was off. `on` and `off` set it outright, which is what you want in a script or when you are not sure what it currently is.
+Toggle commands accept no argument to invert the current value, or `on` and `off` to set it explicitly.
 
-**They save.** A daemon-wide choice is written to config.json and a per-conversation one is saved with the session, so either survives a restart, which is how the same switches have always behaved in the settings window and is not how `/config` behaved: `/config smart_agent on` applies for the run and forgets. When there is no config.json to write to, or the write fails, the change still applies and the reply says so rather than reporting a change that did happen as one that did not.
+Dedicated daemon-wide commands save to config.json. Per-conversation commands save with the session. `/config` changes apply only to the running daemon. If persistence fails, the runtime change still applies and the response reports the failure.
 
-Each reply says what the switch did and what it did not. Turning Smart Agent on with no profiles configured is legal and inert, so it says so instead of reading as a change that took effect; the same for auto-delegation with no `auto_delegate` block. `/permission-skip-all on` says in as many words that shell commands and paths outside the workspace will no longer ask in this conversation, that rules which **deny** still deny, and that `/permission-skip-tools` is the same thing without the last part.
+Replies report inactive configurations, such as Smart Agent without profiles or auto-delegation without a configured target. `/permission-skip-all on` warns that shell commands and external paths no longer prompt. Explicit `deny` rules still apply.
 
 `/config` still works and still lists all four settings including `auto_compact`.
 
@@ -1169,7 +1129,7 @@ Two more commands apply an edited configuration without restarting:
 
 ### Other local commands
 
-These are typed into the message box but never reach the event log, so replaying a session does not bring them back.
+These commands are handled locally or by the daemon without a model call. Client-only commands do not enter the event log.
 
 | Command | Effect |
 |---|---|
@@ -1189,25 +1149,27 @@ These are typed into the message box but never reach the event log, so replaying
 | `/write-outside` | Writing outside the workspace, the same three arguments. |
 | `/schedule` | Books a prompt for later: `/schedule <when> <what to do>`. Runs only while localcode is running. See [Scheduled tasks](#scheduled-tasks). |
 | `/show-scheduled-task` | Lists the prompts booked for later in this conversation. |
-| `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <what to do>` — this conversation's agent writes, the others review, round after round. Also started by asking for it in words, or with the ⚖️ button. See [Debate](#debate). |
-| `/effort` | `/effort [off\|low\|medium\|high]` — how hard the model is asked to think in this conversation, and what that reaches on this model. `default` goes back to the profile's. See [Effort](#effort). |
+| `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <task>`. Author and reviewer iterations. Also available through natural language or the ⚖️ button. See [Debate](#debate). |
+| `/effort` | `/effort [off\|low\|medium\|high]`. Conversation reasoning level. `default` restores the profile setting. See [Effort](#effort). |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions
 
+Sessions retain conversations across client and daemon restarts. Archive to hide a session without deleting it. Delete permanently removes the session and its descendants.
+
 ### Switching sessions
 
-A session is an append only event log that lives as long as the daemon, so reopening the TUI or a browser tab picks the conversation back up.
+Sessions persist as append-only event logs. Reopening a client or restarting the daemon restores the conversation.
 
 * **TUI**: at startup, if any session exists, the terminal lists them with session ID, agent, and creation time. Enter a number to resume, or `n` or an empty line to start fresh. From the same screen, `d<number>` such as `d1` deletes one session and reshows the list, and `da` deletes every session after you type `yes` to confirm.
 * **TUI, once running**: `/session` opens the same choice without restarting. Arrow keys move, Enter switches, Esc cancels. Switching clears the screen and replays the chosen conversation from its own log; the prompt recall history goes with it, since it belonged to the conversation you left.
-* **Web UI**: the left panel always shows the session list, each entry labelled with the workspace directory it was created in. Click a session to switch to it — the screen clears and that session's whole event log replays, including user messages, model replies, and tool runs. See [Left panel: sessions](#left-panel-sessions).
+* **Web UI**: click a session in the left panel. The transcript and workspace switch together. See [Left panel: sessions](#left-panel-sessions).
 
 `GET /api/sessions` returns the same list. Background tasks are `visible:false` and do not appear there. Use `GET /api/sessions/{id}/tasks` for those.
 
 ### Archiving a conversation
 
-A shelf, not a bin. A conversation that has gone quiet leaves the session list without losing anything, and comes back the moment you want it.
+Archiving removes a conversation from the active list without deleting its contents. Retrieve it to resume work.
 
 | Where | Archive | Retrieve |
 |---|---|---|
@@ -1215,15 +1177,15 @@ A shelf, not a bin. A conversation that has gone quiet leaves the session list w
 | TUI | `/archive` puts the conversation you are in away | `/retrieve` offers a picker of the archived ones; `/retrieve <id>` takes one directly |
 | API | `POST /api/sessions/{id}/archive` | `POST /api/sessions/{id}/retrieve` |
 
-The Archive header carries the count, and it is right whether or not the section is open and whoever moved the conversation. The list is read once at load and again on every move for exactly that reason: a number that only appears after the first expand is one nobody can trust.
+The Archive count refreshes on initial load and after every archive or retrieval, including changes from other clients.
 
-`GET /api/sessions?archived=1` is the archived list. Same endpoint and same row shape as the active one, told apart by the query, so nothing can end up with two ideas of what a session is.
+`GET /api/sessions?archived=1` returns archived sessions in the same row format as the active-session endpoint.
 
 #### What archiving keeps
 
-Everything. The title, the workspace, the permissions, the effort, the place in a hand arranged list, and the whole event log. An archived conversation is still readable: `GET /api/sessions/{id}` and its event stream both keep working, because reading the transcript is the point of keeping it.
+Archiving preserves the title, workspace, permissions, effort, list rank, and event log. `GET /api/sessions/{id}` and its event stream remain readable.
 
-Its log is still written to, as well. A background task that outlives the archive still records that it finished, and a schedule still records that it was missed. The store refuses to **start** work in an archived conversation, never to record what happened in it.
+The log continues accepting completion and missed-schedule events. Archived sessions cannot start new work.
 
 #### What it refuses, and with what
 
@@ -1236,7 +1198,7 @@ Its log is still written to, as well. A background task that outlives the archiv
 | Upload a file to it | 403 |
 | Name it in a reorder | 400 |
 
-**403 and never 409.** Both clients read a 409 as "a turn is running" from the status code alone, and both answer it by queueing the prompt and waiting for a `turn.done` that an archived conversation will never produce. A 409 here would be a message that sits unsent with the spinner running.
+Archived-session work requests return 403. Clients reserve 409 for a running turn and would otherwise queue a request that cannot run.
 
 #### When archiving is refused
 
@@ -1246,49 +1208,50 @@ Its log is still written to, as well. A background task that outlives the archiv
 | A background task | 409, naming the tasks. Wait for them or cancel them. |
 | A scheduled run | 409, naming the entries. |
 
-Refused rather than stopped, deliberately: deleting kills that work because the records are about to go away, and archiving has no such excuse. Killing work nobody asked to kill is a silent side effect.
+Archiving does not cancel active work. Finish or cancel it before archiving.
 
-One residual, stated rather than hidden: a scheduled run that commits to running in the moment between that check and the flag being written completes its turn and reports into a conversation that is by then archived. Nothing is lost, since the log still accepts it.
+A scheduled run that starts between the active-work check and the archive flag may finish in the archived conversation. Its results remain in the log.
 
 #### The other edges
 
-| | |
+| Detail | Behavior |
 |---|---|
-| Order | Retrieve restores the **rank**, not the number. Exact if the list was not rearranged while it was away, and as close as the remaining information allows if it was. |
-| A prompt booked for later | Reported **missed** when it comes round in an archived conversation, not fired and not failed. Retrieving does not run it late, for the reason a missed schedule never is. |
-| Background task sessions | Cannot be archived on their own: they are in no list, so archiving one hides nothing, and its parent's turn is waiting on it. |
+| Order | Retrieval restores the previous relative rank. Reordering while archived may change the exact position. |
+| Future scheduled prompt | Marked `missed` if due while archived. Retrieval does not run it late. |
+| Background task sessions | Cannot be archived independently. |
 | Restart | Archived stays archived. A session file written before this feature existed has no flag and loads as active. |
-| Memory | Archiving releases the conversation history this process was holding, and retrieving replays it from the log. Uncollected background task answers are deliberately **not** dropped: they exist nowhere else, and archiving is reversible. |
+| Memory | Archiving releases in-memory conversation history. Retrieval reloads the log. Uncollected task results remain available. |
 | Delete all sessions | Removes archived conversations too. The confirmation says so. |
 
 ### Referring to another conversation with `#<name>`
 
-A prompt can name another conversation on this daemon, and the model is told which one it is and how to read it.
+Use `#<name>` to refer to another conversation on the same daemon. The model receives its identity and may read it with `session_read`.
 
 ```
 #S2 has the final report. Check it against the file in this workspace.
 ```
 
-Two forms, because a title routinely has spaces in it:
+Reference forms:
 
 | Form | Matches |
 |---|---|
 | `#S2` | a session id, or a title with no spaces |
 | `#"the parser rewrite"` | any title |
 
-A name is resolved in one order and never guessed at: exact id, then exact title, then a unique title prefix. Two conversations that both match are listed for you to pick between rather than one being chosen — nothing validates a title, and forking a conversation twice produces two called the same thing, so picking silently would be picking wrong half the time.
+Resolution order: exact ID, exact title, then unique title prefix. Ambiguous matches are listed for the user to choose.
 
-**Nothing of the named conversation is put into your message.** A reference becomes a line of localcode's own text saying which conversation it is, where it was working, and that its contents can be read with the `session_read` tool. The model reads it only if it decides to, and what comes back arrives as a tool result — the least trusted kind of text there is, which is the right classification for a mixture of somebody else's typing, a model's own words, fetched pages and whatever an MCP server returned. Anything written inside that transcript is data: a `#S3` in it does not resolve, and a slash command in it does not run.
+A reference adds the session identity, workspace, and `session_read` instructions, not its transcript. The model may read it as a tool result. Referenced transcript text is data: nested `#` references do not resolve and slash commands do not execute.
 
-Other things worth knowing:
+Reference limits:
 
-* **Nothing is ever refused.** A name that matches nothing, or matches several, or names the conversation you are already in, produces a notice and the turn carries on. `#42` is an issue number and is ignored; `# ` is a markdown heading.
-* **Archived conversations can be referred to.** Referring is reading, and archiving only ever refuses starting work.
-* **A conversation in another project says so.** The notice names both directories and warns that paths in the other transcript are relative to *its* project. Following one from here is how files end up in the wrong repository.
-* **Five per message.** The sixth is not dropped in silence: the notice says how many were skipped.
-* **Background tasks are not referable.** They belong to the conversation that started them; use `/tasks` for those.
-* **Delegated work cannot follow a reference.** A prompt sent to a sub-agent does not resolve `#<name>`, and a sub-agent is not given `session_read`. Auto delegation declines a prompt that names another conversation, so it is answered by the agent you are talking to.
-* **The right arrow completes a name**, in the TUI and the Web UI alike, from the live conversations and the archived ones. The completion replaces the word at the cursor and leaves the rest of what you typed alone — the same rule a `/command` follows, since a reference sits inside a sentence and a command may now too.
+* Unmatched, ambiguous, and self-references produce a notice without blocking the turn. Numeric issue references such as `#42` and Markdown `# ` headings are ignored.
+* Archived conversations remain readable.
+* Cross-project references identify both workspaces and warn that paths belong to the referenced project.
+* Maximum five references per message. Additional references are counted in a notice.
+* Background sessions cannot be referenced; use `/tasks`.
+* Delegated prompts do not resolve references, and sub-agents do not receive `session_read`.
+* Auto-delegation skips prompts containing session references.
+* Right-arrow completion includes active and archived conversations and replaces only the word at the cursor.
 
 ### Renaming and deleting sessions
 
@@ -1300,24 +1263,24 @@ Sessions are identified and resumed by ID, so a `title` is purely for display.
 | Delete one | `DELETE /api/sessions/{id}` | The delete button per session in the Web UI, or `d<number>` in the TUI startup picker |
 | Delete all | `DELETE /api/sessions` | The delete all button in the Web UI, or `da` in the TUI startup picker |
 
-* A rename records a `session.renamed` event.
-* Deleting removes the session and its JSONL and metadata files permanently. It cannot be undone.
-* Deleting is refused with 409 if that session has a turn in progress.
-* **Deleting cascades to everything the session started.** A background task runs in a child session of its own, invisible and unlisted, and a task can delegate again, so the tree can be several levels deep. Deleting the conversation stops every running descendant, waits for it to unwind, and then removes all of their logs and metadata along with the parent's. Nothing is left running and nothing is left on disk.
-* A task that was stopped this way reports a stopped outcome rather than an empty answer, so a collection in flight can tell "the session went away" from "the task had nothing to say".
-* A new background task cannot be launched under a session while it is being deleted. Deletion and delegation share one claim: a delegation already under way is waited for and included in the stop, and one that starts afterwards is refused with an error saying the session is going away. There is no order in which a delete and a delegation can interleave that leaves work running or a session behind.
-* Delete all is refused with 409 if **any** session has a turn running, and nothing is deleted, so a partial delete never leaves things in an unclear state. It stops running background work first, the same way a single delete does.
-* While delete all is running, starting a turn, creating a session and forking one are all refused with 409. The refusal is decided and registered in one step rather than checked and then acted on, so a request that was already past its check when delete all began is waited for and included, rather than committing into a store that is being emptied. For a fork the window opens before the source conversation is read, not just before the copy is created, because a fork depends on state: a copy made from a snapshot taken outside the window would let a deleted conversation reappear. There is no order in which the two can interleave that leaves a session behind, removes a log from under a turn, or recreates a conversation from one that was just deleted.
+* Rename records `session.renamed`.
+* Delete permanently removes JSONL and metadata files.
+* Delete returns 409 when the target has an active turn.
+* Deleting a parent stops all descendants, waits for them to finish stopping, and removes their logs and metadata.
+* A stopped task returns a stopped outcome, not an empty answer.
+* New delegation is refused once deletion begins. Delegation already admitted is included in deletion.
+* Delete all returns 409 without deleting anything if any session has an active turn. Running background work is stopped first.
+* While delete all runs, new turns, sessions, and forks return 409. Already admitted operations are awaited and included. Fork admission covers source-history reads as well as creation.
 
 ### Context window management
 
-At the end of every turn, the token usage the provider reports is recorded as a `usage` event. Bedrock, Anthropic, and any OpenAI compatible server asked for `stream_options.include_usage` all supply it.
+Provider token usage is recorded as a `usage` event at turn end. Bedrock, Anthropic, and OpenAI-compatible servers with `stream_options.include_usage` supply these values.
 
-Each event carries input and output token counts, the model's known maximum context from the best effort table in [internal/modelinfo](../internal/modelinfo/modelinfo.go) defaulting to 128000 for unknown models, the percentage filled, and tokens per second. Both clients drive their status bar from this.
+The event includes input and output tokens, context limit, percentage used, and tokens per second. The context limit uses [internal/modelinfo](../internal/modelinfo/modelinfo.go), with a 128000-token default for unknown models. Both clients use this event for their status bars.
 
-**Automatic compaction.** Once context use passes the threshold (**50%** unless `/auto-compact <percent>` set another), and `auto_compact` is on, the next message triggers a one time summarization of the whole conversation. That summary replaces the history and the new message is sent after it. The transcript notes that compaction happened.
+Automatic compaction runs on the next message after context use exceeds the threshold. The default is 50%. `/auto-compact <percent>` changes it. When enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction.
 
-**When a request is too big anyway.** The threshold watches the history alone, and what a server refuses is the history *plus* the room the request reserves for the reply, so a large `max_tokens` against a small window can be refused while the meter reads half full. Four things guard against that.
+The context gauge does not include all reserved output space. The following controls handle oversized requests:
 
 | Guard | What it does |
 |---|---|
@@ -1326,11 +1289,11 @@ Each event carries input and output token counts, the model's known maximum cont
 | A refused turn is summarized and retried | Not the end of the turn. The transcript says it happened, and the turn carries on. |
 | Still refused, it is trimmed | Whole messages go from the oldest end, and the remaining text is cut if dropping is not enough. Each attempt aims at two thirds of what the conversation *measures*, not of the window, so it converges on a size the server accepts. This matters most for Korean and Japanese, where the character-count estimate runs about 4x low and a request the server refuses can measure as comfortably fitting. |
 
-`/compact` shrinks its own request the same way, rather than failing for being too long, which is the one failure it cannot have.
+`/compact` also reduces its own request size when needed.
 
 Set `context_window` on the profile if the model is one whose name gives no clue to its real limit.
 
-If summarization fails for some other reason, a network error say, compaction is skipped and the original history is used. It never blocks the conversation.
+If summarization fails for another reason, such as a network error, LocalCode uses the original history and continues.
 
 | Setting | Default | Change it |
 |---|---|---|
@@ -1345,11 +1308,13 @@ Session events append to `~/.localcode/sessions/<session-id>.jsonl`, useful for 
 
 Session metadata at `~/.localcode/sessions/<id>.meta.json` and the event log at `<id>.jsonl` both persist, so **restarting the daemon keeps** the session list, the conversation context, and `/usage` totals.
 
-At startup, `session.LoadAllFromDisk` reads every pair to restore the list, and `agent.Loop.RehydrateAll()` replays each event log to rebuild the model facing history, including tool calls, tool results, and compaction summaries, along with token usage. The previous conversation is not only visible again, the model itself still remembers the context for the next message.
+At startup, `session.LoadAllFromDisk` restores metadata and `agent.Loop.RehydrateAll()` rebuilds model history from event logs. Restoration includes tool calls, tool results, compaction summaries, and token usage.
 
 If one session fails to restore, for example a corrupt `.meta.json`, the rest still restore and the daemon logs a warning.
 
 ## Part 6. Web UI
+
+The Web UI shares daemon sessions with the TUI and desktop window. The left panel manages sessions. The right panel shows tasks and MCP servers. Status and permission controls are below the prompt.
 
 ### Resizing and hiding the side panels
 
@@ -1359,9 +1324,9 @@ If one session fails to restore, for example a corrupt `.meta.json`, the rest st
 | Back to the default width | Double-click that same handle |
 | Hide or show a panel | The toggle button in the header, at the far left for the session panel and the far right for the tasks/MCP panel |
 
-Both the widths and the hidden/shown state are remembered in the browser (or the desktop window) and restored next time.
+Panel width and visibility persist in the browser or desktop window.
 
-A drag stops at 160px, because a panel narrower than the session titles and server names it exists to show is worse than no panel at all. The toggle is what removes one entirely.
+Minimum panel width: 160px. Use the toggle to hide a panel.
 
 ### Left panel: sessions
 
@@ -1369,19 +1334,19 @@ Every session on the daemon, newest first. Each card shows:
 
 | Line | Contents |
 |---|---|
-| Title | The session's title, or its ID if it has never been renamed, behind a light: **grey** — nothing is running here; **blinking green** — a turn is running; **steady green** — a reply arrived while you were in another session and you have not opened it since; **steady amber** — the conversation has stopped and is waiting for you to answer a permission request. One rule across every light in the product: green is the machine's colour and amber is yours, blinking means something is happening, and steady amber means nothing is happening and will not until you act. Waiting is drawn in preference to running, because a permission request is raised from inside a turn and both are almost always true at once. Every card has one, so an idle session says so rather than looking like a panel that does not draw lights. |
-| Workspace | The directory the session was created in, shortened from the front (the full path is in the tooltip). This is what distinguishes two sessions that would otherwise look identical because they belong to different projects. |
+| Title | Title or session ID. Indicator: grey for idle, blinking green for running, steady green for unread reply, steady amber for pending permission. Permission state takes precedence. |
+| Workspace | Current directory, shortened from the front. Tooltip shows the full path. |
 | Created | Local date and time |
 
-**Clicking anywhere on a card switches to that session** — the transcript, agent, and status bar all follow. The `rename` and `delete` buttons on the card act on that session without switching to it. Above the list is **+ new**, below it **delete all sessions**; both destructive actions confirm first.
+Click a card to switch its transcript, agent, workspace, and status bar. Rename and delete act on the card without switching. **+ new** creates a session. Deletion controls ask for confirmation.
 
-**Drag a card up or down to put it where you want it.** The order is saved on the daemon (`POST /api/sessions/order`, and in each session's metadata file), so it survives a restart and is the same in every client. Newest-first is only the starting arrangement: it sinks the conversation you have lived in all week below every throwaway one started since. A session created after you have arranged the panel appears at the top, where a new session has always appeared, rather than at the bottom of an arrangement it was never part of.
+Drag cards to reorder sessions. The daemon saves order through `POST /api/sessions/order` and session metadata. All clients use the same order. New sessions appear at the top.
 
-The workspace shown on a card is where that session currently is: recorded when it was created, and updated when the workspace is switched while that session is the open one. Switching in one session never relabels another. Sessions created before this field existed show `(workspace not recorded)`.
+Cards show the session's current workspace. Sessions without a recorded workspace show `(workspace not recorded)`.
 
-**Switching to a session also switches the workspace to its directory** — see [Switching the workspace directory](#switching-the-workspace-directory).
+Switching sessions restores the selected session's workspace. See [Switching the workspace directory](#switching-the-workspace-directory).
 
-The agent isn't shown here — the header dropdown and the [status bar](#status-bar-under-the-prompt) both already carry the current agent, and it's a property of the next message rather than of the session's identity.
+The current agent appears in the header selector and [status bar](#status-bar-under-the-prompt), not on session cards.
 
 ### Right panel
 
@@ -1394,7 +1359,7 @@ The agent isn't shown here — the header dropdown and the [status bar](#status-
 
 Dropping a file on the input box uploads it through `POST /api/sessions/{id}/uploads` to `~/.localcode/uploads/<session id>/<filename>`, and inserts the absolute path into the input box.
 
-The file contents are not shown to the model. The model reads that path itself with `read_file` or `bash` when it needs to. This works well for text files. For images and other binaries the model cannot read them as text, so only the path is useful.
+Uploads insert a path, not file contents. The model must read the path with `read_file` or `bash`. Text files are supported; image and binary content is not decoded.
 
 ### Status bar under the prompt
 
@@ -1402,26 +1367,26 @@ One line directly below the input box:
 
 | Element | Behavior |
 |---|---|
-| Agent and model | Which agent answers the next message, and the model its profile resolves to. The model shows from the moment a session opens, taken from the agent's profile, and switches to whatever the provider actually reports once the first reply arrives. |
+| Agent and model | Agent for the next message. Initial model ID comes from its profile; after a reply, the provider-reported ID is used. |
 | Context use | Yellow past 70%, red past 90% |
-| TPS | Shown when `show_tps` is on. It is a **generation** rate: the clock runs from the first token to the last, so the wait before a model starts answering (prefill, and on a shared local server the queue in front of you) is not divided into the output. It covers the whole turn, not the last model call — a turn that uses tools is several calls, and the last is often a handful of tokens. A `~` prefix marks a live estimate made while the model is still talking, counted from stream chunks because the real token count only arrives when the stream ends; it is replaced by the exact figure at that point. A reply that arrives in a single chunk shows nothing at all: there is no interval to measure across. |
-| Activity light | Four states: **grey** — no live connection to the model (the event stream to the daemon is down); **solid green** — connected and idle; **blinking green** — work is happening in this session, either a turn or a background task; **steady amber** — the work has stopped and is waiting for you to answer a permission request, which is checked first because both are true at once while a question is on screen. A task deliberately outlives the turn that launched it and holds no turn slot, so a conversation whose prompt box is free can still have several agents working in it; hovering the light says which of the two it is. It recovers to green on its own when a stopped daemon comes back, since the browser reconnects the stream automatically. "Running" is the daemon's own answer, not this page's memory of having sent something, so it agrees with the light on the session's row in the left panel however the turn started — from another client, or before this page was loaded. |
-| Stop button | Appears while a turn is running, whoever started it. Click it to cancel, the same as Esc — which is the faster route but depends on the key reaching the page. |
-| Auto-delegate pill | `auto-delegate: on` / `off`. Click to open a panel setting which prompts are delegated and which agent answers them — see [Auto delegation](#auto-delegation). |
-| Permission pill | `permissions: ask (N rules)` or `permissions: skip`. Click it to view or change permission settings — see [Viewing and changing permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
+| TPS | Generation rate across the full turn, excluding prefill and queue time. `~` marks a live stream estimate; the final count replaces it. Single-chunk replies show no rate. Controlled by `show_tps`. |
+| Activity light | Grey: disconnected from daemon. Solid green: connected and idle. Blinking green: turn or background work active. Steady amber: permission required. Uses daemon state and reconnects automatically. Tooltip distinguishes turns from tasks. |
+| Stop button | Cancels the active turn, including a turn started by another client. Equivalent to Esc. |
+| Auto-delegate pill | Opens target-agent and pattern settings. See [Auto delegation](#auto-delegation). |
+| Permission pill | Shows permission state and opens its controls. See [Permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
 | Settings pill | `⚙ settings`. Opens the settings window, which holds the [Smart Agent](#smart-agent) switch and the update controls. See [Checking for updates](#checking-for-updates). |
 
 ### Switching agents with Tab
 
-`Tab` switches to the next agent and `Shift+Tab` to the previous one, the same as in the TUI — the browser's normal "move focus to the next control" behavior is suppressed so the key means the same thing in both clients. Focus stays in the prompt box. Inside a modal (permissions, workspace) Tab still moves between fields, which is the only thing it could usefully mean there.
+Tab selects the next agent and Shift+Tab the previous agent. Focus remains in the prompt box. Inside a modal, Tab moves between fields.
 
 The header dropdown does the same thing and lists each agent with the model it resolves to, e.g. `explore (qwen3-1.7b)`; the agent's description is in the option's tooltip.
 
-In the TUI, `/model` opens the same choice as a list: arrow keys to move, Enter to switch, Esc to cancel, with the model each agent resolves to beside its name. Tab still cycles, which is faster when there are two agents and blind when there are six.
+In the TUI, `/model` opens an agent list with model IDs. Use arrows to select, Enter to switch, and Esc to cancel.
 
 ### Model output renders as markdown
 
-Headers, bold/italic, inline code, fenced code blocks, lists, blockquotes, links, and horizontal rules render as formatted HTML instead of raw text, in both the Web UI and the native GUI window. It's a small built-in renderer with no external dependency, since this stays a fully offline app; anything it doesn't recognize as markdown (including any raw HTML the model writes) shows as plain escaped text rather than being interpreted, so nothing the model outputs can inject markup.
+The built-in offline renderer supports headings, emphasis, code, lists, blockquotes, links, and horizontal rules. Unsupported Markdown and raw HTML are escaped as text. Model output cannot inject HTML.
 
 ### Watching a long turn
 
@@ -1432,32 +1397,34 @@ Each tool the model runs gets its own line in the transcript, written the moment
 ✓ bash  go test ./...                                    14 lines
 ```
 
-The marker pulses while the call is running, and turns into `✓` or a red `✗`. Only the tool's name and its main argument are shown, so a file read does not bury the conversation — **click the line** to expand the full arguments and the full result, and click again to collapse it.
+The marker pulses during execution and becomes `✓` or a red `✗` at completion. Click a tool line to expand or collapse its full arguments and result.
 
-This matters most on the turns where the model spends minutes in tools and says nothing: without those lines, the screen shows a blinking light and no other sign that anything is happening. The status bar still names the tool currently running; the transcript is what remains afterwards.
+The status bar shows the current tool. Completed tool lines remain in the transcript.
 
 The TUI writes the same one-line entries, without the expandable detail.
 
-A submitted prompt appears immediately, dimmed, and turns into a confirmed turn once the daemon acknowledges it. The gap between the two is everything that happens before the model is handed the text — hooks, the auto-delegation decision, the first request — which on a remote or loaded model is seconds. Both clients do this; the transcript still holds one entry per message, the one the daemon recorded.
+Submitted prompts appear immediately in a dimmed state. Daemon acknowledgement confirms the entry. Each message has one recorded transcript event.
 
-**How a turn of yours is marked.** Your prompt and the model's reply used to differ only in font weight, which is not something the eye catches while scrolling back. Since v0.72.0 the block is marked at its edges instead and the text itself is left alone: a boundary row reading `You` opens the turn, and a rule runs down the whole left side of the prompt, so a ten-line paste is marked on every line of it rather than only on its first. The TUI draws the same two things as a `You ────────` rule and a `▌` gutter. The inline `You: ` prefix in front of the prompt text is gone in both clients; the boundary row is what names the speaker now.
+User turns start with a `You` boundary row and a left border across the full prompt. The TUI uses a `You ────────` row and `▌` gutter. Neither client adds an inline `You:` prefix.
 
 ### Redirecting a turn while it runs
 
-You can keep typing while the model is working. A prompt sent during a turn is handed to that turn and picked up at its **next tool call** — so "actually, skip the tests" reaches the model mid-job instead of after it has finished the wrong thing.
+Messages sent during a turn reach the model at its next tool boundary. A running tool finishes before the message is delivered.
 
-Until the model is handed it, the line reads `[sent — the model will pick this up at its next step]`. That is replaced by an ordinary confirmed turn — the `You` boundary row and the prompt beneath it — at the moment the model actually receives it, which is where it appears in the transcript from then on.
+Pending messages show a delivery notice. Once the model receives the message, it becomes a confirmed user turn at that point in the transcript.
 
 Several messages can stack up, and they arrive in the order you typed them. The model is told the text came from you mid-task, so it is not mistaken for tool output.
 
-Two things it is not:
+Limits:
 
-- **Not an interrupt.** A tool already running finishes first; nothing is killed. To stop the work outright, press the stop button or Esc — which also discards anything you had typed while waiting, since the point of stopping is to end the job, not to have it act on your queue afterwards.
-- **Not for commands.** `/compact`, `/agent` and the rest don't go through the message endpoint. Typing one mid-turn is refused with a line saying so, rather than queued or ignored.
+* A new message does not interrupt a running tool. Stop or Esc cancels the turn and discards pending messages.
+* Slash commands are refused during an active turn. They are not queued or delivered as model text.
 
 If the turn happens to finish in the instant between your pressing Enter and the daemon accepting the message, it is answered as an ordinary next message instead. Nothing is dropped either way.
 
 ## Part 7. Agents and automation
+
+Agents select models and tool scopes. Smart Agent adds built-in specialists. Orchestration runs explicit stage plans. Scheduled and repeating tasks require the daemon to remain running.
 
 ### Available tools
 
@@ -1465,10 +1432,10 @@ If the turn happens to finish in the instant between your pressing Enter and the
 |---|---|---|
 | `read_file` | No | Read a file with line numbers |
 | `glob` | No | Find files by pattern, `**` supported |
-| `grep` | No | Search file contents by regex. Stops at 200 matches and says so; names any file it could not open or could not finish reading. See [Three grep answers that were wrong, not short](#three-grep-answers-that-were-wrong-not-short) |
+| `grep` | No | Search file contents by regex. Stops at 200 matches and says so; names any file it could not open or could not finish reading. See [Grep completeness reporting](#grep-completeness-reporting) |
 | `write_file` | Yes | Create or overwrite a file |
 | `edit` | Yes | Replace a specific string in a file |
-| `bash` | Yes | Run a shell command, 2 minute default timeout. A non-zero exit is reported as a status rather than judged an error, and where the status is a documented answer — `grep` 1 is no matches, `diff` 1 is the inputs differ, `test` 1 is false — it is not an error at all; `grep` 2, which means the file could not be read, still is. A command that printed nothing says so, and a command killed by the timeout is told apart from one you interrupted. On Windows, a command whose interpreter is not on PATH is told so rather than left with a bare shell error: see [Python on Windows](#python-on-windows) |
+| `bash` | Yes, except default Git allowance | Shell command with a two-minute default timeout. Reports exit status, empty output, timeout, and cancellation separately. `grep` 1, `diff` 1, and `test` 1 are ordinary results; `grep` 2 is an error. See [Python on Windows](#python-on-windows). |
 | `Skill` | No | Load a skill body by name. Registered only when skills exist. |
 | `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
 | `session_read` | No | Read another conversation on this daemon: `mode=summary` for what it concluded and which files it touched, `mode=transcript` for its messages a page at a time. Not offered to a delegated sub agent. See [Referring to another conversation](#referring-to-another-conversation-with-name) |
@@ -1479,15 +1446,13 @@ If the turn happens to finish in the instant between your pressing Enter and the
 | `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 
-**A turn that will not end.** The loop has one ordinary reason to stop: the model stops asking for tools. A model that asks for the same tool with the same arguments over and over would therefore run without limit, which is not hypothetical — it is what a debate reviewer did after recording its verdict. Two things stop it now. A tool that is the end of the work (`Verdict`, `Answer`) ends the turn when it runs. And a turn that takes three steps in a row asking for nothing it has not already asked for is ended with a line in the transcript saying so. Repetition rather than a step count is the signal, so a long turn doing real work is untouched: re-running one command after an edit is not a repeat, because the edit is itself new work.
+The loop ends when the model stops requesting tools. `Verdict` and `Answer` also end the turn after a valid completion result. Three consecutive steps containing only previously repeated tool calls end the turn with a transcript notice. A new edit between repeated checks counts as progress.
 
-**A tool name that is nearly right.** A model sometimes decorates a name — `bash.command` for `bash`, `functions.bash`, `readFile` for `read_file`. When the decorated form unambiguously names one tool the agent actually has, the call runs and the result says which spelling worked. When it does not, the refusal lists the tools the agent does have, so the model can pick a real one instead of guessing at the same wrong name. Resolution only ever searches the tools that agent was offered, so a misspelling cannot reach past a `tools` restriction.
+Unambiguous tool-name variants such as `bash.command`, `functions.bash`, or `readFile` resolve only against tools available to that agent. The result reports the resolved name. An unresolved name returns the allowed tool list. Resolution cannot bypass tool restrictions.
 
 ### Combining agents
 
-An `agents` entry with only a `profile` is just routing, meaning "run under this name and get this model". Adding `description`, `prompt`, and `tools` turns it into a genuinely **separate role** that other agents can delegate to through the `Task` tool.
-
-The idea comes from opencode's subagent and model matching, such as `oh-my-opencode` attaching different models to orchestrator, explore, and review roles.
+Agents map names to profiles. Add `description`, `prompt`, and `tools` to define specialized delegation roles.
 
 The profile names below are the ones `config.example.json` ships, so this block can be pasted onto a copy of it. A profile an agent names has to exist, or the daemon refuses to start.
 
@@ -1507,7 +1472,7 @@ The profile names below are the ones `config.example.json` ships, so this block 
 }
 ```
 
-Declaring a name the built-in roster already uses, as `explore` does here, replaces that specialist entirely — prompt, profile and tools. A name it does not use adds a seventh agent alongside the six.
+An explicit agent definition replaces the built-in specialist with the same name, including its prompt, profile, and tools. Other names add agents.
 
 | Field | Meaning |
 |---|---|
@@ -1526,43 +1491,43 @@ Delegation deeper than 3 levels is refused automatically, so agents cannot recur
 
 ### Orchestration
 
-Off by default, its own switch, in three places that are the same switch:
+Orchestration runs a validated multi-stage plan. It is disabled by default and has three equivalent controls:
 
-| Where | |
+| Control | Location or effect |
 |---|---|
 | `/orchestrate on\|off` | Answered by the daemon, so both clients have it. Saved to config.json. |
 | Settings window | The Orchestration section, under Smart Agent. |
 | `"orchestrate": true` | In config.json. |
 
-It needs at least two agents to delegate a stage to, so in practice Smart Agent on as well. Turning it on with one agent configured is legal and inert, and every surface says so rather than letting it read as a change that took effect.
+At least two delegation targets are required. Enabling orchestration without them is allowed but has no effect. The UI and command response report this condition.
 
-`Task` already lets a model delegate. What it cannot do is commit to a shape in advance. Every fan out is the model deciding, one step at a time, whether to delegate again, and both failure modes are ordinary: a model that says it will check each finding with three independent reviewers checks the first two and reports, and a model told to repeat until nothing new turns up stops at the third round. Neither is dishonesty. A stated procedure is a request.
+`Task` delegates one request at a time. `Orchestrate` declares stage order, fanout, result types, and limits before execution.
 
-So the plan is data, and localcode runs it. The model authors it by filling in the `Orchestrate` tool's input schema, which means the whole plan is checked before a single token is spent: every agent name against the roster the turn was admitted with, every reference against a stage that really precedes it, every count against a ceiling. A plan that would not work is refused with the reason and nothing runs.
+The model submits a plan through `Orchestrate`. LocalCode validates agent names, stage references, and counts before starting work. Invalid plans return a reason and run no stages.
 
 #### What the model is told
 
-A switch that adds a tool and says nothing else is a switch whose effect is invisible: a run that never happens looks exactly like a switch nobody turned on. So with orchestration on, an orchestrating turn's system prompt gains a policy saying when a plan is worth its cost.
+An orchestration policy is added to top-level turns when the feature is enabled.
 
-What it conveys is a threshold, not an enthusiasm. `Orchestrate` is strictly more expensive than `Task` for one question, so the policy names the three shapes it is for (one thing examined along several independent dimensions, every item of a list checked by agents that cannot see each other, a survey whose answers have to come back in a form you can act on) and says to delegate once when delegating once would do.
+Use orchestration for independent review dimensions, per-item checks, or structured surveys. Use `Task` for one delegated question.
 
-Written per model family, for the reason the orchestration prompt already is, because the failure modes are opposite:
+The policy varies by model family:
 
 | Family | What is added |
 |---|---|
 | Default | The policy as above. |
-| gpt, o3, o4 | A stopping rule. This family runs a capable procedure, including on work it should simply have done. |
-| gemini | A concrete threshold, because it will otherwise reason through the whole thing itself. |
-| Local open weight models | Shorter, and pointed at one shape only: a single fanout over a list. Authoring a plan is what these get wrong, and a refused plan costs one tool call, but a model that keeps producing refused plans is worse than one that never tries. |
+| gpt, o3, o4 | Adds an explicit stopping rule. |
+| gemini | Adds a concrete delegation threshold. |
+| Local open weight models | Short policy focused on a single list fanout. |
 
-Only an orchestrating turn gets it. A stage inside a run does not, because it is refused the tool anyway and describing a tool the model was not given costs a round trip to discover.
+Stage agents receive neither the orchestration policy nor the `Orchestrate` tool.
 
 #### A plan
 
 | Field | Meaning |
 |---|---|
-| `goal` | What the run is for. It reaches every agent, because none of them can see your conversation. |
-| `stages` | In order. Each is a barrier for the next. |
+| `goal` | Run objective supplied to every stage agent. Stage agents do not receive the parent conversation. |
+| `stages` | Ordered stages. Each completes before the next starts. |
 
 A stage is one of three kinds:
 
@@ -1576,15 +1541,15 @@ A stage is one of three kinds:
 |---|---|
 | `name` | Lowercase, no spaces. How a later stage refers to this one. |
 | `agent` | Which delegatable agent runs it. Checked against the roster the turn was admitted with. |
-| `role` | The tool allowlist: `readonly` (default), `builder`, `runner`. A stage names a role and cannot enumerate tools, so a plan can never hand `bash` to a reviewer. Intersected with the agent's own restriction, so a plan cannot widen what an agent may do. |
+| `role` | Tool role: `readonly` (default), `builder`, or `runner`. Intersected with agent restrictions. Plans cannot enumerate tools or widen an agent's permissions. |
 | `prompt` | Stands on its own. Three substitutions and no others: `{{task}}`, `{{item}}` in a fanout, `{{input}}` for what earlier stages kept. |
 | `over` | Fanout only. A list you write, or one entry of the form `$stage.field` naming an earlier stage and one of its `strings` fields. |
-| `copies` | Fanout only. Independent agents per item. This is the adversarial pattern: several agents that cannot see each other answering the same question. |
+| `copies` | Fanout only. Independent agents per item. |
 | `returns` | Field name to type (`string`, `bool`, `number`, `strings`). A stage that declares this gets an `Answer` tool in exactly that shape. |
 | `keep` | One returned field. Results where it is false or empty are dropped. |
 | `unanswered` | What to do when an agent does not answer in the declared shape: `skip` (default), `keep`, `fail`. |
 
-`keep` is the quorum mechanism, and there is no expression language anywhere: a stage of skeptics declaring `{"survives": "bool"}` and keeping `survives` is an adversarial filter.
+`keep` filters results by one returned field. It supports no expression language. For example, `{"survives":"bool"}` with `keep: "survives"` retains true results.
 
 ```json
 {
@@ -1607,23 +1572,23 @@ A stage is one of three kinds:
 
 #### What it does and does not promise
 
-| | |
+| Constraint | Behavior |
 |---|---|
 | Ceilings | 8 stages, 16 items per fanout, 8 copies, 32 agent turns per run, 5 declared fields per stage, 4 agents at once. Every one is a refusal at validation, not a truncation while running. |
-| Timeouts | 10 minutes per stage, 30 minutes per run. Nothing else in localcode bounds a single turn's wall clock; a fan out is where that stops being tolerable. |
+| Timeouts | 10 minutes per stage; 30 minutes per run. |
 | Cancellation | Every stage is a synchronous child, so Esc stops the whole run including the stage in flight. |
-| Permission | Every run asks, always. The prompt shows the ceilings rather than an estimate, because a `$stage.field` fanout's width is however many findings the earlier stage returns and nobody knows that yet. |
-| Repeats | A fanout over an earlier stage's findings merges items that are the same once whitespace and case are set aside, and the report says how many. Reviewing one change along four dimensions returns the same finding from every dimension that noticed it; without this, four agents check what is one thing and the run calls it four findings. |
-| The report | Composed by localcode from what happened, not summarised by a model. A run must not report a success nobody observed. |
-| Nesting | Refused. A plan that can run plans turns a ceiling into an exponent. |
+| Permission | Confirmation before each run. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. |
+| Repeats | Fanout items from prior results are deduplicated after case and whitespace normalization. The report includes the duplicate count. |
+| The report | Generated from execution records by LocalCode, not model summarization. |
+| Nesting | Nested orchestration is refused. |
 
-Not in this version, and named rather than left to be discovered: pipelining an item through later stages without waiting for the rest of its own stage; `repeat_until` loops; resuming a run; plans saved on disk.
+Unsupported: per-item pipelining between stages, `repeat_until`, resuming runs, and saved plans.
 
 ### Smart Agent
 
-Off by default. One switch, in the settings window (the gear pill under the prompt), with `/config smart_agent on|off` and `"smart_agent": true` in config.json as the other two ways to set it. The change applies on every session on the daemon, and is saved to config.json so it survives a restart.
+Smart Agent enables specialist delegation, enhanced tools, fallback, tracing, cache markers, and credential-path checks. It is disabled by default. Use the settings window, `/smart-agent on|off`, `/config smart_agent on|off`, or `"smart_agent": true`.
 
-**When the change takes effect.** Work already admitted keeps the setting it was admitted under, all the way through:
+Each admitted turn retains its initial Smart Agent setting:
 
 | Unit of work | Sees the change |
 |---|---|
@@ -1632,11 +1597,9 @@ Off by default. One switch, in the settings window (the gear pill under the prom
 | A sub agent started by `Task` | No. It runs under the state its parent turn was admitted with |
 | A background task launched with `TaskBackground` | No, including while it is waiting for a free slot. A specialist admitted with a read only tool list starts with that list whenever it eventually runs |
 
-The alternative was rereading the switch at every point that consults it, which let a single turn run half enabled.
-
 If the settings window cannot write config.json it says so beside the switch: the change is applied to the running daemon either way, and the warning is only about whether it will survive a restart.
 
-What it turns on is a way of working rather than a preference, which is why it is opt in: one request can become several model calls against several contexts. That is the point of it and it is also a bill nobody agreed to by installing an update.
+Specialist delegation can add model calls and token usage. Enable it explicitly for workloads that benefit from separate contexts.
 
 #### What it adds
 
@@ -1645,18 +1608,18 @@ What it turns on is a way of working rather than a preference, which is why it i
 | Six specialist agents | `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. They exist without being configured, and disappear again when the switch is turned off. See [What the roster needs from your config](#what-the-roster-needs-from-your-config). |
 | An orchestration prompt | Appended to the system prompt of top level sessions only. It tells the model to work out what is being asked, send wide reading to a sub agent, do the narrow work itself, verify before reporting, and say what it checked. |
 | `TaskBackground` and `TaskCollect` | Launch several specialists at once and pick up the answers together, instead of waiting for each in turn. |
-| [Sharper file and search tools](#the-tools-get-sharper-too) | `read_file` pages through long files, `grep` and `glob` skip what is not source and account for it, and a failed `edit` says why it failed. Three of grep's fixes are not behind the switch. |
+| [File and search behavior](#file-and-search-behavior) | Paged reads, bounded search with explicit notices, and edit diagnostics. Grep completeness fixes apply in both modes. |
 | [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by retrying the same endpoint with a bounded backoff, then moving to the next profile, re-deriving the prompt for the model it moved to. |
 | [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
 | [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas, the system prompt and the tail of the conversation are marked, so the provider can serve the unchanged part of every request from cache. |
-| [Two guards](#secrets-and-the-workspace-boundary) | Credential files are refused, and paths outside the session's workspace — symlinks resolved — are asked about. |
+| [File-access checks](#secrets-and-the-workspace-boundary) | Credential-path denial and resolved workspace-boundary checks. |
 | [A trust boundary](#the-trust-boundary) | The system prompt states which sources are instructions and which are data, and MCP output arrives framed as data. |
 
 #### What the roster needs from your config
 
-Nothing, in the sense that matters: **you do not declare the specialists.** With `smart_agent` on, localcode creates all six and points each at whichever of your profiles suits the work it does. What it needs from you is profiles to choose between.
+Smart Agent creates six specialists from available profiles. Explicit specialist declarations are optional.
 
-Three is the useful number, because the roster sorts into three kinds of work:
+The roster uses three profile categories:
 
 | Kind | Agents | Work |
 |---|---|---|
@@ -1664,13 +1627,13 @@ Three is the useful number, because the roster sorts into three kinds of work:
 | balanced | `implement` | Making one self-contained change |
 | deep | `plan`, `oracle`, `librarian` | Judgement: design, review, reading something long |
 
-With one profile everything runs on it and orchestration still works; it just costs the same everywhere, which is most of the point of having a roster. With none at all there is no roster, and turning the switch on says so.
+With one profile, all specialists use that profile. With no profiles, no roster is created and the enable response reports it.
 
-Name a profile `smart-quick`, `smart-balanced` or `smart-deep` to pin a category by hand; no heuristic gets a vote after that. Without those names localcode guesses from the model ids, which works and is worth not relying on.
+Profiles named `smart-quick`, `smart-balanced`, and `smart-deep` override automatic category matching. Otherwise, LocalCode classifies model IDs.
 
-**`config.example.json`'s `agents` block is this written out**, with the six prompts in full. A test in `internal/smart` holds that block to the built-in roster, so the prompts in it are the prompts localcode actually uses rather than a copy that drifted — and it is why deleting the block changes nothing.
+`config.example.json` includes the six built-in prompts. A test in `internal/smart` checks that these definitions match the roster.
 
-To replace one, declare an agent with the same name. A name you have declared is yours entirely — prompt, model and tools — and localcode does not supply its own version of it.
+Declare the same agent name to replace its prompt, model, and tools. LocalCode does not merge the built-in definition into an explicit definition.
 
 #### The specialists
 
@@ -1683,62 +1646,67 @@ To replace one, declare an agent with the same name. A name you have declared is
 | `implement` | the balanced profile | `read_file`, `write_file`, `edit`, `bash`, `glob`, `grep`, `Skill` | One self contained change, carried out and checked. |
 | `verify` | the quick profile | `read_file`, `bash`, `glob`, `grep` | Running the build or the tests and reporting what happened. |
 
-Two properties of that table are enforced rather than requested:
+Enforced restrictions:
 
-* **No specialist has the delegation tools.** A sub agent that can delegate can spawn sub agents that can delegate. "Do not delegate" in a prompt is a request; leaving `Task` out of the allowlist is the answer. Delegation deeper than 3 levels is refused as well, background launches included.
-* **The four investigating agents have no shell.** A read only agent with `bash` is not read only, and the value of sending investigation elsewhere is that its answer can be trusted not to have changed anything on the way.
+* Specialists do not receive delegation tools.
+* Delegation depth is limited to three levels, including background tasks.
+* `explore`, `librarian`, `oracle`, and `plan` have no shell access.
 
-Every specialist is also told to answer in under 300 words, with paths and line numbers rather than pasted output. That is the whole economy of the feature: a sub agent can read fifty thousand tokens in a context the main session never pays for, and hand back two hundred.
+Specialists are instructed to return fewer than 300 words, with file paths and line numbers instead of copied output. Their source-reading context remains separate from the parent context.
 
-An agent you have defined yourself under one of those names is left alone completely, prompt, model and tools. The roster is a starting point, not something that overwrites a deliberate choice.
+Explicit definitions under specialist names remain unchanged.
 
-#### The tools get sharper too
+<a id="the-tools-get-sharper-too"></a>
 
-Four of the six specialists have nothing but `read_file`, `glob` and `grep`, and the roster's cheapest model is the one holding them. So Smart Agent changes the tools as well as who is using them. The switch covers both: the schema a turn was shown and the tool that then runs are resolved from the same pinned setting, so they cannot disagree.
+#### File and search behavior
 
-**Three of grep's are not behind the switch,** because they were defects rather than a way of working. See [Three grep answers that were wrong, not short](#three-grep-answers-that-were-wrong-not-short). Everything in the table below is. Off, the rest of the tools behave exactly as they did before, asserted string for string by a test.
+Smart Agent changes file-tool schemas and execution behavior together. Both use the setting captured at turn admission.
+
+The table below applies only with Smart Agent enabled. [Grep completeness reporting](#grep-completeness-reporting) applies in both modes.
 
 | Tool | With Smart Agent on |
 |---|---|
-| `read_file` | Takes `offset` and `limit`, and returns 800 lines at a time by default. The footer says which lines you got, how many the file has, and the offset to continue from, so a long file is never mistaken for a short one. A binary file is described rather than rendered as thousands of lines of mojibake. |
-| `grep` | Skips binary files and does not walk version control internals or package caches, naming both in the result. No single file may spend more than 30 of the 200 results, so one generated table cannot crowd out the rest of the tree. A very long matching line is clipped at 400 bytes, on a rune boundary. |
-| `glob` | The same directory skip list, named in the result the same way, capped at 500 paths. The part of a `**` pattern after the stars may name directories: it used to be compared against the filename alone, so `**/cmd/*.go` matched nothing whatever the tree held. |
-| `edit` | A failed match says why: whitespace only difference and the exact bytes at that line, CRLF line endings, the line numbers where the first line does appear, or that nothing resembling it is there. A non unique match gives the line numbers of every match. A successful edit hands back the changed lines, numbered, as they now stand on disk. |
+| `read_file` | Supports `offset` and `limit`. Default: 800 lines. Footer reports range, total lines, and continuation offset. Binary files are identified rather than rendered. |
+| `grep` | Skips binary files, version-control internals, and package caches. Maximum 200 matches, 30 per file. Matching lines are clipped at 400 bytes on a rune boundary. Limits and skipped content are reported. |
+| `glob` | Same reported directory exclusions as grep. Maximum 500 paths. Directory components after `**` are supported, including `**/cmd/*.go`. |
+| `edit` | Reports whitespace differences, exact line bytes, CRLF, candidate line numbers, and duplicate matches. Successful edits return numbered changed lines. |
 | `write_file` | Says whether it created the file or replaced one, and how many lines the replaced one had. |
 
-Three deliberate limits:
+Tool limits:
 
-* **A near miss is reported, never applied.** `edit` will tell you the only difference is whitespace; it will not edit past it. In Python, a Makefile or a YAML document, re indenting to make an edit apply changes the program.
-* **The skip list is short.** Version control directories and package caches only. `vendor`, `build`, `dist` and `target` are real source in some project, and a search that quietly refuses to look somewhere is the failure this is against.
-* **Nothing is capped silently.** Every limit above announces itself in the result. A short answer shaped exactly like a complete one is worse than no answer.
+* `edit` reports near matches but never applies them automatically.
+* Search skips version-control internals and package caches. It does not exclude `vendor`, `build`, `dist`, or `target` by default.
+* Every output limit is reported.
 
-#### Three grep answers that were wrong, not short
+<a id="three-grep-answers-that-were-wrong-not-short"></a>
 
-These apply whether Smart Agent is on or off, because they are not a better answer than the old one. They are a true answer instead of a false one, and nobody opts into that.
+#### Grep completeness reporting
 
-| Was | Now |
+These grep behaviors apply with Smart Agent enabled or disabled.
+
+| Condition | Behavior |
 |---|---|
-| The search stopped at 200 matches and returned 200 lines, with no marker of any kind. That is not a truncated answer, it is a claim that the tree holds 200 matches | It says `[stopped at the 200-result limit ...]` and how to narrow the search |
-| A file whose line was longer than 64KB ended its own scan there. `bufio.Scanner` reports that through `Err()`, which nothing read, so the rest of the file was never searched and the file came back clean | Lines up to 1MB are read, and a file that still cannot be finished is named in the result rather than reported as having no matches |
-| A file that could not be opened at all (a dangling symlink, a permission denied) was skipped in silence. A file nothing looked inside is not a file with no matches | It is named in the result |
+| Result limit | Reports `[stopped at the 200-result limit ...]` and suggests narrowing the search. |
+| Long lines | Reads lines up to 1MB. Reports files whose scan could not finish. |
+| Unreadable files | Reports affected paths, including permission failures and dangling symlinks. |
 
-Notices name paths rather than counting them, at most three before the rest becomes "and N more". A count like "could not open 1 file(s)" repeats on every search of a project with one dangling symlink and can never be acted on; a name is something to go and delete.
+Notices name up to three affected paths, then report the remaining count.
 
-A search that withheld nothing still says nothing, so an ordinary result is still bare `file:line:text`.
+Complete searches retain the ordinary `file:line:text` format.
 
 #### Which model each specialist runs on
 
-Not named in the build, because the models named there would be the models on one developer's machine. Each specialist asks for a capability class instead, and the class is resolved against the profiles already in your config.json.
+Specialists select a capability class from configured profiles, not a hard-coded model.
 
 | Class | Wants | Matched from the model id by |
 |---|---|---|
-| `quick` | The cheap fast one | `haiku`, `mini`, `flash`, `nano`, `lite`, `small`, `turbo`, and small parameter counts such as `-8b` |
-| `balanced` | Good enough to be trusted with an edit | `sonnet`, `coder`, `medium`, `gpt-4`, and mid parameter counts such as `-30b` |
-| `deep` | The strongest one | `opus`, `gpt-5`, `pro`, `ultra`, `thinking`, `-r1`, and large parameter counts such as `-70b` |
+| `quick` | Low-latency lookup | `haiku`, `mini`, `flash`, `nano`, `lite`, `small`, `turbo`, and small parameter counts such as `-8b` |
+| `balanced` | Implementation | `sonnet`, `coder`, `medium`, `gpt-4`, and mid parameter counts such as `-30b` |
+| `deep` | Complex analysis | `opus`, `gpt-5`, `pro`, `ultra`, `thinking`, `-r1`, and large parameter counts such as `-70b` |
 
-The lightest class a model id matches wins, so `gpt-5-mini` is quick and not deep: the size qualifier is the specific half of the name and the family is the general one. A class with no match falls back to the nearest class, then to `default_profile`. With one profile configured every specialist runs on it, which is correct: the separate context is the benefit, and a different model is a bonus.
+The lightest matching class wins. For example, `gpt-5-mini` is `quick`. Missing classes fall back to the nearest class, then `default_profile`. A single configured profile serves all specialists.
 
-To settle it by hand, name a profile `smart-quick`, `smart-balanced` or `smart-deep`. That beats every heuristic outright.
+Use explicit profile names to override classification:
 
 ```json
 "profiles": {
@@ -1749,22 +1717,22 @@ To settle it by hand, name a profile `smart-quick`, `smart-balanced` or `smart-d
 
 #### Running several at once
 
-`Task` waits. For one question that is right. For three independent questions it means waiting three times, so:
+Use `TaskBackground` and `TaskCollect` for independent work:
 
 1. `TaskBackground({"agent":"explore","prompt":"..."})` three times. Each returns a task id straight away and the orchestrator keeps working.
 2. `TaskCollect({})` once. It waits for all of them and returns the answers in the order they were launched, so the model can match each answer to what it asked. `TaskCollect({"task_id":"..."})` takes just one and leaves the rest outstanding.
 
-Stopping a turn stops the collection, not the tasks. Anything that had not finished stays outstanding and can be collected again; the answer is not lost because the turn that asked for it went away. `TaskCollect` says how many were left running.
+Stopping collection does not cancel tasks. Unfinished tasks remain available for later collection. `TaskCollect` reports how many remain running.
 
-A session may have 8 launched and uncollected tasks at once. The ninth is refused, and says to collect first. It is a ceiling rather than a queue on purpose: every outstanding task is a model spending tokens in a session nobody is reading, so hitting it is a signal.
+Maximum eight uncollected tasks per session. Further launches are refused until results are collected.
 
 Background tasks appear in the Web UI's right panel while they run, the same as tasks started through the API.
 
 #### Fallback chains: when a model will not answer
 
-In a long agent session a model failure is an ordinary condition rather than an exception: a rate limit at the wrong moment, a provider having a bad hour, a local server that was restarted, a credential that expired overnight. Without somewhere else to go, every one of those ends the turn and loses whatever it was in the middle of.
+Fallback profiles allow a turn to continue after eligible provider failures. Smart Agent must be enabled.
 
-Name the somewhere else on the profile.
+Set `fallback` on the primary profile:
 
 ```json
 "profiles": {
@@ -1776,47 +1744,47 @@ Name the somewhere else on the profile.
 
 | Detail | Behaviour |
 |---|---|
-| Before it fires | A transient failure — a rate limit, a 5xx, a dropped connection — is retried on the same endpoint first: up to two attempts with a 1s then 2s backoff. The common rate limit is a blip, and the fallback is a different model with a different cache prefix, so the chain is spent only when waiting did not help. Credential and model-identity failures skip the retry, because a 401 will be a 401 in two seconds too. The retry is counted only when it is actually attempted: a turn cancelled during the backoff ends there, recording the cancellation rather than a retry or a fallback that never reached a provider |
-| When it fires | Rate limits and quota that outlast the retries, 5xx and gateway errors, a connection that is refused or times out, a model or credential the endpoint does not have |
-| When it does not | A conversation too long for the window, which is summarized and retried on the same model instead; a request another endpoint would refuse the same way, such as a bad parameter or a tool schema the API will not take; and a stream that had already written part of an answer, since falling back there would leave the conversation carrying both halves |
-| How it decides | On what the error says the cause was, not on which exception class carried it. Bedrock raises `ValidationException` for a model id that does not exist in the region, for an account not entitled to the model, and for a request field the model will not accept: the first two move to the next profile and the third does not |
-| What a refusal costs | Nothing. An error the chain does not cover ends the turn without contacting a fallback and without consuming a link, so a rate limit arriving later still gets the first fallback rather than the second |
-| Order | The primary profile's own list, in order. The list is flat: a fallback's own `fallback` is not followed, so a chain cannot loop and its length is what it says |
-| Visibility | Each retry and each switch is recorded in the transcript, naming what failed and what happens next. A session that quietly got worse, or quietly paused, is the failure mode this avoids |
-| Validation | Names are checked when the config loads, not when something breaks. A chain is read exactly when something has already gone wrong |
+| Before fallback | Transient failures retry the same endpoint twice, after 1s and 2s. Credential and model-identity failures skip retry. Cancellation during backoff records cancellation, not an unattempted retry. |
+| Eligible failures | Exhausted rate-limit or quota retries, 5xx and gateway errors, refused or timed-out connections, unavailable model, or invalid credentials. |
+| Excluded failures | Context overflow uses same-model compaction. Invalid parameters and schemas end the request. A partially emitted answer does not switch models. |
+| Classification | Uses the reported cause, not only the exception type. For Bedrock `ValidationException`, missing models and access entitlement may trigger fallback; invalid fields do not. |
+| Ineligible error | Ends the turn without contacting or consuming a fallback entry. |
+| Order | Primary profile's flat list, in order. Fallback profiles' own lists are not followed. |
+| Visibility | Transcript records each retry and model switch with the failure reason. |
+| Validation | Profile names checked at config load. |
 
-**The model is not the only thing that changes.** Both the orchestration prompt and the per-model formatting note are written per model family, so falling back re-derives the whole request rather than resending the failed one with a different model id. A local open weight model that catches an overflow from a hosted flagship gets the prompt written for it. This is the reason `fallback` is part of Smart Agent rather than a standalone setting.
+Fallback rebuilds the request for the selected model family, including orchestration policy and formatting notes.
 
 #### The turn log
 
 Smart Agent writes a structured record of what each turn did to `~/.localcode/trace/localcode-<date>.jsonl`, one JSON object per line.
 
-A multi agent turn cannot be debugged from a transcript. The transcript shows what the main conversation said. It does not show that the answer came from the second model in a fallback chain, that four fifths of the input was served from cache, that a sub agent spent ninety seconds in one grep, or that the turn compacted twice on the way.
+Trace records supplement the transcript with provider selection, cache usage, tool duration, delegation, retries, and compaction.
 
 | Field | Meaning |
 |---|---|
-| `trace_id` | One per top level turn, inherited by every sub agent it spawns. This is what makes a fan out to three specialists one story rather than four unrelated logs |
+| `trace_id` | Top-level turn ID inherited by all delegated work. |
 | `span` | `turn.start`, `model`, `tool`, `delegate`, `retry`, `fallback`, `compact`, `turn.end` |
 | `session_id`, `parent_session_id` | Which session, and whose child it is |
 | `agent`, `profile`, `model`, `provider` | Who answered, on what |
-| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | What it cost. The read count is how you tell a working cache breakpoint from one that is doing nothing |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` | Token usage and cache accounting. |
 | `tool`, `duration_ms` | Which tool and how long it took, timed around the whole call so a wait on a permission prompt reads as a wait |
-| `finish_reason`, `fallbacks`, `retries`, `compactions` | On `turn.end`: did this turn have a bad time |
+| `finish_reason`, `fallbacks`, `retries`, `compactions` | Completion reason and recovery counts on `turn.end`. |
 | `prompt_manifest`, `prompt_assets`, `prompt_untrusted` | Which prompt assembly this call was built from, which assets it selected, and which of them carried external content. Identities only, never the bodies. See [`/context`](#context) |
 
 ```bash
 jq -c 'select(.trace_id=="a1b2c3d4e5f6a7b8")' ~/.localcode/trace/localcode-2026-08-25.jsonl
 ```
 
-`GET /api/trace` returns the last records held in memory, for the question asked while a session is still open. `?limit=`, `?session=` and `?trace=` narrow it. Nothing is written with Smart Agent off, and the file is not created until the first record.
+`GET /api/trace` returns recent in-memory records. Filters: `?limit=`, `?session=`, and `?trace=`. Smart Agent must be enabled. Files are created on the first record.
 
-**Retention.** Files older than 30 days are removed, so a daemon left running for months does not accumulate one file per day forever. The removal happens once the configured bounds are installed at startup, and again at each day rotation — never before the configuration is read, so a longer configured retention protects its own files from the very first prune. Two config keys adjust it: `trace_max_age_days` changes the age (values at or below zero mean the default, not "keep forever"), and `trace_max_total_mb`, when set, additionally removes the oldest files until the directory fits under it. The file being written today is never removed.
+Trace retention defaults to 30 days. Cleanup runs after configuration loads and at daily rotation. `trace_max_age_days` changes the age limit; zero or negative values use the default. `trace_max_total_mb` additionally removes oldest files to meet a size limit. Today's active file is never removed.
 
-Both keys bound the prompt-manifest directory too, which sits beside the trace and holds the assemblies its `prompt_manifest` ids refer to. The two are bounded separately rather than together, so a busy manifest directory cannot evict trace files or the other way round; the consequence worth knowing is that a trace line can outlive its manifest if the two fill at different rates, and `/context <id>` says so when it cannot resolve one. Each assembly is written once per day however many calls share it, since a manifest is immutable content addressed by its own id.
+The same limits apply separately to the manifest directory. A trace may outlive its manifest; `/context <id>` reports missing manifests. Each immutable assembly is written once per day, regardless of reuse.
 
 #### Prompt cache breakpoints
 
-The stable half of an agent request is the tool schemas and the system prompt, and in a long session it is the same bytes every turn. Smart Agent marks the end of it so the provider can serve it from cache, at roughly a tenth of the price of reading it again.
+Smart Agent marks stable request prefixes for provider prompt caching.
 
 | Backend | What is marked |
 |---|---|
@@ -1824,29 +1792,29 @@ The stable half of an agent request is the tool schemas and the system prompt, a
 | Bedrock | A `cachePoint` after the tools, after the system prompt, and after each of the last two messages |
 | openai-compatible | Nothing. Local servers do their own prefix caching with nothing to declare |
 
-The conversation marks move with the history, and that is cheaper than it sounds: the history is append-only, so each request's marked prefix contains the previous one's, the provider serves the shared part at the cache rate, and only the new suffix is written at the premium. Two moving marks rather than one because a cache lookup only checks a bounded distance behind each breakpoint, and one long tool round can outrun it; the older mark keeps that miss from reaching back to the start of the conversation. Four marks total, which is the Anthropic API's limit.
+Conversation markers move as history grows. Two message markers preserve cache lookup coverage after long tool rounds. Tool, system, and message markers use four cache points in total.
 
-A breakpoint the provider does not honour is harmless: prefixes below the provider's minimum (about 1024 tokens on most Claude models) are ignored and the request is priced as it was before.
+Providers ignore unsupported or undersized cache prefixes. Minimum sizes depend on the provider and model.
 
-Because each specialist runs in its own session, each has its own stable prefix and its own cache. That is a reason to delegate rather than a cost of it.
+Each specialist has its own session prefix and cache.
 
 #### Secrets and the workspace boundary
 
-Two shipped guards. The credential one is on with Smart Agent on; the workspace boundary is always on, because it is a safety property rather than an orchestration feature. Both are overridable.
+The credential-path check requires Smart Agent. Explicit tool rules can override it. The workspace boundary is always enabled and requires separate outside-access approval.
 
-**Secrets are refused outright.** `read_file`, `write_file` and `edit` are denied for paths that look like a credential store: `.env` and `.env.*`, private keys (`*.pem`, `*.key`, `id_rsa` and friends), `~/.ssh`, `~/.aws/credentials`, `~/.kube/config`, `~/.npmrc`, `*credentials.json`, `.netrc`. The threat does not need a malicious model: a summarized repository or a "what is in this directory" is enough, and once a credential is in a context it has been sent to a provider.
+Smart Agent denies `read_file`, `write_file`, and `edit` for credential-like paths: `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa` and related keys, `~/.ssh`, `~/.aws/credentials`, `~/.kube/config`, `~/.npmrc`, `*credentials.json`, and `.netrc`.
 
-Denied rather than asked, because "may I read your SSH private key?" has one right answer and asking it teaches people to click yes. `skip_permissions` does not unlock them: it downgrades ask to allow and never touches deny. To allow one, write the rule:
+`skip_permissions` does not override a denial. To permit a credential path, add an explicit rule:
 
 ```json
 "permission": { "read_file": [{ "match": "*.env", "decision": "allow" }] }
 ```
 
-`bash` is deliberately not covered. A shell command is not a path, and matching `cat .env` out of an arbitrary command line catches the honest case and misses every other one. The shell has its own rules.
+The credential-path check does not parse shell commands. `bash` remains subject to its own permission rules.
 
 ### Leaving the project
 
-**A path that lands outside the session's own directory is a question of its own.** Not a refusal: reading a system header or a file in another checkout is ordinary work. It is the difference between an agent that stays where it was pointed and one that is discovered to have been somewhere else. A `deny` stays a `deny`, and a rule that allows `write_file` everywhere is a statement about this project rather than a licence to edit the one next door.
+File-tool access outside the session workspace requires a separate permission decision. An ordinary tool `allow` rule does not bypass this boundary. Explicit `deny` rules still apply.
 
 **Which tools it covers**, and what counts as reading or writing:
 
@@ -1854,11 +1822,11 @@ Denied rather than asked, because "may I read your SSH private key?" has one rig
 |---|---|---|
 | Reading | `read_file`, `grep`, `glob` | `read_outside` |
 | Writing | `write_file`, `edit` | `write_outside` |
-| Not covered | `bash` | — |
+| Not covered | `bash` | None |
 
-`bash` is not covered and does not claim to be. A shell command is not a path, and `cd /etc && cat passwd` cannot be judged by looking at it. `bash` asks on its own terms, as it always has.
+The workspace boundary does not inspect shell semantics such as `cd /etc && cat passwd`. Shell commands use `bash` permission rules.
 
-**The question is answered by place**, because a place is what it is about. A model told to read a sibling repository reads forty files in it, and forty prompts is one decision and thirty-nine keystrokes, which is how a permission prompt stops being read.
+Workspace-boundary prompts can approve one call, one directory, or all outside access of that read/write class:
 
 | Answer | TUI key | Effect |
 |---|---|---|
@@ -1869,35 +1837,36 @@ Denied rather than asked, because "may I read your SSH private key?" has one rig
 
 The prompt says which project the path is outside of, and names the directory `d` would cover, before you answer.
 
-`/read-outside mem-clear` and `/write-outside mem-clear` forget the directories approved with `d`, without touching the switches: somebody who approved one directory by mistake should not have to change a setting to take it back. The Permissions panel lists them with a **forget** button each. A background task inherits its parent's approved directories, since it works in the parent's project on work the parent authorized.
+`/read-outside mem-clear` and `/write-outside mem-clear` remove directory approvals without changing switches. The Permissions panel provides a **forget** button for each directory. Background tasks inherit parent directory approvals.
 
 `permission-skip-tools` does not silence this question. Only `permission-skip-all` does.
 
-The comparison is between physical paths: symlinks are resolved on both sides before the question is decided, so a link inside the workspace pointing at `~/.aws` is outside, which is where it actually leads, and a workspace that is itself reached through a link (macOS's `/tmp`) still contains its own files. A path that cannot be resolved at all — a link loop, a permission failure — is treated as outside, which costs one question rather than one blind allow. A file about to be created is judged by its closest existing ancestor, so a new file under a link is judged by where the link leads — and a dangling symlink, whose own target does not exist yet, is followed to that target rather than judged by where it sits, because writing through it is what creates the file there.
+The boundary compares resolved physical paths, including symlink targets. Unresolvable paths require confirmation. New files use the closest existing ancestor. Dangling symlinks are evaluated at their target path.
 
 #### The trust boundary
 
-Everything a turn reads arrives as text, and not all of it deserves the same standing. With Smart Agent on, two things say so:
+Smart Agent labels instruction sources and external data:
 
-* **The system prompt states the ranking**, for the orchestrator and every specialist: instructions come from the user, the system prompt and the project's own rule files; tool results — file contents, command output, fetched pages, MCP output — are data, to be used but not obeyed. A tool result containing text addressed to the model is content to surface, not an instruction to follow.
-* **MCP output is framed as data on arrival.** An MCP server's output is the least trusted text a turn reads — another process, possibly another machine, its words going straight into the model — so it is wrapped in a marker naming the server and saying not to follow instructions inside it, rather than handed over bare. Error results are wrapped too — the server controls both its text and its error flag, so an unlabelled error path would just be a way around the label.
+* The orchestrator and specialists treat user instructions, system prompts, and project rules as instructions.
+* Tool results, files, command output, fetched pages, and MCP output are data, not instructions.
+* MCP results include the server name and an untrusted-data marker. Error results receive the same marker.
 
-This is labelling, not enforcement, and it is not claimed as more: a model can still be talked into something by a sufficiently crafted input. What it changes is the default — the model has been told which sources rank where before the crafted input arrives. The permission system stays the enforcement layer: every MCP tool call still asks, whatever its description says.
+Labels do not prevent prompt injection. Permissions remain the enforcement mechanism. MCP tool calls still require confirmation regardless of tool descriptions.
 
-**A delegated task is not a command.** A sub-agent's task text reaches the same entry point a typed message does, and used to be matched against the slash-command table first. A task whose first line was `/permission-skip-all on` flipped that switch in the child session, did no work, and handed the command's own output back to the parent as the answer. The task text is now treated as work. The guard is on the delegated text itself, not on child sessions, so opening a sub-agent's conversation and typing a command in it still works. A delegated task is also not re-routed by `auto_delegate`.
+Delegated task text is not parsed as a slash command and is not rerouted through auto-delegation. A user may still open the child conversation and run a command there.
 
-**MCP servers are pinned on first use.** Tool descriptions steer the model, and a server whose descriptions change between runs changes what the model is told it can do, silently. Each server's advertised surface — every tool's name, description and schema — is fingerprinted into `~/.localcode/mcp-pins.json` on first connect, and a change since the last run is reported as a startup warning naming the server. Warn once, not refuse: tools also change because somebody upgraded the server, and the person who did not upgrade it is the one the warning is for. The pin file works with Smart Agent on or off, since it guards startup rather than a turn.
+At first connection, LocalCode fingerprints MCP tool names, descriptions, and schemas in `~/.localcode/mcp-pins.json`. Later changes produce a startup warning naming the server. Changed tools remain available. Pinning operates with Smart Agent enabled or disabled.
 
 #### The prompt is written for the model
 
-Role stays constant, prompt does not. A policy that reads as a helpful summary to one model reads as a checklist to be performed by another, and the failure modes are opposite: one delegates nothing, the other delegates its own reasoning.
+Orchestration policy wording varies by model family:
 
 | Model family | Difference |
 |---|---|
 | Default | The full policy, for models that follow one stated once |
-| GPT and o series | The same, plus a stopping rule: delegate a question once, and never delegate your own reasoning |
-| Gemini | The same, plus a concrete threshold, since a long context model left alone reads everything itself |
-| Local open weight models (qwen, glm, kimi, llama, mistral, gemma, deepseek and similar) | Shorter and flat, one rule per line. Background delegation is left out entirely: launching work and never collecting it is worse than not launching it. |
+| GPT and o series | Adds a stopping rule: delegate a question once; do not delegate the agent's own reasoning. |
+| Gemini | Adds a concrete delegation threshold. |
+| Local open weight models (qwen, glm, kimi, llama, mistral, gemma, deepseek and similar) | Short policy with one rule per line. Background delegation omitted. |
 
 #### What it does not do
 
@@ -1908,11 +1877,11 @@ Role stays constant, prompt does not. A policy that reads as a helpful summary t
 
 ### Plan mode
 
-The same concept as opencode's Plan and Build modes on the Tab key.
+Plan mode restricts an agent to inspection tools while preserving the conversation for a later implementation turn.
 
 The `plan` agent in `config.example.json` allows only `tools: ["read_file","glob","grep","Skill"]`, so `write_file`, `edit`, and `bash` are never exposed or executed.
 
-opencode implements Plan mode through an ask permission instead, which has produced reported escapes such as [bash running anyway in plan mode](https://github.com/anomalyco/opencode/issues/20938) and [subagents bypassing the read only restriction](https://github.com/anomalyco/opencode/issues/26514). localcode never shows the tool to the model in the first place and refuses it again just before execution, so that class of bypass is structurally impossible.
+Tool restrictions are enforced both when schemas are exposed and before execution. Related external reports: [shell access in plan mode](https://github.com/anomalyco/opencode/issues/20938), [sub-agent restriction bypass](https://github.com/anomalyco/opencode/issues/26514).
 
 **Switching keeps the session's conversation context and changes only which agent answers next.** It does not start a new session.
 
@@ -1924,23 +1893,17 @@ opencode implements Plan mode through an ask permission instead, which has produ
 
 Switching posts to `POST /api/sessions/{id}/agent`. On success an `agent.switched` event goes to the session, so every attached client, including a TUI and Web UI open at once, updates together.
 
-The usual flow: let `plan` analyze and design with no ability to change files, then Tab to an agent that can write and carry straight on with the context intact. In the shipped `config.example.json` that agent is `implement`; a name that is not in your own `agents` block is refused with `unknown agent`, so this is a flow you set up rather than one that exists by default.
+Use `plan` for analysis, then switch to a writable agent. `config.example.json` defines `implement` for this purpose. Only names in the configured `agents` map are selectable; unknown names are refused.
 
 ### Auto delegation
 
 Small, mechanical prompts can be answered by a cheaper agent automatically, without you switching models and without the main model running at all.
 
-**This is off unless you configure it.** With no `auto_delegate` block in config.json, nothing changes from before, so there is nothing you have to do to keep current behavior.
+Auto-delegation is inactive without an `auto_delegate` configuration.
 
-The reason to do this is prompt cache economics, not just the per token price difference. A cache entry is keyed by model as well as by prompt bytes, so changing the session's model part way through throws away the whole cached prefix (tools, system prompt, and every prior turn) and rewrites it at the write premium. On a long session that prefix is the expensive part.
+Auto-delegation preserves the main session's model and prompt cache. Switching the main model invalidates its cached prefix.
 
-| Operation | Cost against base input price |
-|---|---|
-| Cache read | about 0.1x |
-| Cache write, 5 minute TTL | 1.25x |
-| Cache write, 1 hour TTL | 2x |
-
-Delegating sidesteps that entirely. The sub agent runs in its own session with its own history, so the main session's model and prefix never change and its cache survives.
+The delegated agent runs in its own session and history.
 
 Turn it on in config.json:
 
@@ -1977,23 +1940,21 @@ Clicking the `auto-delegate: on|off` pill under the prompt box opens a panel wit
 
 | Control | Effect |
 |---|---|
-| The checkbox | Turns delegation on or off — the same setting as `/config auto_delegate on|off` |
-| **Answer them with** | Which agent handles delegated prompts, listed with the model each resolves to (e.g. `explore (qwen3-1.7b)`), so the cost trade-off is visible at the point of choosing |
+| The checkbox | Enables or disables delegation. Equivalent to `/config auto_delegate on\|off`. |
+| **Answer them with** | Target agent, shown with its model ID, such as `explore (qwen3-1.7b)` |
 | **Patterns** | Add or remove match globs one at a time |
 
-Every change **takes effect on the very next prompt** — no restart — and is written back to config.json. Each control rewrites only its own field, so turning delegation off and on again cannot lose the agent and patterns, and editing patterns cannot flip the switch.
+Panel changes apply on the next prompt and persist to config.json. Each control changes only its own field.
 
 You can configure the whole thing from here with no `auto_delegate` block in config.json to begin with; one is created as needed. Until an agent *and* at least one pattern are set, the panel says so explicitly rather than showing an "on" that quietly delegates nothing, and the pill reads `auto-delegate: on (unconfigured)`.
 
-An agent that isn't in the `agents` map is refused with an error, and refused before anything is applied — a typo can't leave the setting half-changed.
+Unknown agent names are rejected before any setting changes.
 
 #### Choosing what to delegate
 
-There is really only one decision to make here, and the rest of this feature follows from it:
+Delegate only tasks that the selected agent can answer reliably.
 
-> Which questions are you happy to have answered by the cheaper model?
-
-A delegated prompt is answered at that model's quality. Widen the patterns and you save more but get weaker answers on whatever you swept in.
+Broader match patterns route more work to the delegated model. Review the quality of those answers before expanding the patterns.
 
 | Good candidates | Keep on the main model |
 |---|---|
@@ -2001,7 +1962,7 @@ A delegated prompt is answered at that model's quality. Widen the patterns and y
 | Searching, listing, counting | Design and refactoring |
 | "Where is this function?" | "Why is this failing?" (debugging) |
 
-The short version: questions that only **read** are safe to delegate; anything that **produces or changes** something is not.
+Read-only lookup tasks are suitable initial candidates. Keep design, debugging, and edits on the main model unless the delegated agent is configured and validated for them.
 
 Practical loop:
 
@@ -2010,24 +1971,24 @@ Practical loop:
 3. Widen the list if they hold up, drop a pattern if they do not.
 4. `/config auto_delegate off` turns it off mid-conversation with no restart, and `/config` shows the current state and target agent.
 
-How much this saves depends on how often you ask lookup questions. If you mostly ask for code to be written, little will match and the effect will be small. That is a fine reason to leave it off.
+Savings depend on the proportion of matching prompts. Workloads dominated by implementation may benefit little.
 
 ### Debate
 
-Two agents on one piece of work, or four: this conversation's agent writes it, the reviewers read it and say what is wrong, it answers them, and that repeats.
+Debate alternates author work with independent reviews. The current conversation's agent is the author. Configured reviewer agents inspect the result and request revisions.
 
-**Just say so.** An ordinary message that asks for review-and-iterate starts one:
+Start a debate with a natural-language request:
 
 ```
 1부터 10까지 더하는 파이선 프로그램을 만들어라. 완료되면 @girl이 검토하고, 그 결과를 반영해라. 10번 반복해라.
 write a retry wrapper for the upload call, then have the review agent check it and fix what it finds, 5 rounds
 ```
 
-The model reads the sentence and separates the three things in it — who reviews, how many rounds, and the work. **localcode runs the loop**, and asks first: the confirmation names the reviewers, the rounds, the model turns it will cost, and the task as localcode read it. That echo is the point — a protocol sentence that leaked into the task is visible before the turns are spent.
+The model extracts reviewers, round count, and task. LocalCode runs the loop. Confirmation shows the parsed task, reviewers, rounds, and maximum model turns before execution.
 
-**The ⚖️ button** (under the prompt box) asks for the same three things as three fields, and shows the command it is about to send as you fill it in.
+The ⚖️ button under the prompt provides reviewer, round-count, and task fields. It previews the command before submission.
 
-**Or type it.** `/debate <reviewer>[,<reviewer>] [rounds] <what to do>`:
+Command syntax: `/debate <reviewer>[,<reviewer>] [rounds] <what to do>`.
 
 ```
 /debate girl 10 1부터 10까지 더하는 파이선 프로그램을 만들어라
@@ -2035,61 +1996,59 @@ The model reads the sentence and separates the three things in it — who review
 /debate girl,tom 5 rewrite the parser
 ```
 
-The reviewers are any configured agents other than the one already running; the rounds default to **3** and cannot exceed **10**. Rounds are positional and optional, and a count is a token that is *only* digits — `/debate girl 10페이지 문서를 써라` is three rounds writing a ten-page document, not ten rounds writing "페이지 문서를 써라".
+Reviewers may be any configured agents except the current author. Default: 3 rounds. Maximum: 10 rounds. The optional count must be a digits-only token. For example, `/debate girl 10페이지 문서를 써라` uses three rounds because `10페이지` is task text.
 
-**The protocol is not in the prompt.** Everything except the work itself lives in the command or the tool arguments: who reviews, how many times, when to stop. That is not brevity, it is correctness — a prompt that still says "review it ten times" gives the author a loop of its own to run inside the loop already running it, and a model told to repeat ten times inside one turn stops at three and reports that it is done. localcode counts the rounds; the models do the work.
+Reviewer selection, round count, and stopping rules are tool or command arguments. Only the task is sent as the author's work request.
 
-**A round is one author turn plus one turn per reviewer**, plus whatever tools each of them runs. Ten rounds with two reviewers is thirty turns, which is why the numbers are shown before it starts.
+One round includes one author turn and one turn per reviewer, plus their tool calls. Ten rounds with two reviewers require up to thirty model turns.
 
-**Who runs where.** The author runs in this conversation, with its history and its cached prefix intact for as long as the rounds last, so its work appears exactly as it always does. Each reviewer runs in a sub-session of its own — switching this session's model mid-conversation would invalidate its tools, its system prompt and its cache at once — and **keeps that session for every round**, which is what lets it say "the second thing I raised is still not fixed". Its row appears in the right panel; click it to read the whole review session, tool calls included.
+During debate rounds, the author keeps the current conversation history and cache. Each reviewer keeps a separate session across rounds. Reviewer sessions appear in the right panel and include their tool calls.
 
-**What the debate leaves behind.** When it ends, the rounds leave the model's context: the next message in this conversation carries the task and the work as it now stands, and none of the briefs, reviews or intermediate answers. A debate costs the conversation what a delegation costs it, which is the result. The rounds stay on screen and in the log, and the closing line says so.
+Reviewers run concurrently and do not see one another's findings. All reviewers must approve to end the debate as approved.
 
-Why it matters: a brief is localcode's own text in a message from you, and it ends in an instruction ("Fix what you agree with ... Do not ask for another review: it happens on its own when your turn ends") that is false the moment the debate is over. Every later message carried it, with nothing in the request to say it had expired. The rounds also cost what they cost: three rounds of three reviewers is several kilobytes of review text on every message sent afterwards, for a panel that has finished.
+Reviewer permissions:
 
-**A panel reviews independently.** Reviewers run at the same time, in separate sessions, and never see each other's findings. Three models agreeing is worth something only if they arrived there separately, and **all of them have to approve** — one holdout keeps the debate going, because taking the approval would be picking the answer that ends the work.
-
-**The reviewer can read, and can run your check, and cannot write.**
-
-| | |
+| Capability | Tools |
 |---|---|
 | Reading | `read_file`, `glob`, `grep` |
-| Checking | `check` — runs `verify_command` from config.json, exactly, with no arguments |
+| Checking | `check`: exact `verify_command` from config.json, without arguments |
 | Reporting | `Verdict` |
 | Never | `write_file`, `edit`, `bash` |
 
-`bash` is the one worth explaining: a shell command is not a path and cannot be judged by looking at it, so a reviewer with a shell is a second author editing the same files from the other side. `check` is the narrow way back — one line you wrote in your own config, fixed before any model saw it:
+Reviewers cannot use `bash`. The `check` tool runs only the exact project-defined `verify_command`:
 
 ```json
 "verify_command": "go test ./... && go vet ./..."
 ```
 
-The model chooses whether to run the check, never what the check is. Unset, the tool is not registered at all rather than registered and always failing. An agent with its own `tools` list only gets what that list also permits, so add `"check"` to it.
+The model decides whether to run `check`, not its command or arguments. The tool is unavailable when `verify_command` is unset. An explicit agent tool list must also include `check`.
 
-**What the reviewer is given.** The task, the author's own account of what it did, what actually changed, and the workspace to read for itself. Not this conversation's transcript: a history full of another model's tool calls is rejected outright by some providers, and it would be re-sent every round. The account and the change report are deliberately separate — one is what the author says, the other is what happened.
+Reviewers receive the task, author summary, change report, and workspace access. They do not receive the author's full conversation history.
 
-The change report is a real diff where there is a repository to ask: `git diff HEAD`, plus the names of files not yet added to git. Outside a repository it falls back to the files localcode watched `write_file` and `edit` touch, **labelled as what it is** — a file the shell moved or generated is not in that list, and a reviewer that took it for a diff would review the wrong set without knowing.
+In Git repositories, the change report includes `git diff HEAD` and untracked filenames. Elsewhere, it lists paths observed through `write_file` and `edit` and labels that limited scope. Shell-generated changes are absent from the non-Git list.
 
-**How it ends**, and it always says which:
+Debate outcomes:
 
 | Reason | What happened |
 |---|---|
 | `approved` | Every reviewer approved. |
 | `rounds` | The budget ran out with no approval. The work stands; read it before trusting it. |
-| `stalled` | Two rounds running in which the author called no tool at all. That is a standoff, and the rounds left would only restate it. |
+| `stalled` | Two consecutive rounds without an author tool call. |
 | `stopped` | You pressed Stop. What was done is kept. |
 
-**A recorded verdict ends that reviewer's turn.** The tool used to say so and hope — *the debate ends here; nothing further is needed from you* — which is a request, and a model that did not take it called `Verdict` again on the next step, and the one after that. The turn loop had no other reason to stop, so the session stayed busy and every message typed afterwards was delivered into a debate that would never finish. The loop now ends the turn when the tool that ran was the end of the work. The one verdict that does not end a turn is one recorded with no findings, because it asks to be called again.
+At debate completion, model context replaces debate instructions, reviews, and intermediate answers with the task and final work state. The closing message reports this change. All rounds remain visible in the conversation and event log. Expired debate instructions do not apply to the next message.
 
-The approval is a **tool call**, not a sentence: the reviewer sets a boolean, because "did it approve" cannot be read reliably out of prose in two languages. A model that will not call tools can end its reply with a line that is exactly `APPROVED`. Anything else — silence, an unreadable call, a reply with the word inside a sentence — is *not approved*, because ending a debate a round early on a misread stops the work being looked at while the transcript says somebody signed it off. The verdict tool is hidden from every turn that is not a review, so no model is ever in a position to mark its own homework.
+A valid recorded verdict ends the reviewer turn. A verdict lacking required findings requests another call instead.
 
-**Models agreeing is not evidence that the code is right.** It is two or three readings instead of one. The tests are the evidence, which is what `verify_command` is for.
+Approval normally uses the `Verdict` tool's boolean result. A model that cannot call tools may finish with an exact `APPROVED` line. Silence, malformed calls, and embedded uses of that word do not approve. The tool is available only in review turns.
 
-A debate can only be started from a conversation somebody is having: not from a sub-agent, not from a scheduled run, not from a `localcode run` in a pipe, and not from inside a debate. Nobody is watching those, and a tree of debates has no ceiling on it. On those turns the tool is **not offered**, rather than offered and then refused — a tool that can only say no is a turn the model spends finding that out.
+Reviewer agreement does not prove correctness. Use the configured checks and inspect the resulting changes.
+
+Debate is available only in interactive top-level conversations. It is unavailable to sub-agents, scheduled runs, `localcode run` pipes, and nested debates.
 
 ### Effort
 
-How hard the model is asked to think, as one word:
+Effort sets the requested reasoning level for the conversation:
 
 ```
 /effort high
@@ -2104,29 +2063,29 @@ Or on the profile, for every conversation that uses it:
 "balanced": { "provider": "anthropic", "model": "claude-sonnet-5", "effort": "medium" }
 ```
 
-The conversation wins over the profile. The question belongs to the work rather than to the model — the same model answering "which file is this in" and "why does this deadlock" wants different amounts of reasoning — and without a per-conversation answer the only way to have both would be two profiles pointing at one model.
+A conversation effort setting overrides its profile. `default` removes the override.
 
-**Unset is the default, and unset sends nothing.** A request from anybody who has not asked for a level is byte for byte what it was before this existed. `off` is not a level either: the wires' own vocabulary is low/medium/high, servers disagree about whether there is a word for "none", and asking for one nobody agrees on is a worse answer than saying nothing.
+Unset and `off` send no reasoning fields. `/effort` reports the active setting and its provider-specific effect.
 
-**One word, several wires, and they do not agree.** That is reported rather than smoothed over — a setting that claims three positions on a wire with two lies twice, once when it is set and again when somebody tries to tell "high" from "medium" by watching what it costs. `/effort` says what your level reaches on your model, every time it is asked.
+Provider mappings differ:
 
 | Provider | What is sent | What the levels mean |
 |---|---|---|
-| OpenAI-compatible | `reasoning_effort` | The three levels, as the server understands them. A server that does not support reasoning ignores the field and nothing changes — which is what makes this safe on a local muse or gemma. |
-| Anthropic API, newest Claude families | extended thinking, `adaptive` | The model sizes its own reasoning, so low, medium and high all reach the same switch. Here the setting is **on or off, not a dial**. |
+| OpenAI-compatible | `reasoning_effort` | Sends `low`, `medium`, or `high`. Effect depends on server support. |
+| Anthropic API, newest Claude families | Extended thinking, `adaptive` | All enabled effort levels select adaptive thinking. No distinct low/medium/high budget. |
 | Anthropic API, older Claude models | extended thinking, with a budget | Three levels, three token budgets. |
-| Bedrock | extended thinking, through `additionalModelRequestFields` | The same shapes, chosen the same way from the model id. Merged with the million-token beta rather than overwriting it — that field is one document and the SDK gives no way to read one back, so both features have to be written at once or the last one wins. |
+| Bedrock | Extended thinking in `additionalModelRequestFields` | Model-dependent adaptive or budgeted form. Merged with the million-token beta field when enabled. |
 
-**Two things happen on their own, because otherwise they are a 400 rather than a worse answer.**
+Automatic compatibility adjustments:
 
-* **The budget is fitted to `max_tokens`.** On a model that takes a budget, that budget is spent out of the output cap: one larger than the cap is refused, and one equal to it leaves nothing to answer with. It is shrunk to fit, keeping 1024 tokens back for the answer, and a cap too small for any useful reasoning asks for none at all rather than for a reasoning model with no room to reason. This is not an exotic pairing — `config.example.json` puts `max_tokens: 8192` on the profiles these levels apply to, and `high` is 16384.
-* **Temperature is dropped.** The API fixes the temperature while a model is reasoning and refuses a request that also sets one. Dropping it is what leaves both usable; the alternative is that a profile with a temperature on it cannot ask for reasoning at all.
+* Reasoning budgets are reduced to fit `max_tokens`, reserving 1024 tokens for the answer. A cap too small for useful reasoning disables the budget. The high budget is 16384 tokens before adjustment.
+* Temperature is omitted when the provider's reasoning mode requires a fixed temperature.
 
-**Reasoning is shown while it happens and never kept.** In the Web UI it is a muted block of its own, separate from the answer, because it is the working and not the conclusion; in the TUI the busy indicator says `thinking` instead of `working`. None of it is written to the session log: the API does not want it back on a later turn, and a transcript that kept it would double the scrolling for something nobody reads twice. A reload does not bring it back, which is the honest consequence.
+Reasoning appears as a separate muted block in the Web UI. The TUI status reads `thinking`. Reasoning-stream text is not written to session logs or replayed after reload.
 
 ### Scheduled tasks
 
-**Just say when.** An ordinary message that asks for something later books it instead of doing it now:
+Scheduled tasks run a prompt at a parsed future time. LocalCode must be running at that time.
 
 ```
 내일 아침에 테스트 돌려줘
@@ -2134,11 +2093,11 @@ in 30 minutes check whether the build is still green
 금요일 저녁에 배포 준비해줘
 ```
 
-The model recognises the request and separates the time from the work; **localcode reads the time**, with the same parser the command and the button use, and the confirmation names the moment it read rather than the words the model passed. That division is the point: a local model asked for a timestamp gets the year wrong occasionally, and a scheduled task is exactly where an occasional wrong answer stays invisible until the day it matters.
+For natural-language scheduling, the model separates time and task. LocalCode parses the time and shows the resolved timestamp in confirmation.
 
-Booking asks first, like any other side effect — it is a turn that will run later, unattended, with tools of its own. `/permission-skip-tools` silences that question along with the rest.
+Scheduling requires permission. `/permission-skip-tools` suppresses this confirmation.
 
-You can also book one by hand. `/schedule <when> <what to do>`:
+Command syntax: `/schedule <when> <what to do>`.
 
 ```
 /schedule 30분 뒤 run the tests and report the failures
@@ -2147,9 +2106,9 @@ You can also book one by hand. `/schedule <when> <what to do>`:
 /schedule 2026-09-01 14:30 draft the release notes
 ```
 
-**It runs only while localcode is running.** There is no service, no launchd job, and nothing wakes the machine. If localcode is closed or the machine is asleep at that moment, the task is reported as **missed** — in those words, with the time it was booked for — and is **not** run late. Running "summarize yesterday's commits" at four in the afternoon because the machine was asleep at nine would be doing something nobody asked for at a moment they did not choose. A booking whose moment has not yet come is re-armed when localcode starts again.
+LocalCode does not install a service or wake the machine. If it is closed or the machine is asleep at the scheduled time, the occurrence is marked `missed` and does not run late. Future occurrences are restored at startup.
 
-**The Schedule button** (⏰ under the prompt box, Web UI and the desktop window) asks for the two separately: a **When** field and a **What to do** field. That is the difference from typing the command — at a prompt the split between the moment and the request has to be found in one string, and in two fields there is nothing to find. The When field shows what the time was read as while you type it, before anything is booked.
+The ⏰ Schedule button provides **When** and **What to do** fields. The time field previews the parsed timestamp before scheduling.
 
 **The time is read by localcode, not by the model.**
 
@@ -2161,44 +2120,44 @@ You can also book one by hand. `/schedule <when> <what to do>`:
 | Weekday | `금요일 저녁`, `다음주 월요일`, `next monday`, `friday evening` |
 | Absolute | `2026-09-01 14:30`, `2026-09-01` |
 
-The particle belongs to the time, not to the request: `내일 아침에 테스트 돌려줘` books tomorrow at nine and sends `테스트 돌려줘`, and `에러 로그 확인` is not mistaken for a particle because a word that merely starts the same way is not one.
+Korean time particles are removed from the task. For example, `내일 아침에 테스트 돌려줘` schedules tomorrow at 09:00 with task `테스트 돌려줘`. Words such as `에러` are not treated as particles.
 
-**A bare hour means the nearest one.** `5시` said at half past four is the five half an hour away, not the one nineteen hours away that happens to be a morning. A named day pins the date, so `내일 9시` is nine that morning; `오전 9시` and `18:00` are unambiguous and are left alone.
+A bare hour selects its nearest future occurrence. At 04:30, `5시` means 05:00. A named day fixes the date: `내일 9시` means tomorrow at 09:00. Explicit forms such as `오전 9시` and `18:00` retain their stated time.
 
-**What it refuses, and why it says which.** A refusal names the kind of no, because "could not read a time" sends you looking for a spelling mistake when the answer is something else:
+Unsupported time inputs return a specific reason:
 
 | Input | Answer |
 |---|---|
-| `나중에`, `곧`, `later today` | Not a time. Nobody has picked a moment, and a scheduler must not pick one for you. |
-| `매달 1일`, `monthly` | Repeats by the month. A month is not a fixed length and the 31st is not in every one, so there is no reading of it that is not a guess. |
-| `10초마다`, `every 5 seconds` | Too often to book — a run is a whole session and a model call. Minutes or longer. |
+| `나중에`, `곧`, `later today` | No specific time. |
+| `매달 1일`, `monthly` | Monthly recurrence unsupported. |
+| `10초마다`, `every 5 seconds` | Interval shorter than the one-minute minimum. |
 | Anything else it cannot read | Refused with the examples above. |
 
-The reply echoes what was read, in full, because a misread time is worth catching before the work is booked rather than after it fails to happen.
+Review the full parsed time and task in the confirmation.
 
-**Where it runs.** In a session of its own, under the conversation's workspace and its four permission switches — the same shape a background task runs in, which is most of why this is small. The reply says which directory before you commit to it.
+Each scheduled run uses a separate session with the booking conversation's workspace and four permission switches. Confirmation names the workspace.
 
-**Nobody is watching, so it cannot wait forever.** A permission request has no timeout; a scheduled turn that hits one waits five minutes (long enough for someone at the desk to answer the prompt, which appears in the conversation that booked the work) and then stops, saying which tool it wanted and why it did not run. Decide the posture in advance with `/permission-skip-tools`, `/read-outside` and `/write-outside` if the task needs to act without asking.
+Scheduled permission requests appear in the booking conversation and expire after five minutes. Expiry stops the run and names the blocked tool. Configure `/permission-skip-tools`, `/read-outside`, and `/write-outside` in advance if unattended access is required.
 
 | Where | What you get |
 |---|---|
-| ⏰ Schedule button | Two fields — when, and what to do — with the time echoed back as you type it. |
-| Right panel | One row per booked task, with a light: **blinking green** while it waits, **solid green** once there is an answer nobody has read, **grey** once it has been read. **Click** the row to read the result; **double-click** it to see the booking itself. **rename** names it and **delete** removes it along with the run's transcript, the same two buttons a session row carries. |
+| ⏰ Schedule button | Separate time and task fields with parsed-time preview. |
+| Right panel | Task rows: blinking green while waiting, solid green for unread results, grey after reading. Click for results; double-click for booking details. Rename changes the label. Delete removes the booking and run transcript. |
 | `/show-scheduled-task` | The same list as text, for the TUI. |
 | `/schedule cancel <id>` | Removes one. Ids are short and belong to the conversation: `s1`, `s2`. |
 | `/schedule rename <id> <name>` | Labels one; an empty name clears it. |
 
-**Naming a task.** A booked prompt is a paragraph and a row is one truncated line, so two rows that both start "run the tests and report the fail…" are two rows nobody can tell apart at the moment they need to. A name is a label for the row — cosmetic, like a session's title, and nothing resolves by it. The prompt stays visible underneath, so naming a task adds a label rather than hiding what it will actually run.
+Task names are display labels only. The underlying prompt remains visible and names are not used for lookup.
 
-**Reading the booking itself.** Every field on the row is one line with an ellipsis, so the rest of that paragraph had nowhere to be read. **Double-click the row** and it opens in the window Settings uses: when it runs, its status and name, the whole prompt with its line breaks, the agent it will run as, and the error if it failed. It is read-only — rename and delete stay on the row, since a window you opened to check something is the wrong place to change it by accident. A task that has already run offers **Open the run** from there, which is the same window a single click opens. Both gestures sit on the same row, so a single click on a finished task waits a moment to see whether a second one is coming; a task that has not run has no result window to open and shows its booking immediately.
+Double-click a task row for read-only booking details: time, status, name, full prompt, agent, and error. Finished tasks provide **Open the run**. Rename and delete remain on the row. A single click on a finished task waits briefly to distinguish a double-click; an unrun task opens its booking immediately.
 
 ### Repeating tasks
 
-`매일 9시`, `every 2 hours`, `1시간마다`, `매주 월요일 저녁`, `hourly`. The rule comes off the front of the time and what is left is the first run: "매일 9시 run the tests" is the daily rule plus nine o'clock. With no time of day in it — "1시간마다 check the build" — the first run is one step from now. The confirmation echoes both back before anything is booked.
+Repeating schedules support forms such as `매일 9시`, `every 2 hours`, `1시간마다`, `매주 월요일 저녁`, and `hourly`. A stated time sets the first occurrence. Without a time, the first occurrence is one interval from now. Confirmation shows both the recurrence and first run.
 
-Repeats were refused for a long time, and the refusal named its price: *a repeat needs a stop condition and a policy for what happens when it fails*. Both exist now, and both are stated every time you book one.
+Every repeating schedule has a stopping policy and a consecutive-failure policy.
 
-**Three ways to stop.**
+Stopping conditions:
 
 | Say | It runs |
 |---|---|
@@ -2206,15 +2165,15 @@ Repeats were refused for a long time, and the refusal named its price: *a repeat
 | `--until 2026-12-01`, or **or stop on** | until that moment passes |
 | neither | until you delete it |
 
-**It stops itself if three runs in a row fail.** This is the failure policy, and it is what makes the third row above safe to offer. An expired credential fails identically every time, and an unattended turn that needs a permission nobody answers waits five minutes on *every* occurrence — so without this, one wrong booking is a machine that wakes up forever to do nothing. The row turns steady amber, says how many failed and what the last error was, and stops. A run that works clears the count, so a series that survives a blip is not punished for it two hours later.
+Three consecutive failed runs stop the schedule. The row turns steady amber and shows the failure count and last error. A successful run clears the consecutive-failure count.
 
-**Each run is its own session**, and its transcript opens with a line saying which booking made it, which run it is, and when — a run session is otherwise a conversation that begins with an instruction nobody in it typed.
+Each occurrence has a separate session. Its opening event identifies the booking, run number, and scheduled time.
 
-**`--keep` decides how many of those transcripts to hold on to.** `-1` keeps every one, `0` keeps none, and a number keeps that many of the most recent; the default is ten. Keeping none really does delete the run that has just finished — for a booking whose result is its status, the transcript is the part nobody reads, and an hourly job is twenty-four sessions a day. What is never deleted is the record of whether each run worked: that lives on the conversation's own log, so a booking with `--keep 0` still shows its failures.
+`--keep` controls retained run transcripts: `-1` keeps all, `0` keeps none, and a positive number keeps that many recent runs. Default: 10. The parent log retains run outcomes even when transcripts are deleted.
 
-**A missed moment is not caught up.** Three days of the machine being off does not fire an hourly job seventy-two times; the series moves to the next moment in the future and carries on. Same reason a one-off is reported as missed rather than run late.
+Missed occurrences are not replayed. A repeating schedule advances to the next future occurrence.
 
-Repeats by the month are refused, because a month is not a fixed length and the 31st is not in every one — `매주` or `every 30 days` says what you mean. So is anything shorter than a minute: a run is a whole session and a model call.
+Monthly schedules and intervals shorter than one minute are unsupported. Use weekly rules or an explicit day interval where appropriate.
 
 ### Background tasks
 
@@ -2231,25 +2190,21 @@ curl -X POST http://127.0.0.1:4096/api/sessions/<parent-id>/tasks \
 
 #### Watching one
 
-A task is a session, so it has a full conversation behind those three words. Click its row in the Web UI's right panel to open it. The window shows the whole of what is happening in it:
+Click a task in the right panel to view its complete session:
 
 | What | Shown as |
 |---|---|
 | Tool calls | A line when the call starts and the same line completed with its result, `✓` or `✗`, and the output; click it for the full arguments. |
 | A permission it is blocked on | `⏸ waiting for permission`, naming the tool and what it wants to do. Answer it in the session that spawned the task, which is where the prompt appears. |
 | Work it delegates itself | A line per sub-task it spawns and per status that comes back. |
-| The end | `— finished —` or `— cancelled —`, and any call the turn stopped mid-flight is marked as not finished rather than left spinning. |
+| The end | Finished or cancelled marker. Incomplete tool calls are marked as unfinished. |
 | Errors and compaction | A line each. |
 
-A task still running offers **Stop this task**. One that has finished offers **Delete this task** instead: its work is over and its transcript is all that is left, so this is how you are rid of a row that has served its purpose. Deleting removes the conversation and the row together, and the row stays gone across a reload, because the removal is recorded on the parent session's own log where the row comes from.
+Running tasks provide **Stop this task**. Finished tasks provide **Delete this task**, which removes the child session and its row. The parent log records deletion so the row stays removed after reload.
 
 ### Switching models
 
-Changing model inside one conversation is supported, and has been since the
-agent switch became a session-level event rather than a start-up flag. An
-agent names a profile, a profile names a provider and a model, so switching
-agent switches model. The conversation is untouched: only the model, the
-system prompt and the tool scope used for the **next** message change.
+Switching agents changes the profile, provider, model, system prompt, and tool scope for the next message. Conversation history remains unchanged.
 
 ```json
 "agents": {
@@ -2264,40 +2219,35 @@ system prompt and the tool scope used for the **next** message change.
 | Web UI | The selector in the header, or `/agent <name>` |
 | Either | The switch is appended to the session log, so it survives a restart |
 
-The two agents do not have to be on one provider. A Claude on Bedrock and a
-local llama.cpp endpoint are two entries in the map and two stops in one
-conversation; the model taking over is sent what the previous one was asked
-and what it answered.
+Agents may use different providers. The selected model receives the preceding conversation, including earlier questions and answers.
 
-What a switch costs is the prompt cache. The cacheable half of a request is
-the system prompt plus the tool schemas, both of which belong to the agent,
-so the first turn after a switch has no prefix to read.
+Switching agents invalidates the previous agent's cached system prompt and tool-schema prefix.
 
 `--agent <name>` still picks the agent a **new** session starts on.
 
 ### Python on Windows
 
-Two ways a `python` command fails on Windows, and localcode answers both rather than leaving a bare shell error.
+After a failed Python command on Windows, LocalCode provides interpreter-specific diagnostics:
 
 | What happened | What the model is told |
 |---|---|
 | The name resolves to a Microsoft Store app-execution-alias stub, which opens the Store instead of running Python | That every spelling hits the same stub, and the `winget` line that installs a real one. The install is handed back as a command rather than run, so it goes through the ordinary permission gate. |
 | The name is not on PATH at all | That this is a common way for it to fail rather than a sign Python is missing, and where to look. |
 
-The second is worth explaining because the plain reading of "python3: not found" is false on most Windows machines that have Python:
+Windows interpreter differences:
 
 * conda, miniforge and miniconda ship **no `python3.exe` at all**, only `python.exe`.
 * python.org's classic installers ship none either, and do not add themselves to PATH by default.
 * Each tool call gets a fresh shell, so `conda activate` or a venv activation does not carry over. An interpreter has to be called by absolute path.
 
-What it does not do, deliberately:
+Diagnostic limits:
 
-* **It never names an interpreter as the project's.** When PATH does resolve a `python`, that path is reported as a fact about the machine, with the note that whether it suits this project is a separate question. Naming a conda base that cannot import the project turns one failed call into a wrong hypothesis to debug.
-* **It does not search the disk.** The places to look are handed back as a command for the model to run, the same way the install line is, rather than localcode walking install roots with nobody having approved anything.
-* **It runs after a failure, never before one.** A pre-flight check that guessed wrong would stop a command that was going to work, and no reading of PATH can be sure: a shell function, an alias or a shim is invisible to it.
-* **It is keyed on PATH lookup, not on the error text**, which is translated on every non-English Windows.
+* A resolved PATH interpreter is reported as a machine fact, not a verified project interpreter.
+* LocalCode suggests search or install commands but does not run them automatically.
+* Diagnostics run after failure, not as a preflight block.
+* Detection uses PATH lookup rather than localized error text.
 
-Cases it does not cover, named rather than left to be discovered: a wrapped invocation (`env python3 x.py`, `xargs python3`) puts something else in the leading position, and widening the match is what would start refusing commands that were going to work.
+Wrapped invocations such as `env python3 x.py` and `xargs python3` are not covered.
 
 ### Attaching a local LLM
 
@@ -2308,30 +2258,26 @@ Cases it does not cover, named rather than left to be discovered: a wrapped invo
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
-**Reasoning is shown.** A local model that thinks before it answers streams that reasoning in a field the OpenAI API does not have, so every runtime invented one: `reasoning_content` on DeepSeek, vLLM, SGLang, LM Studio, llama.cpp and Ollama, and `reasoning` on OpenRouter and others. Both are read. The TUI says **thinking** in its status line while it arrives; the Web UI shows the text above the answer.
+LocalCode reads local-provider `reasoning_content` and `reasoning` stream fields. The TUI shows `thinking`; the Web UI displays reasoning above the answer.
 
-It is watched and then forgotten: never written to the session log, so a reload does not bring it back, and never sent back to the model — the answer is what the transcript keeps. A model that reasons and then goes straight to a tool call, saying nothing, is the case this exists for. Before it, that looked from the screen like a model running tools with nothing to say.
+Separate reasoning-stream text is neither logged nor returned to the model. Reloading removes it.
 
 Reasoning written into the answer itself, between `<think>` tags, is not separated out: it arrives as content, so it is shown and kept as content.
 
 ### Checking for updates
 
-The settings window (⚙ under the prompt) has one section, **Updates**,
-with two buttons, and neither does anything until it is clicked.
+The settings window's **Updates** section checks or installs only when a button is clicked.
 
 | Button | What it does |
 | --- | --- |
-| Check for updates | Asks GitHub for the latest release of `dennis2lee/localcode` and compares it against this build — or asks `update_url` instead, when config.json sets one. See [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
-| Download and install | Downloads the file for this platform, verifies it, and either installs it and restarts localcode or starts the platform's installer — see [What installing does, per platform](#what-installing-does-per-platform) below. Appears only when there is a newer release *and* this localcode can install it. |
+| Check for updates | Compares the current build with the latest GitHub release or configured `update_url`. See [Custom update sources](#updating-from-somewhere-other-than-github). |
+| Download and install | Downloads, verifies, and installs a supported update. Shown only for a newer version that this daemon can install. See [Platform behavior](#what-installing-does-per-platform). |
 
-Nothing checks on a timer or on opening the panel. A check is an outbound
-request that tells GitHub which version this machine is running, which is
-a thing to ask for rather than assume, and an update replaces the program
-while someone is using it.
+No update check runs on a timer or when the panel opens.
 
 #### What installing does, per platform
 
-What "install" means is not the same everywhere, and neither is whether localcode comes back on its own.
+Update behavior depends on the install format:
 
 | Install shape | What happens | Comes back on its own |
 |---|---|---|
@@ -2339,9 +2285,9 @@ What "install" means is not the same everywhere, and neither is whether localcod
 | Windows `.msi` | The installer runs at basic UI. Windows asks the Restart Manager which processes hold the files, its built-in dialog offers to close them, localcode is closed cleanly with the terminal restored, and the install completes | No. Start localcode again. |
 | Windows `.zip`, macOS `.app`, Linux `.deb` | Downloaded, with what to do next | No. |
 
-**Why a Windows update cannot restart localcode.** The Restart Manager can put an application back, but it restarts a *console* application in a new console, which is not the terminal you are sitting in front of. A custom action inside the package and a helper process that outlives localcode both reach the same place for the same reason: nothing outside a terminal can hand a process back into it. So the reply says the installer will close localcode and to start it again, rather than promising a restart it cannot perform.
+Windows MSI updates do not restart LocalCode in the original terminal. Start it again after installation.
 
-**Basic UI rather than full.** At full UI, Windows Installer looks for a files-in-use dialog authored into the package before it will offer to close anything, and this package has none, because the tool that builds it cannot author dialogs at all. The documented fallback is that nothing is shown and a reboot is scheduled instead: the update reported success and changed nothing until the machine was restarted. Basic UI has that dialog built in. Not silent: replacing the program you are using is not something to do behind a progress bar you cannot see or cancel.
+The MSI uses basic UI so Windows Installer can offer its built-in files-in-use dialog. Full UI requires a package-authored dialog that this package does not contain.
 
 #### Updating from somewhere other than GitHub
 
@@ -2351,9 +2297,9 @@ What "install" means is not the same everywhere, and neither is whether localcod
 { "update_url": "https://bitbucket.org/acme/localcode-builds/downloads/" }
 ```
 
-It exists for a machine that cannot reach github.com, or an organisation that would rather its own build were the one installed: an internal Bitbucket, an artifact server, a plain file share.
+Use an internal source when GitHub is unavailable or when distributing an organization build.
 
-**The version is read out of the filenames**, because on a directory of files that is the only place it is written down. Publish the installers under the names localcode publishes them under — `localcode-1.2.3-darwin-universal.tar.gz`, `localcode-1.2.3-windows-amd64.msi`, `localcode-1.2.3-linux-amd64.deb` and the rest — and drop the new build in. The page is scanned for those names whatever it is: an Apache or nginx directory index, a Bitbucket downloads listing, an artifact server's JSON, or a direct link to a single file. If several versions are there, the highest wins, so a leftover from last month cannot offer a downgrade.
+Versions are parsed from standard asset names, including `localcode-1.2.3-darwin-universal.tar.gz`, `localcode-1.2.3-windows-amd64.msi`, and `localcode-1.2.3-linux-amd64.deb`. Supported source formats include directory indexes, Bitbucket download listings, artifact-server JSON, and direct file URLs. When multiple versions exist, the highest version is selected.
 
 | Situation | What you get |
 |---|---|
@@ -2362,20 +2308,13 @@ It exists for a machine that cannot reach github.com, or an organisation that wo
 | Nothing there looks like an installer | A message saying so, with an example filename |
 | It is not https | Refused, with the reason |
 
-**https only.** What this URL names is a file localcode will run as an installer, and a file share usually publishes nothing beside it to check the download against — so the connection is the only thing that says the file came from the host you meant. An `http://` URL is refused rather than allowed with a warning.
+`update_url` requires HTTPS. HTTP URLs are refused.
 
-**Verifying the download.** GitHub publishes a SHA-256 for every asset and localcode checks it. A file share does not, so if a `<filename>.sha256` sits beside the installer (the shape `sha256sum` writes) it is used; if nothing is published, the install goes ahead and the panel says the download **could not be verified**, which is a true thing about a file that has just been run.
+GitHub assets are checked against their published SHA-256. Other sources may provide a sibling `<filename>.sha256` in `sha256sum` format. Without a checksum, installation continues with a **could not be verified** warning.
 
 The panel names the source when it is not the public releases page, so an internal build is never reported as though it came from GitHub.
 
-**Where the install button appears.** Where the daemon and the person
-clicking share a machine: the desktop window, and a daemon listening on
-loopback — which is the ordinary `localcode` run, TUI and Web UI both.
-Over `--server`, or a daemon deliberately exposed with something like
-`--listen 0.0.0.0:4096`, the check still works and the install does not:
-it would replace the program on the *server*, at the request of a browser
-somewhere else. The panel says so and offers the release page instead. It
-is the same rule the folder picker follows.
+Installation is offered for the desktop window and a daemon listening on loopback. Remote connections and non-loopback listeners support checks only and link to the release page.
 
 **What is downloaded.** The file that matches how localcode was installed:
 
@@ -2388,62 +2327,31 @@ is the same rule the folder picker follows.
 | Linux, installed from the `.deb` (`/usr/bin/localcode`) | `localcode-x.y.z-linux-<arch>.deb`, with the `apt install` line to run |
 | Linux, installed under your home directory (`~/.local/bin`, or any tarball copy) | `localcode-x.y.z-linux-<arch>.tar.gz`, installed for you |
 
-It is checked against the SHA-256 GitHub records for the asset before
-anything is run, and refused if it does not match or if the size is
-wrong — a connection dropped at 90% otherwise produces an installer that
-opens, fails halfway, and leaves a broken install. Downloads go to the
-user cache directory (`%LOCALAPPDATA%\localcode\updates` on Windows).
+Downloads are rejected if their published checksum or expected size does not match. Files are stored in the user cache directory, including `%LOCALAPPDATA%\localcode\updates` on Windows.
 
-**What installing does.** It depends on who owns the copy being replaced.
+Writable standalone binaries are replaced directly. Package-managed installs require the corresponding installer or package manager.
 
-*An install nobody else manages* — a binary in `~/.local/bin`, or
-anywhere else you can write, which is what
-[the no-root install](INSTALL.md#install-on-linux) produces — is replaced
-by localcode itself. The new binary is unpacked beside the old one, asked
-for its version to prove it runs on this machine at all, and renamed into
-place. Rename is atomic, so the localcode running at that moment keeps
-the file it started from and nothing is ever half-written.
+For a writable standalone binary, LocalCode unpacks the update beside the existing binary, checks its version by running it, and atomically renames it into place. This includes [the Linux user install](INSTALL.md#install-on-linux).
 
-**It then restarts itself onto the new binary**, which is the point: the
-program in memory is still the old one until something replaces it, and
-until v0.53.0 nothing did — the panel said "restart localcode to run the
-new version" and left it there, so an update that had worked perfectly
-showed the same version in the header afterwards and read as one that had
-not happened. The restart is an `exec`, not a new process beside this one,
-so it keeps the process id, the terminal, the standard streams and the
-arguments it was started with: a TUI comes back in the terminal it was in
-with the flags it was given, and the Web UI's browser tab reconnects on
-its own once the new daemon has the address. That is the whole update on a
-machine where you have no root.
+After replacement, local Unix execution restarts through `exec`. The process ID, terminal, standard streams, and arguments are retained. Browser clients reconnect when the daemon returns.
 
-The exception is a daemon you reached from somewhere else. It installs and
-does not restart — that is not a browser's to order — and the panel says
-to restart it instead.
+A remote daemon is not automatically restarted.
 
-*An install a package manager owns* is left to that package manager. On
-Windows localcode runs `msiexec /i` on the downloaded package: Windows
-asks for elevation, shows the installer, and localcode has to close for
-its files to be replaced — the window offers to close itself a few
-seconds after the installer starts. On Linux a `.deb` is downloaded and
-verified and the panel gives you the one command that installs it
-(`sudo apt install <path>`): installing needs root, and localcode does
-not ask for a password or drive a package manager on your behalf. The
-same for a copy in `/usr/bin` that only root can write, `LocalCode.app`
-(which is signed as a whole bundle, not as the binary inside it), and a
-Windows zip. In each of those the panel says where the file is *and why
-it stopped there*, since "unpack it yourself" with no reason reads like
-localcode never tried.
+Package-managed and bundle installs:
 
-A build that is not a release — one from a working tree, which reports
-its version as `dev` — is never offered an update, since there is no
-version to compare and every release would look both newer and older.
+* Windows MSI: run `msiexec /i`; Windows handles elevation and in-use files. LocalCode must close. The desktop window offers to close after the installer starts.
+* Linux `.deb` or a root-owned `/usr/bin` copy: download and verify, then show `sudo apt install <path>`. LocalCode does not request a password or run the package manager.
+* macOS `LocalCode.app` and Windows ZIP: download the complete distribution and show manual instructions.
+
+The panel reports the downloaded path and required next action.
+
+Development builds reporting `dev` are not offered updates.
 
 ## Known limitations
 
-* Opening a session shows the end of it, not all of it. A long conversation loads its last few hundred events rather than replaying the whole log, so switching sessions costs the same whatever their length; there is no "load earlier" control yet, so the beginning of a very long conversation is only in its `.jsonl`.
-
-* If an MCP server dies and the reconnect also fails, for example because the executable is gone, its tools return an error on every later call until the daemon restarts.
+* Long sessions initially load recent events. Use **Load the whole conversation** for the full transcript.
+* If an MCP server dies and reconnection fails, later tool calls fail until daemon restart.
 * There is no auth token. Anyone who can reach the `--listen` address gets the entire API, shell execution included. Expose it only over loopback plus an SSH tunnel.
 * On Windows, shell execution resolves to `sh` on PATH, then Git for Windows' `bash.exe` at its usual install paths, then `cmd /c`. Under the `cmd` fallback, bash-only syntax does not work; the bash tool tells the model so in its description. Installing Git for Windows gives the full POSIX behavior.
 * There is no desktop window on Linux. It links a native webview through CGo, which on Linux means WebKitGTK and a build per distribution; the daemon, the TUI, and the Web UI in a browser all work there. The `.deb` and the Linux tarballs carry the `localcode` binary only.
-* `/compact` can still overlap a running turn on the same session. Ordinary messages are serialized (the daemon refuses a second turn, and the client queues and retries it), but compaction does not go through that path.
+* Manual compaction does not use ordinary turn serialization and can overlap an active turn on the same session.

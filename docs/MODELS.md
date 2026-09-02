@@ -1,18 +1,18 @@
 # Model setup guide
 
-localcode supports three provider types:
+Choose a provider, configure a model profile, and assign that profile to an agent. localcode supports three provider types:
 
-| Provider type | What it is |
+| Provider type | Service |
 |---|---|
 | `bedrock` | Amazon Bedrock, cloud hosted Claude |
 | `anthropic` | The Anthropic API directly, using a console.anthropic.com key |
-| `openai-compat` | Any OpenAI compatible endpoint, such as LM Studio or vLLM |
+| `openai-compat` | Any OpenAI-compatible endpoint, such as LM Studio or vLLM |
 
-This document covers how to set each one up for real. Read [USAGE.md](USAGE.md#config-file-configjson) first for what each config field means.
+See [USAGE.md](USAGE.md#config-file-configjson) for configuration field definitions.
 
-Both cloud providers can be authenticated with `localcode login <bedrock|anthropic>`. See [USAGE.md, authenticating with /login](USAGE.md#authenticating-with-login).
+Use `localcode login <bedrock|anthropic>` for cloud authentication. See [USAGE.md, authenticating with /login](USAGE.md#authenticating-with-login).
 
-Signing in with a claude.ai Pro or Max subscription is not supported. That flow needs a private OAuth client issued specifically for Claude Code. Those credentials are not public, and a third party tool reproducing them would risk violating the Anthropic terms of service.
+claude.ai Pro and Max subscriptions are not supported. That sign in flow requires a private OAuth client issued for Claude Code. localcode does not reproduce those credentials because of the Anthropic terms of service risk.
 
 ## Amazon Bedrock
 
@@ -24,7 +24,9 @@ Signing in with a claude.ai Pro or Max subscription is not supported. That flow 
 
 ### 2. Set up credentials
 
-localcode uses the standard AWS credential chain with no extra configuration. `internal/provider/bedrock.go` calls `config.LoadDefaultConfig` on the first request that actually uses a Bedrock provider. Startup does not read AWS configuration, so a local-only configuration can run on a machine with no AWS files or Claude installation even if an unused Bedrock declaration survives a global plus project config merge. Any one of these is enough when Bedrock is used.
+AWS credentials are required only when a request uses Bedrock. Startup does not read AWS configuration. Local models require neither AWS files nor a Claude installation, including when merged global and project settings retain an unused Bedrock entry.
+
+`internal/provider/bedrock.go` calls `config.LoadDefaultConfig` on the first Bedrock request. Configure one source in the standard AWS credential chain:
 
 ```bash
 # Option 1: access keys
@@ -48,18 +50,18 @@ export AWS_SESSION_TOKEN=...   # only for temporary credentials
 aws sts get-caller-identity
 ```
 
-On EC2, ECS, or any container with an instance or task role, the role is picked up automatically.
+EC2 instance roles and ECS or container task roles are detected automatically.
 
 ### 3. Regions and model IDs
 
-Two different things both carry a region, which is the confusing part.
+The provider region and model ID prefix are separate settings:
 
 | Setting | Meaning |
 |---|---|
-| `providers.<name>.region` | The region handed to the SDK, the same as `AWS_REGION` |
-| Prefix on the model ID | Part of the cross region inference profile ID, separate from the above |
+| `providers.<name>.region` | SDK request region, equivalent to `AWS_REGION` |
+| Prefix on the model ID | Routing scope of the cross region inference profile |
 
-From Sonnet 4.5 onward, Bedrock refuses calls to a base model ID and requires a cross region inference profile ID instead, meaning the base ID with `us.`, `eu.`, `global.`, or similar in front. Calling a base ID directly produces:
+Set `profiles.<name>.model` to the full inference profile ID. For Sonnet 4.5 and later models in the table below, add a supported prefix such as `us.`, `eu.`, or `global.` to the base ID. A direct base ID request produces:
 
 ```
 Invocation of model ID anthropic.claude-sonnet-4-5-20250929-v1:0 with on-demand
@@ -67,11 +69,9 @@ throughput isn't supported. Retry your request with the ID or ARN of an
 inference profile that contains this model.
 ```
 
-So `profiles.<name>.model` in config.json needs the full prefixed ID.
-
 ### 4. Usable model IDs, checked 2026-08-19
 
-This table reflects the **Bedrock Converse and ConverseStream API**, which is what localcode actually calls through `bedrockruntime.ConverseStream` in [internal/provider/bedrock.go](../internal/provider/bedrock.go). Names here may lag the newest Anthropic model names, because Bedrock manages its own rollout schedule and naming separately.
+The table covers **Bedrock Converse and ConverseStream**, used by `bedrockruntime.ConverseStream` in [internal/provider/bedrock.go](../internal/provider/bedrock.go). Bedrock model names and availability follow a separate release schedule from the Anthropic API.
 
 | Model | Base model ID | Region prefixes | Converse API |
 |---|---|---|---|
@@ -81,23 +81,25 @@ This table reflects the **Bedrock Converse and ConverseStream API**, which is wh
 | Claude Opus 4.5 | `anthropic.claude-opus-4-5-20251101-v1:0` | `global.` `us.` `eu.` | Yes |
 | Claude Haiku 4.5 | `anthropic.claude-haiku-4-5-20251001-v1:0` | `global.` `us.` `eu.` | Yes |
 
-For Sonnet 4.5 on a US profile the model ID is `us.anthropic.claude-sonnet-4-5-20250929-v1:0`. For global routing use something like `global.anthropic.claude-opus-4-6-v1`.
+Examples: `us.anthropic.claude-sonnet-4-5-20250929-v1:0` for US Sonnet 4.5 routing, or `global.anthropic.claude-opus-4-6-v1` for global Opus 4.6 routing.
 
 | Prefix | When to use it |
 |---|---|
 | `global.` | Default choice. No price premium, highest availability. |
 | `us.` `eu.` `jp.` `apac.` | Only when you have a data residency requirement. Roughly 10% price premium. |
 
-> **Important limitation.** Claude Opus 5, Opus 4.8, Opus 4.7, Sonnet 5, and Fable 5 are absent from the table on purpose. Bedrock now has **two** Claude integrations, and localcode speaks the older one:
+> **Unverified with localcode:** Claude Opus 5, Opus 4.8, Opus 4.7, Sonnet 5, and Fable 5 on Bedrock. localcode uses the older of the two Claude integrations:
 >
 > | | Models | How it is called |
 > |---|---|---|
-> | Legacy, ARN-versioned | Opus 4.6 and earlier (the table above) | `InvokeModel` and `Converse` on `bedrock-runtime` — what localcode's `bedrockruntime.ConverseStream` uses |
+> | Legacy, ARN-versioned | Opus 4.6 and earlier (the table above) | `InvokeModel` and `Converse` on `bedrock-runtime`, including localcode's `bedrockruntime.ConverseStream` |
 > | Claude in Amazon Bedrock | Opus 4.7 and later | The Messages API at `https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages`, with plain IDs like `anthropic.claude-opus-5` |
 >
-> The newer models have no ARN-versioned model ID, which is why they are missing from Anthropic's own legacy table and from this one. Anthropic's documentation says they are reachable through `InvokeModel` on `bedrock-runtime` (served by the same infrastructure as the Messages endpoint); AWS's own launch post for Opus 4.8 goes further and says the **Converse** API accepts `us.anthropic.claude-opus-4-8`. The two sources disagree, and nothing here has been tested against a real account, so: **treat the newest models on Bedrock as unverified with localcode.** Trying one costs a single failed request, and `ValidationException: ... Your account is not authorized to invoke this API operation` is what a "no" looks like. For a path with no doubt in it, pick a model from the table or use the [Anthropic API directly](#using-the-anthropic-api-directly).
+> The newer models have no ARN-versioned ID and are absent from Anthropic's legacy model table. Anthropic documentation describes access through `InvokeModel` on `bedrock-runtime`, using the same infrastructure as the Messages endpoint. The AWS Opus 4.8 launch post also describes Converse access with `us.anthropic.claude-opus-4-8`. These descriptions differ. This project has not verified them with a real account.
+>
+> An unsupported request can return `ValidationException: ... Your account is not authorized to invoke this API operation`. Use a model from the table above or the [Anthropic API directly](#using-the-anthropic-api-directly).
 
-Availability and regions change often. For an authoritative current list:
+Check current model IDs and regional availability with:
 
 ```bash
 aws bedrock list-foundation-models --region=us-west-2 --by-provider anthropic \
@@ -130,11 +132,11 @@ aws bedrock list-foundation-models --region=us-west-2 --by-provider anthropic \
 localcode --agent general-purpose
 ```
 
-Send a message. If authentication or the model ID is wrong, work through these in order.
+Send a message. Check failures in this order:
 
 | Error | Cause and fix |
 |---|---|
-| `aws sts get-caller-identity` fails | A credentials problem, not a localcode problem. Fix that first. |
+| `aws sts get-caller-identity` fails | Resolve AWS credentials before testing localcode. |
 | `AccessDeniedException` | Model access is not enabled for that model in the console. |
 | `... with on-demand throughput isn't supported` | The model ID is missing its region prefix, such as `us.`. |
 | `ValidationException: model identifier is invalid` | A typo, or a model not offered in that region. |
@@ -144,48 +146,48 @@ Send a message. If authentication or the model ID is wrong, work through these i
 
 **`no EC2 IMDS role found` or `failed to refresh cached credentials`**
 
-The AWS credential chain found nothing and fell all the way through to EC2 instance metadata, which of course fails on a laptop.
+The AWS credential chain found no usable credentials and attempted EC2 instance metadata. A local workstation normally has no instance role.
 
-If you already ran `aws sso login` or `localcode login bedrock`, and other tools such as the AWS CLI work fine, the session is not the problem. The usual cause is that localcode was never told to use that profile. Fix it either way:
+If `aws sso login` or `localcode login bedrock` succeeded, confirm that localcode uses the same AWS profile:
 
 * Set `providers.<name>.profile` in config.json to the AWS profile name. `localcode login bedrock` writes `localcode-bedrock` by default.
 * Or export `AWS_PROFILE` in your shell.
 
-Recent versions detect this error and append the same advice to the console output.
+Recent versions include this profile advice in the error output.
 
 **`Your account is not authorized to invoke this API operation`**
 
-Credentials resolved correctly, so unlike the IMDS case above this is not an auth chain problem. Either the model ID is not valid, or that account and role has no access to it. Common causes:
+This error occurs after credential resolution. Check the model ID, API support, and account access:
 
-* **The model may not be reachable through the Bedrock Converse API**, for example `claude-opus-4-8`. Anything missing from the model table above usually falls here — see the limitation note under the table. Switch to a listed model, or use the [Anthropic API directly](#using-the-anthropic-api-directly).
-* **You added a `[1m]` suffix and still get this.** See the 1M context section below for what is and is not verified.
-* **Model access is off for that specific model.** Recheck Bedrock, then Model access in the console. Having only one model left disabled is common.
+* Unsupported or unverified Converse model, such as `claude-opus-4-8`. See the limitation below the model table. Use a listed model or the [Anthropic API directly](#using-the-anthropic-api-directly).
+* A `[1m]` suffix on the model ID. See the 1M context section for verification limits.
+* Disabled access for the requested model. Check Bedrock, then Model access in the console.
 
 **`'temperature' is deprecated for this model`**
 
-Some newer models, confirmed on Opus, reject the `temperature` field outright. Older localcode always sent `temperature`, even the 0.0 default, when a profile never configured one, and these models object to the field being present at all.
+Update localcode if an unconfigured temperature causes this error. Some newer models, including Opus, reject the field. Older versions sent it even when the profile had no temperature setting.
 
-From v0.17.0 the field is sent only when a profile explicitly sets a non zero temperature, so no action is needed. If you still see this, update localcode.
+Since v0.17.0, localcode sends the field only for an explicitly configured nonzero temperature.
 
 ### 1M context with the `[1m]` suffix
 
-Adding `[1m]` to `profiles.<name>.model`, for example `"us.anthropic.claude-sonnet-4-5-20250929-v1:0[1m]"`, makes localcode strip the suffix, request the real model ID, and pass Anthropic's 1M context beta flag (`anthropic_beta: context-1m-2025-08-07`) through `AdditionalModelRequestFields`. This mirrors the "1M context" shorthand shown in Claude Code's own model settings.
+The `[1m]` suffix requests the Anthropic 1M context beta. Example: `"us.anthropic.claude-sonnet-4-5-20250929-v1:0[1m]"` in `profiles.<name>.model`. localcode strips the suffix from the request model ID. It sends `anthropic_beta: context-1m-2025-08-07` through `AdditionalModelRequestFields`. The suffix follows the shorthand in Claude Code model settings.
 
-**Most of the models in the table no longer need it.** Anthropic's Bedrock documentation (checked 2026-08-19) says Opus 4.6 and Sonnet 4.6 already have a 1M-token context window there, as do the newer models localcode cannot reach. What is left on 200k is Sonnet 4.5 and older, which is where the suffix still has a job.
+**Opus 4.6 and Sonnet 4.6 do not need the suffix.** Anthropic's Bedrock documentation, checked 2026-08-19, lists a 1M token context for those models and for newer models unverified with localcode. Sonnet 4.5 and older models retain a 200k default context.
 
-localcode's own context meter agrees without being told: `internal/modelinfo` reads 1M for the Opus 4.6, Sonnet 4.6 and 5-series families and 200k for the rest, and a `context_window` on the profile overrides both.
+`internal/modelinfo` uses 1M for Opus 4.6, Sonnet 4.6, and 5-series families. It uses 200k for other families. A profile `context_window` overrides these values.
 
-> **Not verified.** The exact field name and behavior were never confirmed against a real Bedrock account with 1M context access. They are carried over from the Anthropic direct API convention. Bedrock may want a different name, or may not support this beta yet.
+> **Not verified:** the beta field and behavior have not been tested with a real Bedrock account that has 1M context access. The implementation uses the Anthropic direct API convention. Bedrock may require a different field or may not support the beta.
 
-If it does not work, confirm 1M context model access is enabled in the console, then try again without `[1m]` to fall back to the default context.
+If the request fails, check 1M context access in the console. Retry without `[1m]` to use the default context.
 
-Bedrock also caps a request body at 20 MB whatever the context window, so a very large attachment can be refused while the token count still fits.
+Bedrock limits request bodies to 20 MB regardless of context size. Attachments can exceed that limit while remaining within the token limit.
 
 ## Using the Anthropic API directly
 
-This provider connects to `api.anthropic.com` without going through Bedrock. It is the way to reach the newest models with no doubt about whether the Bedrock Converse path carries them: Opus 5, Opus 4.8, Opus 4.7, Sonnet 5, and Fable 5. See the important limitation note in the Bedrock section above.
+Use this provider for direct access to `api.anthropic.com`. It avoids the Bedrock Converse compatibility limitation for Opus 5, Opus 4.8, Opus 4.7, Sonnet 5, and Fable 5. See the limitation in the Bedrock section above.
 
-Billing is per usage against a key issued at `console.anthropic.com`, entirely separate from a claude.ai Pro or Max subscription.
+Usage is billed to an API key issued at `console.anthropic.com`. Billing is separate from claude.ai Pro and Max subscriptions.
 
 ### 1. Create an API key
 
@@ -197,7 +199,7 @@ Go to [console.anthropic.com](https://console.anthropic.com), open **API Keys**,
 localcode login anthropic
 ```
 
-The key is saved to `~/.localcode/credentials.json` with mode 0600. You do not need to put it in config.json. When `providers.<name>` omits `api_key`, the stored key is used automatically.
+The key is stored in `~/.localcode/credentials.json` with mode 0600. The provider uses that key when `providers.<name>.api_key` is omitted.
 
 ### 3. config.json example
 
@@ -216,11 +218,11 @@ The key is saved to `~/.localcode/credentials.json` with mode 0600. You do not n
 }
 ```
 
-Committing a project config.json to git is safe with this setup, because the key lives only in `~/.localcode/credentials.json`. You can put the key directly in `providers.<name>.api_key` instead, but then keep that file out of version control.
+This setup keeps the API key out of the project config.json. Check for other secrets before committing that file. If you set `providers.<name>.api_key` directly, keep the file out of version control.
 
-## Local LLMs over an OpenAI compatible endpoint
+## Local LLMs over an OpenAI-compatible endpoint
 
-Use this to run entirely locally without Bedrock, or to point light and fast work such as the `explore` agent at a local model.
+Use a local endpoint to run without Bedrock. Assign a local profile to an agent such as `explore` to mix local and hosted models.
 
 ### LM Studio
 
@@ -228,7 +230,12 @@ Use this to run entirely locally without Bedrock, or to point light and fast wor
 2. Open the **Developer** tab on the left and start the local server. The default address is `http://localhost:1234/v1`.
 3. Copy the exact model name LM Studio displays into `profiles.<name>.model`. A mismatched name makes the request fail.
 
-There is no need to tell localcode how big the context window is: as of v0.38.0 the server is asked directly, which is the only reliable source for a local one. A server started at 8k while serving a model capable of 128k reports 8k, and 8k is what a request has to fit inside. Set `context_window` on the profile only if your server reports nothing. `max_tokens` is a separate matter and is worth setting: it is how long an answer you want, not something the server knows, and it defaults to 4096.
+Since v0.38.0, localcode reads the context limit from the server. The configured server limit takes precedence over the model's capacity. For example, a server configured for 8k requires requests to fit within 8k even if the model supports 128k.
+
+| Profile field | Use |
+|---|---|
+| `context_window` | Set only when the server does not report a context limit |
+| `max_tokens` | Maximum response length; default 4096 |
 
 ```json
 {
@@ -247,13 +254,7 @@ There is no need to tell localcode how big the context window is: as of v0.38.0 
 
 ### A local model that stops mid-task
 
-Local models stop in a way the hosted ones mostly do not: a tool comes
-back, the model writes down what still has to happen, and ends the turn.
-Typing "carry on" makes it finish that step, and then it stops again.
-
-localcode carries the turn on for you, up to three times, for the model
-families known to do it. For anything else set `keep_going` on the
-profile:
+Some local models end a turn after a tool result while describing unfinished work. localcode requests continuation up to three times for known affected families. For other models, set `keep_going` on the profile:
 
 ```json
 {
@@ -263,15 +264,13 @@ profile:
 }
 ```
 
-`-1` turns it off for a model that has a default. See
-[USAGE.md](USAGE.md#a-model-that-stops-mid-task) for the cases it
-deliberately leaves alone, such as a model that asked you a question.
+Set `-1` to disable a model's default continuation behavior. See [USAGE.md](USAGE.md#a-model-that-stops-mid-task) for excluded cases, including a model question that requires user input.
 
-### vLLM and other OpenAI compatible servers, including remote proxies
+### vLLM and other OpenAI-compatible servers, including remote proxies
 
-Any server that exposes `/chat/completions` works the same way once `base_url` points at it. For servers that require authentication, set `providers.<name>.api_key` and it is sent as an `Authorization: Bearer <key>` header. On a corporate network, check that the port is open through any reverse proxy or firewall in between.
+Set `base_url` to the OpenAI-compatible server that provides `/chat/completions`. For authentication, set `providers.<name>.api_key`. localcode sends it as `Authorization: Bearer <key>`. Confirm that any reverse proxy and firewall permit the connection.
 
-If you already run a proxy such as an internal LiteLLM and configured it in opencode's `opencode.jsonc` through the `@ai-sdk/openai-compatible` provider with `baseURL` and `apiKey`, the same values move straight into config.json:
+For an existing LiteLLM or similar proxy in opencode's `opencode.jsonc`, copy the `@ai-sdk/openai-compatible` provider's `baseURL` and `apiKey` values to `base_url` and `api_key`:
 
 ```json
 {
@@ -296,9 +295,9 @@ Some opencode fields have no localcode equivalent:
 
 | opencode field | Why there is no equivalent |
 |---|---|
-| `npm` | Selects which SDK package to load. localcode has one built in openai-compat client. |
+| `npm` | SDK package selection. localcode uses one built-in `openai-compat` client. |
 | `name`, `models.<id>.name` | Display names for the opencode UI. |
-| `tool_call` | Declares tool call support. localcode always sends `tools` on `/chat/completions` using the OpenAI function calling format, and simply attempts the request. |
+| `tool_call` | Tool support declaration. localcode sends `tools` on `/chat/completions` in OpenAI function calling format without a separate capability setting. |
 
 ## Mixing Bedrock and local models
 

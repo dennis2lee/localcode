@@ -1,29 +1,30 @@
 # localcode
 
-A coding agent that runs on your own machine against three provider families: **Amazon Bedrock**, the **Anthropic API**, and any **OpenAI-compatible endpoint** (LM Studio, vLLM, llama.cpp, Ollama). The model calls tools itself for file reads and writes, shell execution, MCP, and Skills.
+localcode is a local coding agent with three provider families: **Amazon Bedrock**, the **Anthropic API**, and **OpenAI-compatible endpoints** such as LM Studio, vLLM, llama.cpp, and Ollama. Models can use file, shell, MCP, and Skill tools.
 
-The core is a headless daemon. A TUI, a browser Web UI, and an optional desktop window attach to it as equal clients on one HTTP/SSE API.
+| Component | Role |
+|---|---|
+| Core daemon | Sessions, agents, tools, providers, and one HTTP/SSE API |
+| TUI | Terminal client |
+| Web UI | Browser client |
+| Desktop window | Optional native client |
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/dennis2lee/localcode/main/scripts/install.sh | sh
-```
+Start with [Install](#install) and [Quick start](#quick-start). See [Where localcode differs](https://dennis2lee.github.io/localcode/where-localcode-differs.html) for capability examples and screenshots.
 
 ## What is not standard in a coding agent
 
 | Capability | In one line |
 |---|---|
-| Debate | Adversarial review by up to three other agents, each on its own model, over real rounds with real sub-sessions. |
-| Scheduled tasks | A time in the prompt books work instead of doing it now. Parsed by localcode, in Korean and English. |
-| Orchestrate | A multi-stage plan the model authors as data and localcode validates before a token is spent. |
-| Cross-session reference | `#S2` in a prompt, resolved to a tool the model may call, never spliced into the message. |
-| Provider crossing | A hosted model and a local one in the same conversation. |
-| Prompt inventory | `/context`: what the next request would carry, per source, with trust classes, and no model call. |
-| Trace | One JSON line per model call, tool call, delegation, fallback, and compaction, under one trace id per turn. |
-| Model-invocable commands | The model may run a slash command as its own turn, off by default, allowlisted with no wildcard. |
-| Three front ends | TUI, browser, and native window, all first-class clients of one daemon. |
-| Workspace boundary | Any path leaving the session's workspace is its own question, judged on physical paths. |
-
-Use case and screenshots for each: [Where localcode differs](https://dennis2lee.github.io/localcode/where-localcode-differs.html).
+| Debate | Review by up to three agents, each with its own model and session. |
+| Scheduled tasks | One-time work parsed locally from Korean or English prompts. |
+| Orchestrate | Structured multi-stage plans validated before model execution. |
+| Cross-session reference | `#S2` resolves to an optional session read tool call. Session content is not inserted into the user message. |
+| Provider mixing | Hosted and local models in the same conversation. |
+| Prompt inventory | `/context` reports the next request by source and trust class without a model call. |
+| Trace | JSON Lines records for model calls, tool calls, delegation, fallback, and compaction. One trace ID per turn. |
+| Model-invocable commands | Optional slash command execution by the model. Explicit allowlist with no wildcard. |
+| Three front ends | TUI, browser, and native clients for the same daemon. |
+| Workspace boundary | Separate permission checks for physical paths outside the session workspace. |
 
 ## Features
 
@@ -31,117 +32,117 @@ Use case and screenshots for each: [Where localcode differs](https://dennis2lee.
 
 | Area | What you get |
 |---|---|
-| Providers | Bedrock, Anthropic API, OpenAI-compatible, chosen in one config file. AWS configuration is read on first Bedrock use only, so an unused entry cannot break local-only startup. |
+| Providers | Bedrock, Anthropic API, and OpenAI-compatible providers in one config file. AWS configuration loads only on first Bedrock use. Unused Bedrock entries do not block local startup. |
 | Auth | `localcode login bedrock` (AWS SSO device flow, no AWS CLI needed), `localcode login anthropic` (stores an API key). |
-| Model switching | A hosted model and a local one in one conversation. Tab or `/agent` changes the model, prompt, and tool scope for the *next* message; the history is untouched and the switch is recorded as an event. |
-| Effort | `off`, `low`, `medium`, `high`, on a profile or per conversation with `/effort`. Sent as `reasoning_effort` to an OpenAI-compatible server, as extended thinking to the Anthropic API, and through `additionalModelRequestFields` on Bedrock. Unset by default, and unset sends nothing. |
-| Reasoning display | Both spellings read: `reasoning_content` (DeepSeek, vLLM, SGLang, LM Studio, llama.cpp, Ollama) and `reasoning` (OpenRouter). Shown live, never written to the log, never sent back. |
-| Context window | Read from the server (`GET /v1/models`, or `/props` on llama.cpp) rather than guessed from the model name. A request refused for length is summarized, then trimmed, until the server accepts it. |
-| Prompt cache | Breakpoints on the stable prefix (tool schemas, system prompt) and on the conversation tail. `cache_control` on Anthropic, `cachePoint` on Bedrock, nothing where the server does its own prefix caching. |
-| Fallback | Two retries on the failing endpoint (1s, then 2s), then the profile's `fallback`. A 401 or an unknown model id skips the wait. The request is re-derived rather than resent with a new model id, and the switch is recorded in the transcript. |
-| Model quirks | One extra prompt line for the families that need it, keep-going for models that stop mid-task (`/keep-going` off), LaTeX unwrapping for Gemma. |
+| Model switching | Hosted and local models in one conversation. Tab or `/agent` changes the model, prompt, and tool scope for the next message. History remains unchanged. Each switch is an event. |
+| Effort | `off`, `low`, `medium`, or `high`, set by profile or `/effort`. OpenAI-compatible providers receive `reasoning_effort`; Anthropic receives extended thinking; Bedrock receives `additionalModelRequestFields`. An unset value sends no field. |
+| Reasoning display | Reads `reasoning_content` from DeepSeek, vLLM, SGLang, LM Studio, llama.cpp, and Ollama. Reads `reasoning` from OpenRouter. Live display only, with no log storage or later model input. |
+| Context window | Server supplied values from `GET /v1/models` or llama.cpp `/props`. Length errors cause summarization and trimming until acceptance. |
+| Prompt cache | Breakpoints after the stable prefix (tool schemas and system prompt) and conversation tail. Anthropic uses `cache_control`; Bedrock uses `cachePoint`; providers with server-side prefix caching receive neither. |
+| Fallback | Two endpoint retries after 1 and 2 seconds, then the profile `fallback`. A 401 or unknown model ID skips the delay. localcode derives a new request for the fallback model and records the switch. |
+| Model specific handling | Additional prompt lines for required model families, automatic continuation for models that stop during tasks, `/keep-going off` to disable it, and LaTeX unwrapping for Gemma. |
 
 ### Agents, delegation, orchestration
 
 | Area | What you get |
 |---|---|
-| Multi agent | Per-role model, prompt, and tool scope. Agents delegate through `Task`. `/model` lists every agent with the model it resolves to. |
-| Auto delegate | Matching prompts routed to a cheaper agent, leaving the main session's cache intact. Set from a panel under the prompt bar, saved to config.json. |
-| Smart Agent | Off by default. Turns the session model into an orchestrator with six specialists: `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. Each runs in its own session and context, so fifty files read for one answer cost the main conversation a paragraph. Models resolved from existing profiles, or pinned with `smart-quick`, `smart-balanced`, `smart-deep`. No specialist may delegate, as a tool allowlist rather than a line of prompt. |
-| Debate | Up to three reviewers, each a separate agent on its own model profile, reading the author's work and saying what is wrong, over rounds. Reviewers run at the same time and cannot see each other. Read-only tools plus this project's own `verify_command`, no arguments. Approval is a boolean every reviewer must set. Ends on approval, on the round budget (3 by default, 10 at most), or on a two-round standoff, and the closing line says which. Entry: plain language, the ⚖️ button, or `/debate <agents> <rounds> <work>`. |
-| Orchestrate | Off by default. The plan is data: the model fills in the tool's own input schema, so every agent, reference, and count is checked before a token is spent, and an unworkable plan is refused with the reason. Three stage kinds (one agent once, fan-out, barrier), with `keep` as the adversarial filter and no expression language. Ceilings of 8 stages, 32 agent turns, 10 minutes a stage, 30 a run, all refusals rather than truncations. The report is written by localcode from what happened. |
-| Scheduled tasks | A time in the prompt books the work instead of running it. Also `/schedule`, or the ⏰ button, which takes the moment and the request in two fields. The time is parsed by localcode, not by the model: relative, clock, named, weekday, and absolute forms in Korean and English. A vague time or a repeat is refused by name rather than guessed at. Each run gets its own session under the conversation's workspace and permission switches, and a row with a status light. **It fires only while localcode is running**; a moment that passed while it was closed is reported as missed, not run late. |
-| Model-invocable commands | Off by default (`/model-invocable`, `model_invocable`, or the settings window). Two levels: the switch, and the list, written separately so turning the switch off keeps the choices. A built-in is named in `model_commands` with its slash; a custom command or skill opts itself in with `model_invocable: true`. No wildcard. A command containing a `` !`shell command` `` splice can never be model-invocable, and the refusal is named. |
-| Concurrency | A provider entry may carry its own `max_concurrent_tasks`, taken before the daemon-wide slot, so a task queued on a busy local GPU is not holding a slot a hosted task could use. |
+| Multiple agents | Per role model, prompt, and tool scope. Delegation through `Task`. `/model` lists each agent and its resolved model. |
+| Automatic delegation | Matching prompts can use a lower cost agent without changing the main session cache. Configuration in the panel below the prompt bar, stored in config.json. |
+| Smart Agent | Disabled by default. Six specialists: `explore`, `librarian`, `oracle`, `plan`, `implement`, and `verify`. Separate session and context for each specialist. Models resolve from existing profiles or explicit `smart-quick`, `smart-balanced`, and `smart-deep` profiles. Specialist tool allowlists exclude delegation. |
+| Debate | Up to three concurrent reviewers with separate model profiles and no access to other reviews. Read-only tools plus the project `verify_command`, without arguments. Unanimous boolean approval. Stops on approval, the round limit (3 by default, 10 maximum), or two consecutive rejected rounds with no author tool call. Later model context retains the task and result; all rounds remain in the transcript. Entry through plain language, the ⚖️ button, or `/debate <agents> <rounds> <work>`. |
+| Orchestrate | Disabled by default. The model submits a structured plan. localcode validates agents, references, and counts before execution. Stage types: one agent, concurrent agents, and barrier. The `keep` field provides review filtering; no expression language. Limits: 8 stages, 32 agent turns, 10 minutes per stage, and 30 minutes per run. Limit violations are rejected, not truncated. localcode creates the execution report. |
+| Scheduled tasks | One-time work through plain language, `/schedule`, or the ⏰ button with separate time and request fields. Local parsing for relative, clock, named, weekday, and absolute time forms in Korean and English. Vague or repeating times are rejected. Each run has a status row and separate session with the source workspace and permissions. **Execution requires a running localcode process.** A time missed while localcode is stopped is reported as missed and is not run late. |
+| Model-invocable commands | Disabled by default through `/model-invocable`, `model_invocable`, or settings. Commands run as separate turns. Disabling the feature preserves its allowlist. Built-in commands use `model_commands` with the slash. Custom commands and skills use `model_invocable: true`. No wildcard. Commands with a `` !`shell command` `` insertion are always rejected. |
+| Concurrency | Optional provider limit through `max_concurrent_tasks`, acquired before the daemon limit. Work waiting for a local GPU does not consume a daemon slot. |
 
 ### Sessions
 
 | Area | What you get |
 |---|---|
-| Event log | A session is an append-only event log, not an array of messages. Clients resume from a `since` sequence number with no gap and no duplicate; one that falls behind is told rather than silently skipped, and replays from the log. |
-| Workspace | Per session, not per process. Every relative path and bash command resolves against its own session's directory, so two projects run on one daemon. The system prompt names that directory, re-derived every turn so it follows a workspace move instead of going stale. |
-| Cross-session reference | `#S2 has the final report. Check it against the file here.` Resolves by id, exact title, or unambiguous title prefix, archive included. Fetches nothing: the reference becomes localcode's own line saying the transcript can be read with a tool, so it arrives as a tool result, the least trusted class, and never re-enters the message path. Non-transitive in both halves. Never refused, in either direction. |
-| Archive and retrieve | A shelf, not a bin. An archived conversation keeps everything including its log, stays readable, and still records a background task that outlives the archive. What it refuses is *starting* work, as one store-level invariant rather than a check per caller, and the refusal is 403 and never 409. |
-| Undo a turn | `/rewind` puts back the last turn: the exchange leaves the model's history, and every file `write_file` or `edit` changed is restored. The reply names its limits every time: not a shell command's writes, not a background sub-agent's, not your own edits, and not a symlinked path or a file over 8 MiB. |
-| Start fresh | `/clear` leaves the model holding none of the conversation and the conversation holding all of it, as a barrier appended to the log rather than a deletion. Everything stays on screen and survives a restart. |
+| Event log | Append-only session events. Clients resume from a `since` sequence number without gaps or duplicates. A client outside the retained buffer receives an error and replays from the log. |
+| Workspace | Per session directory. Relative paths and bash commands use that directory, which permits multiple projects on one daemon. Every turn derives the current directory again for the system prompt. |
+| Cross-session reference | `#S2 has the final report. Check it against the file here.` Resolution by ID, exact title, or unambiguous title prefix, including archived sessions. The reference supplies only a notice that a tool can read the transcript. Any retrieved content returns as an external tool result. References are not transitive in either direction and are not rejected. |
+| Archive and retrieve | Archived conversations retain their event logs and remain readable. Existing background tasks can still record results. New work receives HTTP 403, enforced by the store. |
+| Undo a turn | `/rewind` removes the last exchange from model history and restores files changed by `write_file` or `edit`. Exclusions: shell writes, background agent writes, user edits, symbolic link paths, and files over 8 MiB. |
+| Start fresh | `/clear` appends a history barrier. Earlier events remain visible, persistent, and excluded from later model context. |
 | Compaction | `/compact [instructions]` on demand, automatic past a threshold (`/auto-compact 70`, 50% by default), `/usage` for cumulative tokens per model. |
-| Steering | Messages typed during a turn are delivered to that turn at the model's next tool call, in the order typed. Esc stops the whole process tree, a running shell command included. |
+| Steering | Messages entered during a turn are delivered at the next tool call in entry order. Esc stops the process tree, including a running shell command. |
 | Restart safety | Session list, conversation context, and `/usage` totals restore from disk. A second terminal in the same project attaches to the running daemon; one in another project starts its own. |
 
 ### Tools, permissions, guards
 
 | Area | What you get |
 |---|---|
-| Permissions | opencode-style allow/deny/ask rules, plus allow once, for the session, or always at the prompt. A bash line is checked per command, matched both as written and unquoted. Four switches belonging to the conversation rather than the daemon: `/permission-skip-all`, `/permission-skip-tools`, `/read-outside`, `/write-outside`. |
-| Workspace boundary | A path leaving the session's workspace is a question in its own right, judged on physical paths, so a link inside the workspace aimed at `~/.aws` is outside. Covers `read_file`, `grep`, `glob` as reading and `write_file`, `edit` as writing, with a switch for each half. Answered by place: this directory for the session, or anywhere outside the project. Bash is not covered and does not claim to be, since a shell command is not a path. |
-| Credential guard | `.env`, `*.pem`, `id_rsa`, `~/.ssh`, `~/.aws/credentials`, `.netrc` and the rest denied for read, write, and edit with Smart Agent on. Deny class, so no skip switch downgrades it; a rule for the same tool in config.json is the way through for a project that has to edit its own `.env`. |
-| Instructions and data | Every turn's system prompt states which sources are instructions (you, the prompt, the project's rules) and which are data (every tool result), and MCP output arrives wrapped in a marker naming its server. Labelling rather than enforcement: the permission gate stays the control. A delegated task is work and not a command, so a sub-agent's task beginning `/permission-skip-all on` cannot flip the child's switch. |
-| Search that admits what it missed | `grep` names the files it did not finish: past its 200-match cap, a line over 1 MB, a file it could not open. At most three paths named rather than counted, and no single file may take more than 30 of the 200 results. |
-| File tools | `read_file` pages (`offset`, `limit`, 800 lines by default) with a footer naming the lines you got out of the lines there are; a binary file is described, not rendered. A failed `edit` says why (whitespace only, CRLF, or where its first line does appear) and a near miss is reported rather than applied. |
-| Tool name repair | A decorated name that unambiguously means one tool the agent actually has runs it and says which spelling worked. Resolution searches only that agent's own roster, so a misspelling cannot reach past a `tools` restriction. |
-| Hooks | Tool hooks on `pre_tool_use`, `post_tool_use`, `user_prompt_submit`, `stop`, `session_start`, and lifecycle hooks `pre_model` (block a request, or inject a fact), `post_model`, `delegate` (refuse a sub-agent, which a prompt cannot do), `compact`, `retry`. Each runs in the workspace of the session whose event triggered it. |
-| MCP | All three transports: `stdio`, `http` (streamable), `sse`, with per-server auth headers withheld if a redirect leaves the configured host. `localcode mcp add/list/get/remove` edits config.json without printing header or environment values; `mcp import-claude` pulls an existing Claude Code setup straight in. A server's surface is fingerprinted, and a change is one startup warning before the pin moves. |
-| Trace | One JSON line per event to `~/.localcode/trace/`: which model answered on which profile, cost including cache reads and writes, tool timings, delegations, fallbacks, compactions. One trace id per turn, inherited by every sub-agent, so a fan-out to three specialists greps back as one story. `GET /api/trace` tails it live. Retention: `trace_max_age_days` (30), optional `trace_max_total_mb`. |
-| Prompt inventory | Every piece of the system prompt has a stable id, a source, a trust class saying whether it may be followed as instruction, a place in the request, and a condition. `/context` reports the assembly the next turn would send with no model call: what is included and why, per-category token estimates, tool definitions, and whether the request carries content that may not be followed as instruction. `/context all` adds what was left out; `/context <id>` reads back a call that happened. Identities, hashes, and sizes only, never bodies. |
+| Permissions | Allow, deny, and ask rules, plus prompt choices for one use, the session, or always. Each bash command is checked in written and unquoted forms. Conversation switches: `/permission-skip-all`, `/permission-skip-tools`, `/read-outside`, and `/write-outside`. |
+| Workspace boundary | Physical path checks for access outside the session workspace. A workspace symbolic link to `~/.aws` is outside. Read checks cover `read_file`, `grep`, and `glob`; write checks cover `write_file` and `edit`. Approval scope is the current external directory or any external path. Bash has separate command permissions and is not covered by path checks. |
+| Credential guard | Smart Agent denies read, write, and edit access to `.env`, `*.pem`, `id_rsa`, `~/.ssh`, `~/.aws/credentials`, `.netrc`, and related paths. Skip switches cannot override deny rules. Explicit config.json tool rules can permit required project access. |
+| Instructions and data | The system prompt labels instruction sources and data sources. MCP output includes a marker with the server name. Labels do not replace permission enforcement. Delegated work cannot change child permission switches, including a task that starts with `/permission-skip-all on`. |
+| Search limits | `grep` reports files omitted because of the 200 match limit, lines over 1 MB, or read failures. Reports up to three paths. A single file contributes at most 30 matches. |
+| File tools | `read_file` supports `offset` and `limit`, with 800 lines by default and a range footer. Binary files receive a description. Failed `edit` calls report whitespace differences, CRLF differences, the location of the first line, or a near match. Near matches are not applied. |
+| Tool name repair | Unambiguous decorated names resolve only within the current agent tool list. The result reports the accepted spelling. Tool restrictions remain effective. |
+| Hooks | Tool hooks: `pre_tool_use`, `post_tool_use`, `user_prompt_submit`, `stop`, and `session_start`. Lifecycle hooks: `pre_model`, `post_model`, `delegate`, `compact`, and `retry`. `pre_model` can block a request or inject context. `delegate` can reject a child task. Each hook uses the workspace of the source session. |
+| MCP | `stdio`, streamable `http`, and `sse` transports. Authentication headers are withheld after redirects to another host. `localcode mcp add/list/get/remove` updates config.json without printing header or environment values. `mcp import-claude` imports Claude Code settings. Tool surface changes produce one startup warning before the stored fingerprint is updated. |
+| Trace | JSON Lines events in `~/.localcode/trace/` for models, profiles, costs, cache use, tool timing, delegation, fallback, and compaction. One trace ID per turn, inherited by child agents. Live tail through `GET /api/trace`. Retention settings: `trace_max_age_days` (30 by default) and optional `trace_max_total_mb`. |
+| Prompt inventory | Stable ID, source, trust class, placement, and activation condition for each system prompt component. `/context` reports the next request without a model call, including inclusion reasons, token estimates by category, tool definitions, and untrusted content indicators. `/context all` includes omitted entries. `/context <id>` reports a previous call. Manifests contain identities, hashes, and sizes, never content bodies. |
 
 ### Interfaces
 
 | Area | What you get |
 |---|---|
-| Web UI | Left panel of every session with its workspace, click to switch and drag to reorder, each with a status light (blinking green working, amber waiting on a permission, steady green for an unread reply, grey idle). Drag-and-drop file attach, markdown output, live status bar, workspace directory in the header with a native folder picker, right panel of background tasks and connected MCP servers. |
-| TUI | The same daemon, the same commands. `/session` switches conversation in place, `/model` and `/agent` switch agent, `/show-scheduled-task` lists what is booked. |
-| Desktop window | Experimental. The Web UI in a native OS window, no browser and no visible server. Built opt-in with `-tags gui`; `LocalCode.app` on macOS, `localcode-gui.exe` in the Windows MSI. See [USAGE.md](docs/USAGE.md#desktop-window-experimental). |
-| Prompt box | Up and Down recall previous prompts, per conversation, refilled from the transcript when a session opens. The right arrow completes a `/name` against installed skills and commands, cycling back to what you typed, and completes mid-sentence rather than replacing the box, so `read the mail, then run /tid` finishes in place. A slash that does not open a word is a path and is left alone. Alt+Up and Alt+Down move the *view* between your own turns (Web UI). IME composition renders inside the box. |
-| Running work | Every tool call gets a transcript line, written when it starts and completed with its result; click it for arguments and output. `/tasks` inspects a background task mid-run, `/tasks cancel <id>` stops one, and a permission it needs is asked in the session that spawned it. A task's own window shows its whole conversation, delegations included. |
-| Reading while it writes | Scrolling up holds the view there however much is written underneath, in both clients and in a task's own window. Your turns are marked at their edges, with a rule down the whole left side, so a ten-line paste is marked on every line. |
+| Web UI | Session panel with workspace, switching, ordering, and status. Status colors: blinking green for active work, amber for permission, steady green for unread output, and grey for idle. File drag and drop, Markdown output, live status, native workspace picker, background task panel, and MCP server panel. |
+| TUI | Shared daemon and commands. `/session` switches conversations, `/model` and `/agent` switch agents, and `/show-scheduled-task` lists scheduled work. |
+| Desktop window | Experimental native Web UI without a separate browser or visible server. Optional `-tags gui` build. `LocalCode.app` on macOS and `localcode-gui.exe` in the Windows MSI. See [USAGE.md](docs/USAGE.md#desktop-window-experimental). |
+| Prompt box | Separate unsent drafts per conversation. Up and Down recall prompts, restored from the transcript. Right Arrow completes `/name` entries from installed skills and commands, including names within a sentence such as `read the mail, then run /tid`, then cycles to the original text. Slashes outside a command name remain unchanged as paths. Alt+Up and Alt+Down move the Web UI view between user turns. Inline IME composition. |
+| Running work | A transcript entry for each tool call, created at start and completed with the result. Expand it for arguments and output. `/tasks` inspects background work. `/tasks cancel <id>` stops it. Permission requests return to the source session. Task windows show the complete task conversation and delegation. |
+| Stable scroll | Manual upward scrolling disables automatic movement in both clients and task windows. User turns have a full height left border. |
 
 ### Running and packaging
 
 | Area | What you get |
 |---|---|
-| One prompt, no window | `localcode run "what does this repo do?"` answers and exits, in process: no port bound and nothing written to the session list. `--format text` for a person, `json` for a script, `stream-json` for the event stream every other client reads. `--bare` loads nothing but the base prompt, which is what makes a comparison against another tool fair. `--session` keeps the conversation and routes it through a running daemon. Smart Agent works here, and a run does not exit while a sub-agent it launched is still working. |
-| Config | `config.example.json` is the reference: every key with a note on it, plus a worked orchestration setup that a test holds to the roster localcode actually builds. Your own config may be JSONC, and comments survive the writes localcode makes to it. |
-| Config from the environment | Any string may be `{env:NAME}` or `{env:NAME:-fallback}`, read as the file loads: API keys, a base_url, a model id, an MCP server's environment. A missing variable is an error naming it and the field that asked, not an empty string that fails later as a 401. What is on disk stays a placeholder. |
-| Project context | `AGENTS.md` with `@path` imports and a `CLAUDE.md` fallback, read from the asking session's workspace. `~/.localcode/AGENTS.md` and `~/.claude/CLAUDE.md` apply everywhere, so an existing Claude Code setup is reused. `/init` to draft one, custom commands in `.localcode/commands/*.md`, auto memory across sessions. |
-| Updating | The settings window checks GitHub when asked, verifies the download against the release SHA-256, and installs: the platform's installer where there is one, the binary in place where localcode owns it, then `exec` back into the same terminal. Nothing runs on a timer and nothing downloads unasked. Not available over `--server`, and no restart on Windows, which the reply says rather than promises. |
-| Windows | Shell execution resolves to `sh`, then Git for Windows' `bash.exe`, then `cmd /c`. A `python`/`python3` that resolves to a Microsoft Store stub, or is absent from PATH entirely, is answered with the `winget install` line through the ordinary permission gate rather than left as a bare shell error. Keyed on PATH lookup, not on the shell's error text, which is translated on every non-English Windows. |
-| Linux | Installs without root: a static binary in `~/.local/bin`, nothing written outside `$HOME`. A `.deb` for Ubuntu and Debian when localcode is for everyone on the box, and a portable tarball for everything else. `CGO_ENABLED=0`, so there is no `Depends:` line. No desktop window there; the daemon, TUI, and Web UI are what a Linux install is. |
+| Single request | `localcode run "what does this repo do?"` answers in process and exits. No port and no session list entry. Output options: `--format text`, `--format json`, and `--format stream-json`. `--bare` loads only the base prompt. `--session` retains the conversation through a running daemon. Smart Agent is supported. The process waits for child agents before exit. |
+| Config | `config.example.json` documents every key and includes a tested orchestration example. User config supports JSONC. localcode preserves comments during config writes. |
+| Environment values | String fields support `{env:NAME}` and `{env:NAME:-fallback}` at load time, including API keys, `base_url`, model IDs, and MCP environments. Missing variables produce an error with the variable and field names. Files retain the placeholder. |
+| Project context | Session workspace rules from `AGENTS.md`, including `@path` imports, with `CLAUDE.md` fallback. Global rules from `~/.localcode/AGENTS.md` and `~/.claude/CLAUDE.md`. `/init` creates a draft. Custom commands use `.localcode/commands/*.md`. Automatic memory works across sessions. |
+| Updating | Manual GitHub check from settings, SHA-256 verification, platform installer when available, or binary replacement when localcode owns the binary. Unix terminals restart through `exec`. No scheduled checks or automatic downloads. Unavailable with `--server`. Windows requires manual restart. |
+| Windows | Shell selection order: `sh`, Git for Windows `bash.exe`, then `cmd /c`. Missing `python` or `python3`, including Microsoft Store stubs, produces a `winget install` command through the normal permission gate. Detection uses PATH lookup and does not depend on localized shell error text. |
+| Linux | User install of one static binary in `~/.local/bin`, with no writes outside `$HOME`. System `.deb` packages for Ubuntu and Debian. Portable tarballs for other distributions. `CGO_ENABLED=0` and no `Depends:` entry. Linux supports the daemon, TUI, and Web UI, but not the desktop window. |
 
 ## Documentation
 
 | Document | Contents |
 |---|---|
-| [INSTALL.md](docs/INSTALL.md) | Building from source, producing macOS and Windows packages |
+| [INSTALL.md](docs/INSTALL.md) | Release installation, source builds, and distribution packages |
 | [USAGE.md](docs/USAGE.md) | config.json, commands, screen controls, session and agent management |
-| [MODELS.md](docs/MODELS.md) | Real setup for Bedrock and Claude, local LLMs, and verified model IDs |
+| [MODELS.md](docs/MODELS.md) | Provider setup, local LLMs, and verified model IDs |
 | [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) | Known gaps and UI ideas |
+| [DOCUMENTATION_STYLE.md](docs/DOCUMENTATION_STYLE.md) | Structure, terminology, and editing checks |
 | [CHANGELOG.md](docs/CHANGELOG.md) | Version history |
 | [Where localcode differs](https://dennis2lee.github.io/localcode/where-localcode-differs.html) | The capabilities that are not standard in coding agents, with the use case for each |
-| [Korean translation of that page](https://dennis2lee.github.io/localcode/where-localcode-differs.ko.html) | The English page is the source of truth |
+| [Korean translation of that page](https://dennis2lee.github.io/localcode/where-localcode-differs.ko.html) | Translation of the authoritative English page |
 | [Coding agents on one model](https://dennis2lee.github.io/localcode/coding-agent-benchmark.html) | SWE-bench Verified, 25 instances, four agent configurations on one model |
 | [LICENSE](LICENSE) | MIT |
 
 ## Architecture
 
-```
-[core daemon]  sessions, agent loop, tools, MCP, Skills, providers, task manager
-   |- HTTP API   create session, send message, answer permission, spawn background task
-   |_ SSE        token stream, tool start and end, permission requests, task status
-        ^              ^
-     [TUI]         [Web UI]   both are first class clients on the same API
-```
+| Layer | Responsibilities |
+|---|---|
+| Core daemon | Sessions, agent loop, tools, MCP, Skills, providers, and task manager |
+| HTTP API | Session creation, messages, permission responses, and background tasks |
+| SSE | Tokens, tool lifecycle, permission requests, and task status |
+| Clients | TUI and Web UI on the same API |
 
-A session is an append only event log, not an array of messages. Close the TUI or open a new browser tab and it resumes from a single `since` sequence number.
+Sessions use append-only event logs. A TUI restart or new browser tab resumes from a `since` sequence number.
 
 ## Install
 
-**Linux and macOS from the command line. No root:**
+**Recommended for Linux and command line macOS. No root required:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dennis2lee/localcode/main/scripts/install.sh | sh
 ```
 
-One static binary in `~/.local/bin/localcode`, checked against the SHA-256 GitHub publishes for it. Nothing is written outside `$HOME`, no package manager is involved, and no password is asked for, which is what a machine you do not administer needs. Options go after `-s --`: `--version x.y.z`, `--dir ~/bin`, `--uninstall`. Running it again is the upgrade.
+The script verifies the published SHA-256 and installs one static binary at `~/.local/bin/localcode`. It writes nothing outside `$HOME`, uses no package manager, and requests no password. Options after `-s --`: `--version x.y.z`, `--dir ~/bin`, and `--uninstall`. Run the installer again to upgrade.
 
 `~/.local/bin` is the directory Ubuntu's own `~/.profile` puts on PATH when it exists; the script prints the line to add if this shell does not have it yet.
 
@@ -149,7 +150,7 @@ One static binary in `~/.local/bin/localcode`, checked against the SHA-256 GitHu
 
 | Where | How |
 |---|---|
-| Ubuntu or Debian, for every user on the machine (needs root) | `sudo apt install ./localcode-x.y.z-linux-amd64.deb` from the [releases page](https://github.com/dennis2lee/localcode/releases) (`-arm64.deb` on ARM) |
+| Ubuntu or Debian system install, with root | `sudo apt install ./localcode-x.y.z-linux-amd64.deb` from the [releases page](https://github.com/dennis2lee/localcode/releases) (`-arm64.deb` on ARM) |
 | Windows | `localcode-x.y.z-windows-amd64.msi`, or the portable `.zip` on ARM64 |
 | macOS, as an app | `LocalCode-x.y.z-darwin-universal-app.tar.gz`, unpacked into `/Applications` |
 | From source | `go build -o localcode ./cmd/localcode` |
@@ -163,27 +164,31 @@ mkdir -p ~/.localcode
 cp config.example.json ~/.localcode/config.json
 ```
 
-Edit `~/.localcode/config.json` and set your Bedrock region and model IDs, or the address of your local LLM. An API key can stay out of the file entirely: any value may be `{env:NAME}`, read from the environment as the file loads. Then:
+Edit `~/.localcode/config.json`. Set the Bedrock region and model IDs, or the local LLM address. Any value can use `{env:NAME}` to keep API keys out of the file. Then run:
 
 ```bash
 localcode --agent general-purpose
 ```
 
-That starts a local daemon and attaches the TUI to it. Open `http://127.0.0.1:4096` in a browser for the Web UI at the same time.
+This starts the local daemon and TUI. Open `http://127.0.0.1:4096` for the Web UI.
 
 For a daemon on a remote machine (`--headless`) attached from a laptop (`--server`), see [USAGE.md](docs/USAGE.md#remote-daemon-over-an-ssh-tunnel).
 
 ## Tests
 
+Run the full verification suite before committing:
+
+```bash
+make check
+```
+
+Go tests only:
+
 ```bash
 go test ./...
 ```
 
-That includes the Web UI: `internal/daemon` shells out to the JavaScript suite
-in [test/webui/](test/webui/), which loads the shipped `index.html` and the
-real `static/js/*.js` ES modules into a hand-written DOM (Node's built-in test
-runner, no dependencies). It skips itself when `node` isn't installed. To run
-only that part while editing the page:
+This includes the Web UI suite. `internal/daemon` runs [test/webui/](test/webui/), which loads the shipped `index.html` and actual `static/js/*.js` modules in a custom DOM. It uses the Node built-in test runner with no dependencies and skips when `node` is unavailable. Web UI only:
 
 ```bash
 make test-js
@@ -191,9 +196,9 @@ make test-js
 
 ## Not done yet
 
-* macOS code signing and notarization, Windows MSI code signing, and a signed `.deb`. All three install; none is signed.
-* Windows arm64 MSI. Only amd64 ships an MSI today, arm64 ships a portable zip.
-* An apt repository. The `.deb` installs from the file, so `apt update` never offers an upgrade; localcode checks GitHub itself.
-* A desktop window on Linux. The daemon, TUI, and Web UI all run there.
+* No macOS code signing or notarization, Windows MSI signing, or `.deb` signing. All packages install unsigned.
+* No Windows ARM64 MSI. AMD64 has an MSI; ARM64 has a portable zip.
+* No apt repository. Install `.deb` files directly. `apt update` does not offer upgrades; localcode can check GitHub.
+* No Linux desktop window. The daemon, TUI, and Web UI are supported.
 
 See [USAGE.md](docs/USAGE.md#known-limitations) for the full list of limitations.
