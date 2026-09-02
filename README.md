@@ -68,6 +68,7 @@ The model calls tools itself for file reads and writes, shell execution, MCP, an
 | [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) | Known gaps and UI ideas |
 | [CHANGELOG.md](docs/CHANGELOG.md) | Version history |
 | [Where localcode differs](https://dennis2lee.github.io/localcode/where-localcode-differs.html) | The capabilities that are not standard in coding agents, with the use case for each |
+| [localcode가 다른 점](https://dennis2lee.github.io/localcode/where-localcode-differs.ko.html) | The same page in Korean. The English one is the source of truth |
 | [Coding agents on one model](https://dennis2lee.github.io/localcode/coding-agent-benchmark.html) | SWE-bench Verified, 25 instances, four agent configurations on one model |
 | [LICENSE](LICENSE) | MIT |
 

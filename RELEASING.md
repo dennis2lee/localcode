@@ -48,7 +48,10 @@ command -v osslsigncode wixl msiinfo msibuild node
 
 ## Style rules for all docs
 
-* English only.
+* English only. One exception: a page may carry a translation beside it
+  (`docs/<name>.ko.html`). The English page is the source of truth and is
+  what the other docs link to; a translation is added and updated with it,
+  never instead of it. Do not translate a doc in place.
 * Prefer tables and bullet lists over prose.
 * No em dashes. Use `*` for bullets. Hyphens only inside literal flags/IDs.
 

@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Where localcode differs</title>
 <style>
 :root{
@@ -85,6 +86,29 @@ footer{margin-top:4em;padding-top:1.4em;border-top:1px solid var(--line);
   letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
 .part h2{margin:.15em 0 .5em;border:0;padding:0;font-size:1.5rem}
 
+/* Contents. Dense on purpose: navigation should not push the bottom line
+   below the fold. */
+.toc{border:1px solid var(--line);border-radius:6px;background:var(--panel);
+  padding:18px 22px 14px;margin:0 0 2.2em;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  font-size:.9rem}
+.toc h2{margin:0 0 .5em;padding:0;border:0;font-size:.74rem;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--muted);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.toc ol{margin:0 0 .3em;padding-left:1.6em;
+  columns:2;column-gap:32px}
+.toc ol.plain{list-style:none;padding-left:0;columns:1}
+.toc li{margin:0 0 .3em;break-inside:avoid}
+.toc-part{margin:.9em 0 .35em;font-size:.74rem;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--accent);font-weight:600;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (max-width:620px){ .toc ol{columns:1} }
+
+/* Which language this page is in, and where the other one is. */
+.lang{font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0 0 1.6em}
+.lang span{color:var(--muted)}
+.lang a{margin-left:.2em}
+
 figure{margin:1.6em 0;padding:0}
 figure img{display:block;width:100%;height:auto;border:1px solid var(--line);
   border-radius:6px;background:var(--shot)}
@@ -97,7 +121,40 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <h1>Where localcode differs</h1>
 <p class="lede">localcode runs several models against one task and requires all of them to approve the result, books work for a stated time instead of running it now, and validates a multi-agent plan before spending anything on it. This page lists the capabilities that are not standard in coding agents, with the use case each one exists for.</p>
 
+<p class="lang"><span>English</span> &nbsp;&middot;&nbsp; <a href="where-localcode-differs.ko.html">한국어</a></p>
 <div class="meta">version &nbsp;&nbsp;&nbsp;0.84.0<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-01<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
+
+<nav class="toc" aria-label="Contents">
+<h2>Contents</h2>
+<ol>
+<li><a href="#comparison">Capability comparison</a></li>
+</ol>
+<p class="toc-part">Part 1 &mdash; What a single task can be</p>
+<ol>
+<li><a href="#debate">Debate</a></li>
+<li><a href="#scheduled">Scheduled tasks</a></li>
+<li><a href="#orchestrate">Orchestrate</a></li>
+<li><a href="#reference">Cross-conversation reference</a></li>
+<li><a href="#smart-agent">Smart Agent</a></li>
+<li><a href="#local-models">Local models and failover</a></li>
+<li><a href="#prompt-inventory">Prompt inventory</a></li>
+<li><a href="#trace">Trace</a></li>
+<li><a href="#model-commands">Model-invocable commands</a></li>
+</ol>
+<p class="toc-part">Part 2 &mdash; The clients</p>
+<ol start="10">
+<li><a href="#front-ends">Three front ends, one daemon</a></li>
+<li><a href="#prompt-box">The prompt box</a></li>
+<li><a href="#conversations">Rename, reorder, archive, retrieve</a></li>
+<li><a href="#workspace-boundary">Workspace boundary</a></li>
+</ol>
+<p class="toc-part">Closing</p>
+<ol class="plain">
+<li><a href="#smaller">Smaller differences</a></li>
+<li><a href="#parity">Parity, not difference</a></li>
+<li><a href="#qualifications">Qualifications</a></li>
+</ol>
+</nav>
 
 <div class="bluf">
 <h2>Bottom line</h2>
@@ -110,7 +167,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <p>The rest cover cost, auditability, running on models you host yourself, and several front ends over one daemon.</p>
 </div>
 
-<h2>Capability comparison</h2>
+<h2 id="comparison">Capability comparison</h2>
 
 <p>The right column describes what is common across coding agents in general use, not any one product. See <a href="#qualifications">Qualifications</a> for how to read it.</p>
 
@@ -136,7 +193,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <div class="part"><span>Part 1</span><h2>What a single task can be</h2></div>
 
-<h2>1. A decision you do not want one model to make alone</h2>
+<h2 id="debate">1. A decision you do not want one model to make alone</h2>
 <p class="kicker">Debate</p>
 
 <p>One model reviewing its own work agrees with itself. Debate puts the work in front of reviewers that are different models, running in separate contexts, and does not accept the result until every one of them approves.</p>
@@ -161,7 +218,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <li><strong>Reviewers that cannot write.</strong> A reviewer with write access becomes a second author, and the disagreement that makes the review worth running disappears.</li>
 </ul>
 
-<h2>2. Work that belongs to a later time</h2>
+<h2 id="scheduled">2. Work that belongs to a later time</h2>
 <p class="kicker">Scheduled tasks</p>
 
 <p>A long test run at 09:00 tomorrow is not a prompt to send tomorrow at 09:00. State the time and localcode books it.</p>
@@ -184,7 +241,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>Three entry points: plain language in the prompt box, the clock button under it, or <code>/schedule in 30 minutes run the tests</code>. <code>/show-scheduled-task</code> is the same list in the terminal.</p>
 
-<h2>3. A plan that is checked before it is paid for</h2>
+<h2 id="orchestrate">3. A plan that is checked before it is paid for</h2>
 <p class="kicker">Orchestrate</p>
 
 <p>Delegation tools let a model hand work to another model. They do not make it keep to a shape it announced. A model that says it will check every finding with three independent reviewers checks the first two and reports. That is not dishonesty: a stated procedure is a request.</p>
@@ -225,7 +282,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>A stage names a role rather than tools, intersected with the agent's own restriction, so a plan can neither hand <code>bash</code> to a reviewer nor widen what an agent may do. Every stage is a synchronous child, so <kbd>Esc</kbd> stops the whole run.</p>
 
-<h2>4. Reading another conversation from this one</h2>
+<h2 id="reference">4. Reading another conversation from this one</h2>
 <p class="kicker">Cross-conversation reference</p>
 
 <p><strong>The model can read the contents of a different session.</strong> Write <code>#&lt;name&gt;</code> in a prompt and the named conversation becomes readable: its prompts, its replies, and what its tools returned. Analysis done last week in another session does not have to be repeated, and does not have to be pasted in by hand.</p>
@@ -245,7 +302,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>A conversation belonging to another project is flagged as one, with both directories named. <code>#42</code> stays an issue number. The right arrow completes a conversation name the same way it completes a command, which is what makes a renamed conversation worth naming well.</p>
 
-<h2>5. Fifty files read to answer one question</h2>
+<h2 id="smart-agent">5. Fifty files read to answer one question</h2>
 <p class="kicker">Smart Agent</p>
 
 <p>Reading a large tree to answer a small question fills the conversation with material nobody needs again. Smart Agent turns the session's model into an orchestrator with six specialists, each in its own session and its own context.</p>
@@ -271,7 +328,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>On the 25-instance SWE-bench Verified run in the <a href="coding-agent-benchmark.html">benchmark</a>, Smart Agent on resolved 21 of 25 against 19 with it off, on the same model. That spread is inside run-to-run variance and does not rank anything; the measured difference that run does support is output tokens, 7,586 against 9,434 per instance.</p>
 
-<h2>6. Models you host yourself</h2>
+<h2 id="local-models">6. Models you host yourself</h2>
 <p class="kicker">Local models and failover</p>
 
 <p>Support for a local endpoint is usually a generic OpenAI-compatible shim. Several things that matter are outside what that shim covers.</p>
@@ -289,7 +346,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>A 401 or an unknown model id skips the wait, because time does not fix those, and a malformed request retries nowhere.</p>
 
-<h2>7. A prompt you can audit</h2>
+<h2 id="prompt-inventory">7. A prompt you can audit</h2>
 <p class="kicker">Prompt inventory</p>
 
 <p>The system prompt is assembled from a declared inventory rather than concatenated. Each piece carries a stable id, a source, a trust class saying whether it may be followed as instruction at all, a place in the request, and a condition saying when it applies.</p>
@@ -308,7 +365,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>The same manifest ids appear in the trace, so a failover that reused the failed model's prompt is visible as an unchanged manifest id on a changed model family.</p>
 
-<h2>8. Knowing what a run cost and who did it</h2>
+<h2 id="trace">8. Knowing what a run cost and who did it</h2>
 <p class="kicker">Trace</p>
 
 <p>With Smart Agent on, one JSON line per event is written to <code>~/.localcode/trace/</code>.</p>
@@ -319,7 +376,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <li><strong>Live</strong> &mdash; <code>GET /api/trace</code> tails it while the session is open.</li>
 </ul>
 
-<h2>9. Commands the model may run</h2>
+<h2 id="model-commands">9. Commands the model may run</h2>
 <p class="kicker">Model-invocable commands</p>
 
 <p>Shipped in v0.83.0, off by default. On, the model may run a built-in, a custom command or a skill itself, each as a turn of its own in the same conversation.</p>
@@ -343,7 +400,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>One daemon holds every session. What attaches to it is a choice, and more than one thing can attach to the same session at the same time. The screenshots below are of localcode 0.84.0.</p>
 
-<h2>10. A terminal, a browser tab, and a native window</h2>
+<h2 id="front-ends">10. A terminal, a browser tab, and a native window</h2>
 <p class="kicker">Three front ends, one daemon</p>
 
 <figure>
@@ -376,7 +433,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="note"><strong>There is no authentication token</strong>
 <p>Anyone who can reach the listen address gets the entire API, shell execution included. Bind to loopback and share through an SSH tunnel, as above. Do not bind <code>0.0.0.0</code> on an untrusted network.</p></div>
 
-<h2>11. The prompt box</h2>
+<h2 id="prompt-box">11. The prompt box</h2>
 <p class="kicker">Completion and turn navigation</p>
 
 <h3>Command completion</h3>
@@ -409,7 +466,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 
 <p>Scrolling up holds the view where you put it, however much the model writes underneath, in both clients and in a background task's own window. Following the newest output resumes when you scroll back to the bottom.</p>
 
-<h2>12. Keeping a long list of conversations usable</h2>
+<h2 id="conversations">12. Keeping a long list of conversations usable</h2>
 <p class="kicker">Rename, reorder, archive, retrieve</p>
 
 <figure class="narrow">
@@ -439,7 +496,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 </ul>
 </div>
 
-<h2>13. Paths that leave the project</h2>
+<h2 id="workspace-boundary">13. Paths that leave the project</h2>
 <p class="kicker">Workspace boundary</p>
 
 <p>A path that leaves the session's own workspace is its own question, separate from whether the tool is allowed at all. Answering "yes, this agent may read files" is not answering "yes, it may read <code>~/.ssh</code>".</p>
@@ -471,7 +528,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 </ul>
 </div>
 
-<h2>Smaller differences</h2>
+<h2 id="smaller">Smaller differences</h2>
 
 <div class="scroll"><table>
 <thead><tr><th>Area</th><th>What differs</th></tr></thead>
@@ -489,7 +546,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 </tbody>
 </table></div>
 
-<h2>Parity, not difference</h2>
+<h2 id="parity">Parity, not difference</h2>
 
 <p>These are deliberately the same as elsewhere, and are listed so the tables above read as a difference rather than a feature count.</p>
 
