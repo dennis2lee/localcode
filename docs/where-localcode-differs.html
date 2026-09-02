@@ -1,0 +1,370 @@
+<title>Where localcode differs</title>
+<style>
+:root{
+  --bg:#fbfbfa; --panel:#fff; --ink:#1c1b18; --muted:#6b6862; --line:#e4e1da;
+  --accent:#4a5d3a; --warn-bg:#fdf6e6; --warn-line:#e0c987; --warn-ink:#6b5417;
+  --pass:#3f6b3f; --fail:#a04a3c; --code:#f3f1ec; --rule:#c9c4b8;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16181a; --panel:#1d2023; --ink:#e6e4e0; --muted:#9a978f; --line:#2f3337;
+    --accent:#9db584; --warn-bg:#2a2314; --warn-line:#5c4a20; --warn-ink:#e2cd96;
+    --pass:#8fbf8f; --fail:#e08d7c; --code:#24282b; --rule:#3d4247;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16181a; --panel:#1d2023; --ink:#e6e4e0; --muted:#9a978f; --line:#2f3337;
+  --accent:#9db584; --warn-bg:#2a2314; --warn-line:#5c4a20; --warn-ink:#e2cd96;
+  --pass:#8fbf8f; --fail:#e08d7c; --code:#24282b; --rule:#3d4247;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.65 ui-serif,Georgia,"Times New Roman",serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:920px;margin:0 auto;padding:48px 24px 96px}
+h1{font-size:2.1rem;line-height:1.2;margin:0 0 .3em;letter-spacing:-.01em;text-wrap:balance}
+h2{font-size:1.35rem;margin:2.6em 0 .7em;padding-bottom:.3em;
+  border-bottom:1px solid var(--line);letter-spacing:-.005em;text-wrap:balance}
+h3{font-size:1.05rem;margin:1.9em 0 .5em;text-wrap:balance}
+p{margin:0 0 1em}
+.lede{font-size:1.12rem;color:var(--muted);margin-bottom:2em}
+.meta{font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);
+  border-left:2px solid var(--line);padding-left:14px;margin:0 0 2.4em}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:1.2em 0}
+table{border-collapse:collapse;width:100%;font-size:.9rem;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Helvetica Neue",sans-serif}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);
+  vertical-align:top}
+th{font-weight:600;font-size:.78rem;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted);white-space:nowrap}
+tbody tr:hover{background:var(--panel)}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td.nw{white-space:nowrap}
+.pass{color:var(--pass);font-weight:600}
+.fail{color:var(--fail)}
+.note{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);
+  border-radius:6px;padding:16px 20px;margin:1.6em 0}
+.note strong{display:block;margin-bottom:.3em}
+.note p:last-child{margin-bottom:0}
+code{background:var(--code);padding:.12em .38em;border-radius:3px;
+  font:.87em ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--code);padding:14px 18px;border-radius:6px;overflow-x:auto;
+  font:.84rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+pre code{background:none;padding:0}
+ul{padding-left:1.3em;margin:0 0 1em}
+li{margin-bottom:.5em}
+.small{font-size:.87rem;color:var(--muted)}
+a{color:var(--accent)}
+kbd{font:.82em ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);
+  border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:.05em .4em}
+footer{margin-top:4em;padding-top:1.4em;border-top:1px solid var(--line);
+  font-size:.85rem;color:var(--muted)}
+
+/* The bottom line up front. */
+.bluf{border:1px solid var(--rule);border-left:4px solid var(--accent);
+  border-radius:6px;background:var(--panel);padding:20px 24px;margin:0 0 2.4em}
+.bluf h2{margin:0 0 .6em;padding:0;border:0;font-size:.78rem;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--accent);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.bluf p{margin:0 0 .8em}
+.bluf p:last-child{margin-bottom:0}
+
+/* A worked case: the situation, the input, the result. */
+.case{border:1px solid var(--line);border-radius:6px;background:var(--panel);
+  padding:18px 22px;margin:1.4em 0}
+.case h4{margin:0 0 .7em;font-size:.74rem;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:600}
+.case p:last-child,.case ul:last-child{margin-bottom:0}
+.case pre{margin:.2em 0 1em}
+
+.kicker{font:600 .74rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin:0 0 .2em}
+</style>
+<div class="wrap">
+
+<h1>Where localcode differs</h1>
+<p class="lede">localcode runs several models against one task and requires all of them to approve the result, books work for a stated time instead of running it now, and validates a multi-agent plan before spending anything on it. This page lists the capabilities that are not standard in coding agents, with the use case each one exists for.</p>
+
+<div class="meta">version &nbsp;&nbsp;&nbsp;0.84.0<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-01<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
+
+<div class="bluf">
+<h2>Bottom line</h2>
+<p>Nine capabilities below differ from the coding agents in common use. Three of them change what a single task can be:</p>
+<ul>
+<li><strong>Adversarial review across models</strong> — up to three reviewers, each on a different model, each in its own session, all of which must approve before the loop ends.</li>
+<li><strong>Time-shifted work</strong> — a prompt naming a time is booked rather than run, with the time parsed by localcode instead of the model.</li>
+<li><strong>Plans validated before execution</strong> — a multi-agent plan is authored as structured data and rejected in full if any stage would not work.</li>
+</ul>
+<p>The rest cover cost, auditability, and running on models you host yourself.</p>
+</div>
+
+<h2>Capability comparison</h2>
+
+<p>The right column describes what is common across coding agents in general use, not any one product. See <a href="#qualifications">Qualifications</a> for how to read it.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Capability</th><th>localcode</th><th>Common elsewhere</th></tr></thead>
+<tbody>
+<tr><td class="nw">Adversarial review</td><td>Up to 3 reviewers on 3 different models, each with its own persistent sub-session per round, unanimous boolean approval required</td><td>One model reviewing its own output, in the same context</td></tr>
+<tr><td class="nw">Scheduled work</td><td>Natural-language booking in Korean and English, time parsed by the harness, missed times reported as missed</td><td>None; a prompt runs when it is sent</td></tr>
+<tr><td class="nw">Multi-agent plans</td><td>Plan authored into a tool schema, validated whole before execution, hard ceilings on stages, turns and wall time</td><td>Free-form delegation the model narrates and may abandon</td></tr>
+<tr><td class="nw">Cross-conversation reference</td><td><code>#&lt;name&gt;</code> resolves another session, delivered as an untrusted tool result rather than spliced into the prompt</td><td>Manual copy and paste between sessions</td></tr>
+<tr><td class="nw">Prompt auditability</td><td><code>/context</code> reports every assembled piece with its source, trust class and token estimate, with no model call</td><td>The assembled prompt is not inspectable</td></tr>
+<tr><td class="nw">Model-run commands</td><td>Off by default; on, the model may run a named built-in, custom command or skill as its own turn</td><td>Commands are typed by a person only</td></tr>
+<tr><td class="nw">Search honesty</td><td>Truncation, unreadable files and oversized lines are each named in the result</td><td>Silent truncation at a result cap</td></tr>
+<tr><td class="nw">Per-endpoint concurrency</td><td><code>max_concurrent_tasks</code> per provider, taken before the daemon-wide limit</td><td>One global concurrency number, or none</td></tr>
+<tr><td class="nw">Failover</td><td>Per-profile <code>fallback</code> chain with the request re-derived for the new model family</td><td>Retry on the same endpoint, then fail</td></tr>
+<tr><td class="nw">Local models</td><td>Reasoning read from six runtime spellings, context window read from the server, per-family behaviour corrections</td><td>Hosted APIs first, local endpoints as a generic OpenAI shim</td></tr>
+<tr><td class="nw">Client shape</td><td>One daemon, three clients (terminal, browser, native window), any number attached at once</td><td>One process per client</td></tr>
+<tr><td class="nw">Conversation storage</td><td>Archive that keeps the full event log and refuses only new work</td><td>Delete, or an unbounded list</td></tr>
+</tbody>
+</table></div>
+
+<h2>1. A decision you do not want one model to make alone</h2>
+<p class="kicker">Debate</p>
+
+<p>One model reviewing its own work agrees with itself. Debate puts the work in front of reviewers that are different models, running in separate contexts, and does not accept the result until every one of them approves.</p>
+
+<div class="case">
+<h4>Use case — a schema change before it reaches main</h4>
+<pre><code>/debate girl,tom 5 migrate the session store to the new event schema</code></pre>
+<ul>
+<li><strong>Author</strong> — this conversation's agent, keeping its history and its prompt cache.</li>
+<li><strong>Reviewers</strong> — <code>girl</code> and <code>tom</code>, each on its own model, running at the same time and unable to see each other.</li>
+<li><strong>Reviewer memory</strong> — one sub-session per reviewer per round, so a reviewer in round four still knows what it asked for in round one.</li>
+<li><strong>Reviewer powers</strong> — reading, plus the project's own <code>verify_command</code> from config.json, with no arguments. No writing at all, <code>bash</code> included.</li>
+<li><strong>Evidence</strong> — <code>git diff HEAD</code> where there is a repository, the tool-call list where there is not.</li>
+<li><strong>Approval</strong> — a boolean each reviewer sets. Anything that is not an explicit approval is not one.</li>
+<li><strong>Termination</strong> — unanimous approval, the round budget, or a two-round standoff in which the author called no tool. The closing line names which.</li>
+</ul>
+</div>
+
+<p>Two design points carry most of the value:</p>
+<ul>
+<li><strong>Protocol outside the prompt.</strong> A model told to repeat a review ten times inside one turn stops at three and reports it is finished. The rounds are counted by localcode, so the count is real.</li>
+<li><strong>Reviewers that cannot write.</strong> A reviewer with write access becomes a second author, and the disagreement that makes the review worth running disappears.</li>
+</ul>
+
+<h2>2. Work that belongs to a later time</h2>
+<p class="kicker">Scheduled tasks</p>
+
+<p>A long test run at 09:00 tomorrow is not a prompt to send tomorrow at 09:00. Say the time and localcode books it.</p>
+
+<div class="case">
+<h4>Use case — an overnight run booked from the prompt box</h4>
+<pre><code>내일 아침 9시에 전체 테스트 돌리고 실패한 것만 정리해줘</code></pre>
+<ul>
+<li><strong>Split</strong> — the model separates the time from the work; localcode parses the time.</li>
+<li><strong>Confirmation</strong> — names the moment localcode read, not the words the model passed on.</li>
+<li><strong>Forms accepted</strong> — relative, clock, named, weekday and absolute, in Korean and English, with a bare hour meaning the nearest one.</li>
+<li><strong>Refusals by name</strong> — a vague time (<code>나중에</code>, <code>later</code>) and a repeat (<code>매일</code>, <code>every day</code>) are each refused rather than guessed at.</li>
+<li><strong>Execution</strong> — its own session, under the conversation's workspace and permission switches.</li>
+<li><strong>Result</strong> — a row in the right panel with a light: blinking while waiting, solid for an unread answer, grey once read.</li>
+</ul>
+</div>
+
+<div class="note"><strong>One limit, stated in the product</strong>
+<p>A booking fires only while localcode is running. A time that passed while it was closed is reported as missed rather than run late, because the request was for a time.</p></div>
+
+<p>Three entry points: plain language in the prompt box, the clock button under it, or <code>/schedule 30분 뒤 run the tests</code>. <code>/show-scheduled-task</code> is the same list in the terminal.</p>
+
+<h2>3. A plan that is checked before it is paid for</h2>
+<p class="kicker">Orchestrate</p>
+
+<p>Delegation tools let a model hand work to another model. They do not make it keep to a shape it announced. A model that says it will check every finding with three independent reviewers checks the first two and reports. That is not dishonesty: a stated procedure is a request.</p>
+
+<p>Orchestrate makes the plan data. The model authors it by filling in the tool's own input schema, so the whole plan is validated before a token is spent on running it.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Checked before execution</th><th>Refusal</th></tr></thead>
+<tbody>
+<tr><td>Every agent named against the roster the turn was admitted with</td><td>Whole plan, with the reason</td></tr>
+<tr><td>Every reference against a stage that really precedes it</td><td>Whole plan, with the reason</td></tr>
+<tr><td>Every count against its ceiling</td><td>Whole plan, with the reason</td></tr>
+</tbody>
+</table></div>
+
+<div class="case">
+<h4>Use case — a review where every finding must be verified</h4>
+<ul>
+<li><strong>Stage 1, fan-out</strong> — one agent per review dimension over a list.</li>
+<li><strong>Stage 2, fan-out over findings</strong> — N independent copies per finding from stage 1, each declaring the shape it returns.</li>
+<li><strong>Filter</strong> — <code>keep</code> drops every result whose named field is false. This is the adversarial filter, with no expression language anywhere.</li>
+<li><strong>Stage 3, barrier</strong> — sees everything that survived.</li>
+<li><strong>Report</strong> — written by localcode from what happened, not summarised by a model.</li>
+</ul>
+</div>
+
+<p>Ceilings are refusals rather than truncations, and the permission prompt shows them rather than an estimate it cannot keep:</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Limit</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Stages per plan</td><td class="num">8</td></tr>
+<tr><td>Agent turns per run</td><td class="num">32</td></tr>
+<tr><td>Wall time per stage</td><td class="num">10 min</td></tr>
+<tr><td>Wall time per run</td><td class="num">30 min</td></tr>
+</tbody>
+</table></div>
+
+<p>A stage names a role rather than tools, intersected with the agent's own restriction, so a plan can neither hand <code>bash</code> to a reviewer nor widen what an agent may do. Every stage is a synchronous child, so <kbd>Esc</kbd> stops the whole run.</p>
+
+<h2>4. A report that lives in another conversation</h2>
+<p class="kicker">Cross-conversation reference</p>
+
+<div class="case">
+<h4>Use case — checking this project against a finished analysis</h4>
+<pre><code>#S2 has the final report. Check it against the file here.</code></pre>
+<ul>
+<li><strong>Resolution</strong> — by id, exact title, or unambiguous title prefix, including into the archive.</li>
+<li><strong>Delivery</strong> — not one byte of the named conversation enters the message. The reference becomes localcode's own line saying the contents can be read with a tool.</li>
+<li><strong>Trust class</strong> — the transcript arrives, if the model asks for it, as a tool result: the least trusted class, which is correct for a mixture of somebody else's typing, a model's words, fetched pages and MCP output.</li>
+<li><strong>Consequence</strong> — a <code>#S3</code> written inside the referenced conversation cannot resolve, and a <code>/permission-skip-all on</code> inside it cannot reach the router. A tool result never re-enters the message path.</li>
+<li><strong>Never refused</strong> — no match, several matches, or the current conversation each produce a notice and the turn continues.</li>
+</ul>
+</div>
+
+<p>A conversation belonging to another project is flagged as one, with both directories named. <code>#42</code> stays an issue number.</p>
+
+<h2>5. Fifty files read to answer one question</h2>
+<p class="kicker">Smart Agent</p>
+
+<p>Reading a large tree to answer a small question fills the conversation with material nobody needs again. Smart Agent turns the session's model into an orchestrator with six specialists, each in its own session and its own context.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Specialist</th><th>Work</th></tr></thead>
+<tbody>
+<tr><td class="nw"><code>explore</code></td><td>Find things</td></tr>
+<tr><td class="nw"><code>librarian</code></td><td>Digest long material</td></tr>
+<tr><td class="nw"><code>oracle</code></td><td>Review</td></tr>
+<tr><td class="nw"><code>plan</code></td><td>Decompose</td></tr>
+<tr><td class="nw"><code>implement</code></td><td>Make one self-contained change</td></tr>
+<tr><td class="nw"><code>verify</code></td><td>Run the build</td></tr>
+</tbody>
+</table></div>
+
+<ul>
+<li><strong>Context cost</strong> — fifty files read by a specialist cost the main conversation a paragraph.</li>
+<li><strong>Model per specialist</strong> — worked out from the profiles already in config.json, not named in the build. A profile called <code>smart-quick</code>, <code>smart-balanced</code> or <code>smart-deep</code> pins it by hand.</li>
+<li><strong>No recursion</strong> — no specialist can delegate. This is a tool allowlist, not a line of prompt.</li>
+<li><strong>Parallelism</strong> — <code>TaskBackground</code> and <code>TaskCollect</code> run several at once.</li>
+</ul>
+
+<p>On the 25-instance SWE-bench Verified run in the <a href="coding-agent-benchmark.html">benchmark</a>, Smart Agent on resolved 21 of 25 against 19 with it off, on the same model. That spread is inside run-to-run variance and does not rank anything; the measured difference that run does support is output tokens, 7,586 against 9,434 per instance.</p>
+
+<h2>6. Models you host yourself</h2>
+<p class="kicker">Local models and failover</p>
+
+<p>Support for a local endpoint is usually a generic OpenAI-compatible shim. Several things that matter are outside what that shim covers.</p>
+
+<div class="scroll"><table>
+<thead><tr><th>Problem</th><th>Handling</th></tr></thead>
+<tbody>
+<tr><td>Reasoning has no field in the OpenAI API, so every runtime invented one</td><td>Both spellings read: <code>reasoning_content</code> (DeepSeek, vLLM, SGLang, LM Studio, llama.cpp, Ollama) and <code>reasoning</code> (OpenRouter and others)</td></tr>
+<tr><td>A local server's window is whatever was loaded, not what the model supports</td><td>Read from the server: <code>GET /v1/models</code>, or <code>/props</code> on llama.cpp</td></tr>
+<tr><td>One GPU serves one request whatever a global concurrency number says</td><td>Per-provider <code>max_concurrent_tasks</code>, taken before the daemon-wide slot</td></tr>
+<tr><td>A rate limit or an expired credential ends the turn</td><td>Two retries on the failing endpoint (1s, 2s), then a per-profile <code>fallback</code> chain with the request re-derived for the new family</td></tr>
+<tr><td>A request refused for length ends the turn</td><td>Summarise, then trim, shrinking until the server accepts it</td></tr>
+</tbody>
+</table></div>
+
+<p>A 401 or an unknown model id skips the wait, because time does not fix those, and a malformed request retries nowhere.</p>
+
+<h2>7. A prompt you can audit</h2>
+<p class="kicker">Prompt inventory</p>
+
+<p>The system prompt is assembled from a declared inventory rather than concatenated. Each piece carries a stable id, a source, a trust class saying whether it may be followed as instruction at all, a place in the request, and a condition saying when it applies.</p>
+
+<div class="case">
+<h4>Use case — finding out what is actually being sent</h4>
+<pre><code>/context        what the next turn would send, with no model call
+/context all    and what was left out, and why
+/context &lt;id&gt;   the manifest a given model call was built from</code></pre>
+<ul>
+<li><strong>Reported</strong> — what is included and why, per-category token estimates, tool definitions built-in and per MCP server, conversation and reserved output against the window.</li>
+<li><strong>Flagged</strong> — whether the request carries content that may not be followed as instruction.</li>
+<li><strong>Cost</strong> — none. No model call is made to answer it.</li>
+</ul>
+</div>
+
+<p>The same manifest ids appear in the trace, so a failover that reused the failed model's prompt is visible as an unchanged manifest id on a changed model family.</p>
+
+<h2>8. Knowing what a run cost and who did it</h2>
+<p class="kicker">Trace</p>
+
+<p>With Smart Agent on, one JSON line per event is written to <code>~/.localcode/trace/</code>.</p>
+
+<ul>
+<li><strong>Recorded</strong> — which model answered and on which profile, cost including cache reads and writes, which tool ran and for how long, what was delegated to whom, every failover, every compaction.</li>
+<li><strong>One trace id per turn</strong>, inherited by every sub-agent, so a fan-out to three specialists reads back as one story rather than four unrelated logs.</li>
+<li><strong>Live</strong> — <code>GET /api/trace</code> tails it while the session is open.</li>
+</ul>
+
+<h2>9. Commands the model may run</h2>
+<p class="kicker">Model-invocable commands</p>
+
+<p>Shipped in v0.83.0, off by default. On, the model may run a built-in, a custom command or a skill itself, each as a turn of its own in the same conversation.</p>
+
+<div class="case">
+<h4>Use case — cleanup the model decides is due</h4>
+<pre><code>메일을 읽어라. 철수에게서 온 메일이 있으면 /tidy-context 를 실행해라.</code></pre>
+<ul>
+<li><strong>Two levels</strong> — the switch is <em>whether</em>; the list is <em>which</em>, written down separately, so turning the switch off does not discard the choices.</li>
+<li><strong>Built-ins</strong> — named in <code>model_commands</code> with the slash.</li>
+<li><strong>Custom commands and skills</strong> — opt themselves in with <code>model_invocable: true</code> in their own frontmatter.</li>
+<li><strong>No wildcard</strong> — the list reaches <code>/permission-skip-all</code> if you write it, so it must be a name in a file.</li>
+<li><strong>Shell splices excluded</strong> — a command containing <code>!`shell command`</code> can never be model-invocable, and the refusal is named rather than silent.</li>
+</ul>
+</div>
+
+<div class="note"><strong>Read before turning this on</strong>
+<p>The model decides when to run a command from what it has read: files, command output, and whatever an MCP server returned. Anything on the list is reachable from text the model did not write. The switch, the list and the settings note all say so.</p></div>
+
+<h2>Smaller differences</h2>
+
+<div class="scroll"><table>
+<thead><tr><th>Area</th><th>What differs</th></tr></thead>
+<tbody>
+<tr><td class="nw">Search results</td><td>A 200-match cap, a line over 64KB and an unreadable file are each named in the output. Paths, at most three, rather than a count. No single file may take more than 30 of grep's 200 results.</td></tr>
+<tr><td class="nw">Credential files</td><td><code>.env</code>, <code>*.pem</code>, <code>id_rsa</code>, <code>~/.ssh</code>, <code>~/.aws/credentials</code> and the rest refused for read, write and edit with Smart Agent on. Deny class, so no skip unlocks them.</td></tr>
+<tr><td class="nw">Workspace boundary</td><td>Judged on physical paths, so a link inside the workspace pointing at <code>~/.aws</code> is outside. A path that cannot be resolved costs one question rather than one blind allow.</td></tr>
+<tr><td class="nw">Lifecycle hooks</td><td>Beyond tool hooks: <code>pre_model</code> (block a request, or inject a fact the model could not look up), <code>post_model</code>, <code>delegate</code> (refuse a sub-agent, which a prompt cannot do), <code>compact</code>, <code>retry</code>.</td></tr>
+<tr><td class="nw">Archive</td><td>Keeps the whole event log, stays readable, still records a background task that finishes after archiving. Refuses only <em>starting</em> work, by a store-level invariant rather than a check per caller.</td></tr>
+<tr><td class="nw">Per-session workspace</td><td>Two sessions in two projects on one daemon. Only that session's own turn blocks its own switch.</td></tr>
+<tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>, per profile or per conversation. Unset sends nothing, so an unchanged setup produces byte-identical requests.</td></tr>
+<tr><td class="nw">Nearly-right tool names</td><td>A decorated name that unambiguously means one tool the agent has runs it and says which spelling worked. Resolution searches only the tools that agent was offered, so a misspelling cannot reach past a <code>tools</code> restriction.</td></tr>
+<tr><td class="nw">Model quirks</td><td>Keyed on the model id and applied to nothing else: a carry-on nudge for muse models that stop mid-task, LaTeX unwrapping for Gemma.</td></tr>
+<tr><td class="nw">Steering</td><td>A message typed during a turn reaches that turn at the model's next tool call, in the order typed.</td></tr>
+<tr><td class="nw">Config from the environment</td><td>Any string may be <code>{env:NAME}</code> or <code>{env:NAME:-fallback}</code>. A missing variable is an error naming it and the field that asked for it, not an empty string that fails later as a 401.</td></tr>
+<tr><td class="nw">Linux install</td><td>No root: a static binary in <code>~/.local/bin</code>, nothing written outside <code>$HOME</code>. <code>.deb</code> and a portable tarball where root is available.</td></tr>
+</tbody>
+</table></div>
+
+<h2>Parity, not difference</h2>
+
+<p>These are deliberately the same as elsewhere, and are listed so the table above is readable as a difference rather than a feature count.</p>
+
+<ul>
+<li><strong>Undo and clear</strong> — <code>/rewind</code> and <code>/clear</code> follow Claude Code's scope on purpose.</li>
+<li><strong>Project context</strong> — <code>AGENTS.md</code> with <code>@path</code> imports and a <code>CLAUDE.md</code> fallback. <code>~/.claude/CLAUDE.md</code> applies, so an existing setup is reused rather than replaced.</li>
+<li><strong>MCP</strong> — all three transports, and <code>localcode mcp import-claude</code> pulls an existing Claude Code setup.</li>
+<li><strong>Skills and custom commands</strong> — the same directory conventions and progressive disclosure.</li>
+<li><strong>Tool hooks</strong> — <code>pre_tool_use</code>, <code>post_tool_use</code>, <code>user_prompt_submit</code>, <code>stop</code>, <code>session_start</code>.</li>
+<li><strong>Permissions</strong> — allow once, allow for session, always allow, the last written into config.json.</li>
+<li><strong>Compaction</strong> — on demand and automatic past a threshold.</li>
+</ul>
+
+<h2 id="qualifications">Qualifications</h2>
+
+<ul>
+<li><strong>The comparison column describes a general baseline</strong> across coding agents in common use as of 2026-09-01, not a feature audit of any one product. These tools ship frequently, and a capability listed as absent may exist by the time this is read.</li>
+<li><strong>Every localcode claim is a shipped behaviour</strong> at v0.84.0, documented in <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> and covered by the repository's test gate.</li>
+<li><strong>Benchmark numbers are one run of 25 instances</strong> and the spread between agents is inside run-to-run variance. See the <a href="coding-agent-benchmark.html">benchmark page</a> for what it does and does not support.</li>
+<li><strong>Two capabilities are marked experimental</strong> in the product: the native desktop window, and update-in-place on Windows, which applies but does not restart localcode.</li>
+</ul>
+
+<footer>
+localcode 0.84.0 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
+</footer>
+
+</div>

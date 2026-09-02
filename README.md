@@ -67,6 +67,8 @@ The model calls tools itself for file reads and writes, shell execution, MCP, an
 | [MODELS.md](docs/MODELS.md) | Real setup for Bedrock and Claude, local LLMs, and verified model IDs |
 | [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) | Known gaps and UI ideas |
 | [CHANGELOG.md](docs/CHANGELOG.md) | Version history |
+| [Where localcode differs](https://dennis2lee.github.io/localcode/where-localcode-differs.html) | The capabilities that are not standard in coding agents, with the use case for each |
+| [Coding agents on one model](https://dennis2lee.github.io/localcode/coding-agent-benchmark.html) | SWE-bench Verified, 25 instances, four agent configurations on one model |
 | [LICENSE](LICENSE) | MIT |
 
 ## Architecture
