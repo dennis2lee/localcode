@@ -8,13 +8,13 @@ import (
 	"localcode/internal/session"
 )
 
-// Completing "#<conversation>" with the right arrow.
+// Completing "#<conversation>" and "/<command>" with the right arrow.
 //
-// The same key as "/", and deliberately, but not the same rule. A command
-// is the whole prompt, so completing one can replace the box. A reference
-// is a word inside a sentence — "check #S2 against the file here" is the
-// shape the feature exists for — so it has to be found where the cursor
-// is and spliced back where it was.
+// One key and, since commands became mid-sentence too, one rule: the
+// token under the cursor, spliced back where it was. "check #S2 against
+// the file here" is the shape the reference half exists for, and "read
+// the mail, then run /tidy-context" is the shape the command half now
+// does — a prompt that mentions a command rather than being one.
 
 func refModel(t *testing.T) Model {
 	t.Helper()
@@ -131,11 +131,15 @@ func TestTheArrowIsStillACursorKeyInsideAWord(t *testing.T) {
 	}
 }
 
-// "/" did not change. Its span is the whole box, so a splice and a
-// substitution are the same thing there.
-func TestACommandStillCompletesTheWholeBox(t *testing.T) {
+// "/" changed to match: it is a word in a sentence now, not the whole
+// box. A command name is something a prompt can mention rather than only
+// something a prompt can be, and inside a sentence is where the name is
+// hardest to remember.
+func TestACommandCompletesInTheMiddleOfASentence(t *testing.T) {
 	m := refModel(t)
 	m.slashList = []client.SlashCommandInfo{{Name: "smart-agent"}, {Name: "skill"}}
+
+	// Still the whole box, where the whole box is a command.
 	got, at, ok := complete(&m, "/sm", 3)
 	if !ok || got != "/smart-agent" {
 		t.Errorf("got %q ok=%v", got, ok)
@@ -143,10 +147,53 @@ func TestACommandStillCompletesTheWholeBox(t *testing.T) {
 	if at != len("/smart-agent") {
 		t.Errorf("cursor = %d", at)
 	}
-	// And not from the middle of the box, which is where a command is
-	// not a command.
-	if _, _, ok := complete(&m, "/sm x", 3); ok {
-		t.Error("a command completed with text after it")
+
+	// And spliced, where it is not. The cursor lands after the name, so
+	// the rest of the sentence is still there to carry on writing.
+	typed := "read the mail, then run /sm"
+	got, at, ok = complete(&m, typed+" and tell me", len([]rune(typed)))
+	if !ok {
+		t.Fatal("the arrow did not complete a command mid-sentence")
+	}
+	if want := "read the mail, then run /smart-agent and tell me"; got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+	if wantAt := len([]rune("read the mail, then run /smart-agent")); at != wantAt {
+		t.Errorf("cursor = %d, want %d", at, wantAt)
+	}
+}
+
+// The rule that keeps paths out, and it is not a rule about paths: the
+// scan takes the nearest slash and requires it to open a word, so a slash
+// with a letter in front of it ends the search where it stands.
+func TestASlashInsideAWordIsNotACommand(t *testing.T) {
+	m := refModel(t)
+	m.slashList = []client.SlashCommandInfo{{Name: "commands"}, {Name: "compact"}}
+	for _, tc := range []struct {
+		text   string
+		cursor int
+	}{
+		{"see internal/tui/com", 20}, // a path, mid-word
+		{"see /Users/me/com", 17},    // an absolute path, mid-word
+		{"a/com", 5},                 // no whitespace in front of it
+		{"see / com", 9},             // a bare slash is not a prefix
+		{"/com and then some", 18},   // the word ended before the cursor
+	} {
+		if _, _, ok := complete(&m, tc.text, tc.cursor); ok {
+			t.Errorf("%q started a completion", tc.text)
+		}
+	}
+}
+
+// A quoted title may contain a slash, so the reference scan has to be
+// asked first: taking whichever sigil sits nearest the cursor would hand
+// a half-typed title to the commands and complete it to nothing.
+func TestASlashInsideAQuotedTitleIsStillAReference(t *testing.T) {
+	m := refModel(t)
+	m.refNames = append(m.refNames, session.Session{ID: "s-slash", Title: "the /parser notes"})
+	got, _, ok := complete(&m, `#"the /par`, 10)
+	if !ok || got != `#"the /parser notes"` {
+		t.Errorf("got %q ok=%v, want the quoted title", got, ok)
 	}
 }
 

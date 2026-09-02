@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.84.0
+
+* **A `/command` completes where it is written, not only at the start of the box.** The right arrow finished a `/name` only when the name was the whole prompt: a command *was* the prompt, so `/pdf-tools merge a.pdf` was past completing. That stopped being true in v0.83.0, when a prompt could start mentioning a command rather than being one, and a name inside a sentence is exactly where it is hardest to remember. `read the mail, then run /tid` now finishes to `/tidy-context` and leaves the sentence on both sides of it alone.
+
+  It is the rule `#<conversation>` already followed, so there is now one rule rather than two: the token under the cursor, spliced back where it was. In the TUI and the Web UI alike.
+
+  **A slash that does not open a word is a path.** The scan takes the nearest slash before the cursor and requires whitespace or the start of the box in front of it, so `internal/tui/co` and `/Users/me/co` both stop on a slash with a letter behind it. There is no rule about paths anywhere; that one falls out. What is left is a real collision, `read /u` being both a path and the prefix of `/usage`, and it is left to the candidate list: a prefix matching no command offers nothing at all, and the last stop on the walk is always the text as typed.
+
+  **References are matched first, and not because they are likelier.** A quoted title may contain a slash, so `#"the parser /rewrite` is a half-typed reference; a scan taking whichever sigil sat nearest the cursor would hand it to the commands and complete it to nothing.
+
+  One limit, stated rather than worked around: a Korean particle attaches with no space, so `/tidy-context를` is one word, and going back to a name already written that way puts the cursor inside a word, where the arrow is a cursor key and stays one. The order people type in does not hit it, since the name is completed first and the particle typed onto the end.
+
+* **Pressing the right arrow at the end of a Korean prompt crashed the TUI.** Not a hang or a wrong completion: a panic out of `handleKey`, taking the program down. The cursor offset the completions were handed came from the text widget's `CharOffset`, which is a *display width* rather than a count of characters. A Hangul syllable is two cells wide, so on any prompt with enough CJK in it the offset ran past the end of the text and the check for "is there a word after the cursor" indexed off the end of it. The two numbers are equal for anything ASCII, which is why every test missed it and why it only ever happened in Korean.
+
+* **A prompt longer than the input box was scrambled before it was sent.** The worst of the three, and it had nothing to do with completion. Typing past the width of the box put every later keystroke back near the start of the line, so `the quick brown fox jumps over the lazy dog and then keeps on running past the edge` reached the model as `theps on running past the edge quick brown fox jumps over the lazy dog and then kee`. Not a display fault: that is the text the request carried.
+
+  The same class of mistake as the crash above, one layer up. The layout pass that runs after every keystroke compared the number of *logical lines* against the height of the box in *visual rows*, so a single prompt long enough to soft-wrap looked like content that fits, and the pass ran and restored the cursor to a column measured from the start of the wrapped row rather than the start of the line. Both halves are fixed and each was checked on its own: the column one stops the text being scrambled, the guard stops the cursor being scrolled out of sight while typing.
+
+  TUI only. The Web UI and the desktop window use a browser text box and were never affected.
+
+  No test had ever typed into the prompt box one key at a time; every one of them put text in with `SetValue`, which does not go through the layout pass. Three now do, in English, in Korean, and across several lines.
+
 ## v0.83.0
 
 * **The model can run this session's commands, if you let it.** A built-in, a custom command or a skill — each runs **as a turn of its own** in the same conversation, immediately after the turn that asked for it. `/model-invocable on|off` toggles it, config.json's `model_invocable` holds it, and the settings window has it under **Commands the model may run**. Off by default.

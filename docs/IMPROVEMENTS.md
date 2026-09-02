@@ -122,6 +122,11 @@ Findings from a code review on 2026-07-18. Items marked done were fixed on the s
     Three gaps in what it captures, each stated in the reply rather than hidden. Hard links are not detected: Claude Code documents skipping them, and `Nlink` is not reachable portably on Windows, which this repository targets, so a hard-linked path is restored like any other and the link's other name follows. Write tools registered by an MCP filesystem server go through the same registry and are not in the two-name capture set. And a turn that spawned a background task leaves its `task.spawned` inside the removed range while `task.status` keeps arriving after the marker, so those later events refer to a spawn the replay no longer produces; refusing while a child is live narrows this and does not close it.
 
 
+40. **Completion is single-line in the TUI and mid-sentence in the Web UI.** Both clients complete a `/command` or a `#reference` wherever it is written, except that the TUI declines the moment the prompt box holds more than one line. That is the text widget's API rather than a decision: `SetCursorColumn` names a column within whatever line the cursor is already on, and there is no setter for the line. `CursorDown` steps a *visual* row, so a line that soft-wraps makes "move down two lines" mean something other than two presses, and putting the cursor back after a splice is exactly what a completion has to do.
+
+    `cursorRune` reports -1 for a multi-line box, which makes the scan find nothing, which is the right answer until the row can be named. The Web UI has no such limit: a textarea's `selectionStart` is an absolute offset and completing on the third line of a prompt works there today. Closing it means either an upstream setter or tracking the row ourselves against a widget that also tracks it.
+
+
 ## UI ideas
 
 ### Web UI

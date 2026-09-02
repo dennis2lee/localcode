@@ -56,14 +56,31 @@ func (m *Model) resizeLayout() {
 // rows past the end render as black-on-black filler — while Value() is
 // perfectly correct, which is why sending it worked.
 func (m *Model) scrollInputToTop() {
-	if m.input.LineCount() > m.input.Height() {
+	// Both halves of this comparison have to be visual rows, and one of
+	// them was not. LineCount is logical lines: a single prompt long
+	// enough to soft-wrap counts as one, so a box one row tall holding a
+	// two-row prompt looked like content that fits and this ran anyway —
+	// resetting the cursor to a row-relative column on every keystroke,
+	// which scrambled the prompt from the wrap point on. LineInfo's
+	// Height is the rows the cursor's line actually occupies.
+	if m.input.LineCount() > m.input.Height() || m.input.LineInfo().Height > m.input.Height() {
 		return // genuinely taller than the box; the offset is doing real work
 	}
 	row := m.input.Line()
-	col := m.input.LineInfo().ColumnOffset
+	// Column, not LineInfo's ColumnOffset: ColumnOffset is measured from
+	// the start of the wrapped row and SetCursorColumn wants it from the
+	// start of the line. They agree only where nothing wraps.
+	col := m.input.Column()
 	m.input.MoveToBegin() // scrolls the internal viewport back to line 0
-	for i := 0; i < row; i++ {
+	// CursorDown steps a visual row, which is not a line, so step until
+	// the line is the one we left rather than counting presses. It stops
+	// on its own at the end of the text, where a press moves nothing.
+	for m.input.Line() < row {
+		wasRow, wasCol := m.input.Line(), m.input.Column()
 		m.input.CursorDown()
+		if m.input.Line() == wasRow && m.input.Column() == wasCol {
+			break
+		}
 	}
 	m.input.SetCursorColumn(col)
 }

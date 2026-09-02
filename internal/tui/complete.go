@@ -102,25 +102,6 @@ func completionsFor(candidates []string, prefix string) []string {
 	return out
 }
 
-// completionPrefix reports the text to complete, and whether it is
-// completable at all.
-//
-// A completable prompt is one word beginning with "/" and nothing else:
-// "/pd" completes, "/pdf-tools split this" does not, because the
-// completion is over. The cursor has to be at the end for the same
-// reason Up only recalls history at the top of the box: the key means
-// something else in the middle of a line, and taking it there would cost
-// the ordinary use to serve the special one.
-func completionPrefix(text string) (string, bool) {
-	if !strings.HasPrefix(text, "/") || len(text) < 2 {
-		return "", false
-	}
-	if strings.ContainsAny(text, " \t\n") {
-		return "", false
-	}
-	return text, true
-}
-
 // sessionCandidates is everything "#" can be completed to: the other
 // conversations on this daemon, by title where they have one and by id
 // where they do not.
@@ -176,24 +157,39 @@ func sessionCompletionsFor(candidates []string, prefix string) []string {
 
 var allDigits = regexp.MustCompile(`^[0-9]+$`)
 
-// completionTarget finds what the cursor is sitting in, and is the whole
-// difference between the two completions.
+// completionTarget is what the cursor is sitting in: a command, or a
+// reference to another conversation.
 //
-// A command is the first word of the box and nothing else, so it is
-// matched against the whole text. A reference is not: "check #S2 against
-// the file here" is the shape the feature exists for, so its token has to
-// be found where the cursor is and spliced back in place rather than
-// replacing the box.
+// Both are found the same way now — the token under the cursor, spliced
+// back where it was. That was always true of a reference. It used to be
+// false of a command: a command was the whole box, so completing one
+// could replace it, and "/pdf-tools split this" was past completing
+// because the command had been chosen and the rest was the request.
+//
+// That rule outlived its reason. A command name is now something a
+// sentence can mention rather than only something a prompt can be — "if
+// there is mail from 철수, run /tidy-context" is a prompt about a command,
+// and it is exactly where the name is hardest to remember and hardest to
+// get right. So a command is a word, like a reference.
 //
 // start and end bound the runes a completion replaces. Runes, not bytes,
-// because a Korean prompt with a reference in it is the ordinary case
-// here and a byte offset into one lands mid-character.
+// because a Korean prompt with a name in it is the ordinary case here and
+// a byte offset into one lands mid-character.
 type completionTarget struct {
 	session    bool
 	start, end int
 	prefix     string
 }
 
+// targetAt asks the reference scan first and the command scan second.
+//
+// The order is not arbitrary. A quoted title is allowed to contain a
+// slash, so `#"the parser /rewrite` is a half-typed reference; a scan
+// that took whichever sigil sat nearest the cursor would hand that one to
+// the commands and complete it to nothing. Asking references first costs
+// nothing the other way round, because every shape where the cursor is
+// not in a reference is one that scan already declines — and now falls
+// through instead of ending the search.
 func targetAt(text string, cursor int) (completionTarget, bool) {
 	runes := []rune(text)
 	if cursor < 0 {
@@ -202,18 +198,21 @@ func targetAt(text string, cursor int) (completionTarget, bool) {
 	if cursor > len(runes) {
 		cursor = len(runes)
 	}
-	if prefix, ok := completionPrefix(text); ok && cursor == len(runes) {
-		return completionTarget{start: 0, end: len(runes), prefix: prefix}, true
+	if t, ok := referenceAt(runes, cursor); ok {
+		return t, true
 	}
+	return commandAt(runes, cursor)
+}
 
-	// The nearest "#" at or before the cursor that opens a token: at the
-	// start of the box, or with whitespace in front of it. Anything else
-	// is a fragment identifier or somebody's C include.
-	//
-	// The scan does not stop at whitespace, because a quoted name is
-	// allowed to contain some — `#"the parser` is a name half typed, and a
-	// scan that gave up at the space would make every multi-word title
-	// uncompletable, which is most of them. The token decides it instead.
+// referenceAt finds the nearest "#" at or before the cursor that opens a
+// token: at the start of the box, or with whitespace in front of it.
+// Anything else is a fragment identifier or somebody's C include.
+//
+// The scan does not stop at whitespace, because a quoted name is allowed
+// to contain some — `#"the parser` is a name half typed, and a scan that
+// gave up at the space would make every multi-word title uncompletable,
+// which is most of them. The token decides it instead.
+func referenceAt(runes []rune, cursor int) (completionTarget, bool) {
 	for i := cursor - 1; i >= 0; i-- {
 		if runes[i] != '#' {
 			continue
@@ -243,6 +242,44 @@ func targetAt(text string, cursor int) (completionTarget, bool) {
 			return completionTarget{}, false
 		}
 		return completionTarget{session: true, start: i, end: cursor, prefix: token}, true
+	}
+	return completionTarget{}, false
+}
+
+// commandAt finds the "/<name>" the cursor is in, under the same rule:
+// the nearest "/" at or before the cursor that opens a word.
+//
+// Taking the nearest one rather than scanning past it is what keeps paths
+// out, without a rule about paths. "internal/tui/co" and "/Users/me/co"
+// both stop on a slash with a letter in front of it and are declined
+// there; only a slash that opens a word is a command.
+//
+// What that leaves is a real collision and is left to the candidate list:
+// "read /u" is a path being typed and also the prefix of "/usage". The
+// list decides — a prefix matching no command offers nothing at all — and
+// where one does match, the last stop on the walk is the text as typed,
+// so a wrong guess costs one more press.
+func commandAt(runes []rune, cursor int) (completionTarget, bool) {
+	for i := cursor - 1; i >= 0; i-- {
+		if runes[i] != '/' {
+			continue
+		}
+		if i > 0 && !isSpace(runes[i-1]) {
+			return completionTarget{}, false
+		}
+		// A bare "/" is not a prefix worth completing: every command
+		// matches it, and offering the whole list to somebody who typed a
+		// slash in a sentence is not an offer.
+		if cursor-i < 2 {
+			return completionTarget{}, false
+		}
+		token := string(runes[i:cursor])
+		// Whitespace means the word ended before the cursor, and the
+		// cursor is somewhere else in the sentence.
+		if strings.ContainsAny(token, " \t\n") {
+			return completionTarget{}, false
+		}
+		return completionTarget{start: i, end: cursor, prefix: token}, true
 	}
 	return completionTarget{}, false
 }

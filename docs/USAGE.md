@@ -896,7 +896,7 @@ Type a skill's own name as a command. You do not have to wait for the model to d
 
 The transcript keeps just the short command you typed. The full skill body goes only to the model.
 
-**Completing a name.** Type part of one and press the right arrow. In both the TUI and the Web UI, a `/name` with nothing after it completes against the installed skills and the custom commands, and pressing the key again offers the next match:
+**Completing a name.** Type part of one and press the right arrow. In both the TUI and the Web UI, a `/name` completes against the installed skills and the custom commands, and pressing the key again offers the next match:
 
 ```text
 /p     ->  /pdf-tools  ->  /plan-review  ->  /pptx  ->  /p
@@ -904,7 +904,14 @@ The transcript keeps just the short command you typed. The full skill body goes 
 
 The walk comes back round to what you typed, so it is never a cycle you cannot leave. The line under the prompt box shows the first match and how many there are, which is what tells you whether the key is worth pressing. Editing the text ends the walk and the next press starts a fresh one from what is now in the box.
 
-A `/name` completes only at the very end of a one-word prompt: a command is the whole prompt, so a prompt that already has arguments (`/pdf-tools merge a.pdf`) is past completing. The same key also completes a `#<name>` reference, and that one is not a whole prompt but a word inside a sentence, so it completes wherever the cursor sits at the end of a word. See [Referring to another conversation](#referring-to-another-conversation-with-name). Inside a word the arrow moves the cursor, as it always did.
+A `/name` completes wherever it is written, not only at the start of the box. That is a change: a command used to be the whole prompt, so `/pdf-tools merge a.pdf` was past completing. It stopped being true once [the model could run one](#model-invocable), because a prompt can now *mention* a command rather than be one — `read the mail, then run /tidy-context` — and a name inside a sentence is exactly where it is hardest to remember. So a command is a word now, like a `#<name>` reference, and the key works the same on both: it completes the word at the cursor and leaves the rest of the sentence alone.
+
+Two limits come with that, and both are the arrow keeping its day job:
+
+* **Inside a word the arrow moves the cursor**, as it always did. It is completion only at the end of a word — where the next character is a space, or the box ends.
+* **A Korean particle attaches with no space**, so `/tidy-context를` is one word and going back to complete a name already written that way puts the cursor inside it. Typing in the order people actually type in does not hit this: the name is completed first and the particle typed onto the end of it.
+
+What a slash does *not* start is a path. The scan takes the nearest slash before the cursor and requires it to open a word, so `internal/tui/co` and `/Users/me/co` both stop on a slash with a letter in front of it. What is left — `read /u`, which is a path being typed and also the prefix of `/usage` — is left to the candidate list: a prefix matching no command offers nothing at all, and where one does match, the last stop on the walk is the text as you typed it.
 
 Built-in commands complete too, so `/sm` finishes to `/smart-agent` and `/perm` to `/permission-skip-all`. Four lists feed it: the installed skills, the custom commands, the commands the daemon answers, and the few each client answers itself. A name in more than one list is offered once.
 
@@ -1269,7 +1276,7 @@ Other things worth knowing:
 * **Five per message.** The sixth is not dropped in silence: the notice says how many were skipped.
 * **Background tasks are not referable.** They belong to the conversation that started them; use `/tasks` for those.
 * **Delegated work cannot follow a reference.** A prompt sent to a sub-agent does not resolve `#<name>`, and a sub-agent is not given `session_read`. Auto delegation declines a prompt that names another conversation, so it is answered by the agent you are talking to.
-* **The right arrow completes a name**, in the TUI and the Web UI alike, from the live conversations and the archived ones. Unlike a command, a reference sits inside a sentence, so the completion replaces the word at the cursor and leaves the rest of what you typed alone.
+* **The right arrow completes a name**, in the TUI and the Web UI alike, from the live conversations and the archived ones. The completion replaces the word at the cursor and leaves the rest of what you typed alone — the same rule a `/command` follows, since a reference sits inside a sentence and a command may now too.
 
 ### Renaming and deleting sessions
 

@@ -235,3 +235,87 @@ func TestADaemonCommandCompletesWithoutTheClientKnowingIt(t *testing.T) {
 		t.Errorf("the walk over %q does not cross both kinds", walk)
 	}
 }
+
+// The feature and a crash it uncovered, in one press.
+//
+// The cursor offset the completions were handed came from LineInfo's
+// CharOffset, which is a display width: a double-width rune counts twice,
+// so on a Korean prompt the offset ran past the end of the text and
+// cursorCompletable indexed off it. Right, at the end of any prompt with
+// enough CJK in it, took the TUI down. It is equal to the rune count for
+// anything ASCII, which is why every test here missed it.
+func TestACommandCompletesAtTheEndOfAKoreanPrompt(t *testing.T) {
+	m := withSkills(newTestModel(), "pdf-tools")
+	m.setInputTo("이 파일을 /pd")
+
+	m = pressRight(t, m)
+	if got, want := m.input.Value(), "이 파일을 /pdf-tools"; got != want {
+		t.Errorf("input = %q, want %q", got, want)
+	}
+}
+
+// The shape the change exists for: a prompt that mentions a command
+// rather than being one, which is where the name is hardest to remember.
+// Under the old rule this box was "past completing" — a command was the
+// whole prompt, and this one has a sentence in front of it.
+func TestACommandCompletesAtTheEndOfASentenceInKorean(t *testing.T) {
+	m := withSkills(newTestModel(), "tidy-context")
+	m.setInputTo("메일을 읽고, 철수에게서 온 게 있으면 /tid")
+
+	m = pressRight(t, m)
+	if got, want := m.input.Value(), "메일을 읽고, 철수에게서 온 게 있으면 /tidy-context"; got != want {
+		t.Errorf("input = %q\nwant     %q", got, want)
+	}
+}
+
+// And spliced, with the sentence carrying on past it. The cursor lands
+// after the name rather than at the end of what was already written.
+func TestACommandCompletesWithASentenceOnBothSides(t *testing.T) {
+	m := withSkills(newTestModel(), "tidy-context")
+	typed := "메일을 읽고 나서 /tid"
+	m.setInputTo(typed + " 를 실행해라")
+	m.input.SetCursorColumn(len([]rune(typed)))
+
+	m = pressRight(t, m)
+	if got, want := m.input.Value(), "메일을 읽고 나서 /tidy-context 를 실행해라"; got != want {
+		t.Errorf("input = %q\nwant     %q", got, want)
+	}
+	if got, want := m.cursorRune(), len([]rune("메일을 읽고 나서 /tidy-context")); got != want {
+		t.Errorf("cursor = %d, want %d", got, want)
+	}
+}
+
+// The limit, written down because it is a real one and it is Korean's.
+//
+// A particle attaches with no space — "/tidy-context를" is one word — so
+// going back to a name already written that way puts the cursor inside a
+// word, where Right is a cursor key and has to stay one. Taking it there
+// would cost the ordinary use to serve the rarer one. The order people
+// actually type in does not hit this: the name is completed first and the
+// particle typed onto the end of it.
+func TestAParticleTypedOntoTheNameLeavesTheArrowAlone(t *testing.T) {
+	m := withSkills(newTestModel(), "tidy-context")
+	typed := "메일을 읽고 나서 /tid"
+	m.setInputTo(typed + "를 실행해라")
+	m.input.SetCursorColumn(len([]rune(typed)))
+
+	if m.cursorCompletable() {
+		t.Error("Right stopped being a cursor key inside a word")
+	}
+	m = pressRight(t, m)
+	if got := m.input.Value(); got != typed+"를 실행해라" {
+		t.Errorf("input = %q, want it untouched", got)
+	}
+}
+
+// The footer counts mid-sentence too, so an ambiguous name looks
+// ambiguous wherever it is typed.
+func TestTheFooterCountsACommandInsideASentence(t *testing.T) {
+	m := withSkills(newTestModel(), "pdf-tools", "plan-review")
+	typed := "run /p"
+	m.setInputTo(typed + " on this")
+	m.input.SetCursorColumn(len([]rune(typed)))
+	if hint := m.completionHint(); !contains(hint, "2 matches") {
+		t.Errorf("hint = %q, want it to count the matches mid-sentence", hint)
+	}
+}

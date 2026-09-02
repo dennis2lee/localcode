@@ -200,3 +200,86 @@ test('a name shared by a skill and a command is offered once', async () => {
   assert.deepEqual([first, input.value], ['/review', '/rev'],
     'offering one name twice looks like the key stopped working');
 });
+
+// typeCaretAt puts text in the box with the caret somewhere inside it,
+// which is what completing mid-sentence means and what typeAt cannot say.
+function typeCaretAt(app, text, caret) {
+  const input = app.type(text);
+  input.selectionStart = input.selectionEnd = caret;
+  input.fire('input');
+  return input;
+}
+
+// The shape the change exists for: a prompt that mentions a command
+// rather than being one. Under the old rule this box was past completing,
+// because a command was the whole prompt and this one has a sentence in
+// front of it.
+test('a command completes at the end of a sentence', async () => {
+  const app = await load({ routes: { 'GET /api/skills': [{ name: 'tidy-context' }] } });
+  const input = typeAt(app, 'read the mail, then run /tid');
+
+  app.press('ArrowRight');
+  assert.equal(input.value, 'read the mail, then run /tidy-context');
+});
+
+// And spliced, with the sentence carrying on past it. The caret lands
+// after the name so the rest of what was written is still there.
+test('a command completes with a sentence on both sides', async () => {
+  const app = await load({ routes: { 'GET /api/skills': [{ name: 'tidy-context' }] } });
+  const typed = 'read the mail, then run /tid';
+  const input = typeCaretAt(app, typed + ' and tell me', typed.length);
+
+  app.press('ArrowRight');
+  assert.equal(input.value, 'read the mail, then run /tidy-context and tell me');
+  assert.equal(input.selectionStart, 'read the mail, then run /tidy-context'.length,
+    'the caret should sit after the name, not at the end of the sentence');
+});
+
+// A prompt written over several lines, which the box allows and the TUI's
+// widget does not let us follow the caret through.
+test('a command completes on the second line of a prompt', async () => {
+  const app = await load({ routes: { 'GET /api/skills': [{ name: 'tidy-context' }] } });
+  const input = typeAt(app, 'read the mail.\nif it is from 철수, run /tid');
+
+  app.press('ArrowRight');
+  assert.equal(input.value, 'read the mail.\nif it is from 철수, run /tidy-context');
+});
+
+// The rule that keeps paths out, and it is not a rule about paths: the
+// scan takes the nearest slash and requires it to open a word, so a slash
+// with a letter in front of it ends the search where it stands.
+test('a slash inside a word is not a command', async () => {
+  const app = await load({
+    routes: { 'GET /api/slash-commands': [{ name: 'commands' }, { name: 'compact' }] },
+  });
+  for (const text of [
+    'see internal/tui/com',  // a path, mid-word
+    'see /Users/me/com',     // an absolute path, mid-word
+    'a/com',                 // no whitespace in front of it
+    'see / com',             // a bare slash is not a prefix
+    '/com and then some',    // the word ended before the caret
+  ]) {
+    const input = typeAt(app, text);
+    app.press('ArrowRight');
+    assert.equal(input.value, text, `${text} started a completion`);
+  }
+});
+
+// A quoted title may contain a slash, so the reference scan has to be
+// asked first: taking whichever sigil sits nearest the caret would hand a
+// half-typed title to the commands and complete it to nothing.
+test('a slash inside a quoted title is still a reference', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/sessions': [
+        { id: 's-here', title: 'this one' },
+        { id: 's-slash', title: 'the /parser notes' },
+      ],
+    },
+  });
+  app.state.sessionID = 's-here';
+  const input = typeAt(app, '#"the /par');
+
+  app.press('ArrowRight');
+  assert.equal(input.value, '#"the /parser notes"');
+});
