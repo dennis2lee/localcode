@@ -9,6 +9,7 @@ import {
   settingsModalEl, settingsBtn, settingsCloseBtn,
   smartAgentCheckbox, smartAgentNoteEl, smartAgentWarnEl,
   orchestrateCheckbox, orchestrateNoteEl, orchestrateWarnEl,
+  modelInvocableCheckbox, modelInvocableNoteEl, modelInvocableWarnEl,
   keepGoingCheckbox, keepGoingWarnEl,
   updateCheckBtn, updateInstallBtn, updateNoteEl,
 } from './dom.js';
@@ -25,6 +26,7 @@ export function openSettings() {
   updateInstallBtn.hidden = true;
   renderSmartAgent();
   renderOrchestrate();
+  renderModelInvocable();
   renderKeepGoing();
   settings.open();
 }
@@ -118,6 +120,54 @@ function renderOrchestrate(warning) {
     + 'check each finding with agents that cannot see each other, and come back together at the end. '
     + 'A plan that would not work is refused before anything runs, and every run asks first and shows '
     + 'its ceilings: at most 8 stages and 32 agent turns, 10 minutes a stage and 30 for the run.';
+}
+
+// The model running commands.
+//
+// The note carries the list, because the switch alone says nothing about
+// what it reaches: the opt-ins live in config.json and in each command's
+// own frontmatter, and somebody turning this on without seeing them has
+// turned on something they cannot name.
+function renderModelInvocable(warning) {
+  modelInvocableCheckbox.checked = !!app.modelInvocable;
+  modelInvocableWarnEl.textContent = warning || '';
+  modelInvocableWarnEl.hidden = !warning;
+  const names = app.modelCommands || [];
+  if (!app.modelInvocable) {
+    modelInvocableNoteEl.textContent =
+      'Off. Commands run only when you type them.';
+    return;
+  }
+  if (!names.length) {
+    modelInvocableNoteEl.textContent =
+      'On, and nothing is opted in yet, so it changes nothing. Name a built-in in config.json\u2019s '
+      + '"model_commands", or put "model_invocable: true" in a custom command\u2019s or a skill\u2019s frontmatter.';
+    return;
+  }
+  modelInvocableNoteEl.textContent =
+    `On. The model may run: ${names.join(', ')}. Each runs as a turn of its own in this conversation. `
+    + 'It chooses when, from what it has read \u2014 so anything on that list is reachable from text the model did not write.';
+}
+
+export function refreshModelInvocableIfOpen() {
+  if (settings.isOpen) renderModelInvocable();
+}
+
+async function toggleModelInvocable() {
+  const enabled = modelInvocableCheckbox.checked;
+  modelInvocableCheckbox.disabled = true;
+  try {
+    const res = await apiClient.setModelInvocable(enabled);
+    app.modelInvocable = res && 'model_invocable' in res ? !!res.model_invocable : enabled;
+    renderModelInvocable(res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '');
+  } catch (err) {
+    modelInvocableCheckbox.checked = !enabled;
+    modelInvocableNoteEl.textContent = `Not changed: ${err}`;
+  } finally {
+    modelInvocableCheckbox.disabled = false;
+  }
 }
 
 export function refreshOrchestrateIfOpen() {
@@ -289,6 +339,7 @@ export function initSettings() {
   settingsCloseBtn.addEventListener('click', () => settings.close());
   smartAgentCheckbox.addEventListener('change', toggleSmartAgent);
   orchestrateCheckbox.addEventListener('change', toggleOrchestrate);
+  modelInvocableCheckbox.addEventListener('change', toggleModelInvocable);
   keepGoingCheckbox.addEventListener('change', toggleKeepGoing);
   updateCheckBtn.addEventListener('click', checkForUpdate);
   updateInstallBtn.addEventListener('click', installUpdate);

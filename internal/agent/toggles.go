@@ -389,6 +389,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "compact", Description: "summarize the conversation now, optionally with instructions"},
 		{Name: "clear", Description: "start the model fresh: it keeps none of this conversation, and the conversation keeps all of it"},
 		{Name: "rewind", Description: "undo the last turn, and the files write_file and edit changed in it"},
+		{Name: "model-invocable", Description: "whether the model may run this session's commands itself"},
 		{Name: "usage", Description: "cumulative token usage per model"},
 		{Name: "context", Description: "what the next request is made of; /context all, /context <id>"},
 	}
@@ -624,4 +625,68 @@ func (l *Loop) routeShowScheduled(sessionID, text string) (bool, error) {
 	}
 	b.WriteString("\"/schedule cancel <id>\" removes one. They run only while localcode is running.")
 	return true, l.replyText(sessionID, strings.TrimRight(b.String(), "\n"))
+}
+
+// routeModelInvocable answers "/model-invocable [on|off]": whether the
+// model may run this session's commands itself.
+//
+// The switch and what it lets through are separate on purpose. This
+// changes only whether the capability is on; which commands are reachable
+// stays where it was written, so turning it off in a hurry does not throw
+// away the choices somebody made.
+func (l *Loop) routeModelInvocable(sessionID, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/model-invocable")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+
+	want, valid := toggleArg(arg, l.ModelInvocableEnabled())
+	if !valid {
+		return true, l.replyText(sessionID, "usage: /model-invocable [on|off]")
+	}
+	l.SetModelInvocableEnabled(want)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "model_invocable: %s", onOff(want))
+	if want {
+		names := l.modelCommands()
+		if len(names) == 0 {
+			b.WriteString("\n(nothing is opted in yet, so this changes nothing until something is: " +
+				"name a built-in in config.json's \"model_commands\", or put \"model_invocable: true\" " +
+				"in a custom command's or a skill's frontmatter)")
+		} else {
+			fmt.Fprintf(&b, "\nThe model may now run: %s", strings.Join(names, ", "))
+			// The sentence worth saying every time it goes on. A command
+			// is what a person types, and the model decides what to run
+			// after reading files, command output and whatever an MCP
+			// server returned.
+			b.WriteString("\nEach runs as a turn of its own in this conversation. " +
+				"The model chooses when, from what it has read — so anything on that list is reachable " +
+				"from text the model did not write.")
+		}
+		if refused := l.refusedInvocable(); len(refused) > 0 {
+			fmt.Fprintf(&b, "\nNot offered: %s", strings.Join(refused, "; "))
+		}
+	}
+	b.WriteString(l.persist(func(path string) error { return config.SetModelInvocableInFile(path, want) }))
+
+	l.announceConfig(sessionID)
+	return true, l.replyText(sessionID, b.String())
+}
+
+// refusedInvocable names each command that asked to be model-invocable
+// and was not allowed to be, with the reason.
+//
+// Said rather than left as a frontmatter line that quietly did nothing:
+// somebody who wrote model_invocable and finds their command missing from
+// the list deserves to know it was read and refused.
+func (l *Loop) refusedInvocable() []string {
+	var out []string
+	for _, c := range l.Commands {
+		if c.Refused != "" {
+			out = append(out, "/"+c.Name+" — "+c.Refused)
+		}
+	}
+	return out
 }

@@ -1,5 +1,7 @@
 package config
 
+import "strings"
+
 // This file holds the mutex-guarded surface of Config that changes at
 // runtime — a daemon settings endpoint flipping skip_permissions, adding or
 // removing a permission rule, or repointing auto_delegate — as opposed to
@@ -152,4 +154,40 @@ func (c *Config) SetOrchestrateRuntime(v bool) {
 	c.permMu.Lock()
 	defer c.permMu.Unlock()
 	c.Orchestrate = &v
+}
+
+// ModelCommandNames is the built-in commands the model may run, each with
+// its leading slash and normalised to carry exactly one.
+//
+// Normalised rather than validated, because the alternative is a config
+// that loads and silently does nothing: somebody writing "compact" meant
+// the command, and refusing the file over a slash would be pedantry with
+// a cost. What is not normalised is the list itself — a name that is not
+// a command is simply never matched, and the tool says what it does have.
+func (c *Config) ModelCommandNames() []string {
+	out := make([]string, 0, len(c.ModelCommands))
+	for _, name := range c.ModelCommands {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, "/"+strings.TrimPrefix(name, "/"))
+	}
+	return out
+}
+
+// ModelInvocableLive reports whether the model may run commands right
+// now, read the same way and for the same reasons as SmartAgentLive.
+func (c *Config) ModelInvocableLive() bool {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+	return c.ModelInvocable != nil && *c.ModelInvocable
+}
+
+// SetModelInvocableRuntime changes the live setting. The in-memory
+// counterpart to SetModelInvocableInFile.
+func (c *Config) SetModelInvocableRuntime(v bool) {
+	c.permMu.Lock()
+	defer c.permMu.Unlock()
+	c.ModelInvocable = &v
 }

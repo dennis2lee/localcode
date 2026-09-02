@@ -126,6 +126,14 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	if d, booked := l.takePendingDebate(sessionID); booked && err == nil {
 		return l.runDebate(ctx, d)
 	}
+
+	// And a command the model asked for during that turn, for the same
+	// reason and in the same place: it is a turn in this session, and the
+	// tool call that booked it was inside one. Marked as a command run,
+	// so the one it produces cannot book a third.
+	if line, booked := l.takePendingCommand(sessionID); booked && err == nil {
+		return l.SendMessage(withCommandRun(ctx), sessionID, agentName, line)
+	}
 	return err
 }
 
@@ -166,6 +174,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		// docs/USAGE.md.
 		func() (bool, error) { return l.routeClear(sessionID, text) },
 		func() (bool, error) { return l.routeRewind(ctx, sessionID, text) },
+		func() (bool, error) { return l.routeModelInvocable(sessionID, text) },
 		func() (bool, error) { return l.routeUsage(sessionID, text) },
 		func() (bool, error) { return l.routeContext(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeCustomCommand(ctx, sessionID, agentName, text) },

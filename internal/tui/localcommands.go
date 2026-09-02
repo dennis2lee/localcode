@@ -232,6 +232,7 @@ const serverSideHelpText = `  /skill              list registered skills
   /show-scheduled-task  list the prompts booked for later
   /debate <reviewer>[,<reviewer>] [rounds] <what to do>  other agents review this one's work, round after round
   /effort [off|low|medium|high]  how hard the model is asked to think in this conversation
+  /model-invocable [on|off]  whether the model may run this session's commands itself
   /clear             start the model fresh; the conversation itself is kept
   /rewind            undo the last turn, and the files write_file and edit changed in it
   /compact           summarize and compact the conversation right now

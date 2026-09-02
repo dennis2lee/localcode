@@ -99,6 +99,7 @@ export const resolvePermissionRequest = (sessionID, id, allow, scope) =>
 export const setAutoDelegate = (patch) => api('POST', '/api/settings/auto-delegate', patch);
 export const setSmartAgent = (enabled) => api('POST', '/api/settings/smart-agent', { enabled });
 export const setOrchestrate = (enabled) => api('POST', '/api/settings/orchestrate', { enabled });
+export const setModelInvocable = (enabled) => api('POST', '/api/settings/model-invocable', { enabled });
 export const archiveSession = (id) => api('POST', `/api/sessions/${id}/archive`);
 export const retrieveSession = (id) => api('POST', `/api/sessions/${id}/retrieve`);
 export const getArchivedSessions = () => api('GET', '/api/sessions?archived=1');

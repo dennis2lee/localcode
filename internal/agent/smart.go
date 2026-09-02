@@ -258,6 +258,16 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 			hidden[debateToolName] = true
 		}
 	}
+	// The Command tool needs both halves: the switch on, and something
+	// opted in for it to run. Offered with an empty list it is a tool
+	// whose enum has no members, which is a call that can only fail — and
+	// offered with the switch off it would be a capability nobody turned
+	// on. Hidden inside a command run as well, where the tool itself
+	// refuses: an offered tool that always refuses is a turn spent
+	// finding that out.
+	if !l.Config.ModelInvocableLive() || inCommandRun(ctx) || len(l.modelCommands()) == 0 {
+		hidden[commandToolName] = true
+	}
 	// Orchestrate is off unless its own switch is on, and never inside a
 	// run: a plan that can run plans turns a ceiling into an exponent.
 	if !config.OrchestrateFor(ctx, l.Config) || inOrchestration(ctx) {

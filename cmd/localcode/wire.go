@@ -277,6 +277,12 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// tools beside it: whether it is offered is a per-turn question, and a
 	// registry read at startup cannot answer a roster that moves.
 	registry.Register(agent.NewSessionReadTool(loop))
+	// The model running a command. Registered unconditionally, like the
+	// tools beside it, and hidden per turn: whether it is offered depends
+	// on a switch that moves and on a list of opt-ins that a
+	// "/reset-skills" can change, neither of which a registry read at
+	// startup can answer. See Loop.hiddenTools.
+	registry.Register(agent.NewCommandTool(loop))
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
 

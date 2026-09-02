@@ -944,6 +944,7 @@ Currently failing: !`go test ./... 2>&1 | grep FAIL`
 | `description` | One line shown by `/commands`. Optional. |
 | `agent` | Run this one turn as that agent, using its profile, system prompt, and tool restrictions. The session's own agent is unchanged. Optional. |
 | `model` | Force a different model ID for this one turn, ignoring the profile. Optional. |
+| `model_invocable` | Let the model run this command itself, not only you. Off unless set, and refused for a command containing a `` !`shell command` ``. Needs [`/model-invocable`](#model-invocable) on as well. Optional. |
 
 Body substitutions:
 
@@ -1042,6 +1043,35 @@ It refuses in two situations, each for a reason: in a scheduled run or a `localc
 Both `/clear` and `/rewind` wait for a turn in progress. A message typed mid-turn is delivered to that turn as text rather than run as a command, so these two are refused with the reason instead of reaching the model as a prompt that says `/clear`.
 
 **A built-in name wins.** A custom command at `.localcode/commands/clear.md`, or a skill called `rewind`, is shadowed by these — the built-in routes are tried first. Rename yours if it collides.
+
+### `/model-invocable`
+
+Whether the model may run this session's commands itself. **Off by default.**
+
+```
+/model-invocable on
+/model-invocable off
+```
+
+A command is what a person types. Turning this on lets the model type one — a built-in, a custom command, or a skill — and each runs **as a turn of its own** in this same conversation, immediately after the turn that asked for it. Not inside that turn: a command drives turns in the session it belongs to, and the tool call that asked is inside one of them.
+
+**Two levels, and they answer different questions.** This switch is *whether*. What it reaches is *which*, and that is written down separately so turning the switch off does not throw away the choices:
+
+| Kind | How it opts in |
+|---|---|
+| Built-in (`/compact`, `/usage` …) | named in config.json's `model_commands`, with the slash |
+| Custom command | `model_invocable: true` in its own frontmatter |
+| Skill | `model_invocable: true` in its own frontmatter |
+
+**There is no wildcard.** The list includes `/permission-skip-all` if you write it, and that should be a deliberate act with a name in a file rather than something a `*` could sweep in.
+
+**The name carries its slash.** The model calls `/tidy-context`, not `tidy-context`, and a call without one is refused rather than repaired: a model that wrote `compact` may have meant the word, and one that wrote `/compact` meant the command. It is also what you type, so there is one spelling for the thing.
+
+**A command containing `` !`shell command` `` cannot be model-invocable.** That splice runs at render time, through neither the `bash` tool nor the permission gate — which is fine when a person typed the command's name, because they wrote the file and chose to run it. A model calling it would be running a shell command nobody was asked about. The command still works when you type it; only the automatic invocation is refused, and `/model-invocable on` names each one it refused and why.
+
+**Read this before turning it on.** The model decides when to run a command from what it has read: files, command output, and whatever an MCP server returned. Anything on the list is therefore reachable from text the model did not write. That is the same route localcode already closed once — a delegated task whose first line read `/permission-skip-all on` used to flip the child's permission switch — and this reopens it deliberately, under a switch and a list you control.
+
+A command run this way cannot run another: one booking the next is a loop with nothing bounding it.
 
 ### `/usage`
 

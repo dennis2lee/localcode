@@ -29,12 +29,53 @@ type Command struct {
 	Model       string
 	Body        string
 	Path        string
+
+	// ModelInvocable lets the model call this command itself, rather than
+	// only the person typing its name. Off unless the file asks for it:
+	// the model reads files, command output and whatever an MCP server
+	// returned, so anything it can trigger is reachable from text it did
+	// not write.
+	ModelInvocable bool
+
+	// Refused says why ModelInvocable was asked for and not granted, or
+	// "". The command still works when a person types it — what is
+	// refused is only the automatic invocation, and the reason is kept so
+	// "/commands" can say it rather than leaving a file whose frontmatter
+	// silently did nothing.
+	Refused string
 }
 
 type frontmatter struct {
-	Description string `yaml:"description"`
-	Agent       string `yaml:"agent"`
-	Model       string `yaml:"model"`
+	Description    string `yaml:"description"`
+	Agent          string `yaml:"agent"`
+	Model          string `yaml:"model"`
+	ModelInvocable bool   `yaml:"model_invocable"`
+}
+
+// shellSplice matches the one substitution a model-invocable command may
+// not carry.
+//
+// A "!`cmd`" is run at render time by runShell, which is not the bash
+// tool and is gated by nothing: a person typing the command's name has
+// already chosen to run whatever is in the file they wrote. A model
+// calling it has not, and would have a way to run a shell command that
+// the permission gate never sees. So the two are refused together rather
+// than the shell call being quietly promoted to a privileged one.
+var shellSplice = regexp.MustCompile("!`[^`]*`")
+
+// checkModelInvocable reports whether a command may be called by the
+// model, and why not when it may not.
+func checkModelInvocable(fm frontmatter, body string) (bool, string) {
+	if !fm.ModelInvocable {
+		return false, ""
+	}
+	if shellSplice.MatchString(body) {
+		return false, "model_invocable is refused for a command containing a !`shell command`: " +
+			"that runs at render time, without the permission gate the bash tool goes through, " +
+			"so a model calling this command would be running a shell command nobody was asked about. " +
+			"Remove the splice, or drop model_invocable and keep typing the command yourself."
+	}
+	return true, ""
 }
 
 // LoadAll scans each directory in dirs for "*.md" files, one command per
@@ -96,12 +137,15 @@ func parseCommandFile(path string) (Command, error) {
 		}
 	}
 
+	invocable, refused := checkModelInvocable(fm, body)
 	return Command{
-		Description: fm.Description,
-		Agent:       fm.Agent,
-		Model:       fm.Model,
-		Body:        body,
-		Path:        path,
+		Description:    fm.Description,
+		Agent:          fm.Agent,
+		Model:          fm.Model,
+		Body:           body,
+		Path:           path,
+		ModelInvocable: invocable,
+		Refused:        refused,
 	}, nil
 }
 

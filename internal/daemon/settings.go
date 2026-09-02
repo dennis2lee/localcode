@@ -32,6 +32,8 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"keep_going":           d.Loop.KeepGoingEnabled(),
 		"smart_agent":          d.Loop.SmartAgentEnabled(),
 		"orchestrate":          d.Loop.OrchestrateEnabled(),
+		"model_invocable":      d.Loop.ModelInvocableEnabled(),
+		"model_commands":       d.Loop.ModelCommandNames(),
 		"smart_agent_roster":   smart.Names(),
 		"show_tps":             d.Loop.ShowTPS(),
 		"auto_delegate":        d.Loop.AutoDelegateEnabled(),
@@ -159,6 +161,41 @@ func (d *Daemon) handleSetSmartAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetSmartAgentInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
+			resp["persisted"] = false
+			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSetModelInvocable turns model-run commands on or off live and,
+// when a config.json path is known, persists it. The same two-part answer
+// as the two switches above.
+//
+// Only the switch. What it lets through is written down elsewhere — the
+// built-ins in config.json's model_commands, a custom command's or a
+// skill's own frontmatter — and a toggle that also edited those would
+// turn "off for now" into "forget what I chose". GET /api/settings
+// reports the resolved list alongside the switch, so a client can say
+// what turning it on would actually reach rather than the endpoint
+// refusing an empty one.
+func (d *Daemon) handleSetModelInvocable(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	d.Loop.SetModelInvocableEnabled(req.Enabled)
+	d.announceSettings()
+	resp := map[string]any{
+		"model_invocable": req.Enabled,
+		"applied":         true,
+		"persisted":       true,
+	}
+	if d.Broker.ConfigPath != "" {
+		if err := config.SetModelInvocableInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			resp["persisted"] = false
 			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
 		}

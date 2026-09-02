@@ -93,6 +93,8 @@ export async function loadSettings() {
     app.autoDelegateMatch = s.auto_delegate_match || [];
     app.smartAgent = !!s.smart_agent;
     app.orchestrate = !!s.orchestrate;
+    app.modelInvocable = !!s.model_invocable;
+    app.modelCommands = Array.isArray(s.model_commands) ? s.model_commands : [];
     app.smartAgentRoster = s.smart_agent_roster || [];
     app.skipPermissions = !!s.skip_permissions;
     app.keepGoing = s.keep_going !== false;

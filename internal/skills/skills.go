@@ -20,11 +20,22 @@ type Skill struct {
 	Description string
 	Body        string
 	Path        string
+
+	// ModelInvocable lets the model run this skill as a turn of its own,
+	// rather than only the person typing its name. Off unless the file
+	// asks for it.
+	//
+	// Distinct from the Skill tool, which the model has always been able
+	// to call: that returns the body as a tool result, to be read inside
+	// the turn already running. This runs the skill the way typing its
+	// name does — as a turn, framed as a skill, with the session's agent.
+	ModelInvocable bool
 }
 
 type frontmatter struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
+	Name           string `yaml:"name"`
+	Description    string `yaml:"description"`
+	ModelInvocable bool   `yaml:"model_invocable"`
 }
 
 // LoadAll scans each directory in dirs for `*/SKILL.md` and parses it.
@@ -94,10 +105,11 @@ func parseSkillFile(path string) (Skill, error) {
 
 	body := strings.TrimPrefix(rest[end+len("\n---"):], "\n")
 	return Skill{
-		Name:        fm.Name,
-		Description: fm.Description,
-		Body:        body,
-		Path:        path,
+		Name:           fm.Name,
+		Description:    fm.Description,
+		Body:           body,
+		Path:           path,
+		ModelInvocable: fm.ModelInvocable,
 	}, nil
 }
 

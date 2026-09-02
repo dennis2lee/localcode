@@ -188,6 +188,17 @@ func (c *Config) merge(other *Config) {
 	if other.Orchestrate != nil {
 		c.Orchestrate = other.Orchestrate
 	}
+	if other.ModelInvocable != nil {
+		c.ModelInvocable = other.ModelInvocable
+	}
+	// Replaced rather than concatenated. A project naming which built-ins
+	// the model may run is answering the question for that project, and
+	// appending would let a global list add commands to a project that
+	// listed a shorter one deliberately — which is the direction that
+	// matters here.
+	if len(other.ModelCommands) > 0 {
+		c.ModelCommands = other.ModelCommands
+	}
 	if other.SmartAgent != nil {
 		c.SmartAgent = other.SmartAgent
 	}

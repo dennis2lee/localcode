@@ -333,6 +333,26 @@
     </div>
 
     <!--
+      The model running commands.
+      Its own switch, and its own section rather than a line under
+      orchestration, because what it opens is different in kind: not more
+      sub-agents but the commands a person types. The note names what is
+      actually reachable, since the switch on its own says nothing about
+      that - the list lives in config.json and in each command's own
+      frontmatter.
+    -->
+    <h4 class="settings-section">Commands the model may run</h4>
+
+    <div class="settings-field">
+      <div class="check-row">
+        <input type="checkbox" id="model-invocable-checkbox">
+        <label for="model-invocable-checkbox">Let the model run this session&#39;s commands itself, each as a turn of its own</label>
+      </div>
+      <p class="note" id="model-invocable-note"></p>
+      <p class="note warn" id="model-invocable-warn" hidden></p>
+    </div>
+
+    <!--
       Keep going.
 
       One family's fix with one family's scope. The label says the scope,

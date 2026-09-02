@@ -251,6 +251,11 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"TraceMaxAgeDays":       true,
 		"TraceMaxTotalMB":       true,
 		"VerifyCommand":         true,
+		// The switch and the list it gates. A project that names which
+		// commands its model may run must not have that dropped, and a
+		// project that turns the whole thing off certainly must not.
+		"ModelInvocable": true,
+		"ModelCommands":  true,
 	}
 	intentionallyNotMerged := map[string]bool{}
 

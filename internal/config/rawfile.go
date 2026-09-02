@@ -331,3 +331,21 @@ func SetAutoCompactInFile(path string, enabled bool, percent int) error {
 		return nil
 	})
 }
+
+// SetModelInvocableInFile persists the switch that decides whether the
+// model may run commands.
+//
+// Only the switch. What it lets through stays where it was written —
+// model_commands here, model_invocable in each command's or skill's own
+// frontmatter — because a toggle that also edited those would turn "off
+// for now" into "forget what I chose".
+func SetModelInvocableInFile(path string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal model_invocable: %w", err)
+		}
+		raw["model_invocable"] = encoded
+		return nil
+	})
+}

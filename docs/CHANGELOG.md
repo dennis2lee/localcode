@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.83.0
+
+* **The model can run this session's commands, if you let it.** A built-in, a custom command or a skill — each runs **as a turn of its own** in the same conversation, immediately after the turn that asked for it. `/model-invocable on|off` toggles it, config.json's `model_invocable` holds it, and the settings window has it under **Commands the model may run**. Off by default.
+
+  Until now nothing of the sort was reachable, and one route in had been closed on purpose: a delegated task's text used to walk the command table, and a task whose first line read `/permission-skip-all on` flipped the child's permission switch. This reopens that ground deliberately, behind a switch and a list.
+
+  **Two levels, answering different questions.** The switch is *whether*; what it reaches is *which*, written down separately so turning the switch off does not throw away the choices. A built-in is named in config.json's `model_commands`, with its slash. A custom command or a skill opts itself in with `model_invocable: true` in its own frontmatter — the better place for it, since that file is text you wrote.
+
+  **There is no wildcard.** The list includes `/permission-skip-all` if you write it, and that should be a deliberate act with a name in a file rather than something a `*` could sweep in.
+
+  **The name carries its slash.** The model calls `/tidy-context`, not `tidy-context`, and a call without one is refused rather than repaired: a model that wrote `compact` may have meant the word. It is also what you type, so there is one spelling for the thing.
+
+  **A command containing `` !`shell command` `` cannot be model-invocable.** That splice runs at render time, through neither the `bash` tool nor the permission gate — fine when a person typed the command's name, since they wrote the file and chose to run it, and not fine when a model calls it. The command still works when you type it; only the automatic invocation is refused, and `/model-invocable on` names each one it refused and why rather than leaving a frontmatter line that silently did nothing.
+
+  What runs is the command line itself, fed back through the same router that answers the person, so a built-in, a custom command and a skill all work with no case for any of them. A command run this way cannot run another: one booking the next is a loop with nothing bounding it.
+
+  **Worth reading before turning it on.** The model decides when to run a command from what it has read — files, command output, and whatever an MCP server returned. Anything on the list is reachable from text the model did not write. The switch, the list, and the settings note all say so.
+
 ## v0.82.0
 
 * **A local model's reasoning is shown instead of being dropped.** Reported as: muse glimmer runs tools with no explanation and then says it is done. The work was right; the thinking that led to it never reached the screen.

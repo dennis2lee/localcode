@@ -256,6 +256,10 @@ type Loop struct {
 	usage           map[string]sessionUsage           // sessionID -> latest known usage
 	cumulativeUsage map[string]map[string]modelTotals // sessionID -> model -> running totals, see /usage
 	turnRate        map[string]turnRate               // sessionID -> this turn's tokens/generation time
+	// pendingCommand holds a command the Command tool asked for, until
+	// the turn that asked has finished. See command_run.go.
+	pendingCommand map[string]string
+
 	// turnCheckpoints is which paths this turn has already taken a copy
 	// of, per session — the dedupe behind "one pre-image per path per
 	// turn". Reset when a turn opens; see beginTurn in checkpoint.go.

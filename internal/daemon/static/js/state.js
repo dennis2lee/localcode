@@ -28,6 +28,8 @@ export const app = {
   autoDelegateMatch: [],      // glob patterns that qualify a prompt for delegation
   smartAgent: false,
   orchestrate: false,         // the Orchestrate tool, a separate switch
+  modelInvocable: false,      // whether the model may run this session's commands
+  modelCommands: [],          // which ones it may run, with their slashes
   // The archive, kept apart from app.sessions rather than flagged inside
   // it. Four places read app.sessions as "a conversation you can be in",
   // and a flag would need a filter added to each of them, one of which

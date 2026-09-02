@@ -97,6 +97,37 @@ type Config struct {
 	// "/orchestrate on|off".
 	Orchestrate *bool `json:"orchestrate,omitempty"`
 
+	// ModelInvocable is the switch over all of it: whether the model may
+	// run commands at all.
+	//
+	// Two levels, because they answer different questions. This one is
+	// whether the capability is on, and it moves at runtime like Smart
+	// Agent's does. The other is which commands — model_commands below
+	// for the built-ins, model_invocable in a file's own frontmatter for
+	// a custom command or a skill. Turning this off leaves every one of
+	// those opt-ins written down and inert, which is what makes it safe
+	// to turn off in a hurry.
+	//
+	// Nil means unset, which is OFF.
+	ModelInvocable *bool `json:"model_invocable,omitempty"`
+
+	// ModelCommands names the built-in commands the model may run itself,
+	// each with its leading slash: ["/compact", "/usage"].
+	//
+	// Built-ins are listed here because they have no file to opt in from.
+	// A custom command or a skill opts itself in with model_invocable in
+	// its own frontmatter, which is the better place for it: that file is
+	// text the person wrote, and this list is the product's own commands.
+	//
+	// There is no wildcard, on purpose. The list includes
+	// "/permission-skip-all" if somebody writes it, and that is a
+	// deliberate act with a name in a file rather than something a "*"
+	// could sweep in — a model reads files, command output and whatever
+	// an MCP server returned, so anything it can trigger is reachable
+	// from text it did not write. Empty, which is the default, means the
+	// model may run no built-in command at all.
+	ModelCommands []string `json:"model_commands,omitempty"`
+
 	// TraceMaxAgeDays and TraceMaxTotalMB bound the structured turn log
 	// under ~/.localcode/trace/. Unset means the default age (30 days)
 	// and no size cap; the age cannot be turned off, because a log that
