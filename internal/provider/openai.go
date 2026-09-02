@@ -137,7 +137,7 @@ func toOpenAIMessages(system string, msgs []Message) []oaMessage {
 			for _, b := range m.Content {
 				switch b.Type {
 				case BlockText:
-					text.WriteString(b.Text)
+					writeTextBlock(&text, b.Text)
 				case BlockToolResult:
 					out = append(out, oaMessage{
 						Role:       "tool",
@@ -156,7 +156,7 @@ func toOpenAIMessages(system string, msgs []Message) []oaMessage {
 			for _, b := range m.Content {
 				switch b.Type {
 				case BlockText:
-					text.WriteString(b.Text)
+					writeTextBlock(&text, b.Text)
 				case BlockToolUse:
 					tc := oaToolCall{ID: b.ToolUseID, Type: "function"}
 					tc.Function.Name = b.ToolName
@@ -168,6 +168,34 @@ func toOpenAIMessages(system string, msgs []Message) []oaMessage {
 		}
 	}
 	return out
+}
+
+// writeTextBlock appends one text block to a message being flattened into
+// the single string this wire format has for the several blocks a message
+// may hold.
+//
+// Separated by a blank line, because two blocks are two things that were
+// said and this used to join them with nothing at all. The shape that
+// exposed it is the one every compaction leaves: the summary replaces the
+// history as one user message, so the next prompt is a second user
+// message, sendableHistory merges them to keep the alternation the other
+// providers require, and the person's question arrived spliced onto the
+// end of a sentence about something else — "...they discussed three
+// files.fourth question, after the compaction". Anthropic and Bedrock
+// were never affected, because both keep the blocks apart on the wire;
+// this is the one adapter that has to choose, and it was choosing badly.
+//
+// A single block is untouched, which is every ordinary turn: nothing is
+// written before the first non-empty block, and an empty one is not a
+// paragraph anybody wrote.
+func writeTextBlock(b *strings.Builder, text string) {
+	if text == "" {
+		return
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n\n")
+	}
+	b.WriteString(text)
 }
 
 // openAIEffort is the value for "reasoning_effort", or "" for a request

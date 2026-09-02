@@ -494,6 +494,13 @@ func parseCompactCommand(text string) (instructions string, ok bool) {
 func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, displayText, instructions string) error {
 	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText, "local": true})
 
+	// Counted before, because the answer used to be "Conversation
+	// compacted." and nothing else. Compaction changes what is sent and
+	// leaves the screen exactly as it was, so a reply with no number in it
+	// is indistinguishable from a command that did nothing — which is what
+	// it was reported as.
+	before := len(l.history(sessionID))
+
 	profile, err := l.Config.ResolveProfile(agentName)
 	if err != nil {
 		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": err.Error()})
@@ -525,7 +532,17 @@ func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, d
 		return nil
 	}
 
-	return l.replyText(sessionID, "Conversation compacted.")
+	var b strings.Builder
+	b.WriteString("Compacted. The model opens the next message with a summary of this conversation rather than the whole of it.\n")
+	if after := len(l.history(sessionID)); before > 0 {
+		fmt.Fprintf(&b, "%d message(s) in its context replaced by %d.\n", before, after)
+	}
+	// The half people do not expect, said every time rather than
+	// discovered — the same sentence "/clear" ends on, for the same
+	// reason: neither command is a delete.
+	b.WriteString("Everything above stays in this conversation and in its log: scroll up, or reopen it later, " +
+		"and it is all still there. Summarizing is itself a model call, so the compaction's own tokens are in /usage.")
+	return l.replyText(sessionID, b.String())
 }
 
 // handleCostCommand answers "/usage" locally — no model call — with a

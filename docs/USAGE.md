@@ -876,6 +876,8 @@ Other behavior:
 
 Recall *starts* at the edges of the prompt box: the cursor has to already be on the first line before Up reaches for history, and on the last line before Down does. Inside a multi-line prompt the arrows just move the cursor as usual. Once a walk is under way both keys keep walking wherever the cursor has landed, so Up, Up, Up goes three prompts back; editing what was recalled ends the walk, and the next Up starts again from the newest entry. Repeating the same message twice in a row stores it once.
 
+**A half-typed prompt belongs to the conversation too.** Opening another session takes what is in the box with it and gives the new one back whatever it was holding, which is usually nothing. Both clients. Before this the box was the one thing a switch left alone, so a sentence composed in one project followed you into another, where the next Enter would have sent it to a different model in a different directory.
+
 **The list belongs to the conversation.** Each session has its own, and switching away and back finds it as you left it. It is filled from two places: what you send, and the prompts in the transcript the daemon replays when the session opens — so reopening a session (or reattaching the TUI to one) recalls what was asked in it before, including prompts sent from another client. Nothing is stored on disk for this; the replayed transcript is the record.
 
 Up to 200 entries per session are kept.
@@ -1008,7 +1010,17 @@ Compacts the conversation immediately instead of waiting for the automatic thres
 | `/compact` | Compacts with the default summarization prompt |
 | `/compact <instructions>` | Adds your instructions for that one summarization, for example `/compact keep only file paths` |
 
-With nothing to compact, on an empty session, it records an error event and does nothing. On success it records a `compacted` event just like automatic compaction, marked `manual: true`, and shows a confirmation.
+With nothing to compact, on an empty session, it records an error event and does nothing. On success it records a `compacted` event just like automatic compaction, marked `manual: true`.
+
+**The confirmation carries the count**, because compaction changes what is sent and leaves the screen exactly as it was, so a reply with no number in it is indistinguishable from a command that did nothing:
+
+```
+Compacted. The model opens the next message with a summary of this conversation rather than the whole of it.
+12 message(s) in its context replaced by 1.
+Everything above stays in this conversation and in its log: scroll up, or reopen it later, and it is all still there. Summarizing is itself a model call, so the compaction's own tokens are in /usage.
+```
+
+**The next message is a paragraph of its own.** The summary replaces the history as a single message, so the prompt after it is a second message in the same role, and the two are merged to keep the alternation Anthropic and Bedrock require. On an OpenAI-compatible endpoint, where a message is one string rather than a list of blocks, they used to be joined with nothing at all: the question arrived spliced onto the end of the summary's last sentence. They are separated by a blank line.
 
 ### `/clear`
 
@@ -2029,7 +2041,11 @@ The reviewers are any configured agents other than the one already running; the 
 
 **A round is one author turn plus one turn per reviewer**, plus whatever tools each of them runs. Ten rounds with two reviewers is thirty turns, which is why the numbers are shown before it starts.
 
-**Who runs where.** The author runs in this conversation, with its history and its cached prefix intact, so its work appears exactly as it always does. Each reviewer runs in a sub-session of its own — switching this session's model mid-conversation would invalidate its tools, its system prompt and its cache at once — and **keeps that session for every round**, which is what lets it say "the second thing I raised is still not fixed". Its row appears in the right panel; click it to read the whole review session, tool calls included.
+**Who runs where.** The author runs in this conversation, with its history and its cached prefix intact for as long as the rounds last, so its work appears exactly as it always does. Each reviewer runs in a sub-session of its own — switching this session's model mid-conversation would invalidate its tools, its system prompt and its cache at once — and **keeps that session for every round**, which is what lets it say "the second thing I raised is still not fixed". Its row appears in the right panel; click it to read the whole review session, tool calls included.
+
+**What the debate leaves behind.** When it ends, the rounds leave the model's context: the next message in this conversation carries the task and the work as it now stands, and none of the briefs, reviews or intermediate answers. A debate costs the conversation what a delegation costs it, which is the result. The rounds stay on screen and in the log, and the closing line says so.
+
+Two things went wrong while they stayed. A brief is localcode's own text in a message from you, and it ends in an instruction ("Fix what you agree with ... Do not ask for another review: it happens on its own when your turn ends") that is false the moment the debate is over. And a conversation whose last three exchanges are rounds of review is one where the model reaches for the Debate tool again on the next unrelated prompt, which is a debate nobody asked for. Neither is fixable by wording: the history was the instruction.
 
 **A panel reviews independently.** Reviewers run at the same time, in separate sessions, and never see each other's findings. Three models agreeing is worth something only if they arrived there separately, and **all of them have to approve** — one holdout keeps the debate going, because taking the approval would be picking the answer that ends the work.
 
