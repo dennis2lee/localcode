@@ -81,6 +81,10 @@ type debateRun struct {
 	// of the bare task so the record says how the turn was started.
 	command string
 	task    string
+	// historyMark is where this debate's own turns start in the author
+	// session's history, taken before the first of them. See
+	// collapsedDebate.
+	historyMark int
 }
 
 // reviewResult is one reviewer's round.
@@ -125,6 +129,12 @@ func (l *Loop) runDebate(ctx context.Context, d debateRun) error {
 	// Marks every turn of this debate, the author's included, so the
 	// Debate tool can refuse to open another one from inside it.
 	ctx = withInDebate(ctx)
+
+	// Where the debate's own turns begin. Everything appended from here
+	// belongs to the debate and leaves again when it ends; see
+	// collapsedDebate for why, and rehydrateHistory for the same line
+	// taken from the log after a restart.
+	d.historyMark = len(l.history(d.sessionID))
 
 	sessions := map[string]string{}
 	stalls := 0
@@ -295,12 +305,99 @@ func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) 
 	default:
 		note = fmt.Sprintf("debate ended after %s.", roundCount(rounds))
 	}
+	// The rounds leave the model's context here, and only here: the
+	// author needed them while they were running. Read before the note is
+	// finished, because whether anything was collapsed is what decides
+	// whether the note should mention it.
+	collapsed := l.collapseDebate(d)
+	if collapsed {
+		note += " The rounds stay in this conversation and in its log; " +
+			"what the model carries on with is the task and the work as it now stands."
+	}
 	l.Store.Append(d.sessionID, events.TypeDebateEnded, map[string]any{
 		"reason":   reason,
 		"rounds":   rounds,
 		"approved": approved,
 		"note":     note,
 	})
+}
+
+// collapseDebate replaces the debate's own turns in the author session's
+// history with what came out of them, and reports whether there was
+// anything to replace.
+//
+// A debate runs in this session because the author needs the conversation
+// it has been having: its history, its cached prefix, its tools. That is
+// an argument for the rounds being there while they run, and none at all
+// for their being there afterwards, which is what this used to do.
+//
+// Two things went wrong when they stayed. A brief is localcode's own text
+// in a user message, and it ends in an instruction — "Fix what you agree
+// with ... Do not ask for another review: it happens on its own when your
+// turn ends" — that is false the moment the debate is over. And a
+// conversation whose last three exchanges are rounds of review is one
+// where the model reaches for the Debate tool again on the next unrelated
+// prompt: the history was the instruction, and no wording of the tool
+// description outranks it.
+//
+// So the debate costs the conversation what a delegation costs it: the
+// result. The rounds are in the transcript and in the log, where the
+// person reads them; they are not in what the next message is sent with.
+func (l *Loop) collapseDebate(d debateRun) bool {
+	h := l.history(d.sessionID)
+	out := collapsedDebate(h, d.historyMark)
+	if len(out) == len(h) {
+		return false
+	}
+	l.setHistory(d.sessionID, out)
+	return true
+}
+
+// collapsedDebate is that rule as a function of the history alone, so the
+// live path and the one that rebuilds a session from its log cannot come
+// to different answers about the same debate.
+//
+// What is kept is the message that opened the debate and the last thing
+// the author actually said. A debate that said nothing keeps neither: the
+// opening was localcode's message on the author's behalf, and leaving it
+// alone would end the history on a user message nothing answered, which
+// is a shape Bedrock rejects outright and a claim that work was asked for
+// and abandoned.
+func collapsedDebate(h []provider.Message, mark int) []provider.Message {
+	if mark < 0 || mark >= len(h) {
+		return h
+	}
+	answer := ""
+	for i := len(h) - 1; i > mark; i-- {
+		if h[i].Role != provider.RoleAssistant {
+			continue
+		}
+		if text := messageText(h[i]); strings.TrimSpace(text) != "" {
+			answer = text
+			break
+		}
+	}
+	// A fresh backing array either way: the tail being dropped must not
+	// stay reachable through the slice that replaces it.
+	kept := h[:mark:mark]
+	if answer == "" {
+		return kept
+	}
+	return append(kept, h[mark], provider.Message{
+		Role:    provider.RoleAssistant,
+		Content: []provider.Block{provider.TextBlock(answer)},
+	})
+}
+
+// messageText is a message's text, with tool calls and results left out.
+func messageText(m provider.Message) string {
+	var b strings.Builder
+	for _, blk := range m.Content {
+		if blk.Type == provider.BlockText {
+			b.WriteString(blk.Text)
+		}
+	}
+	return b.String()
 }
 
 // roundCount is "1 round" or "3 rounds".

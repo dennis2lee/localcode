@@ -161,8 +161,30 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 	// exactly that one paired reply.
 	var skipNextReply bool
 
+	// Where the debate now being replayed started in `out`, and whether
+	// one is open at all. A debate cannot survive a restart, so every one
+	// in a log being rebuilt has ended; what this replays is the collapse
+	// that ended it. See collapsedDebate.
+	debateMark, inDebate := 0, false
+
 	for _, ev := range evs {
 		switch ev.Type {
+		case events.TypeDebateStarted:
+			// Before the debate's own first message, and after whatever
+			// turn was already in flight — the tool entrance books one
+			// from inside a turn, so that turn's tool call has to be in
+			// `out` before the mark is taken or the collapse would eat it.
+			flush()
+			debateMark, inDebate = len(out), true
+
+		case events.TypeDebateEnded:
+			flush()
+			if inDebate {
+				out = collapsedDebate(out, debateMark)
+				inDebate = false
+				resetPending()
+			}
+
 		case events.TypeCompacted:
 			if summary := dataString(ev.Data, "summary"); summary != "" {
 				out = []provider.Message{{
@@ -173,9 +195,15 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 					Content: []provider.Block{provider.TextBlock(summaryHeader + summary)},
 				}}
 				resetPending()
+				inDebate = false
 			}
 
 		case events.TypeCleared:
+			// A barrier moves everything, the debate mark included: an
+			// offset into a history that no longer exists would collapse
+			// the wrong span. The same goes for the compaction above,
+			// which is why both reset it.
+			inDebate = false
 			// The barrier with nothing behind it. Compaction replaces the
 			// history with a summary; this replaces it with nothing, which
 			// is the whole difference between the two commands.
