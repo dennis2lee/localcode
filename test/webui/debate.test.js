@@ -217,3 +217,71 @@ test('a fourth reviewer will not tick', async () => {
   assert.equal(boxes.filter((b) => b.checked).length, 3, 'a fourth reviewer was accepted');
   assert.ok(app.el('debate-note').textContent.includes('At most 3'), app.el('debate-note').textContent);
 });
+
+// The debate dialog sends its command through the prompt box, which is
+// the right call: the transcript then records the command that started
+// the debate, and every guard the box already has applies. What it must
+// not do is treat the box as empty.
+//
+// It was overwriting whatever was being composed there. On the path where
+// the command sends, the draft was simply gone. On the path where it does
+// not — a command cannot run while a turn is in flight, so it is refused
+// and deliberately left in the box for you to retry — the person was left
+// holding a command they never typed, in place of the sentence they were
+// writing.
+//
+// That second one is how a debate runs from a prompt with no "/debate" in
+// it. The next thing typed lands after the command still sitting there
+// and goes out as "/debate girl 3 review the parserwhat is 2+2", which
+// starts a debate on a task nobody wrote.
+test('the debate dialog gives the prompt box back', async () => {
+  const app = await load();
+  useAgent(app, 'boy');
+  app.state.agents = [{ name: 'boy' }, { name: 'girl' }];
+  const input = app.el('input');
+  input.value = 'a sentence I was in the middle of';
+
+  await app.el('debate-btn').click();
+  const box = app.el('debate-reviewers').querySelectorAll('input')[0];
+  box.checked = true;
+  box.fire('change');
+  app.el('debate-task').value = 'review the parser';
+  await app.el('debate-start').click();
+  await app.settle();
+
+  const sent = app.callsTo('POST', /\/messages$/);
+  assert.equal(sent.length, 1, 'the debate should still have been sent');
+  assert.equal(
+    input.value,
+    'a sentence I was in the middle of',
+    'starting a debate threw away what was being composed in the prompt box',
+  );
+});
+
+test('a debate refused mid-turn leaves no command behind in the box', async () => {
+  const app = await load();
+  useAgent(app, 'boy');
+  app.state.agents = [{ name: 'boy' }, { name: 'girl' }];
+  const input = app.el('input');
+  input.value = 'a sentence I was in the middle of';
+  app.state.waiting = true; // a turn is running: a command cannot go now
+
+  await app.el('debate-btn').click();
+  const box = app.el('debate-reviewers').querySelectorAll('input')[0];
+  box.checked = true;
+  box.fire('change');
+  app.el('debate-task').value = 'review the parser';
+  await app.el('debate-start').click();
+  await app.settle();
+
+  assert.equal(app.callsTo('POST', /\/messages$/).length, 0, 'nothing should have been sent mid-turn');
+  assert.ok(
+    !input.value.includes('/debate'),
+    'the refused command was left in the box: ' + JSON.stringify(input.value),
+  );
+  assert.equal(
+    input.value,
+    'a sentence I was in the middle of',
+    'the box should hold what the person was writing, not a command they never typed',
+  );
+});

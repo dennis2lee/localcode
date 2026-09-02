@@ -285,13 +285,20 @@ func (m *Model) openSession(id string) tea.Cmd {
 	// client that is going nowhere must not have emptied the prompt box on
 	// the way. handleSessionSwitched is where the box actually changes
 	// hands, on the one path that got somewhere.
-	if v := m.input.Value(); v != "" {
-		if m.drafts == nil {
-			m.drafts = map[string]string{}
+	//
+	// Written into the map New made, and never allocated here. Two of this
+	// method's callers are value-receiver handlers that do
+	// "return m, m.openSession(...)", where a write to a *field* of m can
+	// land on a copy the return statement has already read: the order of a
+	// plain operand against a call in the same return is not specified. A
+	// map write is not a field write and lands either way; assigning a new
+	// map would be the one line in here that could quietly go missing.
+	if m.drafts != nil {
+		if v := m.input.Value(); v != "" {
+			m.drafts[m.sessionID] = v
+		} else {
+			delete(m.drafts, m.sessionID)
 		}
-		m.drafts[m.sessionID] = v
-	} else {
-		delete(m.drafts, m.sessionID)
 	}
 	if m.streamCancel != nil {
 		m.streamCancel()

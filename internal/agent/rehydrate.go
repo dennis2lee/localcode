@@ -165,7 +165,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 	// one is open at all. A debate cannot survive a restart, so every one
 	// in a log being rebuilt has ended; what this replays is the collapse
 	// that ended it. See collapsedDebate.
-	debateMark, inDebate := 0, false
+	debateMark, debateTask, inDebate := 0, "", false
 
 	for _, ev := range evs {
 		switch ev.Type {
@@ -176,11 +176,15 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			// `out` before the mark is taken or the collapse would eat it.
 			flush()
 			debateMark, inDebate = len(out), true
+			// Carried so the same confirmation the live path makes can be
+			// made here: the message at the mark has to be the debate's
+			// own opening, or the mark is stale and nothing is collapsed.
+			debateTask = dataString(ev.Data, "task")
 
 		case events.TypeDebateEnded:
 			flush()
 			if inDebate {
-				out = collapsedDebate(out, debateMark)
+				out = collapsedDebate(out, debateMark, debateTask)
 				inDebate = false
 				resetPending()
 			}

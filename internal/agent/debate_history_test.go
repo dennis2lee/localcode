@@ -289,3 +289,90 @@ func TestADebateThatProducedNothingLeavesNothingBehind(t *testing.T) {
 		t.Errorf("history after a debate that answered nothing:\n%s", joinMessages(got))
 	}
 }
+
+// The mark is an offset into a history something else may replace.
+//
+// Auto-compaction is the one that actually happens. It runs at the top of
+// every turn, the debate's author rounds included, and a long debate is
+// exactly what crosses the threshold. It swaps the whole history for a
+// single summary message, after which an offset taken before the debate
+// started names a position that has nothing to do with where the debate
+// began.
+//
+// Collapsing to that offset does not delete anything outside the debate,
+// because the compaction already folded that away. What it does is the
+// opposite of the job: it keeps whichever round brief happens to sit at
+// the offset, treats it as the opening, and drops the author turns
+// between there and the end. So the mark is confirmed against the
+// debate's own opening message, and an unrecognized one leaves the
+// history alone.
+func TestACollapseWillNotTrustAStaleMark(t *testing.T) {
+	task := "write a sum function"
+	msg := func(role provider.Role, text string) provider.Message {
+		return provider.Message{Role: role, Content: []provider.Block{provider.TextBlock(text)}}
+	}
+
+	// A sound mark: the debate collapses to its task and its last answer.
+	sound := []provider.Message{
+		msg(provider.RoleUser, "an earlier question"),
+		msg(provider.RoleAssistant, "an earlier answer"),
+		msg(provider.RoleUser, task),
+		msg(provider.RoleAssistant, "first attempt"),
+		msg(provider.RoleUser, "round 1 brief"),
+		msg(provider.RoleAssistant, "second attempt"),
+	}
+	got := collapsedDebate(sound, 2, task)
+	if len(got) != 4 || messageText(got[2]) != task || messageText(got[3]) != "second attempt" {
+		t.Errorf("a sound mark did not collapse to the task and the answer:\n%s", joinMessages(got))
+	}
+
+	// The same mark after a compaction landed inside the debate: the
+	// history is now the summary plus whatever rounds ran after it, and
+	// offset 2 is in the middle of them.
+	stale := []provider.Message{
+		msg(provider.RoleUser, "[summary of everything so far]"),
+		msg(provider.RoleUser, "round 2 brief"),
+		msg(provider.RoleAssistant, "third attempt"),
+		msg(provider.RoleUser, "round 3 brief"),
+		msg(provider.RoleAssistant, "fourth attempt"),
+		msg(provider.RoleUser, "round 4 brief"),
+		msg(provider.RoleAssistant, "fifth attempt"),
+	}
+	got = collapsedDebate(stale, 2, task)
+	if len(got) != len(stale) {
+		t.Errorf("a stale mark rewrote the conversation, keeping a brief as the opening and dropping %d messages:\n%s",
+			len(stale)-len(got), joinMessages(got))
+	}
+
+	// A mark past the end is left alone rather than indexed.
+	if got := collapsedDebate(stale, 99, task); len(got) != len(stale) {
+		t.Errorf("a mark past the end changed the history:\n%s", joinMessages(got))
+	}
+}
+
+// The closing line describes what happened. A debate that answered
+// nothing kept nothing, and saying "what it carries on with is the work
+// as it now stands" about an empty result is a sentence with no referent.
+func TestTheClosingLineSaysWhatWasActuallyKept(t *testing.T) {
+	script := &debateHistoryScript{authorSilent: true}
+	srv := script.server(t)
+	defer srv.Close()
+
+	loop := newDebateLoop(t, srv.URL)
+	sid := startDebateSession(t, loop)
+
+	if err := loop.SendMessage(context.Background(), sid, "boy", "/debate girl 1 write a sum function"); err != nil {
+		t.Fatalf("debate: %v", err)
+	}
+	ended := debateEvents(t, loop, sid, events.TypeDebateEnded)
+	if len(ended) != 1 {
+		t.Fatalf("got %d debate.ended events", len(ended))
+	}
+	note, _ := ended[0].Data["note"].(string)
+	if !strings.Contains(note, "produced no answer") {
+		t.Errorf("closing line = %q, want it to say the debate produced no answer", note)
+	}
+	if strings.Contains(note, "as it now stands") {
+		t.Errorf("closing line claims work was kept when none was: %q", note)
+	}
+}

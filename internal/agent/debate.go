@@ -309,10 +309,18 @@ func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) 
 	// author needed them while they were running. Read before the note is
 	// finished, because whether anything was collapsed is what decides
 	// whether the note should mention it.
-	collapsed := l.collapseDebate(d)
-	if collapsed {
-		note += " The rounds stay in this conversation and in its log; " +
-			"what the model carries on with is the task and the work as it now stands."
+	switch collapsed, kept := l.collapseDebate(d); {
+	case !collapsed:
+		// Nothing to take out: a debate that ended on its first round
+		// with no review to answer is already just the task and the
+		// answer. Saying otherwise would describe work that did not
+		// happen.
+	case kept == 0:
+		note += " The debate produced no answer, so nothing from it is in the model's context. " +
+			"The rounds are still in this conversation and in its log."
+	default:
+		note += " The rounds leave the model's context here; what it carries on with is the task and the " +
+			"work as it now stands. They stay in this conversation and in its log."
 	}
 	l.Store.Append(d.sessionID, events.TypeDebateEnded, map[string]any{
 		"reason":   reason,
@@ -331,26 +339,38 @@ func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) 
 // an argument for the rounds being there while they run, and none at all
 // for their being there afterwards, which is what this used to do.
 //
-// Two things went wrong when they stayed. A brief is localcode's own text
-// in a user message, and it ends in an instruction — "Fix what you agree
-// with ... Do not ask for another review: it happens on its own when your
-// turn ends" — that is false the moment the debate is over. And a
-// conversation whose last three exchanges are rounds of review is one
-// where the model reaches for the Debate tool again on the next unrelated
-// prompt: the history was the instruction, and no wording of the tool
-// description outranks it.
+// What went wrong when they stayed is that a brief is localcode's own
+// text in a user message, and it ends in an instruction — "Fix what you
+// agree with ... Do not ask for another review: it happens on its own
+// when your turn ends" — which is false the moment the debate is over.
+// Every later message in that conversation carried it, and a standing
+// instruction that has stopped being true is the worst kind: nothing in
+// the request says it has expired.
+//
+// The rounds also cost what they cost. Three rounds of three reviewers is
+// several kilobytes of review text on every message sent afterwards, for
+// a panel that has finished.
+//
+// What this is *not* is the explanation for a debate starting without
+// anybody typing "/debate". That one had a mechanical cause and it was in
+// the Web UI: the debate dialog wrote its command into the prompt box
+// over whatever was being composed there, and a command refused mid-turn
+// is deliberately left in the box, so the next thing typed went out
+// joined to it. See startDebate in static/js/debate.js. Whether a history
+// full of rounds also makes a model reach for the Debate tool again is a
+// reasonable worry and is not something this can claim to have measured.
 //
 // So the debate costs the conversation what a delegation costs it: the
 // result. The rounds are in the transcript and in the log, where the
 // person reads them; they are not in what the next message is sent with.
-func (l *Loop) collapseDebate(d debateRun) bool {
+func (l *Loop) collapseDebate(d debateRun) (collapsed bool, kept int) {
 	h := l.history(d.sessionID)
-	out := collapsedDebate(h, d.historyMark)
+	out := collapsedDebate(h, d.historyMark, d.task)
 	if len(out) == len(h) {
-		return false
+		return false, len(h) - d.historyMark
 	}
 	l.setHistory(d.sessionID, out)
-	return true
+	return true, len(out) - d.historyMark
 }
 
 // collapsedDebate is that rule as a function of the history alone, so the
@@ -363,8 +383,24 @@ func (l *Loop) collapseDebate(d debateRun) bool {
 // alone would end the history on a user message nothing answered, which
 // is a shape Bedrock rejects outright and a claim that work was asked for
 // and abandoned.
-func collapsedDebate(h []provider.Message, mark int) []provider.Message {
+func collapsedDebate(h []provider.Message, mark int, task string) []provider.Message {
 	if mark < 0 || mark >= len(h) {
+		return h
+	}
+	// The mark is an offset into a history that something else is allowed
+	// to replace out from under it. Auto-compaction is the one that
+	// actually happens: it is tried at the top of every turn, the author's
+	// rounds included, and a long debate is exactly what crosses the
+	// threshold. It calls setHistory with a single summary message, after
+	// which the mark names a position in a history that no longer exists
+	// and collapsing to it would delete the wrong messages.
+	//
+	// So the mark has to be confirmed rather than trusted, and the debate
+	// already knows what is supposed to be there: its own opening message,
+	// which is the task and nothing else. Anything else and this leaves
+	// the history alone — the rounds stay, which is the old behaviour and
+	// is merely worse rather than wrong.
+	if opening := h[mark]; opening.Role != provider.RoleUser || messageText(opening) != task {
 		return h
 	}
 	answer := ""

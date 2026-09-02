@@ -534,9 +534,10 @@ func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, d
 
 	var b strings.Builder
 	b.WriteString("Compacted. The model opens the next message with a summary of this conversation rather than the whole of it.\n")
-	if after := len(l.history(sessionID)); before > 0 {
-		fmt.Fprintf(&b, "%d message(s) in its context replaced by %d.\n", before, after)
-	}
+	// Unconditional: compactHistory refuses an empty history and this line
+	// is only reached when it succeeded, so there is always a number to
+	// give and a guard here would be a condition that cannot be false.
+	fmt.Fprintf(&b, "%d message(s) in its context replaced by %d.\n", before, len(l.history(sessionID)))
 	// The half people do not expect, said every time rather than
 	// discovered — the same sentence "/clear" ends on, for the same
 	// reason: neither command is a delete.

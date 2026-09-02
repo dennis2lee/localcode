@@ -140,7 +140,7 @@ export function closeDebateDialog() {
   debateDialog.close();
 }
 
-export function startDebate() {
+export async function startDebate() {
   const reviewers = checkedReviewers();
   if (reviewers.length === 0) {
     setNote(debateNoteEl, 'Pick at least one reviewer.', 'err');
@@ -154,7 +154,29 @@ export function startDebate() {
   closeDebateDialog();
   // Through the prompt box, so the transcript records the command that
   // started it and every guard the box already has applies to this too.
+  //
+  // Borrowed, not taken. The box is where somebody may be part way
+  // through a sentence, and this used to overwrite it: on the sending
+  // path the draft was simply gone, and on the path where a command
+  // cannot go — one will not run while a turn is in flight, so it is
+  // refused and deliberately left in the box to retry — the person was
+  // left holding a command they never typed, where their own sentence
+  // had been.
+  //
+  // That second one is how a debate starts from a prompt with no
+  // "/debate" in it. The next thing typed lands after the command still
+  // sitting there and goes out as "/debate girl 3 review the parserwhat
+  // is 2+2": a debate nobody asked for, on a task nobody wrote.
+  const draft = inputEl.value;
   inputEl.value = command;
   autoResizeInput();
-  sendMessage();
+  await sendMessage();
+  // Whatever is in the box now is this function's, not theirs: either the
+  // command went and the box was emptied, or it was refused and the
+  // command is still there. Anything else is something typed while the
+  // request was in the air, and belongs to whoever typed it.
+  if (inputEl.value === command || inputEl.value === '') {
+    inputEl.value = draft;
+    autoResizeInput();
+  }
 }
