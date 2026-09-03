@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.85.0
+
+**localcode updates itself at startup.** A newer release is installed before anything is served, and localcode comes back on it. On by default; `"auto_update": false` in config.json turns it off, and a project's own config.json can turn it off for that checkout alone.
+
+Startup is where this belongs, and the reason is what an update costs rather than what it gains. Replacing the binary means `exec`, and `exec` ends every turn in flight and every background task with it. At startup there are none: nothing is being said to a model, no shell command is running, and the conversations it would interrupt have not been opened yet. So the update that would be rude at any other moment is free here, which is why it is the only place localcode replaces itself without being asked.
+
+It cannot fail into not starting. No release, no network, no asset for this platform, a refused write, a download that did not match its checksum: each one ends with localcode starting normally on the build it already had. The check is given four seconds, so a machine with no route to GitHub costs a pause and not a hang. A failure that is not simply "nothing to install" is printed, because somebody who turned this on is owed the reason it did nothing.
+
+Not on Windows. Applying an update there runs `msiexec`, which asks for elevation with a dialog, and afterwards nothing can put a console program back in the terminal it was started from. An update that cannot finish is not one to start unasked, so Windows keeps the settings window's button, where a person clicked something.
+
+**`/update` does the same on demand,** from the prompt box in either client, and refuses while anything is running anywhere on this daemon, naming what it found. That is stricter than the settings window's button on purpose. The button is clicked by somebody looking at the window that shows them the turn they would be interrupting; a command typed into one conversation replaces the program for all of them, including the ones nobody is watching. The session that typed it is left out of the turn check, since the turn recorded against it is the command itself.
+
+A restart is not avoidable and is smaller than it sounds. `exec` keeps the process id, the terminal, the standard streams and the arguments; the session list, each conversation's history and the token totals are read back from disk; the browser reconnects on its own. What does not survive is work that was in flight, which is what both entrances are arranged around.
+
+Also in this release:
+
+* **A build with no version stamped into it never looks older than a release.** `go build -o localcode ./cmd/localcode` leaves the version at `dev`, and if that compared as older than the newest tag, the first run of every development build would download a release and `exec` into it, replacing the binary somebody had just compiled. The comparison already answered this correctly; it is now a test, because it became load-bearing the moment updating moved to startup.
+* **The check-and-download half of updating is one implementation.** The settings window's button and `/update` differ in what they do with a refusal — one has status codes, the other has a sentence — and in nothing else.
+
 ## v0.84.1
 
 Five fixes from four reports. One of them was found while reviewing the others, and turned out to be the real cause of a symptom an earlier fix had explained with a guess.
