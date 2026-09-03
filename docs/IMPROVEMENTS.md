@@ -392,6 +392,17 @@ Completed findings remain in this list to preserve item numbers and release hist
     * The update at startup already runs the window against a successor through `successorProxy` (v0.88.0). The same proxy makes a mid-session handoff possible: bind a fresh loopback listener, spawn the successor on it, retire the in-process daemon, and swap the window's handler to the proxy. The browse and reveal routes stay in the window process as they do at startup.
     * Until then USAGE says so in "Handing over".
 
+43. **Muse never receives the reasoning strength it asks for. Open.**
+
+    * The model's own card sets reasoning strength through the system prompt, as `Reasoning strength: <low|medium|high|xhigh>`, and asks for `high` or `xhigh` on coding and agentic work. localcode sends `reasoning_effort` on the request instead (`openAIEffort` in `internal/provider/openai.go`), which the model's chat template does not read, so every muse conversation runs at whatever the server defaults to. `/effort high` changes nothing on this family.
+    * `/llm-doctor` writes the line into its own canaries (v0.90.0), so the probes run the model the way its publisher intends. Real conversations do not.
+    * The fix belongs with the other muse quirks in `internal/agent/quirks.go`: when the model id contains `muse` and an effort level is set, put the line in the system prompt rather than, or as well as, on the wire. `xhigh` has no `provider.Effort` yet.
+
+44. **No `top_p` or `top_k` on OpenAI-compatible requests. Open.**
+
+    * `oaRequest` carries `temperature` and nothing else from the sampling family, so a profile cannot ask for the `top_p` 0.95 and `top_k` 64 that muse's vLLM recipe specifies alongside temperature 1.0. `/llm-doctor` sets them directly on its own request bodies; a profile has no way to.
+    * Adding them means a config field each and a decision about servers that reject `top_k`, which is not in the OpenAI schema and which vLLM accepts as an extension.
+
 ## UI ideas
 
 ### Web UI

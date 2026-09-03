@@ -18,13 +18,28 @@ import (
 // version, a metrics page, and a chat endpoint that answers each canary
 // the right way — or, when told to, the wrong way a broken server does.
 type doctorFake struct {
-	mu         sync.Mutex
-	maxLen     int
-	version    string
-	cacheDtype string
-	toolAsText bool
-	okReply    string
-	chats      int
+	mu          sync.Mutex
+	maxLen      int
+	version     string
+	cacheDtype  string
+	fingerprint string
+	toolAsText  bool
+	okReply     string
+	// reasoningOnly answers every canary the way a reasoning model does
+	// when its budget runs out: nothing in content, everything in
+	// reasoning_content, finish_reason "length".
+	reasoningOnly bool
+	// flipCodeFix corrects the function every other time, which is a
+	// server that has not decided what it thinks.
+	flipCodeFix bool
+	chats       int
+	// what the last chat request carried, for the tests that care how a
+	// canary is sent rather than what comes back
+	sawSystem string
+	sawTemp   float64
+	sawTopP   float64
+	sawTopK   int
+	sawAuth   string
 }
 
 func (f *doctorFake) server(t *testing.T) *httptest.Server {
@@ -55,6 +70,8 @@ func (f *doctorFake) server(t *testing.T) *httptest.Server {
 				} `json:"messages"`
 				Tools       []any    `json:"tools"`
 				Temperature *float64 `json:"temperature"`
+				TopP        float64  `json:"top_p"`
+				TopK        int      `json:"top_k"`
 				Stream      bool     `json:"stream"`
 				Seed        int      `json:"seed"`
 			}
@@ -62,9 +79,15 @@ func (f *doctorFake) server(t *testing.T) *httptest.Server {
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			if req.Temperature == nil || *req.Temperature != 0 || req.Stream || req.Seed == 0 {
-				http.Error(w, "a canary must be sent at temperature 0, seeded, not streamed", 400)
+			if req.Temperature == nil || req.Stream || req.Seed == 0 {
+				http.Error(w, "a canary must carry a temperature and a seed, and must not be streamed", 400)
 				return
+			}
+			f.sawTemp, f.sawTopP, f.sawTopK = *req.Temperature, req.TopP, req.TopK
+			f.sawAuth = r.Header.Get("Authorization")
+			f.sawSystem = ""
+			if req.Messages[0].Role == "system" {
+				f.sawSystem = req.Messages[0].Content
 			}
 			user := req.Messages[len(req.Messages)-1].Content
 			content, finish := "?", "stop"
@@ -91,9 +114,21 @@ func (f *doctorFake) server(t *testing.T) *httptest.Server {
 			case strings.Contains(user, "1 to 5"):
 				content = "1\n2\n3\n4\n5"
 			}
+			if f.flipCodeFix && strings.Contains(user, "sum of a and b") && f.chats%2 == 0 {
+				content = "I would rather explain it."
+			}
+			reasoning := ""
+			if f.reasoningOnly {
+				content, toolCalls, finish = "", nil, "length"
+				reasoning = strings.Repeat("Let me reconsider. ", 20)
+			}
 			json.NewEncoder(w).Encode(map[string]any{
+				"system_fingerprint": f.fingerprint,
 				"choices": []map[string]any{{
-					"message":       map[string]any{"role": "assistant", "content": content, "tool_calls": toolCalls},
+					"message": map[string]any{
+						"role": "assistant", "content": content,
+						"reasoning_content": reasoning, "tool_calls": toolCalls,
+					},
 					"finish_reason": finish,
 				}},
 				"usage": map[string]any{"prompt_tokens": 12, "completion_tokens": 7},
@@ -105,7 +140,7 @@ func (f *doctorFake) server(t *testing.T) *httptest.Server {
 }
 
 func healthyDoctorFake() *doctorFake {
-	return &doctorFake{maxLen: 32768, version: "0.10.1", cacheDtype: "auto"}
+	return &doctorFake{maxLen: 32768, version: "0.10.1", cacheDtype: "auto", fingerprint: "vllm-0.10.1-tp4-aaaa"}
 }
 
 func doctorLoop(t *testing.T, srvURL, model string) (*Loop, string) {
@@ -172,8 +207,8 @@ func TestLLMDoctorRunsTheCanariesAndKeepsTheRun(t *testing.T) {
 			t.Errorf("reply lacks %q:\n%s", want, got)
 		}
 	}
-	if fake.chats != len(doctorCanaries) {
-		t.Errorf("%d chat requests, want one per canary (%d)", fake.chats, len(doctorCanaries))
+	if fake.chats != 2*len(doctorCanaries) {
+		t.Errorf("%d chat requests, want each of the %d canaries asked twice", fake.chats, len(doctorCanaries))
 	}
 
 	file, err := loadDoctorFile(doctorPath(loop.DoctorDir, "google/gemma-3-27b-it"))
@@ -350,4 +385,159 @@ func (doctorOtherProvider) Chat(context.Context, provider.ChatRequest) (<-chan p
 	ch := make(chan provider.StreamEvent)
 	close(ch)
 	return ch, nil
+}
+
+// Muse is not run greedily. Its own vLLM recipe asks for temperature 1.0
+// with top_p and top_k, and takes reasoning strength from the system
+// prompt rather than from "reasoning_effort", so that is how a canary
+// goes out. A canary sent the way the publisher warns against would be
+// measuring the warning.
+func TestLLMDoctorSendsMuseTheSamplingItsRecipeAsksFor(t *testing.T) {
+	fake := healthyDoctorFake()
+	srv := fake.server(t)
+	defer srv.Close()
+	loop, sid := doctorLoop(t, srv.URL, "Muse-Glimmer-30B")
+
+	got := runDoctorCommand(t, loop, sid, "/llm-doctor")
+	if fake.sawTemp != 1.0 || fake.sawTopP != 0.95 || fake.sawTopK != 64 {
+		t.Errorf("muse was sent temperature %v, top_p %v, top_k %v", fake.sawTemp, fake.sawTopP, fake.sawTopK)
+	}
+	if fake.sawSystem != "Reasoning strength: high" {
+		t.Errorf("system prompt = %q, want the reasoning strength muse reads there", fake.sawSystem)
+	}
+	if !strings.Contains(got, "temperature 1.0, top_p 0.95, top_k 64") {
+		t.Errorf("the report does not say what the canaries were sent with:\n%s", got)
+	}
+
+	// Gemma has no such recipe, and greedy is still the better probe there.
+	loop.Config.Profiles["balanced"] = config.Profile{Provider: "local", Model: "google/gemma-3-27b-it"}
+	runDoctorCommand(t, loop, sid, "/llm-doctor")
+	if fake.sawTemp != 0 || fake.sawSystem != "" {
+		t.Errorf("gemma was sent temperature %v and system %q", fake.sawTemp, fake.sawSystem)
+	}
+}
+
+// Behind a gateway that routes only the chat endpoint, system_fingerprint
+// is the whole of what the server says about itself. It comes off the
+// answer, it is reported, and a build swapped underneath is a difference
+// against the baseline like any other.
+func TestLLMDoctorTakesTheFingerprintFromTheAnswer(t *testing.T) {
+	fake := healthyDoctorFake()
+	srv := fake.server(t)
+	defer srv.Close()
+	loop, sid := doctorLoop(t, srv.URL, "muse-glimmer")
+
+	runDoctorCommand(t, loop, sid, "/llm-doctor")
+	runDoctorCommand(t, loop, sid, "/llm-doctor baseline")
+	fake.mu.Lock()
+	fake.fingerprint = "vllm-0.11.0-tp4-bbbb"
+	fake.mu.Unlock()
+
+	got := runDoctorCommand(t, loop, sid, "/llm-doctor")
+	for _, want := range []string{
+		"system_fingerprint: vllm-0.11.0-tp4-bbbb",
+		"system_fingerprint vllm-0.10.1-tp4-aaaa → vllm-0.11.0-tp4-bbbb",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reply lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// A gateway that hides /version does not make the build unknown, and the
+// report should not say "not vLLM" when the answer names one.
+func TestLLMDoctorSaysWhereTheBuildCameFromWithoutVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "muse-glimmer"}}})
+		case "/chat/completions":
+			json.NewEncoder(w).Encode(map[string]any{
+				"system_fingerprint": "vllm-0.26.1rc1.dev608-tp4",
+				"choices": []map[string]any{{
+					"message": map[string]any{"role": "assistant", "content": "OK"}, "finish_reason": "stop",
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	loop, sid := doctorLoop(t, srv.URL, "muse-glimmer")
+
+	got := runDoctorCommand(t, loop, sid, "/llm-doctor")
+	if !strings.Contains(got, "system_fingerprint: vllm-0.26.1rc1.dev608-tp4") || !strings.Contains(got, "/version: not routed") {
+		t.Errorf("reply = %q", got)
+	}
+	if strings.Contains(got, "not vLLM") {
+		t.Errorf("the fingerprint names vLLM, so the report must not guess otherwise:\n%s", got)
+	}
+}
+
+// An answer that never began is not a verdict. A reasoning model that
+// spends the whole budget thinking says nothing about the server, and
+// calling that a failure would be inventing a finding.
+func TestLLMDoctorWillNotJudgeAnAnswerThatNeverBegan(t *testing.T) {
+	fake := healthyDoctorFake()
+	fake.reasoningOnly = true
+	srv := fake.server(t)
+	defer srv.Close()
+	loop, sid := doctorLoop(t, srv.URL, "muse-glimmer")
+
+	got := runDoctorCommand(t, loop, sid, "/llm-doctor")
+	for _, want := range []string{
+		"tool_call: inconclusive", "budget went to reasoning_content",
+		"chars of reasoning", "0 of 4 pass, 4 inconclusive",
+		"No canary reached a verdict",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reply lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "FAIL") {
+		t.Errorf("a budget this command chose was reported as the server failing:\n%s", got)
+	}
+}
+
+// Sampled canaries can disagree with themselves. A canary that passes
+// once and fails once has measured a coin toss, and the report says that
+// rather than reporting whichever side came up first.
+func TestLLMDoctorCallsACoinTossInconclusive(t *testing.T) {
+	fake := healthyDoctorFake()
+	fake.flipCodeFix = true
+	srv := fake.server(t)
+	defer srv.Close()
+	loop, sid := doctorLoop(t, srv.URL, "muse-glimmer")
+
+	got := runDoctorCommand(t, loop, sid, "/llm-doctor")
+	for _, want := range []string{
+		"code_fix: inconclusive", "passed once and failed once",
+		"answered differently the second time", "one sample rather than a property",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reply lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// The replay line has to work, and the key has to stay out of it: a
+// report is pasted into chats and issues.
+func TestLLMDoctorReplayNamesTheKeyHeaderWithoutTheKey(t *testing.T) {
+	fake := healthyDoctorFake()
+	fake.toolAsText = true
+	srv := fake.server(t)
+	defer srv.Close()
+	loop, sid := doctorLoop(t, srv.URL, "muse-glimmer")
+	loop.Providers["local"] = provider.NewOpenAICompat(srv.URL, "sekret-key")
+
+	got := runDoctorCommand(t, loop, sid, "/llm-doctor")
+	if !strings.Contains(got, "-H 'Authorization: Bearer <this profile's api_key>'") {
+		t.Errorf("the replay line will 401 as printed:\n%s", got)
+	}
+	if strings.Contains(got, "sekret-key") {
+		t.Errorf("the report carries the key:\n%s", got)
+	}
+	if fake.sawAuth != "Bearer sekret-key" {
+		t.Errorf("the probe itself did not send the key: %q", fake.sawAuth)
+	}
 }

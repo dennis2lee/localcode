@@ -1066,10 +1066,14 @@ For a local muse or gemma behind vLLM or another OpenAI-compatible server. When 
 | Step | What it does |
 |---|---|
 | Server facts | `GET /v1/models` for the model id and `max_model_len`. On vLLM, `/version` and `/metrics` for the version, the KV cache dtype, preemptions, cache use, queue depth, and how many requests finished by `stop` against `length`. An endpoint that is not there is reported as not offered. |
-| Canaries | Four fixed requests at temperature 0 with a seed, each with a known right answer: a tool call that must come back structured, a one-line code fix, an exact one-word reply, and a count that must stop on its own. Each is judged pass or fail, with the reply quoted when it fails. |
-| Baseline | `/llm-doctor baseline` keeps the last run as the reference for this model. Later runs list what differs: server facts, each canary's verdict, and localcode's own version, so a change on the client side is named too. |
+| Fingerprint | The `system_fingerprint` on the answer itself, which on vLLM names the build and the parallelism it was started with. It arrives through the chat endpoint, so behind a gateway that routes nothing else it is often the only server fact there is. |
+| Canaries | Four fixed requests, each with a known right answer: a tool call that must come back structured, a one-line code fix, an exact one-word reply, and a count that must stop on its own. Each is sent twice and judged pass, FAIL, or inconclusive. |
+| Sampling | Muse is sent temperature 1.0, `top_p` 0.95 and `top_k` 64, with `Reasoning strength: high` in the system prompt, because that is what its own vLLM recipe asks for and it warns against greedy decoding. Gemma is sent temperature 0 with a seed. The report names the sampling it used. |
+| Baseline | `/llm-doctor baseline` keeps the last run as the reference for this model. Later runs list what differs: server facts, the fingerprint, each canary's verdict, and localcode's own version, so a change on the client side is named too. |
 
-The command exists only for models whose name contains `muse` or `gemma`; on another model it says so and sends nothing. Runs are kept under `~/.localcode/doctor/`, one file per model, and a failing canary's request is written beside them so whoever runs the server can replay the same bytes with `curl`.
+The command exists only for models whose name contains `muse` or `gemma`; on another model it says so and sends nothing. Runs are kept under `~/.localcode/doctor/`, one file per model, and a failing canary's request is written beside them so whoever runs the server can replay the same bytes with `curl`. When the profile carries an `api_key`, the printed `curl` line names the `Authorization` header with a blank where the key goes; the key itself is never printed.
+
+Two verdicts are withheld rather than guessed. A canary whose whole token budget went to `reasoning_content` never produced an answer to judge, and a canary that passed on one of its two runs and failed on the other has measured a coin toss. Both are reported as inconclusive and neither is compared against the baseline.
 
 What the report can say is "the server reports different facts than at the baseline" and "the same request now gets a different answer". The cause is in the server's startup flags and logs, which a client cannot read, and the report does not claim one. The first run is not made the baseline by itself: a run taken while the model is misbehaving would make the next healthy one look like the change.
 
@@ -1139,7 +1143,7 @@ Two more commands apply an edited configuration without restarting:
 | Command | What it does |
 |---|---|
 | `/update` | Installs the newest release and moves this daemon onto it without restarting what you are looking at: the new version takes the address, this one finishes whatever is running, and the next message goes to the new one. See [Handing over](#handing-over). Where a handoff is not available — the desktop window, or a daemon reached over `--server` — it installs through the platform's installer or restarts instead, and refuses while anything is running anywhere on this daemon, naming what it found. The download is checked against the release's SHA-256 before it is run. |
-| `/llm-doctor` | For a muse or gemma on an OpenAI-compatible server: what the server reports about itself, four canaries at temperature 0, and what differs from the baseline kept with `/llm-doctor baseline`. See [`/llm-doctor`](#llm-doctor). |
+| `/llm-doctor` | For a muse or gemma on an OpenAI-compatible server: what the server reports about itself, four canaries sent twice, and what differs from the baseline kept with `/llm-doctor baseline`. See [`/llm-doctor`](#llm-doctor). |
 | `/reset-mcp` | Stops the MCP servers, re-reads their configuration from config.json, reconnects, and swaps the tools. A server removed from the file takes its tools with it; one added while the daemon runs connects. The status indicator follows. |
 | `/reset-skills` | Reloads skills from disk, against the live workspace. A skill installed or edited mid-run applies immediately, and the name completes like any other. |
 

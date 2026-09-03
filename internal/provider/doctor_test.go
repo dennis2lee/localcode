@@ -83,6 +83,7 @@ func TestRawChatReturnsTheServersOwnWords(t *testing.T) {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{
+			"system_fingerprint": "vllm-0.26.1rc1.dev608+g99a10304d-tp4-6e5f6fca",
 			"choices": []map[string]any{{
 				"message": map[string]any{
 					"role": "assistant", "content": "", "reasoning_content": "thinking",
@@ -104,7 +105,8 @@ func TestRawChatReturnsTheServersOwnWords(t *testing.T) {
 		t.Errorf("the body was not sent as written: %s", gotBody)
 	}
 	if len(reply.ToolCalls) != 1 || reply.ToolCalls[0].Name != "read_file" || reply.FinishReason != "tool_calls" ||
-		reply.Reasoning != "thinking" || reply.OutputTokens != 9 {
+		reply.Reasoning != "thinking" || reply.OutputTokens != 9 ||
+		reply.Fingerprint != "vllm-0.26.1rc1.dev608+g99a10304d-tp4-6e5f6fca" {
 		t.Errorf("reply = %+v", reply)
 	}
 

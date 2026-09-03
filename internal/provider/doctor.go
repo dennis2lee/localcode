@@ -34,6 +34,14 @@ type ServerFacts struct {
 	MetricsOK  bool               `json:"metrics_ok"`
 	CacheDtype string             `json:"cache_dtype,omitempty"`
 	Metrics    map[string]float64 `json:"metrics,omitempty"`
+
+	// Fingerprint is what the chat endpoint stamps on an answer. vLLM
+	// puts its build and the parallelism it was started with there
+	// ("vllm-0.26.1rc1.dev608+g99a10304d-tp4-..."). It arrives through
+	// the one endpoint every gateway routes, so behind a gateway that
+	// hides /version and /metrics it is often the only server fact
+	// there is. The caller fills it from the first answer it gets.
+	Fingerprint string `json:"system_fingerprint,omitempty"`
 }
 
 // ServerFacts collects what the server at BaseURL says about model.
@@ -214,6 +222,8 @@ type RawReply struct {
 	Reasoning    string
 	ToolCalls    []RawToolCall
 	FinishReason string
+	// Fingerprint is the server's system_fingerprint, if it stamps one.
+	Fingerprint  string
 	PromptTokens int
 	OutputTokens int
 }
@@ -272,7 +282,8 @@ func (p *OpenAICompat) RawChat(ctx context.Context, body []byte) (RawReply, erro
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage struct {
+		SystemFingerprint string `json:"system_fingerprint"`
+		Usage             struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 		} `json:"usage"`
@@ -288,6 +299,7 @@ func (p *OpenAICompat) RawChat(ctx context.Context, body []byte) (RawReply, erro
 		Content:      c.Message.Content,
 		Reasoning:    c.Message.ReasoningContent,
 		FinishReason: c.FinishReason,
+		Fingerprint:  parsed.SystemFingerprint,
 		PromptTokens: parsed.Usage.PromptTokens,
 		OutputTokens: parsed.Usage.CompletionTokens,
 	}

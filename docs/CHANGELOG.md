@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.90.0
+
+**`/llm-doctor` now probes muse the way muse asks to be run.** The first version sent every canary at temperature 0 with a fixed seed, so that a different answer could only mean a different server. Muse does not allow that: its vLLM recipe says not to decode greedily, asks for temperature 1.0 with `top_p` 0.95 and `top_k` 64, and reports identical greedy requests coming back at 70, 80 and 86 completion tokens. It also takes its reasoning strength from the system prompt rather than from `reasoning_effort`, and asks for `high` on coding work. Canaries now go out that way, the report names the sampling it used, and gemma keeps temperature 0.
+
+Determinism is gone, so each canary is sent twice. A canary that passes one run and fails the other has measured a coin toss and is reported as inconclusive rather than as whichever side came up first, and the report says how many answers differed between the two runs.
+
+**Verdicts are withheld instead of guessed.** The token budget was 16 to 128 tokens per canary, which a reasoning model spends before it writes a word: against a real server three of the four canaries failed with empty content and `finish_reason: length`, and none of those failures was about the server. The budget is now 2048 for every canary, and an answer that never began is reported as inconclusive rather than as a failure. An answer that ends of its own accord with everything in `reasoning_content` is still a failure, because that is the closed-channel bug muse's recipe warns about, and it now says so.
+
+**`system_fingerprint` is read off the answer and compared against the baseline.** Behind a gateway that routes only `/chat/completions`, `/version` and `/metrics` are not reachable and the server facts came back empty. vLLM stamps its build and its tensor parallelism on every answer, so that is where the build now comes from, and a server swapped underneath shows up as a difference like any other. `/version: not offered` is no longer printed as "not vLLM" when the fingerprint names one.
+
+The report also keeps how long the model reasoned for each canary, and the printed `curl` line names the `Authorization` header when the profile carries an `api_key`, since without it the replay is a 401. The key itself is never printed.
+
 ## v0.89.0
 
 **`/llm-doctor`: what a client can find out about a local model's server.** For the day a muse or gemma that answered well yesterday loops today. The command asks the server what it reports about itself (the model id and `max_model_len` from `/v1/models`; on vLLM also its version, the KV cache dtype, preemptions, cache use and how many requests finished by length), sends four fixed canaries at temperature 0 with a seed (a tool call that must come back structured, a code fix, an exact one-word reply, a count that must stop), judges each, and keeps the run under `~/.localcode/doctor/`. `/llm-doctor baseline` keeps the last run as the reference; later runs list what differs, localcode's own version included, so a change on the client side is named rather than blamed on the server. A failing canary's request is written beside the run for replay with `curl`.

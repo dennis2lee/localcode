@@ -47,6 +47,12 @@ const (
 	// A fixed seed, so a server that honours one answers the same way
 	// twice. Servers that do not know the field ignore it.
 	doctorSeed = 7
+	// Every canary asks for something a sentence long, but a reasoning
+	// model spends its budget thinking before it writes a word, and a
+	// budget that runs out mid-thought yields an empty answer that says
+	// nothing about the server. The ceiling is set well above what any
+	// of these tasks needs, so reaching it is itself the finding.
+	doctorMaxTokens = 2048
 )
 
 // doctorApplies is the gate: the feature exists for muse and gemma only.
@@ -67,15 +73,32 @@ type doctorRun struct {
 }
 
 type doctorResult struct {
-	Name         string          `json:"name"`
-	Pass         bool            `json:"pass"`
-	Why          string          `json:"why"`
-	FinishReason string          `json:"finish_reason,omitempty"`
-	OutputTokens int             `json:"output_tokens,omitempty"`
-	Millis       int64           `json:"millis"`
-	Reply        string          `json:"reply,omitempty"`
-	RequestSHA   string          `json:"request_sha256"`
-	Request      json.RawMessage `json:"request"`
+	Name string `json:"name"`
+	Pass bool   `json:"pass"`
+	// Inconclusive is the third verdict, and the honest one when the
+	// answer never began: judging it either way would be inventing a
+	// finding out of a request this command built badly.
+	Inconclusive bool   `json:"inconclusive,omitempty"`
+	Why          string `json:"why"`
+	FinishReason string `json:"finish_reason,omitempty"`
+	OutputTokens int    `json:"output_tokens,omitempty"`
+	Millis       int64  `json:"millis"`
+	Reply        string `json:"reply,omitempty"`
+	// Reasoning is kept only when it is where the answer went, and
+	// ReasoningChars whenever there is any: a model that thinks ten
+	// times as long as it used to about the same trivial task is the
+	// shape of "it loops today", and the number is what shows it.
+	Reasoning      string `json:"reasoning,omitempty"`
+	ReasoningChars int    `json:"reasoning_chars,omitempty"`
+	// Repeated records that the same bytes were sent a second time, and
+	// SameTwice whether the server said the same thing. A server that
+	// does not reproduce its own answer cannot have a verdict compared
+	// against yesterday's, and that is worth knowing before trusting one.
+	Repeated   bool            `json:"repeated,omitempty"`
+	SameTwice  bool            `json:"same_twice,omitempty"`
+	Reply2     string          `json:"reply_2,omitempty"`
+	RequestSHA string          `json:"request_sha256"`
+	Request    json.RawMessage `json:"request"`
 }
 
 // doctorFile is what sits under ~/.localcode/doctor, one per model.
@@ -94,20 +117,53 @@ type doctorCanary struct {
 	judge func(r provider.RawReply) (bool, string)
 }
 
+// doctorRequest builds a canary the way the model's own publisher says to
+// run it, rather than the way a diagnostic would prefer.
+//
+// The preference was temperature 0 with a fixed seed, so that a different
+// answer could only mean a different server. Muse does not allow it: its
+// vLLM recipe says not to decode greedily, asks for temperature 1.0 with
+// top_p 0.95 and top_k 64, and reports that identical greedy requests
+// came back at 70, 80 and 86 completion tokens. A canary sent the way the
+// publisher warns against measures that warning and nothing else. So the
+// determinism is given up, each canary is asked twice, and the report
+// says plainly that a verdict is a sample.
+//
+// Muse also takes its reasoning strength from the system prompt rather
+// than from "reasoning_effort", and asks for high on coding work. The
+// canaries are coding work, so they say so.
 func doctorRequest(model, user string, maxTokens int, tools []map[string]any) map[string]any {
 	body := map[string]any{
-		"model":       model,
-		"messages":    []map[string]any{{"role": "user", "content": user}},
-		"max_tokens":  maxTokens,
-		"temperature": 0,
-		"seed":        doctorSeed,
-		"stream":      false,
+		"model":      model,
+		"messages":   doctorMessages(model, user),
+		"max_tokens": maxTokens,
+		"seed":       doctorSeed,
+		"stream":     false,
+	}
+	if doctorIsMuse(model) {
+		body["temperature"] = 1.0
+		body["top_p"] = 0.95
+		body["top_k"] = 64
+	} else {
+		body["temperature"] = 0
 	}
 	if tools != nil {
 		body["tools"] = tools
 		body["tool_choice"] = "auto"
 	}
 	return body
+}
+
+func doctorMessages(model, user string) []map[string]any {
+	var msgs []map[string]any
+	if doctorIsMuse(model) {
+		msgs = append(msgs, map[string]any{"role": "system", "content": "Reasoning strength: high"})
+	}
+	return append(msgs, map[string]any{"role": "user", "content": user})
+}
+
+func doctorIsMuse(model string) bool {
+	return strings.Contains(strings.ToLower(model), "muse")
 }
 
 var doctorReadFileTool = []map[string]any{{
@@ -129,7 +185,7 @@ var doctorCanaries = []doctorCanary{
 	{
 		name: "tool_call",
 		build: func(model string) map[string]any {
-			return doctorRequest(model, "Use the read_file tool to read main.go. Call the tool; do not describe it.", 128, doctorReadFileTool)
+			return doctorRequest(model, "Use the read_file tool to read main.go. Call the tool; do not describe it.", doctorMaxTokens, doctorReadFileTool)
 		},
 		judge: func(r provider.RawReply) (bool, string) {
 			if len(r.ToolCalls) > 0 && r.ToolCalls[0].Name == "read_file" {
@@ -147,7 +203,7 @@ var doctorCanaries = []doctorCanary{
 	{
 		name: "code_fix",
 		build: func(model string) map[string]any {
-			return doctorRequest(model, "This Go function must return the sum of a and b. Reply with only the corrected function, no explanation.\n\nfunc add(a, b int) int {\n\treturn a - b\n}", 128, nil)
+			return doctorRequest(model, "This Go function must return the sum of a and b. Reply with only the corrected function, no explanation.\n\nfunc add(a, b int) int {\n\treturn a - b\n}", doctorMaxTokens, nil)
 		},
 		judge: func(r provider.RawReply) (bool, string) {
 			flat := strings.Join(strings.Fields(r.Content), "")
@@ -160,7 +216,7 @@ var doctorCanaries = []doctorCanary{
 	{
 		name: "exact_reply",
 		build: func(model string) map[string]any {
-			return doctorRequest(model, "Reply with exactly the word OK and nothing else.", 16, nil)
+			return doctorRequest(model, "Reply with exactly the word OK and nothing else.", doctorMaxTokens, nil)
 		},
 		judge: func(r provider.RawReply) (bool, string) {
 			t := strings.Trim(strings.TrimSpace(r.Content), "\"'`*.! ")
@@ -176,11 +232,11 @@ var doctorCanaries = []doctorCanary{
 	{
 		name: "stops",
 		build: func(model string) map[string]any {
-			return doctorRequest(model, "Write the numbers 1 to 5, one per line, then stop.", 64, nil)
+			return doctorRequest(model, "Write the numbers 1 to 5, one per line, then stop.", doctorMaxTokens, nil)
 		},
 		judge: func(r provider.RawReply) (bool, string) {
 			if r.FinishReason == "length" {
-				return false, "did not stop within 64 tokens (finish_reason=length)"
+				return false, fmt.Sprintf("did not stop within %d tokens (finish_reason=length)", doctorMaxTokens)
 			}
 			if strings.Contains(r.Content, "5") {
 				return true, "stopped on its own"
@@ -265,7 +321,7 @@ func (l *Loop) routeLLMDoctor(ctx context.Context, sessionID, agentName, text st
 	file.Last = &run
 	saveErr := saveDoctorFile(path, file)
 	replays := writeDoctorReplays(path, run)
-	report := doctorReport(run, file.Baseline, path, replays)
+	report := doctorReport(run, file.Baseline, path, replays, oa.APIKey != "")
 	if saveErr != nil {
 		report += "\n\n(this run was not saved: " + saveErr.Error() + ")"
 	}
@@ -295,22 +351,89 @@ func (l *Loop) runDoctor(ctx context.Context, p *provider.OpenAICompat, provider
 		sum := sha256.Sum256(body)
 		res := doctorResult{Name: c.name, Request: body, RequestSHA: hex.EncodeToString(sum[:])}
 
-		cctx, cancel := context.WithTimeout(ctx, doctorCanaryTimeout)
-		start := time.Now()
-		reply, err := p.RawChat(cctx, body)
-		cancel()
-		res.Millis = time.Since(start).Milliseconds()
+		reply, ms, err := doctorAsk(ctx, p, body)
+		res.Millis = ms
 		if err != nil {
 			res.Why = "request failed: " + err.Error()
-		} else {
-			res.FinishReason = reply.FinishReason
-			res.OutputTokens = reply.OutputTokens
-			res.Reply = doctorClip(reply.Content, 200)
-			res.Pass, res.Why = c.judge(reply)
+			run.Canaries = append(run.Canaries, res)
+			continue
+		}
+		if run.Server.Fingerprint == "" {
+			run.Server.Fingerprint = reply.Fingerprint
+		}
+		res.FinishReason = reply.FinishReason
+		res.OutputTokens = reply.OutputTokens
+		res.Reply = doctorClip(reply.Content, 200)
+		res.ReasoningChars = len([]rune(reply.Reasoning))
+		pass1, inc1, why1 := doctorJudgeReply(c, reply)
+		res.Pass, res.Inconclusive, res.Why = pass1, inc1, why1
+		if inc1 {
+			res.Reasoning = doctorClip(reply.Reasoning, 200)
+		}
+
+		// The same bytes, a second time. This model is not run greedily,
+		// so two answers are allowed to differ; what is not allowed to
+		// differ is the verdict. When it does, the canary has measured a
+		// coin toss, and saying so is worth more than reporting whichever
+		// side came up first.
+		second, _, err := doctorAsk(ctx, p, body)
+		if err == nil {
+			res.Repeated = true
+			res.SameTwice = strings.TrimSpace(second.Content) == strings.TrimSpace(reply.Content)
+			if !res.SameTwice {
+				res.Reply2 = doctorClip(second.Content, 200)
+			}
+			pass2, inc2, why2 := doctorJudgeReply(c, second)
+			switch {
+			case !inc1 && !inc2 && pass1 != pass2:
+				res.Pass, res.Inconclusive = false, true
+				res.Why = "the same request passed once and failed once: " + doctorFailingWhy(pass1, why1, why2)
+			case inc2 && !inc1:
+				res.Why += "; a second identical request spent its whole budget on reasoning_content"
+			}
 		}
 		run.Canaries = append(run.Canaries, res)
 	}
 	return run
+}
+
+func doctorAsk(ctx context.Context, p *provider.OpenAICompat, body []byte) (provider.RawReply, int64, error) {
+	cctx, cancel := context.WithTimeout(ctx, doctorCanaryTimeout)
+	defer cancel()
+	start := time.Now()
+	reply, err := p.RawChat(cctx, body)
+	return reply, time.Since(start).Milliseconds(), err
+}
+
+// doctorJudgeReply is a canary's verdict on one answer, in three states.
+func doctorJudgeReply(c doctorCanary, r provider.RawReply) (pass, inconclusive bool, why string) {
+	if doctorBudgetGone(r) {
+		return false, true, fmt.Sprintf("the whole %d-token budget went to reasoning_content and the answer never began", doctorMaxTokens)
+	}
+	pass, why = c.judge(r)
+	// An answer that ends of its own accord with nothing in content and
+	// everything in reasoning is the failure muse's own recipe warns
+	// about: the output channel closed before the answer was written.
+	// It is a finding about the server, not a budget that was too small.
+	if !pass && strings.TrimSpace(r.Content) == "" && r.Reasoning != "" && r.FinishReason != "length" {
+		why = "the turn ended with content empty and the whole answer in reasoning_content: the output channel closed before the answer began"
+	}
+	return pass, false, why
+}
+
+// doctorBudgetGone is the one case where no verdict is owed: the model
+// thought until the ceiling and never wrote an answer. Nothing about the
+// server follows from that, only that this request needed more room.
+func doctorBudgetGone(r provider.RawReply) bool {
+	return r.FinishReason == "length" && strings.TrimSpace(r.Content) == "" && r.Reasoning != ""
+}
+
+// doctorFailingWhy is the reason from whichever of two runs failed.
+func doctorFailingWhy(pass1 bool, why1, why2 string) string {
+	if pass1 {
+		return why2
+	}
+	return why1
 }
 
 func (l *Loop) localcodeVersion() string {
@@ -398,7 +521,7 @@ func writeDoctorReplays(path string, run doctorRun) []string {
 
 // --- the report ---
 
-func doctorReport(run doctorRun, base *doctorRun, path string, replays []string) string {
+func doctorReport(run doctorRun, base *doctorRun, path string, replays []string, keyed bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "llm-doctor: %s at %s (localcode %s), %s\n",
 		run.Model, doctorHost(run.BaseURL), run.Localcode, run.At.Format("2006-01-02 15:04"))
@@ -415,9 +538,15 @@ func doctorReport(run doctorRun, base *doctorRun, path string, replays []string)
 			b.WriteString("- max_model_len: not reported\n")
 		}
 	}
-	if s.VersionOK {
+	if s.Fingerprint != "" {
+		fmt.Fprintf(&b, "- system_fingerprint: %s\n", s.Fingerprint)
+	}
+	switch {
+	case s.VersionOK:
 		fmt.Fprintf(&b, "- vLLM: %s\n", s.Version)
-	} else {
+	case s.Fingerprint != "":
+		b.WriteString("- /version: not routed; the fingerprint above is what the build calls itself\n")
+	default:
 		b.WriteString("- /version: not offered (not vLLM, or not exposed)\n")
 	}
 	if s.MetricsOK {
@@ -433,18 +562,34 @@ func doctorReport(run doctorRun, base *doctorRun, path string, replays []string)
 		b.WriteString("- /metrics: not offered\n")
 	}
 
-	passes := 0
-	fmt.Fprintf(&b, "\nCanaries (temperature 0, seed %d)\n", doctorSeed)
+	passes, unsure, differed := 0, 0, 0
+	fmt.Fprintf(&b, "\nCanaries (%s, each sent twice)\n", doctorSampling(run.Model))
 	for _, c := range run.Canaries {
-		verdict := "FAIL"
-		if c.Pass {
-			verdict = "pass"
+		switch {
+		case c.Inconclusive:
+			unsure++
+		case c.Pass:
 			passes++
 		}
-		fmt.Fprintf(&b, "- %s: %s, %s (%s, %d tokens, %.1fs)\n",
-			c.Name, verdict, c.Why, orNone(c.FinishReason, "no finish_reason"), c.OutputTokens, float64(c.Millis)/1000)
+		fmt.Fprintf(&b, "- %s: %s, %s (%s, %d tokens", c.Name, doctorVerdictWord(c), c.Why,
+			orNone(c.FinishReason, "no finish_reason"), c.OutputTokens)
+		if c.ReasoningChars > 0 {
+			fmt.Fprintf(&b, ", %d chars of reasoning", c.ReasoningChars)
+		}
+		fmt.Fprintf(&b, ", %.1fs)\n", float64(c.Millis)/1000)
+		if c.Repeated && !c.SameTwice {
+			differed++
+		}
 	}
-	fmt.Fprintf(&b, "%d of %d pass\n", passes, len(run.Canaries))
+	fmt.Fprintf(&b, "%d of %d pass", passes, len(run.Canaries))
+	if unsure > 0 {
+		fmt.Fprintf(&b, ", %d inconclusive", unsure)
+	}
+	b.WriteString("\n")
+	if differed > 0 {
+		fmt.Fprintf(&b, "%d of %d answered differently the second time. This model is not run greedily, so that is expected; it also means each verdict above is one sample rather than a property.\n",
+			differed, len(run.Canaries))
+	}
 
 	if base != nil {
 		fmt.Fprintf(&b, "\nAgainst the baseline of %s (localcode %s)\n", base.At.Format("2006-01-02 15:04"), base.Localcode)
@@ -462,8 +607,15 @@ func doctorReport(run doctorRun, base *doctorRun, path string, replays []string)
 
 	fmt.Fprintf(&b, "\nSaved: %s", path)
 	if len(replays) > 0 {
-		fmt.Fprintf(&b, "\nReplay a failing canary yourself, or hand it to whoever runs the server:\n  curl -s %s/chat/completions -H 'Content-Type: application/json' -d @%s",
-			run.BaseURL, replays[0])
+		// The key is the profile's, and it stays there: a report is
+		// pasted into chats and issues. The header is named so the line
+		// works, with a blank where the key goes.
+		auth := ""
+		if keyed {
+			auth = " -H 'Authorization: Bearer <this profile's api_key>'"
+		}
+		fmt.Fprintf(&b, "\nReplay a failing canary yourself, or hand it to whoever runs the server:\n  curl -s %s/chat/completions -H 'Content-Type: application/json'%s -d @%s",
+			run.BaseURL, auth, replays[0])
 	}
 	return b.String()
 }
@@ -485,6 +637,9 @@ func doctorDiff(run, base doctorRun) []string {
 	if run.Server.CacheDtype != base.Server.CacheDtype {
 		d = append(d, fmt.Sprintf("kv cache dtype %s → %s", orNone(base.Server.CacheDtype, "none"), orNone(run.Server.CacheDtype, "none")))
 	}
+	if run.Server.Fingerprint != base.Server.Fingerprint {
+		d = append(d, fmt.Sprintf("system_fingerprint %s → %s", orNone(base.Server.Fingerprint, "none"), orNone(run.Server.Fingerprint, "none")))
+	}
 	baseBy := map[string]doctorResult{}
 	for _, c := range base.Canaries {
 		baseBy[c.Name] = c
@@ -496,6 +651,12 @@ func doctorDiff(run, base doctorRun) []string {
 		}
 		if bc.RequestSHA != c.RequestSHA {
 			d = append(d, fmt.Sprintf("%s: the request itself changed (this localcode's canary is not the baseline's), so its verdict is not comparable", c.Name))
+			continue
+		}
+		if bc.Inconclusive || c.Inconclusive {
+			if bc.Inconclusive != c.Inconclusive {
+				d = append(d, fmt.Sprintf("%s: %s → %s", c.Name, doctorVerdictWord(bc), doctorVerdictWord(c)))
+			}
 			continue
 		}
 		if bc.Pass != c.Pass {
@@ -510,17 +671,25 @@ func doctorDiff(run, base doctorRun) []string {
 
 func doctorVerdict(run doctorRun, base *doctorRun) string {
 	var failing []string
+	judged := 0
 	for _, c := range run.Canaries {
+		if c.Inconclusive {
+			continue
+		}
+		judged++
 		if !c.Pass {
 			failing = append(failing, c.Name)
 		}
 	}
 	if base == nil {
-		if len(failing) == 0 {
-			return "- Every canary passes. No baseline yet: /llm-doctor baseline keeps this run as the reference for a day the model answers differently.\n"
+		switch {
+		case judged == 0:
+			return "- No canary reached a verdict, so there is nothing here yet. The lines above say why each one stopped short.\n"
+		case len(failing) == 0:
+			return "- Every canary that reached a verdict passes. No baseline yet: /llm-doctor baseline keeps this run as the reference for a day the model answers differently.\n"
 		}
 		return fmt.Sprintf("- %d of %d canaries fail (%s). Without a baseline this cannot say whether that is new. On a day the model behaves well, run /llm-doctor and then /llm-doctor baseline; after that, a run like this one can say what changed.\n",
-			len(failing), len(run.Canaries), strings.Join(failing, ", "))
+			len(failing), judged, strings.Join(failing, ", "))
 	}
 
 	baseBy := map[string]bool{}
@@ -534,6 +703,8 @@ func doctorVerdict(run doctorRun, base *doctorRun) string {
 			continue
 		}
 		switch {
+		case c.Inconclusive:
+			// No verdict was reached; it cannot have changed.
 		case was && !c.Pass:
 			newlyFailing = append(newlyFailing, c.Name)
 		case !was && c.Pass:
@@ -543,7 +714,8 @@ func doctorVerdict(run doctorRun, base *doctorRun) string {
 	serverChanged := run.Server.ModelID != base.Server.ModelID ||
 		run.Server.MaxModelLen != base.Server.MaxModelLen ||
 		run.Server.Version != base.Server.Version ||
-		run.Server.CacheDtype != base.Server.CacheDtype
+		run.Server.CacheDtype != base.Server.CacheDtype ||
+		run.Server.Fingerprint != base.Server.Fingerprint
 
 	var b strings.Builder
 	switch {
@@ -573,6 +745,22 @@ func doctorPassWord(pass bool) string {
 		return "pass"
 	}
 	return "FAIL"
+}
+
+func doctorVerdictWord(c doctorResult) string {
+	if c.Inconclusive {
+		return "inconclusive"
+	}
+	return doctorPassWord(c.Pass)
+}
+
+// doctorSampling names the sampling a canary was sent with, so the report
+// carries the conditions its verdicts were reached under.
+func doctorSampling(model string) string {
+	if doctorIsMuse(model) {
+		return "temperature 1.0, top_p 0.95, top_k 64, as muse's own recipe asks"
+	}
+	return fmt.Sprintf("temperature 0, seed %d", doctorSeed)
 }
 
 func doctorHost(baseURL string) string {
