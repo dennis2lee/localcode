@@ -195,6 +195,11 @@ const (
 	// conversation A must not repaint its switches because conversation B
 	// answered a prompt.
 	TypePermissionsChanged Type = "permissions.changed"
+	// TypePermissionForgotten records "/read-outside mem-clear" and its
+	// write twin: {"class": "read"|"write"}. The remembered directories
+	// are rebuilt from the log when a session is next looked at, and
+	// without this event a forget would be undone by the next restart.
+	TypePermissionForgotten Type = "permission.forgotten"
 	// TypeSessionRenamed reports a session's title changing: {"title"}.
 	TypeSessionRenamed Type = "session.renamed"
 	// TypeSessionForked opens the log of a session created by forking

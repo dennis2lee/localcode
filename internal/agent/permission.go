@@ -95,6 +95,9 @@ type PermissionBroker struct {
 	// per session and must not leak into other sessions or outlive the
 	// process.
 	granted map[string]map[string]bool
+	// hydrated marks the sessions whose granted and outside entries have
+	// been rebuilt from the log. See hydrate.
+	hydrated map[string]bool
 	// outside remembers the directories a session has approved leaving
 	// the workspace for, per class. Separate from granted because it is
 	// matched by containment rather than by an exact pattern, and keyed
@@ -173,11 +176,12 @@ type resolution struct {
 
 func NewPermissionBroker(store *session.Store) *PermissionBroker {
 	return &PermissionBroker{
-		store:   store,
-		pending: map[string]chan resolution{},
-		asking:  map[string]int{},
-		granted: map[string]map[string]bool{},
-		outside: map[string]map[tools.OutsideClass][]string{},
+		store:    store,
+		pending:  map[string]chan resolution{},
+		asking:   map[string]int{},
+		hydrated: map[string]bool{},
+		granted:  map[string]map[string]bool{},
+		outside:  map[string]map[tools.OutsideClass][]string{},
 	}
 }
 
@@ -426,9 +430,77 @@ func (b *PermissionBroker) grant(sessionID, toolName, pattern string) {
 }
 
 func (b *PermissionBroker) isGranted(sessionID, toolName, pattern string) bool {
+	b.hydrate(sessionID)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.granted[sessionID][grantKey(toolName, pattern)]
+}
+
+// hydrate rebuilds what a session approved from its log, once.
+//
+// granted and outside are memory, and memory is the wrong place for an
+// answer somebody gave: "allow for this session" used to hold until the
+// process ended and not a moment longer, so a restart — an update, a
+// crash, the daemon being handed to a newer version of itself — had the
+// model asking again for a directory it was told it could read an hour
+// ago. The log already had everything needed to say otherwise. A request
+// records the tool and the rule a session approval would grant, and for
+// a path outside the workspace the directory; the answer records the
+// scope. Pairing them by id is the whole of it.
+//
+// Lazily, at the first lookup for a session rather than at construction,
+// because the broker serves every session on the daemon and most of them
+// are not open. Read-only: nothing here writes an event, which matters
+// because the callers are the checks that run *before* a question is
+// asked, and a remembered answer has to stay silent.
+//
+// Replayed in log order, so a forget that came after a remember clears
+// it, and one that came before does not.
+func (b *PermissionBroker) hydrate(sessionID string) {
+	b.mu.Lock()
+	if b.hydrated[sessionID] {
+		b.mu.Unlock()
+		return
+	}
+	b.hydrated[sessionID] = true
+	b.mu.Unlock()
+
+	evs, err := b.store.Events(sessionID, 0)
+	if err != nil {
+		return
+	}
+	requests := map[string]map[string]any{}
+	for _, ev := range evs {
+		switch ev.Type {
+		case events.TypePermissionRequest:
+			if id := dataString(ev.Data, "id"); id != "" {
+				requests[id] = ev.Data
+			}
+		case events.TypePermissionResolved:
+			allow, _ := ev.Data["allow"].(bool)
+			req, ok := requests[dataString(ev.Data, "id")]
+			if !allow || !ok {
+				continue
+			}
+			switch dataString(ev.Data, "scope") {
+			case ScopeSession, ScopeAlways:
+				// ScopeAlways also wrote a rule to config.json, which the
+				// resolver reads on its own; the session grant is what
+				// covers the interval before that file is re-read.
+				if tool, rule := dataString(req, "tool"), dataString(req, "rule"); tool != "" && rule != "" {
+					b.grant(sessionID, tool, rule)
+				}
+			case ScopeOutsideDir:
+				if class, ok := tools.ParseOutsideClass(dataString(req, "outside")); ok {
+					b.rememberOutside(sessionID, class, dataString(req, "outside_dir"))
+				}
+			}
+		case events.TypePermissionForgotten:
+			if class, ok := tools.ParseOutsideClass(dataString(ev.Data, "class")); ok {
+				b.dropOutside(sessionID, class)
+			}
+		}
+	}
 }
 
 // rememberOutside records a directory this session may leave the
@@ -469,6 +541,10 @@ func (b *PermissionBroker) outsideGranted(sessionID string, class tools.OutsideC
 	}
 	id := sessionID
 	for range maxParentWalk {
+		// Each session on the walk, not only the first: a task's own log
+		// is short and the directory it is allowed into was usually
+		// approved in the conversation that spawned it.
+		b.hydrate(id)
 		b.mu.Lock()
 		dirs := append([]string(nil), b.outside[id][class]...)
 		b.mu.Unlock()
@@ -489,6 +565,7 @@ func (b *PermissionBroker) outsideGranted(sessionID string, class tools.OutsideC
 // RememberedOutside lists the directories a session has approved, for a
 // client that wants to show what it is currently trusting.
 func (b *PermissionBroker) RememberedOutside(sessionID string, class tools.OutsideClass) []string {
+	b.hydrate(sessionID)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]string(nil), b.outside[sessionID][class]...)
@@ -503,6 +580,21 @@ func (b *PermissionBroker) RememberedOutside(sessionID string, class tools.Outsi
 // approved one directory by mistake needs a way to take that back
 // without also changing a switch they never touched.
 func (b *PermissionBroker) ForgetOutside(sessionID string, class tools.OutsideClass) int {
+	// Hydrated first, or the count answers for the memory of a process
+	// that may have started a minute ago rather than for the session.
+	b.hydrate(sessionID)
+	n := b.dropOutside(sessionID, class)
+	// Written down, because the remembered directories are rebuilt from
+	// the log and a forget that lived only in memory would be undone by
+	// the next restart. The event goes in regardless of n: forgetting a
+	// list that is already empty still records that it is meant to be.
+	b.store.Append(sessionID, events.TypePermissionForgotten, map[string]any{"class": class.String()})
+	return n
+}
+
+// dropOutside is the in-memory half of a forget, shared by the live path
+// and the replay of a forget from the log.
+func (b *PermissionBroker) dropOutside(sessionID string, class tools.OutsideClass) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	n := len(b.outside[sessionID][class])

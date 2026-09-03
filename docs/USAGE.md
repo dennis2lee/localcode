@@ -577,7 +577,7 @@ Ordinary tool prompts provide the following choices. Workspace-boundary prompts 
 |---|---|---|
 | Allow once | `y` | Approves exactly this call. Asks again next time. |
 | Deny | `n` | Refuses this call. Asks again next time. |
-| Allow for session | `s` | Approves this call and later matching calls until session deletion or daemon restart. Writes nothing to disk. |
+| Allow for session | `s` | Approves this call and later matching calls for the life of the session. It survives a restart: the answer is in the session's log, and the grant is rebuilt from it when the session is next looked at. Nothing is written to config.json. |
 | Always allow | `a` (only shown when available) | Everything "allow for session" does, plus writes a matching rule to config.json, so the same pattern is auto-allowed in every future session too. |
 
 The Web UI shows the same four as buttons: Deny, Allow for session, Always allow, Allow once.
@@ -1838,7 +1838,7 @@ Workspace-boundary prompts can approve one call, one directory, or all outside a
 
 The prompt says which project the path is outside of, and names the directory `d` would cover, before you answer.
 
-`/read-outside mem-clear` and `/write-outside mem-clear` remove directory approvals without changing switches. The Permissions panel provides a **forget** button for each directory. Background tasks inherit parent directory approvals.
+`/read-outside mem-clear` and `/write-outside mem-clear` remove directory approvals without changing switches. The Permissions panel provides a **forget** button for each directory. Background tasks inherit parent directory approvals. Both the approvals and the forgets are in the session's log, so a restart brings back exactly what the session had: an approved directory stays approved, and a forgotten one stays forgotten.
 
 `permission-skip-tools` does not silence this question. Only `permission-skip-all` does.
 

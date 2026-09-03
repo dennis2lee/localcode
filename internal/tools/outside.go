@@ -47,6 +47,21 @@ func (c OutsideClass) String() string {
 	return ""
 }
 
+// ParseOutsideClass is String's inverse, for a class that went through a
+// log and came back as text. The empty string is OutsideNone and is not
+// reported as a failure; anything else unknown is.
+func ParseOutsideClass(s string) (OutsideClass, bool) {
+	switch s {
+	case "":
+		return OutsideNone, true
+	case "read":
+		return OutsideRead, true
+	case "write":
+		return OutsideWrite, true
+	}
+	return OutsideNone, false
+}
+
 // PathTool is implemented by tools whose permission subject is a
 // filesystem path, and says whether the call reads it or writes it.
 //
