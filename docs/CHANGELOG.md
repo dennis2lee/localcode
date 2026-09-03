@@ -8,6 +8,8 @@ The report says what it can: that the server reports different facts, or that th
 
 The `/update` help line still said it refuses while anything is running; it hands over instead, and the line says so now.
 
+Two sessions created inside one tick of the clock got the same id, and the second was refused as already existing. Windows moves `time.Now` in steps of up to sixteen milliseconds, so a quick second click on the new-session button could hit it; the Windows CI runner did. Ids are now strictly increasing within a process.
+
 ## v0.88.0
 
 **Startup auto-update is on for Windows.** It had been off there for two reasons, and the handoff answered both. Applying the MSI unasked meant a UAC prompt; the install is now the one a handoff uses — the zip, a rename or a staged copy, no elevation. And a Windows process cannot exec into a new image; instead the new binary is started beside the starting process on the listener that process already holds, before anything is served, and the starting process runs the TUI, holds the console, or fronts the desktop window against it. That is the state a `/update` handoff leaves things in, arrived at from the start. The daemon is the new version from the first message.

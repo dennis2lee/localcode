@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"localcode/internal/agent"
 	"localcode/internal/events"
@@ -69,7 +68,7 @@ func (d *Daemon) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	id := fmt.Sprintf("s-%d", time.Now().UnixNano())
+	id := newSessionID()
 	// Stamped with the workspace live at creation time. Switching the
 	// workspace later doesn't rewrite existing sessions: the point of the
 	// field is to say which project a conversation belongs to, which is
@@ -159,7 +158,7 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	// source. It marks a background task's session, and anything with one
 	// is filtered out of ListVisible — a fork is a top-level conversation
 	// and has to appear in the list.
-	newID := fmt.Sprintf("s-%d", time.Now().UnixNano())
+	newID := newSessionID()
 	sess, err := d.Loop.Store.CreateSessionIn(newID, "", src.Agent, src.Workspace, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
