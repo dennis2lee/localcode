@@ -384,7 +384,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories"},
 		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models"},
 		{Name: "auto-compact", Description: "toggle auto-compaction, or set its threshold with a percent"},
-		{Name: "update", Description: "install the newest release and come back on it; refuses while anything is running"},
+		{Name: "update", Description: "install the newest release and move the daemon onto it; the terminal keeps running"},
 		{Name: "reset-mcp", Description: "reconnect MCP servers and pick up config changes without a restart"},
 		{Name: "reset-skills", Description: "reload skills from disk without a restart"},
 		{Name: "compact", Description: "summarize the conversation now, optionally with instructions"},
@@ -392,6 +392,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "rewind", Description: "undo the last turn, and the files write_file and edit changed in it"},
 		{Name: "model-invocable", Description: "whether the model may run this session's commands itself"},
 		{Name: "usage", Description: "cumulative token usage per model"},
+		{Name: "llm-doctor", Description: "probe a muse or gemma server: its facts, four canaries, what differs from the baseline; /llm-doctor baseline keeps the last run"},
 		{Name: "context", Description: "what the next request is made of; /context all, /context <id>"},
 	}
 }

@@ -41,6 +41,7 @@ Start with [Install](#install) and [Quick start](#quick-start). See [Where local
 | Prompt cache | Breakpoints after the stable prefix (tool schemas and system prompt) and conversation tail. Anthropic uses `cache_control`; Bedrock uses `cachePoint`; providers with server-side prefix caching receive neither. |
 | Fallback | Two endpoint retries after 1 and 2 seconds, then the profile `fallback`. A 401 or unknown model ID skips the delay. localcode derives a new request for the fallback model and records the switch. |
 | Model specific handling | Additional prompt lines for required model families, automatic continuation for models that stop during tasks, `/keep-going off` to disable it, and LaTeX unwrapping for Gemma. |
+| LLM doctor | `/llm-doctor` for a local muse or gemma: the server's reported facts, four canaries at temperature 0, and what differs from a baseline kept on a good day. See [USAGE.md](docs/USAGE.md#llm-doctor). |
 
 ### Agents, delegation, orchestration
 

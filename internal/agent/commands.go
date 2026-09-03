@@ -177,6 +177,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeRewind(ctx, sessionID, text) },
 		func() (bool, error) { return l.routeModelInvocable(sessionID, text) },
 		func() (bool, error) { return l.routeUsage(sessionID, text) },
+		func() (bool, error) { return l.routeLLMDoctor(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeContext(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeCustomCommand(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeSkillName(ctx, sessionID, agentName, text) },

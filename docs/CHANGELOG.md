@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.89.0
+
+**`/llm-doctor`: what a client can find out about a local model's server.** For the day a muse or gemma that answered well yesterday loops today. The command asks the server what it reports about itself (the model id and `max_model_len` from `/v1/models`; on vLLM also its version, the KV cache dtype, preemptions, cache use and how many requests finished by length), sends four fixed canaries at temperature 0 with a seed (a tool call that must come back structured, a code fix, an exact one-word reply, a count that must stop), judges each, and keeps the run under `~/.localcode/doctor/`. `/llm-doctor baseline` keeps the last run as the reference; later runs list what differs, localcode's own version included, so a change on the client side is named rather than blamed on the server. A failing canary's request is written beside the run for replay with `curl`.
+
+The report says what it can: that the server reports different facts, or that the same bytes get a different answer. The cause lives in the server's flags and logs, and the report does not claim one. The command exists only for models whose name contains `muse` or `gemma`, and only over an OpenAI-compatible provider.
+
+The `/update` help line still said it refuses while anything is running; it hands over instead, and the line says so now.
+
 ## v0.88.0
 
 **Startup auto-update is on for Windows.** It had been off there for two reasons, and the handoff answered both. Applying the MSI unasked meant a UAC prompt; the install is now the one a handoff uses — the zip, a rename or a staged copy, no elevation. And a Windows process cannot exec into a new image; instead the new binary is started beside the starting process on the listener that process already holds, before anything is served, and the starting process runs the TUI, holds the console, or fronts the desktop window against it. That is the state a `/update` handoff leaves things in, arrived at from the start. The daemon is the new version from the first message.

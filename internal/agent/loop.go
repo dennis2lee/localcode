@@ -181,6 +181,15 @@ type Loop struct {
 	// this command.
 	SelfUpdate func(sessionID string) (string, error)
 
+	// Version is the running localcode's version, for the report that
+	// compares a run with an earlier one ("/llm-doctor"): a client that
+	// changed between two runs is a variable the report has to name.
+	Version string
+
+	// DoctorDir is where "/llm-doctor" keeps its runs and baselines.
+	// Empty means ~/.localcode/doctor.
+	DoctorDir string
+
 	// ConfigPath is the config.json the toggle commands write to, so a
 	// switch flipped at the prompt survives a restart the way the same
 	// switch flipped in the settings window does. Empty means there is

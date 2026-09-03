@@ -356,6 +356,7 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 		loop.Skills = skillList
 		loop.Commands = cmdList
 		loop.MemoryDir = memDir
+		loop.Version = version
 	}
 	return loop, agentName, func() {
 		// The run does not end before the work it started does. A background

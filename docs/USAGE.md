@@ -1059,6 +1059,20 @@ Shows cumulative token counts per model for the current session, with no model c
 
 With no calls yet, it just says so.
 
+### `/llm-doctor`
+
+For a local muse or gemma behind vLLM or another OpenAI-compatible server. When the same model answered well yesterday and loops today, this is how a client finds out what changed on the server, and what it cannot find out.
+
+| Step | What it does |
+|---|---|
+| Server facts | `GET /v1/models` for the model id and `max_model_len`. On vLLM, `/version` and `/metrics` for the version, the KV cache dtype, preemptions, cache use, queue depth, and how many requests finished by `stop` against `length`. An endpoint that is not there is reported as not offered. |
+| Canaries | Four fixed requests at temperature 0 with a seed, each with a known right answer: a tool call that must come back structured, a one-line code fix, an exact one-word reply, and a count that must stop on its own. Each is judged pass or fail, with the reply quoted when it fails. |
+| Baseline | `/llm-doctor baseline` keeps the last run as the reference for this model. Later runs list what differs: server facts, each canary's verdict, and localcode's own version, so a change on the client side is named too. |
+
+The command exists only for models whose name contains `muse` or `gemma`; on another model it says so and sends nothing. Runs are kept under `~/.localcode/doctor/`, one file per model, and a failing canary's request is written beside them so whoever runs the server can replay the same bytes with `curl`.
+
+What the report can say is "the server reports different facts than at the baseline" and "the same request now gets a different answer". The cause is in the server's startup flags and logs, which a client cannot read, and the report does not claim one. The first run is not made the baseline by itself: a run taken while the model is misbehaving would make the next healthy one look like the change.
+
 ### `/context`
 
 Shows what is actually in the request this session would send next, and what is not, with no model call.
@@ -1125,6 +1139,7 @@ Two more commands apply an edited configuration without restarting:
 | Command | What it does |
 |---|---|
 | `/update` | Installs the newest release and moves this daemon onto it without restarting what you are looking at: the new version takes the address, this one finishes whatever is running, and the next message goes to the new one. See [Handing over](#handing-over). Where a handoff is not available — the desktop window, or a daemon reached over `--server` — it installs through the platform's installer or restarts instead, and refuses while anything is running anywhere on this daemon, naming what it found. The download is checked against the release's SHA-256 before it is run. |
+| `/llm-doctor` | For a muse or gemma on an OpenAI-compatible server: what the server reports about itself, four canaries at temperature 0, and what differs from the baseline kept with `/llm-doctor baseline`. See [`/llm-doctor`](#llm-doctor). |
 | `/reset-mcp` | Stops the MCP servers, re-reads their configuration from config.json, reconnects, and swaps the tools. A server removed from the file takes its tools with it; one added while the daemon runs connects. The status indicator follows. |
 | `/reset-skills` | Reloads skills from disk, against the live workspace. A skill installed or edited mid-run applies immediately, and the name completes like any other. |
 
