@@ -92,6 +92,13 @@ func run() error {
 		return nil
 	}
 
+	// A process started by a handoff serves the listener it was handed,
+	// whatever mode its arguments name: a successor to a desktop window
+	// is started with the window's arguments and must not open a window,
+	// and one started from a headless daemon must not bind a second port.
+	if in, ok := takingOver(); ok {
+		return runSuccessor(*configPath, in)
+	}
 	if *headless {
 		return runDaemon(*configPath, *listen)
 	}

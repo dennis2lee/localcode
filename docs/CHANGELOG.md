@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.88.0
+
+**Startup auto-update is on for Windows.** It had been off there for two reasons, and the handoff answered both. Applying the MSI unasked meant a UAC prompt; the install is now the one a handoff uses — the zip, a rename or a staged copy, no elevation. And a Windows process cannot exec into a new image; instead the new binary is started beside the starting process on the listener that process already holds, before anything is served, and the starting process runs the TUI, holds the console, or fronts the desktop window against it. That is the state a `/update` handoff leaves things in, arrived at from the start. The daemon is the new version from the first message.
+
+Under Program Files the installed binary is never replaced by this path — it is staged under `%LocalAppData%\localcode\bin` — so each start compares the release against the newest binary this machine can already run, the staged copy included, and hands off to that copy without downloading the same release again. The desktop window is given a proxy to the successor daemon: the page is served by the new version, so it is the new interface; the two routes that open native dialogs stay in the window's process. The settings window's install button still runs the MSI, with its UAC prompt, and is what brings the Program Files copy up to date.
+
+A process started by a handoff now serves the listener it was handed whatever mode its arguments name, since a successor to the desktop window is started with the window's arguments and must not open a window of its own.
+
 ## v0.87.0
 
 **The handoff works on Windows.** v0.86.0 said a socket could not be passed to another process there and the update was an MSI, so `/update` restarted and refused while work was running. Both turned out to be answerable.

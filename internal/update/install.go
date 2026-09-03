@@ -1,11 +1,15 @@
 package update
 
 import (
+	"context"
 	"fmt"
+	"localcode/internal/childproc"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // Outcome says what installing did, because it is not the same thing on
@@ -169,6 +173,53 @@ func ApplyForHandoff(path string) (Outcome, error) {
 		Detail: "staged at " + staged + " and running from there; the copy under " + filepath.Dir(exe) +
 			" is still the old version, and the settings window's install button updates it",
 	}, nil
+}
+
+// StagedBinary is where ApplyForHandoff puts a new binary when the one
+// this process runs from cannot be replaced: the same file name, under
+// the user's own cache directory. Empty when nothing has been staged.
+//
+// Startup asks for it before asking the network. A Program Files install
+// on Windows is never itself replaced by an update — that copy waits for
+// the MSI — so the binary that runs the daemon is the staged one, every
+// start, and comparing the release against only the Program Files
+// version would download the same release again each time.
+func StagedBinary() string {
+	exe, err := currentBinary()
+	if err != nil {
+		return ""
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	staged := filepath.Join(base, "localcode", "bin", filepath.Base(exe))
+	if staged == exe {
+		return ""
+	}
+	if _, err := os.Stat(staged); err != nil {
+		return ""
+	}
+	return staged
+}
+
+// VersionOf asks a localcode binary what version it is. Running it is
+// the only way to know: the number is stamped into the file at build
+// time and nowhere else.
+func VersionOf(path string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "version")
+	childproc.Hide(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("%s does not run here: %w", path, err)
+	}
+	v := strings.TrimSpace(string(out))
+	if v == "" {
+		return "", fmt.Errorf("%s printed no version", path)
+	}
+	return v, nil
 }
 
 // dirWritable reports whether this user can create a file in dir, which

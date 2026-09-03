@@ -4,17 +4,17 @@ package main
 
 import "fmt"
 
-// selfRestartAvailable is false here, and that decides more than the
-// wording of one reply: it is why localcode does not update itself at
-// startup on Windows.
+// selfRestartAvailable is false here: a Windows process cannot replace
+// its own image, so the exec that brings a Unix localcode up on a new
+// binary at startup has no equivalent.
 //
-// The Windows update is an MSI, and applying one runs msiexec, which asks
-// for elevation with a dialog. Doing that unasked, before the program has
-// drawn anything, would turn every startup after a release into a UAC
-// prompt for something nobody initiated — and at the end of it localcode
-// still could not come back into the terminal it was started from. The
-// settings window's button stays the way Windows updates, because there a
-// person clicked something.
+// It used to decide more than that — it was why localcode did not update
+// itself at startup on Windows at all, since the alternative was the MSI,
+// a UAC prompt, and a console that could not be returned to. That is no
+// longer the alternative. Where exec is not available the new version is
+// started beside this process on the listener it already holds, before
+// anything is served, and this process runs the TUI, holds the console,
+// or fronts the window against it. See startuphandoff.go.
 const selfRestartAvailable = false
 
 // execSelf is never reached on Windows.

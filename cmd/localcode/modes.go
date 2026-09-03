@@ -24,17 +24,10 @@ import (
 func runDaemon(configPath, listen string) error {
 	// A listener of our own rather than ListenAndServe, because a
 	// handoff has to be able to take it: the socket is what the next
-	// version inherits. Or the one we were handed, if this process is
-	// that next version.
-	in, tookOver := takingOver()
-	var ln net.Listener
-	if tookOver {
-		ln = in.ln
-	} else {
-		var err error
-		if ln, err = net.Listen("tcp", listen); err != nil {
-			return fmt.Errorf("daemon failed to start: %w", err)
-		}
+	// version inherits.
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return fmt.Errorf("daemon failed to start: %w", err)
 	}
 
 	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
@@ -46,14 +39,19 @@ func runDaemon(configPath, listen string) error {
 	cleanupOnce_ := func() { cleanupOnce.Do(cleanup) }
 	defer cleanupOnce_()
 
-	if tookOver {
-		d.NoteTakeover()
-	} else {
-		// Before the listener serves, which is the whole point: a headless
-		// daemon with nothing bound has no client attached and no session
-		// open, so replacing it costs nobody a turn. Once it is serving,
-		// the same update is somebody's work — and a handoff.
-		autoUpdateAtStartup(d, os.Stderr)
+	// Before the listener serves, which is the whole point: a headless
+	// daemon with nothing bound has no client attached and no session
+	// open, so replacing it costs nobody a turn. Once it is serving, the
+	// same update is somebody's work — and a handoff.
+	//
+	// Two ways the new version comes up. Where this process can exec, it
+	// does, and this function never returns. Where it cannot — Windows —
+	// the new binary is started beside this process on this listener,
+	// and this process stays only to hold the console: Ctrl+C here ends
+	// both, through the pipe the successor watches.
+	if binary, ok := startupHandoffBinary(d, os.Stderr); ok {
+		cleanupOnce_()
+		return superviseSuccessor(binary, ln)
 	}
 
 	srv := &http.Server{Handler: d.Handler()}
@@ -64,7 +62,7 @@ func runDaemon(configPath, listen string) error {
 	}
 	handedOff := make(chan struct{}, 1)
 	d.Handoff = func(version, binary string) error {
-		if err := handoffTo(d, srv, ln, in.alive, cleanupOnce_, version, binary); err != nil {
+		if err := handoffTo(d, srv, ln, nil, cleanupOnce_, version, binary); err != nil {
 			return err
 		}
 		handedOff <- struct{}{}
@@ -74,9 +72,6 @@ func runDaemon(configPath, listen string) error {
 	log.Printf("localcode daemon listening on http://%s", ln.Addr())
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
-	if tookOver {
-		in.announceReady()
-	}
 	err = <-errCh
 	select {
 	case <-handedOff:
@@ -235,6 +230,17 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 	// than somebody's turn. It is also the one place the terminal does
 	// not have to be handed back first — the TUI has not taken it yet.
 	autoUpdateAtStartup(d, os.Stderr)
+
+	// Where exec is not available, the new version comes up beside this
+	// process instead: it takes the listener before anything is served,
+	// and this process runs the TUI against it — which is exactly the
+	// state a "/update" handoff leaves things in, arrived at from the
+	// start. The daemon built above is torn down; the successor builds
+	// its own.
+	if binary, ok := startupHandoffBinary(d, os.Stderr); ok {
+		cleanupOnce_()
+		return runTUIBehindSuccessor(binary, got.ln, listen, agentName)
+	}
 
 	// Coming back up on the new binary once an update has replaced it.
 	//

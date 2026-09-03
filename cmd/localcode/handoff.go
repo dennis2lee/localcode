@@ -142,7 +142,7 @@ func handoffTo(d *daemon.Daemon, srv *http.Server, ln net.Listener, alive *os.Fi
 		}
 		binary = exe
 	}
-	pid, err := spawnSuccessor(binary, ln, alive)
+	pid, _, err := spawnSuccessor(binary, ln, alive)
 	if err != nil {
 		return err
 	}

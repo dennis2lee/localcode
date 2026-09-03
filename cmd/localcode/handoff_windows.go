@@ -80,38 +80,38 @@ func inheritable(f *os.File) (syscall.Handle, error) {
 
 // spawnSuccessor starts binary with the listener and the pipes, and waits
 // until it is serving.
-func spawnSuccessor(binary string, ln net.Listener, alive *os.File) (pid int, err error) {
+func spawnSuccessor(binary string, ln net.Listener, alive *os.File) (pid int, exited <-chan error, err error) {
 	tcp, ok := ln.(*net.TCPListener)
 	if !ok {
-		return 0, fmt.Errorf("the listener is a %T, which cannot be handed to another process", ln)
+		return 0, nil, fmt.Errorf("the listener is a %T, which cannot be handed to another process", ln)
 	}
 	lnFile, err := tcp.File()
 	if err != nil {
-		return 0, fmt.Errorf("get the listener's handle: %w", err)
+		return 0, nil, fmt.Errorf("get the listener's handle: %w", err)
 	}
 	defer lnFile.Close()
 
 	readyR, readyW, err := os.Pipe()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer readyR.Close()
 
 	hLn, err := inheritable(lnFile)
 	if err != nil {
 		readyW.Close()
-		return 0, err
+		return 0, nil, err
 	}
 	hReady, err := inheritable(readyW)
 	if err != nil {
 		readyW.Close()
-		return 0, err
+		return 0, nil, err
 	}
 	var hAlive syscall.Handle
 	if alive != nil {
 		if hAlive, err = inheritable(alive); err != nil {
 			readyW.Close()
-			return 0, err
+			return 0, nil, err
 		}
 	}
 
@@ -130,15 +130,16 @@ func spawnSuccessor(binary string, ln net.Listener, alive *os.File) (pid int, er
 	cmd.SysProcAttr.AdditionalInheritedHandles = handles
 	if err := cmd.Start(); err != nil {
 		readyW.Close()
-		return 0, fmt.Errorf("start the new localcode: %w", err)
+		return 0, nil, fmt.Errorf("start the new localcode: %w", err)
 	}
 	// The parent's copy of the write end has to go, or the read never
 	// sees EOF when the child dies before writing.
 	readyW.Close()
-	go func() { _ = cmd.Wait() }()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
 
 	if err := waitReady(readyR, cmd.Process.Pid, func() { _ = cmd.Process.Kill() }); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return cmd.Process.Pid, nil
+	return cmd.Process.Pid, done, nil
 }

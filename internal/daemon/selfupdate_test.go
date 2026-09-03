@@ -127,7 +127,7 @@ func TestStartupIsNotGatedOnTheRemoteInstallFlag(t *testing.T) {
 		// would mean the flag stopped it before it ever looked.
 		UpdateAPI: "http://127.0.0.1:1/releases",
 	}
-	_, err := d.InstallAtStartup(context.Background())
+	_, _, err := d.InstallAtStartup(context.Background(), d.Version, false)
 	if err == nil {
 		t.Fatal("expected the unreachable check to fail")
 	}

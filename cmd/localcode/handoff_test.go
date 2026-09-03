@@ -45,7 +45,7 @@ func TestASuccessorTakesTheListenerAndOutlivesNothing(t *testing.T) {
 	os.Setenv("LC_HANDOFF_CHILD", "1")
 	defer os.Unsetenv("LC_HANDOFF_CHILD")
 
-	pid, err := spawnSuccessor(os.Args[0], ln, alive.r)
+	pid, _, err := spawnSuccessor(os.Args[0], ln, alive.r)
 	if err != nil {
 		t.Fatalf("spawnSuccessor: %v", err)
 	}

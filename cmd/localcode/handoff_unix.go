@@ -44,20 +44,20 @@ func takingOver() (inherited, bool) {
 
 // spawnSuccessor starts binary with the listener and the pipes, and waits
 // until it is serving.
-func spawnSuccessor(binary string, ln net.Listener, alive *os.File) (pid int, err error) {
+func spawnSuccessor(binary string, ln net.Listener, alive *os.File) (pid int, exited <-chan error, err error) {
 	tcp, ok := ln.(*net.TCPListener)
 	if !ok {
-		return 0, fmt.Errorf("the listener is a %T, which cannot be handed to another process", ln)
+		return 0, nil, fmt.Errorf("the listener is a %T, which cannot be handed to another process", ln)
 	}
 	lnFile, err := tcp.File()
 	if err != nil {
-		return 0, fmt.Errorf("get the listener's descriptor: %w", err)
+		return 0, nil, fmt.Errorf("get the listener's descriptor: %w", err)
 	}
 	defer lnFile.Close()
 
 	readyR, readyW, err := os.Pipe()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer readyR.Close()
 
@@ -73,17 +73,18 @@ func spawnSuccessor(binary string, ln net.Listener, alive *os.File) (pid int, er
 	cmd.ExtraFiles = []*os.File{lnFile, readyW, alive}
 	if err := cmd.Start(); err != nil {
 		readyW.Close()
-		return 0, fmt.Errorf("start the new localcode: %w", err)
+		return 0, nil, fmt.Errorf("start the new localcode: %w", err)
 	}
 	// The parent's copy of the write end has to go, or the read never
 	// sees EOF when the child dies before writing.
 	readyW.Close()
 	// Reaped in the background: the child outlives this function, and a
 	// zombie is what an unreaped child becomes.
-	go func() { _ = cmd.Wait() }()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
 
 	if err := waitReady(readyR, cmd.Process.Pid, func() { _ = cmd.Process.Kill() }); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return cmd.Process.Pid, nil
+	return cmd.Process.Pid, done, nil
 }

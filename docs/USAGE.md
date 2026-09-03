@@ -2277,7 +2277,14 @@ Startup is where this belongs because of what an update costs rather than what i
 
 It cannot fail into not starting. No release, no network, no asset for this platform, a refused write, a download that did not match its checksum: each one ends with localcode starting normally on the build it already had. The check is given four seconds, so a machine with no route to GitHub costs a pause and not a hang. A failure that is not simply "nothing to install" is printed, because somebody who turned this on is owed the reason it did nothing.
 
-Not on Windows. Applying an update there runs `msiexec`, which asks for elevation with a dialog, and afterwards nothing can put a console program back in the terminal it was started from. An update that cannot finish is not one to start unasked, so Windows keeps the settings window's button, where a person clicked something.
+On Windows the same thing happens by a different route, because a Windows process cannot exec into a new image. The new version is installed the way a handoff installs it — from the zip, no elevation — and started beside the starting process on the listener that process already holds, before anything is served. The starting process then runs the TUI, holds the console (headless), or fronts the desktop window against it, which is exactly the state a `/update` handoff leaves things in, arrived at from the start. The daemon is the new version from the first message; what stays old is the starting process's own code — the TUI, or the window shell.
+
+| Install | Where the new binary goes | What the next start runs |
+|---|---|---|
+| Portable (the zip, in a folder you can write) | Over the running one, which is moved aside as `.old` | The new binary directly |
+| Under Program Files (the MSI) | Staged in `%LocalAppData%\localcode\bin`, since Program Files needs elevation to write | The installed binary starts, finds the staged copy newer than itself, and hands off to it without asking the network again |
+
+The Program Files copy is brought up to date by the settings window's install button, which runs the MSI with a UAC prompt; nothing runs `msiexec` unasked.
 
 #### `/update`
 

@@ -116,7 +116,7 @@ jobs:
       - name: Test the Windows code paths
         run: |
           go test ./internal/update/ ./internal/childproc/
-          go test ./cmd/localcode/ -run 'Successor|UnknownCommand'
+          go test ./cmd/localcode/ -run 'Successor|UnknownCommand|WindowProxy'
           go test ./internal/daemon/ -run 'SessionIDInPath|TheGateRefuses|DeadDaemon|TakingOverASession|Retire|Update|Startup|Busy'
         env:
           CGO_ENABLED: '0'

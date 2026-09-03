@@ -34,12 +34,20 @@ var (
 // the button restarts a TUI it can see, and a command has to say what it
 // is about to do to the conversation it is answering in.
 func (d *Daemon) fetchLatest(ctx context.Context, forHandoff bool) (rel update.Release, path string, verified bool, err error) {
+	return d.fetchLatestFrom(ctx, d.Version, forHandoff)
+}
+
+// fetchLatestFrom is fetchLatest measured against a version other than
+// this process's own: the one that will actually run the daemon after a
+// startup handoff, which on a Windows install under Program Files is a
+// staged copy and not this binary.
+func (d *Daemon) fetchLatestFrom(ctx context.Context, running string, forHandoff bool) (rel update.Release, path string, verified bool, err error) {
 	rel, err = d.updateChecker().Latest(ctx)
 	if err != nil {
 		return rel, "", false, err
 	}
-	if !update.Newer(d.Version, rel.Version) {
-		return rel, "", false, fmt.Errorf("localcode %s is %w", d.Version, errAlreadyLatest)
+	if !update.Newer(running, rel.Version) {
+		return rel, "", false, fmt.Errorf("localcode %s is %w", running, errAlreadyLatest)
 	}
 	var asset update.Asset
 	if forHandoff {
@@ -231,35 +239,48 @@ var ErrNoUpdate = errors.New("no newer release")
 // refuse for, and bringing the new binary up is the caller's to do — it
 // is the one that knows whether it can exec, and it has not yet built
 // anything it would have to take down first.
-func (d *Daemon) InstallAtStartup(ctx context.Context) (string, error) {
+//
+// forHandoff asks for the install a handoff needs rather than the
+// platform's packaged one — on Windows the zip and a rename or a staged
+// copy, never the MSI — because the caller is about to start the new
+// binary beside this process rather than exec into it. See
+// update.ApplyForHandoff. running is the version to compare the release
+// against, which is this process's own except where a staged copy is
+// already newer than it.
+func (d *Daemon) InstallAtStartup(ctx context.Context, running string, forHandoff bool) (update.Outcome, string, error) {
 	updateMu.Lock()
 	defer updateMu.Unlock()
 
-	rel, path, verified, err := d.fetchLatest(ctx, false)
+	rel, path, verified, err := d.fetchLatestFrom(ctx, running, forHandoff)
 	switch {
 	case errors.Is(err, errAlreadyLatest), errors.Is(err, errNoAssetForBuild):
 		// Both are "this machine has nothing to install", not a fault:
 		// the release is the one already running, or it ships nothing for
 		// this platform and install shape.
-		return "", ErrNoUpdate
+		return update.Outcome{}, "", ErrNoUpdate
 	case err != nil:
-		return "", err
+		return update.Outcome{}, "", err
 	}
-	out, err := update.Apply(path)
+	var out update.Outcome
+	if forHandoff {
+		out, err = update.ApplyForHandoff(path)
+	} else {
+		out, err = update.Apply(path)
+	}
 	if err != nil {
-		return "", err
+		return update.Outcome{}, "", err
 	}
 	if !out.Replaced {
 		// An installer is running, or a package was left on disk for a
 		// package manager. Either way this process is not about to become
 		// the new version, so the caller must not exec into it.
-		return "", fmt.Errorf("localcode %s: %s", rel.Version, out.Detail)
+		return out, "", fmt.Errorf("localcode %s: %s", rel.Version, out.Detail)
 	}
 	line := fmt.Sprintf("Updated to localcode %s before starting.", rel.Version)
 	if !verified {
 		line += " The download could not be checked against a published checksum."
 	}
-	return line, nil
+	return out, line, nil
 }
 
 // othersThan is the running-session list without the one asking.

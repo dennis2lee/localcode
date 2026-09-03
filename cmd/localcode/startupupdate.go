@@ -45,10 +45,10 @@ func autoUpdateAtStartup(d *daemon.Daemon, out io.Writer) {
 		return
 	}
 	if !selfRestartAvailable {
-		// Windows. Applying an update there runs msiexec, which asks for
-		// elevation, and nothing can put a console program back in the
-		// terminal it was started from afterwards. An update that cannot
-		// finish is not one to start unasked.
+		// Windows. No exec to come back on, so this is not the path: the
+		// startup update there is a handoff — the new binary started
+		// beside this process on the listener it holds. See
+		// startupHandoffBinary, which every mode asks after this returns.
 		return
 	}
 	// Deliberately not gated on AllowUpdateInstall, which is a different
@@ -61,7 +61,7 @@ func autoUpdateAtStartup(d *daemon.Daemon, out io.Writer) {
 	ctx, cancel := context.WithTimeout(context.Background(), startupCheckTimeout)
 	defer cancel()
 
-	report, err := d.InstallAtStartup(ctx)
+	_, report, err := d.InstallAtStartup(ctx, d.Version, false)
 	if err != nil {
 		if errors.Is(err, daemon.ErrNoUpdate) {
 			return
