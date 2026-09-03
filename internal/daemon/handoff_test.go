@@ -32,6 +32,9 @@ func handoffDaemon(t *testing.T) (*Daemon, *session.Store, string) {
 	if len(warnings) > 0 {
 		t.Fatalf("store warnings: %v", warnings)
 	}
+	// Released before the TempDir is removed: Windows will not delete a
+	// file something still has open.
+	t.Cleanup(store.Close)
 	cfg := &config.Config{}
 	loop := agent.New(store, tools.NewRegistry(nil), nil, cfg)
 	d := New(loop, agent.NewPermissionBroker(store), nil, nil, nil, "0.1.0")

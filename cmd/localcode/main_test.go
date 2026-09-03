@@ -16,7 +16,7 @@ func TestAnUnknownCommandIsRefusedRatherThanStartingTheAgent(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("needs the go tool to build the binary under test")
 	}
-	bin := filepath.Join(t.TempDir(), "localcode")
+	bin := filepath.Join(t.TempDir(), "localcode"+exeSuffix)
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}

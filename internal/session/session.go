@@ -883,6 +883,27 @@ func (s *Store) EndAllStreams() {
 	}
 }
 
+// Close releases every session's log file and ends every stream.
+//
+// A daemon never needs this — its files live as long as it does — but a
+// test does: on Windows an open file cannot be deleted, so a temporary
+// directory holding a store's logs cannot be removed until the store has
+// let go of them.
+func (s *Store) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, st := range s.sessions {
+		for _, sub := range st.subs {
+			sub.markLost()
+		}
+		st.subs = map[int]*subscriber{}
+		if st.file != nil {
+			_ = st.file.Close()
+			st.file = nil
+		}
+	}
+}
+
 func LoadAllFromDisk(dir string) (*Store, []error, error) {
 	s, err := NewStore(dir)
 	if err != nil {

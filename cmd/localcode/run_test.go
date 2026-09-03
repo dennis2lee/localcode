@@ -126,6 +126,7 @@ func runHome(t *testing.T, modelURL string) string {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Chdir(work)
 	return home
 }

@@ -376,6 +376,15 @@ Completed findings remain in this list to preserve item numbers and release hist
     * The Web UI uses the textarea's absolute `selectionStart` offset and supports multiline completion.
     * Required change: an upstream line setter or local row tracking consistent with the widget.
 
+41. **Test suites that run on Windows. Open.**
+
+    * The Windows CI job runs tests since v0.87.0, scoped to what passes there: `internal/update`, `internal/childproc`, the handoff test in `cmd/localcode`, and the handoff and update tests in `internal/daemon`.
+    * The first full run showed 52 failures across `cmd/localcode`, `internal/daemon` and `internal/session`, none in the code under test. Three causes account for nearly all of them:
+        * A `t.TempDir()` holding a store's session logs cannot be removed while the store has them open; Windows refuses to delete an open file. `session.Store.Close` exists now, and the fix is `t.Cleanup(store.Close)` wherever a test builds a store, or a shared helper that does.
+        * `TestDaemonEndToEnd` pastes a Windows path into JSON unescaped: `invalid character 'U' in string escape code`.
+        * Tests isolating `HOME` did not set `USERPROFILE`, which is what `os.UserHomeDir` reads on Windows. Fixed at the three sites in `cmd/localcode`; others may exist in packages the job does not run yet.
+    * Once a package is clean, drop it from the `-run` filter in `.github/workflows/gui-windows.yml` so the whole package runs.
+
 ## UI ideas
 
 ### Web UI

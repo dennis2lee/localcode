@@ -2,9 +2,19 @@
 
 package daemon
 
-// pidAlive is optimistic here. Windows has no handoff — see
-// selfRestartAvailable in cmd/localcode — so a manifest is never
-// written on this platform, and the question is only asked of one that
-// was copied in from somewhere else. Answering "alive" keeps such a file
-// from being deleted by a process that cannot check.
-func pidAlive(pid int) bool { return pid > 0 }
+import "os"
+
+// pidAlive reports whether a process exists. On Windows os.FindProcess is
+// not the formality it is elsewhere: it opens the process, and fails for
+// a pid nothing is running under, which is exactly the question.
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	_ = p.Release()
+	return true
+}

@@ -76,6 +76,7 @@ func TestEverySpawnSiteHidesItsWindow(t *testing.T) {
 			return nil // not our job to police syntax; the build does that
 		}
 		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
 
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)

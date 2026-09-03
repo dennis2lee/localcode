@@ -49,6 +49,7 @@ func smartHome(t *testing.T, modelURL string, extra string) string {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Chdir(work)
 	return home
 }

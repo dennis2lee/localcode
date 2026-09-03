@@ -12,7 +12,9 @@ import (
 // unused provider's credentials. Before Bedrock initialization became lazy,
 // the deliberately missing profile below made buildProviders fail.
 func TestBuildProvidersDoesNotLoadAWSConfigAtStartup(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
 			"local": {
