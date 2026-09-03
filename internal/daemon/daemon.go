@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 
 	"localcode/internal/agent"
 	"localcode/internal/events"
@@ -54,6 +55,27 @@ type Daemon struct {
 	// It is called after the response has gone out, because on Unix it
 	// replaces this process image and nothing after it runs.
 	Restart func()
+
+	// Shutdown, if set, stops this daemon's process. Wired for the daemon
+	// that took over an address from an older one: the TUI that stayed
+	// behind in the old process asks this when it exits, so a daemon with
+	// nothing attached does not run on. See handleShutdown.
+	Shutdown func()
+
+	// Handoff, if set, replaces this daemon with the binary now on disk
+	// without stopping the process: the new one takes the listener, this
+	// one finishes its turns. Wired by the process that owns the listener,
+	// which is why it is a hook. It takes the version being handed to,
+	// for the event the streams get.
+	Handoff func(version string) error
+
+	// The daemon this one replaced may still be writing some sessions.
+	// ownedAtStart is which ones it listed when this daemon started;
+	// tookOver marks each as re-read once the old daemon let go of it.
+	// See handoff.go.
+	takeoverMu   sync.Mutex
+	ownedAtStart map[string]bool
+	tookOver     map[string]bool
 	// UpdateAPI overrides GitHub's API address for the update check. Empty
 	// in every real build; set by tests.
 	UpdateAPI string
@@ -156,10 +178,11 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	return d
 }
 
-func (d *Daemon) Handler() http.Handler { return d.mux }
+func (d *Daemon) Handler() http.Handler { return d.ownershipGate(d.mux) }
 
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
+	d.mux.HandleFunc("POST /api/daemon/shutdown", d.handleShutdown)
 	d.mux.HandleFunc("GET /api/update", d.handleUpdateCheck)
 	d.mux.HandleFunc("POST /api/update/install", d.handleUpdateInstall)
 	d.mux.HandleFunc("GET /api/trace", d.handleTrace)
@@ -295,7 +318,9 @@ func writeError(w http.ResponseWriter, status int, err error) {
 }
 
 func (d *Daemon) handleVersion(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"version": d.Version})
+	// The pid is how a client tells one daemon from the one that replaced
+	// it on the same address.
+	writeJSON(w, http.StatusOK, map[string]any{"version": d.Version, "pid": os.Getpid()})
 }
 
 // handleListMCPServers reports every configured MCP server and its

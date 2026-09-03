@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"localcode/internal/events"
 	"localcode/internal/update"
 )
 
@@ -105,22 +106,20 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 			"It still installs updates at startup unless auto_update is off; otherwise get it from %s", d.updateSource())
 	}
 
-	if busy := othersThan(d.turns.running(), sessionID); len(busy) > 0 {
-		return "", fmt.Errorf("%d other conversation(s) have a turn in progress: %s. "+
-			"Updating replaces this program and takes every one of them with it. "+
-			"Wait for them, or stop them, then run /update again",
-			len(busy), strings.Join(busy, ", "))
-	}
-	// Scheduled runs are not asked about separately: one runs in a session
-	// of its own and holds a turn there for as long as it lasts, so it is
-	// already in the answer above, under the id it runs as.
+	// What is running decides how the update lands, not whether. With a
+	// handoff wired, work in flight is the reason to hand off rather
+	// than restart: the new daemon takes the address and this one
+	// finishes its turns. Without one — a desktop window, Windows, a
+	// daemon attached over the network — a restart is the only way back
+	// onto the new binary, and it would cut that work, so it is refused
+	// and the refusal names what it found.
+	busy := othersThan(d.turns.running(), sessionID)
+	var tasks []string
 	if d.Tasks != nil {
-		if running := d.Tasks.Running(); len(running) > 0 {
-			return "", fmt.Errorf("%d background task(s) are still working: %s. "+
-				"Updating would stop them where they are. "+
-				"Wait for them, or cancel them with /tasks cancel <id>, then run /update again",
-				len(running), strings.Join(running, ", "))
-		}
+		tasks = d.Tasks.Running()
+	}
+	if err := updateWhileBusy(d.Handoff != nil, busy, tasks); err != nil {
+		return "", err
 	}
 
 	rel, path, verified, err := d.fetchLatest(context.Background())
@@ -135,8 +134,6 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	detail, restarting := restartPlan(out, d.Restart != nil)
-
 	var b strings.Builder
 	fmt.Fprintf(&b, "localcode %s installed from %s.\n", rel.Version, d.updateSource())
 	if !verified {
@@ -144,6 +141,34 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 		// that has just been run as an installer.
 		b.WriteString("The download could not be checked against a published checksum.\n")
 	}
+
+	if out.Replaced && d.Handoff != nil {
+		// The binary on disk is the new one. Hand the address to it and
+		// finish here: nothing on screen changes hands, and a turn that
+		// is running keeps running where it started.
+		b.WriteString(out.Detail)
+		b.WriteString("\nHanding over to it now. This conversation stays where it is: the new localcode takes the " +
+			"address, and anything still running finishes in this one first. " +
+			"The next message goes to the new version.")
+		if n := len(busy) + len(tasks); n > 0 {
+			fmt.Fprintf(&b, " %d conversation(s) still have work in flight and will be the last to move.", n)
+		}
+		version := rel.Version
+		go func() {
+			time.Sleep(restartDelay)
+			if err := d.Handoff(version); err != nil {
+				// Said on every stream, since the reply above promised
+				// something that did not happen.
+				d.daemonEvents.send(events.Event{
+					Type: events.TypeError,
+					Data: map[string]any{"error": "handoff to localcode " + version + " failed: " + err.Error()},
+				})
+			}
+		}()
+		return b.String(), nil
+	}
+
+	detail, restarting := restartPlan(out, d.Restart != nil)
 	b.WriteString(detail)
 	if restarting {
 		// What a restart does and does not cost, because the version in
@@ -157,6 +182,28 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 		}()
 	}
 	return b.String(), nil
+}
+
+// updateWhileBusy is the one decision "/update" makes about work in
+// flight: with a handoff available it is not an obstacle, and without
+// one it is a refusal that names what it found.
+func updateWhileBusy(canHandoff bool, busy, tasks []string) error {
+	if canHandoff || (len(busy) == 0 && len(tasks) == 0) {
+		return nil
+	}
+	if len(busy) > 0 {
+		return fmt.Errorf("%d other conversation(s) have a turn in progress: %s. "+
+			"Updating replaces this program and takes every one of them with it. "+
+			"Wait for them, or stop them, then run /update again",
+			len(busy), strings.Join(busy, ", "))
+	}
+	// Scheduled runs are not asked about separately: one runs in a session
+	// of its own and holds a turn there for as long as it lasts, so it is
+	// already in the answer above, under the id it runs as.
+	return fmt.Errorf("%d background task(s) are still working: %s. "+
+		"Updating would stop them where they are. "+
+		"Wait for them, or cancel them with /tasks cancel <id>, then run /update again",
+		len(tasks), strings.Join(tasks, ", "))
 }
 
 // ErrNoUpdate is "there was nothing to install", which is the ordinary

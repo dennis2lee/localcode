@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.86.0
+
+**`/update` no longer restarts the localcode you are looking at.** The daemon under the TUI is replaced; the TUI is not.
+
+The TUI is an HTTP client even when it shares a process with the daemon: it dials the loopback address the way the browser does. So the daemon can be swapped the way a web server is upgraded without dropping connections. The new binary is started with the listening socket already open and begins accepting on the same port; the old daemon stops accepting and finishes every turn and background task it has; every open stream is told (`daemon.replaced`) and then ends the way a lagging stream ends, so the TUI and the browser reconnect from their last sequence number and land on the new daemon. The screen never clears, a turn that was running finishes where it started, and the next message goes to the new version. The old process keeps running as the TUI alone; when it exits it asks the daemon it left behind to stop, and if it crashes the daemon notices the terminal's pipe closing and stops on its own.
+
+Two daemons never write one session at the same time. Each keeps a session's log in memory and hands out sequence numbers from a counter, so a second writer would collide on a number or append to a copy the first no longer has. The retiring daemon publishes which sessions it is still writing (`.handoff.json` in the sessions directory, under its process id), the new daemon answers writes to those with the 409 both clients already queue on, and reads each one again from disk the moment it is released. Scheduled bookings are not fired by the retiring daemon; the new one rebuilds them from the log and arms them itself.
+
+What stays old until the next start is the TUI's own code, which is a thin client. Not on Windows, where a socket cannot be passed to another process and the update is an MSI: there `/update` restarts, and refuses while work is running, naming what it found.
+
+**"Allow for session" now means the session, not the process.** A session grant lived in a map, so it held until the process ended: a restart, an update, or now a handoff had the model asking again for a directory it was told it could read an hour ago. The log already recorded the tool, the rule and the directory in the request and the scope in the answer; pairing them by id rebuilds the grants. `/read-outside mem-clear` writes `permission.forgotten` so the replay honours a forget in order.
+
+Also:
+
+* `GET /api/version` reports the daemon's process id, which is how a client tells one daemon from the one that replaced it on the same address.
+* `POST /api/daemon/shutdown`, loopback only, for the TUI that outlived its daemon.
+* The Web UI says, once, when the daemon under it was replaced, and that a reload gets the new interface.
+
 ## v0.85.0
 
 **localcode updates itself at startup.** A newer release is installed before anything is served, and localcode comes back on it. On by default; `"auto_update": false` in config.json turns it off, and a project's own config.json can turn it off for that checkout alone.

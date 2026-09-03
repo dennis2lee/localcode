@@ -831,6 +831,58 @@ func (s *Store) Subscribe(sessionID string) (<-chan events.Event, <-chan struct{
 // warning appended to the returned slice rather than failing the whole
 // restore — one corrupt session shouldn't take every other session down
 // with it.
+// Reload replaces what this store holds for one session with what is on
+// disk, and tells anyone streaming it to reconnect.
+//
+// For the moment a session changes hands between two processes. A
+// daemon handing itself to a newer version keeps writing the sessions
+// whose turns it is still finishing, and the new daemon loaded those
+// sessions at startup, before the last of that writing happened: its
+// copy of the log is short and its next sequence number is stale, and
+// the first event it appended would collide with one already on disk.
+// So the new daemon does not touch such a session until the old one has
+// released it, and then reads it again rather than trusting the copy.
+//
+// Subscribers are told the way a lagging one is told, because the log
+// they were reading is being replaced under them; they reconnect from
+// their last sequence and replay from the fresh copy.
+func (s *Store) Reload(id string) error {
+	if s.dir == "" {
+		return nil
+	}
+	s.mu.Lock()
+	if st, ok := s.sessions[id]; ok {
+		if st.file != nil {
+			_ = st.file.Close()
+		}
+		for _, sub := range st.subs {
+			sub.markLost()
+		}
+		delete(s.sessions, id)
+	}
+	s.mu.Unlock()
+	return s.restoreOne(s.dir, id)
+}
+
+// EndAllStreams tells every subscriber of every session to reconnect.
+//
+// A process that has stopped serving cannot hold streams open, and the
+// streams cannot simply be cut: a client reads a cut connection as the
+// daemon being gone and shows a reply that stops halfway. Marking each
+// lost is the signal the clients already handle — reconnect from the
+// last sequence and replay — and once the new daemon is on the port,
+// that reconnect lands on it.
+func (s *Store) EndAllStreams() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, st := range s.sessions {
+		for _, sub := range st.subs {
+			sub.markLost()
+		}
+		st.subs = map[int]*subscriber{}
+	}
+}
+
 func LoadAllFromDisk(dir string) (*Store, []error, error) {
 	s, err := NewStore(dir)
 	if err != nil {

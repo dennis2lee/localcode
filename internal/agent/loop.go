@@ -467,6 +467,32 @@ func (l *Loop) StopEverything(ids []string) func() {
 // being true between the two. Anything that is about to start a top-level
 // turn or create a conversation calls AdmitTopLevel instead, which decides
 // and registers in one step.
+// Drain refuses every new turn, delegation and scheduled run, then waits
+// for the ones already going, until ctx ends.
+//
+// What StopEverything does without the stopping. That one is for
+// deleting: the records the work writes to are going away, so the work
+// has to go too. This one is for handing the work to another process —
+// nothing is being deleted, and the whole point is that the turn in
+// flight finishes where it started, in the process that has its
+// history and its cache, rather than being cut off and re-run.
+//
+// Reports whether everything ended in time. The refusal is not lifted
+// on a timeout: a daemon that has begun handing over must not start
+// taking new work again, and what to do with a turn that would not end
+// is the caller's decision.
+func (l *Loop) Drain(ctx context.Context) bool {
+	if l.lifecycle == nil {
+		return true
+	}
+	done := l.lifecycle.claimAllUntil(ctx)
+	if l.Tasks != nil {
+		l.Tasks.Drain(ctx)
+		done = done && ctx.Err() == nil
+	}
+	return done
+}
+
 func (l *Loop) SessionsClosing() bool {
 	return l.lifecycle != nil && l.lifecycle.closingAll()
 }

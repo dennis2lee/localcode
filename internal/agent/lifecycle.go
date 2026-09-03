@@ -1,6 +1,9 @@
 package agent
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // The boundary between admitting work into a session tree and tearing one
 // down.
@@ -175,6 +178,41 @@ func (lc *lifecycle) claimAll() {
 	for lc.total > 0 {
 		lc.cond.Wait()
 	}
+}
+
+// claimAllUntil is claimAll with a deadline: refuse new work at once,
+// then wait for what is in flight, but give up waiting when ctx ends.
+//
+// Reports whether the wait finished. The refusal stands either way —
+// the caller decides what to do about work that would not end, and
+// releasing the claim is its call, not this function's. A cond has no
+// way to be interrupted, so a goroutine watches the context and wakes
+// the waiters when it ends; each waiter re-checks the context on
+// waking and leaves if it is done.
+func (lc *lifecycle) claimAllUntil(ctx context.Context) bool {
+	if lc == nil {
+		return true
+	}
+	lc.mu.Lock()
+	lc.closeAll++
+	lc.mu.Unlock()
+
+	stop := context.AfterFunc(ctx, func() {
+		lc.mu.Lock()
+		lc.cond.Broadcast()
+		lc.mu.Unlock()
+	})
+	defer stop()
+
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	for lc.total > 0 {
+		if ctx.Err() != nil {
+			return false
+		}
+		lc.cond.Wait()
+	}
+	return true
 }
 
 func (lc *lifecycle) releaseAll() {

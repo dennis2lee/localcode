@@ -200,6 +200,11 @@ const (
 	// are rebuilt from the log when a session is next looked at, and
 	// without this event a forget would be undone by the next restart.
 	TypePermissionForgotten Type = "permission.forgotten"
+	// TypeDaemonReplaced is sent on every stream by a daemon that has
+	// handed its address to a newer version of itself and is about to
+	// stop serving: {"version": the new one, "pid": its process id}. A
+	// client reconnects at once rather than a second later.
+	TypeDaemonReplaced Type = "daemon.replaced"
 	// TypeSessionRenamed reports a session's title changing: {"title"}.
 	TypeSessionRenamed Type = "session.renamed"
 	// TypeSessionForked opens the log of a session created by forking

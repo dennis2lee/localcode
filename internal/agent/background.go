@@ -583,6 +583,26 @@ func (tm *TaskManager) Running() []string {
 	return running
 }
 
+// RunningParents reports every conversation that a background task
+// still going will write to when it finishes: the task's own session is
+// not the only log it touches, since its result and its status land in
+// the conversation that spawned it.
+//
+// Running plus this is the full set of sessions a daemon that is
+// handing over must keep for itself until its tasks end.
+func (tm *TaskManager) RunningParents() []string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	parents := make([]string, 0, len(tm.pending))
+	for parent, tasks := range tm.pending {
+		if len(tasks) > 0 {
+			parents = append(parents, parent)
+		}
+	}
+	sort.Strings(parents)
+	return parents
+}
+
 func (tm *TaskManager) RunningIn(ids []string) []string {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()

@@ -31,6 +31,13 @@ let eventSource = null;
 // dispatch — before this table, `ev.data.name`/`ev.data.id` were dereferenced
 // unguarded and a malformed frame from the daemon could abort the handler.
 const handlers = {
+  // A daemon that handed its address to a newer version of itself, and
+  // is about to end this stream. The reconnect that follows lands on the
+  // new one on its own; what it cannot do is swap the JavaScript already
+  // running here, so the page says what a reload would get.
+  'daemon.replaced': (d) => {
+    appendTool(`localcode ${d.version || ''} took over this address. This page keeps working against it; reload for its interface.`);
+  },
   'message.user': (d) => {
     if (typeof d.text !== 'string') return;
     // A message localcode sent on the user's behalf — keep_going telling a

@@ -203,6 +203,12 @@ func (m *Model) applyEvent(ev events.Event) {
 		if note, _ := ev.Data["note"].(string); note != "" {
 			m.appendTool("[" + note + "]")
 		}
+	case events.TypeDaemonReplaced:
+		// The daemon under this TUI is a newer process now, and this
+		// stream is about to end; the reconnect lands on it on its own.
+		// Said once, because nothing else on screen changes.
+		version, _ := ev.Data["version"].(string)
+		m.appendTool("[localcode " + version + " took over this address; the next message goes to it]")
 	case events.TypeTurnCancelled:
 		m.endTurn()
 		m.appendTool("[cancelled]")

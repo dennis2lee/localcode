@@ -10,6 +10,29 @@ import (
 	"localcode/internal/config"
 )
 
+// Whether work in flight blocks an update depends on one thing: whether
+// the daemon can hand itself over instead of restarting. With a handoff
+// the work finishes where it is and is no reason to wait; without one a
+// restart would cut it, so it is refused, by name.
+func TestBusyIsARefusalOnlyWhereThereIsNoHandoff(t *testing.T) {
+	busy := []string{"S2"}
+	if err := updateWhileBusy(true, busy, nil); err != nil {
+		t.Errorf("a daemon that can hand off refused for a busy conversation: %v", err)
+	}
+	if err := updateWhileBusy(true, nil, []string{"task-1"}); err != nil {
+		t.Errorf("a daemon that can hand off refused for a background task: %v", err)
+	}
+	if err := updateWhileBusy(false, busy, nil); err == nil || !strings.Contains(err.Error(), "S2") {
+		t.Errorf("without a handoff, a busy conversation should be refused by name; got %v", err)
+	}
+	if err := updateWhileBusy(false, nil, []string{"task-1"}); err == nil || !strings.Contains(err.Error(), "task-1") {
+		t.Errorf("without a handoff, a background task should be refused by name; got %v", err)
+	}
+	if err := updateWhileBusy(false, nil, nil); err != nil {
+		t.Errorf("an idle daemon with no handoff refused: %v", err)
+	}
+}
+
 // "/update" replaces the program for every conversation on this daemon,
 // not just the one it was typed in. So the question it has to ask is a
 // daemon-wide one, and the answer has to name what it found: "something

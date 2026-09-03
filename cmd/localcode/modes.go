@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,18 +22,73 @@ import (
 )
 
 func runDaemon(configPath, listen string) error {
+	// A listener of our own rather than ListenAndServe, because a
+	// handoff has to be able to take it: the socket is what the next
+	// version inherits. Or the one we were handed, if this process is
+	// that next version.
+	in, tookOver := takingOver()
+	var ln net.Listener
+	if tookOver {
+		ln = in.ln
+	} else {
+		var err error
+		if ln, err = net.Listen("tcp", listen); err != nil {
+			return fmt.Errorf("daemon failed to start: %w", err)
+		}
+	}
+
 	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
 	if err != nil {
+		ln.Close()
 		return err
 	}
-	defer cleanup()
-	// Before the listener, which is the whole point: a headless daemon
-	// with nothing bound has no client attached and no session open, so
-	// replacing it costs nobody a turn. Once it is serving, the same
-	// update is somebody's work.
-	autoUpdateAtStartup(d, os.Stderr)
-	log.Printf("localcode daemon listening on http://%s", listen)
-	return http.ListenAndServe(listen, d.Handler())
+	var cleanupOnce sync.Once
+	cleanupOnce_ := func() { cleanupOnce.Do(cleanup) }
+	defer cleanupOnce_()
+
+	if tookOver {
+		d.NoteTakeover()
+	} else {
+		// Before the listener serves, which is the whole point: a headless
+		// daemon with nothing bound has no client attached and no session
+		// open, so replacing it costs nobody a turn. Once it is serving,
+		// the same update is somebody's work — and a handoff.
+		autoUpdateAtStartup(d, os.Stderr)
+	}
+
+	srv := &http.Server{Handler: d.Handler()}
+	d.Shutdown = func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}
+	handedOff := make(chan struct{}, 1)
+	d.Handoff = func(version string) error {
+		if err := handoffTo(d, srv, ln, in.alive, cleanupOnce_, version); err != nil {
+			return err
+		}
+		handedOff <- struct{}{}
+		return nil
+	}
+
+	log.Printf("localcode daemon listening on http://%s", ln.Addr())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ln) }()
+	if tookOver {
+		in.announceReady()
+	}
+	err = <-errCh
+	select {
+	case <-handedOff:
+		// Serve returned because the listener was closed for the
+		// successor. This process has finished its turns and is done.
+		return nil
+	default:
+	}
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 // runGUI opens a native window (see internal/gui) and builds the daemon
@@ -100,6 +157,14 @@ func runGUI(configPath string) error {
 // independently-addressable components, just sharing a process for
 // single-binary convenience.
 func runEmbedded(configPath, listen, agentName string, listenExplicit bool) error {
+	// A process started by a handoff has no terminal of its own to draw
+	// in: the TUI is still running in the process that started it. What
+	// it has is that process's listener, and it serves that until the
+	// terminal goes away.
+	if in, ok := takingOver(); ok {
+		return runSuccessor(configPath, in)
+	}
+
 	// The address is taken before the daemon is built, because one of
 	// the answers is "there is already a daemon there", and building a
 	// second one to throw away would start MCP servers and load skills
@@ -143,7 +208,12 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 		got.ln.Close()
 		return err
 	}
-	defer cleanup()
+	// Once, whichever path gets there first: a handoff runs it when the
+	// retiring daemon has drained, and the deferred call at exit must
+	// not run it again.
+	var cleanupOnce sync.Once
+	cleanupOnce_ := func() { cleanupOnce.Do(cleanup) }
+	defer cleanupOnce_()
 
 	// The update button, on the same rule as the desktop window: it
 	// replaces the program on the machine the daemon runs on, so it exists
@@ -190,7 +260,32 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 
 	// Serve, not ListenAndServe: the listener is already bound, which is
 	// what let the decision above be made before anything was built.
+	// The pipe every daemon under this terminal watches: its read end is
+	// inherited by each successor, and the write end closes when this
+	// process — the one with the TUI — exits. See handoff_unix.go.
+	alive, err := newTUIAlivePipe()
+	if err != nil {
+		got.ln.Close()
+		return fmt.Errorf("daemon failed to start: %w", err)
+	}
+
 	srv := &http.Server{Handler: d.Handler()}
+	// Set when this process has handed its daemon to a successor and is
+	// now only the TUI. On exit it then stops that successor, which has
+	// nobody else.
+	handedOff := make(chan struct{}, 1)
+	if d.AllowUpdateInstall {
+		d.Handoff = func(version string) error {
+			if err := handoffTo(d, srv, got.ln, alive.r, cleanupOnce_, version); err != nil {
+				return err
+			}
+			select {
+			case handedOff <- struct{}{}:
+			default:
+			}
+			return nil
+		}
+	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(got.ln) }()
 
@@ -203,15 +298,78 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 
 	err = runTUIClient("http://"+listen, agentName, &prog)
 	select {
+	case <-handedOff:
+		// The daemon under this TUI is another process now, and this
+		// TUI was the only thing keeping it. Asked to stop rather than
+		// left to notice the pipe closing, because a request is prompt
+		// and a pipe closing is only eventually noticed; the pipe stays
+		// as the backstop for a TUI that crashed. The write end closes
+		// with this process.
+		if serr := stopDaemonAt(listen); serr != nil {
+			fmt.Fprintf(os.Stderr, "the daemon at %s was not stopped: %v\n", listen, serr)
+		}
+		return err
 	case <-restart:
 		// Everything this process owns goes with the exec, so the daemon's
 		// cleanup runs here rather than from the deferred call above,
 		// which the exec would never reach.
-		cleanup()
+		cleanupOnce_()
 		return execSelf()
 	default:
 		return err
 	}
+}
+
+// runSuccessor is the embedded mode's daemon half alone, in a process
+// that was handed a listener by the one with the TUI. It serves until
+// asked to stop, or until the terminal it was started under goes away.
+func runSuccessor(configPath string, in inherited) error {
+	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
+	if err != nil {
+		in.ln.Close()
+		return err
+	}
+	var cleanupOnce sync.Once
+	cleanupOnce_ := func() { cleanupOnce.Do(cleanup) }
+	defer cleanupOnce_()
+
+	d.NoteTakeover()
+	listen := in.ln.Addr().String()
+	d.AllowUpdateInstall = loopbackOnly(listen)
+
+	srv := &http.Server{Handler: d.Handler()}
+	d.Shutdown = func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}
+	handedOff := make(chan struct{}, 1)
+	if d.AllowUpdateInstall {
+		d.Handoff = func(version string) error {
+			if err := handoffTo(d, srv, in.ln, in.alive, cleanupOnce_, version); err != nil {
+				return err
+			}
+			select {
+			case handedOff <- struct{}{}:
+			default:
+			}
+			return nil
+		}
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(in.ln) }()
+	in.announceReady()
+	err = <-errCh
+	select {
+	case <-handedOff:
+		return nil
+	default:
+	}
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 // runTUIClient attaches a TUI to a daemon. prog, when not nil, is handed

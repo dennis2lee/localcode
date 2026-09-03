@@ -287,6 +287,28 @@ func (s *Scheduler) arm(sessionID, id string, at time.Time) {
 	s.timers[k] = time.AfterFunc(d, func() { s.fire(sessionID, id) })
 }
 
+// Disarm stops every timer and forgets none of the bookings.
+//
+// For a daemon that is handing its work to a newer version of itself.
+// A booking is not work in flight: nothing is lost by not firing it
+// here, and the daemon taking over rebuilds every pending one from the
+// log and arms it again. Firing it here would be the one way to lose
+// something — the run would start in a process that is stopping, and
+// the new daemon, which restored the same booking as pending, would
+// start it a second time.
+func (s *Scheduler) Disarm() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for k, t := range s.timers {
+		if t.Stop() {
+			n++
+		}
+		delete(s.timers, k)
+	}
+	return n
+}
+
 // Cancel removes a booked task. Reports whether there was one.
 func (s *Scheduler) Cancel(sessionID, id string) bool {
 	k := key(sessionID, id)

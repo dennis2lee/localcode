@@ -1124,7 +1124,7 @@ Two more commands apply an edited configuration without restarting:
 
 | Command | What it does |
 |---|---|
-| `/update` | Installs the newest release and comes back on it. Refuses while anything is running anywhere on this daemon and names what it found, because the restart replaces the program for every conversation, not just the one it was typed in. The download is checked against the release's SHA-256 before it is run. Everything comes back: the session list, each conversation's history and the token totals are read from disk, and the browser reconnects on its own. What does not come back is work that was in flight, which is why it refuses rather than interrupts. Not available over `--server` (that daemon is on another machine) or on Windows (the update is an MSI, and nothing can put a console program back in the terminal it was started from). |
+| `/update` | Installs the newest release and moves this daemon onto it. Where localcode can hand itself over (the default terminal mode and a headless daemon, on macOS and Linux) it does: the new version takes the address, this one finishes whatever is running, and the next message goes to the new one. Nothing on screen restarts. See [Handing over](#handing-over). Where it cannot — the desktop window, Windows, a daemon reached over `--server` — it restarts instead, and refuses while anything is running anywhere on this daemon, naming what it found, because a restart would cut that work. The download is checked against the release's SHA-256 before it is run. |
 | `/reset-mcp` | Stops the MCP servers, re-reads their configuration from config.json, reconnects, and swaps the tools. A server removed from the file takes its tools with it; one added while the daemon runs connects. The status indicator follows. |
 | `/reset-skills` | Reloads skills from disk, against the live workspace. A skill installed or edited mid-run applies immediately, and the name completes like any other. |
 
@@ -2282,6 +2282,27 @@ Not on Windows. Applying an update there runs `msiexec`, which asks for elevatio
 #### `/update`
 
 The same install, on demand, from the prompt box in either client. It refuses while anything is running anywhere on this daemon and names what it found, because the restart replaces the program for every conversation rather than only the one it was typed in. See the [command table](#part-4-commands-and-screen-controls).
+
+#### Handing over
+
+`/update` in the terminal replaces the daemon without replacing the process you are looking at.
+
+The TUI is an HTTP client even when it shares a process with the daemon: it dials the loopback address like the browser does. So the daemon under it can be swapped the way a web server is upgraded without dropping connections:
+
+| Step | What happens |
+|---|---|
+| 1 | The new binary is downloaded, verified and written over the old one. |
+| 2 | The old daemon starts the new binary as a child and hands it the listening socket. The child begins accepting on the same port. No moment passes with nobody on it. |
+| 3 | The old daemon stops accepting and finishes what it has: every turn in flight, every background task. Scheduled bookings are not fired here; the new daemon rebuilds them from the log and arms them itself. |
+| 4 | While that runs, the old daemon publishes which sessions it is still writing (`.handoff.json` in the sessions directory). The new daemon answers writes to those with the same 409 both clients already queue on, and reads them again from disk the moment they are released. Reads pass throughout. |
+| 5 | Every open stream gets `daemon.replaced`, then ends the way a lagging stream ends; the TUI and the browser reconnect from their last sequence number and land on the new daemon. The screen does not clear. |
+| 6 | The old process keeps running as the TUI alone. When you quit it, it asks the daemon it left behind to stop (`POST /api/daemon/shutdown`); if it crashes instead, the daemon notices the terminal's pipe closing and stops on its own. |
+
+What stays old until you next start localcode is the TUI's own code. It is a thin client; the daemon is what the update is for.
+
+Two daemons never write one session at the same time: that is what step 4 is for, and it is why the manifest names a process id — a manifest left by a daemon that died mid-drain is ignored and removed.
+
+Not on Windows, where a socket cannot be passed to another process and the update is an MSI. There `/update` restarts, and refuses while work is running.
 
 #### The settings window
 
