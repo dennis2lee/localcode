@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.87.0
+
+**The handoff works on Windows.** v0.86.0 said a socket could not be passed to another process there and the update was an MSI, so `/update` restarted and refused while work was running. Both turned out to be answerable.
+
+The socket crosses as an inherited handle: `TCPListener.File` duplicates it through `WSADuplicateSocket`, the handle is marked inheritable and listed for the child, and `net.FileListener` on the other side wraps it back — all of it standard library, since the `net` package's file support became "unix or windows". The readiness and terminal-alive pipes cross the same way; their handle values travel in the environment, where Unix uses fixed descriptor numbers.
+
+A running `.exe` cannot be written over, but it can be renamed, which is what every self-updating program on the platform does: the running binary is moved aside and the new one takes its name. That serves a portable install. An install under Program Files cannot be written by this user without elevation, and a handoff must not wait on a dialog, so there the new binary is staged under `%LocalAppData%\localcode\bin` and the successor runs from it; the Program Files copy stays as it was until the settings window's install button, which runs the MSI, brings it up to date. `/update` on Windows always installs from the zip for this reason, and the install button keeps the MSI.
+
+The Windows CI run now executes the packages with Windows-only paths, including the two-process handoff test with real inherited handles, rather than only building them.
+
+Unchanged: startup auto-update stays off on Windows, since applying an MSI unasked means a UAC prompt, and a console program cannot be put back in its terminal after a restart — which is exactly why a handoff, where nothing restarts, is worth more there than anywhere.
+
 ## v0.86.0
 
 **`/update` no longer restarts the localcode you are looking at.** The daemon under the TUI is replaced; the TUI is not.

@@ -33,7 +33,7 @@ var (
 // program, which is the one step whose consequences differ per caller:
 // the button restarts a TUI it can see, and a command has to say what it
 // is about to do to the conversation it is answering in.
-func (d *Daemon) fetchLatest(ctx context.Context) (rel update.Release, path string, verified bool, err error) {
+func (d *Daemon) fetchLatest(ctx context.Context, forHandoff bool) (rel update.Release, path string, verified bool, err error) {
 	rel, err = d.updateChecker().Latest(ctx)
 	if err != nil {
 		return rel, "", false, err
@@ -41,7 +41,12 @@ func (d *Daemon) fetchLatest(ctx context.Context) (rel update.Release, path stri
 	if !update.Newer(d.Version, rel.Version) {
 		return rel, "", false, fmt.Errorf("localcode %s is %w", d.Version, errAlreadyLatest)
 	}
-	asset, err := rel.AssetFor(runtime.GOOS, runtime.GOARCH, bundledApp())
+	var asset update.Asset
+	if forHandoff {
+		asset, err = rel.HandoffAssetFor(runtime.GOOS, runtime.GOARCH, bundledApp())
+	} else {
+		asset, err = rel.AssetFor(runtime.GOOS, runtime.GOARCH, bundledApp())
+	}
 	if err != nil {
 		return rel, "", false, fmt.Errorf("%w: %v", errNoAssetForBuild, err)
 	}
@@ -122,7 +127,11 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 		return "", err
 	}
 
-	rel, path, verified, err := d.fetchLatest(context.Background())
+	// With a handoff wired the install is the one a handoff needs — a
+	// runnable binary, nothing closing this process — which on Windows is
+	// the zip rather than the MSI. See update.ApplyForHandoff.
+	handoff := d.Handoff != nil
+	rel, path, verified, err := d.fetchLatest(context.Background(), handoff)
 	switch {
 	case errors.Is(err, errAlreadyLatest):
 		return fmt.Sprintf("localcode %s is already the latest release.", d.Version), nil
@@ -130,7 +139,12 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 		return "", err
 	}
 
-	out, err := update.Apply(path)
+	var out update.Outcome
+	if handoff {
+		out, err = update.ApplyForHandoff(path)
+	} else {
+		out, err = update.Apply(path)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -153,10 +167,10 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 		if n := len(busy) + len(tasks); n > 0 {
 			fmt.Fprintf(&b, " %d conversation(s) still have work in flight and will be the last to move.", n)
 		}
-		version := rel.Version
+		version, binary := rel.Version, out.Binary
 		go func() {
 			time.Sleep(restartDelay)
-			if err := d.Handoff(version); err != nil {
+			if err := d.Handoff(version, binary); err != nil {
 				// Said on every stream, since the reply above promised
 				// something that did not happen.
 				d.daemonEvents.send(events.Event{
@@ -221,7 +235,7 @@ func (d *Daemon) InstallAtStartup(ctx context.Context) (string, error) {
 	updateMu.Lock()
 	defer updateMu.Unlock()
 
-	rel, path, verified, err := d.fetchLatest(ctx)
+	rel, path, verified, err := d.fetchLatest(ctx, false)
 	switch {
 	case errors.Is(err, errAlreadyLatest), errors.Is(err, errNoAssetForBuild):
 		// Both are "this machine has nothing to install", not a fault:

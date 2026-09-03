@@ -67,7 +67,7 @@ type Daemon struct {
 	// one finishes its turns. Wired by the process that owns the listener,
 	// which is why it is a hook. It takes the version being handed to,
 	// for the event the streams get.
-	Handoff func(version string) error
+	Handoff func(version, binary string) error
 
 	// The daemon this one replaced may still be writing some sessions.
 	// ownedAtStart is which ones it listed when this daemon started;

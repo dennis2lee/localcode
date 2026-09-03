@@ -1,5 +1,3 @@
-//go:build !windows
-
 package main
 
 import (
@@ -8,9 +6,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
@@ -50,7 +45,7 @@ func TestASuccessorTakesTheListenerAndOutlivesNothing(t *testing.T) {
 	os.Setenv("LC_HANDOFF_CHILD", "1")
 	defer os.Unsetenv("LC_HANDOFF_CHILD")
 
-	pid, err := spawnSuccessor(ln, alive.r)
+	pid, err := spawnSuccessor(os.Args[0], ln, alive.r)
 	if err != nil {
 		t.Fatalf("spawnSuccessor: %v", err)
 	}
@@ -119,15 +114,4 @@ func versionPID(t *testing.T, addr string) int {
 	}
 	t.Fatalf("no answer on %s: %v", addr, last)
 	return 0
-}
-
-func processExists(pid int) bool {
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=").Output()
-	if err != nil {
-		return false
-	}
-	// A zombie is not a running process; it is one whose exit nobody has
-	// read yet, and spawnSuccessor's Wait goroutine reads it.
-	stat := strings.TrimSpace(string(out))
-	return stat != "" && !strings.HasPrefix(stat, "Z")
 }

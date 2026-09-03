@@ -2,6 +2,7 @@ package update
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -38,11 +39,14 @@ const maxBinary = 512 << 20
 // fails to execute, and finding that out after the rename means the
 // person is left with an install that does not start.
 func selfInstall(archive, exe string) error {
-	if runtime.GOOS == "windows" {
-		// Windows holds an open image lock on the running .exe, and this
-		// platform has an MSI that does the job properly anyway.
-		return errors.New("Windows installs come from the MSI")
-	}
+	// Windows holds an open image lock on the running .exe: it cannot be
+	// written or deleted. It can be renamed, which is the whole trick, and
+	// the one every self-updating program on the platform uses: the
+	// running image keeps its file under a new name and the new file takes
+	// the old one. The rename happens below, right before the new binary
+	// takes the name; the leftover is removed on the next update, or by
+	// whoever finds it, since the process holding it is the one that
+	// cannot.
 	if strings.Contains(filepath.ToSlash(exe), ".app/Contents/MacOS/") {
 		// A .app is a directory with a signature over the whole of it.
 		// Swapping the binary inside one leaves a bundle whose Info.plist
@@ -82,6 +86,18 @@ func selfInstall(archive, exe string) error {
 	if err := runsAtAll(tmpPath); err != nil {
 		return err
 	}
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(exe); err == nil {
+			old := exe + ".old"
+			// A leftover from the update before this one, held by nobody
+			// now. Best effort: if it is somehow still held, the rename
+			// below fails and says so.
+			_ = os.Remove(old)
+			if err := os.Rename(exe, old); err != nil {
+				return fmt.Errorf("could not move the running binary aside: %w", err)
+			}
+		}
+	}
 	if err := os.Rename(tmpPath, exe); err != nil {
 		return fmt.Errorf("could not put the new binary in place: %w", err)
 	}
@@ -96,6 +112,9 @@ func selfInstall(archive, exe string) error {
 // which is also how the bare-binary tarball is told apart from the macOS
 // .app one: every entry in that one starts with "LocalCode.app/".
 func openBinary(archive string) (io.Reader, func(), error) {
+	if strings.EqualFold(filepath.Ext(archive), ".zip") {
+		return openZipBinary(archive)
+	}
 	f, err := os.Open(archive)
 	if err != nil {
 		return nil, nil, err
@@ -131,6 +150,33 @@ func openBinary(archive string) (io.Reader, func(), error) {
 }
 
 // runsAtAll checks that the downloaded binary starts on this machine.
+// openZipBinary is openBinary for the Windows archive, which holds one
+// file, localcode.exe, at its root.
+func openZipBinary(archive string) (io.Reader, func(), error) {
+	zr, err := zip.OpenReader(archive)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s is not a zip archive: %w", filepath.Base(archive), err)
+	}
+	for _, zf := range zr.File {
+		name := filepath.Clean(zf.Name)
+		if name != "localcode.exe" && name != "localcode" {
+			continue
+		}
+		if zf.UncompressedSize64 > maxBinary {
+			zr.Close()
+			return nil, nil, fmt.Errorf("the binary in %s is %d bytes, which is not a localcode", filepath.Base(archive), zf.UncompressedSize64)
+		}
+		rc, err := zf.Open()
+		if err != nil {
+			zr.Close()
+			return nil, nil, err
+		}
+		return io.LimitReader(rc, maxBinary), func() { rc.Close(); zr.Close() }, nil
+	}
+	zr.Close()
+	return nil, nil, fmt.Errorf("%s contains no localcode binary", filepath.Base(archive))
+}
+
 func runsAtAll(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

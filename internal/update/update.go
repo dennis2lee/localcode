@@ -234,6 +234,21 @@ func parseVersion(s string) ([3]int, bool) {
 // bundle rather than the bare binary; on Linux, that dpkg put it in
 // /usr/bin. Offering the other one leaves a second localcode on the
 // machine and no way to tell which is running.
+// HandoffAssetFor is AssetFor for a handoff, which needs a binary this
+// user can run without an installer: on Windows that is the zip rather
+// than the MSI, and everywhere else it is what AssetFor picks.
+func (r Release) HandoffAssetFor(goos, goarch string, packaged bool) (Asset, error) {
+	if goos == "windows" {
+		for _, a := range r.Assets {
+			if strings.HasSuffix(a.Name, "-windows-"+goarch+".zip") {
+				return a, nil
+			}
+		}
+		return Asset{}, fmt.Errorf("release %s has no windows/%s zip to hand off to", r.Version, goarch)
+	}
+	return r.AssetFor(goos, goarch, packaged)
+}
+
 func (r Release) AssetFor(goos, goarch string, packaged bool) (Asset, error) {
 	want := func(suffixes ...string) (Asset, bool) {
 		for _, suffix := range suffixes {

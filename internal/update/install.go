@@ -25,6 +25,13 @@ type Outcome struct {
 	// Path is where the downloaded file is, which is the whole answer on a
 	// platform where localcode cannot install for you.
 	Path string `json:"path"`
+	// Binary is the program to run as the new version, when Replaced is
+	// set. Usually the same path this process was started from, now
+	// holding the new file; on a Windows install under Program Files it
+	// is a copy staged where this user can write, because the installed
+	// one cannot be replaced without elevation and a handoff must not
+	// wait on a dialog.
+	Binary string `json:"binary,omitempty"`
 	// Detail is what to tell the user, in one sentence.
 	Detail string `json:"detail"`
 }
@@ -112,6 +119,68 @@ func apply(path string, target func() (string, error)) (Outcome, error) {
 	return Outcome{
 		Replaced: true,
 		Path:     path,
+		Binary:   exe,
 		Detail:   "installed over " + exe,
 	}, nil
+}
+
+// ApplyForHandoff installs an update the way a handoff needs it: the new
+// program has to exist on disk, runnable by this user, without anything
+// closing the running one.
+//
+// Everywhere but Windows that is Apply. On Windows the packaged install
+// is an MSI under Program Files, and applying one runs msiexec, which
+// asks for elevation and then closes localcode to replace its files —
+// two things a handoff cannot have. So the archive is the zip, and the
+// binary goes where this user can write: over the running one if that
+// directory is writable (a portable install), and otherwise into a
+// staging directory of localcode's own. The Program Files copy stays as
+// it was; the settings window's install button, which runs the MSI, is
+// how that copy is brought up to date.
+func ApplyForHandoff(path string) (Outcome, error) {
+	if runtime.GOOS != "windows" {
+		return Apply(path)
+	}
+	exe, err := currentBinary()
+	if err != nil {
+		return Outcome{Path: path}, fmt.Errorf("find this program: %w", err)
+	}
+	if dirWritable(filepath.Dir(exe)) {
+		if err := selfInstall(path, exe); err != nil {
+			return Outcome{Path: path}, err
+		}
+		return Outcome{Replaced: true, Path: path, Binary: exe, Detail: "installed over " + exe}, nil
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return Outcome{Path: path}, fmt.Errorf("no directory to stage the new localcode in: %w", err)
+	}
+	staged := filepath.Join(base, "localcode", "bin", filepath.Base(exe))
+	if err := os.MkdirAll(filepath.Dir(staged), 0o755); err != nil {
+		return Outcome{Path: path}, err
+	}
+	if err := selfInstall(path, staged); err != nil {
+		return Outcome{Path: path}, err
+	}
+	return Outcome{
+		Replaced: true,
+		Path:     path,
+		Binary:   staged,
+		Detail: "staged at " + staged + " and running from there; the copy under " + filepath.Dir(exe) +
+			" is still the old version, and the settings window's install button updates it",
+	}, nil
+}
+
+// dirWritable reports whether this user can create a file in dir, which
+// on Windows is the difference between a portable install and one under
+// Program Files.
+func dirWritable(dir string) bool {
+	f, err := os.CreateTemp(dir, ".localcode-probe-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+	return true
 }

@@ -63,8 +63,8 @@ func runDaemon(configPath, listen string) error {
 		_ = srv.Shutdown(ctx)
 	}
 	handedOff := make(chan struct{}, 1)
-	d.Handoff = func(version string) error {
-		if err := handoffTo(d, srv, ln, in.alive, cleanupOnce_, version); err != nil {
+	d.Handoff = func(version, binary string) error {
+		if err := handoffTo(d, srv, ln, in.alive, cleanupOnce_, version, binary); err != nil {
 			return err
 		}
 		handedOff <- struct{}{}
@@ -275,8 +275,8 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 	// nobody else.
 	handedOff := make(chan struct{}, 1)
 	if d.AllowUpdateInstall {
-		d.Handoff = func(version string) error {
-			if err := handoffTo(d, srv, got.ln, alive.r, cleanupOnce_, version); err != nil {
+		d.Handoff = func(version, binary string) error {
+			if err := handoffTo(d, srv, got.ln, alive.r, cleanupOnce_, version, binary); err != nil {
 				return err
 			}
 			select {
@@ -345,8 +345,8 @@ func runSuccessor(configPath string, in inherited) error {
 	}
 	handedOff := make(chan struct{}, 1)
 	if d.AllowUpdateInstall {
-		d.Handoff = func(version string) error {
-			if err := handoffTo(d, srv, in.ln, in.alive, cleanupOnce_, version); err != nil {
+		d.Handoff = func(version, binary string) error {
+			if err := handoffTo(d, srv, in.ln, in.alive, cleanupOnce_, version, binary); err != nil {
 				return err
 			}
 			select {

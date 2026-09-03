@@ -101,6 +101,16 @@ jobs:
       # nowhere useful from this binary — those belong to the regular
       # console-subsystem localcode.exe, which ships in the same MSI.
 
+      # The packages with Windows-only code paths, run on Windows. The
+      # handoff test in cmd/localcode starts this test binary as a
+      # successor with inherited handles, which no other platform can
+      # stand in for; the update package's rename-and-replace is the
+      # same story. Nothing here needs CGo.
+      - name: Test the Windows code paths
+        run: go test ./cmd/localcode/ ./internal/update/ ./internal/daemon/ ./internal/session/ ./internal/childproc/
+        env:
+          CGO_ENABLED: '0'
+
       - name: Build GUI (-tags gui, CGo)
         env:
           CGO_ENABLED: '1'

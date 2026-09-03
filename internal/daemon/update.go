@@ -122,7 +122,7 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 			"this localcode cannot install updates for you; download it from %s", d.updateSource()))
 		return
 	}
-	rel, path, verified, err := d.fetchLatest(r.Context())
+	rel, path, verified, err := d.fetchLatest(r.Context(), false)
 	if err != nil {
 		writeError(w, updateHTTPStatus(err), err)
 		return

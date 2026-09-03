@@ -1124,7 +1124,7 @@ Two more commands apply an edited configuration without restarting:
 
 | Command | What it does |
 |---|---|
-| `/update` | Installs the newest release and moves this daemon onto it. Where localcode can hand itself over (the default terminal mode and a headless daemon, on macOS and Linux) it does: the new version takes the address, this one finishes whatever is running, and the next message goes to the new one. Nothing on screen restarts. See [Handing over](#handing-over). Where it cannot — the desktop window, Windows, a daemon reached over `--server` — it restarts instead, and refuses while anything is running anywhere on this daemon, naming what it found, because a restart would cut that work. The download is checked against the release's SHA-256 before it is run. |
+| `/update` | Installs the newest release and moves this daemon onto it without restarting what you are looking at: the new version takes the address, this one finishes whatever is running, and the next message goes to the new one. See [Handing over](#handing-over). Where a handoff is not available — a daemon reached over `--server` — it restarts instead, and refuses while anything is running anywhere on this daemon, naming what it found. The download is checked against the release's SHA-256 before it is run. |
 | `/reset-mcp` | Stops the MCP servers, re-reads their configuration from config.json, reconnects, and swaps the tools. A server removed from the file takes its tools with it; one added while the daemon runs connects. The status indicator follows. |
 | `/reset-skills` | Reloads skills from disk, against the live workspace. A skill installed or edited mid-run applies immediately, and the name completes like any other. |
 
@@ -2302,7 +2302,9 @@ What stays old until you next start localcode is the TUI's own code. It is a thi
 
 Two daemons never write one session at the same time: that is what step 4 is for, and it is why the manifest names a process id — a manifest left by a daemon that died mid-drain is ignored and removed.
 
-Not on Windows, where a socket cannot be passed to another process and the update is an MSI. There `/update` restarts, and refuses while work is running.
+On Windows too, with two differences that follow from the platform. A socket crosses to the new process as an inherited handle rather than a descriptor number, which the Go runtime has supported since its `net` package's file support became "unix or windows". And a running `.exe` cannot be written over, but it can be renamed: a portable install (the zip) moves the running binary aside and puts the new one under its name. An install under Program Files cannot be written by this user without elevation, and a handoff must not wait on a dialog, so the new binary is staged under the user's own cache directory (`%LocalAppData%\localcode\bin`) and the successor runs from there; the copy under Program Files stays as it was until the settings window's install button, which runs the MSI, brings it up to date. `/update` on Windows always installs from the zip, for this reason.
+
+What Windows still cannot do is bring a console program back into the terminal it was started from after a restart. That is exactly why a handoff, where nothing restarts, is worth more there than anywhere: the desktop window and the terminal both keep running through an update.
 
 #### The settings window
 
