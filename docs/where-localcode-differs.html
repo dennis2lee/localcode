@@ -595,7 +595,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <li><strong>Part 2 is not uniformly unique.</strong> Sharing one live session between front ends, and moving the view between your own turns, are uncommon. Rename, reorder and fork are conveniences that several tools have in some form; they are here because this page is also about what using localcode is like.</li>
 <li><strong>Every localcode claim is a shipped behaviour</strong> at v0.84.0, documented in <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> and covered by the repository's test gate.</li>
 <li><strong>Benchmark numbers are one run of 25 instances</strong> and the spread between agents is inside run-to-run variance. See the <a href="coding-agent-benchmark.html">benchmark page</a> for what it does and does not support.</li>
-<li><strong>Two capabilities are marked experimental</strong> in the product: the native desktop window, and update-in-place on Windows, which applies but does not restart localcode.</li>
+<li><strong>One capability is marked experimental</strong> in the product: the native desktop window. Updating on Windows was the other at v0.84.0, when it applied the new version but could not restart localcode; since v0.87.0 it hands the daemon over like every other platform, and since v0.88.0 it does so at startup as well.</li>
 </ul>
 
 <footer>

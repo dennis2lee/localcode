@@ -160,16 +160,17 @@ Completed findings remain in this list to preserve item numbers and release hist
 
     * Dictation, the speech engine, and the Windows installer model download were removed.
 
-20. **Update rollback and installer verification. Mostly closed in v0.50.0; remaining gaps open.**
+20. **Update rollback and installer verification. Mostly closed in v0.50.0; handoff since v0.86.0; remaining gaps open.**
 
     * Writable binary installations are unpacked beside the existing binary, execution-checked, and renamed into place.
-    * Since v0.53.0, localcode restarts into the replacement.
+    * v0.53.0 restarted into the replacement. Since v0.86.0 the terminal hands the daemon over instead: `/update` starts the new binary on the listening socket and the old daemon finishes its turns. Since v0.85.0 the update is also applied at startup (`auto_update` turns it off), and since v0.88.0 that includes Windows, by a handoff before anything is served.
     * `/usr/bin` installations receive an `apt install` command.
     * `LocalCode.app` is replaced as a bundle.
-    * Windows amd64 uses `msiexec`. Windows arm64 has no MSI.
-    * No automatic rollback. Recovery requires a previous release installer or archive.
+    * Windows: `/update` and the startup update install from the zip on both architectures, without elevation. A writable install renames the running `.exe` to `.old` and takes its name; an install under Program Files is staged under `%LocalAppData%\localcode\bin` and the successor runs from there. The MSI runs only from the settings window's button. Windows arm64 has no MSI.
+    * No automatic rollback. On Windows the `.old` copy beside a writable install is a manual one; it is removed by the next update, never at startup. Elsewhere recovery requires a previous release installer or archive.
+    * The staged copy under `%LocalAppData%` is written by localcode, not the installer, and the MSI's uninstall does not remove it.
     * Download integrity uses the asset SHA-256 recorded by GitHub. This is not a signature. Release trust depends on the repository and TLS.
-    * The `msiexec` path has not been run from the Mac development machine. `internal/update` tests use a controlled server.
+    * The `msiexec` path has not been run from the Mac development machine. `internal/update` tests use a controlled server. The startup handoff on Windows is verified in parts on the Windows CI runner (two-process handoff, rename install, window proxy); the assembled path needs a release server and has not been run end to end.
 
 21. **Published speech engines for macOS and Linux. Closed by removal in v0.53.0.**
 
@@ -384,6 +385,12 @@ Completed findings remain in this list to preserve item numbers and release hist
         * `TestDaemonEndToEnd` pastes a Windows path into JSON unescaped: `invalid character 'U' in string escape code`.
         * Tests isolating `HOME` did not set `USERPROFILE`, which is what `os.UserHomeDir` reads on Windows. Fixed at the three sites in `cmd/localcode`; others may exist in packages the job does not run yet.
     * Once a package is clean, drop it from the `-run` filter in `.github/workflows/gui-windows.yml` so the whole package runs.
+
+42. **Handoff for `/update` inside the desktop window. Open.**
+
+    * The window serves the daemon's handler in its own process and wires no `Handoff` hook (`runGUI` in `cmd/localcode/modes.go`), so `/update` typed in the window takes the installer path: the MSI on Windows, the bundle replacement on macOS, and a reply asking for the window to be reopened. Anything else running is a refusal, as it was in the terminal before v0.86.0.
+    * The update at startup already runs the window against a successor through `successorProxy` (v0.88.0). The same proxy makes a mid-session handoff possible: bind a fresh loopback listener, spawn the successor on it, retire the in-process daemon, and swap the window's handler to the proxy. The browse and reveal routes stay in the window process as they do at startup.
+    * Until then USAGE says so in "Handing over".
 
 ## UI ideas
 

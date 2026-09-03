@@ -1124,7 +1124,7 @@ Two more commands apply an edited configuration without restarting:
 
 | Command | What it does |
 |---|---|
-| `/update` | Installs the newest release and moves this daemon onto it without restarting what you are looking at: the new version takes the address, this one finishes whatever is running, and the next message goes to the new one. See [Handing over](#handing-over). Where a handoff is not available — a daemon reached over `--server` — it restarts instead, and refuses while anything is running anywhere on this daemon, naming what it found. The download is checked against the release's SHA-256 before it is run. |
+| `/update` | Installs the newest release and moves this daemon onto it without restarting what you are looking at: the new version takes the address, this one finishes whatever is running, and the next message goes to the new one. See [Handing over](#handing-over). Where a handoff is not available — the desktop window, or a daemon reached over `--server` — it installs through the platform's installer or restarts instead, and refuses while anything is running anywhere on this daemon, naming what it found. The download is checked against the release's SHA-256 before it is run. |
 | `/reset-mcp` | Stops the MCP servers, re-reads their configuration from config.json, reconnects, and swaps the tools. A server removed from the file takes its tools with it; one added while the daemon runs connects. The status indicator follows. |
 | `/reset-skills` | Reloads skills from disk, against the live workspace. A skill installed or edited mid-run applies immediately, and the name completes like any other. |
 
@@ -2288,7 +2288,7 @@ The Program Files copy is brought up to date by the settings window's install bu
 
 #### `/update`
 
-The same install, on demand, from the prompt box in either client. It refuses while anything is running anywhere on this daemon and names what it found, because the restart replaces the program for every conversation rather than only the one it was typed in. See the [command table](#part-4-commands-and-screen-controls).
+The same install, on demand, from the prompt box in either client. In the terminal it hands the daemon over (next section), so whatever is running finishes on the old daemon and nothing is refused. Where no handoff is possible — the desktop window, or a daemon reached over `--server` — the install goes through the platform's installer or a restart, which would cut work in flight; there it refuses while anything is running anywhere on this daemon and names what it found. See the [command table](#part-4-commands-and-screen-controls).
 
 #### Handing over
 
@@ -2311,7 +2311,7 @@ Two daemons never write one session at the same time: that is what step 4 is for
 
 On Windows too, with two differences that follow from the platform. A socket crosses to the new process as an inherited handle rather than a descriptor number, which the Go runtime has supported since its `net` package's file support became "unix or windows". And a running `.exe` cannot be written over, but it can be renamed: a portable install (the zip) moves the running binary aside and puts the new one under its name. An install under Program Files cannot be written by this user without elevation, and a handoff must not wait on a dialog, so the new binary is staged under the user's own cache directory (`%LocalAppData%\localcode\bin`) and the successor runs from there; the copy under Program Files stays as it was until the settings window's install button, which runs the MSI, brings it up to date. `/update` on Windows always installs from the zip, for this reason.
 
-What Windows still cannot do is bring a console program back into the terminal it was started from after a restart. That is exactly why a handoff, where nothing restarts, is worth more there than anywhere: the desktop window and the terminal both keep running through an update.
+What Windows still cannot do is bring a console program back into the terminal it was started from after a restart. That is exactly why a handoff, where nothing restarts, is worth more there than anywhere: the terminal keeps running through `/update`, and the desktop window through the update at startup. `/update` typed inside the window is the one case without a handoff yet: it runs the platform's installer and asks you to reopen the window.
 
 #### The settings window
 

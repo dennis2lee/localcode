@@ -122,8 +122,8 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 	// What is running decides how the update lands, not whether. With a
 	// handoff wired, work in flight is the reason to hand off rather
 	// than restart: the new daemon takes the address and this one
-	// finishes its turns. Without one — a desktop window, Windows, a
-	// daemon attached over the network — a restart is the only way back
+	// finishes its turns. Without one — a desktop window, a daemon
+	// attached over the network — a restart is the only way back
 	// onto the new binary, and it would cut that work, so it is refused
 	// and the refusal names what it found.
 	busy := othersThan(d.turns.running(), sessionID)
