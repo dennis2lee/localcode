@@ -273,3 +273,29 @@ func TestApplyHandsBackTheCommandForADebianPackage(t *testing.T) {
 		t.Errorf("the answer does not give the install command: %q", out.Detail)
 	}
 }
+
+// A build with no version stamped into it must never look older than a
+// release.
+//
+// This became load-bearing when updating moved to startup. "go build -o
+// localcode ./cmd/localcode" leaves version at its default "dev", and if
+// that compared as older than the newest tag, the first run of every
+// development build would download a release and exec into it — replacing
+// the binary somebody had just compiled, with no way to tell that is what
+// happened. The same goes for any string that is not a version: the safe
+// reading of "I do not know what I am" is "not older than anything".
+func TestAnUnversionedBuildIsNeverOlderThanARelease(t *testing.T) {
+	// Strings that are not versions at all. "0.0.0-dirty" is deliberately
+	// not in this list: it parses, 0.0.0 really is older than 9.9.9, and
+	// asserting otherwise would be asking the comparison to be wrong.
+	for _, current := range []string{"dev", "", "unknown", "devel", "not a version"} {
+		if Newer(current, "9.9.9") {
+			t.Errorf("Newer(%q, \"9.9.9\") = true; a build that cannot say what version it is would replace itself on startup", current)
+		}
+	}
+	// And the ordinary case still works, or the test above passes for the
+	// wrong reason.
+	if !Newer("0.84.1", "0.85.0") {
+		t.Error("Newer(\"0.84.1\", \"0.85.0\") = false; the comparison itself is broken")
+	}
+}

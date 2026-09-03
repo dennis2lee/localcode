@@ -160,6 +160,8 @@
   "read_outside_workspace": false,
   "//write_outside_workspace": "The same for writing (write_file, edit). Separate from reading because they are not the same risk. /write-outside.",
   "write_outside_workspace": false,
+  "//auto_update": "Whether a newer release is installed at startup, before anything is served. On unless set to false. Startup is the one moment with no turn in flight and no background task to lose, which is why this is where it happens; /update does the same thing on demand and refuses while work is running.",
+  "auto_update": true,
   "//auto_compact_enabled": "Whether a conversation is summarized automatically once it fills the share of the context window set below. On unless set to false. /auto-compact on|off toggles it and saves the answer here; /compact still compacts by hand either way.",
   "auto_compact_enabled": true,
   "//auto_compact_percent": "The context-window fill that triggers automatic compaction, as a percent. 50 unless set; /auto-compact <percent> changes it live and saves it here.",

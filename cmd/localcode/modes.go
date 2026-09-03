@@ -25,6 +25,11 @@ func runDaemon(configPath, listen string) error {
 		return err
 	}
 	defer cleanup()
+	// Before the listener, which is the whole point: a headless daemon
+	// with nothing bound has no client attached and no session open, so
+	// replacing it costs nobody a turn. Once it is serving, the same
+	// update is somebody's work.
+	autoUpdateAtStartup(d, os.Stderr)
 	log.Printf("localcode daemon listening on http://%s", listen)
 	return http.ListenAndServe(listen, d.Handler())
 }
@@ -153,6 +158,13 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 	// in: the binary is the user's own, so replacing it needs nobody's
 	// password.
 	d.AllowUpdateInstall = loopbackOnly(listen)
+
+	// And before the TUI, for the same reason the headless path does it
+	// before its listener: nothing has been drawn, no conversation has
+	// been opened, and the exec below costs a moment of startup rather
+	// than somebody's turn. It is also the one place the terminal does
+	// not have to be handed back first — the TUI has not taken it yet.
+	autoUpdateAtStartup(d, os.Stderr)
 
 	// Coming back up on the new binary once an update has replaced it.
 	//

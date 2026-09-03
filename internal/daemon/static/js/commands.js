@@ -34,6 +34,7 @@ export const HELP_TEXT = [
   '  /config            show current settings (auto_compact, show_tps, auto_delegate)',
   '  /auto-compact [on|off|<percent>]  toggle auto-compaction, or set its threshold (default 50%)',
   '  /keep-going [on|off]  toggle the carry-on nudge for muse models',
+  '  /update             install the newest release and come back on it; refuses while anything is running',
   '  /reset-mcp          reconnect MCP servers and pick up config changes, no restart',
   '  /reset-skills       reload skills from disk, no restart',
   '  /config show_tps on|off       toggle the tokens/sec display under the prompt',

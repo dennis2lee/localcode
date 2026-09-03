@@ -1124,6 +1124,7 @@ Two more commands apply an edited configuration without restarting:
 
 | Command | What it does |
 |---|---|
+| `/update` | Installs the newest release and comes back on it. Refuses while anything is running anywhere on this daemon and names what it found, because the restart replaces the program for every conversation, not just the one it was typed in. The download is checked against the release's SHA-256 before it is run. Everything comes back: the session list, each conversation's history and the token totals are read from disk, and the browser reconnects on its own. What does not come back is work that was in flight, which is why it refuses rather than interrupts. Not available over `--server` (that daemon is on another machine) or on Windows (the update is an MSI, and nothing can put a console program back in the terminal it was started from). |
 | `/reset-mcp` | Stops the MCP servers, re-reads their configuration from config.json, reconnects, and swaps the tools. A server removed from the file takes its tools with it; one added while the daemon runs connects. The status indicator follows. |
 | `/reset-skills` | Reloads skills from disk, against the live workspace. A skill installed or edited mid-run applies immediately, and the name completes like any other. |
 
@@ -2266,14 +2267,32 @@ Reasoning written into the answer itself, between `<think>` tags, is not separat
 
 ### Checking for updates
 
-The settings window's **Updates** section checks or installs only when a button is clicked.
+Three ways: at startup, `/update`, and the settings window.
+
+#### At startup
+
+localcode installs a newer release before it starts serving, and comes back on it. On by default; `"auto_update": false` in config.json turns it off, and a project's own config.json can turn it off for that checkout alone.
+
+Startup is where this belongs because of what an update costs rather than what it gains. Replacing the binary means `exec`, and `exec` ends every turn in flight and every background task with it. At startup there are none: nothing is being said to a model, no shell command is running, and the conversations it would interrupt have not been opened yet. So the update that would be rude at any other moment is free here, which is why it is the only place localcode replaces itself without being asked.
+
+It cannot fail into not starting. No release, no network, no asset for this platform, a refused write, a download that did not match its checksum: each one ends with localcode starting normally on the build it already had. The check is given four seconds, so a machine with no route to GitHub costs a pause and not a hang. A failure that is not simply "nothing to install" is printed, because somebody who turned this on is owed the reason it did nothing.
+
+Not on Windows. Applying an update there runs `msiexec`, which asks for elevation with a dialog, and afterwards nothing can put a console program back in the terminal it was started from. An update that cannot finish is not one to start unasked, so Windows keeps the settings window's button, where a person clicked something.
+
+#### `/update`
+
+The same install, on demand, from the prompt box in either client. It refuses while anything is running anywhere on this daemon and names what it found, because the restart replaces the program for every conversation rather than only the one it was typed in. See the [command table](#part-4-commands-and-screen-controls).
+
+#### The settings window
+
+The **Updates** section checks or installs only when a button is clicked.
 
 | Button | What it does |
 | --- | --- |
 | Check for updates | Compares the current build with the latest GitHub release or configured `update_url`. See [Custom update sources](#updating-from-somewhere-other-than-github). |
 | Download and install | Downloads, verifies, and installs a supported update. Shown only for a newer version that this daemon can install. See [Platform behavior](#what-installing-does-per-platform). |
 
-No update check runs on a timer or when the panel opens.
+No update check runs on a timer, and opening the panel checks nothing. The startup check above is the one that happens without a click, and it happens once, at startup.
 
 #### What installing does, per platform
 

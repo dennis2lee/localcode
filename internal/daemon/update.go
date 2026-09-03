@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -110,49 +109,22 @@ func (d *Daemon) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 // handleUpdateInstall downloads the release and hands it to the platform's
 // installer.
 func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
-	if !d.AllowUpdateInstall {
-		writeError(w, http.StatusForbidden, fmt.Errorf("this localcode cannot install updates for you; download it from https://github.com/%s/releases", update.DefaultRepo))
-		return
-	}
-
 	updateMu.Lock()
 	defer updateMu.Unlock()
 
-	rel, err := d.updateChecker().Latest(r.Context())
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+	// No busy check here, unlike "/update". This button is clicked by
+	// somebody looking at the window that shows them the turn they would
+	// be interrupting; a command typed in one conversation replaces the
+	// program for every conversation, including the ones nobody is
+	// watching. See Daemon.SelfUpdate.
+	if !d.AllowUpdateInstall {
+		writeError(w, http.StatusForbidden, fmt.Errorf(
+			"this localcode cannot install updates for you; download it from %s", d.updateSource()))
 		return
 	}
-	if !update.Newer(d.Version, rel.Version) {
-		writeError(w, http.StatusConflict, fmt.Errorf("localcode %s is already the latest release", d.Version))
-		return
-	}
-	asset, err := rel.AssetFor(runtime.GOOS, runtime.GOARCH, bundledApp())
+	rel, path, verified, err := d.fetchLatest(r.Context())
 	if err != nil {
-		writeError(w, http.StatusNotImplemented, err)
-		return
-	}
-
-	dir, err := updateDir()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	// Deliberately not r.Context(): a browser that gives up on a slow
-	// download would otherwise abort a twenty-megabyte transfer most of
-	// the way through, and the client's own request has a deadline it
-	// cannot usefully hold for the whole of one.
-	// A file share publishes the installer and usually nothing else, so
-	// there is no size and no checksum to check the download against. A
-	// sibling "<asset>.sha256" is used when somebody published one; when
-	// nobody did, the reply says the download could not be verified
-	// rather than leaving that unsaid.
-	if d.Loop.Config.UpdateURL != "" && asset.Digest == "" {
-		asset.Digest = d.updateChecker().DigestFor(r.Context(), asset.URL)
-	}
-	path, err := update.Download(context.Background(), nil, asset, dir)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		writeError(w, updateHTTPStatus(err), err)
 		return
 	}
 	out, err := update.Apply(path)
@@ -174,7 +146,7 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 		// published checksum. False is not a failure and is not hidden:
 		// it is a true thing about a file that has just been run as an
 		// installer, and the panel says it.
-		"verified":   asset.Digest != "",
+		"verified":   verified,
 		"started":    out.Started,
 		"replaced":   out.Replaced,
 		"restarting": restarting,

@@ -8,6 +8,11 @@ import (
 	"syscall"
 )
 
+// selfRestartAvailable says localcode can come back as the new version
+// under its own power, which is what makes updating at startup worth
+// offering here and not on Windows.
+const selfRestartAvailable = true
+
 // execSelf replaces this process with the binary at its own path.
 //
 // exec rather than spawn-and-exit, and that is the whole reason this is

@@ -146,6 +146,18 @@ type Config struct {
 	// to forbid something would be a different, much worse promise.
 	SkipPermissions *bool `json:"skip_permissions,omitempty"`
 
+	// AutoUpdate toggles installing a newer release at startup, before
+	// anything is served and before any conversation is opened.
+	//
+	// Startup is the moment with nothing to lose: no turn is in flight,
+	// no background task is running, and the exec that follows costs the
+	// same terminal a moment rather than costing somebody their work. It
+	// is the only moment localcode replaces itself without being asked,
+	// which is why the switch is here and why turning it off is one line.
+	//
+	// A nil pointer means unset, defaulting to on.
+	AutoUpdate *bool `json:"auto_update,omitempty"`
+
 	// UpdateURL, when set, is where the update button looks instead of
 	// GitHub: one https address at which the current installers are
 	// published, side by side, named the way localcode names them.
@@ -281,6 +293,12 @@ func (c *Config) MemoryEnabled() bool {
 // when AutoCompactEnabled is unset.
 func (c *Config) CompactEnabled() bool {
 	return c.AutoCompactEnabled == nil || *c.AutoCompactEnabled
+}
+
+// AutoUpdateEnabled reports whether localcode installs a newer release at
+// startup — the default when AutoUpdate is unset.
+func (c *Config) AutoUpdateEnabled() bool {
+	return c.AutoUpdate == nil || *c.AutoUpdate
 }
 
 // DefaultCompactPercent is the context-window fill that triggers

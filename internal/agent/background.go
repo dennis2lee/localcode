@@ -565,6 +565,24 @@ func (tm *TaskManager) Drain(ctx context.Context) {
 // the records the work writes to, so it has to stop the work; an archive
 // is not, so it refuses instead and leaves the tasks alone. Killing work
 // nobody asked to kill is the silent side effect that would be.
+// Running reports every session with a background task still going,
+// across the whole daemon.
+//
+// RunningIn's question is "may I archive this conversation", which is
+// about one session and its children. This one's is "may I replace the
+// program", which is about all of them: the exec that follows an update
+// takes every session's work with it, not just the one that asked.
+func (tm *TaskManager) Running() []string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	running := make([]string, 0, len(tm.cancels))
+	for id := range tm.cancels {
+		running = append(running, id)
+	}
+	sort.Strings(running)
+	return running
+}
+
 func (tm *TaskManager) RunningIn(ids []string) []string {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()

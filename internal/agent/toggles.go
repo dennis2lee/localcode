@@ -384,6 +384,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories"},
 		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models"},
 		{Name: "auto-compact", Description: "toggle auto-compaction, or set its threshold with a percent"},
+		{Name: "update", Description: "install the newest release and come back on it; refuses while anything is running"},
 		{Name: "reset-mcp", Description: "reconnect MCP servers and pick up config changes without a restart"},
 		{Name: "reset-skills", Description: "reload skills from disk without a restart"},
 		{Name: "compact", Description: "summarize the conversation now, optionally with instructions"},
@@ -495,6 +496,36 @@ func (l *Loop) routeResetMCP(sessionID, text string) (bool, error) {
 	report, err := l.ReloadMCP()
 	if err != nil {
 		return true, l.replyText(sessionID, "MCP reload failed: "+err.Error())
+	}
+	return true, l.replyText(sessionID, report)
+}
+
+// routeUpdate answers "/update": install the newest release and come back
+// on it.
+//
+// A hook rather than an implementation, like the two reloads above. What
+// is different is that this one cannot finish what it started in this
+// process — the point of it is that the process is replaced — so the
+// reply has to be written and appended before the restart it describes,
+// not after.
+func (l *Loop) routeUpdate(sessionID, text string) (bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(text), "/update") {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+	if l.SelfUpdate == nil {
+		// A TUI attached to somebody else's daemon, or a build with no
+		// installer wired. Naming the reason rather than the symptom: the
+		// program that would be replaced is not the one this conversation
+		// is running in.
+		return true, l.replyText(sessionID,
+			"this localcode cannot install updates for itself. "+
+				"A daemon reached over --server is not this machine's to replace, "+
+				"and a packaged build is updated by its package manager.")
+	}
+	report, err := l.SelfUpdate(sessionID)
+	if err != nil {
+		return true, l.replyText(sessionID, "update: "+err.Error())
 	}
 	return true, l.replyText(sessionID, report)
 }

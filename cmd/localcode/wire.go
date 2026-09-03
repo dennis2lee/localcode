@@ -286,6 +286,13 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 
 	d := daemon.New(loop, broker, tasks, mcpManager, daemon.WebFS(), version)
 
+	// "/update": the same install the settings window's button performs,
+	// reached from the prompt box so the TUI has it too. The daemon owns
+	// it because everything the refusal is made of is the daemon's — which
+	// sessions have a turn in flight, which have a background task, and
+	// whether this process is one that may replace its own binary.
+	loop.SelfUpdate = d.SelfUpdate
+
 	// "/reset-skills": reload from disk, against the *live* workspace
 	// rather than the directory the daemon started in, which is itself a
 	// small fix — a workspace switched at runtime used to keep serving

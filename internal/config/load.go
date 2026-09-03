@@ -152,6 +152,12 @@ func (c *Config) merge(other *Config) {
 	if other.AutoCompactEnabled != nil {
 		c.AutoCompactEnabled = other.AutoCompactEnabled
 	}
+	// Merged, so a project can say "not while working here" — a checkout
+	// pinned to a version, or one whose tooling is being bisected, has a
+	// real reason not to be moved off the build it was left on.
+	if other.AutoUpdate != nil {
+		c.AutoUpdate = other.AutoUpdate
+	}
 	if other.AutoCompactPercent != 0 {
 		c.AutoCompactPercent = other.AutoCompactPercent
 	}

@@ -4,6 +4,19 @@ package main
 
 import "fmt"
 
+// selfRestartAvailable is false here, and that decides more than the
+// wording of one reply: it is why localcode does not update itself at
+// startup on Windows.
+//
+// The Windows update is an MSI, and applying one runs msiexec, which asks
+// for elevation with a dialog. Doing that unasked, before the program has
+// drawn anything, would turn every startup after a release into a UAC
+// prompt for something nobody initiated — and at the end of it localcode
+// still could not come back into the terminal it was started from. The
+// settings window's button stays the way Windows updates, because there a
+// person clicked something.
+const selfRestartAvailable = false
+
 // execSelf is never reached on Windows.
 //
 // There is no exec: a Windows process cannot replace its own image, and

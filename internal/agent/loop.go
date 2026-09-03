@@ -170,6 +170,17 @@ type Loop struct {
 	ReloadMCP    func() (string, error)
 	ReloadSkills func() (string, error)
 
+	// SelfUpdate, if set, backs "/update": install the newest release and
+	// bring localcode back on it. Wired by the daemon for the same reason
+	// the two above are — everything it needs (which sessions have a turn
+	// in flight, whether this process is one that may replace its own
+	// binary, how to restart) lives above this package.
+	//
+	// It takes the session that asked so it can leave that session's own
+	// turn out of "is anything running": the turn recorded against it is
+	// this command.
+	SelfUpdate func(sessionID string) (string, error)
+
 	// ConfigPath is the config.json the toggle commands write to, so a
 	// switch flipped at the prompt survives a restart the way the same
 	// switch flipped in the settings window does. Empty means there is
