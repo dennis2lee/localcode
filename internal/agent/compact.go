@@ -245,15 +245,32 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		Detail: "lifecycle: history replaced by the summary, " + string(trigger),
 	})
 
+	// What the replaced messages were carrying, named before they go.
+	// Behind Smart Agent with the rest of the bundle: it is a note about
+	// how to keep working, not a correctness fix.
+	var replaced []string
+	if l.smartOn(ctx) {
+		replaced = droppedCarriedAssets(history)
+	}
 	l.setHistory(sessionID, []provider.Message{{
 		Role:    provider.RoleUser,
-		Content: []provider.Block{provider.TextBlock(summaryHeader + summary)},
+		Content: []provider.Block{provider.TextBlock(summaryHeader + summary + carriedAssetNote(replaced))},
 	}})
 	l.clearUsage(sessionID)
 	// "summary" (not just its length) and the compaction call's own usage
 	// are what rehydrateHistory/RehydrateSession need to reconstruct this
 	// exact post-compaction state after a restart — see loop_rehydrate.go.
 	compactedData := map[string]any{"summary_length": len(summary), "manual": manual, "summary": summary}
+	if len(replaced) > 0 {
+		// On the record as well as in the prompt: after a restart the
+		// rehydrated session should say what its summary replaced, and
+		// the transcript is where a person looks for that.
+		any := make([]any, 0, len(replaced))
+		for _, n := range replaced {
+			any = append(any, n)
+		}
+		compactedData["replaced_assets"] = any
+	}
 	if usage.hasUsage {
 		compactedData["model"] = profile.Model
 		compactedData["input_tokens"] = usage.inputTokens

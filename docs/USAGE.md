@@ -517,6 +517,15 @@ What each pattern matches:
 | Tool | Match target |
 |---|---|
 | `bash` | The full command string |
+
+Answering "always allow" writes a rule to `config.json`. For most programs the rule generalizes to the program, so approving `cargo test` writes `cargo *`. Two families keep the whole command instead, because the program is not what was approved:
+
+| Family | Examples | Rule written |
+|---|---|---|
+| Interpreters and shells | `sh`, `bash`, `python3`, `node`, `perl`, `ruby`, `powershell`, `env`, `xargs` | The exact command. `python3 *` is not permission to run a command, it is permission to run any code written later. |
+| Privilege and destructive commands | `sudo`, `su`, `doas`, `rm`, `dd`, `shred`, `chmod`, `chown`, `kill` | The exact command. `rm -rf build` and `rm -rf ~` are one rule apart under `rm *`. |
+
+`always` stays available for both; a repeated `rm -rf build` stops asking. The rule is matched against the program's base name, so `/usr/bin/sudo` and `sudo` are the same answer.
 | `read_file`, `write_file`, `edit` | Target file path |
 | `grep`, `glob` | Search directory |
 | `check` | Configured verification command |
@@ -1120,6 +1129,8 @@ Two assets exist only with [Smart Agent](#smart-agent) on, because both tell the
 |---|---|
 | `smart.verify_policy` | Whether this session runs commands without asking. With permissions skipped, the model is told to run the project's checks and report what they said. Otherwise it is told to finish the change and offer the command, since every run costs the person an approval mid-thought. Test-related tasks are excepted in both modes. |
 | `session.context_left` | How many tokens are left in the window, with separators, plus advice to read in ranges under 25 percent and to stop and describe the next step under 10 percent. Written only from usage the server actually reported, never from an estimate. Last in the assembly order, and the only turn-dynamic asset in the system block, so the cacheable prefix in front of it is unaffected. |
+
+With Smart Agent on, compaction also names what its summary replaced. A skill body, a custom command's expansion, a spliced file and an instruction typed mid-turn all live in the conversation rather than in the system prompt, so replacing the history removes them. The summary ends with a line listing them (up to six, then a count) and telling the model to load again anything it is still working from. The `compacted` event records the same list under `replaced_assets`.
 
 Token counts are character-based estimates. Korean and Japanese may use substantially more tokens than the estimate.
 

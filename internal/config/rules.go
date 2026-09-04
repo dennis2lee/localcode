@@ -341,8 +341,66 @@ func PermissionRuleFor(toolName, subject string) PermissionRule {
 			if len(fields) == 1 {
 				return PermissionRule{Match: fields[0], Decision: DecisionAllow}
 			}
+			if tooWideToGeneralize(fields[0]) {
+				// The whole command, not the program plus a wildcard.
+				// See tooWideToGeneralize.
+				return PermissionRule{Match: subject, Decision: DecisionAllow}
+			}
 			return PermissionRule{Match: fields[0] + " *", Decision: DecisionAllow}
 		}
 	}
 	return PermissionRule{Match: subject, Decision: DecisionAllow}
+}
+
+// tooWideToGeneralize names the programs for which "<program> *" is a
+// worse rule than the person thinks they are approving.
+//
+// The default generalization is the useful one: somebody who approves
+// "cargo test" means cargo, and "cargo *" saves them the next twenty
+// prompts. It is wrong for two families.
+//
+// An interpreter takes its program as an argument, so "python3 *" and
+// "sh *" are not permissions to run a command — they are permissions to
+// run any code at all, written later, by a model reading a file it did
+// not write. Codex's own escalation prompt bans exactly these as
+// suggested prefixes for the same reason.
+//
+// A destructive command differs from its own neighbours in the argument
+// rather than the program: "rm -rf build" and "rm -rf ~" are one rule
+// apart under "rm *", and the person approving the first is not
+// approving the second. Same for the privilege ones, where the argument
+// is the entire question.
+//
+// For both, the persisted rule is the exact command. That keeps
+// "always" available — a repeated "rm -rf build" still stops asking —
+// while making the approval mean what it said.
+func tooWideToGeneralize(program string) bool {
+	return wideProgramNames[strings.ToLower(baseName(program))]
+}
+
+// baseName is the program without its directory, so "/usr/bin/sudo" and
+// "sudo" are the same answer.
+func baseName(program string) string {
+	if i := strings.LastIndexAny(program, `/\`); i >= 0 {
+		return program[i+1:]
+	}
+	return program
+}
+
+var wideProgramNames = map[string]bool{
+	// Interpreters and shells: the program is not the command.
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
+	"fish": true, "csh": true, "tcsh": true,
+	"python": true, "python2": true, "python3": true, "py": true,
+	"perl": true, "ruby": true, "node": true, "deno": true, "bun": true,
+	"php": true, "lua": true, "osascript": true,
+	"powershell": true, "powershell.exe": true, "pwsh": true,
+	"cmd": true, "cmd.exe": true, "wscript": true, "cscript": true,
+	"eval": true, "exec": true, "xargs": true, "env": true,
+	// Privilege: the argument is the whole question.
+	"sudo": true, "doas": true, "su": true, "runas": true,
+	// Destructive: neighbours differ in the argument, not the program.
+	"rm": true, "rmdir": true, "dd": true, "shred": true, "truncate": true,
+	"mkfs": true, "chmod": true, "chown": true, "chgrp": true,
+	"kill": true, "killall": true, "pkill": true,
 }
