@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.99.0
+
+**Documentation for the last four releases.** `/debug-log` had a section in USAGE and a row in the command table, and the contents table at the top of that file never listed it, which for anyone who reads the contents table is the same as not having it. Effort's own section was missing from that table too.
+
+The README had no mention of `/debug-log` at all, said effort stops at `high` three releases after `xhigh` shipped and after muse started reading its level from a system prompt line, and had no row for the repeat guard.
+
 ## v0.98.0
 
 **`/debug-log` covers Bedrock, and writes binary bodies as they arrive.** v0.97.0 left Bedrock out because it goes through the AWS SDK's own transport and answers in binary event-stream frames. Both halves of that turned out to be reasons to include it rather than to skip it: the SDK takes an HTTP client, so it now gets the same one, and a frame nobody can read is still evidence that it arrived. Nothing is escaped or summarized on the way in. The signature is unaffected, because the SDK signs in its own middleware before any transport runs and the transport hands on identical bytes.
