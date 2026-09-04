@@ -711,7 +711,7 @@ Project rules, skills, and auto memory supply reusable context. Rules load each 
 
 ### Skills
 
-Put a skill at `~/.localcode/skills/<name>/SKILL.md` for global scope, or `<project>/.localcode/skills/<name>/SKILL.md` for a project scoped one that wins on a name collision.
+Put a skill at `<project>/.localcode/skills/<name>/SKILL.md` for a project scoped one, which wins on a name collision. The global directory is `skills/<name>/SKILL.md` under whichever home root applies; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from).
 
 ```markdown
 ---
@@ -730,13 +730,29 @@ To reference other files such as `scripts/*.py` from the body, write relative pa
 
 Run a skill directly by its own name with `/<skill name>`. See [Running a skill](#running-a-skill).
 
+### Where skills, commands and global rules are read from
+
+Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. One home directory answers for all three, and the first that exists wins outright:
+
+| Order | Root | Reads |
+|---|---|---|
+| 1 | `~/.claude` | `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md`, `CLAUDE.md` |
+| 2 | `~/.opencode` | the same, and `command/` is accepted for the commands directory |
+| 3 | `~/.localcode` | the same |
+
+Nothing is merged across roots. A home with `~/.claude` reads that root and never looks at the other two, including when they hold skills of their own. An empty winner still wins: `~/.claude` with no `skills` directory means no global skills rather than a fall through. Startup logs which root it chose, and `/reset-skills` names the directory it read.
+
+`config.json` is not part of this. It is always `~/.localcode/config.json`, plus the project-local `.localcode/config.json` override.
+
+Project-local files are unaffected and still win over the global ones: `<project>/.localcode/skills` and `<project>/.localcode/commands`, and the `AGENTS.md` found by walking up from the session's directory.
+
 ### AGENTS.md project rules
 
 Project rules in `AGENTS.md` are appended to the system prompt. LocalCode searches the workspace and parent directories up to the Git repository root.
 
 `CLAUDE.md` is recognized as a fallback in the same places, so an existing Claude Code file is reused as is.
 
-Both `~/.localcode/AGENTS.md` and `~/.claude/CLAUDE.md` apply globally when present. Global and project rules are combined.
+Global rules come from one home root, not from all of them. Both `AGENTS.md` and `CLAUDE.md` are read inside that root when both are present. Global and project rules are combined. See [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from).
 
 Rules are resolved from the session workspace and reread at each turn. Workspace moves and rule edits apply on the next message.
 
@@ -893,7 +909,7 @@ The transcript shows only `/init`. Because it writes a file, expect a `write_fil
 
 ### Custom commands
 
-Put a markdown file at `.localcode/commands/<name>.md` for the project, or `~/.localcode/commands/<name>.md` for global scope where the project file wins on a collision. Call it with `/<name>`. The format matches opencode's custom commands.
+Put a markdown file at `.localcode/commands/<name>.md` for the project, where it wins on a collision. The global directory is `commands/<name>.md` under whichever home root applies; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from). Call it with `/<name>`. The format matches opencode's custom commands.
 
 ```markdown
 ---

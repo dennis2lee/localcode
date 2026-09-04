@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.91.0
+
+**Skills, custom commands and global rules are read from the agent directory you already have.** A skill is `<name>/SKILL.md` with YAML frontmatter, which is Claude Code's convention, and a custom command is `<name>.md` with frontmatter and a prompt body, which is opencode's. LocalCode has always read exactly those formats out of `~/.localcode`, which meant copying files into a third directory to use them here. It now reads them where they are: `~/.claude` if that exists, else `~/.opencode`, else `~/.localcode`. Under `~/.opencode` the commands directory may be named `command`, as opencode names it.
+
+One root answers for all three kinds and the first that exists wins outright. Nothing is merged: a home with `~/.claude` reads that root and never looks at the other two. An empty winner still wins, so `~/.claude` without a `skills` directory means no global skills rather than a fall through. Startup logs the root it chose and `/reset-skills` names the directory it read, because a rule that can silently drop a file has to say which file it kept.
+
+The global rules files change with it, and this reverses an earlier decision. `~/.localcode/AGENTS.md` and `~/.claude/CLAUDE.md` used to be read together, precisely so that nobody who set up LocalCode after using Claude Code lost the instructions they had already written. Standing instructions read better as one voice than as two sets of conventions spliced together, so they now come from the winning root alone. Inside that root both names are still read, since they are two names for one thing.
+
+`config.json` does not move. It is always `~/.localcode/config.json` with the project-local `.localcode/config.json` override, and project-local skills, commands and `AGENTS.md` still win over the global ones.
+
 ## v0.90.0
 
 **`/llm-doctor` now probes muse the way muse asks to be run.** The first version sent every canary at temperature 0 with a fixed seed, so that a different answer could only mean a different server. Muse does not allow that: its vLLM recipe says not to decode greedily, asks for temperature 1.0 with `top_p` 0.95 and `top_k` 64, and reports identical greedy requests coming back at 70, 80 and 86 completion tokens. It also takes its reasoning strength from the system prompt rather than from `reasoning_effort`, and asks for `high` on coding work. Canaries now go out that way, the report names the sampling it used, and gemma keeps temperature 0.

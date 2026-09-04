@@ -1,7 +1,9 @@
 // Package rules implements opencode-style AGENTS.md project/user rules
 // files: a plain Markdown file with build/test/architecture/convention
 // notes that gets folded into the system prompt automatically, with
-// CLAUDE.md accepted as a compatibility fallback name. It also supports
+// CLAUDE.md accepted as an equal second name. The project file is found
+// by walking up from the session's directory; the user-level one comes
+// from the home root internal/userdirs chose. It also supports
 // Claude Code's "@path/to/import" syntax for splicing other files in.
 package rules
 
@@ -11,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"localcode/internal/userdirs"
 )
 
 const sectionHeader = "Project/user rules:"
@@ -23,8 +27,9 @@ var projectNames = []string{"AGENTS.md", "CLAUDE.md"}
 
 // Load finds the nearest project-level rules file (searching dir and its
 // parent directories up to and including the git repo root, or the
-// filesystem root if there's no repo) and the global rules files
-// (~/.localcode/AGENTS.md and ~/.claude/CLAUDE.md), expands any "@path"
+// filesystem root if there's no repo) and the global rules files (both
+// names, in whichever home root internal/userdirs chose), expands any
+// "@path"
 // imports in each, and returns a system-prompt section combining whichever
 // were found. Returns "" if none exist.
 //
@@ -73,20 +78,32 @@ type globalFile struct {
 	content string
 }
 
-// findGlobalRules reads every global rules file there is, rather than the
-// first of them.
+// findGlobalRules reads the global rules out of one home directory: the
+// one that also answers for skills and custom commands (internal/userdirs
+// picks it — ~/.claude, else ~/.opencode, else ~/.localcode).
 //
-// ~/.claude/CLAUDE.md used to be a fallback, reached only when
-// ~/.localcode/AGENTS.md did not exist — so anyone who had both (which is
-// anyone who set up localcode after using Claude Code) silently lost the
-// instructions they had already written. They are two files by two names
-// for the same thing, and having one is not a reason to ignore the other.
+// One root rather than all of them, because a person's standing
+// instructions are a single voice. Two roots' worth spliced together is
+// two sets of conventions in one prompt, and the second set is the one
+// nobody remembers writing.
+//
+// The cost is real and was once a bug report: this used to read
+// ~/.localcode/AGENTS.md and ~/.claude/CLAUDE.md together, precisely
+// because taking only the first meant anyone who set up localcode after
+// using Claude Code silently lost the file they had already written. The
+// same loss is possible again, in the other direction — a ~/.claude wins
+// and a ~/.localcode/AGENTS.md stops being read. What makes it liveable
+// is that it is no longer silent: startup logs which root it chose, and
+// the rules section names the file it read.
+//
+// Inside the winning root both names are read, since AGENTS.md and
+// CLAUDE.md are two names for one thing and a root that has both meant
+// both.
 func findGlobalRules(home string) []globalFile {
+	root := userdirs.Assets(home).Path
 	var out []globalFile
-	for _, p := range []string{
-		filepath.Join(home, ".localcode", "AGENTS.md"),
-		filepath.Join(home, ".claude", "CLAUDE.md"),
-	} {
+	for _, name := range projectNames {
+		p := filepath.Join(root, name)
 		if data, err := os.ReadFile(p); err == nil {
 			out = append(out, globalFile{path: p, content: string(data)})
 		}

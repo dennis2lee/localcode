@@ -96,7 +96,11 @@ func TestFindGlobalRulesReadsTheClaudeDir(t *testing.T) {
 // Both global files are read, not the first of them. Anyone who set
 // localcode up after using Claude Code has both, and picking one silently
 // dropped the instructions they had already written in the other.
-func TestBothGlobalRulesFilesAreLoaded(t *testing.T) {
+// The home root that answers for skills and commands answers for the
+// global rules too, and it answers alone. A ~/.claude present means
+// ~/.localcode/AGENTS.md is not read — the loss this trades for is real,
+// and it is the point of the rule rather than an oversight.
+func TestGlobalRulesComeFromOneRootOnly(t *testing.T) {
 	home := t.TempDir()
 	for _, f := range []struct{ dir, name, body string }{
 		{".localcode", "AGENTS.md", "localcode global rules"},
@@ -111,11 +115,51 @@ func TestBothGlobalRulesFilesAreLoaded(t *testing.T) {
 	}
 
 	got := Load(t.TempDir(), home)
-	if !strings.Contains(got, "localcode global rules") {
-		t.Errorf("Load() = %q, want it to contain ~/.localcode/AGENTS.md", got)
-	}
 	if !strings.Contains(got, "claude global rules") {
-		t.Errorf("Load() = %q, want it to contain ~/.claude/CLAUDE.md too", got)
+		t.Errorf("Load() = %q, want the rules of the winning root", got)
+	}
+	if strings.Contains(got, "localcode global rules") {
+		t.Errorf("Load() = %q, want nothing from a root the chain never reaches", got)
+	}
+}
+
+// Within the winning root the two names are two names for one thing, so
+// a root holding both is read whole. This is the part of the old
+// behaviour worth keeping: nobody who wrote both meant to lose one.
+func TestBothRulesNamesInTheWinningRootAreRead(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"AGENTS.md": "opencode agents rules",
+		"CLAUDE.md": "opencode claude rules",
+	} {
+		if err := os.WriteFile(filepath.Join(home, ".opencode", name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := Load(t.TempDir(), home)
+	for _, want := range []string{"opencode agents rules", "opencode claude rules"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Load() = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+// With no other root installed the answer is localcode's own, which is
+// what every existing setup has.
+func TestGlobalRulesFallBackToLocalcode(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".localcode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".localcode", "AGENTS.md"), []byte("localcode global rules"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load(t.TempDir(), home); !strings.Contains(got, "localcode global rules") {
+		t.Errorf("Load() = %q", got)
 	}
 }
 
