@@ -192,6 +192,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/settings/orchestrate", d.handleSetOrchestrate)
 	d.mux.HandleFunc("POST /api/settings/model-invocable", d.handleSetModelInvocable)
 	d.mux.HandleFunc("POST /api/settings/keep-going", d.handleSetKeepGoing)
+	d.mux.HandleFunc("POST /api/settings/repeat-limit", d.handleSetRepeatLimit)
 	d.mux.HandleFunc("POST /api/permissions/skip", d.handleSetSkipPermissions)
 	d.mux.HandleFunc("POST /api/permissions/rules", d.handleAddPermissionRule)
 	d.mux.HandleFunc("POST /api/permissions/rules/remove", d.handleRemovePermissionRule)
@@ -266,6 +267,7 @@ func (d *Daemon) announceSettings() {
 			"smart_agent":          d.Loop.SmartAgentEnabled(),
 			"skip_permissions":     d.Loop.Config.PermissionsSkipped(),
 			"keep_going":           d.Loop.KeepGoingEnabled(),
+			"repeat_limit":         d.Loop.RepeatLimit(),
 			"auto_compact_percent": d.Loop.CompactPercent(),
 		},
 	})

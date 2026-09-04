@@ -236,6 +236,7 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"AutoUpdate":         true,
 		"AutoCompactPercent": true,
 		"KeepGoingEnabled":   true,
+		"RepeatLimitSteps":   true,
 		"ShowTPS":            true,
 		"Hooks":              true,
 		"AutoDelegate":       true,

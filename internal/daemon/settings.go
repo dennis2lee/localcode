@@ -30,6 +30,7 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
 		"auto_compact_percent": d.Loop.CompactPercent(),
 		"keep_going":           d.Loop.KeepGoingEnabled(),
+		"repeat_limit":         d.Loop.RepeatLimit(),
 		"smart_agent":          d.Loop.SmartAgentEnabled(),
 		"orchestrate":          d.Loop.OrchestrateEnabled(),
 		"model_invocable":      d.Loop.ModelInvocableEnabled(),
@@ -257,6 +258,32 @@ func (d *Daemon) handleSetKeepGoing(w http.ResponseWriter, r *http.Request) {
 	d.announceSettings()
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetKeepGoingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
+			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSetRepeatLimit moves the repeat guard's ceiling; zero turns it
+// off. Same shape as keep_going: applied live, then persisted where a
+// config path is known.
+func (d *Daemon) handleSetRepeatLimit(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Limit int `json:"limit"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Limit < 0 || req.Limit > config.MaxRepeatLimit {
+		http.Error(w, fmt.Sprintf("limit must be between 0 (off) and %d", config.MaxRepeatLimit), http.StatusBadRequest)
+		return
+	}
+	d.Loop.SetRepeatLimit(req.Limit)
+	d.announceSettings()
+	if d.Broker.ConfigPath != "" {
+		if err := config.SetRepeatLimitInFile(d.Broker.ConfigPath, req.Limit); err != nil {
 			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
 			return
 		}

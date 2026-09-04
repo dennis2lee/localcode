@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 
 	"localcode/internal/config"
@@ -199,7 +200,9 @@ func newWork(seen map[string]bool, toolUses []provider.Block) bool {
 }
 
 // maxRepeatSteps is how many steps in a row may ask for nothing new
-// before the turn is ended.
+// before the turn is ended, when nobody has said otherwise. The live
+// value is Loop.RepeatLimit, which a person can move or zero; this is
+// where the default is explained.
 //
 // Deliberately small. A step that repeats every call it has already made
 // has, by construction, changed nothing, so the next one has the same
@@ -208,4 +211,27 @@ func newWork(seen map[string]bool, toolUses []provider.Block) bool {
 // this direction is one ended turn with a message saying why. The cost of
 // the other direction was measured: a thousand requests and a session
 // that could never be spoken to again.
-const maxRepeatSteps = 3
+const maxRepeatSteps = config.DefaultRepeatLimit
+
+// describeCalls names a step's tool calls for the repeat notice: the tool
+// and the first stretch of its arguments, at most three of them, so the
+// person reading "repeated itself" can see what it repeated.
+func describeCalls(calls []provider.Block) string {
+	const most = 3
+	var parts []string
+	for i, tu := range calls {
+		if i == most {
+			parts = append(parts, fmt.Sprintf("and %d more", len(calls)-most))
+			break
+		}
+		args := strings.Join(strings.Fields(string(tu.ToolInput)), " ")
+		if r := []rune(args); len(r) > 60 {
+			args = string(r[:60]) + "…"
+		}
+		parts = append(parts, tu.ToolName+" "+args)
+	}
+	if len(parts) == 0 {
+		return "no calls"
+	}
+	return strings.Join(parts, "; ")
+}

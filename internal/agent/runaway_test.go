@@ -251,11 +251,80 @@ func TestTheLoopStopsAModelThatRepeatsItself(t *testing.T) {
 	}
 	said := false
 	for _, e := range evs {
-		if e.Type == events.TypeError && strings.Contains(dataString(e.Data, "error"), "without doing anything new") {
+		if e.Type == events.TypeError && strings.Contains(dataString(e.Data, "error"), "Nothing new was tried") {
 			said = true
 		}
 	}
 	if !said {
 		t.Error("the turn was cut short with nothing in the log saying why")
 	}
+}
+
+// The ceiling is the person's to move. Off means a turn is never ended
+// for repeating itself, which is what somebody watching a model think by
+// re-reading may want; a number means that many nothing-new steps.
+func TestTheRepeatGuardHonoursTheLiveLimit(t *testing.T) {
+	repeatNotices := func(loop *Loop) (int, string) {
+		evs, err := loop.Store.Events("s1", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, last := 0, ""
+		for _, e := range evs {
+			if e.Type == events.TypeError && strings.Contains(dataString(e.Data, "error"), "Nothing new was tried") {
+				n++
+				last = dataString(e.Data, "error")
+			}
+		}
+		return n, last
+	}
+
+	t.Run("off", func(t *testing.T) {
+		model := &alwaysCalls{tool: "bash", input: `{"command":"ls"}`}
+		loop := newSmartLoop(t, model.server(t).URL)
+		loop.Tools.Register(&namedFake{name: "bash"})
+		loop.SetRepeatLimit(0)
+		if _, err := loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+			t.Fatal(err)
+		}
+		if err := loop.SendMessage(context.Background(), "s1", "general-purpose", "do it"); err != nil {
+			t.Fatalf("SendMessage: %v", err)
+		}
+		// With the guard off the only thing that ends this turn is the
+		// fake model giving up, which is the point: nothing here did.
+		if n := model.count(); n <= maxRepeatSteps+2 {
+			t.Errorf("the guard was off and the turn still ended after %d calls", n)
+		}
+		if n, _ := repeatNotices(loop); n != 0 {
+			t.Errorf("the guard was off and still wrote %d notice(s)", n)
+		}
+	})
+
+	t.Run("six", func(t *testing.T) {
+		model := &alwaysCalls{tool: "bash", input: `{"command":"ls"}`}
+		loop := newSmartLoop(t, model.server(t).URL)
+		loop.Tools.Register(&namedFake{name: "bash"})
+		loop.SetRepeatLimit(6)
+		if _, err := loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+			t.Fatal(err)
+		}
+		if err := loop.SendMessage(context.Background(), "s1", "general-purpose", "do it"); err != nil {
+			t.Fatalf("SendMessage: %v", err)
+		}
+		if n := model.count(); n > 6+2 || n <= maxRepeatSteps+2 {
+			t.Errorf("with a limit of 6 the model was asked %d times; want between %d and %d", n, maxRepeatSteps+3, 6+2)
+		}
+		n, last := repeatNotices(loop)
+		if n != 1 {
+			t.Fatalf("%d notices, want one", n)
+		}
+		// Named, because "the same tools with the same arguments" was
+		// read as one call repeated when the rule is about steps that
+		// add nothing, and the calls are what make that legible.
+		for _, want := range []string{"6 steps in a row", `bash {"command":"ls"}`, "/repeat-limit"} {
+			if !strings.Contains(last, want) {
+				t.Errorf("notice lacks %q: %s", want, last)
+			}
+		}
+	})
 }

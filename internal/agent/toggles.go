@@ -383,6 +383,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "read-outside", Description: "reading outside the workspace: on, off, or mem-clear to forget approved directories"},
 		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories"},
 		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models"},
+		{Name: "repeat-limit", Description: "how many nothing-new steps end a turn; /repeat-limit off turns the guard off"},
 		{Name: "auto-compact", Description: "toggle auto-compaction, or set its threshold with a percent"},
 		{Name: "update", Description: "install the newest release and move the daemon onto it; the terminal keeps running"},
 		{Name: "reset-mcp", Description: "reconnect MCP servers and pick up config changes without a restart"},
@@ -436,6 +437,62 @@ func (l *Loop) anyMuseProfile() bool {
 		}
 	}
 	return false
+}
+
+// routeRepeatLimit answers "/repeat-limit [off|<steps>]".
+//
+// A number rather than a switch, because the two things a person means
+// by "turn it off" are different sizes. One is "this model re-reads to
+// think; give it room", which is a bigger number. The other is "never
+// end a turn for this", which is zero. Both are spelled here, and the
+// reply says what a repeat is, since the notice that led someone to
+// this command was read as "one call three times" and is not.
+func (l *Loop) routeRepeatLimit(sessionID, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/repeat-limit")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+
+	arg = strings.ToLower(strings.TrimSpace(arg))
+	current := l.RepeatLimit()
+	if arg == "" {
+		var b strings.Builder
+		if current == 0 {
+			b.WriteString("repeat_limit: off. A turn is never ended for repeating itself.")
+		} else {
+			fmt.Fprintf(&b, "repeat_limit: %d. A turn ends after %d steps in a row that only repeat tool calls it has already made.", current, current)
+		}
+		b.WriteString("\nusage: /repeat-limit [off|<steps>]")
+		return true, l.replyText(sessionID, b.String())
+	}
+
+	var want int
+	switch arg {
+	case "off", "0", "false", "no":
+		want = 0
+	case "on", "default", "true", "yes":
+		want = config.DefaultRepeatLimit
+	default:
+		n, err := strconv.Atoi(arg)
+		if err != nil || n < 1 || n > config.MaxRepeatLimit {
+			return true, l.replyText(sessionID, fmt.Sprintf(
+				"usage: /repeat-limit [off|<steps>], steps between 1 and %d.", config.MaxRepeatLimit))
+		}
+		want = n
+	}
+	l.SetRepeatLimit(want)
+
+	var b strings.Builder
+	if want == 0 {
+		b.WriteString("repeat_limit: off. A turn is never ended for repeating itself; a model that will not stop runs until you stop it.")
+	} else {
+		fmt.Fprintf(&b, "repeat_limit: %d. A turn ends after %d steps in a row that only repeat tool calls it has already made. "+
+			"Alternating between two reads counts: each step adds nothing new.", want, want)
+	}
+	b.WriteString(l.persist(func(path string) error { return config.SetRepeatLimitInFile(path, want) }))
+	l.announceSettings()
+	return true, l.replyText(sessionID, b.String())
 }
 
 // routeAutoCompact answers "/auto-compact [on|off|<percent>]".

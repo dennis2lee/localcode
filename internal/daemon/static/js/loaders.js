@@ -98,6 +98,7 @@ export async function loadSettings() {
     app.smartAgentRoster = s.smart_agent_roster || [];
     app.skipPermissions = !!s.skip_permissions;
     app.keepGoing = s.keep_going !== false;
+    if (typeof s.repeat_limit === 'number') app.repeatLimit = s.repeat_limit;
     if (typeof s.auto_compact_percent === 'number') app.autoCompactPercent = s.auto_compact_percent;
     app.permissionRules = s.permission_rules || {};
     app.canEditPermissions = !!s.can_edit_permissions;

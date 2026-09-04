@@ -166,6 +166,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeSchedule(sessionID, agentName, text) },
 		func() (bool, error) { return l.routeShowScheduled(sessionID, text) },
 		func() (bool, error) { return l.routeKeepGoing(sessionID, text) },
+		func() (bool, error) { return l.routeRepeatLimit(sessionID, text) },
 		func() (bool, error) { return l.routeAutoCompact(sessionID, text) },
 		func() (bool, error) { return l.routeUpdate(sessionID, text) },
 		func() (bool, error) { return l.routeResetMCP(sessionID, text) },

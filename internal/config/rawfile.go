@@ -314,6 +314,19 @@ func SetKeepGoingInFile(path string, enabled bool) error {
 // SetAutoCompactInFile writes the switch, and the threshold when percent
 // is nonzero, so "/auto-compact 70" is one write rather than two chances
 // to fail halfway.
+// SetRepeatLimitInFile writes repeat_limit. Zero is written as zero, not
+// removed: an absent key means the default, and off is not the default.
+func SetRepeatLimitInFile(path string, limit int) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(limit)
+		if err != nil {
+			return fmt.Errorf("marshal repeat_limit: %w", err)
+		}
+		raw["repeat_limit"] = encoded
+		return nil
+	})
+}
+
 func SetAutoCompactInFile(path string, enabled bool, percent int) error {
 	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
 		encoded, err := json.Marshal(enabled)

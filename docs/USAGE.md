@@ -338,6 +338,18 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 
 Model matching is case-insensitive and requires `muse` anywhere in the model ID, including `Muse-Glimmer-30B` and `my-muse-variant`.
 
+#### A model that repeats itself
+
+A turn whose steps only repeat tool calls it has already made is ended after a fixed number of them, with a notice naming the calls. This applies to every model.
+
+| Control | Scope | Behavior |
+|---|---|---|
+| `/repeat-limit <steps>` or the settings window | Daemon | Steps in a row that may add nothing new before the turn ends. Default 3, maximum 50. Saved to config.json as `repeat_limit`. |
+| `/repeat-limit off` or the unchecked box | Daemon | Never ends a turn for repeating itself. A model that will not stop then runs until you stop it. |
+| `/repeat-limit` | Daemon | Reports the current ceiling. |
+
+A repeat is a call with the same tool and the same arguments as one made earlier in the turn, so a model alternating between two earlier reads is repeating even though no two consecutive calls are identical. The guard exists because a model that asked for the same tool a thousand times once held a session busy for everything typed afterwards; the ceiling is small because a step that repeats every call it has already made has changed nothing, so the next step has the same input. Some local models think by re-reading the same two places, and for them a higher ceiling or off is the right setting. That is a judgment the person watching can make and the guard cannot, which is why it is a setting.
+
 ```json
 {
   "profiles": {
@@ -1211,6 +1223,7 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/schedule` | Books a prompt for later: `/schedule <when> <what to do>`. Runs only while localcode is running. See [Scheduled tasks](#scheduled-tasks). |
 | `/show-scheduled-task` | Lists the prompts booked for later in this conversation. |
 | `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <task>`. Author and reviewer iterations. Also available through natural language or the ⚖️ button. See [Debate](#debate). |
+| `/repeat-limit` | `/repeat-limit [off\|<steps>]`. How many nothing-new steps end a turn; `off` never ends one for it. Bare, reports the ceiling. See [A model that repeats itself](#a-model-that-repeats-itself). |
 | `/effort` | `/effort [off\|low\|medium\|high]`. Conversation reasoning level. `default` restores the profile setting. See [Effort](#effort). |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
@@ -1512,7 +1525,7 @@ Agents select models and tool scopes. Smart Agent adds built-in specialists. Orc
 | `Schedule` | Yes, always | Book a prompt to run at a parsed future time in this conversation. The daemon has to still be running then. See [Scheduled tasks](#scheduled-tasks). |
 | `Command` | No | Run one of this session's own commands as a turn of its own, immediately after the current one ends. Offered only with [`/model-invocable`](#model-invocable) on, only for what has opted in (built-ins named in config.json's `model_commands`, plus custom commands and skills with `model_invocable: true` in their frontmatter), and never inside a command run: one command cannot book another. There is no wildcard. |
 
-The loop ends when the model stops requesting tools. `Verdict` and `Answer` also end the turn after a valid completion result. Three consecutive steps containing only previously repeated tool calls end the turn with a transcript notice. A new edit between repeated checks counts as progress.
+The loop ends when the model stops requesting tools. `Verdict` and `Answer` also end the turn after a valid completion result. By default, three consecutive steps containing only previously repeated tool calls end the turn with a transcript notice that names the repeated calls. A step is one model reply; a repeat is a call with the same tool and the same arguments as one already made this turn, so alternating between two earlier reads counts. A new edit between repeated checks counts as progress. `/repeat-limit <steps>` moves the ceiling and `/repeat-limit off` removes it; the settings window has the same control. See [A model that repeats itself](#a-model-that-repeats-itself).
 
 Unambiguous tool-name variants such as `bash.command`, `functions.bash`, or `readFile` resolve only against tools available to that agent. The result reports the resolved name. An unresolved name returns the allowed tool list. Resolution cannot bypass tool restrictions.
 

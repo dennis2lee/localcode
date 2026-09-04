@@ -581,6 +581,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		} else {
 			repeats++
 		}
+		// Kept for the notice below: a turn ended for repeating itself
+		// should say what it repeated, not only that it did.
+		lastCalls := toolUses
 		resultBlocks, refused, ended := l.runTools(ctx, sessionID, toolUses, allowedTools, l.contextWindow(ctx, run.profile))
 		ranTools = true
 		lastRefused = refused
@@ -611,11 +614,20 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// nothing new, and several in a row is a loop rather than work.
 		// Re-running one command after an edit is not caught: the edit is
 		// itself new work and resets the count.
-		if repeats >= maxRepeatSteps {
+		//
+		// The ceiling is the daemon's live setting rather than the
+		// constant, and zero is off: see config.RepeatLimit for why a
+		// person gets to decide. The notice names the calls, because
+		// "the same tools with the same arguments" was read as "one call
+		// three times" by someone watching a model alternate two reads,
+		// and the rule is about steps that add nothing, not about one
+		// call.
+		if limit := l.RepeatLimit(); limit > 0 && repeats >= limit {
 			l.Store.Append(sessionID, events.TypeError, map[string]any{
 				"error": fmt.Sprintf(
-					"stopped: the model called the same tools with the same arguments %d times in a row without doing anything new. "+
-						"Whatever it was trying is not working; the turn was ended rather than left running.", repeats),
+					"stopped: %d steps in a row only repeated tool calls this turn had already made (%s). "+
+						"Nothing new was tried, so the turn was ended rather than left running. "+
+						"/repeat-limit changes the ceiling or turns this off.", repeats, describeCalls(lastCalls)),
 				"recovered": true,
 			})
 			return nil

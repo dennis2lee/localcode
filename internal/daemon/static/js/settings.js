@@ -11,6 +11,7 @@ import {
   orchestrateCheckbox, orchestrateNoteEl, orchestrateWarnEl,
   modelInvocableCheckbox, modelInvocableNoteEl, modelInvocableWarnEl,
   keepGoingCheckbox, keepGoingWarnEl,
+  repeatLimitCheckbox, repeatLimitInput, repeatLimitWarnEl,
   updateCheckBtn, updateInstallBtn, updateNoteEl,
 } from './dom.js';
 import { Modal } from './modal.js';
@@ -62,6 +63,40 @@ async function toggleKeepGoing() {
   }
 }
 
+// The repeat guard.
+//
+// A checkbox and a number, because "off" and "give it room" are different
+// sizes of the same request. The number is only editable while the box
+// is checked; unchecking sends zero, checking sends the number.
+function renderRepeatLimit(warning) {
+  const on = app.repeatLimit > 0;
+  repeatLimitCheckbox.checked = on;
+  repeatLimitInput.disabled = !on;
+  if (on) repeatLimitInput.value = String(app.repeatLimit);
+  repeatLimitWarnEl.textContent = warning || '';
+  repeatLimitWarnEl.hidden = !warning;
+}
+
+export function refreshRepeatLimitIfOpen() {
+  if (settings.isOpen) renderRepeatLimit();
+}
+
+async function applyRepeatLimit() {
+  const wanted = repeatLimitCheckbox.checked ? Math.max(1, parseInt(repeatLimitInput.value, 10) || 3) : 0;
+  repeatLimitCheckbox.disabled = true;
+  repeatLimitInput.disabled = true;
+  try {
+    await apiClient.setRepeatLimit(wanted);
+    app.repeatLimit = wanted;
+    renderRepeatLimit();
+  } catch (err) {
+    renderRepeatLimit(`Not changed: ${err}`);
+  } finally {
+    repeatLimitCheckbox.disabled = false;
+    repeatLimitInput.disabled = app.repeatLimit === 0;
+  }
+}
+
 // Smart Agent.
 //
 // The switch is the whole control. What it turns on — the specialist
@@ -79,16 +114,12 @@ function renderSmartAgent(warning) {
   smartAgentWarnEl.textContent = warning || '';
   smartAgentWarnEl.hidden = !warning;
   if (!app.smartAgent) {
-    smartAgentNoteEl.textContent =
-      'Off. Every request is answered by this session\u2019s own model, in this session\u2019s context.';
+    smartAgentNoteEl.textContent = 'Off. One model, one context.';
     return;
   }
   const roster = (app.smartAgentRoster || []).join(', ');
-  const agents = roster ? `Adds the ${roster} agents, each on whichever configured profile suits it. ` : '';
-  smartAgentNoteEl.textContent =
-    `On. ${agents}Also turns on fallback to another model when one will not answer, prompt cache breakpoints, `
-    + 'the turn log under ~/.localcode/trace, and guards on credential files and paths outside the workspace. '
-    + 'Expect more model calls per request.';
+  const agents = roster ? `Agents: ${roster}. ` : '';
+  smartAgentNoteEl.textContent = `On. ${agents}More model calls per request. Turn log in ~/.localcode/trace.`;
 }
 
 // Orchestration.
@@ -104,22 +135,16 @@ function renderOrchestrate(warning) {
   orchestrateWarnEl.textContent = warning || '';
   orchestrateWarnEl.hidden = !warning;
   if (!app.orchestrate) {
-    orchestrateNoteEl.textContent =
-      'Off. The model delegates one question at a time, deciding each time whether to delegate again.';
+    orchestrateNoteEl.textContent = 'Off. One delegation at a time.';
     return;
   }
   const roster = (app.smartAgentRoster || []).length;
   if (!app.smartAgent && roster) {
-    orchestrateNoteEl.textContent =
-      'On, but there is nobody to delegate to unless you have agents of your own in config.json. '
-      + 'Turn on Smart Agent above for the built-in roster.';
+    orchestrateNoteEl.textContent = 'On, but nobody to delegate to. Turn on Smart Agent for the built-in roster.';
     return;
   }
   orchestrateNoteEl.textContent =
-    'On. The model can commit to a plan: fan out over a list or over what an earlier stage found, '
-    + 'check each finding with agents that cannot see each other, and come back together at the end. '
-    + 'A plan that would not work is refused before anything runs, and every run asks first and shows '
-    + 'its ceilings: at most 8 stages and 32 agent turns, 10 minutes a stage and 30 for the run.';
+    'On. Every run asks first. Limits: 8 stages and 32 agent turns, 10 minutes a stage, 30 a run.';
 }
 
 // The model running commands.
@@ -134,19 +159,15 @@ function renderModelInvocable(warning) {
   modelInvocableWarnEl.hidden = !warning;
   const names = app.modelCommands || [];
   if (!app.modelInvocable) {
-    modelInvocableNoteEl.textContent =
-      'Off. Commands run only when you type them.';
+    modelInvocableNoteEl.textContent = 'Off. Commands run only when you type them.';
     return;
   }
   if (!names.length) {
     modelInvocableNoteEl.textContent =
-      'On, and nothing is opted in yet, so it changes nothing. Name a built-in in config.json\u2019s '
-      + '"model_commands", or put "model_invocable: true" in a custom command\u2019s or a skill\u2019s frontmatter.';
+      'On, but nothing is opted in. Add built-ins to "model_commands" in config.json, or "model_invocable: true" to a command or skill.';
     return;
   }
-  modelInvocableNoteEl.textContent =
-    `On. The model may run: ${names.join(', ')}. Each runs as a turn of its own in this conversation. `
-    + 'It chooses when, from what it has read \u2014 so anything on that list is reachable from text the model did not write.';
+  modelInvocableNoteEl.textContent = `On. May run: ${names.join(', ')}. Reachable from anything the model reads.`;
 }
 
 export function refreshModelInvocableIfOpen() {
@@ -341,6 +362,8 @@ export function initSettings() {
   orchestrateCheckbox.addEventListener('change', toggleOrchestrate);
   modelInvocableCheckbox.addEventListener('change', toggleModelInvocable);
   keepGoingCheckbox.addEventListener('change', toggleKeepGoing);
+  repeatLimitCheckbox.addEventListener('change', applyRepeatLimit);
+  repeatLimitInput.addEventListener('change', applyRepeatLimit);
   updateCheckBtn.addEventListener('click', checkForUpdate);
   updateInstallBtn.addEventListener('click', installUpdate);
 }

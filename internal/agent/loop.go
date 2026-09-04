@@ -37,6 +37,10 @@ type liveSettings struct {
 	// whether it applies to a model at all is decided in keep_going.go,
 	// and only ever for one family.
 	keepGoing bool
+	// repeatLimit is the repeat guard's ceiling; zero is off. See
+	// maxRepeatSteps for what a repeat is and config.RepeatLimit for
+	// why a person gets to move it.
+	repeatLimit int
 }
 
 func (s *liveSettings) AutoCompact() bool {
@@ -73,6 +77,18 @@ func (s *liveSettings) SetKeepGoing(v bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keepGoing = v
+}
+
+func (s *liveSettings) RepeatLimit() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.repeatLimit
+}
+
+func (s *liveSettings) SetRepeatLimit(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.repeatLimit = n
 }
 
 func (s *liveSettings) ShowTPS() bool {
@@ -349,6 +365,7 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 			showTPS:            cfg.TPSEnabled(),
 			autoDelegate:       cfg.DelegateEnabled(),
 			keepGoing:          cfg.KeepGoing(),
+			repeatLimit:        cfg.RepeatLimit(),
 		},
 		messages:        map[string][]provider.Message{},
 		usage:           map[string]sessionUsage{},
@@ -553,6 +570,11 @@ func (l *Loop) SetCompactPercent(v int) { l.settings.SetCompactPercent(v) }
 // is only ever yes for one family.
 func (l *Loop) KeepGoingEnabled() bool     { return l.settings.KeepGoing() }
 func (l *Loop) SetKeepGoingEnabled(v bool) { l.settings.SetKeepGoing(v) }
+
+// RepeatLimit is the repeat guard's ceiling for every turn on this
+// daemon, and SetRepeatLimit moves it; zero turns the guard off.
+func (l *Loop) RepeatLimit() int     { return l.settings.RepeatLimit() }
+func (l *Loop) SetRepeatLimit(n int) { l.settings.SetRepeatLimit(n) }
 
 // ShowTPS reports whether usage events should carry a tokens-per-second
 // figure for display — process-global, toggleable live via "/config

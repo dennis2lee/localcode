@@ -58,6 +58,7 @@ export const getCommands = () => api('GET', '/api/commands');
 export const getSkills = () => api('GET', '/api/skills');
 export const getSlashCommands = () => api('GET', '/api/slash-commands');
 export const setKeepGoing = (enabled) => api('POST', '/api/settings/keep-going', { enabled });
+export const setRepeatLimit = (limit) => api('POST', '/api/settings/repeat-limit', { limit });
 export const getSettings = () => api('GET', '/api/settings');
 export const getVersion = () => api('GET', '/api/version');
 // Updating. The check is a request to GitHub made through the daemon, so

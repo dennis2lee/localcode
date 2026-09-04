@@ -164,6 +164,9 @@ func (c *Config) merge(other *Config) {
 	if other.KeepGoingEnabled != nil {
 		c.KeepGoingEnabled = other.KeepGoingEnabled
 	}
+	if other.RepeatLimitSteps != nil {
+		c.RepeatLimitSteps = other.RepeatLimitSteps
+	}
 	if other.ShowTPS != nil {
 		c.ShowTPS = other.ShowTPS
 	}

@@ -15,7 +15,7 @@ import {
   applySessionPermissions,
 } from './modals.js';
 import { applyScheduleEvent } from './schedules.js';
-import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen } from './settings.js';
+import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen } from './settings.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
@@ -295,6 +295,10 @@ const handlers = {
     if (typeof d.keep_going === 'boolean') {
       app.keepGoing = d.keep_going;
       refreshKeepGoingIfOpen();
+    }
+    if (typeof d.repeat_limit === 'number') {
+      app.repeatLimit = d.repeat_limit;
+      refreshRepeatLimitIfOpen();
     }
     if (typeof d.auto_compact_percent === 'number') app.autoCompactPercent = d.auto_compact_percent;
     if (typeof d.skip_permissions === 'boolean') {
