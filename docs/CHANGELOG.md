@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.93.0
+
+**Six things the Codex CLI does that localcode had no answer for, all behind Smart Agent.** Each tells the model something the harness already knows and it cannot see, or gives it a way to stop guessing. They are a way of working rather than a capability, and the bundle is where ways of working live.
+
+**The edit diagnosis gains a punctuation pass.** A model that read a file through a chat client quotes a curly apostrophe where the source has a straight one, or an en dash where it has a hyphen. The string is otherwise perfect and "not found" says nothing about which character to change. Codex's `apply_patch` folds the same set and applies the edit anyway; this does not, because an edit that rewrites characters the model did not ask to change is a different edit. The fold finds the line, the message quotes the file's real bytes, and the model corrects. Whitespace is still diagnosed first.
+
+**`smart.verify_policy` says whether this session runs commands without asking.** The model cannot see the permission mode, so it guesses, and both guesses are wrong in the other mode: it runs the whole suite in a session where every command waits on a person, or it hands back an unverified change in one where it could have proved it in seconds. Test-related work is excepted in both modes.
+
+**`session.context_left` says how much room is left.** A model that cannot see the meter budgets by feel, opening a twelve-file read at the end of a long session. Written only from usage the server actually reported, never from this side's four-characters-per-token estimate, because a model told a made-up number acts on it. Last in the assembly order and the only turn-dynamic asset in the system block, so the cacheable prefix in front of it is untouched.
+
+**`update_plan` is the model's own checklist,** logged and rendered in both clients. `keep_going` already nudges a model that stops with the task unfinished, and it is blind: neither side can see how many steps there were or which is current. Exactly one step may be `in_progress`, a step cannot go from `pending` straight to `completed`, and one-step plans are refused rather than corrected, since a plan with two steps in progress is a model that has lost track and picking one for it hides that.
+
+**`ask_user` lets the model ask one question without ending its turn.** The alternative is picking a branch nobody wanted, or stopping in prose after the tools it had open are gone. The TUI takes a digit or a typed answer under the prompt box; the Web UI takes the next message. One question per turn, and only where somebody is watching: never in a one-shot run, a scheduled run, or a delegated sub-agent.
+
+**Compaction names what its summary replaced.** A skill body, a custom command's expansion, a spliced file and an instruction typed mid-turn live in the conversation rather than the system prompt, so replacing the history removes them. That is fine for a file spliced ten turns ago and not for a skill the model is in the middle of following. Codex writes text markers so a fragment can recognise itself in retained history; localcode's blocks already carry structured provenance, so the ids are read off and listed. Named rather than re-injected: the model knows which it is still working on, it only has to be told they went.
+
+**Separately, and not behind the switch: "always allow" wrote a rule wider than the question it answered.** Approving one command generalizes it to the program, which is right for most — somebody who approves `cargo test` means cargo. It is wrong twice over. An interpreter takes its program as an argument, so `python3 *` and `sh *` were not permission to run a command but permission to run any code written later. A destructive command differs from its neighbours in the argument rather than the program: `rm -rf build` and `rm -rf ~` were one rule apart under `rm *`. Both families now persist the exact command, matched on the program's base name so `/usr/bin/sudo` and `sudo` are one answer. `always` stays available for both.
+
 ## v0.92.0
 
 **The agent-directory chain runs under the project as well as the home directory.** v0.91.0 read skills and custom commands from `~/.claude`, else `~/.opencode`, else `~/.localcode`. A repo carrying its own `.claude/skills` and `.claude/commands` still had to keep a `.localcode` copy of them. The same chain now runs under the project directory too, resolved independently of the home one: a repo on `.claude` with a home on `.localcode` is an ordinary arrangement rather than a conflict, and a project skill still wins over a global one of the same name.
