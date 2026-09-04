@@ -65,6 +65,21 @@ const (
 	// AssetModelQuirk is the per-family note about how to write for this
 	// model, last so it is not buried under the project's rules.
 	AssetModelQuirk = "model.quirk"
+
+	// AssetVerifyPolicy tells the model whether it may run the project's
+	// checks on its own initiative, which is a question about the
+	// permission mode rather than about the work. Codex asks the same
+	// question and answers it in its prompt: with approvals off it says
+	// run the tests, and in an interactive mode it says hold off,
+	// because a test run the person has to approve mid-thought costs
+	// more attention than it saves.
+	AssetVerifyPolicy = "smart.verify_policy"
+
+	// AssetContextLeft is how much of the window is left, in the model's
+	// own units. Last in the order and turn-dynamic: it is the one
+	// assembled asset that changes every turn, so everything cacheable
+	// sits in front of it.
+	AssetContextLeft = "session.context_left"
 	// AssetSkillsIndex lists the installed skills, loaded at startup.
 	AssetSkillsIndex = "skills.index"
 	// AssetMemoryPolicy is the product's description of the auto-memory
@@ -93,6 +108,8 @@ const (
 	valOrchestrator = "orchestration"
 	valPlanPolicy   = "plan_policy"
 	valModelQuirk   = "model_quirk"
+	valVerifyPolicy = "verify_policy"
+	valContextLeft  = "context_left"
 	valSkillsIndex  = "skills_index"
 	valMemoryPolicy = "memory_policy"
 	valMemoryIndex  = "memory_index"
@@ -345,6 +362,37 @@ func promptRegistry() *prompt.Registry {
 		Render: func(prompt.ActivationContext) string { return smart.TrustBoundary },
 	})
 
+	// Whether this turn may verify its own work without asking.
+	//
+	// The model cannot see the permission mode, so it guesses, and both
+	// guesses are wrong in the other mode: it runs the test suite in a
+	// session where every command stops for approval, or it hands back an
+	// unverified change in a session where it could have just run them.
+	// The mode is known here, so say it.
+	r.Add(prompt.Asset{
+		ID:         AssetVerifyPolicy,
+		Kind:       prompt.KindModeInstruction,
+		Provenance: prompt.FromProduct,
+		Trust:      prompt.TrustSystem,
+		Placement:  prompt.PlaceSystem,
+		Cache:      prompt.CacheSessionDynamic,
+		Order:      42,
+		Version:    "1",
+		Active: func(a prompt.ActivationContext) (bool, string) {
+			if !a.SmartAgent {
+				return false, "smart agent is off for this turn"
+			}
+			if a.Value(valVerifyPolicy) == "" {
+				return false, "this turn has no way to run a check"
+			}
+			if a.Flags["skip_permissions"] {
+				return true, "permissions are skipped, so checks can be run without asking"
+			}
+			return true, "every command stops for approval, so checks are offered rather than run"
+		},
+		Render: func(a prompt.ActivationContext) string { return a.Value(valVerifyPolicy) },
+	})
+
 	// Last, so a note about how to write for this window is not buried
 	// under the project's rules, and re-derived on every fallback
 	// because it is written per family: sending the note for a hosted
@@ -366,6 +414,41 @@ func promptRegistry() *prompt.Registry {
 			return true, "the note written for " + a.Model
 		},
 		Render: func(a prompt.ActivationContext) string { return a.Value(valModelQuirk) },
+	})
+
+	// How much room is left, said in the units the model reasons about.
+	//
+	// A model that cannot see the meter budgets by feel: it opens a
+	// twelve-file read at the end of a long session, or it compresses an
+	// answer that had plenty of space. Codex puts the same sentence in
+	// every turn and gives the model a tool to ask again. This is the
+	// sentence; localcode's own meter is /context, for the person.
+	//
+	// Last in the order, and the only turn-dynamic asset in the system
+	// block, which is what makes it safe: everything cacheable sits in
+	// front of it, so the changing tail costs the tail and not the
+	// prefix. The assembler enforces that (see prompt.CacheClass) — if
+	// this ever moves ahead of a stable asset, assembly fails rather
+	// than quietly paying for a cache miss every turn.
+	r.Add(prompt.Asset{
+		ID:         AssetContextLeft,
+		Kind:       prompt.KindRuntimeReminder,
+		Provenance: prompt.FromProduct,
+		Trust:      prompt.TrustSystem,
+		Placement:  prompt.PlaceSystem,
+		Cache:      prompt.CacheTurnDynamic,
+		Order:      90,
+		Version:    "1",
+		Active: func(a prompt.ActivationContext) (bool, string) {
+			if !a.SmartAgent {
+				return false, "smart agent is off for this turn"
+			}
+			if a.Value(valContextLeft) == "" {
+				return false, "this session has no measured usage yet"
+			}
+			return true, "how much of the window is left"
+		},
+		Render: func(a prompt.ActivationContext) string { return a.Value(valContextLeft) },
 	})
 
 	// The summarizing call's instruction. PlaceUtilityCall: it is not

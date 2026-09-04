@@ -177,6 +177,11 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.thinking = true
 	case events.TypeThinkingEnd:
 		m.thinking = false
+	case events.TypePlanUpdated:
+		// The whole list, every time. A plan is read to see what is left,
+		// and a diff of it ("step 3 is now done") answers a different
+		// question than the one the person is asking.
+		m.appendTool(planLines(ev.Data))
 	case events.TypeDebateStarted:
 		author, _ := ev.Data["author"].(string)
 		reviewer, _ := ev.Data["reviewer"].(string)
@@ -299,4 +304,32 @@ func rewoundFiles(data map[string]any) string {
 		return ""
 	}
 	return " — " + strings.Join(parts, ", ")
+}
+
+// planLines renders a plan.updated payload as the checklist it is.
+//
+// The whole list rather than a count: "3 of 7 done" tells the person how
+// far along the model thinks it is, and the seven lines tell them whether
+// it is doing the right work, which is the question they actually have
+// while watching.
+func planLines(data map[string]any) string {
+	steps, _ := data["plan"].([]any)
+	var b strings.Builder
+	b.WriteString("[plan]")
+	if why, _ := data["explanation"].(string); why != "" {
+		b.WriteString(" " + why)
+	}
+	for _, raw := range steps {
+		s, _ := raw.(map[string]any)
+		text, _ := s["step"].(string)
+		mark := " "
+		switch status, _ := s["status"].(string); status {
+		case "completed":
+			mark = "x"
+		case "in_progress":
+			mark = ">"
+		}
+		fmt.Fprintf(&b, "\n  [%s] %s", mark, text)
+	}
+	return b.String()
 }

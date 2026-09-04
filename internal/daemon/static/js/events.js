@@ -145,6 +145,15 @@ const handlers = {
   // A debate: this session's agent writes, another one reviews, round
   // after round. The banner goes up before the first turn so the page
   // says what is about to happen rather than explaining it afterwards.
+  // The model's own checklist. Whole list every time, for the same
+  // reason the TUI prints it whole: the person is watching to see
+  // whether the work is the right work, not to diff step statuses.
+  'plan.updated': (d) => {
+    const steps = Array.isArray(d.plan) ? d.plan : [];
+    const mark = (s) => (s === 'completed' ? 'x' : s === 'in_progress' ? '>' : ' ');
+    const head = d.explanation ? `[plan] ${d.explanation}` : '[plan]';
+    appendTool([head, ...steps.map((s) => `  [${mark(s.status)}] ${s.step}`)].join('\n'));
+  },
   'debate.started': (d) => {
     const model = d.model ? ` (${d.model})` : '';
     appendTool(`[debate: ${d.author} writes, ${d.reviewer}${model} reviews, up to ${d.rounds} rounds]`);

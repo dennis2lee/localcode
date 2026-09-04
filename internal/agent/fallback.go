@@ -565,6 +565,8 @@ func (l *Loop) activationFor(ctx context.Context, sessionID, resolveAgent string
 			valOrchestrator: l.orchestrationFor(ctx, sessionID, resolveAgent, profile.Model),
 			valPlanPolicy:   l.planPolicyFor(ctx, sessionID, resolveAgent, profile.Model),
 			valModelQuirk:   quirkNote(profile.Model),
+			valVerifyPolicy: l.verifyPolicyFor(advertisedTools),
+			valContextLeft:  l.contextLeftFor(sessionID),
 		},
 	}
 }

@@ -235,6 +235,9 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	if !l.smartOn(ctx) {
 		hidden[smart.ToolSpawn] = true
 		hidden[smart.ToolCollect] = true
+		// A checklist is a way of working rather than a capability, and
+		// the bundle is where ways of working live.
+		hidden[updatePlanToolName] = true
 	}
 	// Answer belongs to one role in one situation: a stage that declared
 	// what it returns, which is given it explicitly through the pinned

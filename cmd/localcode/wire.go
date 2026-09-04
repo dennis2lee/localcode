@@ -254,6 +254,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// Registered after the task manager, which the debate needs to give a
 	// reviewer a session of its own.
 	registry.Register(agent.NewDebateTool(loop))
+	registry.Register(agent.NewUpdatePlanTool(loop))
 
 	// The delegation tools. Registered unconditionally, and hidden per
 	// turn instead — see Loop.hiddenTools. They used to be

@@ -142,6 +142,23 @@ func diagnoseMiss(content, old, display string) string {
 			where.line, numbered(where.text, where.line))
 	}
 
+	// Failing that, the same comparison again with typographic punctuation
+	// folded to ASCII. A model that read a file through a chat client, or
+	// that is writing from memory of one, quotes a curly apostrophe where
+	// the source has a straight one and an en dash where the source has a
+	// hyphen; the string is otherwise perfect and "not found" says nothing
+	// about which character to change. Codex's apply_patch normalises the
+	// same set and applies the edit anyway. This does not: the fold is a
+	// way of finding the line to quote back, never a licence to write
+	// bytes the model did not ask for.
+	if lines := looseMatchLines(punctFold(content), punctFold(old)); len(lines) > 0 {
+		where := lines[0]
+		return msg + fmt.Sprintf(" The same text is at line %d, differing only in punctuation "+
+			"(curly quotes, dashes or non-breaking spaces). The file has:\n%s\n"+
+			"Copy that exactly — those characters included.",
+			where.line, numbered(fileLinesAt(content, where.line, len(where.text)), where.line))
+	}
+
 	// Failing that, anchor on the first line of old_string alone. This is
 	// the case where the model is quoting something real but the rest of
 	// its excerpt has drifted, and the line numbers are what it needs.
@@ -164,6 +181,44 @@ func diagnoseMiss(content, old, display string) string {
 // looseWhitespace collapses every run of whitespace to a single space and
 // trims the ends, so two texts that differ only in spacing compare equal.
 func looseWhitespace(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// punctFold maps the typographic characters a model substitutes for ASCII
+// onto the ASCII they stand for, so a comparison can see past them.
+//
+// Used only to locate the line a diagnosis quotes back. Nothing folded
+// here is ever written to a file: the whole point of the message is that
+// the model then copies the real bytes.
+func punctFold(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '‐', '‑', '‒', '–', '—', '―', '−':
+			return '-'
+		case '‘', '’', '‚', '‛', '′':
+			return '\''
+		case '“', '”', '„', '‟', '″':
+			return '"'
+		case '\u00a0', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006',
+			'\u2007', '\u2008', '\u2009', '\u200a', '\u202f', '\u205f', '\u3000':
+			return ' '
+		case '\u200b', '\u200c', '\u200d', '\ufeff':
+			return -1 // zero-width: drop rather than fold
+		}
+		return r
+	}, s)
+}
+
+// fileLinesAt returns n lines of the file starting at 1-based line, as the
+// file actually holds them. The punctuation pass matches against a folded
+// copy, so the quote handed back has to come from the original.
+func fileLinesAt(content string, line, n int) []string {
+	lines := splitLines(content)
+	start := line - 1
+	if start < 0 || start >= len(lines) {
+		return nil
+	}
+	end := min(start+n, len(lines))
+	return lines[start:end]
+}
 
 type looseHit struct {
 	line int

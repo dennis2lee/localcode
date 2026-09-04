@@ -182,6 +182,15 @@ const (
 	// sentence to show; it rides on the event rather than being written as
 	// a reply, because a reply with no user message before it rehydrates
 	// as a second assistant message in a row.
+	// TypePlanUpdated is the model's own checklist for the work it is
+	// doing itself: {"plan": [{"step","status"}], "explanation"?}.
+	//
+	// Logged rather than transient, unlike task.progress. A plan is what
+	// the work was going to be, and reading it back beside what happened
+	// is most of the value: a session that ends with two steps still
+	// pending says so in the transcript, and says it after a restart.
+	TypePlanUpdated Type = "plan.updated"
+
 	TypeDebateStarted Type = "debate.started"
 	TypeDebateReview  Type = "debate.review"
 	TypeDebateEnded   Type = "debate.ended"

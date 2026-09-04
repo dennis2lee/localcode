@@ -332,6 +332,10 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 	// already too, which makes leaving the tool out the same defect again.
 	registry.Register(agent.NewOrchestrateTool(loop))
 	registry.Register(agent.NewAnswerTool())
+	// A checklist is worth keeping even where nobody is watching it live:
+	// the run's transcript is read afterwards, and the model gets the
+	// same next-action discipline either way.
+	registry.Register(agent.NewUpdatePlanTool(loop))
 	// The model running a command. A run honours it for the same reason
 	// it honours anything else in the config: the booked command becomes
 	// the next turn through the same SendMessage, and a run has one. What

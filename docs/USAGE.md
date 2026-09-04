@@ -1114,6 +1114,13 @@ Each prompt asset has a stable ID, source, trust class, request position, and in
 
 Only identities, sizes, and reasons are printed. Asset bodies, project instructions, and hook-injected content are not printed.
 
+Two assets exist only with [Smart Agent](#smart-agent) on, because both tell the model something the harness knows and it cannot see:
+
+| Asset | What it says |
+|---|---|
+| `smart.verify_policy` | Whether this session runs commands without asking. With permissions skipped, the model is told to run the project's checks and report what they said. Otherwise it is told to finish the change and offer the command, since every run costs the person an approval mid-thought. Test-related tasks are excepted in both modes. |
+| `session.context_left` | How many tokens are left in the window, with separators, plus advice to read in ranges under 25 percent and to stop and describe the next step under 10 percent. Written only from usage the server actually reported, never from an estimate. Last in the assembly order, and the only turn-dynamic asset in the system block, so the cacheable prefix in front of it is unaffected. |
+
 Token counts are character-based estimates. Korean and Japanese may use substantially more tokens than the estimate.
 
 The turn log records `prompt_manifest`, `prompt_assets`, and `prompt_untrusted`. Full records are stored in `~/.localcode/manifests/` with trace retention. `/context <id>` reads a past request's inclusion reasons, exclusions, hashes, warnings, and provider lowering. Bare `/context` describes the next request; `/context <id>` describes a recorded request.
@@ -1485,6 +1492,7 @@ Agents select models and tool scopes. Smart Agent adds built-in specialists. Orc
 | `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [Smart Agent](#smart-agent) on. |
 | `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
+| `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and a step cannot go from `pending` straight to `completed`. One-step plans are refused. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
 
 The loop ends when the model stops requesting tools. `Verdict` and `Answer` also end the turn after a valid completion result. Three consecutive steps containing only previously repeated tool calls end the turn with a transcript notice. A new edit between repeated checks counts as progress.
 
@@ -1709,12 +1717,12 @@ The table below applies only with Smart Agent enabled. [Grep completeness report
 | `read_file` | Supports `offset` and `limit`. Default: 800 lines. Footer reports range, total lines, and continuation offset. Binary files are identified rather than rendered. |
 | `grep` | Skips binary files, version-control internals, and package caches. Maximum 200 matches, 30 per file. Matching lines are clipped at 400 bytes on a rune boundary. Limits and skipped content are reported. |
 | `glob` | Same reported directory exclusions as grep. Maximum 500 paths. Directory components after `**` are supported, including `**/cmd/*.go`. |
-| `edit` | Reports whitespace differences, exact line bytes, CRLF, candidate line numbers, and duplicate matches. Successful edits return numbered changed lines. |
+| `edit` | Reports whitespace differences, punctuation differences (curly quotes, dashes, non-breaking spaces), exact line bytes, CRLF, candidate line numbers, and duplicate matches. Successful edits return numbered changed lines. |
 | `write_file` | Says whether it created the file or replaced one, and how many lines the replaced one had. |
 
 Tool limits:
 
-* `edit` reports near matches but never applies them automatically.
+* `edit` reports near matches but never applies them automatically. This includes the punctuation pass: a curly apostrophe where the file has a straight one is named and quoted, not silently folded, because an edit that rewrites characters the model did not ask to change is a different edit.
 * Search skips version-control internals and package caches. It does not exclude `vendor`, `build`, `dist`, or `target` by default.
 * Every output limit is reported.
 
