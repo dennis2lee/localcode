@@ -122,8 +122,12 @@ type Model struct {
 	// line, and re-wrapping the whole transcript for each of those is both
 	// wasted work on a long session and a needless chance to disturb the
 	// scroll position.
-	transcriptRev    uint64
-	pending          *pendingPermission
+	transcriptRev uint64
+	pending       *pendingPermission
+	// asking is the model's own question, waiting on an answer. Its own
+	// field rather than a mode on pending: the two can be on screen for
+	// different reasons and take different keys.
+	asking           *pendingAsk
 	pendingHintShown bool      // has the "resolve the permission above" hint already fired for this pending request
 	pendingSince     time.Time // when the current request appeared; see canAnswerPermission
 	waiting          bool

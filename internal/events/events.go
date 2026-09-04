@@ -182,6 +182,17 @@ const (
 	// sentence to show; it rides on the event rather than being written as
 	// a reply, because a reply with no user message before it rehydrates
 	// as a second assistant message in a row.
+	// TypeInputRequest is a question the model put to the person in the
+	// middle of a turn: {"id", "question", "options": [...]}. The turn is
+	// blocked until TypeInputResolved carries {"id","answer"} back, or
+	// {"id","cancelled":true} when the turn ended first.
+	//
+	// Distinct from permission.request, which looks similar and is not:
+	// that answer is a policy decision with a scope and a persisted
+	// rule, and this is one reply to one question.
+	TypeInputRequest  Type = "input.request"
+	TypeInputResolved Type = "input.resolved"
+
 	// TypePlanUpdated is the model's own checklist for the work it is
 	// doing itself: {"plan": [{"step","status"}], "explanation"?}.
 	//

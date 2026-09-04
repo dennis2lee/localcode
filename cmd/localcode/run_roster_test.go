@@ -31,6 +31,8 @@ var leftOutOfARun = map[string]string{
 	"Debate": "every turn in a pipe is unattended, and a debate can only be " +
 		"started from a conversation somebody is having",
 	"Verdict": "a debate reviewer's tool, and a run cannot hold a debate",
+	"ask_user": "there is nobody at the keyboard in a pipe, so the question " +
+		"could only block until the turn gave up",
 }
 
 func TestTheOneShotRosterDiffersFromTheDaemonsOnlyOnPurpose(t *testing.T) {

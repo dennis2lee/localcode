@@ -145,6 +145,21 @@ const handlers = {
   // A debate: this session's agent writes, another one reviews, round
   // after round. The banner goes up before the first turn so the page
   // says what is about to happen rather than explaining it afterwards.
+  // A question the model asked mid-turn. Rendered in the transcript
+  // rather than as a modal: the options are a shortcut, not the whole
+  // answer space, and the box below is already where a person types the
+  // one the model did not think of.
+  'input.request': (d) => {
+    session.pendingAsk = d.id;
+    const opts = Array.isArray(d.options) ? d.options : [];
+    appendTool([`[the model is asking] ${d.question}`,
+      ...opts.map((o, i) => `  ${i + 1}. ${o}`),
+      '  (reply in the box below, in your own words or with a number)'].join('\n'));
+  },
+  'input.resolved': (d) => {
+    if (session.pendingAsk === d.id) session.pendingAsk = null;
+    if (d.answer) appendTool(`[answered] ${d.answer}`);
+  },
   // The model's own checklist. Whole list every time, for the same
   // reason the TUI prints it whole: the person is watching to see
   // whether the work is the right work, not to diff step statuses.

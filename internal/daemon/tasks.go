@@ -107,3 +107,32 @@ func (d *Daemon) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 	ok := d.Tasks.Cancel(taskID)
 	writeJSON(w, http.StatusOK, map[string]bool{"cancelled": ok})
 }
+
+// handleResolveInput answers a mid-turn question from the model.
+//
+// Its own route rather than a mode on the permission one, for the same
+// reason the broker is its own type: the payload is an answer, not an
+// allow with a scope, and one endpoint taking both would have to decide
+// which it was looking at.
+func (d *Daemon) handleResolveInput(w http.ResponseWriter, r *http.Request) {
+	askID := r.PathValue("askId")
+	var req struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.Answer) == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("answer is empty"))
+		return
+	}
+	if d.Loop == nil || d.Loop.Input == nil || !d.Loop.Input.Resolve(askID, req.Answer) {
+		// Same reasoning as the permission route: a client told this
+		// succeeded would believe the turn it is watching is unblocked.
+		writeError(w, http.StatusNotFound, fmt.Errorf(
+			"question %s is not pending (already answered, or from a turn that has since ended)", askID))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
+}

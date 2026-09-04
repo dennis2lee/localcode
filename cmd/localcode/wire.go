@@ -95,6 +95,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	}
 
 	broker := agent.NewPermissionBroker(store)
+	input := agent.NewInputBroker(store)
 	configFilePath := ""
 	if path, err := resolvedConfigPath(configPath); err != nil {
 		// Not fatal: "always allow" just falls back to session-only
@@ -169,6 +170,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.ConfigPath = configFilePath
 	loop.MemoryDir = memDir
 	loop.Version = version
+	loop.Input = input
 	// "/rewind" needs a copy of a file as it was before the turn changed
 	// it, and the only place the resolved path exists is inside
 	// internal/tools. Wired here rather than in buildOneShot: a run prints
@@ -255,6 +257,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// reviewer a session of its own.
 	registry.Register(agent.NewDebateTool(loop))
 	registry.Register(agent.NewUpdatePlanTool(loop))
+	registry.Register(agent.NewAskUserTool(loop))
 
 	// The delegation tools. Registered unconditionally, and hidden per
 	// turn instead — see Loop.hiddenTools. They used to be

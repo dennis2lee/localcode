@@ -177,6 +177,23 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.thinking = true
 	case events.TypeThinkingEnd:
 		m.thinking = false
+	case events.TypeInputRequest:
+		id, _ := ev.Data["id"].(string)
+		question, _ := ev.Data["question"].(string)
+		raw, _ := ev.Data["options"].([]any)
+		opts := make([]string, 0, len(raw))
+		for _, o := range raw {
+			if s, _ := o.(string); s != "" {
+				opts = append(opts, s)
+			}
+		}
+		m.asking = &pendingAsk{id: id, question: question, options: opts}
+	case events.TypeInputResolved:
+		// Same replay problem the permission modal has: both halves are
+		// in the log, and resume replays it from the start.
+		if id, _ := ev.Data["id"].(string); m.asking != nil && m.asking.id == id {
+			m.asking = nil
+		}
 	case events.TypePlanUpdated:
 		// The whole list, every time. A plan is read to see what is left,
 		// and a diff of it ("step 3 is now done") answers a different

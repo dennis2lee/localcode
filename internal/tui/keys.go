@@ -1,6 +1,10 @@
 package tui
 
-import tea "charm.land/bubbletea/v2"
+import (
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 // handleKey is the tea.KeyMsg case of Update. Most keys either return
 // immediately or fall out to the bottom of Update, which forwards the
@@ -27,6 +31,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		// "nothing was running" harmlessly when there is nothing to stop.
 		m.queue = nil
 		return m, m.cancelTurn(), true
+
+	case "1", "2", "3", "4":
+		// One keystroke answers the model's question, but only when the
+		// box is empty: a digit typed into a half-written message is a
+		// digit, and answering with it would eat the keystroke and the
+		// question at once.
+		if m.asking != nil && strings.TrimSpace(m.input.Value()) == "" {
+			if answer := m.asking.answerFor(msg.String()); answer != "" {
+				id := m.asking.id
+				m.asking = nil
+				return m, m.answerQuestion(id, answer), true
+			}
+		}
+		return m, nil, false
 
 	case "y", "n", "s", "a", "d":
 		if m.pending != nil && m.canAnswerPermission() {

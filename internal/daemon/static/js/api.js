@@ -95,6 +95,8 @@ export const revealWorkspace = (sessionID) =>
 export const cancelSessionTurn = (sessionID) => api('POST', `/api/sessions/${sessionID}/cancel`, {});
 export const resolvePermissionRequest = (sessionID, id, allow, scope) =>
   api('POST', `/api/sessions/${sessionID}/permissions/${id}`, { allow, scope });
+export const answerQuestion = (sessionID, id, answer) =>
+  api('POST', `/api/sessions/${sessionID}/input/${id}`, { answer });
 
 export const setAutoDelegate = (patch) => api('POST', '/api/settings/auto-delegate', patch);
 export const setSmartAgent = (enabled) => api('POST', '/api/settings/smart-agent', { enabled });

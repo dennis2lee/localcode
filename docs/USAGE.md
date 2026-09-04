@@ -1130,6 +1130,8 @@ Two assets exist only with [Smart Agent](#smart-agent) on, because both tell the
 | `smart.verify_policy` | Whether this session runs commands without asking. With permissions skipped, the model is told to run the project's checks and report what they said. Otherwise it is told to finish the change and offer the command, since every run costs the person an approval mid-thought. Test-related tasks are excepted in both modes. |
 | `session.context_left` | How many tokens are left in the window, with separators, plus advice to read in ranges under 25 percent and to stop and describe the next step under 10 percent. Written only from usage the server actually reported, never from an estimate. Last in the assembly order, and the only turn-dynamic asset in the system block, so the cacheable prefix in front of it is unaffected. |
 
+When the model asks a question with `ask_user`, the turn keeps running and waits. In the TUI the question and its numbered options appear below the prompt box: press the number to answer, or type an answer in your own words and press enter. In the Web UI the question appears in the transcript and the next message you send answers it. Cancelling the turn cancels the question.
+
 With Smart Agent on, compaction also names what its summary replaced. A skill body, a custom command's expansion, a spliced file and an instruction typed mid-turn all live in the conversation rather than in the system prompt, so replacing the history removes them. The summary ends with a line listing them (up to six, then a count) and telling the model to load again anything it is still working from. The `compacted` event records the same list under `replaced_assets`.
 
 Token counts are character-based estimates. Korean and Japanese may use substantially more tokens than the estimate.
@@ -1504,6 +1506,7 @@ Agents select models and tool scopes. Smart Agent adds built-in specialists. Orc
 | `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 | `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and a step cannot go from `pending` straight to `completed`. One-step plans are refused. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
+| `ask_user` | No | Ask the user one question mid-turn and wait for the answer, without ending the turn. 2 to 4 short options, most recommended first; the user can answer in their own words instead. Once per turn. Offered only with [Smart Agent](#smart-agent) on, and only where somebody is watching: never in a one-shot run, a scheduled run, or a delegated sub agent. |
 
 The loop ends when the model stops requesting tools. `Verdict` and `Answer` also end the turn after a valid completion result. Three consecutive steps containing only previously repeated tool calls end the turn with a transcript notice. A new edit between repeated checks counts as progress.
 

@@ -87,6 +87,12 @@ func (m Model) resolvePermission(id string, allow bool, scope string) tea.Cmd {
 	}, func(err error) tea.Msg { return opErrMsg{op: "resolve permission", err: err} })
 }
 
+func (m Model) answerQuestion(id, answer string) tea.Cmd {
+	return callErr(func(ctx context.Context) error {
+		return m.client.AnswerQuestion(ctx, m.sessionID, id, answer)
+	}, func(err error) tea.Msg { return opErrMsg{op: "answer question", err: err} })
+}
+
 func (m Model) fetchVersion() tea.Cmd {
 	return call(m.client.Version, func(v string, err error) tea.Msg { return versionMsg{version: v, err: err} })
 }

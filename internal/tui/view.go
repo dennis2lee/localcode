@@ -122,6 +122,9 @@ func (m Model) View() tea.View {
 	// error — one at a time, gone when there is nothing to say.
 	if m.pending != nil {
 		lines = append(lines, modalStyle.Render(m.pending.prompt(strings.TrimSpace(m.input.Value()) != "")))
+	}
+	if m.asking != nil {
+		lines = append(lines, modalStyle.Render(m.asking.prompt(strings.TrimSpace(m.input.Value()) != "")))
 	} else if m.busy() {
 		lines = append(lines, statusStyle.Render(m.busyLine()))
 	} else if m.errMsg != "" {

@@ -87,6 +87,9 @@ export function freshSessionState(id) {
     historyDraft: '',   // text stashed when recall started
     pendingPermissionID: null,
     pendingPermissionCanAlways: false,
+  // The id of a question the model asked mid-turn, or null. The next
+  // message typed into the box answers it instead of starting a prompt.
+  pendingAsk: null,
     // Model output streams as markdown, so it renders as one growing bubble
     // per model message rather than raw text nodes: currentModelEl is that
     // bubble, currentModelBuffer the raw markdown accumulated for it so far.

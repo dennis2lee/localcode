@@ -35,6 +35,19 @@ func (m *Model) dequeue() tea.Cmd {
 // prompt, queue or reject input while a turn is running, or dispatch a
 // local command / send an ordinary prompt.
 func handleEnter(m Model) (tea.Model, tea.Cmd) {
+	// A question the model asked takes whatever the person wrote, in
+	// their own words. That is the escape hatch that keeps four canned
+	// options from being a dead end: the right answer is often "neither,
+	// do X", and a modal that could not carry it would force them to
+	// cancel the turn to say so.
+	if m.asking != nil {
+		if answer := strings.TrimSpace(m.input.Value()); answer != "" {
+			id := m.asking.id
+			m.asking = nil
+			m.input.SetValue("")
+			return m, m.answerQuestion(id, answer)
+		}
+	}
 	if m.pending != nil {
 		// Typing an answer and hitting Enter here used to do nothing with
 		// no explanation, which reads as broken — the permission line

@@ -103,7 +103,11 @@ func (s *liveSettings) SetAutoDelegate(v bool) {
 // model providers together. One Loop instance is shared across sessions;
 // per-session conversation history is kept in memory.
 type Loop struct {
-	Store        *session.Store
+	Store *session.Store
+	// Input carries a mid-turn question to whoever is watching a session
+	// and blocks until they answer. Nil in a run with nobody at the
+	// keyboard, which is what makes the ask_user tool refuse there.
+	Input        *InputBroker
 	Tools        *tools.Registry
 	Providers    map[string]provider.Provider // provider config key -> client
 	Config       *config.Config
@@ -271,9 +275,12 @@ type Loop struct {
 	// settings ("/config" toggles) live in settings instead, below —
 	// unrelated state that happened to share this lock only because it
 	// used to live directly on Loop.
-	mu              sync.Mutex
-	messages        map[string][]provider.Message     // sessionID -> history
-	usage           map[string]sessionUsage           // sessionID -> latest known usage
+	mu       sync.Mutex
+	messages map[string][]provider.Message // sessionID -> history
+	usage    map[string]sessionUsage       // sessionID -> latest known usage
+	// asked is the one-question-per-turn budget for ask_user, keyed by
+	// session and cleared when the turn ends. See claimAsk.
+	asked           map[string]bool
 	cumulativeUsage map[string]map[string]modelTotals // sessionID -> model -> running totals, see /usage
 	turnRate        map[string]turnRate               // sessionID -> this turn's tokens/generation time
 	// pendingCommand holds a command the Command tool asked for, until

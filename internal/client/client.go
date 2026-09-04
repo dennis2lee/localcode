@@ -352,6 +352,12 @@ func (c *Client) ResolvePermission(ctx context.Context, sessionID, permID string
 	return c.doJSON(ctx, http.MethodPost, path, map[string]any{"allow": allow, "scope": scope}, nil)
 }
 
+// AnswerQuestion replies to a mid-turn question from the model.
+func (c *Client) AnswerQuestion(ctx context.Context, sessionID, askID, answer string) error {
+	path := fmt.Sprintf("/api/sessions/%s/input/%s", sessionID, askID)
+	return c.doJSON(ctx, http.MethodPost, path, map[string]any{"answer": answer}, nil)
+}
+
 // CancelTurn stops the turn currently running for a session. Cancelling
 // an idle session is a no-op, not an error.
 func (c *Client) CancelTurn(ctx context.Context, sessionID string) error {

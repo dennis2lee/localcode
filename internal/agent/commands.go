@@ -35,6 +35,9 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	// function. A delegated turn arrives with its parent's pin and keeps
 	// it. See config.WithSmartAgent.
 	ctx = l.pinSmart(ctx)
+	// The ask_user budget is per turn, and this is where a turn begins
+	// and ends for every route out of this function.
+	defer l.releaseAsk(sessionID)
 
 	if len(l.Config.Hooks) > 0 {
 		blocked, reason, _ := hooks.Run(ctx, l.Config.Hooks, hooks.EventUserPromptSubmit, l.SessionDir(sessionID), map[string]any{

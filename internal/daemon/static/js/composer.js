@@ -274,6 +274,24 @@ export async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text) return;
 
+  // A question the model asked mid-turn takes the box's next message as
+  // its answer, in the person's own words. That is the escape hatch that
+  // keeps four canned options from being a dead end: the right answer is
+  // often "neither, do X", and a dialog that could not carry it would
+  // force cancelling the turn to say so.
+  if (session.pendingAsk) {
+    const id = session.pendingAsk;
+    session.pendingAsk = null;
+    inputEl.value = '';
+    autoResizeInput();
+    try {
+      await apiClient.answerQuestion(session.sessionID, id, text);
+    } catch (err) {
+      appendTool(`[could not answer: ${err}]`);
+    }
+    return;
+  }
+
   // A turn is already running: send the prompt anyway. The daemon hands
   // it to the running turn, which picks it up at its next tool call — so
   // "actually, skip the tests" reaches the model while it is still

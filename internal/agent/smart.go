@@ -238,6 +238,14 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 		// A checklist is a way of working rather than a capability, and
 		// the bundle is where ways of working live.
 		hidden[updatePlanToolName] = true
+		hidden[askUserToolName] = true
+	}
+	// A question needs somebody to answer it. A scheduled run and a
+	// one-shot in a pipe have nobody at the keyboard, and a delegated
+	// sub-agent has a model rather than a person: in all three the tool
+	// could only block until the turn gave up.
+	if Unattended(ctx) || l.Input == nil {
+		hidden[askUserToolName] = true
 	}
 	// Answer belongs to one role in one situation: a stage that declared
 	// what it returns, which is given it explicitly through the pinned
@@ -255,6 +263,9 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	if id, ok := SessionIDFromContext(ctx); ok && l.Store != nil {
 		if sess, err := l.Store.Get(id); err == nil && sess.ParentID != "" {
 			hidden[sessionReadToolName] = true
+			// A sub-agent's "person" is the model that delegated to it,
+			// which is not somebody who can answer a design question.
+			hidden[askUserToolName] = true
 			// The third of the three above: a sub-agent starting a debate
 			// of its own is a tree of them nobody asked for, which
 			// debateRefusal already turns down.
