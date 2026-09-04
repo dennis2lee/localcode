@@ -19,6 +19,7 @@ import (
 	"localcode/internal/dialog"
 	"localcode/internal/gui"
 	"localcode/internal/tui"
+	"localcode/internal/update"
 )
 
 func runDaemon(configPath, listen string) error {
@@ -105,12 +106,7 @@ func runGUI(configPath string) error {
 		}
 	}()
 
-	// The pipe the daemon behind this window watches. Its write end lives
-	// in this process for as long as the window does, so a successor
-	// started by an update exits when the window closes, with nothing to
-	// remember to stop. Made before the window, since the first successor
-	// may be started before the page is up.
-	alive, err := newTUIAlivePipe()
+	alive, err := windowAlivePipe()
 	if err != nil {
 		return err
 	}
@@ -144,6 +140,13 @@ func runGUI(configPath string) error {
 		// described in v0.88.0 and not wired; the window built its daemon
 		// in-process every start and never asked.
 		if binary, ok := startupHandoffBinary(d, os.Stderr); ok {
+			// The splash shows this shell's own version, which after an
+			// update is the copy the shortcut points at rather than the
+			// one about to run. Saying which version is coming up is the
+			// difference between "it did not update" and "it did".
+			if v, verr := update.VersionOf(binary); verr == nil {
+				progress("starting localcode " + v)
+			}
 			ln, lerr := net.Listen("tcp", "127.0.0.1:0")
 			if lerr != nil {
 				return nil, fmt.Errorf("bind a port for the new localcode: %w", lerr)

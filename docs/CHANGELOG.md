@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.101.0
+
+**The desktop window's update could not survive its own success.** The pipe that ties a successor's life to the window's was held only through the daemon that started it, and a handoff exists to stop referring to that daemon. The moment the window swapped to the proxy, the old daemon became garbage and `os.File`'s finalizer closed the pipe with it; the successor read EOF and called `os.Exit(0)`.
+
+What that looked like was two different faults. Sometimes the successor died before it announced itself and the update failed with `did not begin serving within 20s`. Sometimes it announced first, the handoff completed, and every request afterwards answered `502` from a proxy pointing at a process that no longer existed, which is what made switching models and sending messages fail. Neither pointed at a collected pipe. It is held for the life of the process now, which is the lifetime it always needed.
+
+**A failed handoff says why.** The successor's account of itself went to the stderr it inherited, and the desktop window is a GUI-subsystem binary with no console, so it went nowhere. Its output is teed into the failure message and into `handoff.log` under the user's cache directory. The deadline is 90 seconds rather than 20: a successor builds a whole daemon before it serves, which is what the splash screen exists to cover, and 20 was a terminal-sized budget.
+
+**The splash names the version that is coming up.** It shows the shell's own version, and after an update the shell can be the copy the shortcut points at rather than the newer one about to run, which read as an update that had not happened.
+
+**`/debug-log` logs a request whose length is not known in advance.** Such a body was noted and not shown, on the reasoning that reading it would consume what was about to be sent. `GetBody` is the way to read one anyway: a client that sets it is promising a fresh copy on demand, which is how a redirect or a retry resends. The AWS SDK sets it on every signed request, which is why a Bedrock turn logged its answer and not its question.
+
 ## v0.100.0
 
 **Bedrock could not load its config.** v0.98.0 gave the AWS config loader a plain `*http.Client` so that `/debug-log` would see Bedrock calls. With a custom CA bundle configured, the loader reaches for the concrete `awshttp.BuildableClient` to add the roots to, so every Bedrock turn failed at config load with `unable to add custom RootCAs HTTPClient, has no WithTransportOptions`. The client the loader resolved is now kept, CA bundle and all, and wrapped on the service client instead, which takes any `aws.HTTPClient`. A test loads a config with a real generated CA bundle, which is the step that used to fail.

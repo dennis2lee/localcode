@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -117,8 +118,13 @@ func spawnSuccessor(binary string, ln net.Listener, alive *os.File) (pid int, ex
 
 	cmd := exec.Command(binary, successorArgs()...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d,%d,%d", envTakeover, hLn, hReady, hAlive))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Teed rather than inherited: see successor_output.go. A window has
+	// no console for the successor to print to, and its account of why
+	// it would not start is the whole of what a failed handoff has to
+	// offer.
+	out := newSuccessorOutput()
+	cmd.Stdout = io.MultiWriter(passthrough{os.Stdout}, out)
+	cmd.Stderr = io.MultiWriter(passthrough{os.Stderr}, out)
 	childproc.Hide(cmd)
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -135,10 +141,18 @@ func spawnSuccessor(binary string, ln net.Listener, alive *os.File) (pid int, ex
 	// The parent's copy of the write end has to go, or the read never
 	// sees EOF when the child dies before writing.
 	readyW.Close()
+	// The output file is closed when the process ends, in the same
+	// goroutine that reports the end: a second reader of `done` would
+	// take the value the caller is waiting for.
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		out.Close()
+		done <- err
+	}()
 
-	if err := waitReady(readyR, cmd.Process.Pid, func() { _ = cmd.Process.Kill() }); err != nil {
+	if err := waitReady(readyR, cmd.Process.Pid, out, func() { _ = cmd.Process.Kill() }); err != nil {
+		out.Close()
 		return 0, nil, err
 	}
 	return cmd.Process.Pid, done, nil

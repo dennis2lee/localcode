@@ -2197,7 +2197,7 @@ Everything else does reach it. The file holds the system prompt, this project's 
 
 Bedrock is covered too: the client the AWS config resolved is wrapped rather than replaced, on the service client rather than on the config, since the config loader reaches for its own concrete client type when a custom CA bundle is set. The signature is unaffected, because the SDK signs in its own middleware before any transport runs and the wrapper hands on identical bytes. Its responses are binary event-stream frames, and they go into the log as they arrive.
 
-A request body that is streamed, or larger than 32 MB, is noted rather than buffered: reading one to log it would consume what the caller was about to send, and holding it would double the memory it takes. Responses have no such ceiling, since they are copied as they stream rather than held.
+A request whose length is not known ahead of time is read through the client's own `GetBody`, which exists so a redirect or a retry can send the body again and therefore hands back a fresh copy without touching the one going out. A body larger than 32 MB, or one whose client offers no second copy, is noted rather than buffered. Responses have no such ceiling, since they are copied as they stream rather than held.
 
 This is the layer under [`/context`](#context) and the [turn log](#the-turn-log). `/context` says what a request was going to contain and the turn log says a call happened and what it cost; this is the request.
 

@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 )
 
@@ -35,5 +36,44 @@ func TestTheWindowHandlerCanBeSwappedUnderTheWindow(t *testing.T) {
 	front.Store(answer("new"))
 	if got := get(); got != "new" {
 		t.Fatalf("after the swap: %q", got)
+	}
+}
+
+// The window's alive pipe has to outlive the daemon that first used it.
+//
+// Held in a local it did not: a handoff exists to stop referring to the
+// old daemon, so the moment the window swapped to the proxy the pipe
+// became unreachable and os.File's finalizer closed it. The successor
+// read EOF and exited, and the update either timed out or finished onto
+// a backend that answered 502 to everything.
+func TestTheWindowAlivePipeSurvivesCollection(t *testing.T) {
+	p, err := windowAlivePipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := windowAlivePipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != p {
+		t.Fatal("a second call made a second pipe; every generation of successor watches the same end")
+	}
+
+	// Drop every local reference and make the collector look twice: a
+	// finalizer runs on the cycle after the object is found unreachable.
+	p, again = nil, nil
+	_, _ = p, again
+	runtime.GC()
+	runtime.GC()
+
+	held, err := windowAlivePipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Writing is what proves the descriptor is still open. A collected
+	// write end fails here with "file already closed", which is exactly
+	// what the successor saw as EOF on the other side.
+	if _, err := held.w.Write([]byte{0}); err != nil {
+		t.Fatalf("the alive pipe was closed under us: %v", err)
 	}
 }

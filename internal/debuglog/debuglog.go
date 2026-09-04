@@ -224,11 +224,32 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// that body chunked. Both readings mean the same thing here — the
 	// length is not known in advance — and treating zero as empty was
 	// how a streamed request came out of the log as nothing at all.
+	//
+	// GetBody is the way to read one anyway. It exists so a redirect or
+	// a retry can send the body a second time, which means a client that
+	// sets it is promising a fresh copy on demand — and a copy taken
+	// from it never touches the one about to go out. The AWS SDK sets it
+	// on every signed request, which is why a Bedrock turn used to log
+	// its answer and not its question.
+	case req.ContentLength <= 0 && req.GetBody != nil:
+		rc, err := req.GetBody()
+		if err != nil {
+			b.WriteString("\n[the request body could not be read for the log: " + err.Error() + "]\n")
+			break
+		}
+		raw, err := io.ReadAll(io.LimitReader(rc, maxLoggedBody))
+		rc.Close()
+		if err != nil {
+			b.WriteString("\n[the request body could not be read for the log: " + err.Error() + "]\n")
+			break
+		}
+		b.WriteString("\n")
+		b.Write(raw)
+		b.WriteString("\n")
 	case req.ContentLength <= 0:
-		// Unknown length is a streaming body. Reading it to log it would
-		// consume what the caller is about to send, and replacing it with
-		// a buffer would change a streamed upload into a buffered one.
-		b.WriteString("\n[request body is streamed; its length is not known in advance and it is not buffered here]\n")
+		// No length and no second copy to be had. Reading the body here
+		// would consume what the caller is about to send.
+		b.WriteString("\n[request body is streamed, its length is not known in advance, and the client offers no second copy, so it is not shown]\n")
 	case req.ContentLength > maxLoggedBody:
 		fmt.Fprintf(&b, "\n[request body is %d bytes, past the %d-byte ceiling this log buffers; not shown]\n",
 			req.ContentLength, maxLoggedBody)

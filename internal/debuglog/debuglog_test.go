@@ -238,3 +238,43 @@ func TestAStreamedRequestBodyIsNotedRatherThanConsumed(t *testing.T) {
 		t.Errorf("the log does not say the body was streamed:\n%s", read(t, sink.Path()))
 	}
 }
+
+// A body whose length is not known ahead of time is still logged when
+// the client can produce a second copy. The AWS SDK sets GetBody on
+// every signed request, which is why a Bedrock turn logged its answer
+// and not its question.
+func TestAnUnknownLengthBodyIsLoggedThroughGetBody(t *testing.T) {
+	var got []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+
+	sink, err := Create(t.TempDir(), "s1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &http.Client{Transport: Transport{}}
+	req, _ := http.NewRequestWithContext(With(context.Background(), sink),
+		http.MethodPost, srv.URL, struct{ io.Reader }{strings.NewReader(`{"anthropic_version":"x"}`)})
+	// What a signing client does: no length up front, a fresh copy on
+	// demand for the retry it might have to make.
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(`{"anthropic_version":"x"}`)), nil
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	sink.Close()
+
+	if string(got) != `{"anthropic_version":"x"}` {
+		t.Errorf("the server received %q; reading for the log disturbed the request", got)
+	}
+	if !strings.Contains(read(t, sink.Path()), `"anthropic_version":"x"`) {
+		t.Errorf("the request body is not in the log:\n%s", read(t, sink.Path()))
+	}
+}

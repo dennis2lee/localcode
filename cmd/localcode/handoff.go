@@ -49,7 +49,16 @@ const (
 	// handoff that outlasts that is a turn that was never going to end.
 	retireTimeout = 30 * time.Minute
 	// How long the successor gets to come up and say so.
-	successorTimeout = 20 * time.Second
+	//
+	// A successor builds a whole daemon before it serves: it reads the
+	// config, opens the providers, loads every session from disk and
+	// hands shakes with each configured MCP server. That is what the
+	// desktop window's splash screen exists to cover, and on a machine
+	// with several MCP servers it is not a few seconds. Twenty was a
+	// terminal-sized budget and it timed out a handoff that would have
+	// worked; the cost of waiting longer is a slow update, and the cost
+	// of being short is an update that does not happen.
+	successorTimeout = 90 * time.Second
 )
 
 // inherited is what a process started by a handoff was given.
@@ -97,7 +106,7 @@ func newTUIAlivePipe() (*tuiAlivePipe, error) {
 
 // waitReady is the parent's half of the readiness pipe: one byte, or the
 // child going away first, or a deadline.
-func waitReady(readyR *os.File, pid int, kill func()) error {
+func waitReady(readyR *os.File, pid int, out *successorOutput, kill func()) error {
 	readyCh := make(chan error, 1)
 	go func() {
 		var b [1]byte
@@ -107,12 +116,13 @@ func waitReady(readyR *os.File, pid int, kill func()) error {
 	select {
 	case rerr := <-readyCh:
 		if rerr != nil {
-			return fmt.Errorf("the new localcode (pid %d) stopped before it began serving", pid)
+			return fmt.Errorf("the new localcode (pid %d) stopped before it began serving.%s", pid, out.note())
 		}
 		return nil
 	case <-time.After(successorTimeout):
 		kill()
-		return fmt.Errorf("the new localcode (pid %d) did not begin serving within %s", pid, successorTimeout)
+		return fmt.Errorf("the new localcode (pid %d) did not begin serving within %s.%s",
+			pid, successorTimeout, out.note())
 	}
 }
 
