@@ -44,16 +44,7 @@ func NewBedrock(region, profile string) *Bedrock {
 // shared config and credential files instead of the default chain's usual
 // resolution order.
 func loadBedrockClient(ctx context.Context, region, profile string) (bedrockClient, error) {
-	// The same client the HTTP providers use, so "/debug-log" sees these
-	// calls too. The SDK signs the request in its own middleware, before
-	// any transport runs, and the transport hands on the identical bytes,
-	// so the signature is unaffected. What comes back is binary
-	// event-stream frames, and they go into the log as they arrive: a
-	// frame nobody can read is still evidence that it arrived.
-	opts := []func(*awsconfig.LoadOptions) error{
-		awsconfig.WithRegion(region),
-		awsconfig.WithHTTPClient(debugClient()),
-	}
+	opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
 	if profile != "" {
 		opts = append(opts, awsconfig.WithSharedConfigProfile(profile))
 	}
@@ -61,7 +52,24 @@ func loadBedrockClient(ctx context.Context, region, profile string) (bedrockClie
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
-	return bedrockruntime.NewFromConfig(cfg), nil
+	// "/debug-log" sees Bedrock too, and the wrapping happens here rather
+	// than on the config for a reason that cost a release. Passing a
+	// client to LoadDefaultConfig replaces the one it would have built,
+	// and when a custom CA bundle is configured the loader reaches for
+	// that client's *concrete* type — awshttp.BuildableClient — to add
+	// the roots to. Anything else, wrapper or not, fails the assertion
+	// and the whole config load errors out. So the client the loader
+	// resolved is kept, CA bundle and all, and wrapped on the service
+	// client, which takes any aws.HTTPClient.
+	//
+	// The signature is unaffected: the SDK signs in its own middleware,
+	// before any transport runs, and the wrapper hands on identical
+	// bytes. What comes back is binary event-stream frames, and they go
+	// into the log as they arrive: a frame nobody can read is still
+	// evidence that it arrived.
+	return bedrockruntime.NewFromConfig(cfg, func(o *bedrockruntime.Options) {
+		o.HTTPClient = loggingAWSClient(cfg.HTTPClient)
+	}), nil
 }
 
 // clientFor initializes the SDK client once it is actually needed. A failed

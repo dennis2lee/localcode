@@ -21,7 +21,7 @@ LocalCode supports interactive TUI, Web UI, desktop, daemon, and one-shot CLI wo
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Archive](#archiving-a-conversation), [Referring to another conversation](#referring-to-another-conversation-with-name), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
 | [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
-| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Effort](#effort), [Debug log](#debug-log), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm) |
+| [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Effort](#effort), [Zoom and what a reload keeps](#zoom-and-what-a-reload-keeps), [Debug log](#debug-log), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
 ## Part 1. Getting started
@@ -2165,6 +2165,14 @@ Automatic compatibility adjustments:
 
 Reasoning appears as a separate muted block in the Web UI. The TUI status reads `thinking`. Reasoning-stream text is not written to session logs or replayed after reload.
 
+### Zoom and what a reload keeps
+
+Ctrl and the wheel, or ctrl with `+`, `-` and `0`, size the page. The zoom belongs to the page rather than to the window, so it survives a reload and comes back in the next window; the panel widths do the same.
+
+Which conversation a window is looking at survives a reload too, per window: two windows on one daemon each come back to their own. A window opened fresh starts at the newest conversation, as before.
+
+Both matter because `/update` reloads the page on its own when the daemon behind a desktop window hands over. An update that finished by moving you to a different conversation at 100% zoom was taking something away from whoever ran it.
+
 ### Debug log
 
 `/debug-log` writes everything localcode sends a model and everything it sends back, byte for byte. Run it once to turn it on, again to turn it off.
@@ -2187,7 +2195,7 @@ Credentials never reach the file. `Authorization`, `x-api-key`, `api-key`, `x-go
 
 Everything else does reach it. The file holds the system prompt, this project's rules, the auto-memory index, every file the model read and every command it ran. Read one before sharing it.
 
-Bedrock is covered too: its SDK client is given the same HTTP client. The signature is unaffected, because the SDK signs in its own middleware before any transport runs and the transport hands on identical bytes. Its responses are binary event-stream frames, and they go into the log as they arrive.
+Bedrock is covered too: the client the AWS config resolved is wrapped rather than replaced, on the service client rather than on the config, since the config loader reaches for its own concrete client type when a custom CA bundle is set. The signature is unaffected, because the SDK signs in its own middleware before any transport runs and the wrapper hands on identical bytes. Its responses are binary event-stream frames, and they go into the log as they arrive.
 
 A request body that is streamed, or larger than 32 MB, is noted rather than buffered: reading one to log it would consume what the caller was about to send, and holding it would double the memory it takes. Responses have no such ceiling, since they are copied as they stream rather than held.
 

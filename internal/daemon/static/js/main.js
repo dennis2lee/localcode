@@ -22,7 +22,8 @@ import {
   navigatingHistory, endHistoryNavigation,
 } from './composer.js';
 import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent } from './loaders.js';
-import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, loadArchived } from './sessions.js';
+import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, loadArchived, rememberedOpenSession } from './sessions.js';
+import { wireZoom, applyZoom } from './zoom.js';
 import {
   openScheduleDialog, closeScheduleDialog, saveSchedule, previewWhen,
   closeScheduleDetails,
@@ -296,6 +297,9 @@ async function init() {
   // out of the way. What it does not do any more is stay unloaded, for
   // the reason two lines below.
   wireArchiveDrop();
+  // Before anything is measured, so the first layout is at the size the
+  // person left it rather than at 100% for a frame.
+  wireZoom();
   try {
     app.archiveOpen = !!localStorage.getItem('archiveOpen');
   } catch { /* private window, or storage refused: stay collapsed */ }
@@ -308,7 +312,15 @@ async function init() {
   if (!app.sessions || app.sessions.length === 0) {
     await createNewSession();
   } else {
-    selectSession(app.sessions[0].id, app.sessions[0].agent, app.sessions[0].workspace);
+    // The one this window was last looking at, if it is still there.
+    //
+    // Without this a reload always landed on sessions[0], which was a
+    // curiosity when the only way to reload was pressing F5 and a defect
+    // once "/update" started reloading the page on its own: the update
+    // finished and the person was reading a different conversation.
+    const remembered = rememberedOpenSession();
+    const open = app.sessions.find((s) => s.id === remembered) || app.sessions[0];
+    selectSession(open.id, open.agent, open.workspace);
   }
 }
 
@@ -333,3 +345,4 @@ export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
 export { renderSessionList, selectSession, deleteSessionConfirm, reorderList, dropSessionOn } from './sessions.js';
+export { wireZoom, applyZoom } from './zoom.js';

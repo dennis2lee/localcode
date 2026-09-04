@@ -468,6 +468,8 @@ class Document {
     this.listeners = new Map();
     this.byID = elementsWithIDs(this, html);
     this.body = new Element(this, 'body');
+    // The root element, which the page's own zoom is written to.
+    this.documentElement = new Element(this, 'html');
     this.activeElement = null;
     // Every id app.js asked for, so a test can assert the markup and the
     // script still agree.

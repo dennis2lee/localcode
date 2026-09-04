@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.100.0
+
+**Bedrock could not load its config.** v0.98.0 gave the AWS config loader a plain `*http.Client` so that `/debug-log` would see Bedrock calls. With a custom CA bundle configured, the loader reaches for the concrete `awshttp.BuildableClient` to add the roots to, so every Bedrock turn failed at config load with `unable to add custom RootCAs HTTPClient, has no WithTransportOptions`. The client the loader resolved is now kept, CA bundle and all, and wrapped on the service client instead, which takes any `aws.HTTPClient`. A test loads a config with a real generated CA bundle, which is the step that used to fail.
+
+**An update no longer moves you to another conversation.** The page picked the first session in the list on every load, which was a curiosity when reloading meant pressing F5 and a defect once `/update` started reloading the page itself. The window now comes back to the conversation it was reading, kept in `sessionStorage` so two windows each return to their own. A window opened fresh still starts at the newest.
+
+**And it no longer resets the zoom.** Ctrl with the wheel was the container's zoom, which no script can read or restore and which a reload is a navigation away from. The page takes ctrl+wheel and ctrl with `+`, `-` and `0` for itself now, applies the factor to the root element, and remembers it, so it survives a reload and comes back in the next window.
+
 ## v0.99.0
 
 **Documentation for the last four releases.** `/debug-log` had a section in USAGE and a row in the command table, and the contents table at the top of that file never listed it, which for anyone who reads the contents table is the same as not having it. Effort's own section was missing from that table too.

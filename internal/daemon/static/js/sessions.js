@@ -313,6 +313,7 @@ export async function deleteSessionConfirm(s) {
 export function selectSession(id, agent, workspace) {
   // Opening it is reading it.
   app.unreadSessions.delete(id);
+  rememberOpenSession(id);
   // What is in the box was typed into the conversation being left, so it
   // goes with it. Read before resetSession, which is where sessionID stops
   // naming that conversation.
@@ -575,4 +576,31 @@ export function wireArchiveDrop() {
     if (s) archiveSessionNow(s);
     else renderArchiveList();
   });
+}
+
+// Which conversation this window is looking at, kept across a reload.
+//
+// sessionStorage rather than localStorage, and the difference is the
+// point: it is per tab and per window, so two windows on one daemon each
+// come back to their own conversation instead of fighting over one key.
+// It survives a reload and does not survive the window closing, which is
+// exactly the lifetime wanted — a fresh window starting on the newest
+// conversation is the old behaviour and is right.
+//
+// Best-effort throughout. A WebView with storage disabled costs the
+// person a remembered conversation, not a page that fails to start.
+const OPEN_SESSION_KEY = 'localcode.openSession';
+
+export function rememberOpenSession(id) {
+  try {
+    sessionStorage.setItem(OPEN_SESSION_KEY, id || '');
+  } catch { /* storage refused: the next reload starts at the top */ }
+}
+
+export function rememberedOpenSession() {
+  try {
+    return sessionStorage.getItem(OPEN_SESSION_KEY) || '';
+  } catch {
+    return '';
+  }
 }

@@ -42,6 +42,7 @@ export const app = {
   skipPermissions: false,
   keepGoing: true,       // the carry-on nudge for muse models
   repeatLimit: 0,        // nothing-new steps that end a turn; 0 (the default) is off
+  zoom: 1,               // the page's own ctrl+wheel zoom, restored across reloads
   autoCompactPercent: 50,
   permissionRules: {},        // tool -> [{match, decision}]
   // The four switches as they apply to the open conversation, plus where

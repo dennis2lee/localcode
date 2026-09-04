@@ -301,6 +301,16 @@ async function load(opts = {}) {
     removeItem: (k) => stored.delete(k),
   };
   harness.storage = stored;
+  // sessionStorage is its own store, per window: which conversation this
+  // one is looking at is kept there so two windows do not fight over one
+  // key. The stub mirrors localStorage's shape.
+  const sessionStored = new Map(Object.entries(opts.sessionStorage || {}));
+  sandbox.sessionStorage = {
+    getItem: (k) => (sessionStored.has(k) ? sessionStored.get(k) : null),
+    setItem: (k, v) => sessionStored.set(k, String(v)),
+    removeItem: (k) => sessionStored.delete(k),
+  };
+  harness.sessionStorage = sessionStored;
   sandbox.confirm = () => (opts.confirm === undefined ? true : opts.confirm);
   sandbox.prompt = () => (opts.prompt === undefined ? null : opts.prompt);
 
@@ -345,6 +355,10 @@ async function load(opts = {}) {
     // attaches there rather than to an element (global keys, and the
     // pointermove/pointerup of a panel drag).
     doc: document,
+    // internals is the module namespace, for the few tests that call an
+    // exported function directly rather than through the DOM.
+    internals,
+    sessionStorage: sessionStored,
     // el(id) is the element index.html declares — the same object the app
     // code holds a reference to.
     el: (id) => document.getElementById(id),
@@ -399,6 +413,7 @@ async function load(opts = {}) {
       get currentAgent() { return internals.session.currentAgent; },
       get customCommands() { return internals.app.customCommands; }, set customCommands(v) { internals.app.customCommands = v; },
       get sessions() { return internals.app.sessions; }, set sessions(v) { internals.app.sessions = v; },
+      get zoom() { return internals.app.zoom; },
       get mcpServers() { return internals.app.mcpServers; }, set mcpServers(v) { internals.app.mcpServers = v; },
       get lastUsage() { return internals.session.lastUsage; }, set lastUsage(v) { internals.session.lastUsage = v; },
       get skipPermissions() { return internals.app.skipPermissions; }, set skipPermissions(v) { internals.app.skipPermissions = v; },
