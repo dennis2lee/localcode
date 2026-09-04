@@ -41,6 +41,9 @@ type liveSettings struct {
 	// maxRepeatSteps for what a repeat is and config.RepeatLimit for
 	// why a person gets to move it.
 	repeatLimit int
+	// debugLog writes every model exchange to a file per prompt. Runtime
+	// only and never read from config.json: see internal/debuglog.
+	debugLog bool
 }
 
 func (s *liveSettings) AutoCompact() bool {
@@ -77,6 +80,18 @@ func (s *liveSettings) SetKeepGoing(v bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.keepGoing = v
+}
+
+func (s *liveSettings) DebugLog() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.debugLog
+}
+
+func (s *liveSettings) SetDebugLog(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.debugLog = v
 }
 
 func (s *liveSettings) RepeatLimit() int {
@@ -575,6 +590,13 @@ func (l *Loop) SetKeepGoingEnabled(v bool) { l.settings.SetKeepGoing(v) }
 // daemon, and SetRepeatLimit moves it; zero turns the guard off.
 func (l *Loop) RepeatLimit() int     { return l.settings.RepeatLimit() }
 func (l *Loop) SetRepeatLimit(n int) { l.settings.SetRepeatLimit(n) }
+
+// DebugLogEnabled reports whether every model exchange is being written
+// to a file per prompt, and SetDebugLogEnabled moves it. Runtime only:
+// it writes the whole conversation into the workspace, which is a thing
+// to switch on for a question rather than to leave in a config file.
+func (l *Loop) DebugLogEnabled() bool     { return l.settings.DebugLog() }
+func (l *Loop) SetDebugLogEnabled(v bool) { l.settings.SetDebugLog(v) }
 
 // ShowTPS reports whether usage events should carry a tokens-per-second
 // figure for display — process-global, toggleable live via "/config

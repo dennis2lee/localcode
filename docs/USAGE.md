@@ -1225,6 +1225,7 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/show-scheduled-task` | Lists the prompts booked for later in this conversation. |
 | `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <task>`. Author and reviewer iterations. Also available through natural language or the ⚖️ button. See [Debate](#debate). |
 | `/repeat-limit` | `/repeat-limit [on\|off\|<steps>]`. How many nothing-new steps end a turn; `on` is 3, `off` (the default) never ends one for it. Bare, reports the ceiling. See [A model that repeats itself](#a-model-that-repeats-itself). |
+| `/debug-log` | Toggles writing every model request and response to a file per prompt, in this conversation's workspace. Off at every start and never saved. See [Debug log](#debug-log). |
 | `/effort` | `/effort [off\|low\|medium\|high\|xhigh]`. Conversation reasoning level. `default` restores the profile setting. See [Effort](#effort). |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
@@ -2163,6 +2164,32 @@ Automatic compatibility adjustments:
 * Temperature is omitted when the provider's reasoning mode requires a fixed temperature.
 
 Reasoning appears as a separate muted block in the Web UI. The TUI status reads `thinking`. Reasoning-stream text is not written to session logs or replayed after reload.
+
+### Debug log
+
+`/debug-log` writes everything localcode sends a model and everything it sends back, byte for byte. Run it once to turn it on, again to turn it off.
+
+```
+/debug-log
+```
+
+| Property | Value |
+|---|---|
+| Where | This conversation's workspace |
+| Name | `localcode-debug-<date>-<time>.log`, the moment you pressed enter, to the millisecond |
+| One file per | Prompt. A prompt that delegates writes its sub-agents' calls into the same file, since they are part of that prompt |
+| Contains | The request line, the headers, the request body as sent, the status, and the response as it streams, for every call including `/v1/models` and the `/llm-doctor` probes |
+| Lifetime | This run. It is off again the next time localcode starts, and turning it off leaves the files already written |
+
+Empty logs are removed: a prompt answered by a slash command makes no model call, and a file for each of those would bury the real ones.
+
+Credentials never reach the file. `Authorization`, `x-api-key`, `api-key`, `x-goog-api-key`, `proxy-authorization`, `cookie`, `set-cookie` and the AWS signature headers have their values replaced with `[redacted]`, by header name rather than by guessing at value shapes.
+
+Everything else does reach it. The file holds the system prompt, this project's rules, the auto-memory index, every file the model read and every command it ran. Read one before sharing it.
+
+Bedrock calls are not covered. They go through the AWS SDK's own transport, and its responses are binary event-stream frames rather than text. The reply to `/debug-log` says so when a Bedrock profile is configured.
+
+This is the layer under [`/context`](#context) and the [turn log](#the-turn-log). `/context` says what a request was going to contain and the turn log says a call happened and what it cost; this is the request.
 
 ### Scheduled tasks
 

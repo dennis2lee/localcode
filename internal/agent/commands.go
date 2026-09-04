@@ -38,6 +38,12 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	// The ask_user budget is per turn, and this is where a turn begins
 	// and ends for every route out of this function.
 	defer l.releaseAsk(sessionID)
+	// One debug-log file per prompt, opened here because this is where a
+	// prompt begins. A delegated turn arrives with its parent's context
+	// and keeps its sink, so a sub-agent's calls land in the file the
+	// person's prompt opened rather than in one of their own.
+	ctx, closeLog := l.openDebugLog(ctx, sessionID)
+	defer closeLog()
 
 	if len(l.Config.Hooks) > 0 {
 		blocked, reason, _ := hooks.Run(ctx, l.Config.Hooks, hooks.EventUserPromptSubmit, l.SessionDir(sessionID), map[string]any{
@@ -167,6 +173,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeShowScheduled(sessionID, text) },
 		func() (bool, error) { return l.routeKeepGoing(sessionID, text) },
 		func() (bool, error) { return l.routeRepeatLimit(sessionID, text) },
+		func() (bool, error) { return l.routeDebugLog(sessionID, text) },
 		func() (bool, error) { return l.routeAutoCompact(sessionID, text) },
 		func() (bool, error) { return l.routeUpdate(sessionID, text) },
 		func() (bool, error) { return l.routeResetMCP(sessionID, text) },

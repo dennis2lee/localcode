@@ -217,6 +217,7 @@ const serverSideHelpText = `  /skill              list registered skills
   /auto-compact [on|off|<percent>]  toggle auto-compaction, or set its threshold (default 50%)
   /keep-going [on|off]  toggle the carry-on nudge for muse models
   /repeat-limit [on|off|N]  end a turn after N nothing-new steps; on is 3, off (default) never
+  /debug-log            write every model request and response to a file per prompt, here
   /llm-doctor [baseline]  probe a muse or gemma server: facts, four canaries, what differs from the baseline
   /update             install the newest release and move the daemon onto it; the terminal keeps running
   /reset-mcp          reconnect MCP servers and pick up config changes, no restart

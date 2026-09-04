@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.97.0
+
+**`/debug-log` writes every byte between localcode and the model.** One file per prompt, in the conversation's workspace, named for the moment enter was pressed. Run it once to turn it on, again to turn it off.
+
+The gap it fills is narrow and had been hit repeatedly. The turn log records that a call happened, which model answered and what it cost. `/context` says what a request was going to contain. Neither shows the request, and the questions that keep needing an answer here are all questions about bytes: is the tool schema what I think it is, did the reasoning line actually go out, what exactly did the server send back before it stopped.
+
+Implemented as an HTTP transport rather than a wrapper around the provider, so what lands in the file is the wire and not localcode's own structs, and so every call is covered rather than only the chat ones: `/v1/models`, vLLM's `/metrics`, the probes `/llm-doctor` sends. The sink travels on the turn's context, which is what makes a prompt that delegates write its sub-agents' calls into the same file: they are part of that prompt.
+
+Credentials never reach the file. `Authorization`, `x-api-key`, `api-key`, `x-goog-api-key`, `proxy-authorization`, `cookie`, `set-cookie` and the AWS signature headers have their values replaced, by header name rather than by guessing at value shapes, and replaced rather than shortened, since a prefix identifies a key too. Everything else does reach it: the system prompt, the project's rules, every file the model read. The reply that turns it on says so.
+
+Off at every start and never written to config.json. A switch that keeps writing whole conversations into every workspace somebody opens is not a setting to leave on and forget. Empty logs are removed, so a prompt answered by a slash command does not leave a file behind. Bedrock is not covered, because it goes through the AWS SDK's own transport and answers in binary event-stream frames; the reply says so when a Bedrock profile is configured.
+
 ## v0.96.0
 
 **The repeat guard starts off.** v0.95.0 made its ceiling a setting and kept the default at three. A day of watching a local model with it on was enough to decide the other way: the model that thinks by re-reading the same two places is the common case at this keyboard, and every turn the guard ended was one that was about to act. `repeat_limit` unset now means off, `/repeat-limit on` and the ticked box mean three, and a number is a number. Nothing else about the guard changes.

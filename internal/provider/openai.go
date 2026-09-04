@@ -23,7 +23,7 @@ func NewOpenAICompat(baseURL, apiKey string) *OpenAICompat {
 	return &OpenAICompat{
 		BaseURL: strings.TrimRight(baseURL, "/"),
 		APIKey:  apiKey,
-		Client:  http.DefaultClient,
+		Client:  debugClient(),
 	}
 }
 

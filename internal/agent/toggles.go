@@ -384,6 +384,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories"},
 		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models"},
 		{Name: "repeat-limit", Description: "how many nothing-new steps end a turn; /repeat-limit off turns the guard off"},
+		{Name: "debug-log", Description: "write every model request and response to a file per prompt, in this workspace"},
 		{Name: "auto-compact", Description: "toggle auto-compaction, or set its threshold with a percent"},
 		{Name: "update", Description: "install the newest release and move the daemon onto it; the terminal keeps running"},
 		{Name: "reset-mcp", Description: "reconnect MCP servers and pick up config changes without a restart"},

@@ -32,7 +32,7 @@ func NewAnthropicDirect(apiKey string) *AnthropicDirect {
 	return &AnthropicDirect{
 		BaseURL: anthropicDefaultBaseURL,
 		APIKey:  apiKey,
-		Client:  http.DefaultClient,
+		Client:  debugClient(),
 	}
 }
 
