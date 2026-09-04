@@ -711,7 +711,7 @@ Project rules, skills, and auto memory supply reusable context. Rules load each 
 
 ### Skills
 
-Put a skill at `<project>/.localcode/skills/<name>/SKILL.md` for a project scoped one, which wins on a name collision. The global directory is `skills/<name>/SKILL.md` under whichever home root applies; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from).
+Put a skill at `<project>/.localcode/skills/<name>/SKILL.md` for a project scoped one, which wins on a name collision. Both the project and the home directory are searched through the root chain; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from).
 
 ```markdown
 ---
@@ -732,19 +732,23 @@ Run a skill directly by its own name with `/<skill name>`. See [Running a skill]
 
 ### Where skills, commands and global rules are read from
 
-Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. One home directory answers for all three, and the first that exists wins outright:
+Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. The first directory that exists wins outright:
 
 | Order | Root | Reads |
 |---|---|---|
-| 1 | `~/.claude` | `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md`, `CLAUDE.md` |
-| 2 | `~/.opencode` | the same, and `command/` is accepted for the commands directory |
-| 3 | `~/.localcode` | the same |
+| 1 | `.claude` | `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md`, `CLAUDE.md` |
+| 2 | `.opencode` | the same, and `command/` is accepted for the commands directory |
+| 3 | `.localcode` | the same |
 
-Nothing is merged across roots. A home with `~/.claude` reads that root and never looks at the other two, including when they hold skills of their own. An empty winner still wins: `~/.claude` with no `skills` directory means no global skills rather than a fall through. Startup logs which root it chose, and `/reset-skills` names the directory it read.
+The chain runs twice, independently: once under the project directory and once under the home directory. A project skill still wins over a global one of the same name, as before. A repo that keeps its skills in `.claude` and a home that keeps its own in `.localcode` is an ordinary arrangement, not a conflict.
+
+Nothing is merged across roots. A home with `~/.claude` reads that root and never looks at the other two, including when they hold skills of their own. An empty winner still wins: `~/.claude` with no `skills` directory means no global skills rather than a fall through, and a repo whose `.claude` holds only settings shadows its own `.localcode/skills` the same way. Startup logs both roots it chose, and `/reset-skills` names both directories it read.
+
+Windows works the same way. The roots are directory names under the project and under the home directory `USERPROFILE` names, so `C:\Users\you\.claude` answers exactly as `~/.claude` does elsewhere.
 
 `config.json` is not part of this. It is always `~/.localcode/config.json`, plus the project-local `.localcode/config.json` override.
 
-Project-local files are unaffected and still win over the global ones: `<project>/.localcode/skills` and `<project>/.localcode/commands`, and the `AGENTS.md` found by walking up from the session's directory.
+The project `AGENTS.md` is also unaffected: it is found by walking up from the session's directory, under either name, as before.
 
 ### AGENTS.md project rules
 
@@ -909,7 +913,7 @@ The transcript shows only `/init`. Because it writes a file, expect a `write_fil
 
 ### Custom commands
 
-Put a markdown file at `.localcode/commands/<name>.md` for the project, where it wins on a collision. The global directory is `commands/<name>.md` under whichever home root applies; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from). Call it with `/<name>`. The format matches opencode's custom commands.
+Put a markdown file at `commands/<name>.md` inside the project's agent directory, where it wins on a collision, or inside the home one for global scope; which agent directory that is comes from the root chain, see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from). Call it with `/<name>`. The format matches opencode's custom commands.
 
 ```markdown
 ---

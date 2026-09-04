@@ -11,18 +11,33 @@
 // to use them here.
 //
 // So one root answers for both kinds, and the first that exists wins
-// outright: ~/.claude, then ~/.opencode, then ~/.localcode. Nothing is
-// merged across roots. A person with ~/.claude gets their Claude Code
-// skills and commands and nothing from the other two, even if the other
-// two also have some — which is the point: two sets of half-loaded
-// commands with the same names would be worse than one set that is
-// clearly from one place.
+// outright: .claude, then .opencode, then .localcode. Nothing is merged
+// across roots. A person with ~/.claude gets their Claude Code skills and
+// commands and nothing from the other two, even if the other two also
+// have some — which is the point: two sets of half-loaded commands with
+// the same names would be worse than one set that is clearly from one
+// place.
+//
+// The same chain runs twice, under two directories: the project being
+// worked in and the home directory. A project's own skills and commands
+// still win over the global ones, exactly as before; what the chain
+// decides is which directory inside each of those two places is read.
+// The two are resolved independently, so a repo carrying .claude and a
+// home carrying only .localcode is an ordinary arrangement rather than a
+// conflict.
 //
 // The consequence to know about is that an empty winner still wins. A
 // ~/.claude with no skills directory in it means no global skills, rather
-// than a fall through to ~/.localcode. That is why Assets reports the
-// root it chose: startup names it, so "my skills disappeared" is one line
-// of output away from its answer rather than a mystery.
+// than a fall through to ~/.localcode, and a repo whose .claude holds
+// only settings shadows its own .localcode/skills the same way. That is
+// why At reports the root it chose: startup names both, so "my skills
+// disappeared" is one line of output away from its answer rather than a
+// mystery.
+//
+// None of this is platform-specific. The roots are plain directory names
+// under a home or a project, joined with filepath.Join, and on Windows
+// the home is the one os.UserHomeDir returns from USERPROFILE — so
+// C:\Users\me\.claude answers exactly as ~/.claude does elsewhere.
 //
 // Reading these files grants nothing new. They are the person's own files
 // in the person's own home directory, at the same trust level as the ones
@@ -36,9 +51,9 @@ import (
 	"path/filepath"
 )
 
-// Order is the search order, as directory names under the home directory.
-// The last is localcode's own, which is the answer when no other root is
-// installed.
+// Order is the search order, as directory names under a home or project
+// directory. The last is localcode's own, which is the answer when no
+// other root is there.
 var Order = []string{".claude", ".opencode", ".localcode"}
 
 // Root is one resolved home for user-authored assets.
@@ -57,21 +72,22 @@ type Root struct {
 	Chosen string
 }
 
-// Assets resolves the root for skills and custom commands under home.
+// At resolves the root for skills and custom commands under dir, which is
+// either a home directory or a project directory.
 //
 // The first directory in Order that exists wins for both kinds. When none
-// exists — a first run, before anything has been created — the answer is
-// ~/.localcode, so the paths point where a person following the
-// documentation would put their first skill.
-func Assets(home string) Root {
+// exists — a first run, or a project that carries no agent directory at
+// all — the answer is .localcode, so the paths point where a person
+// following the documentation would put their first skill.
+func At(dir string) Root {
 	for _, name := range Order {
-		root := filepath.Join(home, name)
+		root := filepath.Join(dir, name)
 		if isDir(root) {
 			return rootAt(root, name)
 		}
 	}
 	last := Order[len(Order)-1]
-	return rootAt(filepath.Join(home, last), last)
+	return rootAt(filepath.Join(dir, last), last)
 }
 
 func rootAt(path, name string) Root {

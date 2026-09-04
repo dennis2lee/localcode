@@ -100,7 +100,7 @@ type globalFile struct {
 // CLAUDE.md are two names for one thing and a root that has both meant
 // both.
 func findGlobalRules(home string) []globalFile {
-	root := userdirs.Assets(home).Path
+	root := userdirs.At(home).Path
 	var out []globalFile
 	for _, name := range projectNames {
 		p := filepath.Join(root, name)

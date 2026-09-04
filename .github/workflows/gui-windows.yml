@@ -106,6 +106,12 @@ jobs:
       # successor with inherited handles, which no other platform can
       # stand in for; the update package's rename-and-replace is the
       # same story. Nothing here needs CGo.
+      # The three directory-resolution packages run whole: what decides
+      # where skills, commands and rules are read from is a chain of
+      # path joins, and "the same on Windows" is a claim that has to be
+      # executed on Windows rather than reasoned about from filepath's
+      # documentation.
+      #
       # Scoped to the tests that are Windows-clean today. The rest of
       # these packages' suites fail on Windows for reasons of their own —
       # a temporary directory holding a store's open log files cannot be
@@ -116,7 +122,8 @@ jobs:
       - name: Test the Windows code paths
         run: |
           go test ./internal/update/ ./internal/childproc/
-          go test ./cmd/localcode/ -run 'Successor|UnknownCommand|WindowProxy'
+          go test ./internal/userdirs/ ./internal/skills/ ./internal/rules/
+          go test ./cmd/localcode/ -run 'Successor|UnknownCommand|WindowProxy|ChosenRoot|OwnChain'
           go test ./internal/daemon/ -run 'SessionIDInPath|TheGateRefuses|DeadDaemon|TakingOverASession|Retire|Update|Startup|Busy'
         env:
           CGO_ENABLED: '0'

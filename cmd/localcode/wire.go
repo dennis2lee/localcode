@@ -300,11 +300,11 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// small fix — a workspace switched at runtime used to keep serving
 	// the old project's skills until a restart.
 	loop.ReloadSkills = func() (string, error) {
-		globalSkills := userdirs.Assets(e.home).Skills
-		list, err := skills.LoadAll(
-			filepath.Join(loop.GetProjectDir(), ".localcode", "skills"),
-			globalSkills,
-		)
+		// The live workspace, not the one the daemon started in, so the
+		// chain is re-run against the project actually being worked on.
+		projectSkills := userdirs.At(loop.GetProjectDir()).Skills
+		globalSkills := userdirs.At(e.home).Skills
+		list, err := skills.LoadAll(projectSkills, globalSkills)
 		if err != nil {
 			return "", err
 		}
@@ -319,13 +319,14 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		}
 		loop.SetSkills(list, section)
 		if len(list) == 0 {
-			return "skills reloaded: none installed (looked in " + globalSkills + ")", nil
+			return "skills reloaded: none installed (looked in " + projectSkills + " and " + globalSkills + ")", nil
 		}
 		names := make([]string, len(list))
 		for i, sk := range list {
 			names[i] = sk.Name
 		}
-		return fmt.Sprintf("skills reloaded: %d from %s (%s)", len(list), globalSkills, strings.Join(names, ", ")), nil
+		return fmt.Sprintf("skills reloaded: %d (%s) from %s and %s",
+			len(list), strings.Join(names, ", "), projectSkills, globalSkills), nil
 	}
 
 	// "/reset-mcp": stop the servers, re-read their configuration from
@@ -446,12 +447,13 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker, store *se
 // and returns the combined text to append to Loop.SystemPrompt alongside
 // the loaded skills/commands/memory-dir Loop needs directly.
 func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (skillsSection, memoryPolicy, memorySection string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
-	assets := assetsFor(e)
-	if assets.Chosen != ".localcode" {
+	project, global := assetsFor(e)
+	if project.Chosen != ".localcode" || global.Chosen != ".localcode" {
 		// Worth a line: an empty winner still wins, so "where did my
 		// skills go" is answered by the log rather than by reading this
 		// package's source.
-		log.Printf("skills and commands: reading ~/%s (config.json is always ~/.localcode/config.json)", assets.Chosen)
+		log.Printf("skills and commands: reading %s and %s (config.json is always ~/.localcode/config.json)",
+			project.Path, global.Path)
 	}
 
 	skillList, err = loadSkills(e)
@@ -463,7 +465,7 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (ski
 		skillsSection = skills.SystemPromptSection(skillList)
 	}
 
-	cmdList, err = commands.LoadAll(filepath.Join(e.cwd, ".localcode", "commands"), assets.Commands)
+	cmdList, err = commands.LoadAll(project.Commands, global.Commands)
 	if err != nil {
 		return "", "", "", nil, nil, "", err
 	}
@@ -488,15 +490,17 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (ski
 // project can override a same-named global skill. Which global one that is
 // depends on what is installed: see internal/userdirs.
 func loadSkills(e env) ([]skills.Skill, error) {
-	return skills.LoadAll(
-		filepath.Join(e.cwd, ".localcode", "skills"),
-		assetsFor(e).Skills,
-	)
+	project, global := assetsFor(e)
+	return skills.LoadAll(project.Skills, global.Skills)
 }
 
-// assetsFor is the home root this environment reads skills, commands and
-// global rules out of. One place, so the three loaders cannot drift.
-func assetsFor(e env) userdirs.Root { return userdirs.Assets(e.home) }
+// assetsFor is the project root and the home root this environment reads
+// skills and custom commands out of. One place, so the loaders cannot
+// drift, and two chains, because a repo's agent directory and a person's
+// need not be the same one.
+func assetsFor(e env) (project, global userdirs.Root) {
+	return userdirs.At(e.cwd), userdirs.At(e.home)
+}
 
 // resolvedConfigPath is where an "always allow" permission decision gets
 // written: the explicit --config file if one was given (that's the only

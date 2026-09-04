@@ -22,7 +22,7 @@ func TestTheFirstRootThatExistsWinsOutright(t *testing.T) {
 	home := t.TempDir()
 	mkdirs(t, home, ".claude/skills", ".opencode/skills", ".localcode/skills", ".localcode/commands")
 
-	got := Assets(home)
+	got := At(home)
 	if got.Chosen != ".claude" {
 		t.Fatalf("chose %q, want .claude", got.Chosen)
 	}
@@ -49,7 +49,7 @@ func TestTheChainFallsThroughInOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			mkdirs(t, home, tc.make...)
-			if got := Assets(home).Chosen; got != tc.chosen {
+			if got := At(home).Chosen; got != tc.chosen {
 				t.Errorf("chose %q, want %q", got, tc.chosen)
 			}
 		})
@@ -64,7 +64,7 @@ func TestAnEmptyWinnerStillWins(t *testing.T) {
 	home := t.TempDir()
 	mkdirs(t, home, ".claude", ".localcode/skills", ".localcode/commands")
 
-	got := Assets(home)
+	got := At(home)
 	if got.Chosen != ".claude" {
 		t.Fatalf("chose %q, want .claude even though it holds nothing", got.Chosen)
 	}
@@ -85,7 +85,7 @@ func TestOpencodeCommandDirectoryIsAccepted(t *testing.T) {
 	home := t.TempDir()
 	mkdirs(t, home, ".opencode/command")
 
-	if got := Assets(home).Commands; got != filepath.Join(home, ".opencode", "command") {
+	if got := At(home).Commands; got != filepath.Join(home, ".opencode", "command") {
 		t.Errorf("commands = %q, want the singular directory opencode creates", got)
 	}
 }
@@ -96,7 +96,7 @@ func TestThePluralNameWinsWhenBothExist(t *testing.T) {
 	home := t.TempDir()
 	mkdirs(t, home, ".opencode/command", ".opencode/commands")
 
-	if got := Assets(home).Commands; got != filepath.Join(home, ".opencode", "commands") {
+	if got := At(home).Commands; got != filepath.Join(home, ".opencode", "commands") {
 		t.Errorf("commands = %q", got)
 	}
 }
@@ -105,8 +105,46 @@ func TestThePluralNameWinsWhenBothExist(t *testing.T) {
 // first run points where the documentation says to put a first skill.
 func TestAFreshHomeAnswersWithLocalcode(t *testing.T) {
 	home := t.TempDir()
-	got := Assets(home)
+	got := At(home)
 	if got.Chosen != ".localcode" || got.Skills != filepath.Join(home, ".localcode", "skills") {
-		t.Errorf("Assets on an empty home = %+v", got)
+		t.Errorf("At on an empty home = %+v", got)
+	}
+}
+
+// The chain knows nothing about homes: a project directory resolves the
+// same way, and the two answers are independent of each other.
+func TestAProjectResolvesIndependentlyOfAHome(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	mkdirs(t, home, ".localcode/skills")
+	mkdirs(t, project, ".claude/skills", ".localcode/skills")
+
+	if got := At(home).Chosen; got != ".localcode" {
+		t.Errorf("home chose %q", got)
+	}
+	if got := At(project); got.Chosen != ".claude" || got.Skills != filepath.Join(project, ".claude", "skills") {
+		t.Errorf("project = %+v, want its own .claude", got)
+	}
+}
+
+// Every path this returns is built with filepath.Join, so it is the
+// platform's own separator rather than a slash written into a string.
+// The Windows job runs this package whole for exactly this claim.
+func TestPathsUseThePlatformSeparator(t *testing.T) {
+	dir := t.TempDir()
+	mkdirs(t, dir, ".claude/skills", ".claude/commands")
+
+	got := At(dir)
+	for name, path := range map[string]string{
+		"Path":     got.Path,
+		"Skills":   got.Skills,
+		"Commands": got.Commands,
+	} {
+		if want := filepath.Clean(path); path != want {
+			t.Errorf("%s = %q, want the cleaned platform path %q", name, path, want)
+		}
+		if filepath.Base(filepath.Dir(got.Skills)) != ".claude" {
+			t.Errorf("%s does not sit under the chosen root", name)
+		}
 	}
 }
