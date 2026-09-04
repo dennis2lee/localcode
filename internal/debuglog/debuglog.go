@@ -28,7 +28,6 @@
 package debuglog
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -97,12 +96,23 @@ func (s *Sink) Path() string {
 	return s.path
 }
 
+// writef appends to the file, or does nothing once it is closed.
+//
+// The closed check is inside the lock, which is not a detail: a response
+// that is still streaming when the turn ends goes on writing after Close
+// has run. Reading the field outside the lock was a race the detector
+// found, and the failure it describes is worse than a torn read — a
+// write that passed the check a moment before Close could reach a file
+// that is no longer open.
 func (s *Sink) writef(format string, args ...any) {
-	if s == nil || s.f == nil {
+	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.f == nil {
+		return
+	}
 	fmt.Fprintf(s.f, format, args...)
 }
 
@@ -212,65 +222,30 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		time.Now().Format(time.RFC3339Nano))
 	writeHeaders(&b, redactHeaders(req.Header))
 
-	// The body is read out and put back. A request body is a stream and
-	// reading it here would leave nothing to send; GetBody exists for
-	// redirects and retries, so this is the same trick with the same
-	// constraint, and a body too large to hold is left unread rather
-	// than truncated silently.
-	switch {
-	case req.Body == nil || req.Body == http.NoBody:
-	// A zero ContentLength with a body is not an empty body: net/http
-	// leaves it zero for a reader whose size it cannot see, and sends
-	// that body chunked. Both readings mean the same thing here — the
-	// length is not known in advance — and treating zero as empty was
-	// how a streamed request came out of the log as nothing at all.
+	// The body is copied as the transport sends it, not read out and put
+	// back.
 	//
-	// GetBody is the way to read one anyway. It exists so a redirect or
-	// a retry can send the body a second time, which means a client that
-	// sets it is promising a fresh copy on demand — and a copy taken
-	// from it never touches the one about to go out. The AWS SDK sets it
-	// on every signed request, which is why a Bedrock turn used to log
-	// its answer and not its question.
-	case req.ContentLength <= 0 && req.GetBody != nil:
-		rc, err := req.GetBody()
-		if err != nil {
-			b.WriteString("\n[the request body could not be read for the log: " + err.Error() + "]\n")
-			break
-		}
-		raw, err := io.ReadAll(io.LimitReader(rc, maxLoggedBody))
-		rc.Close()
-		if err != nil {
-			b.WriteString("\n[the request body could not be read for the log: " + err.Error() + "]\n")
-			break
-		}
+	// Reading it up front needs a second copy from somewhere: either
+	// buffer it and hand the caller a replacement, which turns a
+	// streamed upload into a buffered one and doubles what it costs, or
+	// ask the client for one through GetBody. Neither is general. The
+	// AWS SDK sets no GetBody at all and marks a signed body's length
+	// unknown, so a Bedrock turn logged its answer and not its question —
+	// which is exactly how this was reported.
+	//
+	// A tee needs nothing from the client. The transport reads the body
+	// to send it and the copy goes into the file on the way past, in the
+	// order it is sent, for every client and every length. What it does
+	// not cover is a retry that goes through GetBody: the first attempt
+	// is logged and the replay is not.
+	if req.Body != nil && req.Body != http.NoBody {
 		b.WriteString("\n")
-		b.Write(raw)
+		s.writef("%s", b.String())
+		req.Body = &teeRequestBody{r: req.Body, s: s, left: maxLoggedBody}
+	} else {
 		b.WriteString("\n")
-	case req.ContentLength <= 0:
-		// No length and no second copy to be had. Reading the body here
-		// would consume what the caller is about to send.
-		b.WriteString("\n[request body is streamed, its length is not known in advance, and the client offers no second copy, so it is not shown]\n")
-	case req.ContentLength > maxLoggedBody:
-		fmt.Fprintf(&b, "\n[request body is %d bytes, past the %d-byte ceiling this log buffers; not shown]\n",
-			req.ContentLength, maxLoggedBody)
-	default:
-		raw, err := io.ReadAll(req.Body)
-		req.Body.Close()
-		if err != nil {
-			b.WriteString("\n[the request body could not be read for the log: " + err.Error() + "]\n")
-		} else {
-			b.WriteString("\n")
-			b.Write(raw)
-			b.WriteString("\n")
-			req.Body = io.NopCloser(bytes.NewReader(raw))
-			req.GetBody = func() (io.ReadCloser, error) {
-				return io.NopCloser(bytes.NewReader(raw)), nil
-			}
-			req.ContentLength = int64(len(raw))
-		}
+		s.writef("%s", b.String())
 	}
-	b.WriteString("\n")
-	s.writef("%s", b.String())
 
 	start := time.Now()
 	resp, err := t.base().RoundTrip(req)
@@ -280,6 +255,7 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	var rb strings.Builder
+	rb.WriteString("\n")
 	fmt.Fprintf(&rb, "==== %d <<< %s  after %s\n", n, resp.Status, time.Since(start).Round(time.Millisecond))
 	writeHeaders(&rb, redactHeaders(resp.Header))
 	rb.WriteString("\n")
@@ -292,6 +268,33 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp.Body = &teeBody{r: resp.Body, s: s, n: n, start: start}
 	return resp, nil
 }
+
+// teeRequestBody copies the request into the log as the transport sends
+// it, and stops copying at the ceiling without stopping the send.
+type teeRequestBody struct {
+	r    io.ReadCloser
+	s    *Sink
+	left int
+	cut  bool
+}
+
+func (t *teeRequestBody) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 {
+		switch {
+		case t.left >= n:
+			t.s.writef("%s", p[:n])
+			t.left -= n
+		case !t.cut:
+			t.s.writef("%s", p[:t.left])
+			t.s.writef("\n[the rest of this request body is past the %d-byte ceiling and is not shown]\n", maxLoggedBody)
+			t.left, t.cut = 0, true
+		}
+	}
+	return n, err
+}
+
+func (t *teeRequestBody) Close() error { return t.r.Close() }
 
 // teeBody copies the response into the log as the caller reads it.
 type teeBody struct {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -277,4 +278,27 @@ func TestAnUnknownLengthBodyIsLoggedThroughGetBody(t *testing.T) {
 	if !strings.Contains(read(t, sink.Path()), `"anthropic_version":"x"`) {
 		t.Errorf("the request body is not in the log:\n%s", read(t, sink.Path()))
 	}
+}
+
+// A response that is still streaming when the turn ends goes on writing
+// after Close has run. The closed check has to be inside the lock, or a
+// write that passed it a moment earlier reaches a file that is no longer
+// open. Run this with -race.
+func TestWritingWhileClosingIsSafe(t *testing.T) {
+	sink, err := Create(t.TempDir(), "s1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				sink.writef("still streaming\n")
+			}
+		}()
+	}
+	sink.Close()
+	wg.Wait()
 }

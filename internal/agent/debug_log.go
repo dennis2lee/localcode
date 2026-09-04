@@ -76,7 +76,9 @@ func (l *Loop) routeDebugLog(sessionID, text string) (bool, error) {
 	dir := l.SessionDir(sessionID)
 	fmt.Fprintf(&b, "\n%s\nOne file per prompt, in %s, named for the moment you pressed enter: "+
 		"localcode-debug-<date>-<time>.log", debugLogToolTip, dir)
-	b.WriteString("\nThis prompt is not in one — the file opens when the next prompt starts.")
+	b.WriteString("\nThis prompt is not in one — the file opens when the next prompt starts. " +
+		"A prompt that never reaches a model leaves no file: a slash command, or a turn that " +
+		"failed before the first request.")
 	// The whole conversation ends up in these files, which is the point
 	// and is also worth saying once, here, rather than in a note nobody
 	// reads afterwards.

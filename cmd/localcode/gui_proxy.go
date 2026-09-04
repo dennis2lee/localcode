@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -35,6 +36,17 @@ func successorProxy(target string) http.Handler {
 	// The event stream never ends and is written a line at a time; a
 	// proxy that buffered it would show a reply only when it finished.
 	proxy.FlushInterval = -1
+	// A backend that is not there answers 502 with no body, and that is
+	// what every request looked like after a successor died: "POST
+	// /api/sessions/…/agent: 502", with nothing to say which process was
+	// gone or where to look. The handler says both.
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		writeJSONError(w, http.StatusBadGateway, fmt.Sprintf(
+			"the localcode behind this window is not answering at %s (%v). "+
+				"It was started by an update; what it said before it stopped is in %s. "+
+				"Reopen the window to run this version directly.",
+			target, err, handoffLogPath()))
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/workspace/browse", func(w http.ResponseWriter, r *http.Request) {

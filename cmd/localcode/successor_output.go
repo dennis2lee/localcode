@@ -116,3 +116,36 @@ func (p passthrough) Write(b []byte) (int, error) {
 	}
 	return len(b), nil
 }
+
+// handoffLogPath is where a successor's output is kept, for the messages
+// that point at it. Empty when there is no cache directory to write in.
+func handoffLogPath() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "the user cache directory"
+	}
+	return filepath.Join(base, "localcode", "handoff.log")
+}
+
+// noteSuccessorExit appends why the daemon behind the window stopped.
+//
+// Written rather than only returned, because by the time it happens
+// there is nobody to return it to: the window is showing a page served
+// through a proxy onto a process that has just gone, and the next thing
+// that happens is a 502 with no context.
+func noteSuccessorExit(pid int, err error) {
+	path := handoffLogPath()
+	if path == "" {
+		return
+	}
+	f, ferr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if ferr != nil {
+		return
+	}
+	defer f.Close()
+	if err == nil {
+		fmt.Fprintf(f, "\n[the localcode behind this window (pid %d) exited cleanly]\n", pid)
+		return
+	}
+	fmt.Fprintf(f, "\n[the localcode behind this window (pid %d) exited: %v]\n", pid, err)
+}

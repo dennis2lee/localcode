@@ -94,3 +94,36 @@ func TestTheWindowProxyStreamsWithoutBuffering(t *testing.T) {
 		t.Fatal("the first event did not arrive until the stream ended: the proxy is buffering")
 	}
 }
+
+// A backend that is gone used to answer 502 with an empty body, which
+// reached the transcript as "POST /api/sessions/…/agent: 502" — no
+// process named, nothing to look at. That is what a successor dying
+// mid-session looked like from the window.
+func TestADeadSuccessorSaysWhatIsWrong(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	addr := strings.TrimPrefix(backend.URL, "http://")
+	backend.Close() // the successor is gone; the window still points at it
+
+	front := httptest.NewServer(successorProxy(addr))
+	defer front.Close()
+
+	resp, err := http.Get(front.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %s, want 502", resp.Status)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("the 502 had no readable body: %v", err)
+	}
+	for _, want := range []string{"not answering", addr, "handoff.log", "Reopen the window"} {
+		if !strings.Contains(body.Error, want) {
+			t.Errorf("the message lacks %q: %s", want, body.Error)
+		}
+	}
+}

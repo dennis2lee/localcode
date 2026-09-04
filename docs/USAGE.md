@@ -2197,7 +2197,9 @@ Everything else does reach it. The file holds the system prompt, this project's 
 
 Bedrock is covered too: the client the AWS config resolved is wrapped rather than replaced, on the service client rather than on the config, since the config loader reaches for its own concrete client type when a custom CA bundle is set. The signature is unaffected, because the SDK signs in its own middleware before any transport runs and the wrapper hands on identical bytes. Its responses are binary event-stream frames, and they go into the log as they arrive.
 
-A request whose length is not known ahead of time is read through the client's own `GetBody`, which exists so a redirect or a retry can send the body again and therefore hands back a fresh copy without touching the one going out. A body larger than 32 MB, or one whose client offers no second copy, is noted rather than buffered. Responses have no such ceiling, since they are copied as they stream rather than held.
+Request bodies are copied as the transport sends them, so nothing has to be buffered or asked of the client, and a body of unknown length is logged like any other. Past 32 MB the copy stops and says so; the request itself is unaffected. A retry that resends through the client's own `GetBody` is not copied a second time. Responses are copied as they stream, with no ceiling.
+
+A prompt that never reaches a model leaves no file at all: a slash command makes no request, and neither does a turn that fails before the first one. An empty log would bury the real ones.
 
 This is the layer under [`/context`](#context) and the [turn log](#the-turn-log). `/context` says what a request was going to contain and the turn log says a call happened and what it cost; this is the request.
 

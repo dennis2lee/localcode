@@ -62,11 +62,18 @@ func windowHandoff(d *daemon.Daemon, front *swapHandler, alive *tuiAlivePipe, cl
 	if err != nil {
 		return fmt.Errorf("bind a port for the new localcode: %w", err)
 	}
-	pid, _, err := spawnSuccessor(binary, ln, alive.r)
+	pid, exited, err := spawnSuccessor(binary, ln, alive.r)
 	if err != nil {
 		ln.Close()
 		return err
 	}
+	// A successor that dies later takes the window's daemon with it and
+	// every request afterwards answers 502. Recording the exit is what
+	// turns that into something with a cause attached.
+	go func() {
+		err := <-exited
+		noteSuccessorExit(pid, err)
+	}()
 	addr := ln.Addr().String()
 	// The successor holds its own handle on the socket; closing ours
 	// here leaves the port bound to it alone.

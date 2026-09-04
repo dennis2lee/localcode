@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.102.0
+
+**A dead successor says what is wrong.** When the daemon behind the desktop window stops, every request afterwards went through a proxy onto a process that is not there, and `httputil` answers that with a bare `502` and no body. What reached the transcript was `POST /api/sessions/…/agent: 502`, which names neither the process that went nor anywhere to look. The proxy now answers with the address it was pointing at, the underlying error, and the path of `handoff.log`; the window records why its successor exited into that same file.
+
+**Two claims made here in the last two releases were wrong, and are corrected.** v0.101.0 said the AWS SDK sets `GetBody` on every signed request and that this was why a Bedrock turn logged its answer and not its question. Measured against the real SDK client: it sets no `GetBody` at all, and its request body has a known length, so it was already being logged from v0.100.0 — the release that made Bedrock reach the log in the first place. What "debug-log does not work with this model" actually looks like is a turn that never reaches a model, which writes no file at all, because an empty log for every slash command would bury the real ones. The reply that turns logging on says so now.
+
+**Request bodies are copied as they are sent** rather than read out and put back. The old way needed a second copy from somewhere — a buffer handed to the caller, which turns a streamed upload into a buffered one, or the client's `GetBody`, which not every client offers. A tee needs nothing from the client and covers every length. Past 32 MB the copy stops and says so, and the request is unaffected.
+
+**A debug log could be written to after it was closed.** The check for a closed file was outside the lock that Close takes, so a response still streaming when the turn ended could pass the check a moment before Close and then write to a file that was no longer open. Found by the race detector, with a test that reproduces it.
+
 ## v0.101.0
 
 **The desktop window's update could not survive its own success.** The pipe that ties a successor's life to the window's was held only through the daemon that started it, and a handoff exists to stop referring to that daemon. The moment the window swapped to the proxy, the old daemon became garbage and `os.File`'s finalizer closed the pipe with it; the successor read EOF and called `os.Exit(0)`.
@@ -10,7 +20,7 @@ What that looked like was two different faults. Sometimes the successor died bef
 
 **The splash names the version that is coming up.** It shows the shell's own version, and after an update the shell can be the copy the shortcut points at rather than the newer one about to run, which read as an update that had not happened.
 
-**`/debug-log` logs a request whose length is not known in advance.** Such a body was noted and not shown, on the reasoning that reading it would consume what was about to be sent. `GetBody` is the way to read one anyway: a client that sets it is promising a fresh copy on demand, which is how a redirect or a retry resends. The AWS SDK sets it on every signed request, which is why a Bedrock turn logged its answer and not its question.
+**`/debug-log` logs a request whose length is not known in advance.** Such a body was noted and not shown, on the reasoning that reading it would consume what was about to be sent. It is read through `GetBody` where a client offers one. (The claim first published here, that this was why a Bedrock turn logged its answer and not its question, was wrong and is corrected in v0.102.0: the SDK sets no `GetBody`, its request body has a known length, and it was already being logged.)
 
 ## v0.100.0
 
