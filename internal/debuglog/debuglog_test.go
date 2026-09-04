@@ -172,3 +172,69 @@ func TestTwoPromptsInOneMillisecondGetTwoFiles(t *testing.T) {
 	a.Close()
 	b.Close()
 }
+
+// A binary response goes into the file as it arrived. An event-stream
+// frame nobody can read is still evidence that it arrived, and escaping
+// it would make the file a description of the bytes rather than the
+// bytes.
+func TestABinaryResponseIsWrittenByteForByte(t *testing.T) {
+	payload := []byte{0x00, 0x00, 0x00, 0x1b, 0xff, 0xfe, '\n', 0x7f, 'o', 'k', 0x00}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		w.Write(payload)
+	}))
+	defer srv.Close()
+
+	sink, err := Create(t.TempDir(), "s1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &http.Client{Transport: Transport{}}
+	req, _ := http.NewRequestWithContext(With(context.Background(), sink), http.MethodGet, srv.URL, nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	sink.Close()
+
+	if !strings.Contains(read(t, sink.Path()), string(payload)) {
+		t.Errorf("the binary body is not in the log byte for byte:\n%q", read(t, sink.Path()))
+	}
+}
+
+// A streamed request body is left alone. Reading it to log it would
+// consume what the caller was about to send.
+func TestAStreamedRequestBodyIsNotedRatherThanConsumed(t *testing.T) {
+	var got []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+
+	sink, err := Create(t.TempDir(), "s1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &http.Client{Transport: Transport{}}
+	// A reader with no Len makes ContentLength -1, which is what a
+	// streamed upload looks like.
+	req, _ := http.NewRequestWithContext(With(context.Background(), sink),
+		http.MethodPost, srv.URL, struct{ io.Reader }{strings.NewReader("streamed payload")})
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	sink.Close()
+
+	if string(got) != "streamed payload" {
+		t.Errorf("the server received %q; the log consumed the body", got)
+	}
+	if !strings.Contains(read(t, sink.Path()), "streamed") {
+		t.Errorf("the log does not say the body was streamed:\n%s", read(t, sink.Path()))
+	}
+}

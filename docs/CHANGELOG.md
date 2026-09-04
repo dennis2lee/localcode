@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.98.0
+
+**`/debug-log` covers Bedrock, and writes binary bodies as they arrive.** v0.97.0 left Bedrock out because it goes through the AWS SDK's own transport and answers in binary event-stream frames. Both halves of that turned out to be reasons to include it rather than to skip it: the SDK takes an HTTP client, so it now gets the same one, and a frame nobody can read is still evidence that it arrived. Nothing is escaped or summarized on the way in. The signature is unaffected, because the SDK signs in its own middleware before any transport runs and the transport hands on identical bytes.
+
+A request body whose length is not known in advance is noted rather than buffered, and this fixed a real hole: `net/http` leaves `ContentLength` at zero for a reader whose size it cannot see and sends that body chunked, so treating zero as "empty" wrote a streamed request into the log as nothing at all. Bodies over 32 MB are noted for their size instead, since logging one means holding it. Responses have no ceiling: they are copied as they stream.
+
 ## v0.97.0
 
 **`/debug-log` writes every byte between localcode and the model.** One file per prompt, in the conversation's workspace, named for the moment enter was pressed. Run it once to turn it on, again to turn it off.

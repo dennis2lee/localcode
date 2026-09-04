@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"localcode/internal/config"
 	"localcode/internal/debuglog"
 	"localcode/internal/events"
 )
@@ -84,23 +83,5 @@ func (l *Loop) routeDebugLog(sessionID, text string) (bool, error) {
 	b.WriteString("\nThe file holds the whole conversation: the system prompt, this project's rules, " +
 		"and every file the model read. Read one before you share it.")
 	b.WriteString("\nThis run only. It is off again the next time localcode starts.")
-	if l.anyBedrockProfile() {
-		b.WriteString("\n(Bedrock calls are not covered: they go through the AWS SDK's own transport.)")
-	}
 	return true, l.replyText(sessionID, b.String())
-}
-
-// anyBedrockProfile reports whether any configured profile would make a
-// call this cannot see, so the reply can say so rather than leaving
-// somebody to wonder why a turn produced an empty file.
-func (l *Loop) anyBedrockProfile() bool {
-	if l.Config == nil {
-		return false
-	}
-	for _, p := range l.Config.Profiles {
-		if pc, ok := l.Config.Providers[p.Provider]; ok && pc.Type == config.ProviderBedrock {
-			return true
-		}
-	}
-	return false
 }

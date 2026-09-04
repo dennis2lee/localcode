@@ -44,7 +44,16 @@ func NewBedrock(region, profile string) *Bedrock {
 // shared config and credential files instead of the default chain's usual
 // resolution order.
 func loadBedrockClient(ctx context.Context, region, profile string) (bedrockClient, error) {
-	opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
+	// The same client the HTTP providers use, so "/debug-log" sees these
+	// calls too. The SDK signs the request in its own middleware, before
+	// any transport runs, and the transport hands on the identical bytes,
+	// so the signature is unaffected. What comes back is binary
+	// event-stream frames, and they go into the log as they arrive: a
+	// frame nobody can read is still evidence that it arrived.
+	opts := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(region),
+		awsconfig.WithHTTPClient(debugClient()),
+	}
 	if profile != "" {
 		opts = append(opts, awsconfig.WithSharedConfigProfile(profile))
 	}

@@ -2178,7 +2178,7 @@ Reasoning appears as a separate muted block in the Web UI. The TUI status reads 
 | Where | This conversation's workspace |
 | Name | `localcode-debug-<date>-<time>.log`, the moment you pressed enter, to the millisecond |
 | One file per | Prompt. A prompt that delegates writes its sub-agents' calls into the same file, since they are part of that prompt |
-| Contains | The request line, the headers, the request body as sent, the status, and the response as it streams, for every call including `/v1/models` and the `/llm-doctor` probes |
+| Contains | The request line, the headers, the request body as sent, the status, and the response as it streams, for every call including `/v1/models` and the `/llm-doctor` probes. Binary bodies, such as Bedrock's event-stream frames, are written byte for byte and not escaped |
 | Lifetime | This run. It is off again the next time localcode starts, and turning it off leaves the files already written |
 
 Empty logs are removed: a prompt answered by a slash command makes no model call, and a file for each of those would bury the real ones.
@@ -2187,7 +2187,9 @@ Credentials never reach the file. `Authorization`, `x-api-key`, `api-key`, `x-go
 
 Everything else does reach it. The file holds the system prompt, this project's rules, the auto-memory index, every file the model read and every command it ran. Read one before sharing it.
 
-Bedrock calls are not covered. They go through the AWS SDK's own transport, and its responses are binary event-stream frames rather than text. The reply to `/debug-log` says so when a Bedrock profile is configured.
+Bedrock is covered too: its SDK client is given the same HTTP client. The signature is unaffected, because the SDK signs in its own middleware before any transport runs and the transport hands on identical bytes. Its responses are binary event-stream frames, and they go into the log as they arrive.
+
+A request body that is streamed, or larger than 32 MB, is noted rather than buffered: reading one to log it would consume what the caller was about to send, and holding it would double the memory it takes. Responses have no such ceiling, since they are copied as they stream rather than held.
 
 This is the layer under [`/context`](#context) and the [turn log](#the-turn-log). `/context` says what a request was going to contain and the turn log says a call happened and what it cost; this is the request.
 

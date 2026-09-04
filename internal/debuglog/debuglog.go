@@ -39,6 +39,14 @@ import (
 	"time"
 )
 
+// maxLoggedBody is the largest request body this reads out to log it.
+//
+// A ceiling because reading the body means holding it: the bytes are put
+// back for the caller, so a request twice the size of memory would be
+// held twice. Responses have no such ceiling, since they are copied as
+// they stream rather than held.
+const maxLoggedBody = 32 << 20
+
 // Sink is one prompt's file. Safe for concurrent use: a turn's own calls
 // are sequential, but a prompt that delegates has sub-agents writing to
 // the same file at the same time.
@@ -65,9 +73,9 @@ func Create(dir, sessionID string, when time.Time) (*Sink, error) {
 		if err == nil {
 			s := &Sink{f: f, path: path}
 			s.writef("# localcode debug log\n# prompt started %s\n# session %s\n"+
-				"# Every request to a model and every response, as they went over the wire.\n"+
-				"# Credentials are redacted. Bedrock is not covered: it goes through the AWS\n"+
-				"# SDK's own transport and its responses are binary event-stream frames.\n\n",
+				"# Every request to a model and every response, as they went over the wire,\n"+
+				"# including binary bodies, written byte for byte and not escaped.\n"+
+				"# Credentials are redacted; nothing else is.\n\n",
 				when.Format(time.RFC3339Nano), sessionID)
 			return s, nil
 		}
@@ -209,7 +217,22 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// redirects and retries, so this is the same trick with the same
 	// constraint, and a body too large to hold is left unread rather
 	// than truncated silently.
-	if req.Body != nil && req.ContentLength != 0 {
+	switch {
+	case req.Body == nil || req.Body == http.NoBody:
+	// A zero ContentLength with a body is not an empty body: net/http
+	// leaves it zero for a reader whose size it cannot see, and sends
+	// that body chunked. Both readings mean the same thing here — the
+	// length is not known in advance — and treating zero as empty was
+	// how a streamed request came out of the log as nothing at all.
+	case req.ContentLength <= 0:
+		// Unknown length is a streaming body. Reading it to log it would
+		// consume what the caller is about to send, and replacing it with
+		// a buffer would change a streamed upload into a buffered one.
+		b.WriteString("\n[request body is streamed; its length is not known in advance and it is not buffered here]\n")
+	case req.ContentLength > maxLoggedBody:
+		fmt.Fprintf(&b, "\n[request body is %d bytes, past the %d-byte ceiling this log buffers; not shown]\n",
+			req.ContentLength, maxLoggedBody)
+	default:
 		raw, err := io.ReadAll(req.Body)
 		req.Body.Close()
 		if err != nil {
