@@ -1,14 +1,18 @@
 # Changelog
 
+## v0.92.0
+
+**The agent-directory chain runs under the project as well as the home directory.** v0.91.0 read skills and custom commands from `~/.claude`, else `~/.opencode`, else `~/.localcode`. A repo carrying its own `.claude/skills` and `.claude/commands` still had to keep a `.localcode` copy of them. The same chain now runs under the project directory too, resolved independently of the home one: a repo on `.claude` with a home on `.localcode` is an ordinary arrangement rather than a conflict, and a project skill still wins over a global one of the same name.
+
+The trade is the one this chain makes everywhere. A repo whose `.claude` holds only settings shadows its own `.localcode/skills`. Startup logs both roots and `/reset-skills` names both directories, so it is visible rather than silent.
+
+**Windows is the same, and the CI now says so.** Nothing in the resolution is platform-specific — the roots are directory names joined with `filepath.Join`, under the project and under the home directory `USERPROFILE` names — but nothing ran there either. The three resolution packages run whole on the Windows job, with the two wiring tests, because a claim about path joining should be executed on the platform it is claimed for.
+
 ## v0.91.0
 
 **Skills, custom commands and global rules are read from the agent directory you already have.** A skill is `<name>/SKILL.md` with YAML frontmatter, which is Claude Code's convention, and a custom command is `<name>.md` with frontmatter and a prompt body, which is opencode's. LocalCode has always read exactly those formats out of `~/.localcode`, which meant copying files into a third directory to use them here. It now reads them where they are: `~/.claude` if that exists, else `~/.opencode`, else `~/.localcode`. Under `~/.opencode` the commands directory may be named `command`, as opencode names it.
 
-One root answers for all three kinds and the first that exists wins outright. Nothing is merged: a home with `~/.claude` reads that root and never looks at the other two. An empty winner still wins, so `~/.claude` without a `skills` directory means no global skills rather than a fall through. Startup logs the roots it chose and `/reset-skills` names the directories it read, because a rule that can silently drop a file has to say which file it kept.
-
-The same chain runs under the project directory, independently of the home one, so a repo's `.claude/skills` and `.claude/commands` are read the way its `.claude` settings already are. A project skill still wins over a global one of the same name. A repo whose `.claude` holds only settings shadows its own `.localcode/skills`, which is the same trade as everywhere else in this chain.
-
-Windows is the same, and now says so in CI: the resolution packages run whole on the Windows runner rather than being reasoned about from `filepath`'s documentation. The roots are directory names under the project and under the home directory `USERPROFILE` names.
+One root answers for all three kinds and the first that exists wins outright. Nothing is merged: a home with `~/.claude` reads that root and never looks at the other two. An empty winner still wins, so `~/.claude` without a `skills` directory means no global skills rather than a fall through. Startup logs the root it chose and `/reset-skills` names the directory it read, because a rule that can silently drop a file has to say which file it kept.
 
 The global rules files change with it, and this reverses an earlier decision. `~/.localcode/AGENTS.md` and `~/.claude/CLAUDE.md` used to be read together, precisely so that nobody who set up LocalCode after using Claude Code lost the instructions they had already written. Standing instructions read better as one voice than as two sets of conventions spliced together, so they now come from the winning root alone. Inside that root both names are still read, since they are two names for one thing.
 
