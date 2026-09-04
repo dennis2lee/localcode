@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.94.0
+
+**A documentation audit, and two guards so the same drift cannot happen quietly again.** Fourteen agents read every doc against the code shipped since v0.89.0; twenty-eight defects survived an adversarial pass and are fixed here. No behaviour changes.
+
+The two guards are the point. `TestEveryToolIsDocumented` fails when the daemon registers a tool that `docs/USAGE.md` never names in backticks, and it immediately found `Debate` and `Command` missing from the tool table, both documented elsewhere and neither where a reader looks for what the model can call. `TestTheInventoryListsEveryRegisteredAsset` fails when `promptRegistry()` registers an asset that `docs/PROMPT_ASSET_INVENTORY.md` has no row for. That file had already noted twice that its own count sentence goes stale and answered both times with a better sentence; the count was wrong again, by two. Prose that a test reads is the only prose that stays true.
+
+What the audit found, by kind:
+
+| Fixed | Where |
+|---|---|
+| The `Command` tool row named Smart Agent as its switch. It is `/model-invocable`, and the opt-in set is wider than `model_commands`: custom commands and skills opt themselves in through their own frontmatter | `USAGE.md` |
+| `update_plan` was described as refusing a `pending` to `completed` jump. That is guidance in the tool description; the tool records the list it is given and never compares it with the last one | `USAGE.md` |
+| `Schedule` was registered on every daemon turn and had no row in the tool table | `USAGE.md` |
+| Redirection and substitution were said never to auto-allow. With permission skipping on, a line whose every segment resolves to allow runs with the redirect in it; an explicit deny still denies | `USAGE.md` |
+| The `bash` segment list omitted a lone `&`, and said quoted separators survive without mentioning backslash-escaped ones | `USAGE.md` |
+| The first-word grant rule did not mention the two families that grant the exact command | `USAGE.md` |
+| The `"*"` permission fallback was described as applying only when a tool has no named entry. It is consulted whenever the named rules do not match the subject | `USAGE.md` |
+| The v0.93.0 always-allow paragraph had been inserted into the middle of the pattern-subject table, stranding four rows | `USAGE.md` |
+| The credential-path list named eleven of twenty patterns, so an unlisted path read as allowed | `USAGE.md` |
+| `/llm-doctor` was said not to compare inconclusive verdicts against the baseline. They do not count as a pass or a failure, but a verdict moving into or out of inconclusive is listed as a difference | `USAGE.md` |
+| The singular `command/` directory was shown only in the `.opencode` row; it is read in any root | `USAGE.md` |
+| `/commands` still said `.localcode/commands/*.md`, and the one-shot Smart Agent row omitted `update_plan` | `USAGE.md` |
+| Startup was said to log both roots. It logs them when either is not `.localcode` | `USAGE.md` |
+| A lead-in said "two more commands" over a four-row table | `USAGE.md` |
+| The LLM doctor row still said "four canaries at temperature 0", which is the gemma path only | `README.md` |
+| The agent-directory sentence described the home chain alone, three releases after the project chain shipped | `README.md` |
+| The paged `read_file`, the binary-file description, the edit diagnosis and grep's per-file cap were listed unconditionally; all four are Smart Agent behaviours | `README.md` |
+| Two missing asset rows, and a count sentence that said twelve where the registry had fourteen | `PROMPT_ASSET_INVENTORY.md` |
+| Item 33 said the Windows job runs no `go test`; item 41 had not recorded the v0.92.0 widening | `IMPROVEMENTS.md` |
+| grep's per-file cap stated unconditionally, in both the English and Korean pages | `where-localcode-differs.html`, `.ko.html` |
+
 ## v0.93.0
 
 **Six things the Codex CLI does that localcode had no answer for, all behind Smart Agent.** Each tells the model something the harness already knows and it cannot see, or gives it a way to stop guessing. They are a way of working rather than a capability, and the bundle is where ways of working live.

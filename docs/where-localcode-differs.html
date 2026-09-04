@@ -560,7 +560,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="scroll"><table>
 <thead><tr><th>Area</th><th>What differs</th></tr></thead>
 <tbody>
-<tr><td class="nw">Search results</td><td>A 200-match cap, a line over 1MB and an unreadable file are each named in the output. Paths, at most three, rather than a count. No single file may take more than 30 of grep's 200 results.</td></tr>
+<tr><td class="nw">Search results</td><td>A 200-match cap, a line over 1MB and an unreadable file are each named in the output. Paths, at most three, rather than a count. With Smart Agent on, no single file may take more than 30 of grep's 200 results.</td></tr>
 <tr><td class="nw">Lifecycle hooks</td><td>Beyond tool hooks: <code>pre_model</code> (block a request, or inject a fact the model could not look up), <code>post_model</code>, <code>delegate</code> (refuse a sub-agent, which a prompt cannot do), <code>compact</code>, <code>retry</code>.</td></tr>
 <tr><td class="nw">Per-session workspace</td><td>Two sessions in two projects on one daemon. Only that session's own turn blocks its own switch.</td></tr>
 <tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>, per profile or per conversation. Unset sends nothing, so an unchanged setup produces byte-identical requests.</td></tr>

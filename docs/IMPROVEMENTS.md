@@ -285,7 +285,7 @@ Completed findings remain in this list to preserve item numbers and release hist
 33. **CI test enforcement. Open for commits; enforced for releases.**
 
     * `gui-windows.yml` performs checkout, version resolution, build, smoke check, and upload.
-    * It does not run `go test`, `go vet`, or a pure-Go build.
+    * It runs `go test` on the Windows-specific and directory-resolution packages with `CGO_ENABLED=0`, so those are also built pure-Go. It does not run `go vet`, or a pure-Go build of every package. See item 41 for the scope.
     * `make check` records a local verification stamp. Release preflight requires a matching stamp.
     * The stamp does not enforce checks on commits or verify another machine.
     * A push-triggered workflow could provide both checks.
@@ -379,7 +379,8 @@ Completed findings remain in this list to preserve item numbers and release hist
 
 41. **Test suites that run on Windows. Open.**
 
-    * The Windows CI job runs tests since v0.87.0, scoped to what passes there: `internal/update`, `internal/childproc`, the handoff test in `cmd/localcode`, and the handoff and update tests in `internal/daemon`.
+    * The Windows CI job runs tests since v0.87.0, scoped to what passes there: `internal/update` and `internal/childproc` whole, the handoff test in `cmd/localcode`, and the handoff and update tests in `internal/daemon`.
+    * Widened in v0.92.0: `internal/userdirs`, `internal/skills` and `internal/rules` run whole, and the `cmd/localcode` filter also covers the two agent-directory wiring tests. Path resolution is a claim that has to be executed on the platform it is claimed for.
     * The first full run showed 52 failures across `cmd/localcode`, `internal/daemon` and `internal/session`, none in the code under test. Three causes account for nearly all of them:
         * A `t.TempDir()` holding a store's session logs cannot be removed while the store has them open; Windows refuses to delete an open file. `session.Store.Close` exists now, and the fix is `t.Cleanup(store.Close)` wherever a test builds a store, or a shared helper that does.
         * `TestDaemonEndToEnd` pastes a Windows path into JSON unescaped: `invalid character 'U' in string escape code`.

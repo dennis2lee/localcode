@@ -554,7 +554,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="scroll"><table>
 <thead><tr><th>영역</th><th>다른 점</th></tr></thead>
 <tbody>
-<tr><td class="nw">검색 결과</td><td>200개 상한, 1MB를 넘는 줄, 읽지 못한 파일을 각각 출력에 명시합니다. 개수가 아니라 경로를, 최대 세 개까지. 한 파일이 grep 결과 200개 중 30개를 넘게 차지할 수 없습니다.</td></tr>
+<tr><td class="nw">검색 결과</td><td>200개 상한, 1MB를 넘는 줄, 읽지 못한 파일을 각각 출력에 명시합니다. 개수가 아니라 경로를, 최대 세 개까지. Smart Agent가 켜져 있으면 한 파일이 grep 결과 200개 중 30개를 넘게 차지할 수 없습니다.</td></tr>
 <tr><td class="nw">라이프사이클 훅</td><td>도구 훅 외에 <code>pre_model</code>(요청 차단, 또는 모델이 찾을 수 없는 사실 주입), <code>post_model</code>, <code>delegate</code>(서브 에이전트 거절. 프롬프트로는 못 하는 일), <code>compact</code>, <code>retry</code>.</td></tr>
 <tr><td class="nw">세션별 workspace</td><td>데몬 하나에서 두 프로젝트의 두 세션. 자기 세션의 턴만 자기 전환을 막습니다.</td></tr>
 <tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>를 프로파일별 또는 대화별로. 설정하지 않으면 아무것도 보내지 않으므로, 손대지 않은 환경의 요청은 바이트까지 그대로입니다.</td></tr>

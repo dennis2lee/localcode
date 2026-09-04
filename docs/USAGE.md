@@ -84,7 +84,7 @@ The prompt may be an argument or stdin. Use stdin for prompts that contain newli
 | `--bare` | Loads only the base system prompt, workspace, and tools. Excludes `AGENTS.md`, `CLAUDE.md`, skills, memory, custom commands, and hooks. Creates no memory-index directory. Suitable for controlled comparisons. |
 | Permission request | Refused immediately because no interactive client can answer it. `--skip-permissions` is equivalent to `/permission-skip-all` for the run. |
 | Failure | Non-zero exit status. JSON output includes an `error` field. |
-| Smart Agent | Supports the six specialists plus `Task`, `TaskBackground`, and `TaskCollect` when `smart_agent` is enabled. |
+| Smart Agent | Supports the six specialists plus `Task`, `TaskBackground`, `TaskCollect`, and `update_plan` when `smart_agent` is enabled. |
 | Orchestration | Available when `orchestrate` is enabled, but every plan requires permission. Use one of the following settings for unattended execution. |
 
 ```
@@ -507,7 +507,7 @@ Git commands run without confirmation by default. An explicit `bash` rule for Gi
 |---|---|
 | String value (`"allow"`, `"ask"`, `"deny"`) | Applies to every call of that tool |
 | Array value | A list of `{"match": pattern, "decision": ...}` checked in order, where **the last matching rule wins** |
-| `"*"` key | Fallback for any tool with no exactly named rule. An exact tool name always beats `"*"`. |
+| `"*"` key | Fallback consulted whenever the tool's own rules do not match the subject, as well as when the tool has no named entry at all. Where both match, the exact tool name wins. |
 | No rule matches | Falls back to that tool's built in default from the table above |
 
 In the example, `git status` matches both `*` (ask) and `git *` (allow), and allow wins because it comes later. `rm -rf` matches `*` and `rm *`, so deny wins.
@@ -518,6 +518,11 @@ What each pattern matches:
 |---|---|
 | `bash` | The full command string |
 
+| `read_file`, `write_file`, `edit` | Target file path |
+| `grep`, `glob` | Search directory |
+| `check` | Configured verification command |
+| Other tools, including MCP tools | No subject; use a flat decision or `*` pattern |
+
 Answering "always allow" writes a rule to `config.json`. For most programs the rule generalizes to the program, so approving `cargo test` writes `cargo *`. Two families keep the whole command instead, because the program is not what was approved:
 
 | Family | Examples | Rule written |
@@ -526,10 +531,6 @@ Answering "always allow" writes a rule to `config.json`. For most programs the r
 | Privilege and destructive commands | `sudo`, `su`, `doas`, `rm`, `dd`, `shred`, `chmod`, `chown`, `kill` | The exact command. `rm -rf build` and `rm -rf ~` are one rule apart under `rm *`. |
 
 `always` stays available for both; a repeated `rm -rf build` stops asking. The rule is matched against the program's base name, so `/usr/bin/sudo` and `sudo` are the same answer.
-| `read_file`, `write_file`, `edit` | Target file path |
-| `grep`, `glob` | Search directory |
-| `check` | Configured verification command |
-| Other tools, including MCP tools | No subject; use a flat decision or `*` pattern |
 
 Patterns are globs where `*` is zero or more characters and `?` is exactly one.
 
@@ -574,9 +575,9 @@ The panel and commands save changes with the session. Background tasks follow th
 { "read_file": [{ "match": "*", "decision": "allow" }, { "match": "*.env", "decision": "deny" }] }
 ```
 
-`bash` rules apply to each command segment. LocalCode splits unquoted `&&`, `||`, `;`, `|`, and newlines. Every segment must resolve to `allow`; any `deny` rejects the full line. Quoted separators remain part of their command.
+`bash` rules apply to each command segment. LocalCode splits unquoted `&&`, `||`, `;`, `|`, `&`, and newlines. Every segment must resolve to `allow`; any `deny` rejects the full line. Separators that are quoted or backslash-escaped remain part of their command.
 
-Command substitution and output redirection never auto-allow: `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, and `>>`. These forms require confirmation unless an explicit rule denies them.
+Command substitution and output redirection never auto-allow: `$(...)`, `` `...` ``, `<(...)`, `>(...)`, `>`, and `>>`. These forms require confirmation unless an explicit rule denies them, or permission skipping is on: with `skip_all` a line whose every segment resolves to `allow` runs with the redirect or substitution in it. An explicit `deny` still denies in every mode.
 
 ### Answering a permission prompt: once, this session, or always
 
@@ -591,7 +592,7 @@ Ordinary tool prompts provide the following choices. Workspace-boundary prompts 
 
 The Web UI shows the same four as buttons: Deny, Allow for session, Always allow, Allow once.
 
-For `bash`, session and permanent grants generalize the first word. Approving `npm test` grants `npm *`. File and MCP grants use the exact subject. The prompt shows the resulting pattern.
+For `bash`, session and permanent grants generalize the first word. Approving `npm test` grants `npm *`. Two families are the exception and grant the exact command instead: interpreters and shells, and privilege or destructive commands. See [Fine grained permission rules](#fine-grained-permission-rules). File and MCP grants use the exact subject. The prompt shows the resulting pattern.
 
 "Always allow" updates the file passed through `--config`, or global `~/.localcode/config.json` when no explicit file is set. It never updates the project override. Only the `permission` key changes. Without a writable config target, this option is unavailable.
 
@@ -746,12 +747,12 @@ Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats o
 | Order | Root | Reads |
 |---|---|---|
 | 1 | `.claude` | `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md`, `CLAUDE.md` |
-| 2 | `.opencode` | the same, and `command/` is accepted for the commands directory |
+| 2 | `.opencode` | the same |
 | 3 | `.localcode` | the same |
 
 The chain runs twice, independently: once under the project directory and once under the home directory. A project skill still wins over a global one of the same name, as before. A repo that keeps its skills in `.claude` and a home that keeps its own in `.localcode` is an ordinary arrangement, not a conflict.
 
-Nothing is merged across roots. A home with `~/.claude` reads that root and never looks at the other two, including when they hold skills of their own. An empty winner still wins: `~/.claude` with no `skills` directory means no global skills rather than a fall through, and a repo whose `.claude` holds only settings shadows its own `.localcode/skills` the same way. Startup logs both roots it chose, and `/reset-skills` names both directories it read.
+Nothing is merged across roots. A home with `~/.claude` reads that root and never looks at the other two, including when they hold skills of their own. An empty winner still wins: `~/.claude` with no `skills` directory means no global skills rather than a fall through, and a repo whose `.claude` holds only settings shadows its own `.localcode/skills` the same way. In any root, `command/` is read when `commands/` does not exist, since opencode names that directory in the singular; `commands/` wins where a root has both. Startup logs both roots whenever either one is not `.localcode`, and `/reset-skills` always names both directories it read.
 
 Windows works the same way. The roots are directory names under the project and under the home directory `USERPROFILE` names, so `C:\Users\you\.claude` answers exactly as `~/.claude` does elsewhere.
 
@@ -1102,7 +1103,7 @@ For a local muse or gemma behind vLLM or another OpenAI-compatible server. When 
 
 The command exists only for models whose name contains `muse` or `gemma`; on another model it says so and sends nothing. Runs are kept under `~/.localcode/doctor/`, one file per model, and a failing canary's request is written beside them so whoever runs the server can replay the same bytes with `curl`. When the profile carries an `api_key`, the printed `curl` line names the `Authorization` header with a blank where the key goes; the key itself is never printed.
 
-Two verdicts are withheld rather than guessed. A canary whose whole token budget went to `reasoning_content` never produced an answer to judge, and a canary that passed on one of its two runs and failed on the other has measured a coin toss. Both are reported as inconclusive and neither is compared against the baseline.
+Two verdicts are withheld rather than guessed. A canary whose whole token budget went to `reasoning_content` never produced an answer to judge, and a canary that passed on one of its two runs and failed on the other has measured a coin toss. Both are reported as inconclusive, and neither counts as a pass or a failure against the baseline. A verdict that moves into or out of inconclusive is still listed as a difference.
 
 What the report can say is "the server reports different facts than at the baseline" and "the same request now gets a different answer". The cause is in the server's startup flags and logs, which a client cannot read, and the report does not claim one. The first run is not made the baseline by itself: a run taken while the model is misbehaving would make the next healthy one look like the change.
 
@@ -1178,7 +1179,7 @@ Replies report inactive configurations, such as Smart Agent without profiles or 
 
 `/config` still works and still lists all four settings including `auto_compact`.
 
-Two more commands apply an edited configuration without restarting:
+Four more daemon commands act on the running install:
 
 | Command | What it does |
 |---|---|
@@ -1199,7 +1200,7 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/model` | **TUI.** Opens a list of agents to choose from, with the model each one resolves to, so you can switch without knowing the name first. `/model <name>` switches directly. The Web UI has the header dropdown instead. |
 | `/session` | **TUI.** Opens a list of conversations to switch to. `/session <id>` switches directly. The Web UI has the left panel instead. See [Switching sessions](#switching-sessions). |
 | `/skill` | Lists registered skills. See [Running a skill](#running-a-skill). |
-| `/commands` | Lists the custom commands registered from `.localcode/commands/*.md`. See [Custom commands](#custom-commands). |
+| `/commands` | Lists the custom commands registered from the project and home agent directories the root chain picked (`commands/*.md`, or `command/*.md`). See [Custom commands](#custom-commands). |
 | `/tasks` | Lists background tasks in this session. See [`/tasks`](#tasks). |
 | `/smart-agent` | Toggles the Smart Agent bundle and saves the choice. `/smart-agent on\|off` sets it outright. Answered by the daemon, so both clients have it. See [The switches](#the-switches). |
 | `/auto-delegate` | Toggles auto-delegation the same way. |
@@ -1505,8 +1506,11 @@ Agents select models and tool scopes. Smart Agent adds built-in specialists. Orc
 | `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [Smart Agent](#smart-agent) on. |
 | `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
-| `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and a step cannot go from `pending` straight to `completed`. One-step plans are refused. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
+| `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and one-step plans are refused. The model is also told never to move a step from `pending` straight to `completed`, but that is guidance in the tool description rather than a refusal: the tool records the list it is given and does not compare it with the last one. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
 | `ask_user` | No | Ask the user one question mid-turn and wait for the answer, without ending the turn. 2 to 4 short options, most recommended first; the user can answer in their own words instead. Once per turn. Offered only with [Smart Agent](#smart-agent) on, and only where somebody is watching: never in a one-shot run, a scheduled run, or a delegated sub agent. |
+| `Debate` | No | Book a debate: this session's agent writes, another agent reviews, round after round. Called instead of doing the work; the first round is where the work happens. Not offered inside a debate, in an unattended turn, or to a delegated sub agent. See [Debate](#debate). |
+| `Schedule` | Yes, always | Book a prompt to run at a parsed future time in this conversation. The daemon has to still be running then. See [Scheduled tasks](#scheduled-tasks). |
+| `Command` | No | Run one of this session's own commands as a turn of its own, immediately after the current one ends. Offered only with [`/model-invocable`](#model-invocable) on, only for what has opted in (built-ins named in config.json's `model_commands`, plus custom commands and skills with `model_invocable: true` in their frontmatter), and never inside a command run: one command cannot book another. There is no wildcard. |
 
 The loop ends when the model stops requesting tools. `Verdict` and `Answer` also end the turn after a valid completion result. Three consecutive steps containing only previously repeated tool calls end the turn with a transcript notice. A new edit between repeated checks counts as progress.
 
@@ -1864,7 +1868,7 @@ Each specialist has its own session prefix and cache.
 
 The credential-path check requires Smart Agent. Explicit tool rules can override it. The workspace boundary is always enabled and requires separate outside-access approval.
 
-Smart Agent denies `read_file`, `write_file`, and `edit` for credential-like paths: `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa` and related keys, `~/.ssh`, `~/.aws/credentials`, `~/.kube/config`, `~/.npmrc`, `*credentials.json`, and `.netrc`.
+Smart Agent denies `read_file`, `write_file`, and `edit` for credential-like paths. The full list is `secretPatterns` in `internal/config/rules.go`; it covers `.env` and `*.env.*`, SSH keys (`*id_rsa*`, `*id_ed25519*`, `*id_ecdsa*`, `*id_dsa*`, `~/.ssh`), certificate and keystore files (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`), `~/.aws/credentials` and `~/.aws/config`, `~/.gnupg`, `~/.kube/config`, `~/.docker/config.json`, `~/.npmrc`, `~/.pypirc`, `*credentials.json`, `*service-account*.json`, `.netrc`, and `*.htpasswd`.
 
 `skip_permissions` does not override a denial. To permit a credential path, add an explicit rule:
 
