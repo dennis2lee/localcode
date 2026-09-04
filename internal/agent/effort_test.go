@@ -194,3 +194,71 @@ func TestTheCommandSaysWhatTheLevelReaches(t *testing.T) {
 		}
 	}
 }
+
+// Muse reads its reasoning strength from the system prompt, not from
+// reasoning_effort. Until this existed "/effort high" on a muse profile
+// changed a field the model ignores.
+func TestMuseGetsItsReasoningStrengthInTheSystemPrompt(t *testing.T) {
+	systemOf := func(body map[string]any) string {
+		msgs, _ := body["messages"].([]any)
+		for _, m := range msgs {
+			mm, _ := m.(map[string]any)
+			if mm["role"] == "system" {
+				s, _ := mm["content"].(string)
+				return s
+			}
+		}
+		return ""
+	}
+
+	loop, sid, bodies := effortLoop(t, "")
+	if err := loop.SendMessage(context.Background(), sid, "boy", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if got := systemOf(bodies()[0]); strings.Contains(got, "Reasoning strength") {
+		t.Errorf("an unset effort still wrote a reasoning line: %q", got)
+	}
+
+	if _, err := loop.routeEffort(sid, "boy", "/effort high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "boy", "again"); err != nil {
+		t.Fatal(err)
+	}
+	if got := systemOf(bodies()[1]); !strings.Contains(got, "Reasoning strength: high") {
+		t.Errorf("system prompt lacks the muse line: %q", got)
+	}
+
+	// xhigh is a muse word. It reaches the system prompt as itself and the
+	// wire as high, the top of that field's vocabulary.
+	if _, err := loop.routeEffort(sid, "boy", "/effort xhigh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "boy", "once more"); err != nil {
+		t.Fatal(err)
+	}
+	b := bodies()[2]
+	if got := systemOf(b); !strings.Contains(got, "Reasoning strength: xhigh") {
+		t.Errorf("system prompt lacks xhigh: %q", got)
+	}
+	if got := b["reasoning_effort"]; got != "high" {
+		t.Errorf("reasoning_effort = %v on the wire, want high (the field has no xhigh)", got)
+	}
+}
+
+// The line is muse's alone, and it sits ahead of the family note.
+func TestTheReasoningLineIsMusesAlone(t *testing.T) {
+	if got := modelNoteFor("google/gemma-3-27b-it", provider.EffortHigh); strings.Contains(got, "Reasoning strength") {
+		t.Errorf("gemma got a muse line: %q", got)
+	}
+	got := modelNoteFor("Muse-Glimmer-30B", provider.EffortXHigh)
+	if !strings.HasPrefix(got, "Reasoning strength: xhigh") {
+		t.Errorf("the line is not first: %q", got)
+	}
+	if !strings.Contains(got, "Working style") {
+		t.Errorf("the family note went missing: %q", got)
+	}
+	if got := modelNoteFor("Muse-Glimmer-30B", provider.EffortOff); strings.Contains(got, "Reasoning strength") {
+		t.Errorf("off wrote a line: %q", got)
+	}
+}

@@ -13,9 +13,13 @@ import (
 // default pure-Go, cross-compiled release builds omit — so this returns a
 // clear error telling you what to do instead of failing to compile the
 // whole binary.
-func Launch(title, version string, start func(progress func(string)) (http.Handler, error)) error {
+func Launch(title, version string, start func(progress func(string), reload func()) (http.Handler, error)) error {
 	return errors.New(unavailable(runtime.GOOS))
 }
+
+// InstallerRestarts is false without a window: there is nothing for an
+// installer to bring back.
+func InstallerRestarts() bool { return false }
 
 // unavailable is the explanation, per platform, because the answer is a
 // different one on each and the wrong answer is worse than none.

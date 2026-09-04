@@ -45,17 +45,3 @@ internal/childproc/childproc_other.go:HideConsole
 # nobody can check from another machine is one that goes wrong quietly, so
 # it lives where TestTheInstallerIsStartedAtBasicUI can read it here.
 internal/update/install.go:installerArgs
-
-# --- reachable only through the gui build tag ----------------------
-# deadcode runs without -tags gui, and in that build gui.Launch is the
-# stub, which never calls the start closure runGUI hands it. Everything
-# only that closure reaches is therefore reported. The desktop window's
-# proxy to a startup-handoff successor (cmd/localcode/gui_proxy.go) is
-# such code: live in every shipped window, unreachable in the build the
-# checker sees. Tested directly in gui_proxy_test.go.
-cmd/localcode/gui_proxy.go:successorProxy
-cmd/localcode/gui_proxy.go:captured.Header
-cmd/localcode/gui_proxy.go:captured.Write
-cmd/localcode/gui_proxy.go:captured.WriteHeader
-cmd/localcode/gui_proxy.go:writeJSON
-cmd/localcode/gui_proxy.go:writeJSONError

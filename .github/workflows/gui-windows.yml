@@ -123,7 +123,7 @@ jobs:
         run: |
           go test ./internal/update/ ./internal/childproc/
           go test ./internal/userdirs/ ./internal/skills/ ./internal/rules/
-          go test ./cmd/localcode/ -run 'Successor|UnknownCommand|WindowProxy|ChosenRoot|OwnChain'
+          go test ./cmd/localcode/ -run 'Successor|UnknownCommand|WindowProxy|ChosenRoot|OwnChain|SwapHandler|SwappedUnderTheWindow'
           go test ./internal/daemon/ -run 'SessionIDInPath|TheGateRefuses|DeadDaemon|TakingOverASession|Retire|Update|Startup|Busy'
         env:
           CGO_ENABLED: '0'

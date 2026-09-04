@@ -167,11 +167,19 @@ const (
 	EffortLow    Effort = "low"
 	EffortMedium Effort = "medium"
 	EffortHigh   Effort = "high"
+	// EffortXHigh is one step past high, and only some models have that
+	// step. Muse reads "Reasoning strength: xhigh" from its system prompt
+	// and its publisher asks for it on coding work. On the OpenAI wire it
+	// is sent as high, the top of that vocabulary; on Anthropic's it is
+	// the high budget, or adaptive where the model decides for itself.
+	EffortXHigh Effort = "xhigh"
 )
 
 // Levels is every effort a person may configure, in order, for a message
 // that has to list them.
-func Levels() []Effort { return []Effort{EffortOff, EffortLow, EffortMedium, EffortHigh} }
+func Levels() []Effort {
+	return []Effort{EffortOff, EffortLow, EffortMedium, EffortHigh, EffortXHigh}
+}
 
 // ValidEffort reports whether s names a level. The empty string does not:
 // callers that mean "unset" have it already and do not need to ask.

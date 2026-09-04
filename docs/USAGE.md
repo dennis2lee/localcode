@@ -1195,7 +1195,7 @@ Four more daemon commands act on the running install:
 
 | Command | What it does |
 |---|---|
-| `/update` | Installs the newest release and moves this daemon onto it without restarting what you are looking at: the new version takes the address, this one finishes whatever is running, and the next message goes to the new one. See [Handing over](#handing-over). Where a handoff is not available — the desktop window, or a daemon reached over `--server` — it installs through the platform's installer or restarts instead, and refuses while anything is running anywhere on this daemon, naming what it found. The download is checked against the release's SHA-256 before it is run. |
+| `/update` | Installs the newest release and moves this daemon onto it without restarting what you are looking at: the new version takes the address, this one finishes whatever is running, and the next message goes to the new one. In the desktop window the page reloads onto the new version and the window stays open. See [Handing over](#handing-over). Where a handoff is not available, a daemon reached over `--server`, it installs through the platform's installer or restarts instead, and refuses while anything is running anywhere on this daemon, naming what it found. The download is checked against the release's SHA-256 before it is run. |
 | `/llm-doctor` | For a muse or gemma on an OpenAI-compatible server: what the server reports about itself, four canaries sent twice, and what differs from the baseline kept with `/llm-doctor baseline`. See [`/llm-doctor`](#llm-doctor). |
 | `/reset-mcp` | Stops the MCP servers, re-reads their configuration from config.json, reconnects, and swaps the tools. A server removed from the file takes its tools with it; one added while the daemon runs connects. The status indicator follows. |
 | `/reset-skills` | Reloads skills from disk, against the live workspace. A skill installed or edited mid-run applies immediately, and the name completes like any other. |
@@ -1224,7 +1224,7 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/show-scheduled-task` | Lists the prompts booked for later in this conversation. |
 | `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <task>`. Author and reviewer iterations. Also available through natural language or the ⚖️ button. See [Debate](#debate). |
 | `/repeat-limit` | `/repeat-limit [off\|<steps>]`. How many nothing-new steps end a turn; `off` never ends one for it. Bare, reports the ceiling. See [A model that repeats itself](#a-model-that-repeats-itself). |
-| `/effort` | `/effort [off\|low\|medium\|high]`. Conversation reasoning level. `default` restores the profile setting. See [Effort](#effort). |
+| `/effort` | `/effort [off\|low\|medium\|high\|xhigh]`. Conversation reasoning level. `default` restores the profile setting. See [Effort](#effort). |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions
@@ -2144,13 +2144,14 @@ Or on the profile, for every conversation that uses it:
 
 A conversation effort setting overrides its profile. `default` removes the override.
 
-Unset and `off` send no reasoning fields. `/effort` reports the active setting and its provider-specific effect.
+Unset and `off` send no reasoning fields. `/effort` reports the active setting and its provider-specific effect. `xhigh` is one step past `high`, and only some models have that step; elsewhere it means `high`.
 
 Provider mappings differ:
 
 | Provider | What is sent | What the levels mean |
 |---|---|---|
-| OpenAI-compatible | `reasoning_effort` | Sends `low`, `medium`, or `high`. Effect depends on server support. |
+| OpenAI-compatible | `reasoning_effort` | Sends `low`, `medium`, or `high`; `xhigh` is sent as `high`. Effect depends on server support. |
+| Muse models | A system prompt line | Muse does not read `reasoning_effort`. The level goes into the system prompt as `Reasoning strength: <level>`, which is how its model card sets it, with `xhigh` sent as itself. Its publisher asks for `high` or `xhigh` on coding work. The field is sent as well, capped at `high`, for a server that reads it. |
 | Anthropic API, newest Claude families | Extended thinking, `adaptive` | All enabled effort levels select adaptive thinking. No distinct low/medium/high budget. |
 | Anthropic API, older Claude models | extended thinking, with a budget | Three levels, three token budgets. |
 | Bedrock | Extended thinking in `additionalModelRequestFields` | Model-dependent adaptive or budgeted form. Merged with the million-token beta field when enabled. |
@@ -2389,7 +2390,11 @@ Two daemons never write one session at the same time: that is what step 4 is for
 
 On Windows too, with two differences that follow from the platform. A socket crosses to the new process as an inherited handle rather than a descriptor number, which the Go runtime has supported since its `net` package's file support became "unix or windows". And a running `.exe` cannot be written over, but it can be renamed: a portable install (the zip) moves the running binary aside and puts the new one under its name. An install under Program Files cannot be written by this user without elevation, and a handoff must not wait on a dialog, so the new binary is staged under the user's own cache directory (`%LocalAppData%\localcode\bin`) and the successor runs from there; the copy under Program Files stays as it was until the settings window's install button, which runs the MSI, brings it up to date. `/update` on Windows always installs from the zip, for this reason.
 
-What Windows still cannot do is bring a console program back into the terminal it was started from after a restart. That is exactly why a handoff, where nothing restarts, is worth more there than anywhere: the terminal keeps running through `/update`, and the desktop window through the update at startup. `/update` typed inside the window is the one case without a handoff yet: it runs the platform's installer and asks you to reopen the window.
+What Windows still cannot do is bring a console program back into the terminal it was started from after a restart. That is exactly why a handoff, where nothing restarts, is worth more there than anywhere: the terminal keeps running through `/update`.
+
+The desktop window hands over too, one step indirect. The window owns the loopback listener its page is connected to and never gives it up, so the new version gets a listener of its own and the window serves a proxy onto it; the two routes that open native dialogs stay in the window's process. At startup that is how a staged update runs from the first message. On `/update` the same thing happens mid-session: the new daemon comes up, the old one finishes what it has and retires, the window switches to the proxy, and the page reloads onto the new version's interface. The window stays open throughout. The daemon behind the window watches the same pipe the terminal's does, so closing the window ends it.
+
+The settings window's install button is the one path that closes the window, because it runs the MSI and the MSI has to replace the files the window holds. On Windows the window registers with the Restart Manager when it opens, so Windows starts it again when the install finishes. Windows applies its own two rules there: the window must have been open for a minute before the install, and an install that needs a reboot does not restart anything until after it.
 
 #### The settings window
 

@@ -105,29 +105,61 @@ func runGUI(configPath string) error {
 		}
 	}()
 
+	// The pipe the daemon behind this window watches. Its write end lives
+	// in this process for as long as the window does, so a successor
+	// started by an update exits when the window closes, with nothing to
+	// remember to stop. Made before the window, since the first successor
+	// may be started before the page is up.
+	alive, err := newTUIAlivePipe()
+	if err != nil {
+		return err
+	}
+
 	// "LocalCode", not "localcode": this string is the window title and
 	// the taskbar label, where it is the product's name rather than the
 	// command you type. The binary, the package and the CLI stay
 	// lower-case.
-	return gui.Launch("LocalCode", version, func(progress func(string)) (http.Handler, error) {
+	return gui.Launch("LocalCode", version, func(progress func(string), reload func()) (http.Handler, error) {
 		d, done, err := buildDaemon(context.Background(), configPath, progress)
 		if err != nil {
 			return nil, err
 		}
 		cleanup = done
+		var cleanupOnce sync.Once
+		cleanupOnce_ := func() { cleanupOnce.Do(done) }
 		// Same reasoning as the picker below, one step stronger: installing
 		// replaces the program on the machine the daemon runs on, so the
 		// button only exists where that machine is the one being looked at.
 		d.AllowUpdateInstall = true
-		// No d.Restart here, and it is not an omission. The restart exists
-		// for the install that replaces localcode's own binary, and the
-		// desktop window is never that install: macOS ships it as a .app
-		// bundle, which selfInstall refuses to write into piece by piece,
-		// and Windows ships an MSI, which msiexec applies after localcode
-		// has exited. Both report Replaced=false, so the reply says what
-		// it always said. Wiring a hook that could only fire on a window
-		// closing would mean a window closed an hour later reopening
-		// itself, which is a worse fault than the one being fixed.
+		// Whether the installer's close is followed by a return. See
+		// internal/gui/restart_windows.go; the reply to the install button
+		// reads it.
+		d.InstallerRestarts = gui.InstallerRestarts()
+
+		// The startup update, where exec is not available. The new version
+		// is started beside this process on a loopback listener of its
+		// own, and the window fronts it through the proxy: the page is
+		// served by the new version, so it is the new interface, and the
+		// two routes that open native dialogs stay here. This was
+		// described in v0.88.0 and not wired; the window built its daemon
+		// in-process every start and never asked.
+		if binary, ok := startupHandoffBinary(d, os.Stderr); ok {
+			ln, lerr := net.Listen("tcp", "127.0.0.1:0")
+			if lerr != nil {
+				return nil, fmt.Errorf("bind a port for the new localcode: %w", lerr)
+			}
+			if _, _, serr := spawnSuccessor(binary, ln, alive.r); serr != nil {
+				ln.Close()
+				fmt.Fprintf(os.Stderr, "start the new localcode: %v; running this version instead\n", serr)
+			} else {
+				addr := ln.Addr().String()
+				ln.Close()
+				cleanupOnce_()
+				cleanup = nil
+				return successorProxy(addr), nil
+			}
+		}
+
 		// Only here. The window and the daemon share a machine and a user
 		// in this mode, so a folder picker opens where the person clicking
 		// is sitting. Every other mode leaves d.PickDirectory nil — over
@@ -142,7 +174,18 @@ func runGUI(configPath string) error {
 			// the person who clicked it.
 			d.RevealDirectory = dialog.RevealDirectory
 		}
-		return d.Handler(), nil
+
+		// "/update" hands the daemon behind the window to the new binary
+		// the way the terminal does, through the proxy above. The window
+		// stays; the page is reloaded onto the new version; work in flight
+		// finishes in the old daemon first. Before this the window had no
+		// Handoff and took the installer path, which on Windows closed
+		// localcode and left it closed.
+		front := newSwapHandler(d.Handler())
+		d.Handoff = func(version, binary string) error {
+			return windowHandoff(d, front, alive, cleanupOnce_, reload, version, binary)
+		}
+		return front, nil
 	})
 }
 

@@ -40,6 +40,10 @@ func TestOpenAICompatCarriesTheLevel(t *testing.T) {
 			t.Errorf("openAIEffort(%s) = %q, want %q", level, got, level)
 		}
 	}
+	// The field's vocabulary stops at high; xhigh is the top of it.
+	if got := openAIEffort(EffortXHigh); got != "high" {
+		t.Errorf("openAIEffort(xhigh) = %q, want high", got)
+	}
 }
 
 // The newest Claude families decide the size of their own reasoning and
@@ -83,6 +87,10 @@ func TestTheLevelsAreThreeDifferentBudgets(t *testing.T) {
 			t.Errorf("%s reuses a budget another level already has (%d)", level, th.BudgetTokens)
 		}
 		seen[th.BudgetTokens] = true
+	}
+	// xhigh has no tier of its own on this wire; it is the high budget.
+	if th := anthropicThinking("claude-3-5-sonnet-20241022", EffortXHigh, 0); th == nil || th.BudgetTokens != 16384 {
+		t.Errorf("xhigh = %+v, want the high budget", th)
 	}
 }
 
@@ -140,7 +148,7 @@ func TestAnUnsignedThinkingBlockIsNotSent(t *testing.T) {
 }
 
 func TestValidEffort(t *testing.T) {
-	for _, ok := range []string{"off", "low", "medium", "high"} {
+	for _, ok := range []string{"off", "low", "medium", "high", "xhigh"} {
 		if !ValidEffort(ok) {
 			t.Errorf("%q was rejected", ok)
 		}

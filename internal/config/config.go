@@ -566,7 +566,7 @@ func (c *Config) Validate() error {
 		// This number multiplies turns, and a typo in it — a stray zero —
 		// is a session that keeps prompting itself.
 		if profile.Effort != "" && !provider.ValidEffort(profile.Effort) {
-			return fmt.Errorf("profile %q: effort is %q, which is not one of off, low, medium, high",
+			return fmt.Errorf("profile %q: effort is %q, which is not one of off, low, medium, high, xhigh",
 				name, profile.Effort)
 		}
 		if profile.KeepGoing < -1 || profile.KeepGoing > maxKeepGoing {

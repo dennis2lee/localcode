@@ -65,7 +65,7 @@ func (l *Loop) routeEffort(sessionID, agentName, text string) (bool, error) {
 	}
 	if !provider.ValidEffort(arg) {
 		return true, l.replyText(sessionID,
-			"usage: /effort [off|low|medium|high], or \"default\" to go back to the profile's.")
+			"usage: /effort [off|low|medium|high|xhigh], or \"default\" to go back to the profile's.")
 	}
 	if _, err := l.Store.SetEffort(sessionID, arg); err != nil {
 		return true, l.replyText(sessionID, err.Error())
@@ -93,7 +93,7 @@ func (l *Loop) effortSummary(sessionID, profileName string, profile config.Profi
 		fmt.Fprintf(&b, "effort: %s, set by %s. Model: %s.\n", level, source, modelName(profile))
 	}
 	b.WriteString(effortReach(l.providerTypeOf(profile), profile.Model, level))
-	b.WriteString("\n\nusage: /effort [off|low|medium|high], or \"default\" to go back to the profile's.")
+	b.WriteString("\n\nusage: /effort [off|low|medium|high|xhigh], or \"default\" to go back to the profile's.")
 	return b.String()
 }
 
@@ -120,6 +120,12 @@ func effortReach(providerType config.ProviderType, model string, level provider.
 		}
 		return "On " + model + " this asks Bedrock for extended thinking, with a token budget for the level."
 	default:
+		if museModel(model) {
+			return "Muse reads its reasoning strength from the system prompt, not from a request field, so " +
+				"this is sent as the line \"Reasoning strength: " + string(level) + "\" there. Its publisher asks " +
+				"for high or xhigh on coding work. reasoning_effort is sent as well, capped at high, for a " +
+				"server that reads it."
+		}
 		return "Sent to the server as \"reasoning_effort\". One that supports reasoning takes the level; " +
 			"one that does not ignores the field, and nothing about the request changes."
 	}

@@ -302,6 +302,9 @@ var thinkingBudgets = map[Effort]int{
 	EffortLow:    2048,
 	EffortMedium: 8192,
 	EffortHigh:   16384,
+	// No larger tier exists on this wire. xhigh is a muse word; here it
+	// means the most this API takes, which is the same as high.
+	EffortXHigh: 16384,
 }
 
 // temperatureFor is the temperature a request may carry: its own, unless

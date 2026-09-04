@@ -1,6 +1,10 @@
 package agent
 
-import "strings"
+import (
+	"strings"
+
+	"localcode/internal/provider"
+)
 
 // Per-model notes appended to the system prompt.
 //
@@ -68,6 +72,34 @@ var modelQuirks = []struct {
 	},
 }
 
+// museModel reports whether model is one of the muse family, by the same
+// substring rule every other muse decision here uses.
+func museModel(model string) bool { return strings.Contains(strings.ToLower(model), "muse") }
+
+// museReasoningLine is how an effort level reaches a muse model.
+//
+// Muse does not read reasoning_effort. Its model card sets the amount of
+// reasoning through the system prompt, as "Reasoning strength: <low |
+// medium | high | xhigh>", and asks for high or xhigh on coding and
+// agentic work. Until this existed, "/effort high" on a muse profile
+// changed a request field the model ignores, and every muse conversation
+// ran at whatever the server's default strength is, which the publisher
+// says is the wrong one for code.
+//
+// Only when a level is set. Unset and off send nothing here for the same
+// reason they send nothing on the wire: the model's own default is a
+// setting too, and the person who has not asked keeps it.
+func museReasoningLine(model string, level provider.Effort) string {
+	if !museModel(model) {
+		return ""
+	}
+	switch level {
+	case provider.EffortLow, provider.EffortMedium, provider.EffortHigh, provider.EffortXHigh:
+		return "Reasoning strength: " + string(level)
+	}
+	return ""
+}
+
 // quirkNote returns the addition for a model, or "" for a model with no
 // known quirk.
 func quirkNote(model string) string {
@@ -78,6 +110,23 @@ func quirkNote(model string) string {
 		}
 	}
 	return ""
+}
+
+// modelNoteFor is the per-model system text: the family's quirk note, and
+// for muse the reasoning line the effort level asks for. On the same
+// asset because they are the same kind of thing, words this model needs
+// that no other does, and because a line that changes with /effort has
+// to be re-derived per turn, which the quirk asset already is.
+func modelNoteFor(model string, level provider.Effort) string {
+	note := quirkNote(model)
+	line := museReasoningLine(model, level)
+	switch {
+	case note == "":
+		return line
+	case line == "":
+		return note
+	}
+	return line + "\n\n" + note
 }
 
 // modelFamily names the family a model id belongs to, using the same

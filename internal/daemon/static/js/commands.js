@@ -50,7 +50,7 @@ export const HELP_TEXT = [
   '  /permission-skip-tools [on|off]  allow tool prompts, still ask before leaving the project',
   '  /read-outside [on|off|mem-clear]   reading outside this project\'s directory',
   '  /write-outside [on|off|mem-clear]  writing outside it',
-  '  /effort [off|low|medium|high]  how hard the model is asked to think in this conversation',
+  '  /effort [off|low|medium|high|xhigh]  how hard the model is asked to think in this conversation',
   '  /debate <reviewer>[,<reviewer>] [rounds] <what to do>  other agents review this one\'s work, round after round',
   '  /schedule <when> <what to do>  book a prompt for later (only while localcode runs)',
   '  /show-scheduled-task  list the prompts booked for later',

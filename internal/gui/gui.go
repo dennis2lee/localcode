@@ -38,16 +38,24 @@ import (
 // nothing to distinguish "working" from "failed to start". The obvious
 // response is to launch it again, and then two are starting.
 //
+// reload is handed to start as well, for later: after a handoff the
+// daemon behind the window is a newer version and the page it is showing
+// is the old one's, and the only way to the new interface is to load it
+// again. It is safe to call at any time after the page is up.
+//
 // Blocks until the window is closed. If start fails, the error is shown
 // in the window (this binary has no console to print it to) and returned
 // once the user closes it.
-func Launch(title, version string, start func(progress func(string)) (http.Handler, error)) error {
+func Launch(title, version string, start func(progress func(string), reload func()) (http.Handler, error)) error {
 	w := webview.New(false)
 	defer w.Destroy()
 	w.SetTitle(title)
 	w.Navigate(dataURL(splashHTML(version)))
 	setWindowIcon(uintptr(w.Window()))
 	hideTitleBar(uintptr(w.Window()))
+	// Told to Windows before anything else, so an installer that closes
+	// this window later brings it back. See restart_windows.go.
+	registerRestart()
 
 	// Where the OS frame has been taken away, the page draws the buttons
 	// that went with it and works them through here. Bound before the
@@ -67,7 +75,10 @@ func Launch(title, version string, start func(progress func(string)) (http.Handl
 		progress := func(msg string) {
 			w.Dispatch(func() { w.Eval(jsCall("lcStatus", msg)) })
 		}
-		handler, err := start(progress)
+		reload := func() {
+			w.Dispatch(func() { w.Eval("location.reload()") })
+		}
+		handler, err := start(progress, reload)
 		if err != nil {
 			startErr = err
 			// Left on screen rather than exiting: a window that appears

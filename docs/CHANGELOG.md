@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.95.0
+
+**The desktop window comes back after an update, and hands over on `/update`.** Three things ended with the window closed and nobody bringing it back on Windows, and each has its own fix.
+
+`/update` typed in the window took the installer path: the MSI closed localcode to replace its files, and nothing reopened it. The window now hands over the way the terminal does, one step indirect. It owns the loopback listener its page is connected to and never gives it up, so the new version gets a listener of its own, the window swaps what it serves to a proxy onto that listener, the old daemon finishes its work and retires, and the page reloads onto the new version's interface. The window stays open throughout. The daemon behind it watches the same pipe the terminal's does, so closing the window ends it.
+
+The update at startup did not happen in the window at all. v0.88.0 said the window fronted a startup successor through a proxy; the proxy existed, had tests, and had no caller, and the deadcode allowlist recorded it as live behind the gui tag, which is what hid that. The window built its daemon in-process every start and never asked. It asks now, and runs a staged update from the first message.
+
+The settings window's install button still runs the MSI, since that is what brings the Program Files copy up to date, and the MSI still has to close the window. The window now registers with the Restart Manager when it opens (`RegisterApplicationRestart`), so Windows starts it again when the install finishes. The reply to the button says so. Windows' own rules apply: the window must have been open for a minute, and an install that needs a reboot restarts nothing until after it.
+
+**Muse gets the reasoning strength it was asked for.** Muse does not read `reasoning_effort`; its model card sets the amount of reasoning through the system prompt, as `Reasoning strength: <low|medium|high|xhigh>`, and asks for `high` or `xhigh` on coding work. Until now `/effort high` on a muse profile changed a request field the model ignores, so every muse conversation ran at the server's default strength, which the publisher says is the wrong one for code. The level now goes into the system prompt on the model-quirk asset whenever one is set, re-derived per turn so `/effort` takes effect on the next message. `xhigh` is a level: sent to muse as itself, to the OpenAI wire as `high` (the field's vocabulary stops there), and to Anthropic's API as the high budget.
+
+**The repeat guard's ceiling is a setting, and its notice names the calls.** A turn that only repeats tool calls it has already made is ended after three such steps. The guard has two failure modes and only one is visible from inside localcode: a model that will not stop, which any small number catches, and a model that thinks by re-reading the same two places, which the same number cuts off as it was about to act. Which of the two a session is having is something the person watching can see, so the ceiling is theirs: `/repeat-limit <steps>`, `/repeat-limit off`, or the settings window, saved as `repeat_limit`. The default stays at three; the session that prompted this looked like a misjudgment and was not. The notice now names the calls it repeated, because "the same tools with the same arguments three times in a row" was read as one call repeated when the rule is about steps that add nothing, which a model alternating between two earlier reads satisfies without making the same call twice running.
+
+**The settings window says less.** Each label had grown into a paragraph explaining the feature's design. The label now says what the switch does; the note under it says what state it is in.
+
 ## v0.94.0
 
 **A documentation audit, and two guards so the same drift cannot happen quietly again.** Fourteen agents read every doc against the code shipped since v0.89.0; twenty-eight defects survived an adversarial pass and are fixed here. No behaviour changes.

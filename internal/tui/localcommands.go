@@ -234,7 +234,7 @@ const serverSideHelpText = `  /skill              list registered skills
   /schedule <when> <what to do>  book a prompt for later (only while localcode runs)
   /show-scheduled-task  list the prompts booked for later
   /debate <reviewer>[,<reviewer>] [rounds] <what to do>  other agents review this one's work, round after round
-  /effort [off|low|medium|high]  how hard the model is asked to think in this conversation
+  /effort [off|low|medium|high|xhigh]  how hard the model is asked to think in this conversation
   /model-invocable [on|off]  whether the model may run this session's commands itself
   /clear             start the model fresh; the conversation itself is kept
   /rewind            undo the last turn, and the files write_file and edit changed in it

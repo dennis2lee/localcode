@@ -387,22 +387,31 @@ Completed findings remain in this list to preserve item numbers and release hist
         * Tests isolating `HOME` did not set `USERPROFILE`, which is what `os.UserHomeDir` reads on Windows. Fixed at the three sites in `cmd/localcode`; others may exist in packages the job does not run yet.
     * Once a package is clean, drop it from the `-run` filter in `.github/workflows/gui-windows.yml` so the whole package runs.
 
-42. **Handoff for `/update` inside the desktop window. Open.**
+42. **Handoff for `/update` inside the desktop window. Done in v0.95.0.**
 
     * The window serves the daemon's handler in its own process and wires no `Handoff` hook (`runGUI` in `cmd/localcode/modes.go`), so `/update` typed in the window takes the installer path: the MSI on Windows, the bundle replacement on macOS, and a reply asking for the window to be reopened. Anything else running is a refusal, as it was in the terminal before v0.86.0.
-    * The update at startup already runs the window against a successor through `successorProxy` (v0.88.0). The same proxy makes a mid-session handoff possible: bind a fresh loopback listener, spawn the successor on it, retire the in-process daemon, and swap the window's handler to the proxy. The browse and reveal routes stay in the window process as they do at startup.
-    * Until then USAGE says so in "Handing over".
+    * v0.88.0 described the window fronting a startup successor through `successorProxy` and did not wire it: `runGUI` never called `startupHandoffBinary`, and `successorProxy` had no caller outside its test. The deadcode allowlist recorded it as live behind the gui tag, which hid that.
+    * Done in v0.95.0, both halves. At startup the window spawns the successor on a fresh loopback listener and serves the proxy. On `/update` it does the same mid-session: `windowHandoff` spawns the successor, retires the in-process daemon, swaps the window's handler to the proxy, and reloads the page. The successor watches the same alive pipe the terminal's does, so it exits with the window.
+    * The settings window's install button still runs the MSI, and the window now registers with the Restart Manager so Windows starts it again when the install finishes (`internal/gui/restart_windows.go`). Windows' own rules apply: the window must have been open a minute, and an install needing a reboot does not restart anything.
 
-43. **Muse never receives the reasoning strength it asks for. Open.**
+43. **Muse never receives the reasoning strength it asks for. Done in v0.95.0.**
 
     * The model's own card sets reasoning strength through the system prompt, as `Reasoning strength: <low|medium|high|xhigh>`, and asks for `high` or `xhigh` on coding and agentic work. localcode sends `reasoning_effort` on the request instead (`openAIEffort` in `internal/provider/openai.go`), which the model's chat template does not read, so every muse conversation runs at whatever the server defaults to. `/effort high` changes nothing on this family.
     * `/llm-doctor` writes the line into its own canaries (v0.90.0), so the probes run the model the way its publisher intends. Real conversations do not.
-    * The fix belongs with the other muse quirks in `internal/agent/quirks.go`: when the model id contains `muse` and an effort level is set, put the line in the system prompt rather than, or as well as, on the wire. `xhigh` has no `provider.Effort` yet.
+    * Done as described: `museReasoningLine` in `internal/agent/quirks.go` puts `Reasoning strength: <level>` into the system prompt on the model-quirk asset whenever an effort level is set on a muse profile or conversation, and `xhigh` is a level now, sent to the OpenAI wire as `high` and to Anthropic's as the high budget.
 
 44. **No `top_p` or `top_k` on OpenAI-compatible requests. Open.**
 
     * `oaRequest` carries `temperature` and nothing else from the sampling family, so a profile cannot ask for the `top_p` 0.95 and `top_k` 64 that muse's vLLM recipe specifies alongside temperature 1.0. `/llm-doctor` sets them directly on its own request bodies; a profile has no way to.
     * Adding them means a config field each and a decision about servers that reject `top_k`, which is not in the OpenAI schema and which vLLM accepts as an extension.
+
+
+45. **Smart Agent's orchestration prompt tells a muse to delegate to itself. Open.**
+
+    * Reported: turning Smart Agent off noticeably reduced looping on Muse-Glimmer-30B. The bundle changes eleven things for the model (see `smartOn` and `smartAgent` sites), and the likeliest cause is the orchestration prompt `localVariant` in `internal/smart/prompt.go`, which every local family gets: "Searching the codebase: use Task with the explore agent. Do not grep the whole project yourself." and the same for review and verification. In a one-profile config every specialist is the same muse model, so the orchestrator delegates a search to itself, gets a summary it did not write, and re-delegates. Each Task is a full extra model call in a fresh context.
+    * Second candidate: the paged `read_file` (800 lines with a `read on with offset=N` footer). A model that does not carry the offset re-reads the same window, which the repeat guard then ends.
+    * How to confirm from what Smart Agent already records: with it on, every turn is in `~/.localcode/trace/localcode-<day>.jsonl`. Count `span == "tool"` records with `tool == "Task"` per `trace_id`, and count `span == "tool"` records per trace whose `parent_session_id` is set. A loop that is delegation shows as many Task spans under one trace; one that is re-reading shows as repeated `read_file` spans with the same session. The `stopped: N steps in a row only repeated` notice (v0.95.0) names the calls in the transcript either way.
+    * If confirmed, the fix is a muse-specific orchestration variant that recommends delegation rather than ordering it, or that leaves the delegation tools out of a one-profile config where the specialist would be the orchestrator's own model. Not done unasked: it changes what every muse session is told.
 
 ## UI ideas
 

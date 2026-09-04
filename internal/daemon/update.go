@@ -139,6 +139,9 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	// the version in the header does not change, and the next thing the
 	// user does is run the same old build.
 	detail, restarting := restartPlan(out, d.Restart != nil)
+	if out.Started && d.InstallerRestarts {
+		detail += installerRestartsNote
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": rel.Version,
 		"source":  d.updateSource(),
@@ -199,6 +202,12 @@ func restartPlan(out update.Outcome, canRestart bool) (detail string, restarting
 	// worked and changes nothing on screen reads as one that did not.
 	return out.Detail + " — restart localcode to run the new version", false
 }
+
+// installerRestartsNote is appended to an installer's detail where the
+// platform will bring the program back. "When the install finishes" and
+// not "now": the restart is the Restart Manager's, on its own terms, and
+// one of those terms is that the program had been running a minute.
+const installerRestartsNote = " Windows starts localcode again when the install finishes."
 
 // updateDir is where downloads are kept: the user's cache directory, since
 // an installer is disposable the moment it has run.

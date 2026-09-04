@@ -204,6 +204,11 @@ func openAIEffort(e Effort) string {
 	switch e {
 	case EffortLow, EffortMedium, EffortHigh:
 		return string(e)
+	case EffortXHigh:
+		// The field's vocabulary stops at high. The level still reaches
+		// the models that have a word for it, muse among them, through
+		// their system prompt: see museReasoningLine in internal/agent.
+		return string(EffortHigh)
 	}
 	return ""
 }

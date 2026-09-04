@@ -192,6 +192,9 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 
 	detail, restarting := restartPlan(out, d.Restart != nil)
 	b.WriteString(detail)
+	if out.Started && d.InstallerRestarts {
+		b.WriteString(installerRestartsNote)
+	}
 	if restarting {
 		// What a restart does and does not cost, because the version in
 		// the header changing is not by itself an explanation for a
