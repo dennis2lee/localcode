@@ -200,9 +200,9 @@ func newWork(seen map[string]bool, toolUses []provider.Block) bool {
 }
 
 // maxRepeatSteps is how many steps in a row may ask for nothing new
-// before the turn is ended, when nobody has said otherwise. The live
-// value is Loop.RepeatLimit, which a person can move or zero; this is
-// where the default is explained.
+// before the turn is ended, once the guard is on. The guard is off
+// unless somebody turns it on (see config.RepeatLimit for why); the live
+// value is Loop.RepeatLimit, and this is what "on" means.
 //
 // Deliberately small. A step that repeats every call it has already made
 // has, by construction, changed nothing, so the next one has the same
@@ -211,7 +211,7 @@ func newWork(seen map[string]bool, toolUses []provider.Block) bool {
 // this direction is one ended turn with a message saying why. The cost of
 // the other direction was measured: a thousand requests and a session
 // that could never be spoken to again.
-const maxRepeatSteps = config.DefaultRepeatLimit
+const maxRepeatSteps = config.RepeatLimitOn
 
 // describeCalls names a step's tool calls for the repeat notice: the tool
 // and the first stretch of its arguments, at most three of them, so the

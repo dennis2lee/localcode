@@ -227,6 +227,8 @@ func TestTheLoopStopsAModelThatRepeatsItself(t *testing.T) {
 	model := &alwaysCalls{tool: "bash", input: `{"command":"ls"}`}
 	loop := newSmartLoop(t, model.server(t).URL)
 	loop.Tools.Register(&namedFake{name: "bash"})
+	// Off by default; this test is about what "on" does.
+	loop.SetRepeatLimit(maxRepeatSteps)
 	if _, err := loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.96.0
+
+**The repeat guard starts off.** v0.95.0 made its ceiling a setting and kept the default at three. A day of watching a local model with it on was enough to decide the other way: the model that thinks by re-reading the same two places is the common case at this keyboard, and every turn the guard ended was one that was about to act. `repeat_limit` unset now means off, `/repeat-limit on` and the ticked box mean three, and a number is a number. Nothing else about the guard changes.
+
+The cost is stated rather than hidden. With the guard off, a model that repeats one call forever runs until somebody stops it. The runaway that first motivated the guard, a debate reviewer calling `Verdict` again after recording its verdict, is caught separately by that tool ending the turn; what is lost is the second layer under it.
+
 ## v0.95.0
 
 **The desktop window comes back after an update, and hands over on `/update`.** Three things ended with the window closed and nobody bringing it back on Windows, and each has its own fix.

@@ -463,7 +463,7 @@ func (l *Loop) routeRepeatLimit(sessionID, text string) (bool, error) {
 		} else {
 			fmt.Fprintf(&b, "repeat_limit: %d. A turn ends after %d steps in a row that only repeat tool calls it has already made.", current, current)
 		}
-		b.WriteString("\nusage: /repeat-limit [off|<steps>]")
+		b.WriteString("\nusage: /repeat-limit [on|off|<steps>]; on is " + strconv.Itoa(config.RepeatLimitOn) + ".")
 		return true, l.replyText(sessionID, b.String())
 	}
 
@@ -471,13 +471,15 @@ func (l *Loop) routeRepeatLimit(sessionID, text string) (bool, error) {
 	switch arg {
 	case "off", "0", "false", "no":
 		want = 0
-	case "on", "default", "true", "yes":
+	case "on", "true", "yes":
+		want = config.RepeatLimitOn
+	case "default":
 		want = config.DefaultRepeatLimit
 	default:
 		n, err := strconv.Atoi(arg)
 		if err != nil || n < 1 || n > config.MaxRepeatLimit {
 			return true, l.replyText(sessionID, fmt.Sprintf(
-				"usage: /repeat-limit [off|<steps>], steps between 1 and %d.", config.MaxRepeatLimit))
+				"usage: /repeat-limit [on|off|<steps>], steps between 1 and %d.", config.MaxRepeatLimit))
 		}
 		want = n
 	}

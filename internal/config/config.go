@@ -55,16 +55,21 @@ type Config struct {
 	// RepeatLimit is how many steps in a row a turn may spend repeating
 	// tool calls it has already made before the turn is ended (see
 	// maxRepeatSteps in internal/agent/keep_going.go for what a repeat
-	// is). A nil pointer means unset, defaulting to 3. Zero turns the
-	// guard off. Toggleable via "/repeat-limit" and the settings window.
+	// is). A nil pointer means unset, which is off. A number turns the
+	// guard on at that ceiling; "/repeat-limit on" is 3. Toggleable via
+	// "/repeat-limit" and the settings window.
 	//
-	// Exposed because the guard has two failure modes and only one of
-	// them is visible from inside localcode. A model that will not stop
-	// is caught at any small number; a model that thinks by re-reading
-	// the same two places, which some local models do, is cut off by the
-	// same number while it was about to act. Which of the two a session
-	// is having is something the person watching it can see and the
-	// guard cannot.
+	// Off by default, which was a decision made at the keyboard rather
+	// than in this file. The guard has two failure modes and only one is
+	// visible from inside localcode: a model that will not stop, which
+	// any small number catches, and a model that thinks by re-reading the
+	// same two places, which the same number cuts off as it was about to
+	// act. The person watching a local model saw the second often enough
+	// to want the guard opt-in. The cost is the first case: with the
+	// guard off, a model that repeats one call forever runs until
+	// somebody stops it. The runaway that first motivated the guard, a
+	// reviewer calling Verdict after its verdict, is caught separately
+	// by that tool ending the turn.
 	RepeatLimitSteps *int `json:"repeat_limit,omitempty"`
 
 	// ShowTPS toggles whether a tokens-per-second figure is included in
@@ -310,9 +315,14 @@ func (c *Config) CompactEnabled() bool {
 	return c.AutoCompactEnabled == nil || *c.AutoCompactEnabled
 }
 
-// DefaultRepeatLimit is the number of nothing-new steps that end a turn
-// when repeat_limit is unset. Small on purpose: see maxRepeatSteps.
-const DefaultRepeatLimit = 3
+// DefaultRepeatLimit is what an unset repeat_limit means: off.
+const DefaultRepeatLimit = 0
+
+// RepeatLimitOn is the ceiling "/repeat-limit on" and a ticked checkbox
+// with no number mean. Small on purpose: a step that repeats every call
+// it has already made has changed nothing, so the next one has the same
+// input. See maxRepeatSteps in internal/agent.
+const RepeatLimitOn = 3
 
 // MaxRepeatLimit caps repeat_limit. Past this the guard is off in all but
 // name, and off is a setting with its own spelling.

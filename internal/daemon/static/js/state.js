@@ -41,7 +41,7 @@ export const app = {
   // conversation starts with; see sessionPermissions for the open one.
   skipPermissions: false,
   keepGoing: true,       // the carry-on nudge for muse models
-  repeatLimit: 3,        // nothing-new steps that end a turn; 0 is off
+  repeatLimit: 0,        // nothing-new steps that end a turn; 0 (the default) is off
   autoCompactPercent: 50,
   permissionRules: {},        // tool -> [{match, decision}]
   // The four switches as they apply to the open conversation, plus where

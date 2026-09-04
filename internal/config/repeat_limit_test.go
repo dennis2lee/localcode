@@ -17,7 +17,7 @@ func TestRepeatLimitDefaultsAndBounds(t *testing.T) {
 		in   *int
 		want int
 	}{
-		{"unset", nil, DefaultRepeatLimit},
+		{"unset is off", nil, 0},
 		{"off", n(0), 0},
 		{"six", n(6), 6},
 		{"negative reads as off", n(-3), 0},

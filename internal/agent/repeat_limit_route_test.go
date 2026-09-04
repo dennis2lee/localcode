@@ -22,8 +22,11 @@ func TestRepeatLimitCommand(t *testing.T) {
 		return lastReply(t, loop, sid)
 	}
 
-	if got := run("/repeat-limit"); !strings.Contains(got, "repeat_limit: 3") {
-		t.Errorf("bare = %q, want the default reported", got)
+	if got := run("/repeat-limit"); !strings.Contains(got, "repeat_limit: off") {
+		t.Errorf("bare = %q, want the default, off, reported", got)
+	}
+	if got := run("/repeat-limit on"); !strings.Contains(got, "3 steps in a row") || loop.RepeatLimit() != 3 {
+		t.Errorf("on = %q, limit %d; want on to mean 3", got, loop.RepeatLimit())
 	}
 	if got := run("/repeat-limit off"); !strings.Contains(got, "off") || loop.RepeatLimit() != 0 {
 		t.Errorf("off = %q, limit %d", got, loop.RepeatLimit())
@@ -37,8 +40,8 @@ func TestRepeatLimitCommand(t *testing.T) {
 	if got := run("/repeat-limit 999"); !strings.Contains(got, "usage") || loop.RepeatLimit() != 8 {
 		t.Errorf("999 = %q, limit %d; want a usage line and no change", got, loop.RepeatLimit())
 	}
-	if got := run("/repeat-limit default"); loop.RepeatLimit() != 3 {
-		t.Errorf("default = %q, limit %d", got, loop.RepeatLimit())
+	if got := run("/repeat-limit default"); loop.RepeatLimit() != 0 {
+		t.Errorf("default = %q, limit %d; want the default, which is off", got, loop.RepeatLimit())
 	}
 	if handled, _ := loop.routeRepeatLimit(sid, "/repeat-limits"); handled {
 		t.Error("/repeat-limits was taken as the command")
