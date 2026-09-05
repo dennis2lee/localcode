@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.103.0
+
+**Four faults in the desktop window that only an update could reach.** v0.101.0 fixed the pipe that had been killing the daemon behind the window, and in doing so turned on a mode that had never really run: before it, a successor died seconds after starting every time, so a window served its proxy for a few seconds at most. After it, windows run that way for hours, and four defects that had been sitting in that path came out together. This is why everything was fine through v0.100.0.
+
+**The folder button never worked in a window that had updated.** The proxy's copy of `/api/workspace/reveal` read the folder out of the request body. The page sends no folder and must not: the route starts a process with a path argument, and the daemon's own handler refuses a caller-supplied one for exactly that reason. So every click answered `500 no workspace directory to open`, and any caller that did send a path could have opened any folder on the machine. The window asks the daemon which folder now.
+
+**A session could not be deleted after an update.** A retiring daemon never let go of its session logs, and after a handoff the retiring one is still a live process — the window, or the terminal the TUI is in — while the successor is the daemon being asked to delete them. Windows will not remove a file another process holds open, so deleting a conversation failed with `The process cannot access the file because it is being used by another process`. `Store.Close` carried a comment saying a daemon never needs it; that was true until a handoff made two daemons exist at once, and the comment outlived it. `Retire` closes the store.
+
+**Any fault on the parent pipe stopped the daemon.** A successor watches a pipe held open by the process that started it and leaves when it closes. It watched with `io.Copy`, which reports EOF and every other read error identically — as nil — so a handle problem ran the same path as the window closing and called `os.Exit(0)`. From the outside that is the daemon vanishing mid-turn: the indicator goes grey, the event stream ends, and every request afterwards is a 502. Only a close stops it now; anything else keeps serving and says so in the log.
+
+**The indicator latched on a question that was already gone.** `permission.resolved` closed the modal and unlocked the composer but left the pending id set. Answering with the buttons clears it; every other way out — stopping the turn, an unattended request timing out, another window answering — arrives only as that event. So after pressing stop on a turn that was waiting on a tool call, the light went on saying "waiting for you to answer a permission request" with nothing on screen to answer, for the rest of the session.
+
+**A dead successor's last words are in the error, not only in a file.** Naming `handoff.log` was the previous answer and it was one step short: the person reading a 502 is looking at a transcript. The reply now carries what the process actually printed — a panic's first frames, a config error — and its exit status.
+
+**Tests.** Every URL `api.js` builds, driven through a real daemon behind a real `successorProxy`: the round trip that had no coverage at all, and the reason a route could drift from the daemon's copy unnoticed. Each of the four fixes fails its test when removed.
+
 ## v0.102.0
 
 **A dead successor says what is wrong.** When the daemon behind the desktop window stops, every request afterwards went through a proxy onto a process that is not there, and `httputil` answers that with a bare `502` and no body. What reached the transcript was `POST /api/sessions/…/agent: 502`, which names neither the process that went nor anywhere to look. The proxy now answers with the address it was pointing at, the underlying error, and the path of `handoff.log`; the window records why its successor exited into that same file.
