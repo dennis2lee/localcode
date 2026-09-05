@@ -1,48 +1,39 @@
 <!--
-  LocalCode's application icon: a brick whose face is a circuit board.
+  LocalCode's application icon: a bracket pair that closes into a room.
 
-  Drawn as a bright blue brick with the traces cut *out* of it in the
-  background colour, rather than a dark brick outlined in blue. An icon
-  sits on a taskbar and a desktop whose colours we do not control, and a
-  dark-on-dark shape disappears into both. The saturated body carries the
-  silhouette; the traces read as detail inside it.
+  The two square brackets a programmer types every day, with their top
+  serifs lifted into a roof and their feet turned back inward — so the
+  same three strokes say code and say a place you own, and the doorway
+  between the feet is left open.
 
-  Colours are the app's own accent, ok and background values from
-  style.css, so the icon and the window it opens look like the same
-  product.
+  Drawn as a bright body with the mark cut out of it in the app's own
+  ink, rather than a dark shape outlined in a colour. An icon sits on a
+  taskbar and a desktop whose colours we do not control, and a dark on dark shape disappears into both: the saturated ground carries the
+  silhouette and the mark reads as what is cut into it.
 
-  See icon-small.svg for the 16/32px variant — this one's detail turns to
-  mud below about 48px, which is why there are two.
+  What this replaces was a studded brick with a circuit-board face. Two
+  things were wrong with it and neither was taste: the silhouette is a
+  toy brick that belongs to somebody else, and its colours were taken
+  from a stylesheet that had since moved on, so the icon and the window
+  it opened were no longer the same product.
+
+  Colours are the app's own interactive and ink values from style.css.
+  See icon-small.svg and icon-16.svg: below about 48px this stroke
+  weight closes the doorway, which is the one detail that has to survive.
+
+  The shoulders are open here and closed in the small drawings, and that
+  is deliberate: three separate strokes are what a bracket pair is, and
+  the gap is what keeps this from being the solid pentagon every toolbar
+  already has. Below about 48px the gap is smaller than a pixel, so the
+  small drawings close it and let the silhouette do the work instead.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <!-- Studs. Drawn first so the body overlaps their lower half and they
-       read as attached to it rather than sitting on top of it. -->
-  <g fill="#58a6ff">
-    <rect x="52"  y="34" width="42" height="34" rx="10"/>
-    <rect x="107" y="34" width="42" height="34" rx="10"/>
-    <rect x="162" y="34" width="42" height="34" rx="10"/>
-  </g>
-
-  <!-- Brick body. -->
-  <rect x="34" y="58" width="188" height="146" rx="20" fill="#1f6feb"/>
-
-  <!-- Circuit traces, cut in the background colour. Right angles only,
-       with the corners left sharp: a PCB trace turns at 90 degrees, and
-       rounding them here made it read as plumbing. -->
-  <g stroke="#0d1117" stroke-width="11" fill="none" stroke-linecap="round">
-    <path d="M62 176 L62 140 L104 140 L104 100"/>
-    <path d="M104 176 L152 176 L152 122"/>
-    <path d="M74 100 L74 118 L134 118"/>
-    <path d="M152 90 L194 90 L194 152"/>
-  </g>
-
-  <!-- Nodes: the pads a trace terminates at. Green is the app's "ok"
-       colour, and the only third colour here — enough to make the face
-       read as a board rather than a maze. -->
-  <g fill="#7ee787">
-    <circle cx="104" cy="100" r="12"/>
-    <circle cx="152" cy="122" r="12"/>
-    <circle cx="62"  cy="176" r="12"/>
-    <circle cx="194" cy="152" r="12"/>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="#7f97dc"/>
+  <g transform="translate(28 30) scale(8.3333)"
+     fill="none" stroke="#0f1011" stroke-width="2.4"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.8 12 L12 4.6 L21.2 12"/>
+    <path d="M5 13.1 V19.5 H9.2"/>
+    <path d="M19 13.1 V19.5 H14.8"/>
   </g>
 </svg>

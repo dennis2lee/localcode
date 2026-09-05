@@ -349,16 +349,27 @@ main {
    indents that line and no other. One label per turn on its own row
    costs the same vertical space as the separator would have cost
    anyway, and lets the prompt itself start at the margin. */
+/* Where one turn ends and the next begins. A rule across the column with
+   the word set into it, so the boundary is visible while scrolling past
+   at speed rather than only when read. */
 #transcript .turn-sep {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 18px 0 6px;
-  color: var(--muted);
+  margin: 30px 0 10px;
+  color: var(--faint);
   font-size: var(--t-cap);
-  letter-spacing: 0.1em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
+  font-weight: 600;
 }
+#transcript .turn-sep::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+#transcript .turn-sep:first-child { margin-top: 4px; }
 #transcript .turn-sep::after {
   content: "";
   flex: 1;
@@ -471,13 +482,36 @@ main {
    around it. It is there so a long turn is legible while it runs, not to
    compete with what the model actually said. */
 #transcript .msg-toolcall { margin-bottom: 4px; }
+/* A turn's workings, set as apparatus.
+   The Document direction puts these in the margin beside the prose. The
+   transcript is one column of siblings in DOM order, and a grid cannot
+   put a child beside the one after it without leaving a hole where the
+   prose should be — so the separation is made with type instead of with
+   position, which is the half that actually carries it: the interface
+   face at the smallest reading size, quiet, against a hairline that runs
+   down the side of the run. A turn reads as prose with its workings set
+   apart from it. */
+#transcript .msg-toolcall {
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+}
 #transcript .msg-toolcall .head {
   display: flex;
   gap: 8px;
   align-items: baseline;
   cursor: pointer;
   color: var(--muted);
-  font-size: 0.92em;
+  font-family: var(--f-ui);
+  font-size: var(--t-fine);
+  line-height: 1.7;
+}
+#transcript .msg-toolcall .head:hover { color: var(--text); }
+#transcript .msg-toolcall .name { font-family: var(--f-mono); }
+/* Thinking is the model's, not the machine's: it stays in the reading
+   face and simply steps back a size. */
+#transcript .msg-thinking {
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
 }
 #transcript .msg-toolcall .head:hover { color: var(--text); }
 #transcript .msg-toolcall .marker { flex: none; width: 1em; }
@@ -837,13 +871,31 @@ aside h2 {
   margin-bottom: 6px;
   font-family: var(--f-mono);
 }
+/* The composer is under the column it writes into, not across the window.
+   What you type becomes the first thing in the transcript, so it is set to
+   the same measure and in the same face — the box you write in and the
+   page you write onto line up, and a sentence does not change width the
+   moment it is sent. The strip itself still spans, so the rule under the
+   page runs edge to edge. */
 footer {
   border-top: 1px solid var(--border);
-  padding: 10px 16px;
+  padding: 12px 16px;
   display: flex;
   align-items: flex-end;
   gap: 8px;
+  max-width: calc(var(--measure) + 6rem);
+  width: 100%;
+  margin: 0 auto;
 }
+#input {
+  font-family: var(--f-doc);
+  font-size: var(--t-read);
+  line-height: 1.5;
+}
+/* Not aligned with the composer: this is the window's status line rather
+   than part of the page, it carries more than the measure holds, and
+   constraining it wrapped "auto-delegate: off" onto two lines. It spans,
+   the way a status bar does. */
 #input {
   flex: 1;
   background: var(--raised);

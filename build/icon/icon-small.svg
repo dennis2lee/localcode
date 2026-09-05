@@ -1,24 +1,15 @@
 <!--
-  The 16px and 32px variant. Same idea, far less of it: four traces and
-  four nodes at this size are a grey smear, so it keeps one trace, one
-  node, and thicker strokes. Icon sets have always done this — the small
-  sizes are a redraw, not a downscale.
+  The 32px drawing. Same three strokes, redrawn rather than resized: the
+  stroke is heavier so it holds at a third of the size, and the roof and
+  the walls are pulled apart slightly so the join does not fill in.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <g fill="#58a6ff">
-    <rect x="52"  y="30" width="46" height="38" rx="11"/>
-    <rect x="105" y="30" width="46" height="38" rx="11"/>
-    <rect x="158" y="30" width="46" height="38" rx="11"/>
-  </g>
-
-  <rect x="30" y="58" width="196" height="152" rx="22" fill="#1f6feb"/>
-
-  <g stroke="#0d1117" stroke-width="20" fill="none" stroke-linecap="round">
-    <path d="M72 168 L72 122 L140 122 L140 96"/>
-  </g>
-
-  <g fill="#7ee787">
-    <circle cx="140" cy="96" r="19"/>
-    <circle cx="72"  cy="168" r="19"/>
+  <rect x="4" y="4" width="248" height="248" rx="52" fill="#7f97dc"/>
+  <g transform="translate(22 32) scale(8.8)"
+     fill="none" stroke="#0f1011" stroke-width="2.9"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.6 12 L12 4.2 L21.4 12"/>
+    <path d="M5 13 V19.6 H9.4"/>
+    <path d="M19 13 V19.6 H14.6"/>
   </g>
 </svg>
