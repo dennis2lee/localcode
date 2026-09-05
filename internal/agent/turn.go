@@ -575,11 +575,27 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return nil
 		}
 
-		if newWork(madeCalls, toolUses) {
-			nudgedSinceWork = false
+		// Two different questions, two different tests.
+		//
+		// The repeat guard asks "did this step ask for anything it had not
+		// already asked for", because a step that repeats every call it
+		// has made has changed nothing and the next one has the same
+		// input. The carry-on guard asks something narrower: did the nudge
+		// produce a change, or only more looking. See changedSomething for
+		// what that distinction cost when the two shared one test.
+		fresh := newWork(madeCalls, toolUses)
+		if fresh {
 			repeats = 0
 		} else {
 			repeats++
+		}
+		// A carry-on is earned by a call that is BOTH new and a change.
+		// New alone was the old test and it let a prodded model buy
+		// another nudge by looking somewhere it had not looked; a change
+		// alone would let it buy one by re-running the same command. Only
+		// the pair is progress. See changedSomething.
+		if fresh && changedSomething(toolUses) {
+			nudgedSinceWork = false
 		}
 		// Kept for the notice below: a turn ended for repeating itself
 		// should say what it repeated, not only that it did.

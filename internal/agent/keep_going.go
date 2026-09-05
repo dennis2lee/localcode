@@ -176,6 +176,43 @@ func endsWithQuestion(text string) bool {
 	return false
 }
 
+// changedSomething reports whether a step did anything to the project, as
+// opposed to looking at it again.
+//
+// This is what clears the carry-on guard, and "a call this turn has not
+// made before" was the wrong test for it. Measured against the model the
+// feature exists for, on a task it had already finished correctly: told
+// to check whether the work was complete, it ran `grep timeout`, then
+// `grep 30`. Neither was a repeat — both were calls it had not made — so
+// both counted as work, both cleared the guard, and both bought another
+// nudge. A finished turn of nine requests became thirteen, all four of
+// them re-confirming a change already made.
+//
+// The file's own comment already said what the test should be: re-running
+// the build after fixing what broke it is work, because the fix is a call
+// of its own; re-running it to admire the result is not. A model prodded
+// into looking somewhere new is admiring the result with more steps.
+//
+// Paired with newWork rather than replacing it: a call has to be new AND
+// a change. New alone let a prodded model look somewhere it had not
+// looked; a change alone would let it re-run the same command.
+//
+// So only the three calls that can change the workspace count. read_file,
+// grep, glob and check are observations, and an observation is what a
+// model reaches for when it has nothing left to do and has been told to
+// carry on. Task is excluded on the same ground and one more: on a
+// one-profile roster it is the model delegating to itself, which is the
+// last thing another nudge should pay for.
+func changedSomething(toolUses []provider.Block) bool {
+	for _, tu := range toolUses {
+		switch tu.ToolName {
+		case "write_file", "edit", "bash":
+			return true
+		}
+	}
+	return false
+}
+
 // newWork records this step's tool calls and reports whether any of them
 // is one this turn has not made before.
 //

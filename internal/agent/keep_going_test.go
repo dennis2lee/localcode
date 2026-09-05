@@ -38,7 +38,7 @@ func textStream(text string) []provider.StreamEvent {
 func distinctToolCall(arg string) []provider.StreamEvent {
 	return []provider.StreamEvent{
 		{Type: provider.EventTextDelta, TextDelta: "running the command now"},
-		{Type: provider.EventToolUseStart, ToolUseID: "call_" + arg, ToolName: "echo"},
+		{Type: provider.EventToolUseStart, ToolUseID: "call_" + arg, ToolName: "bash"},
 		{Type: provider.EventToolUseEnd, ToolUseID: "call_" + arg, ToolInput: json.RawMessage(`{"step":"` + arg + `"}`)},
 		{Type: provider.EventMessageStop, StopReason: "tool_calls"},
 	}
@@ -154,9 +154,11 @@ func TestCarryingOnIsBounded(t *testing.T) {
 	reg.Register(countingTool{runs: &runs})
 
 	// Work, stall, work, stall, work, stall: a model that would keep this
-	// up for as long as it is asked to. Each step is a *different* call,
-	// which is what makes it progress rather than the same thing done
-	// three times — see TestACarryOnThatOnlyRepeatsItselfEndsTheTurn.
+	// up for as long as it is asked to. Each step CHANGES something,
+	// which is what makes it progress — a step that only looks somewhere
+	// new does not earn another carry-on, and a step that repeats itself
+	// does not either. See TestLookingSomewhereNewDoesNotEarnAnother and
+	// TestACarryOnThatOnlyRepeatsItselfEndsTheTurn.
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
 		distinctToolCall("one"),
 		textStream("one more thing to do."),
@@ -216,10 +218,13 @@ func TestARefusedToolEndsTheTurnForGood(t *testing.T) {
 	reg.Register(countingTool{runs: &runs})
 	reg.Resolver = func(context.Context, tools.Query) tools.Outcome { return tools.Outcome{Decision: tools.DecisionDeny} }
 
+	// distinctToolCall, not the shared toolCallStream: this registry holds
+	// one tool and the call has to name it, or the turn ends on "no such
+	// tool" and the refusal is never the reason.
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
-		toolCallStream("tool_calls"),
+		distinctToolCall("one"),
 		textStream("understood, I will leave that alone."),
-		toolCallStream("tool_calls"),
+		distinctToolCall("two"),
 	}}
 	loop, sessionID := keepGoingLoop(t, p, reg, 2)
 
@@ -390,8 +395,11 @@ func TestTheStallingModelIsAskedNotTo(t *testing.T) {
 // turn is told from one that ended.
 type countingTool struct{ runs *int }
 
-func (t countingTool) Name() string        { return "echo" }
-func (t countingTool) Description() string { return "echo" }
+// "bash", not "echo": a carry-on is earned by a call that changes
+// something, and the test's own premise is a model that does the next
+// piece of work each time it is prodded. See changedSomething.
+func (t countingTool) Name() string        { return "bash" }
+func (t countingTool) Description() string { return "run a command" }
 func (t countingTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{}}`)
 }
@@ -533,5 +541,101 @@ func TestTheKeepGoingSwitchGatesTheFamily(t *testing.T) {
 	loop.SetKeepGoingEnabled(false)
 	if got := loop.effectiveKeepGoing(profile); got != 0 {
 		t.Errorf("budget with the switch off = %d, want 0", got)
+	}
+}
+
+// Only a change clears the carry-on guard; looking again does not.
+//
+// Measured against the real model this feature exists for, on a task it
+// had already finished: told to check whether the work was complete, it
+// ran `grep timeout` and then `grep 30`. Neither was a repeat, so under
+// the old test both counted as work, both cleared the guard, and both
+// bought another nudge — nine requests became thirteen, four of them
+// re-confirming a change already made.
+func TestOnlyAChangeClearsTheCarryOnGuard(t *testing.T) {
+	call := func(name string) provider.Block {
+		return provider.Block{Type: provider.BlockToolUse, ToolName: name, ToolInput: []byte(`{}`)}
+	}
+	for _, c := range []struct {
+		name  string
+		calls []provider.Block
+		want  bool
+	}{
+		{"an edit is a change", []provider.Block{call("edit")}, true},
+		{"a write is a change", []provider.Block{call("write_file")}, true},
+		{"a command may be a change", []provider.Block{call("bash")}, true},
+		{"reading is looking", []provider.Block{call("read_file")}, false},
+		{"grepping is looking", []provider.Block{call("grep")}, false},
+		{"globbing is looking", []provider.Block{call("glob")}, false},
+		{"re-running the check is looking", []provider.Block{call("check")}, false},
+		{"delegating is not a change this turn made", []provider.Block{call("Task")}, false},
+		{"the exact pair the model reached for", []provider.Block{call("grep"), call("grep")}, false},
+		{"looking and then fixing is a change", []provider.Block{call("grep"), call("edit")}, true},
+		{"nothing at all", nil, false},
+	} {
+		if got := changedSomething(c.calls); got != c.want {
+			t.Errorf("%s: changedSomething = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// A model prodded into looking somewhere new does not earn another prod.
+//
+// This is the fault the guard was rebuilt for, and it was measured on the
+// model the feature exists for. Told to check whether an already-finished
+// task was complete, a 30B muse ran `grep timeout`, then `grep 30`.
+// Neither was a repeat, so under the old test both counted as work, both
+// cleared the guard, and both bought another carry-on: nine requests
+// became thirteen, four of them re-confirming a change already made.
+func TestLookingSomewhereNewDoesNotEarnAnother(t *testing.T) {
+	runs := 0
+	reg := tools.NewRegistry(nil)
+	reg.Register(lookingTool{runs: &runs})
+
+	// Look, stall, look, stall, look: every step is a different call and
+	// not one of them changes anything.
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{
+		lookCall("one"),
+		textStream("one more thing to do."),
+		lookCall("two"),
+		textStream("one more thing to do."),
+		lookCall("three"),
+		textStream("one more thing to do."),
+	}}
+	loop, sessionID := keepGoingLoop(t, p, reg, 3)
+
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	// Four requests: the first reply, one carry-on, the look it produced,
+	// and the stall after it — which earns nothing, because looking is not
+	// progress. Under the old rule this ran to the whole budget.
+	if p.sentCount() != 4 {
+		t.Errorf("provider turns = %d, want 4 — looking somewhere new bought another carry-on", p.sentCount())
+	}
+	if runs != 2 {
+		t.Errorf("the tool ran %d times, want 2", runs)
+	}
+}
+
+type lookingTool struct{ runs *int }
+
+func (t lookingTool) Name() string        { return "grep" }
+func (t lookingTool) Description() string { return "search the project" }
+func (t lookingTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+func (t lookingTool) RequiresPermission(json.RawMessage) bool { return false }
+func (t lookingTool) Execute(context.Context, json.RawMessage) tools.Result {
+	*t.runs++
+	return tools.Result{Content: "no matches"}
+}
+
+func lookCall(arg string) []provider.StreamEvent {
+	return []provider.StreamEvent{
+		{Type: provider.EventTextDelta, TextDelta: "let me look"},
+		{Type: provider.EventToolUseStart, ToolUseID: "look_" + arg, ToolName: "grep"},
+		{Type: provider.EventToolUseEnd, ToolUseID: "look_" + arg, ToolInput: json.RawMessage(`{"pattern":"` + arg + `"}`)},
+		{Type: provider.EventMessageStop, StopReason: "tool_calls"},
 	}
 }

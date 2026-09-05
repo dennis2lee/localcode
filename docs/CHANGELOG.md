@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.107.0
+
+**Looking somewhere new is not progress, and it no longer buys another carry-on.** Reproduced against the model the feature exists for — a 30B muse served by LM Studio on the reporter's own machine — on a task it had already finished correctly. It changed the timeout in both files, wrote "Changed request timeout from 30 to 60 everywhere in the project", and stopped. That was request nine and it was right. Then `keep_going` asked whether the work was complete, and the model did what a compliant model does: it ran `grep timeout`, then `grep 30`. Neither was a repeat, so under the old test both counted as work, both cleared the guard, and both bought another nudge. Nine requests became thirteen, four of them re-confirming a change already made.
+
+The guard's own comment had said what the test should be — re-running the build after fixing what broke it is work, because the fix is a call of its own; re-running it to admire the result is not — and "a call this turn has not made before" was the wrong proxy for it. A carry-on is now earned only by a call that is both new **and** a change: `write_file`, `edit` or `bash`. `read_file`, `grep`, `glob`, `check` and `Task` are observations, and an observation is what a model reaches for when it has nothing left to do and has been told to carry on. New alone let a prodded model look somewhere it had not looked; a change alone would let it re-run the same command.
+
+Measured on the same model and task afterwards: two nudges became one, and the nudge that remained was followed by `glob` and `grep` — the exact behaviour that defeated the old guard — without buying a second. Both files still end up correct. A scripted control confirms the other half: a model that answers a nudge by making the next change still earns the whole budget, so the feature does what it was built for.
+
+**Three tests that encoded the old definition are corrected rather than deleted.** The bounded-carry-on test said a different call "is what makes it progress"; that premise is what this release disproves, and it now scripts a model that changes something each time. A fourth test is new and is the measured failure itself.
+
 ## v0.106.0
 
 **The comparison paper is checked against the code it describes, and restamped.** `docs/where-localcode-differs.html` and its Korean twin were stamped v0.84.0; twenty-one releases had gone by. Five readers went through it section by section and every claim they reported as broken was attacked by an independent verifier before it was believed: 27 reported, 17 confirmed, 10 dismissed as fair readings of the code.
