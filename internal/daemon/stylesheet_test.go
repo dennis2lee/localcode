@@ -124,3 +124,40 @@ func TestHiddenBeatsEveryDisplayRule(t *testing.T) {
 			"display will silently un-hide anything the page hides")
 	}
 }
+
+// The page's icon is the same artwork the window and the installer wear.
+//
+// A browser tab showed the blank-page glyph, because there was no icon at
+// all. Now there is one, and it is a copy — this directory is what the
+// daemon embeds and serves, build/icon/icon.svg is what the packagers
+// rasterise — so the two have to be held together or they drift the way
+// the old brick's colours drifted from the stylesheet they came from.
+func TestThePagesIconIsTheApplicationIcon(t *testing.T) {
+	page, err := os.ReadFile(filepath.Join("static", "icon.svg"))
+	if err != nil {
+		t.Fatalf("read the page's icon: %v", err)
+	}
+	source, err := os.ReadFile(filepath.Join("..", "..", "build", "icon", "icon.svg"))
+	if err != nil {
+		t.Fatalf("read the application icon: %v", err)
+	}
+	// The comment above each differs on purpose; the drawing must not.
+	draw := func(b []byte) string {
+		s := string(b)
+		if i := strings.Index(s, "<svg"); i >= 0 {
+			return s[i:]
+		}
+		return s
+	}
+	if draw(page) != draw(source) {
+		t.Errorf("static/icon.svg has drifted from build/icon/icon.svg; they are one mark:\n"+
+			"\tthe page's:\n%s\n\tthe application's:\n%s", draw(page), draw(source))
+	}
+	index, err := os.ReadFile(filepath.Join("static", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), `rel="icon"`) {
+		t.Error("index.html links no icon, so a browser tab shows the blank-page glyph")
+	}
+}

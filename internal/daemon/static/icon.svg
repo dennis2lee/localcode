@@ -1,0 +1,17 @@
+<!--
+  The page's icon: the same mark the window and the installer wear.
+
+  A copy rather than a reference, because this directory is what the
+  daemon embeds and serves; build/icon/icon.svg is what the packagers
+  rasterise. internal/daemon/static_icon_test.go holds the two together.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="#7f97dc"/>
+  <g transform="translate(28 30) scale(8.3333)"
+     fill="none" stroke="#0f1011" stroke-width="2.4"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.8 12 L12 4.6 L21.2 12"/>
+    <path d="M5 13.1 V19.5 H9.2"/>
+    <path d="M19 13.1 V19.5 H14.8"/>
+  </g>
+</svg>

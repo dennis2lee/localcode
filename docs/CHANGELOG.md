@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.105.1
+
+**A browser tab showed the blank-page glyph.** The Web UI linked no icon at all. It wears the mark now — the same drawing the window and the installer carry, served from the same directory the daemon embeds, with a test holding the copy to the source so it cannot drift the way the old one's colours drifted from the stylesheet they came from.
+
 ## v0.105.0
 
 **The window is set as a document, and its apparatus says what it is.** Three interface directions were built as working mockups and reviewed against the feature contract; this is the one that was chosen — the Document direction's reading surface with the Instrument direction's discipline about state. Stylesheet, markup and artwork only: every id the tests find is where it was, and nothing about what the window does has changed.
