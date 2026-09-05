@@ -55,12 +55,16 @@ type oaTool struct {
 }
 
 type oaRequest struct {
-	Model       string      `json:"model"`
-	Messages    []oaMessage `json:"messages"`
-	Tools       []oaTool    `json:"tools,omitempty"`
-	Stream      bool        `json:"stream"`
-	MaxTokens   int         `json:"max_tokens,omitempty"`
-	Temperature float64     `json:"temperature,omitempty"`
+	Model    string      `json:"model"`
+	Messages []oaMessage `json:"messages"`
+	Tools    []oaTool    `json:"tools,omitempty"`
+	// ToolChoice is "none" when the request carries tools the model may
+	// not call, and absent otherwise. Sent only alongside tools: the
+	// field without them is a request OpenAI refuses.
+	ToolChoice  string  `json:"tool_choice,omitempty"`
+	Stream      bool    `json:"stream"`
+	MaxTokens   int     `json:"max_tokens,omitempty"`
+	Temperature float64 `json:"temperature,omitempty"`
 
 	// StreamOptions requests a final usage-only chunk (empty "choices")
 	// at the end of the stream — an OpenAI-compat server that doesn't
@@ -252,6 +256,9 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		// worse answer than saying nothing — which is what a model's own
 		// default already is.
 		ReasoningEffort: openAIEffort(req.Effort),
+	}
+	if req.ToolChoice != "" && len(body.Tools) > 0 {
+		body.ToolChoice = req.ToolChoice
 	}
 
 	payload, err := json.Marshal(body)

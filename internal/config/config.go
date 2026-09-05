@@ -493,7 +493,8 @@ type Profile struct {
 	Fallback []string `json:"fallback,omitempty"`
 
 	// KeepGoing is how many times one turn may be told to carry on after
-	// the model stops with the task unfinished. 0, the default, defers to
+	// the model has stopped and, asked whether the task is complete, has
+	// answered that steps remain. 0, the default, defers to
 	// the model: families known to stall get a small budget out of the
 	// box (see modelKeepGoing in internal/agent), everything else gets
 	// none. -1 forces it off whatever the model.
@@ -507,9 +508,10 @@ type Profile struct {
 	//
 	// Per profile because it is a property of the model, not of the work:
 	// a turn that ends after tool use looks the same whether the model
-	// finished or gave up, and on a model that stops when it is done a
-	// carry-on spends a turn asking "anything else?" after every task —
-	// which is why the default budget for unrecognised models is zero.
+	// finished or gave up, which is why the model is asked, with the tools
+	// out of reach, before any carry-on is sent — and why the default
+	// budget for unrecognised models is zero: on a model that stops when
+	// it is done, even the question is a request spent after every task.
 	KeepGoing int `json:"keep_going,omitempty"`
 }
 

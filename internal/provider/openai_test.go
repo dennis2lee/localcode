@@ -393,3 +393,48 @@ data: [DONE]
 		t.Errorf("tool name = %q, want read_file", name)
 	}
 }
+
+// tool_choice "none" goes on the wire alongside the tools it constrains,
+// and never without them: the field on a request with no tools is one
+// OpenAI refuses. The tools themselves stay, which is the point — a
+// local server's prefix cache is keyed on the rendered prompt, and the
+// tool schemas are the front of it.
+func TestToolChoiceNoneKeepsTheToolsAndConstrainsThem(t *testing.T) {
+	var bodies []oaRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b oaRequest
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		bodies = append(bodies, b)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"DONE\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompat(srv.URL, "")
+	tool := Tool{Name: "bash", Description: "run", InputSchema: json.RawMessage(`{"type":"object"}`)}
+	for _, req := range []ChatRequest{
+		{Model: "m", Messages: []Message{{Role: "user", Content: []Block{{Type: BlockText, Text: "hi"}}}}, Tools: []Tool{tool}, ToolChoice: ToolChoiceNone},
+		{Model: "m", Messages: []Message{{Role: "user", Content: []Block{{Type: BlockText, Text: "hi"}}}}, Tools: []Tool{tool}},
+		{Model: "m", Messages: []Message{{Role: "user", Content: []Block{{Type: BlockText, Text: "hi"}}}}, ToolChoice: ToolChoiceNone},
+	} {
+		ch, err := p.Chat(context.Background(), req)
+		if err != nil {
+			t.Fatalf("send: %v", err)
+		}
+		for range ch {
+		}
+	}
+	if len(bodies) != 3 {
+		t.Fatalf("requests = %d, want 3", len(bodies))
+	}
+	if bodies[0].ToolChoice != "none" || len(bodies[0].Tools) != 1 {
+		t.Errorf("constrained request: tool_choice=%q tools=%d, want none and 1", bodies[0].ToolChoice, len(bodies[0].Tools))
+	}
+	if bodies[1].ToolChoice != "" {
+		t.Errorf("ordinary request carries tool_choice=%q", bodies[1].ToolChoice)
+	}
+	if bodies[2].ToolChoice != "" {
+		t.Errorf("a request with no tools carries tool_choice=%q, which the API refuses", bodies[2].ToolChoice)
+	}
+}

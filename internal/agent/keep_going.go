@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"localcode/internal/config"
 	"localcode/internal/provider"
@@ -25,10 +26,13 @@ import (
 //
 // There is no way to tell that apart from a model that has finished. A
 // turn that ends after tool use with a paragraph of prose is the shape of
-// both "here is what I did" and "here is what remains". So this is opt-in
-// per profile — it is a property of the model, not of the work — and
-// bounded, because the one thing worse than a model that stops early is a
-// session that prompts itself forever.
+// both "here is what I did" and "here is what remains". So the model is
+// asked which it was — and asked in a way it cannot answer with more
+// work: the question goes out with the tools switched off (see
+// keepGoingVerdictPrompt), and only an answer of MORE is followed by a
+// carry-on with the tools back on. It is a property of one model family,
+// not of the work, and bounded, because the one thing worse than a model
+// that stops early is a session that prompts itself forever.
 
 // keepGoingApplies reports whether the feature exists for this model at
 // all: only when its id contains "muse", case-insensitively.
@@ -65,38 +69,140 @@ func (l *Loop) effectiveKeepGoing(profile config.Profile) int {
 	return modelKeepGoing(profile.Model)
 }
 
-// keepGoingPrompt is what the model is told. It is a user message,
-// because that is the only thing a model answers.
+// keepGoingVerdictPrompt is the question, and the request that carries
+// it has tool_choice "none": the tool definitions stay on the wire, so a
+// server's prefix cache still holds, but the model may not call one.
 //
-// It says what may have happened rather than just "continue": the failure
-// is the model treating a description of the next step as an acceptable
-// end to a turn, and naming that is what stops the next reply being
-// another description.
+// That is the whole design, and it comes from a measurement. The old
+// carry-on was one message that asked whether the work was complete
+// and, if not, told the model to take the next step with the tools.
+// Sent to a model that had finished, it did what a compliant model does
+// with tools in reach: it checked — `grep timeout`, `find . -type f`,
+// `grep -r 30` — then said the task was complete, then was asked again.
+// On a task finished in six requests that cost seven more and the whole
+// budget, and every guard on what counted as work (v0.53.0, v0.107.0)
+// was a patch over the same hole: the model was handed the means to
+// redo the task in the same breath as the question of whether it needed
+// to.
 //
-// What it must not do is assert that the work is unfinished. localcode
-// cannot tell a stall from a finished task — that is stated plainly at
-// the top of this file — so a prompt that says "you did not finish" is a
-// claim it has no evidence for, aimed at a model whose whole training is
-// to comply with the last instruction. A finished model told it has not
-// finished goes and finds something to do: it re-reads a file, re-runs
-// the build, redoes the work it just did. That is the "it keeps repeating
-// a task it already completed" report, and it comes from this sentence
-// rather than from the budget.
+// With no tool to reach for, the only thing a finished model can do is
+// say so, and that takes one request and a few tokens. A stalled model
+// says MORE and names the step, and the carry-on that follows goes to a
+// model that has just said, in its own words, that there is one.
 //
-// So the question is put as a question, and "it is already done" is named
-// as an acceptable answer. A model that genuinely stalled still has its
-// next step to take; one that finished now has somewhere to go that is
-// not more work.
-const keepGoingPrompt = "Check whether the task you were given is actually complete. " +
-	"If it is, say so in one line and stop — do not re-run, re-check or redo work you have already done. " +
-	"If it is not, take the next step now using the tools instead of describing it, and keep going until the " +
-	"work is done. If you need a decision only the user can make, ask for it plainly."
+// It still must not assert that the work is unfinished. localcode has
+// no evidence either way, and a model told it has not finished finds
+// something to finish. The question names both answers.
+const keepGoingVerdictPrompt = "Is the task you were given complete? " +
+	"Answer on the first line with one word: DONE if it is, or MORE if steps remain. " +
+	"If MORE, say on the next line what remains. Answer only; do not start the work here."
 
-// keepGoing decides whether this turn should carry on by itself, and with
-// what.
+// keepGoingPrompt is the carry-on. It is sent only after the model has
+// answered MORE, so unlike its predecessor it may take the model at its
+// word that there is a step to take.
+const keepGoingPrompt = "Take the next step now using the tools instead of describing it, and keep going until " +
+	"the work is done. If you need a decision only the user can make, ask for it plainly."
+
+// stopVerdict is the model's answer to keepGoingVerdictPrompt as
+// localcode reads it.
+type stopVerdict int
+
+const (
+	// stopUnclear is an answer that said neither. It ends the turn:
+	// the cost of a carry-on the model did not ask for is the loop this
+	// file exists to prevent, and the cost of a missed one is the person
+	// typing "continue", which is what they did before the feature.
+	stopUnclear stopVerdict = iota
+	stopDone
+	stopMore
+)
+
+// parseVerdict reads the first line the model wrote. The two words are
+// the ones the prompt asked for and they win outright; the rest are the
+// plain ways of saying the same thing, because a model that answers "Not
+// yet — config.go still calls it" has answered.
+//
+// The order matters and was chosen against real sentences. "No further
+// changes are needed" opens with "no" and means done; "No, global_init.go
+// still needs the change" opens with the same word and means the
+// opposite. So the phrases that say "nothing left" are read before the
+// phrases that say "something left", and a bare yes or no is the last
+// resort rather than the first.
+func parseVerdict(text string) stopVerdict {
+	line := strings.ToUpper(strings.Trim(firstNonEmptyLine(text), "*_`#>-—: \t.!"))
+	word := line
+	if i := strings.IndexFunc(line, func(r rune) bool { return !unicode.IsLetter(r) }); i >= 0 {
+		word = line[:i]
+	}
+	switch word {
+	case "MORE":
+		return stopMore
+	case "DONE":
+		return stopDone
+	}
+	has := func(phrases ...string) bool {
+		for _, p := range phrases {
+			if strings.Contains(line, p) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("NOTHING", "NO FURTHER", "NO MORE", "NO REMAINING", "NO OTHER", "ALL DONE"):
+		return stopDone
+	case has("NOT DONE", "NOT COMPLETE", "NOT YET", "NOT FINISHED", "INCOMPLETE", "UNFINISHED",
+		"STILL NEED", "STILL HAS", "STILL HAVE", "REMAIN", "미완", "남아", "남았"):
+		return stopMore
+	case has("DONE", "COMPLETE", "FINISHED", "완료", "끝났"):
+		return stopDone
+	}
+	switch word {
+	case "YES":
+		return stopDone
+	case "NO":
+		return stopMore
+	}
+	return stopUnclear
+}
+
+// firstNonEmptyLine is the first line of a reply that says anything,
+// trimmed. Not firstLine: that one is a log-line cut of a tool result
+// and keeps a leading blank line.
+func firstNonEmptyLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// verdictSummary is what the notice quotes: the answer and, when the
+// model went on to name what remains, that line too. Bounded, because
+// the notice is one line in a transcript.
+func verdictSummary(text string) string {
+	var lines []string
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+			if len(lines) == 2 {
+				break
+			}
+		}
+	}
+	s := strings.Join(lines, " ")
+	if r := []rune(s); len(r) > 160 {
+		s = string(r[:160]) + "…"
+	}
+	return s
+}
+
+// keepGoing decides whether this stop is one to question — whether the
+// verdict prompt goes out at all.
 //
 // Every condition here is a case where stopping was the right thing to do
-// and saying "continue" would override the wrong person:
+// and even asking would override the wrong person:
 //
 //   - nothing has run yet, so this was a question and its answer;
 //   - the last tool call was refused, so the model stopped because it was
@@ -109,12 +215,12 @@ const keepGoingPrompt = "Check whether the task you were given is actually compl
 //     finished rather than stalling;
 //   - the user has typed something that has not reached the model yet,
 //     which is a better continuation than an invented one.
-func (l *Loop) keepGoing(sessionID string, profile config.Profile, stopReason string, reply []provider.Block, ranTools, refused, nudgedSinceWork bool, nudges int) (string, bool) {
+func (l *Loop) keepGoing(sessionID string, profile config.Profile, stopReason string, reply []provider.Block, ranTools, refused, nudgedSinceWork bool, nudges int) bool {
 	if budget := l.effectiveKeepGoing(profile); budget <= 0 || nudges >= budget {
-		return "", false
+		return false
 	}
 	if !ranTools || refused || stopReason == "max_tokens" {
-		return "", false
+		return false
 	}
 	// Told to carry on once already, and nothing new came of it.
 	//
@@ -133,17 +239,17 @@ func (l *Loop) keepGoing(sessionID string, profile config.Profile, stopReason st
 	// because the fix is a call of its own; re-running it to admire the
 	// result is not.
 	if nudgedSinceWork {
-		return "", false
+		return false
 	}
 	// The user has already typed what happens next. It reaches the model
 	// as soon as this turn ends, which is now.
 	if l.UserWaiting != nil && l.UserWaiting(sessionID) {
-		return "", false
+		return false
 	}
 	if endsWithQuestion(replyText(reply)) {
-		return "", false
+		return false
 	}
-	return keepGoingPrompt, true
+	return true
 }
 
 // replyText is the text of one assistant message, tool calls aside.

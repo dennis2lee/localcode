@@ -142,13 +142,20 @@ type anthRequest struct {
 	// breakpoint has to be attached to it — the API accepts both, and the
 	// plain string is kept for the uncached case so the request on the
 	// wire is exactly what it has always been.
-	System      any           `json:"system,omitempty"`
-	Messages    []anthMessage `json:"messages"`
-	Tools       []anthTool    `json:"tools,omitempty"`
-	MaxTokens   int           `json:"max_tokens"`
-	Temperature float64       `json:"temperature,omitempty"`
-	Stream      bool          `json:"stream"`
-	Thinking    *anthThinking `json:"thinking,omitempty"`
+	System   any           `json:"system,omitempty"`
+	Messages []anthMessage `json:"messages"`
+	Tools    []anthTool    `json:"tools,omitempty"`
+	// ToolChoice is {"type":"none"} when the tools on the request may
+	// not be called, and absent otherwise. Only alongside tools.
+	ToolChoice  *anthToolChoice `json:"tool_choice,omitempty"`
+	MaxTokens   int             `json:"max_tokens"`
+	Temperature float64         `json:"temperature,omitempty"`
+	Stream      bool            `json:"stream"`
+	Thinking    *anthThinking   `json:"thinking,omitempty"`
+}
+
+type anthToolChoice struct {
+	Type string `json:"type"`
 }
 
 // anthThinking is extended thinking, in the two shapes the API has had.
@@ -477,6 +484,9 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		Thinking:  anthropicThinking(req.Model, req.Effort, req.MaxTokens),
 	}
 	body.Temperature = temperatureFor(req)
+	if req.ToolChoice == ToolChoiceNone && len(tools) > 0 {
+		body.ToolChoice = &anthToolChoice{Type: "none"}
+	}
 
 	payload, err := json.Marshal(body)
 	if err != nil {

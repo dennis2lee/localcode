@@ -254,7 +254,7 @@ Since v0.38.0, localcode reads the context limit from the server. The configured
 
 ### A local model that stops mid-task
 
-Some local models end a turn after a tool result while describing unfinished work. localcode requests continuation up to three times for known affected families. For other models, set `keep_going` on the profile:
+Some local models end a turn after a tool result while describing unfinished work. For known affected families, localcode asks the model whether the task is complete — with the tools on the request but not callable — and sends a continuation only when the answer says work remains, up to three times. For other models, set `keep_going` on the profile:
 
 ```json
 {

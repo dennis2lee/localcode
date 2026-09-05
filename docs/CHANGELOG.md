@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.109.0
+
+**keep_going**
+
+* A question before any carry-on, sent with `tool_choice: none` — the tools stay on the request so a server's prefix cache still holds, and the model may answer but may not act.
+* Carry-on only on an answer that says work remains. `DONE`, plain words to the same effect, and an answer that reads as neither all end the turn.
+* The budget now counts carry-ons rather than nudges: a finished task costs one short request, not the whole budget.
+* `ChatRequest.ToolChoice` and `provider.ToolChoiceNone`, wired for OpenAI-compatible and Anthropic. Sent only alongside tools, since a `tool_choice` with no tools is refused.
+* A verdict reply that calls a tool anyway — a server that drops the field — is counted as a carry-on, so the budget still bounds the turn.
+* Nothing asked on a turn somebody stopped. A cancelled stream closes without a terminal event, which read here as a model that stopped after running tools, so the prompt was appended to a dead turn and the next thing typed arrived underneath it. Present in the old shape too.
+
+Measured on the reporter's own 30B muse through a recording shim. The original repro, three runs, all identical: seven requests, one question, zero carry-ons, both files correct — against thirteen under the shape v0.107.0 replaced and nine under v0.107.0.
+
+**Web UI**
+
+* Full-width transcript. The reading measure that capped it at 37rem and centred it is gone; a single `--gutter` holds the text off the panel rules.
+* The composer moved into the conversation column, so the box is the transcript's width less Send at any panel size, including collapsed.
+* One `#input` rule instead of two. The second block's `font: inherit` had been quietly overriding the first block's document face since it was written; the face is left as it has actually been drawing.
+* A composer 240px tall on a page that loaded before its window had a size. `scrollHeight` in a zero-size layout is not a height, and it was written inline and never revisited; the box is no longer measured without a width, and a window that gains one recomputes. Found in a hidden pane, present in every build to date.
+
+**Docs**
+
+* The carry-on section of the usage guide rewritten for the two-step shape, with what counts as each answer.
+* `webui-full.png` and `webui-completion.png` retaken on the new layout. The comparison paper now names the screenshots' version separately from the version its claims were checked against.
+
 ## v0.108.1
 
 **Today's seven entries were checked against the code before this tree went to a reviewer, and twelve claims in them were wrong.** Seven readers went through v0.103.0 to v0.108.0 with the entry assumed right, and every claim they reported was attacked by an independent verifier: 22 reported, 12 confirmed, 7 dismissed as fair readings. The entries are corrected in place; this note is the record that they needed it.

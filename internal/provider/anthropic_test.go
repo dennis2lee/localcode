@@ -293,3 +293,48 @@ func TestAnthropicChatEmitsUsageFromMessageStartAndDelta(t *testing.T) {
 		t.Errorf("second usage event = %+v, want InputTokens=1500 (carried forward) OutputTokens=42", usageEvents[1])
 	}
 }
+
+// tool_choice {"type":"none"} goes on the wire alongside the tools it
+// constrains and never without them.
+func TestAnthropicToolChoiceNoneKeepsTheTools(t *testing.T) {
+	var bodies []anthRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b anthRequest
+		_ = json.NewDecoder(r.Body).Decode(&b)
+		bodies = append(bodies, b)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprint(w, sseLine(map[string]any{"type": "message_stop"}))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	p := NewAnthropicDirect("sk-ant-test123")
+	p.BaseURL = srv.URL
+	tool := Tool{Name: "bash", Description: "run", InputSchema: json.RawMessage(`{"type":"object"}`)}
+	msgs := []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}}
+	for _, req := range []ChatRequest{
+		{Model: "claude-sonnet-5", Messages: msgs, MaxTokens: 10, Tools: []Tool{tool}, ToolChoice: ToolChoiceNone},
+		{Model: "claude-sonnet-5", Messages: msgs, MaxTokens: 10, Tools: []Tool{tool}},
+		{Model: "claude-sonnet-5", Messages: msgs, MaxTokens: 10, ToolChoice: ToolChoiceNone},
+	} {
+		stream, err := p.Chat(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Chat: %v", err)
+		}
+		for range stream {
+		}
+	}
+	if len(bodies) != 3 {
+		t.Fatalf("requests = %d, want 3", len(bodies))
+	}
+	if bodies[0].ToolChoice == nil || bodies[0].ToolChoice.Type != "none" || len(bodies[0].Tools) != 1 {
+		t.Errorf("constrained request: tool_choice=%+v tools=%d, want none and 1", bodies[0].ToolChoice, len(bodies[0].Tools))
+	}
+	if bodies[1].ToolChoice != nil {
+		t.Errorf("ordinary request carries tool_choice %+v", bodies[1].ToolChoice)
+	}
+	if bodies[2].ToolChoice != nil {
+		t.Errorf("a request with no tools carries tool_choice %+v", bodies[2].ToolChoice)
+	}
+}

@@ -327,6 +327,24 @@ async function load(opts = {}) {
   // app code reaches for window.prompt / window.confirm; in a browser
   // window *is* the global, so wire it up the same way here.
   sandbox.window = sandbox;
+  // Window-level events. The page binds resize here to recompute the
+  // composer's height, which is the one thing that corrects a height
+  // measured before the window had a size — so a test has to be able to
+  // fire one.
+  const windowListeners = new Map();
+  sandbox.addEventListener = (type, fn) => {
+    if (!windowListeners.has(type)) windowListeners.set(type, []);
+    windowListeners.get(type).push(fn);
+  };
+  sandbox.removeEventListener = (type, fn) => {
+    const list = windowListeners.get(type);
+    if (!list) return;
+    const i = list.indexOf(fn);
+    if (i >= 0) list.splice(i, 1);
+  };
+  harness.fireWindow = (type, ev = {}) => {
+    for (const fn of windowListeners.get(type) || []) fn(ev);
+  };
   // A minimal localStorage: the resize handles persist panel widths
   // through it, and the app treats a throwing/absent store as "no saved
   // width" rather than an error, so the stub only has to be honest.

@@ -327,12 +327,20 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 
 #### A model that stops mid-task
 
-`keep_going` continues an incomplete Muse-model turn by submitting `carry on`. It does not apply to other model families.
+`keep_going` questions a Muse-model turn that ends after tool use, and carries it on only when the model itself says work remains. It does not apply to other model families.
+
+1. The model stops with prose and no tool call. localcode asks: is the task complete? Answer DONE or MORE. The request carries the tools with `tool_choice: none`, so the model can answer but cannot act.
+2. An answer that reads as finished ends the turn: `DONE`, or plain words to the same effect (yes, complete, finished, nothing further, 완료). So does an answer localcode cannot read either way. Cost on a finished task: one short request.
+3. An answer that reads as unfinished sends the carry-on, with the tools callable again: `MORE`, or plain words to the same effect (not yet, incomplete, still needs, two callers remain, 남았). Bounded by the budget below.
+
+Only the first non-empty line of the answer is read. `DONE` and `MORE` win outright; after them, "no further changes" is matched before "no, X still needs the change", so an opening "no" is not read as unfinished on its own.
+
+Each question and carry-on is a user message marked `auto`, hidden by both clients and announced by a notice line that quotes the answer. The model's answer is shown as its reply.
 
 | Control | Scope | Behavior |
 |---|---|---|
 | `/keep-going` or GUI checkbox | Daemon | Enables or disables the feature and saves the value to config.json |
-| Profile `keep_going` | Profile | Maximum continuations per turn |
+| Profile `keep_going` | Profile | Maximum carry-ons per turn (answers of MORE that are acted on) |
 | Unset or `0` on a Muse model | Profile | Default budget of 3 |
 | `-1` on a Muse model | Profile | Disabled for that profile |
 

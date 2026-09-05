@@ -28,6 +28,10 @@ type scriptedProvider struct {
 	// systems records the system prompt of each request, which is how the
 	// per-workspace rules tests see what the model was actually told.
 	systems []string
+	// requests is every request as it went out, for the tests that ask
+	// about something other than the system prompt — whether the tools
+	// were callable, for one.
+	requests []provider.ChatRequest
 }
 
 // sentCount and systemPrompts read what the harness recorded, under the
@@ -46,10 +50,17 @@ func (p *scriptedProvider) systemPrompts() []string {
 	return append([]string(nil), p.systems...)
 }
 
+func (p *scriptedProvider) sentRequests() []provider.ChatRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]provider.ChatRequest(nil), p.requests...)
+}
+
 func (p *scriptedProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.systems = append(p.systems, req.System)
+	p.requests = append(p.requests, req)
 	var evs []provider.StreamEvent
 	if p.sent < len(p.turns) {
 		evs = p.turns[p.sent]

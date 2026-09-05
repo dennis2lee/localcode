@@ -84,11 +84,11 @@
   --t-read: 17px;     /* the document body, and what you type into it */
   --t-head: 18.5px;   /* a heading inside an answer, and a window's title */
 
-  /* The reading measure. 37rem of Charter at 17px is about 72 characters,
-     which is the whole of finding 01: the transcript was flex:1 with no
-     maximum, so on a maximised 27-inch window a paragraph was set about
-     190 characters wide. */
-  --measure: 37rem;
+  /* The space the page keeps clear at the window's left and right edges.
+     One value for the transcript, the composer and the status strip, so
+     the text you read, the box you type into and the line under it all
+     begin and end on the same two verticals. */
+  --gutter: 28px;
 
   /* One radius, and it means one thing: you can press this. A window is a
      sheet of paper and has square corners; code is set on a ground, not
@@ -247,9 +247,20 @@ main {
    The pane exists only to give that button something to be positioned
    against: #transcript is the scrolling box, so a child of it would
    scroll away with the content. */
+/* The conversation column: the scrolling transcript, and the composer
+   under it. Both are the column's width, which is what makes the box you
+   type into as wide as the text you are reading however the panels
+   either side are dragged or collapsed. */
+#center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 #transcript-pane {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   position: relative;
 }
@@ -275,22 +286,18 @@ main {
   flex: 1;
   background: var(--center);
   overflow-y: auto;
-  padding: 16px;
+  padding: 16px var(--gutter);
   word-break: break-word;
 }
-/* The reading measure, and it is the single biggest thing about how this
-   application feels.
-   #transcript was flex:1 with no maximum, so on a maximised 27-inch
-   window a paragraph of a model's answer was set about 190 characters
-   wide — two and a half times the range anybody reads comfortably. The
-   column is capped and centred; the scrolling box stays full width, so
-   the scrollbar is still at the edge of the window where it belongs and
-   nothing about the layout moved. */
-#transcript > * {
-  max-width: var(--measure);
-  margin-left: auto;
-  margin-right: auto;
-}
+/* The transcript is as wide as the window gives it, less a gutter.
+   It was capped at a reading measure and centred, which is the right
+   rule for a page of prose and the wrong one here: this window is
+   already three columns, and the middle one was then a narrow ribbon
+   with a band of empty ground on either side of it. Everything the
+   transcript carries is at least as often code, a diff, a file listing
+   or a table as it is a paragraph, and those are the things a cap
+   wraps. So the column spans and keeps only the gutter, which is what
+   stops the text from touching the panel rules. */
 /* Set as a document. Charter and Sitka Text are on the machine already —
    this page never asks the network for a face — and only the transcript
    gets them: the answer is prose, the apparatus around it is an
@@ -891,33 +898,29 @@ aside h2 {
   margin-bottom: 6px;
   font-family: var(--f-mono);
 }
-/* The composer is under the column it writes into, not across the window.
-   What you type becomes the first thing in the transcript, so it is set to
-   the same measure and in the same face — the box you write in and the
-   page you write onto line up, and a sentence does not change width the
-   moment it is sent. The strip itself still spans, so the rule under the
-   page runs edge to edge. */
+/* The composer is under the column it writes into and as wide as it.
+   What you type becomes the first thing in the transcript, so the two
+   share two verticals: the box begins where the text begins, and Send
+   ends where the text ends. The box takes the width and the button takes
+   what it needs, which is what makes the input the transcript's width
+   less Send. */
 footer {
   border-top: 1px solid var(--border);
-  padding: 12px 16px;
+  padding: 12px var(--gutter);
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  max-width: calc(var(--measure) + 6rem);
-  width: 100%;
-  margin: 0 auto;
+  flex-shrink: 0;
 }
-#input {
-  font-family: var(--f-doc);
-  font-size: var(--t-read);
-  line-height: 1.5;
-}
-/* Not aligned with the composer: this is the window's status line rather
-   than part of the page, it carries more than the measure holds, and
-   constraining it wrapped "auto-delegate: off" onto two lines. It spans,
-   the way a status bar does. */
+/* One rule, not two. There were two #input blocks: the first set the
+   document face and the second, under a comment about the status strip,
+   reset `font: inherit` — so the face the first asked for had never
+   once been drawn. Merged here at the face the composer has actually
+   been using; giving it the serif is a change to how the page looks,
+   not to how wide it is, and it is not what was asked for. */
 #input {
   flex: 1;
+  min-width: 0;
   background: var(--raised);
   border: 1px solid var(--border);
   color: var(--text);
@@ -1005,7 +1008,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    field of colour: --run and --err are the only hues that appear, and
    both of them mean the machine. */
 #prompt-status {
-  padding: 0 16px 10px;
+  padding: 0 var(--gutter) 10px;
   display: flex;
   align-items: center;
   gap: 8px;

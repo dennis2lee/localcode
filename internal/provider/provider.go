@@ -154,7 +154,24 @@ type ChatRequest struct {
 	// each adapter. localcode's part is to carry the intent, not to
 	// pretend the wires agree.
 	Effort Effort
+
+	// ToolChoice constrains what the model may do with the tools on the
+	// request. Empty is the default and puts nothing on the wire.
+	//
+	// ToolChoiceNone keeps the tool definitions in the request — so a
+	// server's prefix cache still holds, which on a local model is the
+	// difference between a one-second answer and a re-read of the whole
+	// conversation — while telling the model it may not call one. It
+	// exists for the one request keep_going makes (see
+	// internal/agent/keep_going.go). Best effort: an adapter with no wire
+	// for it sends nothing, and the caller treats a reply that calls a
+	// tool anyway as the model's own decision to carry on.
+	ToolChoice string
 }
+
+// ToolChoiceNone is the one ToolChoice value: the tools stay defined
+// and the model may not call any of them.
+const ToolChoiceNone = "none"
 
 // Effort is how hard the model is asked to think. Off is not the same as
 // unset: unset says nothing and leaves the model's own default alone,

@@ -434,6 +434,24 @@ Completed findings remain in this list to preserve item numbers and release hist
    * Two interface faults surfaced in the taking and were fixed with them: every unclassed button was a filled lozenge of the accent, and a session row's controls reserved a blank band under every idle row. See the v0.106.0 entry.
 
 
+48. **The carry-on nudge was measured on a task the model had already finished, and it went and worked again. Done in v0.109.0.**
+
+   * `keep_going` sent one message — check whether the task is complete; if not, take the next step with the tools — and sent it **with the tools callable**. A model that had finished did what a compliant model does with tools in reach: it checked. Measured on the reporter's own 30B muse through a recording shim, a task finished correctly at request six cost seven more and the whole budget.
+   * Both earlier fixes were patches over the same hole. v0.53.0 stopped the prompt asserting the work was unfinished; v0.107.0 narrowed what counted as work to a call that changes something. Neither touched the fact that the question and the means to answer it with more work arrived together.
+   * The question is now its own request, sent with `tool_choice: none`. The tool definitions stay on the wire — a local server's prefix cache is keyed on the rendered prompt and the schemas are the front of it — and the model may answer but not act. A carry-on follows only an answer that says work remains.
+   * LM Studio was checked directly for whether it honours the field on this model: with `tool_choice: none` the same request answers in prose where it otherwise calls a tool. A server that drops the field is handled rather than assumed away: a verdict reply carrying tool calls is counted as a carry-on, so the budget still bounds the turn.
+   * Measured on the new build against the original repro, the same task and workspace the earlier entries used. Three runs, all three identical: seven provider requests, one question, **zero carry-ons**, both files correct. The same task cost thirteen requests under the shape v0.107.0 replaced and nine under v0.107.0 itself. On a second task — change a function's signature, then fix every caller until the build passes — two runs at eleven and fourteen requests, one question each, zero carry-ons, build passing; three control runs with the feature off took ten to twelve.
+   * One measurement was thrown away rather than reported. A run came back as "no question asked", which would have meant the feature never fired on the repro; the request log showed the question going out and dying unanswered, because the trial script's poll cap had expired and it deleted the session mid-turn. The cap was raised, the script now reports whether it timed out, and the arm was re-run.
+   * A second fault was found while reviewing the change and is fixed with it, having been in the old shape as well: pressing stop left the prompt in the history. A cancelled stream closes without a terminal event, which the loop reads as a model that stopped after running tools, so the carry-on was appended to a turn that was already over and the next thing the person typed arrived underneath it. The turn is now silent once its context is done, and a test that drives a real cancellation covers it.
+
+49. **The transcript was a ribbon down the middle of a three-column window. Done in v0.109.0.**
+
+   * `#transcript > *` was capped at a 37rem reading measure and centred, and the composer at that measure plus six rem. That is the right rule for a page of prose and the wrong one for this window: the middle column of three was a narrow band with empty ground either side, and a table, a diff or a file listing wrapped inside it while the window had room to spare.
+   * Both now span and keep one `--gutter`, which is the only thing holding the text off the panel rules. The composer moved into the conversation column so that it is the transcript's width by construction — the panels either side are draggable and collapsible, so a padding would have had to be recomputed every time one of them moved.
+   * Found in the same pass: two `#input` rules, the second of which reset `font: inherit` and had been silently discarding the document face the first asked for. Merged at the face the composer has actually been drawing, since changing it is not a change to how wide anything is.
+   * And a second fault, in every build to date and nothing to do with width. `autoResizeInput` writes the measured height inline and nothing measures again, so a page laid out in a window with no size kept whatever `scrollHeight` returned there: measured at 996px on a page loaded into a hidden pane, drawn as a 240px empty box by the `max-height` cap, over a third of a small window. A box with no width is no longer measured, and a window that gains a size recomputes. Three tests, and the harness now models window-level events so a resize can be fired at all.
+
+
 ## UI ideas
 
 ### Web UI

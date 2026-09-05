@@ -192,6 +192,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	lastRefused := false
 	nudgedSinceWork := false
 	nudges := 0
+	// Whether the request being built is the question keep_going asks,
+	// which goes out with the tools defined but not callable. See
+	// keepGoingVerdictPrompt for why that is the whole design.
+	askingVerdict := false
 	// Every tool call this turn has already made, so a carry-on that only
 	// repeats them can be told from one that does something. A model told
 	// to continue when it had in fact finished does not argue: it re-reads
@@ -233,6 +237,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// is what keeps every request byte-identical to what it was
 			// for anybody who has not set it. See effort.go.
 			Effort: l.effortFor(sessionID, run.profile),
+		}
+		if askingVerdict {
+			req.ToolChoice = provider.ToolChoiceNone
 		}
 
 		// The last chance to say no, and the point where a policy can add
@@ -511,6 +518,21 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// so a tool call at the end of it has arguments that stop partway
 		// through and running them means acting on a truncated instruction.
 		wantsTools := len(toolUses) > 0 && stopReason != "max_tokens"
+		if askingVerdict && wantsTools {
+			// The question went out with tool_choice "none" and the model
+			// called a tool anyway: a server that does not carry the
+			// field. The reply is then the carry-on itself, and it is
+			// counted as one, so the budget still bounds it.
+			askingVerdict = false
+			nudges++
+			nudgedSinceWork = true
+			l.Store.Append(sessionID, events.TypeError, map[string]any{
+				"error": fmt.Sprintf(
+					"asked whether the task was complete, the model went on working instead (%d of %d — keep_going for %q)",
+					nudges, l.effectiveKeepGoing(run.profile), run.profile.Model),
+				"recovered": true,
+			})
+		}
 		if !wantsTools {
 			// A reply that ran into its own length cap is not a reply that
 			// finished, and it is indistinguishable from one that did:
@@ -529,31 +551,66 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					"recovered": true,
 				})
 			}
-			if text, ok := l.keepGoing(sessionID, run.profile, stopReason, assistantBlocks, ranTools, lastRefused, nudgedSinceWork, nudges); ok {
-				nudges++
-				nudgedSinceWork = true
+			// keep_going, in two requests rather than one, and neither
+			// of them on a turn somebody has stopped: a cancelled stream
+			// closes without a terminal event, which reads here as a
+			// model that stopped with tools already run — so the
+			// question would be appended to the history, the request
+			// carrying it would die on the dead context, and the next
+			// thing the person typed would arrive underneath "Is the
+			// task you were given complete?".
+			//
+			// First the question, with the tools on the request but not callable,
+			// so the only thing a finished model can do is say so; then,
+			// only on an answer of MORE, the carry-on with the tools back.
+			// Each is a user message, because that is the only thing a
+			// model answers, and each is persisted as the message it is,
+			// marked auto so no client shows it as something the person
+			// typed. Without that record a daemon restarted mid-session
+			// rebuilt the history with two assistant messages back to
+			// back — a shape Bedrock rejects outright — and a
+			// conversation the model remembered differently from how it
+			// happened. localcode's own words arriving in a user-role
+			// message are tagged on the block, and the tag stays with
+			// the message for as long as the message is sent.
+			if askingVerdict {
+				askingVerdict = false
+				text := replyText(assistantBlocks)
+				if parseVerdict(text) == stopMore {
+					nudges++
+					nudgedSinceWork = true
+					l.Store.Append(sessionID, events.TypeError, map[string]any{
+						"error": fmt.Sprintf(
+							"asked whether the task was complete, the model said steps remain (%q), so localcode told it to carry on (%d of %d — keep_going for %q)",
+							verdictSummary(text), nudges, l.effectiveKeepGoing(run.profile), run.profile.Model),
+						"recovered": true,
+					})
+					l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{
+						"text": keepGoingPrompt, "auto": true, "source": "reminder.keep_going",
+					})
+					l.appendHistory(sessionID, provider.Message{
+						Role:    provider.RoleUser,
+						Content: []provider.Block{{Type: provider.BlockText, Text: keepGoingPrompt, Source: "reminder.keep_going"}},
+					})
+					continue
+				}
+				// DONE, or nothing that reads as MORE: taken at its word,
+				// and said so, because the one-line answer sitting under
+				// the model's real reply needs an explanation.
 				l.Store.Append(sessionID, events.TypeError, map[string]any{
 					"error": fmt.Sprintf(
-						"the model ended its turn with the task unfinished, so localcode told it to carry on (%d of %d — keep_going for %q)",
-						nudges, l.effectiveKeepGoing(run.profile), run.profile.Model),
+						"asked whether the task was complete, the model answered %q, so the turn ended (keep_going for %q)",
+						verdictSummary(text), run.profile.Model),
 					"recovered": true,
 				})
-				// Persisted as the user message it is, marked auto so no
-				// client shows it as something the person typed. Without
-				// this event, a daemon restarted mid-session rebuilt the
-				// history with two assistant messages back to back — a
-				// shape Bedrock rejects outright — and a conversation the
-				// model remembered differently from how it happened.
+			} else if ctx.Err() == nil && l.keepGoing(sessionID, run.profile, stopReason, assistantBlocks, ranTools, lastRefused, nudgedSinceWork, nudges) {
+				askingVerdict = true
 				l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{
-					"text": text, "auto": true, "source": "reminder.keep_going",
+					"text": keepGoingVerdictPrompt, "auto": true, "source": "reminder.keep_going",
 				})
-				// localcode's own words, arriving in a user-role message
-				// that the user did not write. The role does not say
-				// that; the tag on the block does, and it stays with the
-				// message for as long as the message is sent.
 				l.appendHistory(sessionID, provider.Message{
 					Role:    provider.RoleUser,
-					Content: []provider.Block{{Type: provider.BlockText, Text: text, Source: "reminder.keep_going"}},
+					Content: []provider.Block{{Type: provider.BlockText, Text: keepGoingVerdictPrompt, Source: "reminder.keep_going"}},
 				})
 				continue
 			}

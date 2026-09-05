@@ -262,7 +262,21 @@ function retryQueueSoon() {
   }, 300);
 }
 
+// autoResizeInput grows the box to fit what is in it.
+//
+// It refuses to measure a box with no width, and that guard is the whole
+// of a bug worth naming. scrollHeight in a zero-size layout is not a
+// height, it is whatever the engine had lying around; writing it as an
+// inline height makes it permanent, because nothing measures again once
+// the window has a size. Measured on a page loaded into a window that
+// was not on screen yet: the composer came up at height 996px, which
+// max-height then drew as a 240px box over a third of the window, empty.
+//
+// Hence also the resize listener in main.js. A window that gains a size
+// is the one moment a stale height can be corrected, and until now no
+// code ran there.
 export function autoResizeInput() {
+  if (!inputEl.offsetWidth) return;
   inputEl.style.height = 'auto';
   inputEl.style.height = inputEl.scrollHeight + 'px';
 }

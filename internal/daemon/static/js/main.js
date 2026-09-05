@@ -300,6 +300,12 @@ async function init() {
   // Before anything is measured, so the first layout is at the size the
   // person left it rather than at 100% for a frame.
   wireZoom();
+  // The composer's height is written once and never revisited, so a page
+  // that loaded before its window had a size kept whatever the zero-size
+  // layout measured. See autoResizeInput.
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('resize', autoResizeInput);
+  }
   try {
     app.archiveOpen = !!localStorage.getItem('archiveOpen');
   } catch { /* private window, or storage refused: stay collapsed */ }
@@ -336,7 +342,7 @@ export { renderMarkdown, inline, unwrapMath } from './markdown.js';
 export { jumpToTurn } from './transcript.js';
 export { HELP_TEXT, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
-export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage } from './composer.js';
+export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage, autoResizeInput } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { renderSchedules, applyScheduleEvent, loadSchedules, openScheduleDetails } from './schedules.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';

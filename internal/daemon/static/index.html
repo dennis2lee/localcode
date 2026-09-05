@@ -193,12 +193,25 @@
     </div>
   </aside>
   <div class="resizer" id="resize-left" title="drag to resize"></div>
-  <div id="transcript-pane">
-    <div id="transcript"></div>
-    <!-- Shown only while the view is away from the bottom, so a turn that
-         is still writing can be left running while something further up is
-         read. -->
-    <button id="jump-bottom" title="jump to the newest output" hidden><svg class="ico ico-13"><use href="#i-arrow-d"/></svg>latest</button>
+  <!--
+    The conversation column: what the model said, and the box you answer
+    it in. The composer is in here rather than across the foot of the
+    window so that it is the transcript's width by construction — the
+    panels either side are draggable and collapsible, so the alternative
+    was a padding that had to be recomputed every time one of them moved.
+  -->
+  <div id="center">
+    <div id="transcript-pane">
+      <div id="transcript"></div>
+      <!-- Shown only while the view is away from the bottom, so a turn that
+           is still writing can be left running while something further up is
+           read. -->
+      <button id="jump-bottom" title="jump to the newest output" hidden><svg class="ico ico-13"><use href="#i-arrow-d"/></svg>latest</button>
+    </div>
+    <footer>
+      <textarea id="input" rows="1" placeholder="Type a message (Enter to send, /help for help, drag a file to attach)" autofocus></textarea>
+      <button id="send">Send</button>
+    </footer>
   </div>
   <div class="resizer" id="resize-right" title="drag to resize"></div>
   <aside id="right-panel">
@@ -226,10 +239,6 @@
     </div>
   </aside>
 </main>
-<footer>
-  <textarea id="input" rows="1" placeholder="Type a message (Enter to send, /help for help, drag a file to attach)" autofocus></textarea>
-  <button id="send">Send</button>
-</footer>
 <div id="prompt-status">
   <span class="comm-dot" id="comm-dot"></span>
   <span id="status-text"></span>

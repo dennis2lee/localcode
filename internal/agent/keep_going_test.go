@@ -20,7 +20,13 @@ import (
 // and was ended anyway, because the server called the stop reason
 // "stop"). What is left is a model that really does stop, with nothing in
 // the reply to run, and nothing in the reply to tell it apart from a
-// model that has finished — which is why this is opt-in per profile.
+// model that has finished — which is why the model is asked, and asked
+// with the tools out of reach: see keepGoingVerdictPrompt.
+//
+// The scripts below therefore have a shape: a stop is followed by the
+// model's answer to the question ("DONE", or "MORE" and what remains),
+// and only after MORE does the carry-on go out and the next piece of
+// work come back.
 
 // textStream is a reply with no tool calls in it: the shape of both "I am
 // done" and "here is what still needs doing".
@@ -29,6 +35,12 @@ func textStream(text string) []provider.StreamEvent {
 		{Type: provider.EventTextDelta, TextDelta: text},
 		{Type: provider.EventMessageStop, StopReason: "end_turn"},
 	}
+}
+
+// done and more are the model's answers to the question keep_going asks.
+func done() []provider.StreamEvent { return textStream("DONE") }
+func more(what string) []provider.StreamEvent {
+	return textStream("MORE\n" + what)
 }
 
 // distinctToolCall is toolCallStream with arguments of its own, so a
@@ -62,6 +74,7 @@ func TestAStalledTurnCarriesOnWhenTheProfileAsksForIt(t *testing.T) {
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
 		distinctToolCall("edit-main"),
 		textStream("global_init.cpp also has to be updated."),
+		more("global_init.cpp still has to be updated."),
 		distinctToolCall("edit-global-init"),
 		textStream("done — the build passes."),
 	}}
@@ -73,11 +86,12 @@ func TestAStalledTurnCarriesOnWhenTheProfileAsksForIt(t *testing.T) {
 	if runs != 2 {
 		t.Errorf("the tool ran %d times, want 2 — the turn stopped after the model described the next step", runs)
 	}
-	if p.sentCount() != 4 {
-		t.Errorf("provider turns = %d, want 4", p.sentCount())
+	// The first step, the stall, the question and its answer, the second
+	// step, and the reply after it — which is past the budget of one, so
+	// it is not even questioned.
+	if p.sentCount() != 5 {
+		t.Errorf("provider turns = %d, want 5", p.sentCount())
 	}
-	// And the budget stops it: with one carry-on allowed, the reply that
-	// says the work is done is the end of the turn.
 
 	// And it is visible. A turn that carries on by itself with nothing in
 	// the transcript to say why is a model that looks like it never
@@ -153,19 +167,23 @@ func TestCarryingOnIsBounded(t *testing.T) {
 	reg := tools.NewRegistry(nil)
 	reg.Register(countingTool{runs: &runs})
 
-	// Work, stall, work, stall, work, stall: a model that would keep this
-	// up for as long as it is asked to. Each step CHANGES something,
-	// which is what makes it progress — a step that only looks somewhere
-	// new does not earn another carry-on, and a step that repeats itself
-	// does not either. See TestLookingSomewhereNewDoesNotEarnAnother and
+	// Work, stall, "more", work, stall, "more", work, stall: a model that
+	// would keep this up for as long as it is asked to. Each step CHANGES
+	// something, which is what makes it progress — a step that only looks
+	// somewhere new does not earn another carry-on, and a step that
+	// repeats itself does not either. See
+	// TestLookingSomewhereNewDoesNotEarnAnother and
 	// TestACarryOnThatOnlyRepeatsItselfEndsTheTurn.
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
 		distinctToolCall("one"),
 		textStream("one more thing to do."),
+		more("one more thing."),
 		distinctToolCall("two"),
 		textStream("one more thing to do."),
+		more("one more thing."),
 		distinctToolCall("three"),
 		textStream("one more thing to do."),
+		more("one more thing."),
 		distinctToolCall("four"),
 	}}
 	loop, sessionID := keepGoingLoop(t, p, reg, 2)
@@ -173,32 +191,35 @@ func TestCarryingOnIsBounded(t *testing.T) {
 	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	// Six requests: the first reply, then two carry-ons each followed by
-	// the work they produced, then the third stall — which is past the
-	// budget and ends the turn.
-	if p.sentCount() != 6 {
-		t.Errorf("provider turns = %d, want 6", p.sentCount())
+	// Eight requests: the first step and its stall, then twice over a
+	// question, its answer, a step and a stall — and the third stall is
+	// past the budget, so it is not questioned and ends the turn.
+	if p.sentCount() != 8 {
+		t.Errorf("provider turns = %d, want 8", p.sentCount())
 	}
 	if runs != 3 {
 		t.Errorf("the tool ran %d times, want 3", runs)
 	}
 }
 
-// A carry-on that produces no work is the model saying it has finished,
-// and it is taken at its word. Without this, a model that stops when it
-// is done spends the whole keep_going budget on turns that say "anything
-// else?" — the cost of the setting would be paid on every completed task
-// rather than only on the stalls it is there for.
-func TestACarryOnThatProducesNoWorkEndsTheTurn(t *testing.T) {
+// A finished model is asked, says so, and that is the end of it. This is
+// the whole cost of the setting on a completed task: one request with a
+// one-word answer, and the tool is not run again.
+//
+// It used to be more. The question and the carry-on were one message,
+// sent with the tools on, and a finished model told to check its work
+// checked it — grep, find, grep again — and every one of those bought
+// another round. See keepGoingVerdictPrompt for the measurement.
+func TestAFinishedModelIsAskedOnceAndTakenAtItsWord(t *testing.T) {
 	runs := 0
 	reg := tools.NewRegistry(nil)
 	reg.Register(countingTool{runs: &runs})
 
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
-		toolCallStream("tool_calls"),
+		distinctToolCall("edit"),
 		textStream("that is the whole change."),
-		textStream("yes — nothing else to do."),
-		textStream("still nothing."),
+		done(),
+		distinctToolCall("check-again"), // never asked for
 	}}
 	loop, sessionID := keepGoingLoop(t, p, reg, 3)
 
@@ -206,7 +227,137 @@ func TestACarryOnThatProducesNoWorkEndsTheTurn(t *testing.T) {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	if p.sentCount() != 3 {
-		t.Errorf("provider turns = %d, want 3 — one carry-on, and the answer to it was taken as final", p.sentCount())
+		t.Errorf("provider turns = %d, want 3 — the work, the question, and the answer", p.sentCount())
+	}
+	if runs != 1 {
+		t.Errorf("the tool ran %d times, want 1 — a finished model was made to work again", runs)
+	}
+}
+
+// The question goes out with the tools defined but not callable, and the
+// carry-on with them callable again. Defined, not removed: a local
+// server's prefix cache is keyed on the rendered prompt, and the tool
+// schemas are the front of it, so dropping them turns a one-word answer
+// into a re-read of the whole conversation.
+func TestTheQuestionGoesOutWithTheToolsOutOfReach(t *testing.T) {
+	runs := 0
+	reg := tools.NewRegistry(nil)
+	reg.Register(countingTool{runs: &runs})
+
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{
+		distinctToolCall("one"),
+		textStream("one more thing to do."),
+		more("one more thing."),
+		distinctToolCall("two"),
+		textStream("done."),
+		done(),
+	}}
+	loop, sessionID := keepGoingLoop(t, p, reg, 3)
+
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	reqs := p.sentRequests()
+	if len(reqs) != 6 {
+		t.Fatalf("provider turns = %d, want 6", len(reqs))
+	}
+	for i, want := range []string{"", "", provider.ToolChoiceNone, "", "", provider.ToolChoiceNone} {
+		if reqs[i].ToolChoice != want {
+			t.Errorf("request %d: tool_choice = %q, want %q", i+1, reqs[i].ToolChoice, want)
+		}
+		if len(reqs[i].Tools) == 0 {
+			t.Errorf("request %d carries no tools — the prefix cache is lost on it", i+1)
+		}
+	}
+}
+
+// A server that does not carry tool_choice sends the question to a model
+// with the tools in reach, and the model may answer by working. That
+// reply is the carry-on, and it is counted as one, so the budget still
+// bounds the turn.
+func TestAServerThatIgnoresTheChoiceStillGetsABoundedCarryOn(t *testing.T) {
+	runs := 0
+	reg := tools.NewRegistry(nil)
+	reg.Register(countingTool{runs: &runs})
+
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{
+		distinctToolCall("one"),
+		textStream("one more thing to do."),
+		distinctToolCall("two"), // the answer to the question, with a tool call in it
+		textStream("one more thing to do."),
+		distinctToolCall("three"), // never asked for: the budget is spent
+	}}
+	loop, sessionID := keepGoingLoop(t, p, reg, 1)
+
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if runs != 2 {
+		t.Errorf("the tool ran %d times, want 2", runs)
+	}
+	if p.sentCount() != 4 {
+		t.Errorf("provider turns = %d, want 4 — the carry-on the model took by itself was not counted", p.sentCount())
+	}
+}
+
+// An answer that names neither word ends the turn. The cost of a carry-on
+// the model did not ask for is the loop this feature is measured by; the
+// cost of a missed one is the person typing "continue".
+func TestAnAnswerThatSaysNeitherEndsTheTurn(t *testing.T) {
+	runs := 0
+	reg := tools.NewRegistry(nil)
+	reg.Register(countingTool{runs: &runs})
+
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{
+		distinctToolCall("one"),
+		textStream("the change is in."),
+		textStream("Let me think about what the task was."),
+		distinctToolCall("two"), // never asked for
+	}}
+	loop, sessionID := keepGoingLoop(t, p, reg, 3)
+
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if p.sentCount() != 3 {
+		t.Errorf("provider turns = %d, want 3", p.sentCount())
+	}
+	if runs != 1 {
+		t.Errorf("the tool ran %d times, want 1", runs)
+	}
+}
+
+func TestTheAnswerIsReadFromItsFirstLine(t *testing.T) {
+	for text, want := range map[string]stopVerdict{
+		"DONE":                                      stopDone,
+		"done.":                                     stopDone,
+		"**DONE** — both files are updated.":        stopDone,
+		"Done: the build passes.":                   stopDone,
+		"Yes, the task is complete.":                stopDone,
+		"The task is complete.":                     stopDone,
+		"Nothing remains to be done.":               stopDone,
+		"완료했습니다.":                                   stopDone,
+		"No further changes are needed.":            stopDone,
+		"No more work is needed.":                   stopDone,
+		"All done.":                                 stopDone,
+		"MORE":                                      stopMore,
+		"MORE\nglobal_init.go still calls it.":      stopMore,
+		"- MORE: config.go":                         stopMore,
+		"Not yet — config.go still calls it.":       stopMore,
+		"No, global_init.go still needs the change": stopMore,
+		"The task is not complete.":                 stopMore,
+		"Incomplete.":                               stopMore,
+		"config.go still needs the change.":         stopMore,
+		"Two callers remain to be updated.":         stopMore,
+		"MORE: nothing else after that.":            stopMore,
+		"아직 남았습니다.":                                 stopMore,
+		"":                                          stopUnclear,
+		"Let me think about what the task was.":     stopUnclear,
+		"I changed two files.":                      stopUnclear,
+	} {
+		if got := parseVerdict(text); got != want {
+			t.Errorf("parseVerdict(%q) = %v, want %v", text, got, want)
+		}
 	}
 }
 
@@ -289,8 +440,10 @@ func TestTheReportedModelCarriesOnWithNoConfigAtAll(t *testing.T) {
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
 		distinctToolCall("edit-main"),
 		textStream("global_init.cpp also has to be updated."),
+		more("global_init.cpp."),
 		distinctToolCall("edit-global-init"),
 		textStream("done — the build passes."),
+		done(),
 	}}
 	loop, sessionID := scriptedLoop(t, p, reg)
 	// No keep_going anywhere: only the model name says what this is.
@@ -325,11 +478,11 @@ func TestMinusOneTurnsCarryingOnOffForAStallingModel(t *testing.T) {
 	}
 }
 
-// The carry-on is part of the conversation the model had, so it has to
-// survive a daemon restart. It used to live only in memory: rehydrating
-// the event log rebuilt the history with two assistant messages back to
-// back — a shape Bedrock rejects outright — and a "continue" the model
-// was never re-told about.
+// The question and the carry-on are part of the conversation the model
+// had, so they have to survive a daemon restart. They used to live only
+// in memory: rehydrating the event log rebuilt the history with two
+// assistant messages back to back — a shape Bedrock rejects outright —
+// and a "continue" the model was never re-told about.
 func TestACarriedOnTurnSurvivesARestart(t *testing.T) {
 	runs := 0
 	reg := tools.NewRegistry(nil)
@@ -338,6 +491,7 @@ func TestACarriedOnTurnSurvivesARestart(t *testing.T) {
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
 		distinctToolCall("edit-main"),
 		textStream("global_init.cpp also has to be updated."),
+		more("global_init.cpp."),
 		distinctToolCall("edit-global-init"),
 		textStream("done — the build passes."),
 	}}
@@ -361,17 +515,24 @@ func TestACarriedOnTurnSurvivesARestart(t *testing.T) {
 			t.Fatalf("message %d role = %s, live had %s", i, got[i].Role, live[i].Role)
 		}
 	}
-	var nudge bool
+	var question, carryOn bool
 	for _, m := range got {
-		// Matched against the prompt itself, not a phrase copied out of
-		// it: the wording is tuned from time to time and a test that
+		// Matched against the prompts themselves, not phrases copied out
+		// of them: the wording is tuned from time to time and a test that
 		// pins a sentence would fail for that instead of for this.
-		if m.Role == provider.RoleUser && strings.Contains(replyText(m.Content), keepGoingPrompt) {
-			nudge = true
+		if m.Role != provider.RoleUser {
+			continue
+		}
+		text := replyText(m.Content)
+		if strings.Contains(text, keepGoingVerdictPrompt) {
+			question = true
+		}
+		if strings.Contains(text, keepGoingPrompt) {
+			carryOn = true
 		}
 	}
-	if !nudge {
-		t.Error("the carry-on message is not in the rehydrated history — the model would remember a different conversation")
+	if !question || !carryOn {
+		t.Errorf("rehydrated history has question=%v carry-on=%v, want both — the model would remember a different conversation", question, carryOn)
 	}
 }
 
@@ -434,18 +595,11 @@ func TestAWaitingUserIsNotTalkedOver(t *testing.T) {
 	}
 }
 
-// The report this fixes: with muse, "the task is already finished and it
-// runs it all over again".
-//
-// A model told "you did not finish" does not argue. It goes and does
-// something — re-reads the file it just wrote, re-runs the build it just
-// ran — and the old guard cleared on any tool call at all, so every one
-// of those bought another carry-on. A completed task was re-executed for
-// the whole budget, and from the outside that is a model repeating itself
-// until it is told to stop.
-//
-// The script is the finished case exactly: work, a summary, and then
-// nothing but the same call again each time it is prodded.
+// A model that answers MORE and then only repeats a call it has already
+// made has changed nothing, and the next stop is not questioned again.
+// The guard under the question: a model can say MORE for as long as it
+// is asked, and the budget alone would let it re-run the build three
+// times to admire the result.
 func TestACarryOnThatOnlyRepeatsItselfEndsTheTurn(t *testing.T) {
 	runs := 0
 	reg := tools.NewRegistry(nil)
@@ -454,10 +608,10 @@ func TestACarryOnThatOnlyRepeatsItselfEndsTheTurn(t *testing.T) {
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
 		distinctToolCall("build"),
 		textStream("done — the build passes."),
+		more("let me re-check the build."),
 		distinctToolCall("build"), // the same call, to check its own work
 		textStream("still done."),
-		distinctToolCall("build"), // and again
-		textStream("still done."),
+		more("let me re-check the build."), // never asked for
 		distinctToolCall("build"),
 	}}
 	loop, sessionID := keepGoingLoop(t, p, reg, 3)
@@ -465,10 +619,10 @@ func TestACarryOnThatOnlyRepeatsItselfEndsTheTurn(t *testing.T) {
 	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	// One carry-on, the repeat it produced, and the reply that ends the
-	// turn: four requests, not the eight a budget of three would allow.
-	if p.sentCount() != 4 {
-		t.Errorf("provider turns = %d, want 4 — a finished task was carried on %d times", p.sentCount(), p.sentCount()-2)
+	// The work, the stop, the question and MORE, the repeat, and the
+	// stop after it: five requests, not the ten a budget of three allows.
+	if p.sentCount() != 5 {
+		t.Errorf("provider turns = %d, want 5 — a finished task was carried on %d times", p.sentCount(), (p.sentCount()-2)/2)
 	}
 	// Twice: the real work, and the one repeat the single carry-on bought.
 	if runs != 2 {
@@ -476,26 +630,32 @@ func TestACarryOnThatOnlyRepeatsItselfEndsTheTurn(t *testing.T) {
 	}
 }
 
-// The carry-on prompt must not assert that the work is unfinished.
+// The question must not assert that the work is unfinished.
 //
 // localcode cannot tell a stall from a finished task — that is the whole
 // premise of this file — so a sentence claiming the task is incomplete is
 // a claim with no evidence behind it, put to a model that complies with
-// the last thing it was told. Naming "it is already done" as an allowed
-// answer is what gives a finished model somewhere to go that is not more
-// work.
-func TestTheCarryOnPromptLetsTheModelSayItIsDone(t *testing.T) {
-	for _, claim := range []string{"you ended your turn with the task unfinished", "you described the next step"} {
-		if strings.Contains(strings.ToLower(keepGoingPrompt), claim) {
-			t.Errorf("the prompt asserts the task is unfinished (%q), which is what makes a finished model redo its work", claim)
+// the last thing it was told. The question names both answers, and it
+// asks for an answer rather than for work, because the work is what a
+// finished model does when told to check.
+func TestTheQuestionNamesBothAnswersAndAsksForNoWork(t *testing.T) {
+	for _, claim := range []string{"you ended your turn with the task unfinished", "you described the next step", "not finished"} {
+		if strings.Contains(strings.ToLower(keepGoingVerdictPrompt), claim) {
+			t.Errorf("the question asserts the task is unfinished (%q), which is what makes a finished model redo its work", claim)
 		}
 	}
-	lower := strings.ToLower(keepGoingPrompt)
-	if !strings.Contains(lower, "complete") && !strings.Contains(lower, "done") {
-		t.Error("the prompt never offers 'it is already complete' as an answer")
+	for _, word := range []string{"DONE", "MORE"} {
+		if !strings.Contains(keepGoingVerdictPrompt, word) {
+			t.Errorf("the question never offers %s as an answer", word)
+		}
 	}
-	if !strings.Contains(lower, "redo") && !strings.Contains(lower, "re-run") {
-		t.Error("the prompt does not tell the model to leave finished work alone")
+	if !strings.Contains(strings.ToLower(keepGoingVerdictPrompt), "answer only") {
+		t.Error("the question does not tell the model to answer rather than work")
+	}
+	// And the carry-on may take the model at its word: it is only ever
+	// sent after MORE.
+	if !strings.Contains(strings.ToLower(keepGoingPrompt), "next step") {
+		t.Error("the carry-on does not tell the model to take the next step")
 	}
 }
 
@@ -581,37 +741,34 @@ func TestOnlyAChangeClearsTheCarryOnGuard(t *testing.T) {
 
 // A model prodded into looking somewhere new does not earn another prod.
 //
-// This is the fault the guard was rebuilt for, and it was measured on the
-// model the feature exists for. Told to check whether an already-finished
-// task was complete, a 30B muse ran `grep timeout`, then `grep 30`.
-// Neither was a repeat, so under the old test both counted as work, both
-// cleared the guard, and both bought another carry-on: nine requests
-// became thirteen, four of them re-confirming a change already made.
+// The guard under the question. A model can answer MORE, look somewhere
+// it has not looked, and stop again; under the old rule that counted as
+// work and bought the next round, and measured on the model the feature
+// exists for it ran the whole budget on `grep timeout`, `grep 30`. Only
+// a change clears the guard; see changedSomething.
 func TestLookingSomewhereNewDoesNotEarnAnother(t *testing.T) {
 	runs := 0
 	reg := tools.NewRegistry(nil)
 	reg.Register(lookingTool{runs: &runs})
 
-	// Look, stall, look, stall, look: every step is a different call and
-	// not one of them changes anything.
+	// Look, stall, "more", look, stall: the second look changes nothing,
+	// so the second stall is not questioned.
 	p := &scriptedProvider{turns: [][]provider.StreamEvent{
 		lookCall("one"),
 		textStream("one more thing to do."),
+		more("one more thing."),
 		lookCall("two"),
 		textStream("one more thing to do."),
+		more("one more thing."), // never asked for
 		lookCall("three"),
-		textStream("one more thing to do."),
 	}}
 	loop, sessionID := keepGoingLoop(t, p, reg, 3)
 
 	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "do it"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	// Four requests: the first reply, one carry-on, the look it produced,
-	// and the stall after it — which earns nothing, because looking is not
-	// progress. Under the old rule this ran to the whole budget.
-	if p.sentCount() != 4 {
-		t.Errorf("provider turns = %d, want 4 — looking somewhere new bought another carry-on", p.sentCount())
+	if p.sentCount() != 5 {
+		t.Errorf("provider turns = %d, want 5 — looking somewhere new bought another carry-on", p.sentCount())
 	}
 	if runs != 2 {
 		t.Errorf("the tool ran %d times, want 2", runs)
@@ -637,5 +794,56 @@ func lookCall(arg string) []provider.StreamEvent {
 		{Type: provider.EventToolUseStart, ToolUseID: "look_" + arg, ToolName: "grep"},
 		{Type: provider.EventToolUseEnd, ToolUseID: "look_" + arg, ToolInput: json.RawMessage(`{"pattern":"` + arg + `"}`)},
 		{Type: provider.EventMessageStop, StopReason: "tool_calls"},
+	}
+}
+
+// Stopping a turn stops it. Nothing is asked afterwards.
+//
+// A cancelled stream closes without a terminal event, which the loop
+// reads as a model that stopped after running tools — the exact shape
+// keep_going exists for. Left alone, the question was appended to the
+// history, the request carrying it died on the dead context, and the
+// next thing the person typed arrived underneath "Is the task you were
+// given complete?".
+func TestStoppingATurnAsksTheModelNothing(t *testing.T) {
+	runs := 0
+	reg := tools.NewRegistry(nil)
+	reg.Register(countingTool{runs: &runs})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{
+		distinctToolCall("one"),
+		// What a cancelled stream looks like from here: no blocks, no
+		// terminal event. The harness cancels first so the loop reaches
+		// this reply with a context already done.
+		{},
+	}}
+	loop, sessionID := keepGoingLoop(t, p, reg, 3)
+	loop.Tools.Resolver = func(context.Context, tools.Query) tools.Outcome {
+		cancel()
+		return tools.Outcome{Decision: tools.DecisionAllow}
+	}
+
+	_ = loop.SendMessage(ctx, sessionID, "general-purpose", "do it")
+
+	for _, m := range loop.history(sessionID) {
+		if m.Role != provider.RoleUser {
+			continue
+		}
+		if text := replyText(m.Content); strings.Contains(text, keepGoingVerdictPrompt) || strings.Contains(text, keepGoingPrompt) {
+			t.Fatalf("a stopped turn left localcode's own words in the history: %q", text)
+		}
+	}
+	evs, err := loop.Store.Events(sessionID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	for _, ev := range evs {
+		if ev.Type != events.TypeUserMessage {
+			continue
+		}
+		if auto, _ := ev.Data["auto"].(bool); auto {
+			t.Errorf("a stopped turn logged an automatic message: %v", ev.Data["text"])
+		}
 	}
 }

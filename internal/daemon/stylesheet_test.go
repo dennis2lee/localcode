@@ -161,3 +161,49 @@ func TestThePagesIconIsTheApplicationIcon(t *testing.T) {
 		t.Error("index.html links no icon, so a browser tab shows the blank-page glyph")
 	}
 }
+
+// The transcript, the composer and the status strip begin and end on the
+// same two verticals.
+//
+// The transcript used to be capped at a reading measure and centred, and
+// the composer at that measure plus six rem — so the middle column of a
+// three-column window was a ribbon with empty ground either side of it,
+// and a table or a diff wrapped inside it while the window had room to
+// spare. All three now span and keep one gutter, which is the only thing
+// holding the text off the panel rules. A rule that goes back to its own
+// padding is how they drift apart again.
+func TestTheTranscriptAndTheComposerShareOneGutter(t *testing.T) {
+	css, err := os.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	text := string(css)
+
+	for _, want := range []struct{ selector, padding string }{
+		{"#transcript {", "padding: 16px var(--gutter);"},
+		{"footer {", "padding: 12px var(--gutter);"},
+		{"#prompt-status {", "padding: 0 var(--gutter) 10px;"},
+	} {
+		i := strings.Index(text, want.selector)
+		if i < 0 {
+			t.Errorf("no %s rule in the stylesheet", want.selector)
+			continue
+		}
+		block := text[i:]
+		if j := strings.Index(block, "}"); j >= 0 {
+			block = block[:j]
+		}
+		if !strings.Contains(block, want.padding) {
+			t.Errorf("%s does not set %q — it no longer lines up with the other two", want.selector, want.padding)
+		}
+	}
+
+	// And nothing puts the cap back. A max-width on the transcript's
+	// children is what centred the column; the composer's was the same
+	// rule spelled with a constant added to it.
+	for _, gone := range []string{"--measure", "max-width: var(--gutter)"} {
+		if strings.Contains(text, gone) {
+			t.Errorf("style.css still carries %q — the reading measure is back and the column is a ribbon again", gone)
+		}
+	}
+}
