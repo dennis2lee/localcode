@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"localcode/internal/agent"
 	"localcode/internal/events"
@@ -346,6 +347,19 @@ func (d *Daemon) handleArchiveSession(w http.ResponseWriter, r *http.Request) {
 	// The memory an idle conversation was holding. Recoverable: the
 	// history is replayed from the event log if it is ever retrieved.
 	d.Loop.ReleaseSessionMemory(id)
+	// The timers are left alone on purpose. A booking has never run a
+	// turn in an archived conversation — Scheduler.fire looks at the
+	// parent and marks the row missed on sight — so an armed timer on
+	// the shelf is harmless, and it is what writes that row at the
+	// moment it was booked for, which is the accurate one. Taking the
+	// timers away here would move the row to whenever somebody happens
+	// to retrieve the conversation, and give a conversation nobody
+	// retrieves no row at all.
+	//
+	// What does change is a restart: startup no longer walks the shelf,
+	// so a booking archived before it is not armed again and its moment
+	// passes unmarked until the conversation comes back. See
+	// handleRetrieveSession.
 	d.announceArchived(id, true)
 	writeJSON(w, http.StatusOK, sess)
 }
@@ -376,8 +390,22 @@ func (d *Daemon) handleRetrieveSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The history archiving released. Rebuilt from the event log, which is
-	// why releasing it was safe.
+	// why releasing it was safe. This is also the read that a shelved
+	// log has been waiting for: nothing has touched it since the
+	// daemon started.
 	d.Loop.RehydrateSession(id)
+	// And the books, from the same log. Startup skips the shelf, so for
+	// a conversation archived before the last restart this is the only
+	// place its rows come back — and a moment that passed while it was
+	// on the shelf is marked missed here, with the reason it was.
+	//
+	// The whole tree, because a background task can book work of its
+	// own and its rows are keyed by the child's session id.
+	if d.Loop.Schedules != nil {
+		ids, releaseTree := d.Loop.ClaimSessionTree(id)
+		d.Loop.Schedules.RestoreRetrieved(ids, time.Now())
+		releaseTree()
+	}
 	d.announceArchived(id, false)
 	writeJSON(w, http.StatusOK, sess)
 }

@@ -17,7 +17,9 @@ Project rules for agents working in this repo.
     all in `internal/config`. The suite's concurrency is `go test` running
     package binaries side by side, which defaults to the core count.
     Measured: `-parallel 1` 10s, `-parallel 8` 9s, `-p 1` 61s.
-  * `go vet ./...`, `go build -tags gui ./...` (macOS only, CGo), and both
+  * `go vet ./...`, `go build -tags gui ./...` plus `go test -tags gui
+    ./internal/gui/` (macOS only, CGo — the package is behind the tag, so
+    the race lane never compiles its tests), and both
     cross-builds — `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
     GOOS=linux GOARCH=amd64`. Windows and Linux are release targets built
     from this machine, so a break in either is a break in the release.

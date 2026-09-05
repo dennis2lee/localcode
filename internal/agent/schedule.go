@@ -668,6 +668,27 @@ func (s *Scheduler) status(sessionID, id, status, runID, errText string) {
 // something nobody asked for, at a moment they did not choose. The row
 // says so instead.
 func (s *Scheduler) Restore(sessions []string, now time.Time) {
+	s.restore(sessions, now, func(at time.Time) string {
+		return "localcode was not running at " + at.Format("2006-01-02 15:04")
+	})
+}
+
+// RestoreRetrieved is Restore for a conversation coming back off the
+// shelf.
+//
+// The same rebuild, and a different sentence for a moment that has
+// already passed. Startup no longer walks the archive, so this is where
+// a booking whose time came while the conversation was put away is
+// marked missed — and "localcode was not running" would be a claim about
+// the machine that is very often false. What is true in every case here
+// is that the conversation was archived at that moment.
+func (s *Scheduler) RestoreRetrieved(sessions []string, now time.Time) {
+	s.restore(sessions, now, func(at time.Time) string {
+		return "the conversation this was scheduled in was archived at " + at.Format("2006-01-02 15:04")
+	})
+}
+
+func (s *Scheduler) restore(sessions []string, now time.Time, missed func(time.Time) string) {
 	for _, sessionID := range sessions {
 		evs, err := s.loop.Store.Events(sessionID, 0)
 		if err != nil {
@@ -740,6 +761,21 @@ func (s *Scheduler) Restore(sessions []string, now time.Time) {
 				delete(byID, id)
 			}
 		}
+		// Every id the log ever created, whether or not its row survived.
+		//
+		// The counter used to be raised only from the rows still standing,
+		// which is the one case it must not be: a booking that was
+		// cancelled is deleted from byID and skipped below, so its number
+		// never reached the counter and the next booking in that
+		// conversation was handed the id the cancelled one had used. The
+		// comment beside the old line claimed the opposite.
+		s.mu.Lock()
+		for _, id := range order {
+			if n := idNumber(id); n > s.counters[sessionID] {
+				s.counters[sessionID] = n
+			}
+		}
+		s.mu.Unlock()
 		for _, id := range order {
 			e := byID[id]
 			if e == nil {
@@ -752,12 +788,14 @@ func (s *Scheduler) Restore(sessions []string, now time.Time) {
 				e.Error = "localcode stopped while this was running"
 			}
 			s.mu.Lock()
-			s.entries[key(sessionID, id)] = e
-			// The counter picks up where the log left off, so a restart
-			// cannot hand out an id a cancelled task already used.
-			if n := idNumber(id); n > s.counters[sessionID] {
-				s.counters[sessionID] = n
+			// A timer already armed for this key, from a restore that ran
+			// before this one — retrieving a conversation restores it
+			// again, and two timers on one booking fire it twice.
+			if t := s.timers[key(sessionID, id)]; t != nil {
+				t.Stop()
+				delete(s.timers, key(sessionID, id))
 			}
+			s.entries[key(sessionID, id)] = e
 			s.mu.Unlock()
 			if e.Status != SchedulePending {
 				continue
@@ -765,7 +803,7 @@ func (s *Scheduler) Restore(sessions []string, now time.Time) {
 			if e.At.After(now) {
 				s.arm(sessionID, id, e.At)
 			} else {
-				s.status(sessionID, id, ScheduleMissed, "", "localcode was not running at "+e.At.Format("2006-01-02 15:04"))
+				s.status(sessionID, id, ScheduleMissed, "", missed(e.At))
 			}
 		}
 	}

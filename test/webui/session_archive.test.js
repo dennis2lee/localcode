@@ -348,3 +348,34 @@ test('delete all empties the archive header as well', async () => {
   assert.equal(app.el('archive-toggle').textContent, 'Archive',
     'the archive header still counts conversations delete-all removed');
 });
+
+// A shelf is where conversations stop being distinguishable: rows named
+// after what they were about, with nothing saying which of four projects
+// that was. The live rows have carried the workspace for exactly this
+// reason since they were built; the archived ones did not, so retrieving
+// one to find out which project it belonged to was the only way to ask.
+test('an archived row names the workspace it belonged to', async () => {
+  const app = await withArchive({
+    inArchive: [
+      archivedRow({ ...ONE, workspace: '/Users/someone/work/parser' }),
+      archivedRow({ ...TWO, workspace: '' }),
+    ],
+  });
+  app.el('archive-toggle').fire('click');
+  await app.wait(0);
+
+  const rows = Array.from(app.el('archive-list').querySelectorAll('.session-item'));
+  const withPath = rows.find((el) => (el.textContent || '').includes(ONE.title));
+  const withNone = rows.find((el) => (el.textContent || '').includes(TWO.title));
+  assert.ok(withPath && withNone, 'the archived rows are not in the list');
+  assert.match(
+    withPath.querySelector('.workspace').textContent,
+    /parser$/,
+    'the archived row does not name its workspace',
+  );
+  assert.match(
+    withNone.querySelector('.workspace').textContent,
+    /not recorded/,
+    'a row from before workspaces were tracked says nothing at all',
+  );
+});

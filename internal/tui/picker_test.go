@@ -197,3 +197,32 @@ func TestAnEventFromTheOldSessionIsDropped(t *testing.T) {
 		t.Errorf("an event from an old stream was shown: %q", m.transcriptText())
 	}
 }
+
+// A path in a picker row is cut from the front, not the back.
+//
+// The row is rendered as label + detail and then truncated at the
+// terminal's width from the right, so an absolute path put in the middle
+// of a detail loses its tail — the project directory, which is the part
+// that identifies the session — and pushes whatever follows it off the
+// line first. The Web UI's shortenPath makes the same choice for the
+// same reason.
+func TestShortenPathKeepsTheEndThatIdentifiesTheProject(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"/Users/someone/work/parser", "/Users/someone/work/parser"},
+		{"/Users/someone/very/deep/tree/of/directories/louvre-master", "…/directories/louvre-master"},
+		{"short", "short"},
+	} {
+		got := shortenPath(c.in, 28)
+		if got != c.want {
+			t.Errorf("shortenPath(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if len([]rune(got)) > 28 {
+			t.Errorf("shortenPath(%q) is %d runes, over the budget", c.in, len([]rune(got)))
+		}
+	}
+	// And the tail survives whatever the head was.
+	long := "/Users/someone/work/some/nested/place/parser-rewrite"
+	if got := shortenPath(long, 28); !strings.HasSuffix(got, "parser-rewrite") {
+		t.Errorf("shortenPath dropped the identifying tail: %q", got)
+	}
+}

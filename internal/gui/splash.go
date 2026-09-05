@@ -108,7 +108,7 @@ func splashHTML(version string) string {
 </head>
 <body>
   <div class="logo">` + logoSVG + `</div>
-  <div class="row"><h1>LocalCode</h1><span class="version">` + v + `</span></div>
+  <div class="row"><h1>LocalCode</h1><span class="version" id="version">` + v + `</span></div>
   <div id="status">starting</div>
   <div class="track"><i></i></div>
 <script>
@@ -118,6 +118,16 @@ func splashHTML(version string) string {
   // into a console nobody is reading.
   window.lcStatus = (text) => {
     const el = document.getElementById('status');
+    if (el) el.textContent = text;
+  };
+  // The version shown at the top is this shell's own, which after an
+  // update is the copy the shortcut points at rather than the one about
+  // to run: the window said v0.108.1 while its status line said
+  // "starting localcode 0.109.0", and the version is what anybody looks
+  // at to see whether the update took. Corrected as soon as the binary
+  // that is starting has been read.
+  window.lcVersion = (text) => {
+    const el = document.getElementById('version');
     if (el) el.textContent = text;
   };
   window.lcFailed = (text) => {

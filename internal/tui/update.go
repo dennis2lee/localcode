@@ -444,9 +444,23 @@ func (m Model) handleArchivedSessionsMsg(msg archivedSessionsMsg) (tea.Model, te
 		}
 		// No "(current)" marker: the conversation you are in is never in
 		// this list, which is the whole point of it.
+		//
+		// The workspace is here and not in the live picker above, and the
+		// asymmetry is the point: a shelf is where conversations stop
+		// being distinguishable. Twenty rows named after what they were
+		// about, with nothing saying which of four projects that was, is
+		// a list you retrieve from at random.
 		detail := s.Agent
 		if s.ArchivedAt != nil {
 			detail += ", archived " + s.ArchivedAt.Local().Format("2006-01-02 15:04")
+		}
+		// Last, and shortened from the front. A picker row is truncated
+		// from the right at the terminal's width, so a raw absolute path
+		// in the middle of the line pushes the date off it and then loses
+		// its own tail — which is the half that says which project this
+		// was. See shortenPath.
+		if s.Workspace != "" {
+			detail += ", " + shortenPath(s.Workspace, 28)
 		}
 		items = append(items, pickerItem{id: s.ID, label: label, detail: detail})
 	}

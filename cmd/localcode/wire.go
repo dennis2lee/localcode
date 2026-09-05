@@ -238,8 +238,22 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// than work done now. Registered after the scheduler exists, because
 	// the tool is useless without one.
 	registry.Register(agent.NewScheduleTool(loop))
+	// Nothing under an archived conversation has its books rebuilt here,
+	// and that is what keeps those logs on disk: reading a session's
+	// schedule rows means reading its whole log, which is the cost
+	// archiving is supposed to have put away. The tasks that ran inside
+	// the conversation count as much as the conversation — they book
+	// work of their own, under their own session ids — so the store's
+	// own answer is used rather than a parent check here.
+	//
+	// Retrieving rebuilds them, and marks anything whose moment passed
+	// on the shelf as missed at that point. See handleRetrieveSession.
+	shelved := store.ShelvedIDs()
 	var sessionIDs []string
 	for _, sess := range store.AllSessions() {
+		if shelved[sess.ID] {
+			continue
+		}
 		sessionIDs = append(sessionIDs, sess.ID)
 	}
 	scheduler.Restore(sessionIDs, time.Now())

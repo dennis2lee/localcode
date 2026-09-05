@@ -171,6 +171,28 @@ func (m Model) pickerView(width, height int) string {
 // for double-width cells, so a full-width line can still overrun by a
 // column or two; that is a display nicety, and cutting a character in
 // half is not.
+// shortenPath cuts a long path from the front, keeping the tail.
+//
+// The mirror of shortenPath in the Web UI's format.js, and for the same
+// reason its stylesheet gives: the tail is the project directory, which
+// is the part that identifies a session. The picker's own truncate cuts
+// from the right, so a raw absolute path put in a row's detail loses
+// exactly the half worth having — and, before that, pushes whatever
+// follows it off the line.
+func shortenPath(path string, max int) string {
+	r := []rune(path)
+	if len(r) <= max {
+		return path
+	}
+	tail := string(r[len(r)-(max-1):])
+	// Prefer starting at a separator so the result reads as a path rather
+	// than a word chopped in half.
+	if cut := strings.IndexByte(tail, '/'); cut > 0 && cut < 8 {
+		tail = tail[cut:]
+	}
+	return "…" + tail
+}
+
 func truncate(s string, width int) string {
 	if width <= 1 {
 		return ""

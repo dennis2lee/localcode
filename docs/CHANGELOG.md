@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.110.0
+
+**Startup**
+
+* Nothing under an archived conversation is read at startup: not the conversation, and not the background tasks and scheduled runs that happened inside it, which are sessions of their own with logs as long as the work they did. The session list is built from the metadata beside each log; the events are read by the first request that needs them, normally the retrieval. On a home with 5 live and 100 archived conversations of 3,000 events each with two tasks apiece: 2.9s and 1.8 GB to answer before, 0.18s and 109 MB after.
+* Booked work under an archived conversation is not rebuilt at startup either, for the same reason: reading its rows means reading its whole log. Retrieval rebuilds the whole tree's books and marks anything whose moment passed on the shelf as missed, saying that the conversation was archived rather than that localcode was not running.
+* Archiving on a running daemon returns the tree's events to the files they came from, so a daemon up for a week is not still holding what was put away on Monday.
+* A schedule id is no longer handed out twice. The per-conversation counter was rebuilt only from the rows still standing, so a cancelled booking's number was forgotten and the next booking reused it. The comment beside that line claimed the opposite.
+* A booking is armed once. Restoring a conversation whose rows were already armed left two timers on one row.
+
+**Window**
+
+* The version on the splash is the one starting, not the one being replaced. After a startup update the window showed `v0.108.1` above a status line reading "starting localcode 0.109.0", and the version is what anybody reads to see whether the update took. It goes back if that version will not start and the window comes up on itself.
+* `go test -tags gui ./internal/gui/` runs in the check gate. The package is behind a build tag, so its tests were never compiled by the race lane, and its suite had been failing since the icon was redrawn on a test that pinned the old palette.
+
+**Web UI and TUI**
+
+* Archived rows name the workspace they belonged to, the line the live rows have always carried. A shelf is where conversations stop being distinguishable.
+* The terminal's archive picker shortens a path from the front, keeping the project directory. A picker row is cut from the right at the terminal's width, so a raw absolute path pushed the date off the line and then lost its own tail.
+
 ## v0.109.0
 
 **keep_going**

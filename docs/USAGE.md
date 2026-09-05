@@ -1271,6 +1271,10 @@ Archiving preserves the title, workspace, permissions, effort, list rank, and ev
 
 The log continues accepting completion and missed-schedule events. Archived sessions cannot start new work.
 
+An archived conversation's event log stays on disk, and so do the logs of the background tasks and scheduled runs that happened inside it. The daemon reads none of them at startup and replays none of them into memory; the session list is built from the metadata file beside each log. The first request that needs the events reads them, which is normally the retrieval. On a home with 5 active and 100 archived conversations of 3,000 events each with two background tasks apiece, this is the difference between a daemon that answers in 2.9s holding 1.8 GB and one that answers in 0.18s holding 109 MB.
+
+Work booked for later is not rebuilt at startup either, for the same reason. On a running daemon an archived conversation's bookings stay armed, and one whose moment arrives is marked `missed` then, as it always was. After a restart there is nothing armed: retrieval rebuilds the rows and marks anything whose moment passed on the shelf as `missed` at that point, giving the archiving as the reason. A conversation that is never retrieved gets no row.
+
 #### What it refuses, and with what
 
 | Request | Answer |
@@ -1278,6 +1282,7 @@ The log continues accepting completion and missed-schedule events. Archived sess
 | Send a message | 403 |
 | Start a background task | 403 |
 | Book a scheduled prompt | 403 |
+| A booking made before it was archived | Never runs. It is marked `missed`: at its own moment if the daemon has not restarted since, and otherwise when the conversation is retrieved |
 | Switch its agent | 403 |
 | Upload a file to it | 403 |
 | Name it in a reorder | 400 |
@@ -1301,8 +1306,8 @@ A scheduled run that starts between the active-work check and the archive flag m
 | Detail | Behavior |
 |---|---|
 | Order | Retrieval restores the previous relative rank. Reordering while archived may change the exact position. |
-| Future scheduled prompt | Marked `missed` if due while archived. Retrieval does not run it late. |
-| Background task sessions | Cannot be archived independently. |
+| Future scheduled prompt | Never runs. Marked `missed` at its own moment while the daemon that armed it is still up, and otherwise at retrieval. Retrieval does not run it late. |
+| Background task sessions | Cannot be archived independently. They go on the shelf with the conversation: their logs are not read at startup and their bookings are not rebuilt until it is retrieved. |
 | Restart | Archived stays archived. A session file written before this feature existed has no flag and loads as active. |
 | Memory | Archiving releases in-memory conversation history. Retrieval reloads the log. Uncollected task results remain available. |
 | Delete all sessions | Removes archived conversations too. The confirmation says so. |

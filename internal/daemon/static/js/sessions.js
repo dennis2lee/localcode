@@ -499,9 +499,26 @@ function renderArchiveList() {
     title.textContent = s.title || s.id;
     div.appendChild(title);
 
+    // Which project it belonged to, the same line the live rows carry.
+    // A shelf is where conversations go to stop being distinguishable —
+    // twenty of them titled after the thing they were about, with
+    // nothing saying which of four projects that was — and the
+    // workspace is what tells two of them apart before you retrieve one
+    // to find out.
+    const workspace = document.createElement('div');
+    workspace.className = 'workspace';
+    workspace.textContent = s.workspace ? shortenPath(s.workspace) : '(workspace not recorded)';
+    workspace.title = s.workspace || 'this session predates workspace tracking';
+    div.appendChild(workspace);
+
+    // When it was put away. The line itself is hidden on an archived row
+    // — the two buttons stand in its place, since they are the only
+    // things you can do here — so the row carries it as a tooltip
+    // instead of rendering text nothing will ever show.
     const meta = document.createElement('div');
     meta.className = 'meta';
     meta.textContent = `archived ${formatTime(s.archived_at)}`;
+    div.title = meta.textContent;
     div.appendChild(meta);
 
     const actions = document.createElement('div');

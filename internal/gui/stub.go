@@ -13,7 +13,7 @@ import (
 // default pure-Go, cross-compiled release builds omit — so this returns a
 // clear error telling you what to do instead of failing to compile the
 // whole binary.
-func Launch(title, version string, start func(progress func(string), reload func()) (http.Handler, error)) error {
+func Launch(title, version string, start func(progress func(string), setVersion func(string), reload func()) (http.Handler, error)) error {
 	return errors.New(unavailable(runtime.GOOS))
 }
 

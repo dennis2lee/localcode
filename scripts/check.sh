@@ -65,7 +65,7 @@ cd "$(dirname "$0")/.."
 checks=(
 	"race	race	go test ./... -race -parallel 8 -count=1"
 	"go	vet	go vet ./..."
-	"go	gui	go build -tags gui ./..."
+	"go	gui	go build -tags gui ./... && go test -tags gui ./internal/gui/ -count=1"
 	"go	windows	GOOS=windows GOARCH=amd64 go build ./..."
 	"go	linux	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./..."
 	"go	deadcode	scripts/check-deadcode.sh"

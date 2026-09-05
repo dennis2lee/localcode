@@ -187,12 +187,135 @@ func (s *subscriber) markLost() {
 }
 
 type sessionState struct {
-	meta      Session
-	log       []events.Event
-	nextSeq   uint64
+	meta Session
+	// log is this session's events, and for a conversation on the shelf
+	// it is empty until somebody wants it. See loaded.
+	log     []events.Event
+	nextSeq uint64
+	// logPath is where log came from, or "" for a store with no
+	// directory. Kept so a deferred read has somewhere to read from.
+	logPath string
+	// loaded says whether log is this session's events or merely empty.
+	//
+	// Nothing under an archived conversation is read at startup — not
+	// the conversation, and not the background tasks and scheduled runs
+	// that happened inside it, which are sessions of their own with logs
+	// as long as the work they did. Everything the session list needs is
+	// in the metadata file beside each log — title, workspace, when it
+	// was put away — and the events are wanted only when the
+	// conversation is retrieved or opened, which for a shelf is rarely
+	// and for most of the shelf never. Measured
+	// on a home with five live conversations and a hundred archived ones
+	// of 3,000 events each, two background tasks apiece — the shape a
+	// busy month leaves behind: the daemon answered its first request in
+	// 2.9s holding 1.8 GB with every log read at startup, and in 0.18s
+	// holding 109 MB with the shelf left on disk.
+	//
+	// False only for a session left unread. Everything that touches log
+	// or nextSeq calls loadDeferred first, so nothing downstream has to
+	// know this exists.
+	loaded    bool
 	subs      map[int]*subscriber
 	nextSubID int
 	file      *os.File // nil if not persisted
+}
+
+// loadDeferred reads a session's log if it has not been read yet, and is
+// called before the lock rather than under it.
+//
+// Two things it must not do, both learned the hard way.
+//
+// It must not read the file with s.mu held. That is the one mutex in the
+// store: every Append, every fan-out to a subscriber, every list. A
+// megabyte of JSON parsed inside it stops the model's output reaching
+// every other conversation in the process for as long as it takes, and
+// the read this exists for is of the largest logs there are.
+//
+// And it must not swallow the failure. A read error that leaves the
+// session present and empty leaves nextSeq at zero, and the next Append
+// hands out seq 1 into a file that already ends at six thousand — two
+// events with one sequence number, which breaks `since=` replay and
+// Last-Event-ID resume for that session permanently. That is the exact
+// corruption parseLog's comment describes. A missing file is the one
+// tolerated case, because a session with no log is an empty session and
+// always was; every other error is returned, the session stays unread so
+// a transient one can be retried, and the caller refuses rather than
+// writes.
+func (s *Store) loadDeferred(sessionID string) error {
+	s.mu.Lock()
+	st, ok := s.sessions[sessionID]
+	if !ok || st.loaded {
+		s.mu.Unlock()
+		return nil
+	}
+	if st.logPath == "" {
+		st.loaded = true
+		s.mu.Unlock()
+		return nil
+	}
+	path := st.logPath
+	s.mu.Unlock()
+
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read session log: %w", err)
+	}
+	var log []events.Event
+	var nextSeq uint64
+	if err == nil {
+		log, nextSeq = parseLog(data)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Looked up again: the session can have been deleted, reloaded or
+	// read by somebody else while the file was being read. Installing
+	// over a load that already happened would put back a copy of the log
+	// from before whatever was appended in between.
+	if st, ok := s.sessions[sessionID]; ok && !st.loaded {
+		st.log, st.nextSeq = log, nextSeq
+		st.loaded = true
+	}
+	return nil
+}
+
+// parseLog reads an event log into memory.
+//
+// Read with a Reader, not a Scanner. A Scanner has a maximum line length
+// and nothing here truncates tool output, so one `cat` of a large file
+// writes a line past any cap that could be chosen — and a Scanner
+// reports that by stopping, which is indistinguishable from reaching the
+// end of the file.
+//
+// The consequence was not a truncated transcript but a corrupted log.
+// Every later event was dropped, nextSeq was restored below the highest
+// seq actually in the file, and appends after the restart handed out
+// numbers the file already contained. Two events with one seq breaks
+// `since=` replay and Last-Event-ID resume for that session permanently,
+// and nothing reported a problem: restore returned no error at all.
+func parseLog(data []byte) ([]events.Event, uint64) {
+	var log []events.Event
+	var nextSeq uint64
+	r := bufio.NewReader(bytes.NewReader(data))
+	for {
+		line, err := r.ReadBytes('\n')
+		if len(line) > 0 {
+			var ev events.Event
+			// A line that does not parse is skipped, not fatal: the last
+			// line of a log whose write was interrupted is a partial one,
+			// and losing it is right — losing everything after it is not.
+			if json.Unmarshal(bytes.TrimSpace(line), &ev) == nil {
+				log = append(log, ev)
+				if ev.Seq > nextSeq {
+					nextSeq = ev.Seq
+				}
+			}
+		}
+		if err != nil {
+			break // io.EOF, or a final line with no newline
+		}
+	}
+	return log, nextSeq
 }
 
 // Store holds all sessions in memory, optionally persisting each session's
@@ -264,6 +387,8 @@ func (s *Store) CreateSessionIn(id, parentID, agent, workspace string, visible b
 	st := &sessionState{
 		meta: meta,
 		subs: map[int]*subscriber{},
+		// Nothing to read: this conversation starts here.
+		loaded: true,
 	}
 
 	if s.dir != "" {
@@ -272,6 +397,7 @@ func (s *Store) CreateSessionIn(id, parentID, agent, workspace string, visible b
 			return nil, fmt.Errorf("open session log: %w", err)
 		}
 		st.file = f
+		st.logPath = filepath.Join(s.dir, id+".jsonl")
 		if err := writeSessionMeta(s.dir, meta); err != nil {
 			_ = f.Close()
 			return nil, err
@@ -663,6 +789,14 @@ func (s *Store) Children(parentID string) []Session {
 // Append adds an event to the session's log, persists it if configured, and
 // fans it out to live subscribers. Returns the stored event with its seq.
 func (s *Store) Append(sessionID string, typ events.Type, data map[string]any) (events.Event, error) {
+	// Before the lock, and before nextSeq is read: a deferred log is the
+	// one place that number is written down, and appending without it
+	// hands out seq 1 to a session whose file already ends at 6,000.
+	// A log that cannot be read refuses the append rather than
+	// corrupting the file with a sequence number it cannot know.
+	if err := s.loadDeferred(sessionID); err != nil {
+		return events.Event{}, err
+	}
 	s.mu.Lock()
 	st, ok := s.sessions[sessionID]
 	if !ok {
@@ -781,6 +915,9 @@ func (s *Store) Broadcast(sessionID string, typ events.Type, data map[string]any
 // Events returns all events with seq > since, for catch-up on
 // (re)connection.
 func (s *Store) Events(sessionID string, since uint64) ([]events.Event, error) {
+	if err := s.loadDeferred(sessionID); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, ok := s.sessions[sessionID]
@@ -938,6 +1075,12 @@ func LoadAllFromDisk(dir string) (*Store, []error, error) {
 		return nil, nil, fmt.Errorf("glob session metadata: %w", err)
 	}
 
+	// Two passes, and the order is the point. A background task's session
+	// carries no archived flag of its own — Archive refuses anything that
+	// is not a conversation — so whether its log is wanted depends on a
+	// parent that the glob may not have reached yet. So every metadata
+	// file is read first, the shelved set is computed from the parent
+	// links that gives us, and only then are the logs read.
 	var warnings []error
 	for _, metaPath := range metaFiles {
 		id := strings.TrimSuffix(filepath.Base(metaPath), ".meta.json")
@@ -945,11 +1088,90 @@ func LoadAllFromDisk(dir string) (*Store, []error, error) {
 			warnings = append(warnings, fmt.Errorf("session %s: %w", id, err))
 		}
 	}
+	shelved := s.ShelvedIDs()
+	s.mu.Lock()
+	var toRead []*sessionState
+	for id, st := range s.sessions {
+		if !shelved[id] {
+			toRead = append(toRead, st)
+		}
+	}
+	s.mu.Unlock()
+	for _, st := range toRead {
+		if err := s.readLog(st); err != nil {
+			warnings = append(warnings, err)
+		}
+	}
 	return s, warnings, nil
 }
 
-// restoreOne loads one session's metadata + event log into s, opening its
-// jsonl file in append mode so future Append calls continue the same file.
+// ShelvedIDs is every session that is archived or sits under one.
+//
+// A conversation is put away with everything that ran inside it, and
+// only the conversation carries the flag: its background tasks and its
+// scheduled runs are separate sessions, invisible, each with a log as
+// long as the work it did. Anything that treats a shelved conversation
+// as cold has to treat those the same way or it is reading the larger
+// half of what it meant to leave alone.
+//
+// The walk is up, from each session towards its root, and capped: a
+// parent link that somehow forms a cycle must not hang the daemon at
+// startup. Nothing legitimate nests more than a few deep.
+func (s *Store) ShelvedIDs() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	archived := make(map[string]bool)
+	parent := make(map[string]string, len(s.sessions))
+	for id, st := range s.sessions {
+		if st.meta.ArchivedAt != nil {
+			archived[id] = true
+		}
+		parent[id] = st.meta.ParentID
+	}
+	shelved := make(map[string]bool, len(archived))
+	const maxDepth = 16
+	for id := range s.sessions {
+		at := id
+		for hop := 0; at != "" && hop < maxDepth; hop++ {
+			if archived[at] {
+				shelved[id] = true
+				break
+			}
+			at = parent[at]
+		}
+	}
+	return shelved
+}
+
+// readLog fills a session's events from the file recorded on it.
+func (s *Store) readLog(st *sessionState) error {
+	if st.logPath == "" {
+		s.mu.Lock()
+		st.loaded = true
+		s.mu.Unlock()
+		return nil
+	}
+	data, err := os.ReadFile(st.logPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("session %s: read session log: %w", st.meta.ID, err)
+	}
+	var log []events.Event
+	var nextSeq uint64
+	if err == nil {
+		log, nextSeq = parseLog(data)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !st.loaded {
+		st.log, st.nextSeq = log, nextSeq
+		st.loaded = true
+	}
+	return nil
+}
+
+// restoreOne loads one session's metadata into s, opening its jsonl file
+// in append mode so future Append calls continue the same file. The
+// events themselves are read later; see LoadAllFromDisk.
 func (s *Store) restoreOne(dir, id string) error {
 	metaData, err := os.ReadFile(filepath.Join(dir, id+".meta.json"))
 	if err != nil {
@@ -969,50 +1191,17 @@ func (s *Store) restoreOne(dir, id string) error {
 	}
 
 	st := &sessionState{
-		meta: meta,
-		subs: map[int]*subscriber{},
-		file: f,
+		meta:    meta,
+		subs:    map[int]*subscriber{},
+		file:    f,
+		logPath: filepath.Join(dir, id+".jsonl"),
 	}
-
-	if logData, err := os.ReadFile(filepath.Join(dir, id+".jsonl")); err == nil {
-		// Read with a Reader, not a Scanner. A Scanner has a maximum line
-		// length and nothing here truncates tool output, so one `cat` of a
-		// large file writes a line past any cap that could be chosen — and
-		// a Scanner reports that by stopping, which is indistinguishable
-		// from reaching the end of the file.
-		//
-		// The consequence was not a truncated transcript but a corrupted
-		// log. Every later event was dropped, nextSeq was restored below
-		// the highest seq actually in the file, and appends after the
-		// restart handed out numbers the file already contained. Two
-		// events with one seq breaks `since=` replay and Last-Event-ID
-		// resume for that session permanently, and nothing reported a
-		// problem: restore returned no error at all.
-		r := bufio.NewReader(bytes.NewReader(logData))
-		for {
-			line, err := r.ReadBytes('\n')
-			if len(line) > 0 {
-				var ev events.Event
-				// A line that does not parse is skipped, not fatal: the
-				// last line of a log whose write was interrupted is a
-				// partial one, and losing it is right — losing everything
-				// after it is not.
-				if json.Unmarshal(bytes.TrimSpace(line), &ev) == nil {
-					st.log = append(st.log, ev)
-					if ev.Seq > st.nextSeq {
-						st.nextSeq = ev.Seq
-					}
-				}
-			}
-			if err != nil {
-				break // io.EOF, or a final line with no newline
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		_ = f.Close()
-		return fmt.Errorf("read session log: %w", err)
-	}
-
+	// The events are not read here. Whether they are wanted at all
+	// depends on whether this session is under a conversation somebody
+	// put away, and that is not knowable until every metadata file has
+	// been read — see LoadAllFromDisk, which reads the logs of everything
+	// outside the shelved set as soon as it can answer that, and
+	// loadDeferred, which reads the rest on the first request for them.
 	s.mu.Lock()
 	s.sessions[id] = st
 	s.mu.Unlock()
@@ -1053,6 +1242,9 @@ func (s *Store) restoreOne(dir, id string) error {
 func (s *Store) TailSince(sessionID string, n int) (uint64, error) {
 	if n <= 0 {
 		return 0, nil
+	}
+	if err := s.loadDeferred(sessionID); err != nil {
+		return 0, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1133,7 +1325,46 @@ func (s *Store) Archive(sessionID string) (*Session, error) {
 			return nil, err
 		}
 	}
+	// The events go back to the file they came from, so a daemon that has
+	// been running for a week is not still holding the conversations
+	// somebody put away on Monday. The same read a restart now defers
+	// brings them back; see sessionState.loaded.
+	//
+	// The whole tree: the background tasks and scheduled runs that
+	// happened inside this conversation are separate sessions with logs
+	// of their own, and on a busy conversation they are the larger half.
+	//
+	// Only where there is a file. A store with no directory has nowhere
+	// to read them back from, and dropping them there would make
+	// archiving a delete.
+	for id, child := range s.sessions {
+		if id != sessionID && !s.underLocked(id, sessionID) {
+			continue
+		}
+		if child.logPath != "" {
+			child.log = nil
+			child.loaded = false
+		}
+	}
 	return &metaCopy, nil
+}
+
+// underLocked reports whether id sits under root, by the parent links.
+// Called with s.mu held, and capped for the same reason ShelvedIDs is.
+func (s *Store) underLocked(id, root string) bool {
+	const maxDepth = 16
+	at := id
+	for hop := 0; at != "" && hop < maxDepth; hop++ {
+		st, ok := s.sessions[at]
+		if !ok {
+			return false
+		}
+		if st.meta.ParentID == root {
+			return true
+		}
+		at = st.meta.ParentID
+	}
+	return false
 }
 
 // Retrieve brings a conversation back and returns it. Retrieving one that

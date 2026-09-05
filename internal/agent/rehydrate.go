@@ -15,16 +15,22 @@ import (
 // but the model had amnesia on the very next turn. Call once at startup,
 // after sessions have been loaded via session.LoadAllFromDisk.
 func (l *Loop) RehydrateAll() {
+	// Nothing under a conversation somebody put away is replayed:
+	// neither the conversation nor the background tasks and scheduled
+	// runs that happened inside it, which are sessions of their own with
+	// no archived flag to carry. Archiving releases the history it was
+	// holding, and rebuilding it at every restart would hand it straight
+	// back: a shelf that costs the same as the shelf being empty is not
+	// one. Retrieving replays it.
+	//
+	// Replaying a session reads its own log — the child's, not the
+	// parent's — so this skip is what keeps a shelved subtree's events
+	// off the heap. The store decides what "under" means, because it is
+	// the same question it answers when deciding which logs to read at
+	// all; see Store.ShelvedIDs.
+	shelved := l.Store.ShelvedIDs()
 	for _, s := range l.Store.AllSessions() {
-		// An archived conversation is not replayed. Archiving releases the
-		// history it was holding, and rebuilding it at every restart would
-		// hand it straight back: a shelf that costs the same as the shelf
-		// being empty is not one. Retrieving replays it.
-		//
-		// Only the conversation itself. Its task children are visible:false
-		// and carry no flag of their own, so they are still replayed;
-		// narrowing that would mean a parent walk per session at startup.
-		if s.ArchivedAt != nil {
+		if shelved[s.ID] {
 			continue
 		}
 		l.RehydrateSession(s.ID)

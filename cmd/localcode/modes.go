@@ -98,6 +98,33 @@ func runDaemon(configPath, listen string) error {
 // gui.Launch. That is also why cleanup is registered from inside the
 // callback: there is nothing to clean up until the build succeeds, and
 // by then runGUI is already blocked in Launch.
+// handoffComing is what the splash says while a newer localcode starts
+// behind it.
+//
+// Both lines, not just the status one. The version at the top of the
+// splash is this shell's own, fixed when the window opened, and after an
+// update the shell is the copy the shortcut points at rather than the one
+// about to serve — so the window read "LocalCode v0.108.1" over a status
+// line reading "starting localcode 0.109.0", and the version is what
+// anybody looks at to decide whether the update took.
+func handoffComing(coming string, progress, setVersion func(string)) {
+	progress("starting localcode " + coming)
+	setVersion(coming)
+}
+
+// handoffFailed is what it says when that newer localcode will not start.
+//
+// The label goes back as well as the line. Having just promised a
+// version, leaving it up while the old binary serves is the same untruth
+// in the other direction.
+func handoffFailed(coming, own string, progress, setVersion func(string)) {
+	if coming == "" {
+		return
+	}
+	progress("localcode " + coming + " would not start; running " + own + " instead")
+	setVersion(own)
+}
+
 func runGUI(configPath string) error {
 	var cleanup func()
 	defer func() {
@@ -115,7 +142,7 @@ func runGUI(configPath string) error {
 	// the taskbar label, where it is the product's name rather than the
 	// command you type. The binary, the package and the CLI stay
 	// lower-case.
-	return gui.Launch("LocalCode", version, func(progress func(string), reload func()) (http.Handler, error) {
+	return gui.Launch("LocalCode", version, func(progress func(string), setVersion func(string), reload func()) (http.Handler, error) {
 		d, done, err := buildDaemon(context.Background(), configPath, progress)
 		if err != nil {
 			return nil, err
@@ -140,14 +167,10 @@ func runGUI(configPath string) error {
 		// described in v0.88.0 and not wired; the window built its daemon
 		// in-process every start and never asked.
 		if binary, ok := startupHandoffBinary(d, os.Stderr); ok {
-			// The splash shows this shell's own version, which after an
-			// update is the copy the shortcut points at rather than the
-			// one about to run. Saying which version is coming up is the
-			// difference between "it did not update" and "it did".
 			coming := ""
 			if v, verr := update.VersionOf(binary); verr == nil {
 				coming = v
-				progress("starting localcode " + v)
+				handoffComing(v, progress, setVersion)
 			}
 			ln, lerr := net.Listen("tcp", "127.0.0.1:0")
 			if lerr != nil {
@@ -163,9 +186,7 @@ func runGUI(configPath string) error {
 				// On the splash, not only on a stderr nobody is reading:
 				// the line above has just promised the new version, and
 				// this is the window quietly coming up on the old one.
-				if coming != "" {
-					progress("localcode " + coming + " would not start; running " + version + " instead")
-				}
+				handoffFailed(coming, version, progress, setVersion)
 				fmt.Fprintf(os.Stderr, "start the new localcode: %v; running this version instead\n", serr)
 			} else {
 				addr := ln.Addr().String()
