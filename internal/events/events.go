@@ -79,6 +79,15 @@ const (
 	// missed one is corrected by re-reading the list.
 	TypeSessionArchived Type = "session.archived"
 
+	// TypeSessionDeleted reports that a conversation is gone. Daemon-wide
+	// for the same reason as the archive above: the clients that need to
+	// know are the ones whose session list is about to change, and the
+	// conversation's own log cannot carry the news because it has just
+	// been removed. Without it a delete from another window, the TUI, or
+	// this page's own "delete all" left the row in every other client's
+	// sidebar until something else happened to reload the list.
+	TypeSessionDeleted Type = "session.deleted"
+
 	// TypeSettingsChanged reports the daemon-wide switches after one of
 	// them moved, whoever moved it: a toggle typed at a prompt, the
 	// settings window, another client entirely.

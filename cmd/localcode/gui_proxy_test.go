@@ -127,7 +127,9 @@ func TestADeadSuccessorSaysWhatIsWrong(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("the 502 had no readable body: %v", err)
 	}
-	for _, want := range []string{"not answering", addr, "handoff.log", "Reopen the window"} {
+	// handoff-<pid>.log: one per generation, so a second update cannot
+	// truncate the file its parent is still writing.
+	for _, want := range []string{"not answering", addr, "handoff-", ".log", "Reopen the window"} {
 		if !strings.Contains(body.Error, want) {
 			t.Errorf("the message lacks %q: %s", want, body.Error)
 		}

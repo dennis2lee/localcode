@@ -329,8 +329,13 @@ export async function loadSchedules(sessionID) {
   if (!sessionID) return;
   try {
     const data = await apiClient.listSchedules(sessionID);
+    // The switch that asked for this did not wait for it, so two switches
+    // in quick succession race and the later reply can arrive first. A
+    // list belonging to a conversation you have left is not this panel's.
+    if (sessionID !== session.sessionID) return;
     session.schedules = new Map((data.schedules || []).map(s => [s.id, s]));
   } catch {
+    if (sessionID !== session.sessionID) return;
     session.schedules = new Map();
   }
   renderSchedules();

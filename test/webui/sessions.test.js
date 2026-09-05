@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load } = require('./harness');
+const { load, defaultRoutes } = require('./harness');
 
 // The fake DOM has no querySelectorAll, so walk it. Buttons are found by
 // their label because that is what a user clicks — an id or an nth-child
@@ -105,4 +105,35 @@ test('an unnamed session still shows something in the header', async () => {
     routes: { 'GET /api/sessions': [{ id: 'sess-1', agent: 'general-purpose' }] },
   });
   assert.equal(app.el('session-id').textContent, 'sess-1');
+});
+
+// A conversation deleted somewhere else leaves every other client's
+// sidebar.
+//
+// The list is only refreshed by loadSessions(), which runs at init, on
+// rename, on archive and on a switch — none of which a delete from
+// another window, the TUI, or this page's own "delete all" triggers. So
+// the row stayed, pointing at a conversation that was gone, and if it was
+// the open one the header went on naming it.
+test('a session deleted elsewhere goes from the list, and the open one is left', async () => {
+  let sessions = [
+    { id: 'sess-1', title: 'one' },
+    { id: 'sess-2', title: 'two' },
+  ];
+  const app = await load({
+    routes: { ...defaultRoutes(), 'GET /api/sessions': () => sessions },
+  });
+  assert.equal(app.el('session-list').children.length, 2);
+
+  // Another client deletes the one this page is not looking at.
+  sessions = [{ id: 'sess-1', title: 'one' }];
+  app.sse.emit({ seq: 1, type: 'session.deleted', data: { session: 'sess-2' } });
+  await app.settle();
+  assert.equal(app.el('session-list').children.length, 1, 'the deleted conversation stayed in the sidebar');
+
+  // And now the one it is looking at.
+  sessions = [{ id: 'sess-9', title: 'nine' }];
+  app.sse.emit({ seq: 2, type: 'session.deleted', data: { session: 'sess-1' } });
+  await app.settle();
+  assert.equal(app.state.sessionID, 'sess-9', 'the page stayed on a conversation that no longer exists');
 });

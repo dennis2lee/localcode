@@ -47,7 +47,13 @@ func newSuccessorOutput() *successorOutput {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return o
 	}
-	path := filepath.Join(dir, "handoff.log")
+	// One per process, not one shared name. Every generation opened the
+	// same path with O_TRUNC and held it for its successor's whole life,
+	// so a second update emptied the file the first parent was still
+	// writing into — and because that parent's descriptor keeps its
+	// offset, what was left was a run of NUL bytes up to where it had
+	// got to.
+	path := filepath.Join(dir, fmt.Sprintf("handoff-%d.log", os.Getpid()))
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return o
@@ -140,7 +146,8 @@ func handoffLogPath() string {
 	if err != nil {
 		return "the user cache directory"
 	}
-	return filepath.Join(base, "localcode", "handoff.log")
+	// This process's own: the one a successor it started writes into.
+	return filepath.Join(base, "localcode", fmt.Sprintf("handoff-%d.log", os.Getpid()))
 }
 
 // noteSuccessorExit appends why the daemon behind the window stopped.
@@ -209,9 +216,19 @@ func successorEpitaph() string {
 	if !exited {
 		return ""
 	}
+	// A process that exited cleanly and said nothing is not an
+	// explanation for anything. After a second update it is the ordinary
+	// end of the generation before: that one handed its port on and
+	// stopped, and whatever is failing now is its successor, which this
+	// process never saw. Quoting it named a process that had been gone
+	// for hours as the cause.
+	said := out.note()
+	if err == nil && !strings.Contains(said, "It said") {
+		return ""
+	}
 	how := "exited cleanly"
 	if err != nil {
 		how = "exited with " + err.Error()
 	}
-	return fmt.Sprintf(" It (pid %d) %s.%s", pid, how, out.note())
+	return fmt.Sprintf(" It (pid %d) %s.%s", pid, how, said)
 }

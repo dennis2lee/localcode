@@ -144,15 +144,28 @@ func runGUI(configPath string) error {
 			// update is the copy the shortcut points at rather than the
 			// one about to run. Saying which version is coming up is the
 			// difference between "it did not update" and "it did".
+			coming := ""
 			if v, verr := update.VersionOf(binary); verr == nil {
+				coming = v
 				progress("starting localcode " + v)
 			}
 			ln, lerr := net.Listen("tcp", "127.0.0.1:0")
 			if lerr != nil {
 				return nil, fmt.Errorf("bind a port for the new localcode: %w", lerr)
 			}
-			if _, _, serr := spawnSuccessor(binary, ln, alive.r); serr != nil {
+			// spawnAndWatch, not spawnSuccessor: this branch used to throw
+			// the exit channel away, so a window that updated at startup
+			// could never say why its daemon died — every 502 took the
+			// "still running, as far as this process knows" branch, which
+			// was exactly the case it was not.
+			if _, serr := spawnAndWatch(binary, ln, alive.r); serr != nil {
 				ln.Close()
+				// On the splash, not only on a stderr nobody is reading:
+				// the line above has just promised the new version, and
+				// this is the window quietly coming up on the old one.
+				if coming != "" {
+					progress("localcode " + coming + " would not start; running " + version + " instead")
+				}
 				fmt.Fprintf(os.Stderr, "start the new localcode: %v; running this version instead\n", serr)
 			} else {
 				addr := ln.Addr().String()
@@ -401,6 +414,13 @@ func runSuccessor(configPath string, in inherited) error {
 	d.NoteTakeover()
 	listen := in.ln.Addr().String()
 	d.AllowUpdateInstall = loopbackOnly(listen)
+	// Whether an installer's close is followed by a return. Only the
+	// process with the window knows — it is the one that registered for
+	// it — and after a handoff that process is not this one, so it says
+	// so on the command line. Without it the install reply dropped the
+	// sentence promising Windows would start localcode again, in exactly
+	// the mode where the promise is kept.
+	d.InstallerRestarts = os.Getenv(envInstallerRestarts) == "1"
 
 	srv := &http.Server{Handler: d.Handler()}
 	d.Shutdown = func() {

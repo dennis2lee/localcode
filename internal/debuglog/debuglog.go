@@ -54,6 +54,14 @@ type Sink struct {
 	f    *os.File
 	path string
 	n    int
+	// last is the exchange whose bytes went in most recently.
+	//
+	// A prompt that delegates has several model calls open at once
+	// against one file, and a response is copied as it streams, so their
+	// chunks land interleaved. Without a mark saying whose the next run
+	// of bytes is, two answers arriving together read as one corrupted
+	// answer. See writeFor.
+	last int
 }
 
 // Create opens the file for a prompt that started at when, under dir.
@@ -104,6 +112,24 @@ func (s *Sink) Path() string {
 // found, and the failure it describes is worse than a torn read — a
 // write that passed the check a moment before Close could reach a file
 // that is no longer open.
+// writeFor appends bytes belonging to exchange n, noting the change of
+// hands when the previous bytes belonged to another one.
+func (s *Sink) writeFor(n int, p []byte) {
+	if s == nil || len(p) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.f == nil {
+		return
+	}
+	if s.last != n {
+		fmt.Fprintf(s.f, "\n==== %d (continued)\n", n)
+		s.last = n
+	}
+	s.f.Write(p)
+}
+
 func (s *Sink) writef(format string, args ...any) {
 	if s == nil {
 		return
@@ -114,6 +140,23 @@ func (s *Sink) writef(format string, args ...any) {
 		return
 	}
 	fmt.Fprintf(s.f, format, args...)
+}
+
+// writeBlockFor writes one whole block attributed to exchange n: the
+// header, the body, the status line. Whole, because these are assembled
+// before they are written and a block that arrives in one piece cannot be
+// interleaved with anything.
+func (s *Sink) writeBlockFor(n int, text string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.f == nil {
+		return
+	}
+	s.last = n
+	fmt.Fprint(s.f, text)
 }
 
 // Close finishes the file. A sink that wrote nothing is removed rather
@@ -238,19 +281,19 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// order it is sent, for every client and every length. What it does
 	// not cover is a retry that goes through GetBody: the first attempt
 	// is logged and the replay is not.
+	b.WriteString("\n")
+	s.writeBlockFor(n, b.String())
 	if req.Body != nil && req.Body != http.NoBody {
-		b.WriteString("\n")
-		s.writef("%s", b.String())
-		req.Body = &teeRequestBody{r: req.Body, s: s, left: maxLoggedBody}
-	} else {
-		b.WriteString("\n")
-		s.writef("%s", b.String())
+		req.Body = &teeRequestBody{r: req.Body, s: s, n: n, left: maxLoggedBody}
 	}
 
 	start := time.Now()
 	resp, err := t.base().RoundTrip(req)
 	if err != nil {
-		s.writef("==== %d <<< failed after %s: %v\n\n", n, time.Since(start).Round(time.Millisecond), err)
+		// The leading newline is not decoration: the request body ends
+		// wherever it ends, with no trailing newline of its own, so
+		// without this the failure line was glued to its last byte.
+		s.writef("\n==== %d <<< failed after %s: %v\n\n", n, time.Since(start).Round(time.Millisecond), err)
 		return resp, err
 	}
 
@@ -259,7 +302,7 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	fmt.Fprintf(&rb, "==== %d <<< %s  after %s\n", n, resp.Status, time.Since(start).Round(time.Millisecond))
 	writeHeaders(&rb, redactHeaders(resp.Header))
 	rb.WriteString("\n")
-	s.writef("%s", rb.String())
+	s.writeBlockFor(n, rb.String())
 
 	// Streamed as it arrives rather than buffered: the response is an SSE
 	// stream the caller renders token by token, and holding it to log it
@@ -274,6 +317,7 @@ func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 type teeRequestBody struct {
 	r    io.ReadCloser
 	s    *Sink
+	n    int
 	left int
 	cut  bool
 }
@@ -283,10 +327,10 @@ func (t *teeRequestBody) Read(p []byte) (int, error) {
 	if n > 0 {
 		switch {
 		case t.left >= n:
-			t.s.writef("%s", p[:n])
+			t.s.writeFor(t.n, p[:n])
 			t.left -= n
 		case !t.cut:
-			t.s.writef("%s", p[:t.left])
+			t.s.writeFor(t.n, p[:t.left])
 			t.s.writef("\n[the rest of this request body is past the %d-byte ceiling and is not shown]\n", maxLoggedBody)
 			t.left, t.cut = 0, true
 		}
@@ -308,7 +352,7 @@ type teeBody struct {
 func (t *teeBody) Read(p []byte) (int, error) {
 	n, err := t.r.Read(p)
 	if n > 0 {
-		t.s.writef("%s", p[:n])
+		t.s.writeFor(t.n, p[:n])
 	}
 	if err != nil && !t.done {
 		t.done = true

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -66,6 +67,15 @@ func successorProxy(target string) http.Handler {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		path, err := pickDirectory(r.Context(), "Choose a workspace folder", req.Start)
+		// Dismissing a picker is a normal thing to do, and the daemon's
+		// own handler says so with 204, which the page reads as nothing
+		// to do. This copy had every error down one path, so cancelling
+		// put "the folder picker could not open" on screen — the same
+		// drift the reveal route had.
+		if errors.Is(err, dialog.ErrCancelled) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return

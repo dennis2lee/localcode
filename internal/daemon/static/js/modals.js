@@ -188,7 +188,14 @@ export function applySessionPermissions(d) {
 export async function loadSessionPermissions(sessionID) {
   if (!sessionID) return;
   try {
-    applySessionPermissions(await apiClient.getSessionPermissions(sessionID));
+    const answer = await apiClient.getSessionPermissions(sessionID);
+    // Switching conversations fires this without waiting for it, so two
+    // switches in quick succession race and whichever reply lands last
+    // wins. loadWorkspace next to it already guards; these two did not,
+    // and the permissions pill could end up describing a conversation you
+    // had already left.
+    if (sessionID !== session.sessionID) return;
+    applySessionPermissions(answer);
   } catch {
     // A daemon that cannot answer leaves the last snapshot standing,
     // which is better than blanking the panel to a state nothing is in.

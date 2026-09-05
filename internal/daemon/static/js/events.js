@@ -36,7 +36,22 @@ const handlers = {
   // new one on its own; what it cannot do is swap the JavaScript already
   // running here, so the page says what a reload would get.
   'daemon.replaced': (d) => {
-    appendTool(`localcode ${d.version || ''} took over this address. This page keeps working against it; reload for its interface.`);
+    appendTool(`localcode ${d.version || ''} took over this address; loading its interface.`);
+    // Noted, not acted on yet.
+    //
+    // The window reloads the page itself when the update went through its
+    // own handoff, and that was the only path that did: a window that
+    // updated at startup serves a fixed proxy and never captured the
+    // reload, and every later update is performed by the successor in
+    // another process, which cannot reach up to ask. So the page has to
+    // do it — but not now. This event is sent at the *start* of the
+    // retirement, before the drain and before anything has been pointed
+    // at the new daemon, so reloading here would fetch the old interface
+    // again and nothing would say so a second time.
+    //
+    // The right moment is when the stream comes back, because that is
+    // when there is a new daemon behind it. See resyncAfterReconnect.
+    session.daemonReplaced = true;
   },
   'message.user': (d) => {
     if (typeof d.text !== 'string') return;
@@ -392,6 +407,20 @@ const handlers = {
     // changed it rather than waiting for something else to happen.
     if (d.session === session.sessionID) renderCommDot();
   },
+  // A conversation is gone, deleted from wherever. Daemon-wide, like
+  // session.archived: without it a delete in another window, in the TUI,
+  // or by this page's own "delete all" left the row in every other
+  // client's sidebar and its id in their header until something else
+  // happened to reload the list.
+  'session.deleted': (d) => {
+    const gone = d.session;
+    if (!gone) return;
+    loadSessions().then(() => {
+      if (gone !== session.sessionID) return;
+      const next = (app.sessions || [])[0];
+      if (next) selectSession(next.id);
+    });
+  },
   'mcp.status': (d) => {
     app.mcpServers = d.servers || [];
     renderMCPServers();
@@ -515,6 +544,16 @@ export function resetTranscriptWindow() {
 // does not contain this session is a failed fetch or a deleted
 // conversation, and neither is evidence that a turn finished.
 async function resyncAfterReconnect() {
+  // The stream is back, and the daemon behind it said it was handing
+  // over: whatever is answering now is the new version, so this is the
+  // moment to go and get its interface. See the daemon.replaced handler.
+  if (session.daemonReplaced) {
+    session.daemonReplaced = false;
+    try {
+      location.reload();
+    } catch { /* nothing else to try */ }
+    return;
+  }
   if (!session.waiting || !session.sessionID) return;
   await loadSessions();
   const mine = (app.sessions || []).find(s => s.id === session.sessionID);

@@ -736,6 +736,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 8px;
   padding: 20px;
   max-width: 480px;
+  /* Capped and scrollable, because this is the one window with no way
+     out. The composer is locked behind it on purpose ("Resolve the
+     permission request above to continue") and Escape is suppressed for
+     it, so if the buttons go off the bottom there is nothing left to
+     click: a long command in the description simply grew the box, and
+     the overlay is position:fixed with nothing to scroll. */
+  max-height: calc(86vh / var(--zoom, 1));
+  overflow-y: auto;
 }
 #permission-modal h3 { margin-top: 0; color: var(--warn); }
 /* The reason line, shown only when the boundary is what is asking. Warn

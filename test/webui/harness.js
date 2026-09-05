@@ -262,6 +262,8 @@ async function load(opts = {}) {
     calls: [],
     consoleErrors: [],
     sse: null,
+    // How many times the page asked to be reloaded.
+    reloads: 0,
     // Every SSE stream the page opens, in the order it opened them: the
     // conversation's, and one per background-task window.
     streams: [],
@@ -309,6 +311,13 @@ async function load(opts = {}) {
     URLSearchParams,
     queueMicrotask,
     AbortController,
+    // Counted rather than performed: the page reloads itself when the
+    // daemon under it is replaced, and a test has to be able to see that
+    // without a browser to navigate.
+    location: {
+      href: 'http://127.0.0.1:4096/',
+      reload() { harness.reloads += 1; },
+    },
   };
   // Globals the page finds in a particular host rather than in a browser:
   // the desktop window binds lcWindowCommand, and the page draws its own

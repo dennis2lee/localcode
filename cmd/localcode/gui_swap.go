@@ -68,19 +68,15 @@ func windowHandoff(d *daemon.Daemon, front *swapHandler, alive *tuiAlivePipe, cl
 	if err := d.PublishOwned(); err != nil {
 		fmt.Fprintf(os.Stderr, "handoff: could not publish owned sessions: %v\n", err)
 	}
-	pid, exited, err := spawnSuccessor(binary, ln, alive.r)
+	releaseMCPBeforeSuccessor(d)
+	// A successor that dies later takes the window's daemon with it and
+	// every request afterwards answers 502; spawnAndWatch records the
+	// exit, which is what turns that into something with a cause.
+	pid, err := spawnAndWatch(binary, ln, alive.r)
 	if err != nil {
 		ln.Close()
 		return err
 	}
-	// A successor that dies later takes the window's daemon with it and
-	// every request afterwards answers 502. Recording the exit is what
-	// turns that into something with a cause attached.
-	go func() {
-		err := <-exited
-		rememberSuccessorExit(pid, err)
-		noteSuccessorExit(pid, err)
-	}()
 	addr := ln.Addr().String()
 	// The successor holds its own handle on the socket; closing ours
 	// here leaves the port bound to it alone.

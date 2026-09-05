@@ -394,6 +394,17 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// One shutdown for everything, whatever has changed since startup:
 	// the MCP servers running *now* (a reload may have replaced or first
 	// created them), then the trace file.
+	// Published so a handoff can stop the servers before the successor
+	// starts its own: see the note at the call site in handoff.go.
+	closeMCPServers = func() {
+		mcpReloadMu.Lock()
+		defer mcpReloadMu.Unlock()
+		if currentMCP != nil {
+			currentMCP.Close()
+			currentMCP = nil
+		}
+	}
+
 	cleanup = func() {
 		// Everything this daemon holds that outlives it if nobody says
 		// otherwise. Two of these were added because a startup update
@@ -412,11 +423,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		if loop.Schedules != nil {
 			loop.Schedules.Disarm()
 		}
-		mcpReloadMu.Lock()
-		if currentMCP != nil {
-			currentMCP.Close()
-		}
-		mcpReloadMu.Unlock()
+		closeMCPServers()
 		if loop.Trace != nil {
 			loop.Trace.Close()
 		}

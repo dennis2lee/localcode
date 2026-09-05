@@ -16,7 +16,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	webview "github.com/webview/webview_go"
@@ -88,15 +92,28 @@ func Launch(title, version string, start func(progress func(string), reload func
 			return
 		}
 
-		// Port 0 lets the OS pick a free port — no fixed 4096 to collide
-		// with a separately running daemon, and loopback-only so nothing
-		// is exposed off the machine.
-		ln, lerr := net.Listen("tcp", "127.0.0.1:0")
+		// The port the window last used, then any free one.
+		//
+		// Port 0 alone was the whole of this, and it made every launch a
+		// different origin. Browser storage is partitioned by origin
+		// including the port, so everything the page remembers for itself
+		// — the zoom somebody set with ctrl+wheel, the widths they
+		// dragged the panels to — came back empty every time the window
+		// was closed and opened, which reads as the settings not being
+		// saved at all.
+		//
+		// Remembered rather than fixed: a fixed 4096 would collide with a
+		// separately running daemon, and this falls back to 0 whenever
+		// the remembered one is taken, so a collision costs a preference
+		// rather than a window that will not open. Loopback only either
+		// way, so nothing is exposed off the machine.
+		ln, lerr := listenRemembered()
 		if lerr != nil {
 			startErr = fmt.Errorf("bind loopback port: %w", lerr)
 			w.Dispatch(func() { w.Eval(jsCall("lcFailed", startErr.Error())) })
 			return
 		}
+		rememberPort(ln.Addr().String())
 		go func() { _ = http.Serve(ln, handler) }()
 		w.Dispatch(func() { w.Navigate("http://" + ln.Addr().String()) })
 	}()
@@ -167,6 +184,48 @@ const (
 //
 // Windows only: WKWebView takes its backing scale from the screen and has
 // never shown this, and there is no reason to make a mac window twitch.
+// windowPortFile is where the last port is kept: beside the config, not
+// in it, because it is a fact about this machine's last run rather than
+// anything somebody chose.
+func windowPortFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".localcode", "window-port")
+}
+
+// listenRemembered binds the port the window used last, or any free one.
+func listenRemembered() (net.Listener, error) {
+	if path := windowPortFile(); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			if port, perr := strconv.Atoi(strings.TrimSpace(string(data))); perr == nil && port > 0 && port < 65536 {
+				if ln, lerr := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port))); lerr == nil {
+					return ln, nil
+				}
+			}
+		}
+	}
+	return net.Listen("tcp", "127.0.0.1:0")
+}
+
+// rememberPort writes down what the window ended up on, best effort: a
+// port that cannot be written down costs a preference, not a window.
+func rememberPort(addr string) {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return
+	}
+	path := windowPortFile()
+	if path == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, []byte(port), 0o644)
+}
+
 func nudgeScale(w webview.WebView) {
 	if runtime.GOOS != "windows" {
 		return

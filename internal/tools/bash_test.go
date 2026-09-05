@@ -183,3 +183,42 @@ func TestBashSubjectInvalidInputReturnsEmpty(t *testing.T) {
 		t.Errorf("Subject() = %q, want empty for malformed input", got)
 	}
 }
+
+// One command's output is bounded, whatever the command decides to print.
+//
+// CombinedOutput accumulated everything with no ceiling, and the ceiling
+// that exists runs later, on a string already fully in memory. A `find /`
+// or a build with a warning per line was a daemon holding hundreds of
+// megabytes for a result the model would never see more than about eighty
+// kilobytes of.
+func TestOneCommandsOutputIsBounded(t *testing.T) {
+	w := &cappedWriter{limit: 100}
+	for i := 0; i < 1000; i++ {
+		if _, err := w.Write([]byte("0123456789")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := w.bytes()
+	if len(out) > 100+80 {
+		t.Errorf("kept %d bytes of a 10000-byte command; the cap is 100", len(out))
+	}
+	if !strings.HasPrefix(string(out), "0123456789") {
+		t.Errorf("the start was dropped: %q", out[:20])
+	}
+	if !strings.HasSuffix(string(out), "0123456789") {
+		t.Errorf("the end was dropped, which is where a failure says why: %q", out[len(out)-20:])
+	}
+	if !strings.Contains(string(out), "not shown") {
+		t.Errorf("the gap is silent: %q", out)
+	}
+}
+
+// Output that fits is passed through exactly, with nothing added.
+func TestOutputThatFitsIsUntouched(t *testing.T) {
+	w := &cappedWriter{limit: 100}
+	w.Write([]byte("hello\n"))
+	w.Write([]byte("world\n"))
+	if got := string(w.bytes()); got != "hello\nworld\n" {
+		t.Errorf("got %q", got)
+	}
+}

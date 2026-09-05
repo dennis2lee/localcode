@@ -396,6 +396,18 @@ func (d *Daemon) announceArchived(id string, archived bool) {
 	})
 }
 
+// announceDeleted tells every client a conversation is gone, for the same
+// reason announceArchived exists: the list that has to change is on
+// clients that may not be looking at it.
+func (d *Daemon) announceDeleted(ids ...string) {
+	for _, id := range ids {
+		d.daemonEvents.send(events.Event{
+			Type: events.TypeSessionDeleted,
+			Data: map[string]any{"session": id},
+		})
+	}
+}
+
 func (d *Daemon) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sess, err := d.Loop.Store.Get(id)
@@ -495,6 +507,7 @@ func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 			d.Loop.Schedules.ForgetSession(sid)
 		}
 	}
+	d.announceDeleted(ids...)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -559,6 +572,7 @@ func (d *Daemon) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request)
 			d.Loop.Schedules.ForgetSession(sid)
 		}
 	}
+	d.announceDeleted(currentIDs...)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"localcode/internal/daemon"
+	"localcode/internal/gui"
 )
 
 // The process side of handing a daemon to a newer version of itself.
@@ -196,6 +197,68 @@ func waitReady(readyR *os.File, pid int, out *successorOutput, kill func()) erro
 	}
 }
 
+// closeMCPServers stops the MCP subprocesses this process started, set by
+// buildDaemon. A no-op until one has been built, and after it has been
+// called once.
+//
+// A package-level variable because the place that needs it — a handoff,
+// two files away — has no route to the closure buildDaemon builds, and
+// there is one daemon at a time in a process.
+var closeMCPServers = func() {}
+
+// spawnAndWatch starts the successor and records how it ends.
+//
+// One function because there were two spawn sites in the window and only
+// one of them remembered: a window that updated at startup could never
+// say why its daemon died, since nothing ever set the exit that
+// successorEpitaph speaks from, and every 502 took the "still running, as
+// far as this process knows" branch — which is exactly the case it was
+// not.
+func spawnAndWatch(binary string, ln net.Listener, alive *os.File) (int, error) {
+	// Passed through the environment because the successor has no other
+	// way to learn it: see envInstallerRestarts.
+	if gui.InstallerRestarts() {
+		_ = os.Setenv(envInstallerRestarts, "1")
+	}
+	pid, exited, err := spawnSuccessor(binary, ln, alive)
+	if err != nil {
+		return 0, err
+	}
+	go func() {
+		err := <-exited
+		rememberSuccessorExit(pid, err)
+		noteSuccessorExit(pid, err)
+	}()
+	return pid, nil
+}
+
+// releaseMCPBeforeSuccessor stops this process's MCP servers when it is
+// safe to, so the successor is not connecting to a set that is already
+// running.
+//
+// The overlap is guaranteed otherwise: the successor writes its ready
+// byte only after its own buildDaemon has connected to every configured
+// server, and this process still has all of its own at that instant. A
+// server that refuses a second instance then loses its tools for the life
+// of the new daemon.
+//
+// Only when nothing is running, though. A turn still being drained may
+// reach for one of these tools, and taking it away mid-sentence is a
+// worse failure than a duplicated server: the person asked for an update,
+// not for their work to be cut off. When something is running the overlap
+// stands, which is what it always did.
+func releaseMCPBeforeSuccessor(d *daemon.Daemon) {
+	if len(d.OwnedSessions()) != 0 {
+		return
+	}
+	closeMCPServers()
+}
+
+// envInstallerRestarts tells a successor what only the process with the
+// window can know: that an installer closing this program is followed by
+// Windows starting it again, because that process registered for it.
+const envInstallerRestarts = "LOCALCODE_INSTALLER_RESTARTS"
+
 // successorArgs is the command line the successor is started with: this
 // invocation's own arguments, so --agent, --listen, --config and all come
 // back, on the binary the update produced.
@@ -241,7 +304,8 @@ func handoffTo(d *daemon.Daemon, srv *http.Server, ln net.Listener, alive *os.Fi
 	if err := d.PublishOwned(); err != nil {
 		fmt.Fprintf(os.Stderr, "handoff: could not publish owned sessions: %v\n", err)
 	}
-	pid, _, err := spawnSuccessor(binary, ln, alive)
+	releaseMCPBeforeSuccessor(d)
+	pid, err := spawnAndWatch(binary, ln, alive)
 	if err != nil {
 		return err
 	}

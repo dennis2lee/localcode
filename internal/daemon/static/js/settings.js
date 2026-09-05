@@ -349,8 +349,15 @@ async function installUpdate() {
     }
   } catch (err) {
     showUpdate(`Not installed: ${err}`, true);
-    updateInstallBtn.disabled = false;
   } finally {
+    // Both buttons, and here rather than in the catch.
+    //
+    // On the paths that hide the install button this is moot; on the one
+    // that does neither — an install that replaced the files without
+    // restarting, which is every macOS bundle — the button stayed visible
+    // and disabled for the life of the page, with no way back to it but a
+    // reload.
+    updateInstallBtn.disabled = false;
     updateCheckBtn.disabled = false;
   }
 }

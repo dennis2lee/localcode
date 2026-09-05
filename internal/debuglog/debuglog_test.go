@@ -2,6 +2,7 @@ package debuglog
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -302,3 +303,85 @@ func TestWritingWhileClosingIsSafe(t *testing.T) {
 	sink.Close()
 	wg.Wait()
 }
+
+// Two calls at once do not shred each other.
+//
+// A prompt that delegates has several model calls open against one file,
+// and both the request body and the response are copied as they move. The
+// request used to be assembled whole and written in one call; the tee
+// writes it a Read at a time, so two requests going out together
+// interleaved into one unreadable run of bytes with nothing to say where
+// one ended.
+func TestTwoExchangesAtOnceStaySeparable(t *testing.T) {
+	dir := t.TempDir()
+	sink, err := Create(dir, "S1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := func(word string) io.ReadCloser {
+		return io.NopCloser(strings.NewReader(strings.Repeat(word, 40)))
+	}
+	one := &teeRequestBody{r: body("AAAA"), s: sink, n: 1, left: maxLoggedBody}
+	two := &teeRequestBody{r: body("BBBB"), s: sink, n: 2, left: maxLoggedBody}
+
+	// Alternating, the way two transports on two connections do.
+	buf := make([]byte, 16)
+	for {
+		n1, e1 := one.Read(buf)
+		n2, e2 := two.Read(buf)
+		if (n1 == 0 && e1 != nil) && (n2 == 0 && e2 != nil) {
+			break
+		}
+	}
+	// Read before Close: a sink that logged no exchange removes its file,
+	// and these two bodies were driven directly rather than through
+	// RoundTrip.
+	data, err := os.ReadFile(sink.Path())
+	sink.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	// Every change of hands is marked, so a reader can follow one call
+	// through the other's bytes.
+	if !strings.Contains(text, "==== 1 (continued)") || !strings.Contains(text, "==== 2 (continued)") {
+		t.Errorf("the two calls' bytes run together with nothing to separate them:\n%s", text)
+	}
+	// And a run of one call's bytes is never broken by the other's
+	// without a marker between them.
+	for _, bad := range []string{"AAAABBBB", "BBBBAAAA"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("found %q: one exchange's bytes ran straight into another's", bad)
+		}
+	}
+}
+
+// A request that fails gets its own line rather than one glued to the
+// last byte of the body it was sending.
+func TestAFailureStartsOnItsOwnLine(t *testing.T) {
+	dir := t.TempDir()
+	sink, err := Create(dir, "S1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := Transport{Base: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})}
+	req, _ := http.NewRequestWithContext(With(context.Background(), sink),
+		http.MethodPost, "http://127.0.0.1:1/v1/chat", strings.NewReader(`{"model":"m"}`))
+	_, _ = rt.RoundTrip(req)
+	sink.Close()
+
+	data, _ := os.ReadFile(sink.Path())
+	if strings.Contains(string(data), `}==== `) {
+		t.Errorf("the failure line is glued to the request body:\n%s", data)
+	}
+	if !strings.Contains(string(data), "connection refused") {
+		t.Errorf("the failure is not in the log:\n%s", data)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
