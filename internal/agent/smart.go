@@ -325,7 +325,10 @@ func (l *Loop) orchestrationFor(ctx context.Context, sessionID, agentName, model
 	if len(l.delegatableAgents(ctx)) < 2 {
 		return ""
 	}
-	return smart.OrchestrationPrompt(model)
+	// The roster's shape, not just the model's family: on a roster where
+	// every specialist resolves to this same model, delegation is the
+	// model handing work to itself. See smart.Solo.
+	return smart.OrchestrationPrompt(model, smart.Solo(l.Config))
 }
 
 // planPolicyFor is what this turn is told about the Orchestrate tool, or
@@ -356,5 +359,5 @@ func (l *Loop) planPolicyFor(ctx context.Context, sessionID, agentName, model st
 	if len(l.delegatableAgents(ctx)) < 2 {
 		return ""
 	}
-	return smart.PlanPolicy(model)
+	return smart.PlanPolicy(model, smart.Solo(l.Config))
 }

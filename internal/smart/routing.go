@@ -122,6 +122,44 @@ func ProfileFor(cfg *config.Config, category string) string {
 
 // bestMatch returns the first profile, by name, whose model belongs to
 // category — or "" if none does.
+// Solo reports whether every routing category lands on the same profile,
+// which is to say that delegating is the model handing work to itself.
+//
+// Measured, on the model this matters for. With one profile configured,
+// all six specialists resolve to it; the orchestration prompt then orders
+// the model to delegate a search rather than grep — and its first move
+// was Task(explore), after which the sub-agent, the same 30B muse, spent
+// thirteen requests on glob and grep in a two-file project, found the
+// answer at the eleventh, kept going, and edited nothing. The same task
+// with the switch off finished in thirteen requests with both files
+// correct.
+//
+// The test is what every category RESOLVES to, not how many profiles are
+// written down, and the difference is the population this exists for.
+// classify reads a weight class out of a model id (routing_test.go has
+// two profiles named "model" and "another" that it cannot classify at
+// all), so two local endpoints whose ids carry no size qualifier route
+// every category to the same profile — exactly the setup this is meant to
+// catch, and exactly what a "len(Profiles) == 1" test would let through.
+func Solo(cfg *config.Config) bool {
+	if cfg == nil || len(cfg.Profiles) == 0 {
+		return false
+	}
+	first := ""
+	for _, category := range Categories {
+		got := ProfileFor(cfg, category)
+		if got == "" {
+			return false
+		}
+		if first == "" {
+			first = got
+		} else if got != first {
+			return false
+		}
+	}
+	return first != ""
+}
+
 func bestMatch(profiles map[string]config.Profile, category string) string {
 	for _, name := range sortedNames(profiles) {
 		if class, ok := classify(profiles[name].Model); ok && class == category {

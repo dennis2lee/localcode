@@ -1,6 +1,7 @@
 package smart
 
 import (
+	"strings"
 	"testing"
 
 	"localcode/internal/config"
@@ -107,5 +108,81 @@ func TestRoutingIsStable(t *testing.T) {
 		if got := ProfileFor(cfg, CategoryDeep); got != first {
 			t.Fatalf("routed to %q then %q for the same config", first, got)
 		}
+	}
+}
+
+// Solo is about what the categories RESOLVE to, not how many profiles are
+// written down — and the difference is the population it exists for.
+func TestSoloIsAboutWhereTheCategoriesLand(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cfg  *config.Config
+		want bool
+	}{
+		{
+			"one profile is the plain case",
+			&config.Config{
+				Profiles:       map[string]config.Profile{"m": {Model: "muse-glimmer-30b"}},
+				DefaultProfile: "m",
+			},
+			true,
+		},
+		{
+			// The case a len(Profiles) == 1 test would let through, and
+			// the one this is for: two local endpoints whose ids carry no
+			// size qualifier, so classify places neither and every
+			// category falls back to the same profile.
+			"two unclassifiable profiles still land on one",
+			&config.Config{
+				Profiles:       map[string]config.Profile{"a": {Model: "model"}, "b": {Model: "another"}},
+				DefaultProfile: "a",
+			},
+			true,
+		},
+		{
+			"a real roster is not solo",
+			&config.Config{
+				Profiles: map[string]config.Profile{
+					"smart-quick":    {Model: "qwen3-1.7b"},
+					"smart-balanced": {Model: "claude-sonnet-5"},
+					"smart-deep":     {Model: "claude-opus-5"},
+				},
+				DefaultProfile: "smart-deep",
+			},
+			false,
+		},
+		{"nothing configured is not solo", &config.Config{}, false},
+		{"no config at all is not solo", nil, false},
+	} {
+		if got := Solo(c.cfg); got != c.want {
+			t.Errorf("%s: Solo = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// A one-model roster is told what delegation still buys, and is not
+// ordered to delegate work it could do in a grep.
+func TestASoloRosterIsNotOrderedToDelegate(t *testing.T) {
+	solo := OrchestrationPrompt("muse-glimmer-30b", true)
+	team := OrchestrationPrompt("muse-glimmer-30b", false)
+
+	if solo == team {
+		t.Fatal("a one-model roster is told the same thing as a real one")
+	}
+	if strings.Contains(solo, "Do not grep the whole project yourself") {
+		t.Error("a model with nobody else on the team is still ordered not to grep")
+	}
+	if !strings.Contains(solo, "same model") {
+		t.Error("the prompt does not say the specialists are this same model, which is the whole reason it differs")
+	}
+	// The part that survives whatever the roster looks like.
+	for _, want := range []string{"Task", "verify it"} {
+		if !strings.Contains(solo, want) {
+			t.Errorf("the solo prompt dropped %q", want)
+		}
+	}
+	// And the team prompt is untouched.
+	if !strings.Contains(team, "Do not grep the whole project yourself") {
+		t.Error("the ordinary local prompt changed")
 	}
 }

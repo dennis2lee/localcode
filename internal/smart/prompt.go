@@ -94,6 +94,53 @@ A sub-agent cannot see this conversation, so tell it everything it needs in the 
 
 Before you say a task is done, verify it: run the build or the test and look at the result. Do not report success you have not seen.`
 
+// soloVariant is what the orchestrator is told when every specialist it
+// can delegate to runs the model it is already running.
+//
+// localVariant below orders delegation — "use Task with the explore
+// agent. Do not grep the whole project yourself." — and that instruction
+// is right when explore is a cheaper, faster model. On a one-model roster
+// it says: hand this to yourself. Measured on a 30B muse, the
+// orchestrator's first move was Task(explore), and the sub-agent spent
+// thirteen requests on glob and grep in a two-file project, found the
+// answer at the eleventh, carried on, and edited nothing. The same task
+// with Smart Agent off finished in thirteen requests with both files
+// changed correctly.
+//
+// So this states the one thing delegation still buys and leaves the
+// decision where it belongs. A sub-agent on the same model is not a
+// second opinion and not a faster worker; it is a context this
+// conversation does not have to pay for. That is worth something when
+// answering would mean reading far more than is worth keeping, and
+// nothing at all when it would not.
+//
+// Selected by the shape of the roster rather than by the model id, which
+// is the other half of the fix: the id says which family a model is from,
+// and the question here is who else is on the team.
+const soloVariant = `Smart Agent is on. You have specialist sub-agents available through the Task tool, and you are the one deciding when to use them.
+
+Every agent you can delegate to runs the same model you are running. So delegating buys exactly one thing: a context this conversation does not have to pay for. It does not buy a second opinion, a faster worker, or a better reader.
+
+* Use a sub-agent when answering would mean reading far more than you want to keep: a long log, a subsystem you need one fact from, a search across a codebase you do not know.
+* Do the work here when one or two tool calls would answer it. Searching two files is not delegation, it is a grep.
+* Do not delegate review, planning, or running the build. You have the same tools and the same model, and a second opinion from yourself is not one.
+
+A sub-agent cannot see this conversation, so tell it everything it needs in the prompt you give it.
+
+Before you say a task is done, verify it: run the build or the test and look at the result. Do not report success you have not seen.`
+
+// soloPlanPolicy is the same correction one level up. Orchestrate runs a
+// staged plan of several agents at once, and its adversarial pattern —
+// several copies of one stage, compared — is several copies of one model
+// when the roster is one model.
+const soloPlanPolicy = `The Orchestrate tool runs a plan of sub-agents for you: several at once, in stages.
+
+Every agent in that plan runs the model you are running, so a stage buys a separate context and nothing else. Use it when a job splits into parts that each read a lot and report back a little: several files surveyed at once, several logs read at once. Do not use it to get several opinions on one question — they are your opinion, several times, at several times the cost.
+
+Use Task instead for a single question. A plan costs a model call per agent it launches; if you can answer by delegating once, delegate once.
+
+Write the plan, and localcode decides what each stage keeps.`
+
 // promptVariants is consulted in order, first substring match wins, so
 // the more specific ids come first.
 //
@@ -129,7 +176,10 @@ var promptVariants = []struct {
 // which is the right default because it is the one written for a model
 // that follows a stated policy, and a model nobody has characterised is
 // better assumed capable than assumed small.
-func OrchestrationPrompt(model string) string {
+func OrchestrationPrompt(model string, solo bool) string {
+	if solo {
+		return soloVariant
+	}
 	id := strings.ToLower(model)
 	for _, v := range promptVariants {
 		if strings.Contains(id, v.match) {
@@ -224,7 +274,10 @@ var planVariants = []struct {
 // PlanPolicy is what a turn is told about the Orchestrate tool, for a
 // model. Matched the same way OrchestrationPrompt is, and an unrecognised
 // id gets the base policy for the same reason.
-func PlanPolicy(model string) string {
+func PlanPolicy(model string, solo bool) string {
+	if solo {
+		return soloPlanPolicy
+	}
 	id := strings.ToLower(model)
 	for _, v := range planVariants {
 		if strings.Contains(id, v.match) {

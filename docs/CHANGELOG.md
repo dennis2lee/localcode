@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.108.0
+
+**On a one-model roster, Smart Agent told the model to delegate to itself.** IMPROVEMENTS #45 has been open since the report that turning Smart Agent off noticeably reduced looping on a local muse. It is confirmed now, against that model — a 30B muse served by LM Studio on the reporter's own machine, reached through a shim that recorded every request.
+
+Same task, same workspace, one switch. **Off:** thirteen requests, two edits, both files correct. **On:** the orchestrator's first move was `Task(agent: "explore")` — the local orchestration prompt orders it, "use Task with the explore agent, do not grep the whole project yourself" — and the sub-agent, which is the same muse, spent thirteen requests on `glob` and `grep` in a two-file project, found the answer at the eleventh, carried on, edited nothing, and was still running when it was cancelled. The orchestrator never got control back. The two system prompts measured 4190 and 3547 characters, so no prefix cache could hit either: every delegation is a full extra prefill.
+
+The instruction is right when `explore` is a cheaper, faster model. With one profile configured, all six specialists resolve to the same one, and it becomes "hand this to yourself".
+
+**The fix reads the shape of the roster, not the model id.** `smart.Solo` reports whether every routing category resolves to the same profile, and the orchestration prompt and plan policy are selected with it. The test is deliberately what the categories *resolve to* rather than how many profiles are written down: `classify` reads a weight class out of a model id, so two local endpoints whose ids carry no size qualifier route everything to one profile — which is the setup this exists for, and exactly what a profile-count test would have let through.
+
+The prompt a solo roster gets states what delegation still buys rather than ordering it: a context this conversation does not have to pay for, worth something when answering would mean reading far more than is worth keeping and nothing at all when it would not. It says plainly that review, planning and running the build are not worth handing to the same model, because a second opinion from yourself is not one. The plan policy says the same thing one level up: a stage buys a separate context, and several stages on one question are your opinion several times at several times the cost.
+
+**Re-measured on the same model and task**: no `Task` span in the trace at all, edits at request four, thirteen requests, both files correct — the same cost as running with the switch off. The other candidate in #45, a paged `read_file` being re-read, is ruled out for this failure: `read_file` was called twice with no repeat.
+
 ## v0.107.0
 
 **Looking somewhere new is not progress, and it no longer buys another carry-on.** Reproduced against the model the feature exists for — a 30B muse served by LM Studio on the reporter's own machine — on a task it had already finished correctly. It changed the timeout in both files, wrote "Changed request timeout from 30 to 60 everywhere in the project", and stopped. That was request nine and it was right. Then `keep_going` asked whether the work was complete, and the model did what a compliant model does: it ran `grep timeout`, then `grep 30`. Neither was a repeat, so under the old test both counted as work, both cleared the guard, and both bought another nudge. Nine requests became thirteen, four of them re-confirming a change already made.

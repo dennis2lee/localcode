@@ -7,7 +7,7 @@ import (
 
 func TestEveryModelGetsAnOrchestrationPrompt(t *testing.T) {
 	for _, model := range []string{"claude-opus-5", "gpt-5", "gemini-3-pro", "qwen3-coder-30b", "something-nobody-has-heard-of", ""} {
-		if OrchestrationPrompt(model) == "" {
+		if OrchestrationPrompt(model, false) == "" {
 			t.Errorf("%q got no prompt", model)
 		}
 	}
@@ -17,9 +17,9 @@ func TestEveryModelGetsAnOrchestrationPrompt(t *testing.T) {
 // one competes with the task itself for attention on a 30B, and what
 // survives is the first line and the last.
 func TestLocalModelsGetTheShortVariant(t *testing.T) {
-	long := len(OrchestrationPrompt("claude-opus-5"))
+	long := len(OrchestrationPrompt("claude-opus-5", false))
 	for _, model := range []string{"qwen3-coder-30b", "glm-4-6", "muse-glimmer-30b", "llama-3.3-70b", "gemma-3-27b-it-q4"} {
-		got := OrchestrationPrompt(model)
+		got := OrchestrationPrompt(model, false)
 		if len(got) >= long {
 			t.Errorf("%q got a prompt as long as the default one", model)
 		}
@@ -33,7 +33,7 @@ func TestLocalModelsGetTheShortVariant(t *testing.T) {
 // base prompt is the one written for a model that follows a stated policy,
 // and nothing about an unknown name says it does not.
 func TestAnUnknownModelGetsTheBasePrompt(t *testing.T) {
-	if OrchestrationPrompt("who-knows-7") != baseOrchestration {
+	if OrchestrationPrompt("who-knows-7", false) != baseOrchestration {
 		t.Error("an unknown model did not get the base prompt")
 	}
 }
@@ -42,7 +42,7 @@ func TestAnUnknownModelGetsTheBasePrompt(t *testing.T) {
 // or it is describing a capability the model was not given.
 func TestEveryVariantNamesTheTaskTool(t *testing.T) {
 	for _, model := range []string{"claude-opus-5", "gpt-5", "gemini-3-pro", "qwen3-coder-30b"} {
-		if !strings.Contains(OrchestrationPrompt(model), "Task") {
+		if !strings.Contains(OrchestrationPrompt(model, false), "Task") {
 			t.Errorf("%q was never told what to delegate with", model)
 		}
 	}

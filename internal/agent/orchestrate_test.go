@@ -250,9 +250,9 @@ func TestThePlanPolicyFollowsItsOwnSwitch(t *testing.T) {
 // authoring wrong, so it is pointed at the one shape that is hard to get
 // wrong rather than at the whole grammar.
 func TestThePlanPolicyIsWrittenForTheModel(t *testing.T) {
-	base := smart.PlanPolicy("claude-opus-5")
-	local := smart.PlanPolicy("qwen3-30b-a3b")
-	gpt := smart.PlanPolicy("gpt-5")
+	base := smart.PlanPolicy("claude-opus-5", false)
+	local := smart.PlanPolicy("qwen3-30b-a3b", false)
+	gpt := smart.PlanPolicy("gpt-5", false)
 
 	if local == base {
 		t.Error("a 30B local model got the policy written for a frontier one")
@@ -266,7 +266,7 @@ func TestThePlanPolicyIsWrittenForTheModel(t *testing.T) {
 	if gpt == base || !strings.Contains(gpt, "Do not plan the work you could simply do") {
 		t.Error("the gpt policy is missing its stopping rule")
 	}
-	if smart.PlanPolicy("something-nobody-has-characterised") != base {
+	if smart.PlanPolicy("something-nobody-has-characterised", false) != base {
 		t.Error("an unrecognised model did not get the base policy")
 	}
 }
