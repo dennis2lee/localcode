@@ -6,6 +6,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -166,4 +169,53 @@ func TestTheSuccessorLeavesOnlyWhenItsParentGoes(t *testing.T) {
 		default:
 		}
 	})
+}
+
+// Every path that starts a successor uses the process's own alive pipe,
+// not one made in a local.
+//
+// A local is reachable only until the last statement that mentions it,
+// and every one of these passes alive.r to spawnSuccessor and then never
+// touches alive again — so the collector could run os.File's finalizer
+// and close the write end while the successor was still starting. The
+// successor reads EOF and calls os.Exit(0). That was found and fixed in
+// the window's handoff in v0.101.0 and left in the two startup paths,
+// which is the same fault in the two modes nobody was running.
+//
+// A source check rather than a behavioural one, because the failure is a
+// garbage collection that may or may not happen on any given run — the
+// thing to hold is that nobody makes a pipe of their own again.
+func TestEveryHandoffPathHoldsTheProcessAlivePipe(t *testing.T) {
+	_, here, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate this test file")
+	}
+	dir := filepath.Dir(here)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			if !strings.Contains(line, "newTUIAlivePipe()") {
+				continue
+			}
+			// Its own declaration, and the one legitimate caller: the
+			// accessor that makes it once.
+			if name == "handoff.go" &&
+				(strings.Contains(line, "processAliveOnce.Do") || strings.HasPrefix(line, "func newTUIAlivePipe")) {
+				continue
+			}
+			t.Errorf("%s:%d makes an alive pipe of its own; use processAlivePipe() so it outlives the "+
+				"statement that passes it:\n\t%s", name, i+1, strings.TrimSpace(line))
+		}
+	}
 }

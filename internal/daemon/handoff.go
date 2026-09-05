@@ -253,6 +253,25 @@ func (d *Daemon) Retire(ctx context.Context, newVersion string, newPID int) bool
 	}()
 
 	done := d.Loop.Drain(ctx)
+
+	// Drain is not the whole of "nothing is still running".
+	//
+	// It waits on admission windows and background tasks, and a turn's
+	// admission window closes the moment the turn is registered:
+	// handleSendMessage releases it, answers 202, and leaves the turn to a
+	// goroutine. So Drain returned in under a millisecond with a reply
+	// still being written, and everything below ran underneath it.
+	//
+	// Two things followed, and both were reported. The session stayed in
+	// .handoff.json — the re-publish loop was stopped right here and
+	// nothing else ever writes that file — so the successor answered 409
+	// "still being finished by the previous localcode" for that
+	// conversation for the life of the window, forever rather than "in a
+	// moment". And once the store below was closed under the running
+	// turn, the model's answer was appended to a nil file handle and
+	// dropped without a word.
+	turnsDone := d.waitForTurns(ctx)
+
 	close(stopWatch)
 	wg.Wait()
 	if err := d.publishOwned(); err != nil {
@@ -277,8 +296,43 @@ func (d *Daemon) Retire(ctx context.Context, newVersion string, newPID int) bool
 	// successor; an append after this point would be a second writer on a
 	// file the new daemon owns, which is worse than the event going
 	// nowhere.
-	d.Loop.Store.Close()
-	return done
+	//
+	// Only when everything really finished. Giving up on a turn and then
+	// closing the log under it is the silent-loss case above; a session
+	// file left open costs a delete on Windows, which says so out loud.
+	if turnsDone {
+		d.Loop.Store.Close()
+	} else {
+		fmt.Fprintf(os.Stderr,
+			"handoff: %d session(s) were still running at the deadline, so their logs stay open here\n",
+			len(d.OwnedSessions()))
+	}
+	return done && turnsDone
+}
+
+// waitForTurns blocks until this daemon owns nothing that is still
+// running, or ctx gives up.
+//
+// Separate from Loop.Drain because it asks a different question. Drain
+// asks whether the parts of the daemon that take a claim have let go;
+// this asks whether any conversation is still being written, which is
+// what the successor needs to know before it takes one over and what this
+// process needs to know before it closes the files.
+func (d *Daemon) waitForTurns(ctx context.Context) bool {
+	// Short, because this is the tail of an update somebody is watching,
+	// and the manifest is kept current by the caller's own ticker.
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if len(d.OwnedSessions()) == 0 {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
+		}
+	}
 }
 
 // handleShutdown stops this daemon at a client's request.

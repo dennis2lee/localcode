@@ -155,7 +155,19 @@ class Element {
     this.childNodes = [];
     this.parentNode = null;
     this.classList = new ClassList();
-    this.style = {};
+    // A plain object plus the two methods the page actually calls on a
+    // style declaration. setProperty is how a custom property is set, and
+    // there is no way to write one through the object form — el.style
+    // ['--zoom'] is not the same declaration — so a fake without it makes
+    // any code that publishes one throw.
+    this.style = {
+      setProperty(name, value) { this[name] = String(value); },
+      removeProperty(name) { const had = this[name]; delete this[name]; return had; },
+      getPropertyValue(name) { return this[name] === undefined ? '' : this[name]; },
+    };
+    Object.defineProperty(this.style, 'setProperty', { enumerable: false });
+    Object.defineProperty(this.style, 'removeProperty', { enumerable: false });
+    Object.defineProperty(this.style, 'getPropertyValue', { enumerable: false });
     this.dataset = {};
     this.listeners = new Map();
     this.attributes = new Map();

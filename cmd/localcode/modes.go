@@ -106,7 +106,7 @@ func runGUI(configPath string) error {
 		}
 	}()
 
-	alive, err := windowAlivePipe()
+	alive, err := processAlivePipe()
 	if err != nil {
 		return err
 	}
@@ -315,7 +315,13 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 	// The pipe every daemon under this terminal watches: its read end is
 	// inherited by each successor, and the write end closes when this
 	// process — the one with the TUI — exits. See handoff_unix.go.
-	alive, err := newTUIAlivePipe()
+	//
+	// The process's own, not one made here. This one happened to survive,
+	// because the Handoff closure below captures it and that closure lives
+	// as long as the daemon does — but that is an accident of where it is
+	// used rather than a lifetime anybody chose, and it is the same
+	// accident the other three paths did not have. See processAlivePipe.
+	alive, err := processAlivePipe()
 	if err != nil {
 		got.ln.Close()
 		return fmt.Errorf("daemon failed to start: %w", err)

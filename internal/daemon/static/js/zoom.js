@@ -58,7 +58,23 @@ export function applyZoom(z) {
   // element is not a browser, and a page that fails to start is a worse
   // answer than one that starts at 100%.
   const root = document.documentElement;
-  if (root && root.style) root.style.zoom = app.zoom === 1 ? '' : String(app.zoom);
+  if (root && root.style) {
+    root.style.zoom = app.zoom === 1 ? '' : String(app.zoom);
+    // The factor, published for the stylesheet.
+    //
+    // CSS zoom deliberately does not scale viewport-percentage units, so
+    // every vh cap in style.css silently stops capping: a panel written
+    // as max-height:86vh computes that against the *unzoomed* viewport
+    // and, at 1.5x, is taller than the window with its Close button off
+    // the bottom and nothing to scroll — the box fits its own content, so
+    // its overflow-y has nothing to do. The container zoom this replaced
+    // shrank the viewport in CSS px instead, which is why the caps held
+    // before v0.100.0 and why nobody had seen this.
+    //
+    // Dividing each cap by the factor puts it back: see the calc()s in
+    // style.css.
+    root.style.setProperty('--zoom', String(app.zoom));
+  }
   write(app.zoom);
 }
 

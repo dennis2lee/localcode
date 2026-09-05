@@ -395,6 +395,23 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// the MCP servers running *now* (a reload may have replaced or first
 	// created them), then the trace file.
 	cleanup = func() {
+		// Everything this daemon holds that outlives it if nobody says
+		// otherwise. Two of these were added because a startup update
+		// throws a fully built daemon away — runGUI builds one before it
+		// knows whether a newer binary is waiting — and "throws away"
+		// only ever meant the MCP servers and the trace file.
+		//
+		// The scheduler: still armed, in a process that goes on running
+		// as the window. Every prompt booked for later then fired twice,
+		// once in the discarded daemon and once in the successor.
+		//
+		// The session logs: still open, in that same process. On Windows
+		// a file another process holds cannot be removed, so deleting a
+		// conversation failed — the same fault as the one Retire now
+		// avoids, by the other route into it.
+		if loop.Schedules != nil {
+			loop.Schedules.Disarm()
+		}
 		mcpReloadMu.Lock()
 		if currentMCP != nil {
 			currentMCP.Close()
@@ -403,6 +420,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		if loop.Trace != nil {
 			loop.Trace.Close()
 		}
+		store.Close()
 	}
 
 	// The same path "always allow" persists to, and for the same reason:

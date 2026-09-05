@@ -86,7 +86,8 @@ func startupHandoffBinary(d *daemon.Daemon, out io.Writer) (string, bool) {
 // process exits when the successor does; the successor exits when this
 // process does, through the pipe it watches, so Ctrl+C here ends both.
 func superviseSuccessor(binary string, ln net.Listener) error {
-	alive, err := newTUIAlivePipe()
+	// The process's own pipe, not one made here: see processAlivePipe.
+	alive, err := processAlivePipe()
 	if err != nil {
 		return err
 	}
@@ -104,7 +105,10 @@ func superviseSuccessor(binary string, ln net.Listener) error {
 // On exit it stops the daemon it started, the way a TUI left behind by a
 // "/update" handoff does.
 func runTUIBehindSuccessor(binary string, ln net.Listener, listen, agentName string) error {
-	alive, err := newTUIAlivePipe()
+	// The process's own pipe, not one made here: this function then runs a
+	// TUI for hours without mentioning it again, which is exactly the
+	// lifetime a local does not survive. See processAlivePipe.
+	alive, err := processAlivePipe()
 	if err != nil {
 		return err
 	}

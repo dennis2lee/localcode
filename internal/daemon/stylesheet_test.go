@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -63,5 +64,44 @@ func TestTheStylesheetDoesNotClaimALightPaletteItLacks(t *testing.T) {
 	if claimsLight && !hasLightPalette {
 		t.Error("style.css declares a light colour scheme but defines no light palette; " +
 			"either add one under prefers-color-scheme: light, or say color-scheme: dark")
+	}
+}
+
+// Every viewport-relative size undoes the page's own zoom.
+//
+// The page owns ctrl+wheel and applies the factor as a CSS zoom on the
+// root element (js/zoom.js). CSS zoom deliberately does not scale
+// viewport-percentage units, so a cap written as `max-height: 86vh`
+// computes against the *unzoomed* viewport and stops capping the moment
+// somebody zooms in: at 1.5x the Settings panel was taller than the
+// window with its Close button off the bottom and nothing to scroll,
+// because the box fitted its own content and its overflow-y had nothing
+// to do.
+//
+// The container zoom this replaced shrank the viewport in CSS px instead,
+// which is why the caps held before v0.100.0 and why nobody had seen it.
+// So every vh and vw here is divided by --zoom, which applyZoom
+// publishes, and this keeps the next one honest.
+func TestEveryViewportSizeIsDividedByThePagesZoom(t *testing.T) {
+	css, err := os.ReadFile(filepath.Join("static", "style.css"))
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	// A vh/vw length, and what sits immediately before it in the same
+	// calc(): a bare one has no division by the factor anywhere near.
+	unit := regexp.MustCompile(`[0-9.]+v[hw]\b`)
+	for i, line := range strings.Split(string(css), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "/*") {
+			continue // a comment may say "86vh" while explaining this
+		}
+		if !unit.MatchString(line) {
+			continue
+		}
+		if strings.Contains(line, "var(--zoom") {
+			continue
+		}
+		t.Errorf("style.css:%d sizes something against the viewport without undoing the page's zoom; "+
+			"write it as calc(<n>vh / var(--zoom, 1)):\n\t%s", i+1, trimmed)
 	}
 }

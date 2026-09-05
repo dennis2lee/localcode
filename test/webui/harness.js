@@ -123,6 +123,10 @@ class FakeEventSource {
   constructor(url, harness) {
     this.url = url;
     this.closed = false;
+    // 0 CONNECTING, 1 OPEN, 2 CLOSED — the same three the real one has.
+    // The page reads it to tell a drop the browser will retry from a
+    // reply that failed the connection, which it never retries.
+    this.readyState = 0;
     this.onopen = null;
     this.onmessage = null;
     this.onerror = null;
@@ -136,7 +140,9 @@ class FakeEventSource {
     // A real EventSource connects asynchronously; opening here would mean
     // onopen ran before app code had a chance to assign it.
     queueMicrotask(() => {
-      if (!this.closed && this.onopen) this.onopen();
+      if (this.closed) return;
+      this.readyState = 1;
+      if (this.onopen) this.onopen();
     });
   }
   // emit delivers one server event, exactly as the daemon frames it.
@@ -148,18 +154,32 @@ class FakeEventSource {
   raw(data) {
     if (this.onmessage) this.onmessage({ data });
   }
+  // fail is a transport drop: the browser reopens this one itself, so the
+  // stream stays CONNECTING and the page is expected to wait.
   fail() {
+    this.readyState = 0;
     if (this.onerror) this.onerror(new Error('stream failed'));
+  }
+  // failFatally is the other kind: a reply that was not 200 text/event-stream.
+  // The spec says that fails the connection — CLOSED, and never retried —
+  // which is what a 404 for a missing session or a 502 from a window whose
+  // successor has gone actually produces.
+  failFatally() {
+    this.readyState = 2;
+    if (this.onerror) this.onerror(new Error('stream failed fatally'));
   }
   // reopen is the other half of fail(): a real EventSource reconnects on
   // its own after an error and announces it, and the page has work to do
   // at that moment — a stream that has been away is a gap in what this
   // client knows. Without this the fake could only ever go down.
   reopen() {
-    if (!this.closed && this.onopen) this.onopen();
+    if (this.closed) return;
+    this.readyState = 1;
+    if (this.onopen) this.onopen();
   }
   close() {
     this.closed = true;
+    this.readyState = 2;
   }
 }
 

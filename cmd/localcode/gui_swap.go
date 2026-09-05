@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -93,35 +92,4 @@ func windowHandoff(d *daemon.Daemon, front *swapHandler, alive *tuiAlivePipe, cl
 	time.Sleep(200 * time.Millisecond)
 	reload()
 	return nil
-}
-
-// The pipe every daemon behind this window watches, held for the life of
-// the process.
-//
-// A package-level variable, and it has to be one. The write end's only
-// job is to stay open: a successor reads the other end and exits when it
-// sees EOF, which is how a window closing takes its daemon with it. Held
-// in a local, it was reachable only through the daemon that started the
-// successor — and a handoff exists to stop referring to that daemon. The
-// moment the window swapped to the proxy, the old daemon became garbage,
-// and os.File's finalizer closed the pipe with it.
-//
-// What that looked like was not a leak. The successor saw EOF a moment
-// after it started and called os.Exit(0), so the update either timed out
-// waiting for a process that had already gone, or completed onto a
-// backend that died immediately afterwards and answered 502 to
-// everything. Neither pointed at a garbage-collected pipe.
-//
-// Once per process, because every generation of successor watches the
-// same end: the second daemon under this window has to be watching the
-// window, not the first daemon.
-var (
-	windowAliveOnce sync.Once
-	windowAliveVal  *tuiAlivePipe
-	windowAliveErr  error
-)
-
-func windowAlivePipe() (*tuiAlivePipe, error) {
-	windowAliveOnce.Do(func() { windowAliveVal, windowAliveErr = newTUIAlivePipe() })
-	return windowAliveVal, windowAliveErr
 }

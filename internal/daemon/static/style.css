@@ -4,6 +4,12 @@
      rendering light on a dark page for anyone whose system is set to
      light. */
   color-scheme: dark;
+  /* The page's own zoom factor, republished here by js/zoom.js.
+     Defined rather than left to var()'s fallback so the value is visible
+     in the stylesheet that divides by it: CSS zoom does not scale vh or
+     vw, so every viewport-relative cap below is written as
+     calc(<n>vh / var(--zoom, 1)) to put back what the zoom took away. */
+  --zoom: 1;
   /* Surfaces, in four steps rather than three. --bg is the side panels
      and the header/footer chrome, --center the transcript column, so the
      conversation reads as the lit surface and everything around it
@@ -561,7 +567,7 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 20px;
-  width: min(560px, 90vw);
+  width: min(560px, calc(90vw / var(--zoom, 1)));
 }
 #schedule-modal h3, #debate-modal h3 { margin-top: 0; }
 #schedule-modal .field-label, #debate-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: 12px; }
@@ -617,9 +623,9 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
    box: a task was given its instructions when it was spawned. */
 #task-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10; }
 #task-modal.open { display: flex; }
-#task-modal .box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: min(820px, 90vw); }
+#task-modal .box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: min(820px, calc(90vw / var(--zoom, 1))); }
 #task-modal h3 { margin-top: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
-#task-modal #task-modal-body { height: min(60vh, 520px); overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+#task-modal #task-modal-body { height: min(calc(60vh / var(--zoom, 1)), 520px); overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
 #task-modal .note { color: var(--muted); font-size: 11px; margin-top: 8px; }
 #task-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 #task-modal .danger-btn { background: transparent; color: var(--err); border-color: var(--err); }
@@ -815,7 +821,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 8px;
   padding: 20px;
   width: 480px;
-  max-height: 80vh;
+  max-height: calc(80vh / var(--zoom, 1));
   overflow-y: auto;
 }
 #permission-settings-modal h3 { margin-top: 0; }
@@ -873,7 +879,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 8px;
   padding: 20px;
   width: 520px;
-  max-height: 80vh;
+  max-height: calc(80vh / var(--zoom, 1));
   overflow-y: auto;
 }
 #auto-delegate-modal h3 { margin-top: 0; }
@@ -1067,8 +1073,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 20px;
-  width: min(560px, 92vw);
-  max-height: 86vh;
+  width: min(560px, calc(92vw / var(--zoom, 1)));
+  max-height: calc(86vh / var(--zoom, 1));
   overflow-y: auto;
 }
 #settings-modal h3, #schedule-details-modal h3 { margin-top: 0; }
@@ -1097,7 +1103,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px 10px;
-  max-height: 40vh;
+  max-height: calc(40vh / var(--zoom, 1));
   overflow-y: auto;
 }
 #schedule-details-modal .note.err { color: var(--err); font-size: 12px; margin-top: 8px; }

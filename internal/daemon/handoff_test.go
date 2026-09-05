@@ -326,3 +326,76 @@ func TestARetiredDaemonLetsGoOfTheSessionLogs(t *testing.T) {
 		t.Errorf("the retired daemon is still holding something in %s: %v", dir, err)
 	}
 }
+
+// Retire waits for the turn itself, not only for the claims around it.
+//
+// Loop.Drain waits on admission windows and background tasks, and a
+// turn's admission window closes the moment the turn is registered:
+// handleSendMessage releases it, answers 202 and leaves the turn to a
+// goroutine. So Retire returned in under a millisecond with a reply still
+// being written — which left the session named in .handoff.json for the
+// life of the retiring process (the successor then refused it with 409
+// forever) and, once the store was closed under it, dropped the model's
+// answer without a word.
+func TestRetireWaitsForATurnThatOutlivesItsAdmissionWindow(t *testing.T) {
+	d, store, dir := handoffDaemon(t)
+	if _, err := store.CreateSession("S1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exactly what handleSendMessage does: take the admission window,
+	// register the turn, then give the window back and let the turn run.
+	release, ok := d.Loop.AdmitTopLevel()
+	if !ok {
+		t.Fatal("admit")
+	}
+	if !d.turns.begin("S1", func() {}) {
+		t.Fatal("begin")
+	}
+	release()
+
+	retired := make(chan bool, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		retired <- d.Retire(ctx, "9.9.9", 4242)
+	}()
+
+	select {
+	case <-retired:
+		t.Fatal("Retire finished while a turn was still running")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// The turn writes its answer while Retire is waiting. It has to reach
+	// the file: the retiring process is the only one that has it.
+	store.Append("S1", events.TypeMessagePartEnd, map[string]any{"text": "the answer"})
+	d.turns.end("S1")
+
+	select {
+	case ok := <-retired:
+		if !ok {
+			t.Error("Retire reported it had not finished, although the turn ended in time")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Retire never returned after the turn ended")
+	}
+
+	log, err := os.ReadFile(filepath.Join(dir, "S1.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "the answer") {
+		t.Errorf("the reply written during the handoff is not in the log:\n%s", log)
+	}
+
+	// And nothing this daemon owns is left in the manifest for the
+	// successor to refuse.
+	if data, err := os.ReadFile(filepath.Join(dir, handoffFile)); err == nil {
+		var m handoffManifest
+		_ = json.Unmarshal(data, &m)
+		if len(m.Sessions) != 0 {
+			t.Errorf("the retired daemon still claims %v; the successor will refuse them with 409", m.Sessions)
+		}
+	}
+}

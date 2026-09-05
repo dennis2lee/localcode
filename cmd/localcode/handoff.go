@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"localcode/internal/daemon"
@@ -129,6 +130,40 @@ func watchParent(alive *os.File, stop func()) {
 // this process has stopped being a daemon.
 type tuiAlivePipe struct {
 	r, w *os.File
+}
+
+// processAlivePipe is this process's own alive pipe, made once and held
+// for as long as it runs.
+//
+// A package-level variable, and it has to be one. The write end's only
+// job is to stay open: a successor reads the other end and exits when it
+// sees EOF, which is how a parent going away takes its daemon with it.
+// Held in a local, it is reachable only until the last statement that
+// mentions it — and every caller here passes alive.r to spawnSuccessor
+// and then never touches alive again, so the collector was free to run
+// os.File's finalizer and close the write end while the successor was
+// still starting.
+//
+// What that looks like is not a leak. The successor sees EOF a moment
+// after it starts and calls os.Exit(0), so the update either times out
+// waiting for a process that has already gone, or completes onto a
+// backend that dies immediately and answers 502 to everything. It was
+// found and fixed in the window's own handoff in v0.101.0 and left in
+// place in the two startup paths, which is the same bug in the two modes
+// nobody was running.
+//
+// Once per process, because every generation of successor watches the
+// same end: the second daemon under this process has to be watching this
+// process, not the first daemon.
+var (
+	processAliveOnce sync.Once
+	processAliveVal  *tuiAlivePipe
+	processAliveErr  error
+)
+
+func processAlivePipe() (*tuiAlivePipe, error) {
+	processAliveOnce.Do(func() { processAliveVal, processAliveErr = newTUIAlivePipe() })
+	return processAliveVal, processAliveErr
 }
 
 func newTUIAlivePipe() (*tuiAlivePipe, error) {

@@ -201,6 +201,8 @@ type Store struct {
 	mu       sync.Mutex
 	sessions map[string]*sessionState
 	dir      string // empty = no persistence
+	// warnedClosed keeps the note below to one line per store.
+	warnedClosed bool
 }
 
 func NewStore(persistDir string) (*Store, error) {
@@ -718,6 +720,20 @@ func (s *Store) Append(sessionID string, typ events.Type, data map[string]any) (
 		if line, err := json.Marshal(ev); err == nil {
 			_, _ = st.file.Write(append(line, '\n'))
 		}
+	} else if s.dir != "" && !s.warnedClosed {
+		// A store with a directory whose session has no file is a session
+		// whose log was closed under a writer that is still going. That
+		// used to be impossible; a handoff made it possible, and the
+		// silence made it invisible — a model's whole reply went to a nil
+		// handle and the conversation came back next start ending at the
+		// user's message.
+		//
+		// Once per store, because if it happens at all it happens for
+		// every delta of every remaining turn, and one line is the signal.
+		s.warnedClosed = true
+		fmt.Fprintf(os.Stderr,
+			"session %s: the log was closed while this conversation was still being written; "+
+				"events from here on are only in memory\n", sessionID)
 	}
 	s.mu.Unlock()
 

@@ -524,8 +524,43 @@ async function resyncAfterReconnect() {
   renderCommDot();
 }
 
+// EventSource.CLOSED, spelled out: the constant is on the constructor,
+// which a test double does not have to provide.
+const CLOSED = 2;
+
+// Reopening a stream the browser has given up on.
+//
+// Backoff because the reason it closed is usually still true a moment
+// later — a 404 for a session that is gone stays a 404 — and a tight loop
+// there is a request per frame. Capped so a daemon that comes back after
+// an hour is still picked up without a reload.
+const reconnectFirstDelay = 1000;
+const reconnectMaxDelay = 15000;
+let reconnectDelay = reconnectFirstDelay;
+let reconnectTimer = null;
+
+function cancelReconnect() {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer !== null) return;
+  const wait = reconnectDelay;
+  reconnectDelay = Math.min(reconnectDelay * 2, reconnectMaxDelay);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    // Not if the page has moved on to another conversation in the
+    // meantime: that switch opened a stream of its own.
+    if (session.sessionID) connectEvents();
+  }, wait);
+}
+
 export function connectEvents() {
   if (eventSource) eventSource.close();
+  cancelReconnect();
   setConnected(false);
   sawFirstSeq = false;
   // ?tail= so opening a long conversation shows its end straight away
@@ -542,12 +577,15 @@ export function connectEvents() {
     : `/api/sessions/${session.sessionID}/events?tail=${TRANSCRIPT_TAIL}`;
   eventSource = new EventSource(url);
   eventSource.onopen = () => {
+    // Up again: the next failure starts its own backoff from the bottom.
+    reconnectDelay = reconnectFirstDelay;
     if (setConnected(true)) resyncAfterReconnect();
   };
   eventSource.onmessage = (e) => {
     // An event arriving is itself proof the stream is up, which matters
     // because onopen doesn't fire again after an auto-reconnect in every
     // browser.
+    reconnectDelay = reconnectFirstDelay;
     if (setConnected(true)) resyncAfterReconnect();
     try {
       const ev = JSON.parse(e.data);
@@ -556,8 +594,22 @@ export function connectEvents() {
     } catch (err) { console.error('bad event', err); }
   };
   eventSource.onerror = () => {
-    // EventSource auto-reconnects using Last-Event-ID, so there's nothing to
-    // do but show the light as down until it comes back.
     setConnected(false);
+    // Two different failures arrive here and only one of them retries.
+    //
+    // A transport-level drop — the daemon restarting, a cable — leaves
+    // the stream CONNECTING, and the browser reopens it on its own with
+    // Last-Event-ID, which is what the comment here used to say and is
+    // still true. But a reply whose status is not 200, or whose
+    // Content-Type is not text/event-stream, *fails the connection* per
+    // the spec: readyState goes to CLOSED and the browser never tries
+    // again. The daemon answers 404 from the SSE handler for a session it
+    // does not know, and a window whose successor has gone answers 502 to
+    // everything — so one such reply left the page permanently deaf while
+    // looking alive: prompts posted, turns ran, and nothing was ever
+    // painted.
+    //
+    // The page knows how to build the stream; it just never asked again.
+    if (eventSource && eventSource.readyState === CLOSED) scheduleReconnect();
   };
 }

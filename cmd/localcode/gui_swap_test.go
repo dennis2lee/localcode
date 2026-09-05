@@ -39,19 +39,20 @@ func TestTheWindowHandlerCanBeSwappedUnderTheWindow(t *testing.T) {
 	}
 }
 
-// The window's alive pipe has to outlive the daemon that first used it.
+// The process's alive pipe has to outlive the daemon that first used it.
 //
 // Held in a local it did not: a handoff exists to stop referring to the
 // old daemon, so the moment the window swapped to the proxy the pipe
 // became unreachable and os.File's finalizer closed it. The successor
 // read EOF and exited, and the update either timed out or finished onto
-// a backend that answered 502 to everything.
-func TestTheWindowAlivePipeSurvivesCollection(t *testing.T) {
-	p, err := windowAlivePipe()
+// a backend that answered 502 to everything. The same fault sat in the
+// two startup paths until every one of them was moved onto this accessor.
+func TestTheProcessAlivePipeSurvivesCollection(t *testing.T) {
+	p, err := processAlivePipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := windowAlivePipe()
+	again, err := processAlivePipe()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestTheWindowAlivePipeSurvivesCollection(t *testing.T) {
 	runtime.GC()
 	runtime.GC()
 
-	held, err := windowAlivePipe()
+	held, err := processAlivePipe()
 	if err != nil {
 		t.Fatal(err)
 	}
