@@ -73,10 +73,16 @@ export function setWaiting(v) {
   renderStatusBar();
 }
 
+// setConnected records whether the event stream is up, and reports
+// whether that is news. The caller needs the transition rather than the
+// value: coming back up is the moment this client has to stop trusting
+// what it remembers about a turn, and it is told that on every message,
+// not only when something changed.
 export function setConnected(v) {
-  if (session.connected === v) return;
+  if (session.connected === v) return false;
   session.connected = v;
   renderCommDot();
+  return true;
 }
 
 export function rememberPrompt(text) {

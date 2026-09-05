@@ -492,6 +492,38 @@ export function resetTranscriptWindow() {
   sawFirstSeq = false;
 }
 
+// resyncAfterReconnect asks the daemon whether the turn this client
+// thinks is running still is.
+//
+// session.waiting is this page's own memory, set when it sent a prompt and
+// cleared by the turn.end that answers it. If the daemon serving that turn
+// goes away — killed, crashed, or replaced by an update that did not
+// finish — that event never comes, and the memory has no expiry. The
+// stream drops, the light goes grey, and when the stream comes back the
+// page is still saying "working…" about a turn that no longer exists, with
+// a stop button that answers 502. That is exactly what a window reported
+// after its daemon vanished mid-turn.
+//
+// A stream that has been down is a gap in what this client knows, so the
+// reconnect is the moment to stop trusting the memory and ask. The daemon
+// is the authority: it says whether the session is busy. Three cases and
+// only one of them clears anything — the turn is still running (a blip,
+// and the memory was right), the turn ended and the replay is about to say
+// so, or the turn is gone and nobody will ever say so.
+//
+// Nothing is cleared unless the answer actually arrived: a listing that
+// does not contain this session is a failed fetch or a deleted
+// conversation, and neither is evidence that a turn finished.
+async function resyncAfterReconnect() {
+  if (!session.waiting || !session.sessionID) return;
+  await loadSessions();
+  const mine = (app.sessions || []).find(s => s.id === session.sessionID);
+  if (!mine || mine.busy) return;
+  setWaiting(false);
+  appendTool('[the localcode running this turn is no longer running it; the turn did not finish]');
+  renderCommDot();
+}
+
 export function connectEvents() {
   if (eventSource) eventSource.close();
   setConnected(false);
@@ -509,12 +541,14 @@ export function connectEvents() {
     ? `/api/sessions/${session.sessionID}/events`
     : `/api/sessions/${session.sessionID}/events?tail=${TRANSCRIPT_TAIL}`;
   eventSource = new EventSource(url);
-  eventSource.onopen = () => setConnected(true);
+  eventSource.onopen = () => {
+    if (setConnected(true)) resyncAfterReconnect();
+  };
   eventSource.onmessage = (e) => {
     // An event arriving is itself proof the stream is up, which matters
     // because onopen doesn't fire again after an auto-reconnect in every
     // browser.
-    setConnected(true);
+    if (setConnected(true)) resyncAfterReconnect();
     try {
       const ev = JSON.parse(e.data);
       noticeTruncation(ev);

@@ -151,6 +151,13 @@ class FakeEventSource {
   fail() {
     if (this.onerror) this.onerror(new Error('stream failed'));
   }
+  // reopen is the other half of fail(): a real EventSource reconnects on
+  // its own after an error and announces it, and the page has work to do
+  // at that moment — a stream that has been away is a gap in what this
+  // client knows. Without this the fake could only ever go down.
+  reopen() {
+    if (!this.closed && this.onopen) this.onopen();
+  }
   close() {
     this.closed = true;
   }
