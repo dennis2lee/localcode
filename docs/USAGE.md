@@ -1223,7 +1223,7 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/write-outside` | Writing outside the workspace, the same three arguments. |
 | `/schedule` | Books a prompt for later: `/schedule <when> <what to do>`. Runs only while localcode is running. See [Scheduled tasks](#scheduled-tasks). |
 | `/show-scheduled-task` | Lists the prompts booked for later in this conversation. |
-| `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <task>`. Author and reviewer iterations. Also available through natural language or the ⚖️ button. See [Debate](#debate). |
+| `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <task>`. Author and reviewer iterations. Also available through natural language or the **debate** button. See [Debate](#debate). |
 | `/repeat-limit` | `/repeat-limit [on\|off\|<steps>]`. How many nothing-new steps end a turn; `on` is 3, `off` (the default) never ends one for it. Bare, reports the ceiling. See [A model that repeats itself](#a-model-that-repeats-itself). |
 | `/debug-log` | Toggles writing every model request and response to a file per prompt, in this conversation's workspace. Off at every start and never saved. See [Debug log](#debug-log). |
 | `/effort` | `/effort [off\|low\|medium\|high\|xhigh]`. Conversation reasoning level. `default` restores the profile setting. See [Effort](#effort). |
@@ -1450,7 +1450,7 @@ One line directly below the input box:
 | Stop button | Cancels the active turn, including a turn started by another client. Equivalent to Esc. |
 | Auto-delegate pill | Opens target-agent and pattern settings. See [Auto delegation](#auto-delegation). |
 | Permission pill | Shows permission state and opens its controls. See [Permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
-| Settings pill | `⚙ settings`. Opens the settings window, which holds the [Smart Agent](#smart-agent) switch and the update controls. See [Checking for updates](#checking-for-updates). |
+| Settings pill | **settings**. Opens the settings window, which holds the [Smart Agent](#smart-agent) switch and the update controls. See [Checking for updates](#checking-for-updates). |
 
 ### Switching agents with Tab
 
@@ -2067,7 +2067,7 @@ write a retry wrapper for the upload call, then have the review agent check it a
 
 The model extracts reviewers, round count, and task. LocalCode runs the loop. Confirmation shows the parsed task, reviewers, rounds, and maximum model turns before execution.
 
-The ⚖️ button under the prompt provides reviewer, round-count, and task fields. It previews the command before submission.
+The **debate** button under the prompt provides reviewer, round-count, and task fields. It previews the command before submission.
 
 Command syntax: `/debate <reviewer>[,<reviewer>] [rounds] <what to do>`.
 
@@ -2228,7 +2228,7 @@ Command syntax: `/schedule <when> <what to do>`.
 
 LocalCode does not install a service or wake the machine. If it is closed or the machine is asleep at the scheduled time, the occurrence is marked `missed` and does not run late. Future occurrences are restored at startup.
 
-The ⏰ Schedule button provides **When** and **What to do** fields. The time field previews the parsed timestamp before scheduling.
+The **schedule** button provides **When** and **What to do** fields. The time field previews the parsed timestamp before scheduling.
 
 **The time is read by localcode, not by the model.**
 
@@ -2261,7 +2261,7 @@ Scheduled permission requests appear in the booking conversation and expire afte
 
 | Where | What you get |
 |---|---|
-| ⏰ Schedule button | Separate time and task fields with parsed-time preview. |
+| **schedule** button | Separate time and task fields with parsed-time preview. |
 | Right panel | Task rows: blinking green while waiting, solid green for unread results, grey after reading. Click for results; double-click for booking details. Rename changes the label. Delete removes the booking and run transcript. |
 | `/show-scheduled-task` | The same list as text, for the TUI. |
 | `/schedule cancel <id>` | Removes one. Ids are short and belong to the conversation: `s1`, `s2`. |

@@ -780,6 +780,7 @@ aside h2 {
 #task-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 #task-modal .danger-btn { background: transparent; color: var(--err); border-color: var(--err); }
 .session-item {
+  position: relative;
   border: 1px solid var(--border);
   border-radius: var(--r-ctl);
   padding: 8px 10px;
@@ -827,20 +828,39 @@ aside h2 {
    on — so nothing is hidden behind a gesture you have to know about.
    Kept in the layout rather than display:none, so a row does not change
    height under the pointer. */
+/* In the place of the date, not on top of the row.
+   In the flow they either reserved a blank band on every idle row — three
+   conversations with a hole under each — or changed the row's height
+   under the pointer and shifted the whole list. So they take the line the
+   date is on, which is the least useful line at the moment you are
+   reaching for a control, and the date steps aside for them. One line
+   either way: nothing moves, and nothing is half-covered. */
 .session-item .actions {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 7px;
   display: flex;
   gap: 4px;
-  margin-top: 6px;
   visibility: hidden;
 }
+.session-item:hover .meta,
+.session-item:focus-within .meta,
+.session-item.active .meta { visibility: hidden; }
 .session-item:hover .actions,
 .session-item:focus-within .actions,
 .session-item.active .actions { visibility: visible; }
-/* Coarse pointers have no hover, so there is nothing to reveal: show them. */
+/* Coarse pointers have no hover, so there is nothing to reveal. */
 @media (hover: none) {
   .session-item .actions { visibility: visible; }
 }
-.session-item button { padding: 3px 8px; font-size: var(--t-fine); }
+/* The archive is different: a conversation there has exactly two things
+   you can do to it, and it is a list you visit rarely — hiding them
+   behind a gesture is hiding the only reason to open the section. */
+.session-item.archived .actions { visibility: visible; }
+.session-item.archived .meta { visibility: hidden; }
+/* One line high, so the row they sit in does not have to be taller. */
+.session-item button { padding: 1px 7px; font-size: var(--t-cap); line-height: 1.6; }
 /* Outlined rather than filled: solid red on every row made the panel
    read as a wall of alarms, and white on --err is 3.0:1 at this size —
    below AA. The fill arrives on hover, when it is about to matter. */
@@ -910,16 +930,33 @@ footer {
   line-height: 1.4;
 }
 #input.drag-over { border-color: var(--interactive); border-style: dashed; }
+/* A button draws, it does not flood.
+   Every unclassed button used to be a filled lozenge of the accent, which
+   in a session panel is four of them per row and, in the right-hand
+   panel, two per booked task — so the loudest objects in the window were
+   fork and rename, and the model's answer came third. That is the
+   opposite of what this palette is built on: the second ink is allowed to
+   be a rule, an outline or a word, and not a field of colour.
+   Send keeps the fill, because it is the one primary action on the page
+   and there is exactly one of it. */
 button {
-  background: var(--interactive);
-  color: var(--on-accent);
-  border: none;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: var(--r-ctl);
-  padding: 8px 14px;
+  padding: 7px 13px;
   font: inherit;
-  font-weight: 600;
   cursor: pointer;
 }
+button:hover { border-color: var(--border-strong); }
+/* The one filled control on the page. */
+#send {
+  background: var(--interactive);
+  color: var(--on-accent);
+  border-color: var(--interactive);
+  font-weight: 600;
+}
+#send:hover { border-color: var(--interactive); filter: brightness(1.08); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 #permission-modal {
   position: fixed;

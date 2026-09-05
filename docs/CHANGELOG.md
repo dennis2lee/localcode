@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.106.0
+
+**The comparison paper is checked against the code it describes, and restamped.** `docs/where-localcode-differs.html` and its Korean twin were stamped v0.84.0; twenty-one releases had gone by. Five readers went through it section by section and every claim they reported as broken was attacked by an independent verifier before it was believed: 27 reported, 17 confirmed, 10 dismissed as fair readings of the code.
+
+What was wrong. **A reviewer keeps its sub-session across a debate's rounds** — the paper said "per round", which is the opposite of the feature and of the reason it exists; a doc edit on 2026-09-01 had dropped the word "persistent" as collateral while fixing something else. **Failover is a Smart Agent behaviour**, and two rows described it without saying so. **Reasoning is read from two runtime spellings, not six** — six is the number of runtimes those two spellings cover. **A repeating booking is not refused**: only one with no fixed length to it is. **A `#reference` reads the files a conversation's tools touched**, not the tool output verbatim. **One ceiling is a drop rather than a refusal** — a fanout over an earlier stage's results, whose width is not known until the run — and the report says how many were dropped. **A boundary question withholds the tool-level answers on purpose**: a place is answered by place, at one of two sizes. **Effort has five levels**; `xhigh` shipped in v0.95.0. **The LaTeX unwrapper is not model-selected** — the Web UI unwraps it whoever wrote it. **Turn navigation works in the desktop window too.** And the Windows sentence in Qualifications read as if the update were a second experimental capability.
+
+**The four screenshots are of the interface that ships.** They were taken from a running v0.105.1 rather than described: a real daemon with three MCP servers, three conversations and an archive, driven through the states the figures need — a completion walk mid-typing, the archive open, the permissions dialog scrolled to its boundary section. The first retake of the completion figure cropped to the composer and cut off the line the caption is about; the second includes it.
+
+**`README.md` and `docs/USAGE.md` stop naming buttons by glyphs that no longer exist.** Seven places called them the ⚖️, ⏰ and ⚙ buttons; those characters were replaced by drawn icons in v0.105.0.
+
+**Two more interface faults, found while taking the pictures.** Every unclassed button was a filled lozenge of the accent — four per session row, two per booked task — so the loudest objects in the window were `fork` and `rename` and the model's answer came third, which is the opposite of what the palette is built on. A button draws now; `Send` is the one filled control on the page. And a session row's controls took the line the date is on rather than reserving a blank band under every idle row or changing the row's height under the pointer.
+
 ## v0.105.1
 
 **A browser tab showed the blank-page glyph.** The Web UI linked no icon at all. It wears the mark now — the same drawing the window and the installer carry, served from the same directory the daemon embeds, with a test holding the copy to the source so it cannot drift the way the old one's colours drifted from the stylesheet they came from.

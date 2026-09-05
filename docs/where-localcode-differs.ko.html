@@ -116,7 +116,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 
 <p class="lang"><a href="where-localcode-differs.html">English</a> &nbsp;&middot;&nbsp; <span>한국어</span></p>
 
-<div class="meta">version &nbsp;&nbsp;&nbsp;0.84.0<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-01<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
+<div class="meta">version &nbsp;&nbsp;&nbsp;0.105.1<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-05<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
 
 <nav class="toc" aria-label="목차">
 <h2>목차</h2>
@@ -169,7 +169,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <div class="scroll"><table>
 <thead><tr><th>기능</th><th>localcode</th><th>일반적인 경우</th></tr></thead>
 <tbody>
-<tr><td class="nw">모델 간 교차 검증</td><td>리뷰어 3개까지, 각각 자기 모델 프로파일을 가진 별개의 에이전트로 각 라운드마다 자기 서브세션 유지, 전원 승인(불리언) 필요</td><td>같은 컨텍스트 안에서 모델이 자기 출력을 스스로 검토</td></tr>
+<tr><td class="nw">모델 간 교차 검증</td><td>리뷰어 3개까지, 각각 자기 모델 프로파일을 가진 별개의 에이전트로 자기 서브세션을 라운드 내내 유지, 전원 승인(불리언) 필요</td><td>같은 컨텍스트 안에서 모델이 자기 출력을 스스로 검토</td></tr>
 <tr><td class="nw">예약 작업</td><td>자연어 예약, 시각은 localcode가 파싱, 놓친 시각은 놓쳤다고 보고</td><td>없음. 프롬프트는 보낸 시점에 실행됨</td></tr>
 <tr><td class="nw">멀티 에이전트 계획</td><td>도구 스키마에 계획을 작성, 실행 전 전체 검증, 단계·턴·소요 시간에 상한</td><td>모델이 말로 서술하고 중간에 그만둘 수 있는 자유 형식 위임</td></tr>
 <tr><td class="nw">다른 대화 참조</td><td><code>#&lt;이름&gt;</code>으로 모델이 다른 세션의 메시지를 읽음. 프롬프트에 붙이지 않고 신뢰도가 가장 낮은 도구 결과로 전달</td><td>세션 간 수동 복사·붙여넣기</td></tr>
@@ -177,8 +177,8 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <tr><td class="nw">모델이 실행하는 명령</td><td>기본 꺼짐. 켜면 지정된 내장 명령·커스텀 명령·스킬을 모델이 자기 턴으로 실행</td><td>명령은 사람만 입력</td></tr>
 <tr><td class="nw">검색 결과의 완전성 표시</td><td>잘림, 읽지 못한 파일, 지나치게 긴 줄을 각각 결과에 명시</td><td>결과 상한에서 별도 안내 없이 잘림</td></tr>
 <tr><td class="nw">엔드포인트별 동시성</td><td>provider마다 <code>max_concurrent_tasks</code>, 데몬 전역 제한보다 먼저 적용</td><td>전역 동시성 숫자 하나, 또는 없음</td></tr>
-<tr><td class="nw">페일오버</td><td>프로파일별 <code>fallback</code> 체인. 새 모델 계열에 맞게 요청을 다시 구성</td><td>같은 엔드포인트 재시도 후 실패</td></tr>
-<tr><td class="nw">로컬 모델</td><td>런타임 6종의 reasoning 필드 지원, 서버에서 컨텍스트 한도 조회, 계열별 동작 교정</td><td>범용 OpenAI 호환 인터페이스 사용</td></tr>
+<tr><td class="nw">페일오버</td><td>Smart Agent를 켠 상태에서, 프로파일별 <code>fallback</code> 체인. 새 모델 계열에 맞게 요청을 다시 구성</td><td>같은 엔드포인트 재시도 후 실패</td></tr>
+<tr><td class="nw">로컬 모델</td><td>두 철자의 reasoning 필드를 모두 읽음, 서버에서 컨텍스트 한도 조회, 계열별 동작 교정</td><td>범용 OpenAI 호환 인터페이스 사용</td></tr>
 <tr><td class="nw">모델 전환</td><td>한 대화 안에서, provider를 가로질러 모델 변경. 호스팅 모델과 내 기계의 모델이 같은 대화의 두 지점</td><td>한 벤더의 목록에서 모델 선택</td></tr>
 <tr><td class="nw">클라이언트 구조</td><td>데몬 하나에 화면 셋(터미널·브라우저·네이티브 창), 같은 세션에 동시에 여러 개 접속 가능</td><td>클라이언트마다 프로세스 하나</td></tr>
 <tr><td class="nw">턴 이동</td><td><kbd>Alt</kbd>+방향키로 내가 보낸 턴 사이를 이동. 프롬프트 히스토리 호출과 별개</td><td>스크롤백 검색, 또는 스크롤</td></tr>
@@ -202,7 +202,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <ul>
 <li><strong>작성자</strong>: 이 대화의 에이전트. 자기 히스토리와 프롬프트 캐시를 그대로 유지합니다.</li>
 <li><strong>리뷰어</strong>: <code>girl</code>과 <code>tom</code>. 각자 자기 모델로, 동시에 실행되며, 서로를 볼 수 없습니다.</li>
-<li><strong>리뷰어의 기억</strong>: 리뷰어마다 라운드마다 서브세션 하나. 4라운드의 리뷰어도 1라운드에서 자기가 무엇을 요구했는지 알고 있습니다.</li>
+<li><strong>리뷰어의 기억</strong>: 리뷰어마다 서브세션 하나를 라운드 내내 유지합니다. 4라운드의 리뷰어도 1라운드에서 자기가 무엇을 요구했는지 알고 있습니다.</li>
 <li><strong>리뷰어의 권한</strong>: 읽기, 그리고 프로젝트가 설정해 둔 경우 config.json의 <code>verify_command</code>를 인자 없이 실행하는 것까지. 쓰기는 <code>bash</code>를 포함해 일절 없습니다.</li>
 <li><strong>근거</strong>: 저장소가 있으면 <code>git diff HEAD</code>, 없으면 도구 호출 목록.</li>
 <li><strong>승인</strong>: 리뷰어가 설정하는 불리언 값. 명시적 승인이 아닌 것은 승인이 아닙니다.</li>
@@ -228,7 +228,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <li><strong>분리</strong>: 모델은 시각과 작업을 분리하고, 시각은 localcode가 해석합니다.</li>
 <li><strong>확인</strong>: 모델이 넘긴 말이 아니라, localcode가 읽어낸 시각을 그대로 보여줍니다.</li>
 <li><strong>인식하는 형식</strong>: 상대·시계·명칭·요일·절대 형식을 한국어와 영어 모두 인식합니다. 조사는 작업이 아니라 시각에 붙는 것으로 처리하고, 시각만 있으면 가장 가까운 그 시각을 뜻합니다.</li>
-<li><strong>이름을 대는 거절</strong>: 모호한 시각(<code>나중에</code>)과 반복(<code>매일</code>)은 추측하지 않고 각각 거절합니다.</li>
+<li><strong>이름을 대는 거절</strong>: 모호한 시각(<code>나중에</code>)과 길이가 정해지지 않은 반복(<code>매달</code>, <code>30초마다</code>)은 추측하지 않고 각각 거절합니다. 분·시간·일·주 단위 반복(<code>매일 9시</code>, <code>every day</code>)은 종료 조건을 확인 문구에 밝히고 예약합니다.</li>
 <li><strong>실행</strong>: 자기 세션에서, 그 대화의 workspace와 권한 스위치를 따릅니다.</li>
 <li><strong>결과</strong>: 오른쪽 패널의 행 하나와 표시등. 대기 중에는 깜빡이고, 읽지 않은 답이 있으면 켜지고, 읽으면 회색이 됩니다.</li>
 </ul>
@@ -266,7 +266,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 </ul>
 </div>
 
-<p>상한은 잘라내기가 아니라 거절이며, 권한 확인 창은 지킬 수 없는 추정치 대신 이 값들을 그대로 보여줍니다.</p>
+<p>상한은 잘라내기가 아니라 거절입니다. 앞 단계의 결과를 펼치는 fanout만 예외로, 그 폭은 실행 전에는 알 수 없어서 넘치는 항목을 버리고 몇 개를 버렸는지 보고에 밝힙니다. 권한 확인 창은 지킬 수 없는 추정치 대신 이 값들을 그대로 보여줍니다.</p>
 
 <div class="scroll"><table>
 <thead><tr><th>제한</th><th>값</th></tr></thead>
@@ -283,7 +283,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <h2 id="reference">4. 다른 대화 참조</h2>
 <p class="kicker">다른 대화 참조</p>
 
-<p><strong>모델이 다른 세션의 내용을 읽을 수 있습니다.</strong> 프롬프트에 <code>#&lt;이름&gt;</code>이라고 쓰면 그 대화를 읽을 수 있게 됩니다. 그쪽에서 주고받은 프롬프트, 모델의 답변, 도구가 반환한 내용까지요. 지난주 다른 세션에서 한 분석을 다시 할 필요도, 손으로 붙여넣을 필요도 없습니다.</p>
+<p><strong>모델이 다른 세션의 내용을 읽을 수 있습니다.</strong> 프롬프트에 <code>#&lt;이름&gt;</code>이라고 쓰면 그 대화를 읽을 수 있게 됩니다. 그쪽에서 주고받은 프롬프트, 모델의 답변, 그리고 도구가 건드린 파일까지요. 지난주 다른 세션에서 한 분석을 다시 할 필요도, 손으로 붙여넣을 필요도 없습니다.</p>
 
 <div class="case">
 <h4>사용 사례: 다른 세션에서 작성한 보고서와 이 프로젝트를 대조</h4>
@@ -337,7 +337,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <tr><td>OpenAI API에는 reasoning을 담을 필드가 없어서 런타임마다 필드를 새로 만들었다</td><td>두 철자를 모두 읽음. <code>reasoning_content</code>(DeepSeek, vLLM, SGLang, LM Studio, llama.cpp, Ollama)와 <code>reasoning</code>(OpenRouter 등)</td></tr>
 <tr><td>로컬 서버의 컨텍스트 창은 모델의 사양이 아니라 실제로 로드된 값이다</td><td>서버에 물어봄. <code>GET /v1/models</code>, llama.cpp는 <code>/props</code></td></tr>
 <tr><td>엔드포인트의 동시 요청 용량이 데몬의 전역 제한보다 작음</td><td>provider별 <code>max_concurrent_tasks</code> 적용. 데몬 전역 슬롯보다 먼저 획득</td></tr>
-<tr><td>요청 한도나 만료된 자격증명이 턴을 끝내버린다</td><td>실패한 엔드포인트에 두 번 재시도(1초, 2초) 후, 프로파일별 <code>fallback</code> 체인으로. 새 계열에 맞게 요청을 다시 구성</td></tr>
+<tr><td>요청 한도나 만료된 자격증명이 턴을 끝내버린다</td><td>Smart Agent를 켠 상태에서: 실패한 엔드포인트에 두 번 재시도(1초, 2초) 후, 프로파일별 <code>fallback</code> 체인으로. 새 계열에 맞게 요청을 다시 구성</td></tr>
 <tr><td>길이 초과로 거절된 요청이 턴을 끝내버린다</td><td>요약하고, 그래도 모자라면 잘라내며, 서버가 받아들일 때까지 줄임</td></tr>
 </tbody>
 </table></div>
@@ -419,7 +419,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 
 <div class="part"><span>2부</span><h2>클라이언트</h2></div>
 
-<p>모든 세션은 데몬 하나가 들고 있습니다. 거기에 무엇을 붙일지는 선택이고, 같은 세션에 여러 개가 동시에 붙을 수 있습니다. 아래 스크린샷은 localcode 0.84.0의 실제 화면입니다.</p>
+<p>모든 세션은 데몬 하나가 들고 있습니다. 거기에 무엇을 붙일지는 선택이고, 같은 세션에 여러 개가 동시에 붙을 수 있습니다. 아래 스크린샷은 localcode 0.105.1의 실제 화면입니다.</p>
 
 <h2 id="front-ends">11. 터미널, 브라우저 탭, 네이티브 창</h2>
 <p class="kicker">하나의 데몬, 세 가지 화면</p>
@@ -462,7 +462,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <p>이름 일부를 입력하고 오른쪽 방향키를 누릅니다. 스킬, 커스텀 명령, 데몬 명령, 클라이언트 명령을 하나의 목록에서 완성합니다.</p>
 
 <figure>
-<img src="img/webui-completion.png" alt="프롬프트 창에 'read the mail, then run /s'가 입력되어 있고, 그 아래 줄에 agent: general-purpose 다음 화살표와 /skill, 그리고 4 matches, 화살표로 순환이라고 표시되어 있다.">
+<img src="img/webui-completion.png" alt="프롬프트 창에 'read the mail, then run /s'가 입력되어 있고, 그 아래 줄에 agent: general-purpose, model: qwen3-coder-30b 다음 화살표와 /skill, 그리고 4 matches, 화살표로 순환이라고 표시되어 있다.">
 <figcaption>키를 누르기 전에, 창 아래 줄이 첫 후보와 후보 개수를 알려줍니다.</figcaption>
 </figure>
 
@@ -479,7 +479,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="case">
 <h4>사용 사례: 마흔 턴 전에 내가 뭘 물었는지 찾기</h4>
 <ul>
-<li><strong><kbd>Alt</kbd>+<kbd>↑</kbd>와 <kbd>Alt</kbd>+<kbd>↓</kbd></strong>는 <em>화면</em>을 내가 보낸 턴에서 다음 턴으로 옮깁니다. 사이에 모델이 쓴 것은 전부 건너뜁니다. 턴이 쉰 개인 세션에서 프롬프트를 찾는 방법입니다. 브라우저 화면 전용이고, 터미널은 같은 턴 표시를 그리지만 이 키는 연결하지 않았습니다.</li>
+<li><strong><kbd>Alt</kbd>+<kbd>↑</kbd>와 <kbd>Alt</kbd>+<kbd>↓</kbd></strong>는 <em>화면</em>을 내가 보낸 턴에서 다음 턴으로 옮깁니다. 사이에 모델이 쓴 것은 전부 건너뜁니다. 턴이 쉰 개인 세션에서 프롬프트를 찾는 방법입니다. 브라우저와 데스크톱 창 전용이고, 터미널은 같은 턴 표시를 그리지만 이 키는 연결하지 않았습니다.</li>
 <li><strong><kbd>↑</kbd>와 <kbd>↓</kbd></strong>는 별개이고 <em>텍스트</em>를 옮깁니다. 이전 프롬프트를 대화별로 창에 불러옵니다. 세션을 열 때 대화 내용에서 목록을 다시 채우므로, 대화를 다시 열면 예전에 무엇을 물었는지 그대로 불러올 수 있습니다.</li>
 <li><strong>왜 둘인가</strong>: 내가 물었던 것을 <em>되읽는</em> 일과 <em>고쳐서 다시 묻는</em> 일은 다른 작업이고, 키 하나가 둘 다 하려면 다른 하나를 빼앗아야 합니다.</li>
 </ul>
@@ -491,8 +491,8 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <p class="kicker">이름 변경, 순서 변경, 보관, 복원</p>
 
 <figure class="narrow">
-<img src="img/webui-sessions.png" alt="세션 패널. parser rewrite, release v0.84.0, schema migration이라는 제목의 대화 셋이 각각 fork, rename, archive, delete 버튼을 달고 있고, 그 아래 Archive 섹션에 retrieve와 delete 버튼을 가진 대화 하나가 있다.">
-<figcaption>진행 중인 대화 셋과 그 아래 보관함. 카드마다 workspace 경로와 자체 버튼이 붙어 있습니다.</figcaption>
+<img src="img/webui-sessions.png" alt="세션 패널. parser rewrite, release v0.105.1, schema migration이라는 제목의 대화 셋. 열려 있는 대화는 날짜 자리에 fork, rename, archive, delete를 보여주고, 나머지 둘은 워크스페이스 경로와 시작 시각을 보여준다. 그 아래 Archive 섹션에 retrieve와 delete를 가진 대화 하나가 있다.">
+<figcaption>진행 중인 대화 셋과 그 아래 보관함. 버튼은 날짜가 있던 자리에, 지금 열려 있는 대화와 가리키고 있는 대화에만 나옵니다.</figcaption>
 </figure>
 
 <div class="scroll"><table>
@@ -544,7 +544,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <ul>
 <li><strong>세션 단위</strong>: 경계는 묻고 있는 그 세션의 workspace입니다. 데몬 하나 위의 두 프로젝트에 있는 두 대화가 각자의 경계를 갖습니다.</li>
 <li><strong>적용 대상</strong>: 읽기는 <code>read_file</code>, <code>grep</code>, <code>glob</code>. 쓰기는 <code>write_file</code>, <code>edit</code>.</li>
-<li><strong>고를 수 있는 답</strong>: 이번만 허용, 이 세션 동안 허용, 이 디렉터리 허용, 또는 바깥 전반 허용. 기억된 것은 <code>/read-outside mem-clear</code>로 다시 잊게 할 수 있습니다.</li>
+<li><strong>고를 수 있는 답</strong>: 이번만 허용, 이 디렉터리를 이번 세션 동안 허용, 바깥 전반 허용, 또는 거절. 도구 단위의 "세션 동안 허용"과 "항상 허용"은 여기서 일부러 빼두었습니다 — 장소는 장소로, 두 가지 크기 중 하나로 답합니다. 기억된 것은 <code>/read-outside mem-clear</code>로 다시 잊게 할 수 있습니다.</li>
 <li><strong>터미널에서</strong>: <code>/read-outside</code>와 <code>/write-outside</code>가 같은 두 스위치를 조작합니다. <code>/permission-skip-tools</code>는 의도적으로 도구 확인만 건너뛰고 프로젝트를 벗어나는 경로는 계속 묻습니다.</li>
 </ul>
 </div>
@@ -557,10 +557,10 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <tr><td class="nw">검색 결과</td><td>200개 상한, 1MB를 넘는 줄, 읽지 못한 파일을 각각 출력에 명시합니다. 개수가 아니라 경로를, 최대 세 개까지. Smart Agent가 켜져 있으면 한 파일이 grep 결과 200개 중 30개를 넘게 차지할 수 없습니다.</td></tr>
 <tr><td class="nw">라이프사이클 훅</td><td>도구 훅 외에 <code>pre_model</code>(요청 차단, 또는 모델이 찾을 수 없는 사실 주입), <code>post_model</code>, <code>delegate</code>(서브 에이전트 거절. 프롬프트로는 못 하는 일), <code>compact</code>, <code>retry</code>.</td></tr>
 <tr><td class="nw">세션별 workspace</td><td>데몬 하나에서 두 프로젝트의 두 세션. 자기 세션의 턴만 자기 전환을 막습니다.</td></tr>
-<tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>를 프로파일별 또는 대화별로. 설정하지 않으면 아무것도 보내지 않으므로, 손대지 않은 환경의 요청은 바이트까지 그대로입니다.</td></tr>
+<tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>를 프로파일별 또는 대화별로. 설정하지 않으면 아무것도 보내지 않으므로, 손대지 않은 환경의 요청은 바이트까지 그대로입니다.</td></tr>
 <tr><td class="nw">진행 중 지시</td><td>턴이 도는 동안 입력한 메시지가 모델의 다음 도구 호출 지점에서 그 턴에 전달됩니다. 입력한 순서대로입니다.</td></tr>
 <tr><td class="nw">거의 맞는 도구 이름</td><td>장식이 붙었지만 그 에이전트가 실제로 가진 도구 하나를 명확히 가리키는 이름은 실행하고 어느 철자가 맞았는지 알려줍니다. 해석은 그 에이전트에게 제공된 도구 안에서만 이루어지므로, 오타가 <code>tools</code> 제한을 넘어설 수 없습니다.</td></tr>
-<tr><td class="nw">모델별 습성</td><td>모델 id를 기준으로만 적용하고 다른 어디에도 적용하지 않습니다. 작업 중간에 멈추는 muse 계열에는 계속하라는 신호를, Gemma에는 LaTeX 벗기기를.</td></tr>
+<tr><td class="nw">모델별 습성</td><td>모델 id를 기준으로 적용합니다. 작업 중간에 멈추는 muse 계열에는 계속하라는 신호를, Gemma에는 LaTeX 대신 문자를 그대로 쓰라는 안내를. 그래도 들어온 LaTeX는 웹 UI가 모델과 무관하게 벗겨냅니다.</td></tr>
 <tr><td class="nw">환경변수 설정</td><td>config.json의 모든 문자열이 <code>{env:NAME}</code> 또는 <code>{env:NAME:-fallback}</code>일 수 있습니다. 없는 변수는 그 변수와 요구한 필드를 지목하는 오류이지, 나중에 401로 실패하는 빈 문자열이 아닙니다.</td></tr>
 <tr><td class="nw">이벤트 전달</td><td>뒤처진 클라이언트를 조용히 건너뛰지 않고 그 사실을 알려줍니다. 스트림이 끝나고, 다시 연결해, 놓친 부분을 세션 로그에서 재생합니다. 빠짐도 중복도 없습니다.</td></tr>
 <tr><td class="nw">Linux 설치</td><td>root 없이. 정적 바이너리를 <code>~/.local/bin</code>에 두고 <code>$HOME</code> 밖에는 아무것도 쓰지 않습니다. root를 쓸 수 있으면 <code>.deb</code>와 이식 가능한 tarball도 있습니다.</td></tr>
@@ -585,15 +585,15 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <h2 id="qualifications">전제와 한계</h2>
 
 <ul>
-<li><strong>비교 표의 오른쪽 열은 일반적 기준선</strong>입니다. 2026-09-01 기준으로 널리 쓰이는 코딩 에이전트들의 공통 모습을 서술한 것이지, 특정 제품에 대한 기능 감사가 아닙니다. 이 도구들은 자주 출시되므로, 없다고 적힌 기능이 이 글을 읽는 시점에는 있을 수 있습니다.</li>
+<li><strong>비교 표의 오른쪽 열은 일반적 기준선</strong>입니다. 2026-09-01 기준이며, localcode 열을 v0.105.1에 맞춰 재검증할 때 이 열은 다시 조사하지 않았습니다. 널리 쓰이는 코딩 에이전트들의 공통 모습을 서술한 것이지, 특정 제품에 대한 기능 감사가 아닙니다. 이 도구들은 자주 출시되므로, 없다고 적힌 기능이 이 글을 읽는 시점에는 있을 수 있습니다.</li>
 <li><strong>2부가 전부 유일한 것은 아닙니다.</strong> 하나의 라이브 세션을 여러 화면이 공유하는 것과, 내가 보낸 턴 사이를 이동하는 것은 드뭅니다. 이름 변경·순서 변경·fork는 여러 도구가 어떤 형태로든 갖고 있는 편의 기능이며, 이 문서가 <em>localcode를 쓰는 경험</em>에 대한 것이기도 해서 실었습니다.</li>
-<li><strong>localcode에 대한 모든 서술은 v0.84.0에 실제로 들어 있는 동작</strong>입니다. <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a>에 문서화되어 있고 저장소의 테스트 게이트가 검증합니다.</li>
+<li><strong>localcode에 대한 모든 서술은 v0.105.1에 실제로 들어 있는 동작</strong>입니다. <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a>에 문서화되어 있고 저장소의 테스트 게이트가 검증합니다.</li>
 <li><strong>벤치마크 수치는 25개 인스턴스 한 번의 실행</strong>이고 에이전트 간 격차는 실행 간 편차 안에 있습니다. 그 실행이 무엇을 뒷받침하고 무엇을 뒷받침하지 않는지는 <a href="coding-agent-benchmark.html">벤치마크 문서</a>를 보십시오.</li>
-<li><strong>한 기능은 제품에서 실험적</strong>이라고 표시되어 있습니다. 네이티브 데스크톱 창입니다. v0.84.0에서는 Windows 자체 업데이트도 그랬습니다. 새 버전을 적용은 하지만 localcode를 재시작하지는 못했습니다. v0.87.0부터는 다른 플랫폼처럼 데몬을 새 버전에 넘겨주고, v0.88.0부터는 시작 시에도 그렇게 합니다.</li>
+<li><strong>한 기능은 제품에서 실험적</strong>이라고 표시되어 있습니다. 네이티브 데스크톱 창입니다. 거친 부분은 v0.84.0의 Windows 자체 업데이트가 하나 더 있었습니다. 새 버전을 적용은 하지만 localcode를 재시작하지는 못했습니다. v0.87.0부터는 다른 플랫폼처럼 데몬을 새 버전에 넘겨주고, v0.88.0부터는 시작 시에도 그렇게 합니다.</li>
 </ul>
 
 <footer>
-localcode 0.84.0 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
+localcode 0.105.1 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
 </footer>
 
 </div>

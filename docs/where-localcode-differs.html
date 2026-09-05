@@ -122,7 +122,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <p class="lede">localcode supports multi-model approval, scheduled execution, and validated multi-agent plans. This page describes capabilities that are not standard in coding agents and states the use case for each capability.</p>
 
 <p class="lang"><span>English</span> &nbsp;&middot;&nbsp; <a href="where-localcode-differs.ko.html">한국어</a></p>
-<div class="meta">version &nbsp;&nbsp;&nbsp;0.84.0<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-01<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
+<div class="meta">version &nbsp;&nbsp;&nbsp;0.105.1<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-05<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
 
 <nav class="toc" aria-label="Contents">
 <h2>Contents</h2>
@@ -175,7 +175,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <div class="scroll"><table>
 <thead><tr><th>Capability</th><th>localcode</th><th>Common elsewhere</th></tr></thead>
 <tbody>
-<tr><td class="nw">Adversarial review</td><td>Up to 3 reviewers, each a separate agent with its own model profile and its own sub-session per round, unanimous boolean approval required</td><td>One model reviewing its own output, in the same context</td></tr>
+<tr><td class="nw">Adversarial review</td><td>Up to 3 reviewers, each a separate agent with its own model profile and its own sub-session kept across rounds, unanimous boolean approval required</td><td>One model reviewing its own output, in the same context</td></tr>
 <tr><td class="nw">Scheduled work</td><td>Natural-language booking, time parsed by the harness, missed times reported as missed</td><td>None; a prompt runs when it is sent</td></tr>
 <tr><td class="nw">Multi-agent plans</td><td>Plan authored into a tool schema, validated whole before execution, hard ceilings on stages, turns and wall time</td><td>Free-form delegation the model narrates and may abandon</td></tr>
 <tr><td class="nw">Cross-conversation reference</td><td><code>#&lt;name&gt;</code> lets the model read another session's messages, delivered as an untrusted tool result rather than spliced into the prompt</td><td>Manual copy and paste between sessions</td></tr>
@@ -183,8 +183,8 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <tr><td class="nw">Model-run commands</td><td>Off by default; on, the model may run a named built-in, custom command or skill as its own turn</td><td>Commands are typed by a person only</td></tr>
 <tr><td class="nw">Search completeness reporting</td><td>Truncation, unreadable files and oversized lines are each named in the result</td><td>Silent truncation at a result cap</td></tr>
 <tr><td class="nw">Per-endpoint concurrency</td><td><code>max_concurrent_tasks</code> per provider, taken before the daemon-wide limit</td><td>One global concurrency number, or none</td></tr>
-<tr><td class="nw">Failover</td><td>Per-profile <code>fallback</code> chain with the request re-derived for the new model family</td><td>Retry on the same endpoint, then fail</td></tr>
-<tr><td class="nw">Local models</td><td>Reasoning read from six runtime spellings, context window read from the server, per-family behaviour corrections</td><td>Hosted APIs first, local endpoints as a generic OpenAI shim</td></tr>
+<tr><td class="nw">Failover</td><td>With Smart Agent on, a per-profile <code>fallback</code> chain with the request re-derived for the new model family</td><td>Retry on the same endpoint, then fail</td></tr>
+<tr><td class="nw">Local models</td><td>Reasoning read from both runtime spellings, context window read from the server, per-family behaviour corrections</td><td>Hosted APIs first, local endpoints as a generic OpenAI shim</td></tr>
 <tr><td class="nw">Model switching</td><td>Change model inside one conversation, across providers: a hosted model and one on your own machine are two stops in the same conversation</td><td>A model picked from one vendor's list</td></tr>
 <tr><td class="nw">Client architecture</td><td>One daemon, three front ends (terminal, browser, native window), any number attached to the same session at once</td><td>One process per client</td></tr>
 <tr><td class="nw">Turn navigation</td><td><kbd>Alt</kbd> and the arrows move the view between your own turns, separately from prompt history recall</td><td>Scrollback search, or scrolling</td></tr>
@@ -208,7 +208,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <ul>
 <li><strong>Author</strong>: this conversation's agent, keeping its history and its prompt cache.</li>
 <li><strong>Reviewers</strong>: <code>girl</code> and <code>tom</code>, each on its own model, running at the same time and unable to see each other.</li>
-<li><strong>Reviewer memory</strong>: one sub-session per reviewer per round, so a reviewer in round four still knows what it asked for in round one.</li>
+<li><strong>Reviewer memory</strong>: one sub-session per reviewer, kept across the rounds, so a reviewer in round four still knows what it asked for in round one.</li>
 <li><strong>Reviewer powers</strong>: reading, plus the project's own <code>verify_command</code> from config.json, with no arguments, where the project has set one. No writing at all, <code>bash</code> included.</li>
 <li><strong>Evidence</strong>: <code>git diff HEAD</code> where there is a repository, the tool-call list where there is not.</li>
 <li><strong>Approval</strong>: a boolean each reviewer sets. Anything that is not an explicit approval is not one.</li>
@@ -234,7 +234,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <li><strong>Split</strong>: the model separates the time from the work; localcode parses the time.</li>
 <li><strong>Confirmation</strong>: names the moment localcode read, not the words the model passed on.</li>
 <li><strong>Forms accepted</strong>: relative, clock, named, weekday and absolute, in English and in Korean, with a bare hour meaning the nearest one.</li>
-<li><strong>Refusals by name</strong>: a vague time (<code>later</code>) and a repeat (<code>every day</code>) are each refused rather than guessed at.</li>
+<li><strong>Refusals by name</strong>: a vague time (<code>later</code>) and a repeat with no fixed length to it (<code>every month</code>, <code>every 30 seconds</code>) are each refused rather than guessed at. A repeat by the minute, hour, day or week (<code>every day</code>, <code>매일 9시</code>) is booked, with a stop condition named in the confirmation.</li>
 <li><strong>Execution</strong>: its own session, under the conversation's workspace and permission switches.</li>
 <li><strong>Result</strong>: a row in the right panel with a light: blinking while waiting, solid for an unread answer, grey once read.</li>
 </ul>
@@ -272,7 +272,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 </ul>
 </div>
 
-<p>Ceilings are refusals rather than truncations, and the permission prompt shows them rather than an estimate it cannot keep:</p>
+<p>Ceilings are refusals rather than truncations, except a fanout over an earlier stage's results, whose width is not known until the run: there the surplus items are dropped and the report names how many. The permission prompt shows the ceilings rather than an estimate it cannot keep:</p>
 
 <div class="scroll"><table>
 <thead><tr><th>Limit</th><th>Value</th></tr></thead>
@@ -289,7 +289,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <h2 id="reference">4. Cross-conversation reference</h2>
 <p class="kicker">Cross-conversation reference</p>
 
-<p><strong>The model can read the contents of a different session.</strong> Write <code>#&lt;name&gt;</code> in a prompt and the named conversation becomes readable: its prompts, its replies, and what its tools returned. Analysis done last week in another session does not have to be repeated, and does not have to be pasted in by hand.</p>
+<p><strong>The model can read the contents of a different session.</strong> Write <code>#&lt;name&gt;</code> in a prompt and the named conversation becomes readable: its prompts, its replies, and the files its tools touched. Analysis done last week in another session does not have to be repeated, and does not have to be pasted in by hand.</p>
 
 <div class="case">
 <h4>Use case: checking this project against a report written in another session</h4>
@@ -343,7 +343,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <tr><td>Reasoning has no field in the OpenAI API, so every runtime invented one</td><td>Both spellings read: <code>reasoning_content</code> (DeepSeek, vLLM, SGLang, LM Studio, llama.cpp, Ollama) and <code>reasoning</code> (OpenRouter and others)</td></tr>
 <tr><td>A local server's window is whatever was loaded, not what the model supports</td><td>Read from the server: <code>GET /v1/models</code>, or <code>/props</code> on llama.cpp</td></tr>
 <tr><td>An endpoint supports fewer concurrent requests than the daemon</td><td>Per-provider <code>max_concurrent_tasks</code>, acquired before the daemon-wide slot</td></tr>
-<tr><td>A rate limit or an expired credential ends the turn</td><td>Two retries on the failing endpoint (1s, 2s), then a per-profile <code>fallback</code> chain with the request re-derived for the new family</td></tr>
+<tr><td>A rate limit or an expired credential ends the turn</td><td>With Smart Agent on, two retries on the failing endpoint (1s, 2s), then a per-profile <code>fallback</code> chain with the request re-derived for the new family</td></tr>
 <tr><td>A request refused for length ends the turn</td><td>Summarise, then trim, shrinking until the server accepts it</td></tr>
 </tbody>
 </table></div>
@@ -425,7 +425,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <div class="part"><span>Part 2</span><h2>Client operation</h2></div>
 
-<p>One daemon holds every session. What attaches to it is a choice, and more than one thing can attach to the same session at the same time. The screenshots below are of localcode 0.84.0.</p>
+<p>One daemon holds every session. What attaches to it is a choice, and more than one thing can attach to the same session at the same time. The screenshots below are of localcode 0.105.1.</p>
 
 <h2 id="front-ends">11. A terminal, a browser tab, and a native window</h2>
 <p class="kicker">Three front ends, one daemon</p>
@@ -468,7 +468,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <p>Type part of a name and press the right arrow. One completion list includes skills, custom commands, daemon commands and client commands.</p>
 
 <figure>
-<img src="img/webui-completion.png" alt="The prompt box holding the text 'read the mail, then run /s', with the line below it reading: agent general-purpose, then an arrow, then /skill, then 4 matches, arrow cycles.">
+<img src="img/webui-completion.png" alt="The prompt box holding the text 'read the mail, then run /s', with the line below it reading: agent general-purpose, model qwen3-coder-30b, then an arrow, then /skill, then 4 matches, arrow cycles.">
 <figcaption>The line under the box names the first match and how many there are, before the key is pressed.</figcaption>
 </figure>
 
@@ -485,7 +485,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="case">
 <h4>Use case: finding what you asked, forty turns ago</h4>
 <ul>
-<li><strong><kbd>Alt</kbd> + <kbd>Up</kbd> and <kbd>Alt</kbd> + <kbd>Down</kbd></strong> move the <em>view</em> from one of your own turns to the next, skipping everything the model wrote in between. This is how you find a prompt in a session with fifty of them. Browser front end only; the terminal draws the same turn marks but does not bind the keys.</li>
+<li><strong><kbd>Alt</kbd> + <kbd>Up</kbd> and <kbd>Alt</kbd> + <kbd>Down</kbd></strong> move the <em>view</em> from one of your own turns to the next, skipping everything the model wrote in between. This is how you find a prompt in a session with fifty of them. Browser and desktop window only; the terminal draws the same turn marks but does not bind the keys.</li>
 <li><strong><kbd>Up</kbd> and <kbd>Down</kbd></strong> are separate, and move the <em>text</em>: they recall previous prompts into the box, per conversation. The list is refilled from the transcript when a session opens, so reopening a conversation recalls what was asked in it before.</li>
 <li><strong>Why two</strong>: reading back what you asked and editing what you asked again are different jobs, and one key cannot do both without taking the other away.</li>
 </ul>
@@ -497,8 +497,8 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <p class="kicker">Rename, reorder, archive, retrieve</p>
 
 <figure class="narrow">
-<img src="img/webui-sessions.png" alt="The session panel: three conversations titled parser rewrite, release v0.84.0 and schema migration, each with fork, rename, archive and delete buttons, and below them an Archive section holding one conversation with retrieve and delete buttons.">
-<figcaption>Three active conversations and the archive list. Each card shows its workspace path and controls.</figcaption>
+<img src="img/webui-sessions.png" alt="The session panel: three conversations titled parser rewrite, release v0.105.1 and schema migration. The open one shows fork, rename, archive and delete in place of its date; the other two show their workspace path and when they were started. Below them an Archive section holding one conversation, with retrieve and delete.">
+<figcaption>Three active conversations and the archive list. A row carries its controls where its date is, on the conversation you are in and on the one you are pointing at.</figcaption>
 </figure>
 
 <div class="scroll"><table>
@@ -550,7 +550,7 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <ul>
 <li><strong>Per session</strong>: the boundary is the workspace of the session asking, so two conversations in two projects on one daemon each have their own.</li>
 <li><strong>Covered</strong>: <code>read_file</code>, <code>grep</code> and <code>glob</code> as reading; <code>write_file</code> and <code>edit</code> as writing.</li>
-<li><strong>Answers available</strong>: allow once, allow for this session, allow this directory, or allow outside generally. The remembered ones can be forgotten again with <code>/read-outside mem-clear</code>.</li>
+<li><strong>Answers available</strong>: allow once, allow this directory for the rest of the session, allow outside generally, or deny. The tool-level "allow for this session" and "always allow" are deliberately withheld here — a place is answered by place, at one of two sizes. The remembered ones can be forgotten again with <code>/read-outside mem-clear</code>.</li>
 <li><strong>From the terminal</strong>: <code>/read-outside</code> and <code>/write-outside</code> set the same two switches, and <code>/permission-skip-tools</code> deliberately skips tool prompts while still asking about paths that leave the project.</li>
 </ul>
 </div>
@@ -563,10 +563,10 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <tr><td class="nw">Search results</td><td>A 200-match cap, a line over 1MB and an unreadable file are each named in the output. Paths, at most three, rather than a count. With Smart Agent on, no single file may take more than 30 of grep's 200 results.</td></tr>
 <tr><td class="nw">Lifecycle hooks</td><td>Beyond tool hooks: <code>pre_model</code> (block a request, or inject a fact the model could not look up), <code>post_model</code>, <code>delegate</code> (refuse a sub-agent, which a prompt cannot do), <code>compact</code>, <code>retry</code>.</td></tr>
 <tr><td class="nw">Per-session workspace</td><td>Two sessions in two projects on one daemon. Only that session's own turn blocks its own switch.</td></tr>
-<tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>, per profile or per conversation. Unset sends nothing, so an unchanged setup produces byte-identical requests.</td></tr>
+<tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, per profile or per conversation. Unset sends nothing, so an unchanged setup produces byte-identical requests.</td></tr>
 <tr><td class="nw">Steering</td><td>A message typed during a turn reaches that turn at the model's next tool call, in the order typed.</td></tr>
 <tr><td class="nw">Nearly-right tool names</td><td>A decorated name that unambiguously means one tool the agent has runs it and says which spelling worked. Resolution searches only the tools that agent was offered, so a misspelling cannot reach past a <code>tools</code> restriction.</td></tr>
-<tr><td class="nw">Model-specific handling</td><td>Selected by model ID: continuation instructions for muse models that stop during a task, LaTeX unwrapping for Gemma.</td></tr>
+<tr><td class="nw">Model-specific handling</td><td>Selected by model ID: continuation instructions for muse models that stop during a task, a note asking Gemma for the character itself rather than LaTeX. The Web UI unwraps the LaTeX that arrives anyway, whoever wrote it.</td></tr>
 <tr><td class="nw">Config from the environment</td><td>Any string may be <code>{env:NAME}</code> or <code>{env:NAME:-fallback}</code>. A missing variable is an error naming it and the field that asked for it, not an empty string that fails later as a 401.</td></tr>
 <tr><td class="nw">Event delivery</td><td>A client that falls behind is told rather than silently skipped: the stream ends, it reconnects, and it replays what it missed from the session log with no gap and no duplicate.</td></tr>
 <tr><td class="nw">Linux install</td><td>No root: a static binary in <code>~/.local/bin</code>, nothing written outside <code>$HOME</code>. A <code>.deb</code> and a portable tarball where root is available.</td></tr>
@@ -591,15 +591,15 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <h2 id="qualifications">Qualifications</h2>
 
 <ul>
-<li><strong>The comparison column describes a general baseline</strong> across coding agents in common use as of 2026-09-01, not a feature audit of any one product. These tools ship frequently, and a capability listed as absent may exist by the time this is read.</li>
+<li><strong>The comparison column describes a general baseline</strong> across coding agents in common use as of 2026-09-01, and was not re-surveyed when the localcode column was checked against v0.105.1, not a feature audit of any one product. These tools ship frequently, and a capability listed as absent may exist by the time this is read.</li>
 <li><strong>Part 2 is not uniformly unique.</strong> Sharing one live session between front ends, and moving the view between your own turns, are uncommon. Rename, reorder and fork are conveniences that several tools have in some form; they are here because this page is also about what using localcode is like.</li>
-<li><strong>Every localcode claim is a shipped behaviour</strong> at v0.84.0, documented in <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> and covered by the repository's test gate.</li>
+<li><strong>Every localcode claim is a shipped behaviour</strong> at v0.105.1, documented in <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> and covered by the repository's test gate.</li>
 <li><strong>Benchmark numbers are one run of 25 instances</strong> and the spread between agents is inside run-to-run variance. See the <a href="coding-agent-benchmark.html">benchmark page</a> for what it does and does not support.</li>
-<li><strong>One capability is marked experimental</strong> in the product: the native desktop window. Updating on Windows was the other at v0.84.0, when it applied the new version but could not restart localcode; since v0.87.0 it hands the daemon over like every other platform, and since v0.88.0 it does so at startup as well.</li>
+<li><strong>One capability is marked experimental</strong> in the product: the native desktop window. Updating on Windows was the other rough edge at v0.84.0, when it applied the new version but could not restart localcode; since v0.87.0 it hands the daemon over like every other platform, and since v0.88.0 it does so at startup as well.</li>
 </ul>
 
 <footer>
-localcode 0.84.0 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
+localcode 0.105.1 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
 </footer>
 
 </div>
