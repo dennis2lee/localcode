@@ -427,11 +427,11 @@ Completed findings remain in this list to preserve item numbers and release hist
    * Not fixed here because the fix is a decision rather than a patch. Answering `GET /api/update` from the window's own version is easy; making `POST /api/update/install` mean "replace the installed copy" requires the *window* process to run the install, and after a startup handoff the window has already discarded its daemon. Either the window keeps enough of one to install with, or the successor is told which file to replace.
 
 
-47. **The four Web UI screenshots in `docs/img/` are of the old interface. Open.**
+47. **The four Web UI screenshots in `docs/img/` were of the old interface. Done in v0.106.0.**
 
-   * `docs/where-localcode-differs.html` and its Korean twin embed `webui-full.png`, `webui-completion.png`, `webui-sessions.png` and `webui-outside.png`. All four were taken before the interface study landed, so they show the old palette, the old glyph icons, the full-width transcript and the permanent row of session buttons.
-   * The alt text is still accurate — the layout and every control it describes are where they were — so the pages read correctly with images off. What is wrong is that a reader who looks at them sees a different product from the one they just installed.
-   * Not done here because it needs a screen: the images have to be captured from a running window at a known size with specific content in it (a completion walk mid-typing, three named conversations plus an archive, the permissions dialog scrolled to "Outside this project"), and there is no path from this environment to a PNG on disk.
+   * `docs/where-localcode-differs.html` and its Korean twin embed `webui-full.png`, `webui-completion.png`, `webui-sessions.png` and `webui-outside.png`. All four had been taken before the interface study, so they showed the old palette, the old glyph icons, the full-width transcript and the permanent row of session buttons.
+   * Recorded here as "needs a screen, and there is no path from this environment to a PNG on disk". That was wrong: Chrome over the DevTools Protocol both evaluates script and captures pixels, which is what the three interesting figures need — a completion walk mid-typing, the archive open, the permissions dialog scrolled to its boundary section. Retaken from a running v0.105.1 with three MCP servers, three named conversations and an archive.
+   * Two interface faults surfaced in the taking and were fixed with them: every unclassed button was a filled lozenge of the accent, and a session row's controls reserved a blank band under every idle row. See the v0.106.0 entry.
 
 
 ## UI ideas

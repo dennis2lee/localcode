@@ -589,7 +589,8 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		} else {
 			repeats++
 		}
-		// A carry-on is earned by a call that is BOTH new and a change.
+		// A carry-on is earned by a step that is BOTH: a call this turn
+		// has not made, alongside one that can change the workspace.
 		// New alone was the old test and it let a prodded model buy
 		// another nudge by looking somewhere it had not looked; a change
 		// alone would let it buy one by re-running the same command. Only
