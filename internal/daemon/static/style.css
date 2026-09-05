@@ -10,57 +10,124 @@
      vw, so every viewport-relative cap below is written as
      calc(<n>vh / var(--zoom, 1)) to put back what the zoom took away. */
   --zoom: 1;
-  /* Surfaces, in four steps rather than three. --bg is the side panels
-     and the header/footer chrome, --center the transcript column, so the
-     conversation reads as the lit surface and everything around it
-     recedes. --panel is what a modal is drawn on: it used to hold the
-     same value as --center, which left a dialog floating on the
-     transcript's own grey with a 1px border as the only evidence it was
-     a separate thing. --raised is one step further up again, for what
-     sits *on* a surface — the prompt box, code blocks, table headers. */
-  --bg: #131417;
-  --center: #1b1d21;
-  --panel: #22252a;
-  --raised: #2a2e34;
+  /* Surfaces: cold for the machine, warm for the page.
+     The four steps are the ones this sheet has always had, and the
+     temperature is the new part. The chrome is a cold near-black and the
+     transcript a warm one, so the conversation reads as the lit surface
+     without a border having to say so — which is what a page on a desk
+     looks like. --panel is what a window is drawn on, --raised what sits
+     on a surface: the prompt box, code, table headers. --ink is below all
+     of them, for the window bar the page draws itself. */
+  --ink: #0f1011;
+  --bg: #16181b;
+  --center: #221c17;
+  --panel: #2a2420;
+  --raised: #332c25;
   /* Two border tokens, not one. --border is the structural hairline that
-     every card, input and table cell is drawn with, and at #333 on
-     #202020 — 1.35:1 — it was very nearly not there at all. Anything
-     that has to be seen rather than merely inferred, chiefly hover,
-     takes --border-strong. */
-  --border: #383d44;
-  --border-strong: #4e555e;
-  --text: #eef1f5;
-  --muted: #9aa4b0;
-  /* Colour by role rather than by taste. One blue used to mean all of
-     "you can act on this", "this is the selected one", "this is a path"
-     and "this is what you said" at once, which left blue meaning nothing
-     in particular. --interactive is the only one that ever invites a
-     click. --select says which thing is current and never appears on a
-     control. --user is the deliberate absence of colour on the user's
-     own prose: it is the longest text on screen and reads worse tinted.
-     Paths go muted — they identify a session, they are not links. */
-  --interactive: #57a9ff;
-  --select: #a98bff;
-  --user: #d9e3ef;
-  /* Text drawn on --interactive. It exists because there were two
-     answers to the same question: a hard-coded #05131f on buttons and
-     var(--center) on the jump-to-latest pill. */
-  --on-accent: #06121f;
-  /* Status. --run is its own token because "running" was green in the
-     session list and amber in the task panel — one fact in two colours
-     depending on which panel it was in. Amber won the tie: green is
-     "this finished well", and a turn in flight has not finished. */
-  --ok: #4cc38a;
-  --run: #e0a23c;
-  --warn: #e0a23c;
-  --err: #ff6f61;
+     every row, input and table cell is drawn with; anything that has to
+     be seen rather than merely inferred, chiefly hover, takes
+     --border-strong. */
+  --border: #3d3a36;
+  --border-strong: #575049;
+  /* Text, warmed to the page it is set on. --faint is new: the quietest
+     thing that is still text, for a timestamp or a note, and still 4.6:1.
+     --user is the deliberate absence of colour on the user's own prose. */
+  --text: #f2ede6;
+  --user: #fbf7f0;
+  --muted: #a09992;
+  --faint: #8b857d;
+  /* The second ink, and the rule that goes with it: IT DRAWS, IT NEVER
+     FLOODS. It may be a rule, an outline, a check, a word. It may not be
+     a field of colour — nothing here is a filled lozenge of it, which is
+     why the loudest thing in the window is the prose and not a button.
+     Red is spoken for by errors, so the second historical ink is the
+     other one: a blue-violet lapis. */
+  --interactive: #7f97dc;
+  /* --select says which thing is current, and it is not a hue: it is the
+     light being on. Warm ivory, brighter than the text, never on a
+     control. */
+  --select: #f5e9d2;
+  --on-accent: #15120f;
+  /* Status, and these four are the only colours that report a machine
+     condition. --run and --warn used to be the same value, which made "a
+     turn is in flight" and "this is waiting on you" the same colour in a
+     product whose whole tempo is those two states. An orange and a gold:
+     different hue, different lightness, tellable apart in a 7px dot. */
+  --ok: #7fae8c;
+  --run: #e09a4e;
+  --warn: #e9c46b;
+  --err: #e0796a;
+
+  /* Faces, all three of them already on the machine: this page is served
+     from the binary and never asks the network for anything.
+     doc  — Charter (macOS) and Sitka Text (Windows) are both Matthew
+            Carter transitionals cut for the screen: high x-height, stems
+            that survive light-on-dark, real italics. Only the transcript
+            is set in it, which is the argument: the model's answer is a
+            document and everything around it is an interface.
+     ui   — the platform's own UI face, so the apparatus looks like the
+            operating system rather than like the prose.
+     mono — the platform's UI monospace, for paths, ids, tool names, code. */
+  --f-doc: Charter, "Sitka Text", "Iowan Old Style", "Bitstream Charter", Cambria, Georgia, serif;
+  --f-ui: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --f-mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", Consolas, Menlo, monospace;
+
+  /* The scale, and it is the whole scale: every font-size below is one of
+     these nine. */
+  --t-cap: 10.5px;    /* letterspaced caps: the name of a region */
+  --t-fine: 11.5px;   /* meta, notes, marginal apparatus */
+  --t-ui: 12.5px;     /* the interface default, and the voice of controls */
+  --t-code: 13px;     /* mono, wherever it is set as code */
+  --t-ui-l: 13.5px;   /* inputs and panel rows */
+  --t-read-s: 15px;   /* the second reading size: thinking, review, tables */
+  --t-sub: 16.5px;
+  --t-read: 17px;     /* the document body, and what you type into it */
+  --t-head: 18.5px;   /* a heading inside an answer, and a window's title */
+
+  /* The reading measure. 37rem of Charter at 17px is about 72 characters,
+     which is the whole of finding 01: the transcript was flex:1 with no
+     maximum, so on a maximised 27-inch window a paragraph was set about
+     190 characters wide. */
+  --measure: 37rem;
+
+  /* One radius, and it means one thing: you can press this. A window is a
+     sheet of paper and has square corners; code is set on a ground, not
+     in a pill; a row is divided by a rule, not drawn as a card. */
+  --r-ctl: 2px;
 }
+/* The icon set.
+   One grid (16), one stroke (1.25), one colour source (currentColor), so
+   an icon is whatever colour the control it sits in is and nothing has to
+   be said twice. The sprite itself is inert and takes no space. */
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.ico { width: 16px; height: 16px; flex: none; display: block; }
+.ico-14 { width: 14px; height: 14px; }
+.ico-13 { width: 13px; height: 13px; }
+.ico-12 { width: 12px; height: 12px; }
+/* A control with an icon in it is a row, not a run of text. */
+.pill, .panel-toggle, .icon-btn, #jump-bottom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 * { box-sizing: border-box; }
+/* hidden wins, always.
+   The browser's own [hidden] rule is a display:none at the very bottom of
+   the cascade, so any class selector that sets display beats it — and a
+   sheet that gives .pill a display:inline-flex quietly un-hides every
+   pill the page has hidden. That is how the stop button came to be on
+   screen with nothing to stop, which is precisely the lie this redesign
+   was fixing elsewhere. Stated once, with the weight to hold. */
+[hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: var(--t-ui)/1.5 var(--f-ui);
+  /* Digits that line up in a column: every readout in the status strip,
+     every count in a panel, every timestamp. */
+  font-variant-numeric: tabular-nums;
   display: flex;
   flex-direction: column;
 }
@@ -77,14 +144,23 @@ body {
   align-items: center;
   justify-content: space-between;
   height: 28px;
-  background: var(--bg);
+  /* One step below the header, which only happens here: on Windows the
+     page draws this bar itself and the depth cue is real, while on macOS
+     the system draws it and matches --bg instead (chrome_darwin.go). */
+  background: var(--ink);
   border-bottom: 1px solid var(--border);
   user-select: none;
 }
 #window-bar[hidden] { display: none; }
-#window-bar .title { padding-left: 12px; font-size: 12px; color: var(--muted); }
+#window-bar .title { padding-left: 12px; font-size: var(--t-ui); color: var(--muted); }
 #window-bar .window-buttons { display: flex; height: 100%; }
 #window-bar button {
+  /* One rule, and it stays one: internal/gui/chrome_test.go reads this
+     width back out of the stylesheet and holds chrome_windows.go to it,
+     matching the first "#window-bar button {" in the file. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 46px;
   height: 100%;
   padding: 0;
@@ -92,7 +168,7 @@ body {
   border-radius: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--t-code);
   line-height: 1;
 }
 #window-bar button:hover { background: var(--raised); color: var(--text); }
@@ -135,32 +211,32 @@ header .left-group, header .right { display: flex; align-items: center; gap: 10p
   background: transparent;
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-ui);
   line-height: 1;
   padding: 5px 7px;
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   cursor: pointer;
 }
 .panel-toggle:hover { color: var(--text); border-color: var(--interactive); }
-header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+header h1 { font-size: var(--t-read-s); margin: 0; font-weight: 600; }
 /* Baseline-aligned and muted: the version is reference material you go
    looking for when filing a bug, not something to read every time. It
    is the daemon's version, which is the one that matters when a client
    is attached to a core running elsewhere. */
 header .version {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-family: var(--f-mono);
+  font-size: var(--t-fine);
   color: var(--muted);
 }
 header .right { display: flex; align-items: center; gap: 10px; }
-header .session-id { color: var(--muted); font-size: 12px; font-family: monospace; }
+header .session-id { color: var(--muted); font-size: var(--t-ui); font-family: var(--f-mono); }
 header .agent-select {
   background: var(--raised);
   border: 1px solid var(--border);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--t-ui);
   padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
 }
 main {
   flex: 1;
@@ -185,10 +261,10 @@ main {
   background: var(--interactive);
   color: var(--on-accent);
   border: none;
-  border-radius: 14px;
+  border-radius: 999px;
   padding: 5px 12px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--t-ui);
   cursor: pointer;
   opacity: 0.92;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -202,6 +278,33 @@ main {
   padding: 16px;
   word-break: break-word;
 }
+/* The reading measure, and it is the single biggest thing about how this
+   application feels.
+   #transcript was flex:1 with no maximum, so on a maximised 27-inch
+   window a paragraph of a model's answer was set about 190 characters
+   wide — two and a half times the range anybody reads comfortably. The
+   column is capped and centred; the scrolling box stays full width, so
+   the scrollbar is still at the edge of the window where it belongs and
+   nothing about the layout moved. */
+#transcript > * {
+  max-width: var(--measure);
+  margin-left: auto;
+  margin-right: auto;
+}
+/* Set as a document. Charter and Sitka Text are on the machine already —
+   this page never asks the network for a face — and only the transcript
+   gets them: the answer is prose, the apparatus around it is an
+   interface. */
+#transcript .msg-model,
+#transcript .msg-user,
+#transcript .msg-thinking,
+#transcript .msg-review {
+  font-family: var(--f-doc);
+  font-size: var(--t-read);
+  line-height: 1.62;
+}
+#transcript .msg-thinking,
+#transcript .msg-review { font-size: var(--t-read-s); }
 /* pre-wrap belongs only to the messages whose text goes in via
    textContent — for those the newlines ARE the formatting, and without it
    a multi-line user prompt collapses onto one line.
@@ -252,7 +355,7 @@ main {
   gap: 10px;
   margin: 18px 0 6px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--t-cap);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -293,7 +396,7 @@ main {
   gap: 8px;
   flex-wrap: wrap;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-ui);
   padding-bottom: 6px;
   margin-bottom: 6px;
   border-bottom: 1px dashed var(--border);
@@ -303,7 +406,7 @@ main {
   color: var(--text);
   background: none;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   padding: 2px 8px;
   cursor: pointer;
 }
@@ -313,7 +416,7 @@ main {
    be able to skip the whole block at a glance. */
 #transcript .msg-thinking {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-ui);
   font-style: italic;
   white-space: pre-wrap;
   border-left: 2px solid var(--border);
@@ -333,7 +436,7 @@ main {
 #transcript .msg-review.approved { border-left-color: var(--ok); }
 #transcript .msg-review .head {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--t-ui);
   font-weight: 600;
   margin-bottom: 4px;
 }
@@ -352,16 +455,16 @@ main {
 .debate-reviewer .name { color: var(--text); }
 .debate-reviewer .model {
   color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-family: var(--f-mono);
+  font-size: var(--t-fine);
 }
 /* The command it is about to send, shown as it is filled in. Monospace
    and wrapping on its own newlines, because it is a command line and the
    turn count sits under it. */
 #debate-preview {
   white-space: pre-wrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-family: var(--f-mono);
+  font-size: var(--t-fine);
 }
 
 /* A tool call: one quiet line, deliberately quieter than the conversation
@@ -380,7 +483,7 @@ main {
 #transcript .msg-toolcall .marker { flex: none; width: 1em; }
 #transcript .msg-toolcall .name {
   flex: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--f-mono);
   font-weight: 600;
 }
 /* The argument gets whatever room is left and is cut off rather than
@@ -391,7 +494,7 @@ main {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--f-mono);
   opacity: 0.85;
 }
 #transcript .msg-toolcall .state { flex: none; opacity: 0.7; }
@@ -403,7 +506,7 @@ main {
   word-break: break-word;
   background: var(--raised);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   padding: 8px 10px;
   margin: 4px 0 6px;
   max-height: 340px;
@@ -426,15 +529,15 @@ main {
 #transcript .msg-model code {
   background: var(--raised);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   padding: 1px 5px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--f-mono);
   font-size: 0.9em;
 }
 #transcript .msg-model pre {
   background: var(--raised);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   padding: 10px 12px;
   overflow-x: auto;
   margin: 0 0 10px;
@@ -452,7 +555,7 @@ main {
 #transcript .msg-model .table-wrap { overflow-x: auto; margin: 0 0 10px; }
 #transcript .msg-model table {
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--t-code);
   /* Not width:100% — a two-column table stretched across the whole
      transcript puts a hand-span of empty space between its columns. */
   min-width: min(100%, 320px);
@@ -488,7 +591,7 @@ aside {
      anything still too wide inside it. */
   min-width: 0;
   overflow-x: hidden;
-  font-size: 12px;
+  font-size: var(--t-ui);
   flex-shrink: 0;
 }
 /* A collapsed panel takes its resizer with it — a drag handle for
@@ -527,19 +630,32 @@ aside.left {
   border-left: none;
   border-right: 1px solid var(--border);
 }
-.side-section { margin-bottom: 18px; }
-.side-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); margin: 0; }
+/* Three lists in one column read as one list when the only thing between
+   them is 18px of nothing. A rule and a name that outranks the rows under
+   it is what makes a section a section: the heading is letterspaced caps
+   at the smallest size in the scale, which is quieter than a row label
+   and unmistakably a different kind of thing. */
+.side-section { padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.side-section:last-child { border-bottom: 0; margin-bottom: 0; }
+.side-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+aside h2 {
+  font-size: var(--t-cap);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0;
+  font-weight: 600;
+}
 .icon-btn {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--t-ui);
   padding: 2px 8px;
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   line-height: 1.4;
 }
-.task { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; }
+.task { border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 6px 8px; margin-bottom: 6px; }
 .task .agent { color: var(--muted); }
 /* A glyph as well as a colour. Green and red are the conventional pair
    and they stay, but on their own they are the one distinction a red-green
@@ -555,7 +671,7 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 .task:hover { border-color: var(--border-strong); }
 /* What the task is doing right now, so the panel itself says something
    about progress without the window having to be opened. */
-.task .doing { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task .doing { color: var(--muted); font-size: var(--t-fine); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Booking a prompt for later. Two fields, because at a prompt the split
    between the moment and the request has to be guessed from one string,
@@ -565,24 +681,24 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 #schedule-modal .box, #debate-modal .box {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   padding: 20px;
   width: min(560px, calc(90vw / var(--zoom, 1)));
 }
 #schedule-modal h3, #debate-modal h3 { margin-top: 0; }
-#schedule-modal .field-label, #debate-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: 12px; }
+#schedule-modal .field-label, #debate-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: var(--t-ui); }
 #schedule-modal input, #schedule-modal textarea, #debate-modal input, #debate-modal textarea {
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   padding: 6px 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--t-code);
 }
 #schedule-modal textarea, #debate-modal textarea { resize: vertical; }
-#schedule-modal .note, #debate-modal .note { color: var(--muted); font-size: 11px; margin-top: 6px; min-height: 1em; }
+#schedule-modal .note, #debate-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 6px; min-height: 1em; }
 #schedule-modal .note.err, #debate-modal .note.err { color: var(--err); }
 #schedule-modal .note.ok, #debate-modal .note.ok { color: var(--ok); }
 #schedule-modal .close-row, #debate-modal .close-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
@@ -602,36 +718,36 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
    word under it, leaving the row highlighted for no reason the reader
    asked for. The prompt is selectable in the window that opens, which is
    where copying it out of would actually work. */
-.sched { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; cursor: pointer; user-select: none; }
+.sched { border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 6px 8px; margin-bottom: 6px; cursor: pointer; user-select: none; }
 .sched:hover { border-color: var(--border-strong); }
 .sched .head { display: flex; align-items: center; gap: 6px; }
 .sched .when { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sched .prompt { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched .prompt { color: var(--muted); font-size: var(--t-fine); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* How often it repeats and how far in. Clipped like everything else on
    the row; the window opened by double-clicking says it in full. */
-.sched .repeat { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sched .err { color: var(--err); font-size: 11px; }
+.sched .repeat { color: var(--muted); font-size: var(--t-fine); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched .err { color: var(--err); font-size: var(--t-fine); }
 /* The same buttons a session row has, on their own line and wrapping the
    same way: two panels doing the same two jobs should not ask somebody to
    learn two vocabularies. .danger-btn is shared, so delete is outlined
    here for the reason it is outlined there. */
 .sched .actions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
-.sched .actions button { padding: 3px 8px; font-size: 11px; }
+.sched .actions button { padding: 3px 8px; font-size: var(--t-fine); }
 
 /* A background task's own conversation, read-only. There is no prompt
    box: a task was given its instructions when it was spawned. */
 #task-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10; }
 #task-modal.open { display: flex; }
-#task-modal .box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: min(820px, calc(90vw / var(--zoom, 1))); }
-#task-modal h3 { margin-top: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
-#task-modal #task-modal-body { height: min(calc(60vh / var(--zoom, 1)), 520px); overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
-#task-modal .note { color: var(--muted); font-size: 11px; margin-top: 8px; }
+#task-modal .box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 20px; width: min(820px, calc(90vw / var(--zoom, 1))); }
+#task-modal h3 { margin-top: 0; font-family: var(--f-mono); font-size: var(--t-code); word-break: break-all; }
+#task-modal #task-modal-body { height: min(calc(60vh / var(--zoom, 1)), 520px); overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 10px; }
+#task-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 8px; }
 #task-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 #task-modal .danger-btn { background: transparent; color: var(--err); border-color: var(--err); }
 .session-item {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   padding: 8px 10px;
   margin-bottom: 6px;
   cursor: pointer;
@@ -658,19 +774,39 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
    than by CSS ellipsis, because the tail — the project directory — is
    the part that identifies the session. */
 .session-item .workspace {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-family: var(--f-mono);
+  font-size: var(--t-fine);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-item .meta { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
+.session-item .meta { font-size: var(--t-fine); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 6px; }
 /* Wraps rather than overflowing: in a narrow panel the buttons stack
    onto a second line, which is cramped but still usable — the previous
    behaviour was for them to run out past the panel edge. */
-.session-item .actions { display: flex; gap: 4px; flex-wrap: wrap; }
-.session-item button { padding: 3px 8px; font-size: 11px; }
+/* The row's actions, on the row you are pointing at.
+   Four buttons on every conversation is sixteen buttons competing with
+   four titles, and three of the four are things you do once in the life
+   of a conversation. They are here on hover and on keyboard focus, and
+   they stay on the row that is open — the one you are most likely to act
+   on — so nothing is hidden behind a gesture you have to know about.
+   Kept in the layout rather than display:none, so a row does not change
+   height under the pointer. */
+.session-item .actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  visibility: hidden;
+}
+.session-item:hover .actions,
+.session-item:focus-within .actions,
+.session-item.active .actions { visibility: visible; }
+/* Coarse pointers have no hover, so there is nothing to reveal: show them. */
+@media (hover: none) {
+  .session-item .actions { visibility: visible; }
+}
+.session-item button { padding: 3px 8px; font-size: var(--t-fine); }
 /* Outlined rather than filled: solid red on every row made the panel
    read as a wall of alarms, and white on --err is 3.0:1 at this size —
    below AA. The fill arrives on hover, when it is about to matter. */
@@ -682,12 +818,24 @@ aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); marg
 .danger-btn:hover, .session-item .danger-btn:hover, .icon-btn.danger-btn:hover {
   background: color-mix(in srgb, var(--err) 22%, transparent);
 }
+/* The most destructive control on the page, and it used to be the most
+   insistent: a full-width red bar under the list, on screen at all times.
+   It is a line of quiet text now, and it is still exactly one click plus
+   a confirmation away. */
+#delete-all-sessions-btn {
+  border-color: transparent;
+  color: var(--faint);
+  justify-content: center;
+  font-size: var(--t-fine);
+}
+#delete-all-sessions-btn:hover { color: var(--err); border-color: var(--err); }
+
 .mcp-item {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   padding: 6px 8px;
   margin-bottom: 6px;
-  font-family: monospace;
+  font-family: var(--f-mono);
 }
 footer {
   border-top: 1px solid var(--border);
@@ -701,7 +849,7 @@ footer {
   background: var(--raised);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   padding: 8px 10px;
   font: inherit;
   resize: none;
@@ -714,7 +862,7 @@ button {
   background: var(--interactive);
   color: var(--on-accent);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   padding: 8px 14px;
   font: inherit;
   font-weight: 600;
@@ -733,7 +881,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #permission-modal .box {
   background: var(--panel);
   border: 1px solid var(--warn);
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   padding: 20px;
   max-width: 480px;
   /* Capped and scrollable, because this is the one window with no way
@@ -749,22 +897,48 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* The reason line, shown only when the boundary is what is asking. Warn
    coloured because it is the part that changes what the request means:
    without it, a write to another project reads as an ordinary write. */
-#permission-modal .note { color: var(--muted); font-size: 11px; margin-top: 8px; }
+#permission-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 8px; }
 #permission-modal .note.warn { color: var(--warn); }
 /* Wraps, because a boundary prompt has five answers and two of them are
    long enough to name a directory. */
 #permission-modal .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 #permission-modal .deny { background: transparent; color: var(--err); border: 1px solid var(--err); }
 
+/* The status strip, and the one rule that shapes it: a readout is not a
+   verb.
+   Six controls used to share one .pill class — stop, which ends work in
+   flight; auto-delegate and permissions, which report a setting you can
+   also click; schedule and debate, which open a window; and settings. The
+   thing that stops a running turn looked exactly like the thing that
+   says what a setting is.
+   So the state goes on the left as text, in the interface face, and the
+   verbs go on the right as controls with a border. Nothing here is a
+   field of colour: --run and --err are the only hues that appear, and
+   both of them mean the machine. */
 #prompt-status {
   padding: 0 16px 10px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 8px;
+  font-size: var(--t-ui);
   color: var(--muted);
   min-height: 16px;
+  font-variant-numeric: tabular-nums;
 }
+/* Read left to right: what is true, then what you can do.
+   The markup's order is the order these were added over two years, so the
+   grouping is stated here rather than by moving elements the tests find
+   by id. The state pills sit with the sentence they belong to; the first
+   verb takes the gap and everything after it is a control. */
+#prompt-status #auto-delegate-btn { order: 1; }
+#prompt-status #permission-status-btn { order: 2; }
+#prompt-status #stop-btn { order: 3; margin-left: auto; }
+#prompt-status #schedule-btn { order: 4; }
+#prompt-status #debate-btn { order: 5; }
+#prompt-status #settings-btn { order: 6; }
+/* When nothing is running there is no stop button, so the gap has to come
+   from the first verb that is there. */
+#prompt-status #stop-btn[hidden] ~ #schedule-btn { margin-left: auto; }
 #prompt-status.ctx-warn { color: var(--warn); }
 #prompt-status.ctx-crit { color: var(--err); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
@@ -794,23 +968,34 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* The status row's controls: each is a small outlined pill that names
    its own current state, so the row reads as a sentence about the
    session rather than a strip of icons to be decoded. */
+/* A verb. Bordered, quiet, and never filled: the second ink draws, it
+   never floods, so the loudest thing in the window stays the prose. */
 .pill {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-fine);
   padding: 2px 8px;
-  border-radius: 10px;
+  border-radius: var(--r-ctl);
   cursor: pointer;
 }
 .pill:disabled { cursor: not-allowed; opacity: 0.6; }
 /* The first pill rides the right edge and the rest of the group follows
    it. The stop button only exists while a turn is running, so the rule
    has to name whichever pill can come first. */
-#stop-btn, #auto-delegate-btn { margin-left: auto; }
-#stop-btn ~ #auto-delegate-btn { margin-left: 0; }
 #stop-btn { color: var(--err); border-color: var(--err); }
 #stop-btn:hover { background: color-mix(in srgb, var(--err) 18%, transparent); }
+#auto-delegate-btn, #permission-status-btn {
+  /* State, not a verb: no border, and it reads as the sentence the strip
+     is already speaking. Still a button, because both of them open the
+     window that changes what they report. */
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  padding-left: 0;
+  padding-right: 0;
+}
+#auto-delegate-btn:hover, #permission-status-btn:hover { color: var(--text); border-color: transparent; }
 #auto-delegate-btn.on { color: var(--interactive); border-color: var(--interactive); }
 #permission-status-btn.skip { color: var(--warn); border-color: var(--warn); }
 #permission-settings-modal {
@@ -826,7 +1011,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #permission-settings-modal .box {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   padding: 20px;
   width: 480px;
   max-height: calc(80vh / var(--zoom, 1));
@@ -838,26 +1023,26 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   display: flex;
   align-items: center;
   gap: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-family: var(--f-mono);
+  font-size: var(--t-ui);
   padding: 4px 0;
   border-bottom: 1px solid var(--border);
 }
 #permission-settings-modal .rule-row .rule-text { flex: 1; overflow-wrap: anywhere; }
-#permission-settings-modal .rule-row button { padding: 2px 8px; font-size: 11px; background: transparent; color: var(--err); border: 1px solid var(--err); }
+#permission-settings-modal .rule-row button { padding: 2px 8px; font-size: var(--t-fine); background: transparent; color: var(--err); border: 1px solid var(--err); }
 #permission-settings-modal .add-rule-row { display: flex; gap: 6px; margin-top: 12px; }
 #permission-settings-modal .add-rule-row input, #permission-settings-modal .add-rule-row select {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   padding: 4px 6px;
-  font-size: 12px;
+  font-size: var(--t-ui);
 }
 #permission-settings-modal .add-rule-row input[name="tool"] { width: 70px; }
 #permission-settings-modal .add-rule-row input[name="match"] { flex: 1; }
 #permission-settings-modal .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
-#permission-settings-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
+#permission-settings-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 10px; }
 #permission-settings-modal .note.err { color: var(--err); }
 /* The same section heading the settings window uses. The permission
    panel has sections now (the four switches, then the boundary, then the
@@ -870,7 +1055,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--muted);
   font-weight: 600;
 }
-#permission-settings-modal .skip-row label { font-size: 12px; }
+#permission-settings-modal .skip-row label { font-size: var(--t-ui); }
 #auto-delegate-modal {
   position: fixed;
   inset: 0;
@@ -884,7 +1069,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #auto-delegate-modal .box {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   padding: 20px;
   width: 520px;
   max-height: calc(80vh / var(--zoom, 1));
@@ -892,30 +1077,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 #auto-delegate-modal h3 { margin-top: 0; }
 #auto-delegate-modal .row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
-#auto-delegate-modal label.field { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+#auto-delegate-modal label.field { display: block; color: var(--muted); font-size: var(--t-fine); margin-bottom: 4px; }
 #auto-delegate-modal select, #auto-delegate-modal input[type="text"] {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 4px;
+  border-radius: var(--r-ctl);
   padding: 5px 7px;
-  font-size: 12px;
+  font-size: var(--t-ui);
 }
 #auto-delegate-modal #delegate-agent-select { width: 100%; }
 #auto-delegate-modal .match-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-family: var(--f-mono);
+  font-size: var(--t-ui);
   padding: 4px 0;
   border-bottom: 1px solid var(--border);
 }
 #auto-delegate-modal .match-row .match-text { flex: 1; overflow-wrap: anywhere; }
-#auto-delegate-modal .match-row button { padding: 2px 8px; font-size: 11px; background: transparent; color: var(--err); border: 1px solid var(--err); }
+#auto-delegate-modal .match-row button { padding: 2px 8px; font-size: var(--t-fine); background: transparent; color: var(--err); border: 1px solid var(--err); }
 #auto-delegate-modal .add-match-row { display: flex; gap: 6px; margin-top: 12px; }
 #auto-delegate-modal .add-match-row input { flex: 1; }
-#auto-delegate-modal .note { color: var(--muted); font-size: 11px; margin-top: 10px; }
+#auto-delegate-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 10px; }
 #auto-delegate-modal .note.err { color: var(--err); }
 #auto-delegate-modal .close-row { display: flex; justify-content: flex-end; margin-top: 16px; }
 /* While the OS folder dialog is open, waiting for an answer. Clicking
@@ -927,11 +1112,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--t-ui);
   padding: 3px 10px;
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   cursor: pointer;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--f-mono);
   max-width: 480px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -950,7 +1135,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #workspace-modal .box {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   padding: 20px;
   width: 480px;
 }
@@ -960,10 +1145,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   padding: 8px 10px;
   font: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--f-mono);
   box-sizing: border-box;
 }
 /* The path box and its Browse button share one row: typing a path and
@@ -972,7 +1157,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #workspace-modal .path-row { display: flex; gap: 8px; align-items: stretch; }
 #workspace-modal .path-row input { flex: 1; min-width: 0; }
 #workspace-modal .path-row button { white-space: nowrap; }
-#workspace-modal .note { color: var(--muted); font-size: 11px; margin-top: 8px; }
+#workspace-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 8px; }
 #workspace-modal .note.err { color: var(--err); }
 #workspace-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 
@@ -1079,7 +1264,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #settings-modal .box, #schedule-details-modal .box {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-ctl);
   padding: 20px;
   width: min(560px, calc(92vw / var(--zoom, 1)));
   max-height: calc(86vh / var(--zoom, 1));
@@ -1109,12 +1294,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font: inherit;
   background: var(--raised);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-ctl);
   padding: 8px 10px;
   max-height: calc(40vh / var(--zoom, 1));
   overflow-y: auto;
 }
-#schedule-details-modal .note.err { color: var(--err); font-size: 12px; margin-top: 8px; }
+#schedule-details-modal .note.err { color: var(--err); font-size: var(--t-ui); margin-top: 8px; }
 #schedule-details-modal .note.err[hidden] { display: none; }
 #settings-modal select,
 #settings-modal input[type="text"] { width: 100%; }
@@ -1146,7 +1331,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: none;
   border: 1px solid transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--t-fine);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 6px 8px;

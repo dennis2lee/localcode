@@ -51,8 +51,8 @@ func splashHTML(version string) string {
   :root { color-scheme: dark; }
   html, body { height: 100%; margin: 0; }
   body {
-    background: #131417;
-    color: #eef1f5;
+    background: #16181b;
+    color: #f2ede6;
     font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     display: flex;
     flex-direction: column;
@@ -73,13 +73,13 @@ func splashHTML(version string) string {
      what overrides them. */
   .logo svg { display: block; width: 100%; height: 100%; }
   h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
-  .version { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #9aa4b0; }
+  .version { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #a09992; }
   .row { display: flex; align-items: baseline; gap: 9px; }
   /* Fixed height and a fixed width so a longer message does not shift
      the logo above it; a splash that jitters while it loads looks less
      finished than one that does not. */
   #status {
-    color: #9aa4b0;
+    color: #a09992;
     font-size: 12px;
     height: 16px;
     max-width: 420px;
@@ -92,8 +92,8 @@ func splashHTML(version string) string {
      different amounts of time (one unreachable MCP server outlasts
      everything else put together), so any number would be a lie. This
      only claims that something is still happening. */
-  .track { width: 220px; height: 3px; background: #2a2e34; border-radius: 2px; overflow: hidden; }
-  .track i { display: block; width: 40%; height: 100%; background: #57a9ff; border-radius: 2px; animation: slide 1.3s ease-in-out infinite; }
+  .track { width: 220px; height: 3px; background: #332c25; border-radius: 2px; overflow: hidden; }
+  .track i { display: block; width: 40%; height: 100%; background: #7f97dc; border-radius: 2px; animation: slide 1.3s ease-in-out infinite; }
   @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
   @media (prefers-reduced-motion: reduce) {
     .track i { animation: none; width: 100%; opacity: 0.5; }
@@ -103,7 +103,7 @@ func splashHTML(version string) string {
      to stderr goes nowhere at all — the window would simply never
      appear, which is exactly the symptom the splash exists to remove. */
   body.failed .track { display: none; }
-  body.failed #status { color: #ff6f61; white-space: pre-wrap; height: auto; text-align: left; }
+  body.failed #status { color: #e0796a; white-space: pre-wrap; height: auto; text-align: left; }
 </style>
 </head>
 <body>

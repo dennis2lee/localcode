@@ -7,6 +7,92 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<!--
+  The icon set: one sprite, one grid, one stroke weight.
+
+  Five glyphs used to do this job and they were drawn by two different
+  engines: the folder, the clock and the scales are colour emoji that the
+  system font decides the shape of, and the gear and the stop square are
+  monochrome text glyphs. They cannot be given a size, a weight or a
+  colour in common, and on Windows three of them arrive in full colour
+  next to two that are grey.
+
+  These are 16x16, 1.25 stroke, round caps and joins, drawn on the same
+  grid, and they take currentColor — so an icon is the colour of the
+  control it sits in and nothing else has to be said.
+-->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-sessions" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.25" y="4.75" width="8.5" height="8.5" rx="1"/><path d="M5.25 2.25h6.5a2 2 0 0 1 2 2v6.5"/>
+  </symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 3.25v9.5M3.25 8h9.5"/>
+  </symbol>
+  <symbol id="i-archive" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.25" y="2.75" width="11.5" height="3.25" rx=".75"/><path d="M3.25 6v6.25a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1V6"/><path d="M6.5 8.75h3"/>
+  </symbol>
+  <symbol id="i-reveal" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.25 12.25V4a.75.75 0 0 1 .75-.75h2.9l1.4 1.9H13a.75.75 0 0 1 .75.75v6.35a.75.75 0 0 1-.75.75H3a.75.75 0 0 1-.75-.75Z"/>
+    <path d="M8 11.25V7.5M6.4 9.1 8 7.5l1.6 1.6"/>
+  </symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.25 12.25V4a.75.75 0 0 1 .75-.75h2.9l1.4 1.9H13a.75.75 0 0 1 .75.75v6.35a.75.75 0 0 1-.75.75H3a.75.75 0 0 1-.75-.75Z"/>
+  </symbol>
+  <symbol id="i-drawer" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="1"/><path d="M9.75 2.75v10.5"/>
+  </symbol>
+  <symbol id="i-chev-r" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6.25 3.75 10.5 8l-4.25 4.25"/>
+  </symbol>
+  <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 8.4 6.35 11.75 13 5.1"/>
+  </symbol>
+  <symbol id="i-cross" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 4l8 8M12 4l-8 8"/>
+  </symbol>
+  <symbol id="i-dash" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.5 8h9"/>
+  </symbol>
+  <symbol id="i-square" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3.75" y="3.75" width="8.5" height="8.5" rx="1"/>
+  </symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="4.25" y="4.25" width="7.5" height="7.5" rx="1"/>
+  </symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="8" cy="8" r="5.5"/><path d="M8 4.75V8l2.4 1.45"/>
+  </symbol>
+  <symbol id="i-scales" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 2.75v9.75M5.25 13h5.5M3 4.9h10"/>
+    <path d="M3 4.9 1.6 8.4a1.55 1.55 0 0 0 2.8 0Z"/><path d="M13 4.9 11.6 8.4a1.55 1.55 0 0 0 2.8 0Z"/>
+  </symbol>
+  <symbol id="i-key" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="5.6" cy="5.9" r="2.9"/><path d="M7.7 8 13 13.3M10.6 10.9l1.2-1.2M9 9.3l1.2-1.2"/>
+  </symbol>
+  <symbol id="i-sliders" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.5 5.2h5.1M11.4 5.2h2.1M2.5 10.8h2.1M8.4 10.8h5.1"/>
+    <circle cx="9.5" cy="5.2" r="1.7"/><circle cx="6.5" cy="10.8" r="1.7"/>
+  </symbol>
+  <symbol id="i-arrow-d" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 3.25v9.5M4.4 9.15 8 12.75l3.6-3.6"/>
+  </symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8.85 2.6 14.6 12.4a1 1 0 0 1-.86 1.5H2.26a1 1 0 0 1-.86-1.5L7.15 2.6a1 1 0 0 1 1.7 0Z"/>
+    <path d="M8 6.25v3.1M8 11.5h.01"/>
+  </symbol>
+  <symbol id="i-server" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.25" y="2.75" width="11.5" height="4.5" rx="1"/><rect x="2.25" y="8.75" width="11.5" height="4.5" rx="1"/>
+    <path d="M4.75 5h.01M4.75 11h.01"/>
+  </symbol>
+  <symbol id="i-trash" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.75 4.25h10.5M6.25 4.25V2.9h3.5v1.35"/>
+    <path d="M4.4 4.25 5 12.6a.9.9 0 0 0 .9.85h4.2a.9.9 0 0 0 .9-.85l.6-8.35"/>
+  </symbol>
+  <symbol id="i-pen" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11.1 2.6 13.4 4.9 5.7 12.6 2.6 13.4l.8-3.1Z"/><path d="M9.9 3.8 12.2 6.1"/>
+  </symbol>
+  <symbol id="i-dot" viewBox="0 0 16 16" fill="currentColor" stroke="none"><circle cx="8" cy="8" r="2.6"/></symbol>
+</svg>
 <!-- The window's own title bar, drawn by the page.
      Hidden everywhere except the desktop window on Windows, where the
      system frame has been taken away and these are the buttons that went
@@ -15,9 +101,9 @@
 <div id="window-bar" hidden>
   <span class="title" id="window-title">LocalCode</span>
   <div class="window-buttons">
-    <button id="window-minimize" title="minimise">&#8722;</button>
-    <button id="window-maximize" title="maximise / restore">&#9633;</button>
-    <button id="window-close" class="close" title="close">&#10005;</button>
+    <button id="window-minimize" title="minimise"><svg class="ico ico-12"><use href="#i-dash"/></svg></button>
+    <button id="window-maximize" title="maximise / restore"><svg class="ico ico-12"><use href="#i-square"/></svg></button>
+    <button id="window-close" class="close" title="close"><svg class="ico ico-12"><use href="#i-cross"/></svg></button>
   </div>
 </div>
 <!-- The window's resize edges.
@@ -37,7 +123,7 @@
 </div>
 <header>
   <div class="left-group">
-    <button class="panel-toggle" id="toggle-left" title="show/hide the session panel">&#9776;</button>
+    <button class="panel-toggle" id="toggle-left" title="show/hide the session panel"><svg class="ico"><use href="#i-sessions"/></svg></button>
     <div class="brand">
       <h1>LocalCode</h1>
       <span class="version" id="app-version"></span>
@@ -45,12 +131,12 @@
   </div>
   <div class="workspace-group">
     <button id="workspace-btn" title="click to change the workspace directory"></button>
-    <button id="workspace-reveal-btn" class="icon-btn" title="open this folder in a file-manager window">&#128193;</button>
+    <button id="workspace-reveal-btn" class="icon-btn" title="open this folder in a file-manager window"><svg class="ico ico-14"><use href="#i-reveal"/></svg></button>
   </div>
   <div class="right">
     <select class="agent-select" id="agent-select" title="switch agent"></select>
     <span class="session-id" id="session-id">connecting…</span>
-    <button class="panel-toggle" id="toggle-right" title="show/hide the tasks and MCP panel">&#9776;</button>
+    <button class="panel-toggle" id="toggle-right" title="show/hide the tasks and MCP panel"><svg class="ico"><use href="#i-drawer"/></svg></button>
   </div>
 </header>
 
@@ -111,7 +197,7 @@
     <!-- Shown only while the view is away from the bottom, so a turn that
          is still writing can be left running while something further up is
          read. -->
-    <button id="jump-bottom" title="jump to the newest output" hidden>&darr; latest</button>
+    <button id="jump-bottom" title="jump to the newest output" hidden><svg class="ico ico-13"><use href="#i-arrow-d"/></svg>latest</button>
   </div>
   <div class="resizer" id="resize-right" title="drag to resize"></div>
   <aside id="right-panel">
@@ -146,7 +232,7 @@
 <div id="prompt-status">
   <span class="comm-dot" id="comm-dot"></span>
   <span id="status-text"></span>
-  <button class="pill stop" id="stop-btn" title="stop the running turn" hidden>&#9632; stop</button>
+  <button class="pill stop" id="stop-btn" title="stop the running turn" hidden><svg class="ico ico-13"><use href="#i-stop"/></svg>stop</button>
   <button class="pill" id="auto-delegate-btn" title="click to toggle auto-delegation"></button>
   <!--
     Booking work for later, without having to know the command or how the
@@ -155,7 +241,7 @@
     between the moment and the request has to be guessed from one string,
     and in two fields there is nothing to guess.
   -->
-  <button class="pill" id="schedule-btn" title="book a prompt to run later">&#9200; schedule</button>
+  <button class="pill" id="schedule-btn" title="book a prompt to run later"><svg class="ico ico-13"><use href="#i-clock"/></svg>schedule</button>
   <!--
     Starting a debate without having to know the command. The three
     things it needs are asked for as three things: who reviews, how many
@@ -165,9 +251,9 @@
   <!-- The variation selector is not decoration: without it the scales
        render as a thin monochrome glyph beside the clock's colour emoji,
        and the two buttons stop looking like the same kind of thing. -->
-  <button class="pill" id="debate-btn" title="have another agent review this one's work, round after round">&#9878;&#65039; debate</button>
+  <button class="pill" id="debate-btn" title="have another agent review this one's work, round after round"><svg class="ico ico-13"><use href="#i-scales"/></svg>debate</button>
   <button class="pill" id="permission-status-btn" title="click to view or change permission settings"></button>
-  <button class="pill" id="settings-btn" title="settings">&#9881; settings</button>
+  <button class="pill" id="settings-btn" title="settings"><svg class="ico ico-13"><use href="#i-sliders"/></svg>settings</button>
 </div>
 
 <div id="schedule-modal">

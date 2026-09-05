@@ -30,7 +30,7 @@ static void lcHideTitleBar(void *ptr) {
   w.titleVisibility = NSWindowTitleHidden;
   // --bg from the Web UI's stylesheet (rgb 19,20,23). Kept in step by
   // chrome_test.go, which reads the value out of style.css.
-  w.backgroundColor = [NSColor colorWithSRGBRed:(19/255.0) green:(20/255.0) blue:(23/255.0) alpha:1.0];
+  w.backgroundColor = [NSColor colorWithSRGBRed:(22/255.0) green:(24/255.0) blue:(27/255.0) alpha:1.0];
 }
 */
 import "C"

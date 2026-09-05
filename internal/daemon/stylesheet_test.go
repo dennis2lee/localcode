@@ -105,3 +105,22 @@ func TestEveryViewportSizeIsDividedByThePagesZoom(t *testing.T) {
 			"write it as calc(<n>vh / var(--zoom, 1)):\n\t%s", i+1, trimmed)
 	}
 }
+
+// A hidden element stays hidden, whatever else the sheet says about
+// display.
+//
+// The browser's own [hidden] rule is a display:none at the very bottom of
+// the cascade, so any class selector setting display beats it. Giving
+// .pill a display:inline-flex un-hid every pill the page had hidden — the
+// stop button appeared with nothing to stop, and the jump-to-latest
+// button sat over the transcript at all times.
+func TestHiddenBeatsEveryDisplayRule(t *testing.T) {
+	css, err := os.ReadFile(filepath.Join("static", "style.css"))
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	if !regexp.MustCompile(`\[hidden\]\s*\{[^}]*display:\s*none\s*!important`).Match(css) {
+		t.Error("style.css has no [hidden] { display: none !important } — a class rule that sets " +
+			"display will silently un-hide anything the page hides")
+	}
+}
