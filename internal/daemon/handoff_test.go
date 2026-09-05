@@ -317,8 +317,12 @@ func TestARetiredDaemonLetsGoOfTheSessionLogs(t *testing.T) {
 		t.Errorf("the retired daemon is still writing to %s: %d bytes, was %d",
 			log, after.Size(), before.Size())
 	}
-	// And what the bug actually broke.
-	if err := os.Remove(log); err != nil {
-		t.Errorf("the session log could not be deleted after the daemon retired: %v", err)
+	// And what the bug actually broke. The whole directory, not just the
+	// log: on Windows an open handle on any file in it — the log, the
+	// .meta.json, a checkpoint — refuses the removal, so this is the one
+	// assertion that covers every file a retiring daemon might still be
+	// holding rather than the one that was found holding it.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Errorf("the retired daemon is still holding something in %s: %v", dir, err)
 	}
 }

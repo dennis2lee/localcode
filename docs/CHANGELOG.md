@@ -14,7 +14,7 @@
 
 **A dead successor's last words are in the error, not only in a file.** Naming `handoff.log` was the previous answer and it was one step short: the person reading a 502 is looking at a transcript. The reply now carries what the process actually printed — a panic's first frames, a config error — and its exit status.
 
-**Tests.** Every URL `api.js` builds, driven through a real daemon behind a real `successorProxy`: the round trip that had no coverage at all, and the reason a route could drift from the daemon's copy unnoticed. Each of the four fixes fails its test when removed.
+**Tests.** All 46 URLs `api.js` builds, driven through a real daemon behind a real `successorProxy`: the round trip that had no coverage at all, and the reason a route could drift from the daemon's copy unnoticed. It carries a guard of its own — `api.js` is the one place the page builds an `/api/...` string, so the test parses it and fails naming any route it does not drive, which is how the folder button stays covered when the next route is added. The retired daemon is checked by removing its whole sessions directory rather than one file, since on Windows any handle left on any file in it refuses that. Each of the four fixes fails its test when removed.
 
 ## v0.102.0
 
