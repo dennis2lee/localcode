@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.105.0
+
+**The window is set as a document, and its apparatus says what it is.** Three interface directions were built as working mockups and reviewed against the feature contract; this is the one that was chosen — the Document direction's reading surface with the Instrument direction's discipline about state. Stylesheet, markup and artwork only: every id the tests find is where it was, and nothing about what the window does has changed.
+
+**The transcript has a measure.** It was `flex: 1` with no maximum, so on a maximised 27-inch window a paragraph of a model's answer was set about 190 characters wide — two and a half times the range anybody reads. The column is capped at 37rem and centred; the scrolling box stays full width, so the scrollbar is still at the edge of the window. This is the single thing that most changes how the application feels, and it is one declaration.
+
+**And a face.** Charter on macOS, Sitka Text on Windows: both Matthew Carter transitionals cut for the screen, both already on the machine, because this page is served out of the binary and never asks the network for anything. Only the transcript gets it — the model's answer is a document, everything around it is an interface, and the interface keeps the platform's own UI face. Nine sizes, and every `font-size` in the sheet is one of them.
+
+**Cold chrome, warm page.** The four surface steps are the ones this sheet always had; the temperature is new, so the conversation reads as the lit surface without a border having to say so. `--run` and `--warn` are no longer the same value, which had made "a turn is in flight" and "this is waiting on you" the same colour in a product whose tempo is those two states.
+
+**Five glyphs drawn by two engines become one icon set.** The folder, the clock and the scales were colour emoji whose shape the system font decides; the gear and the stop square were monochrome text glyphs. They could not be given a size, a weight or a colour in common. Twenty-two icons on a 16px grid at 1.25 stroke, taking `currentColor`. The two panel toggles are no longer the same hamburger: one is a session list, one is a drawer.
+
+**A readout is not a verb.** Six controls shared one `.pill` class, so the one that stops work in flight looked exactly like the one that reports a setting. State reads on the left as part of the sentence the strip is already speaking; the verbs are bordered controls at the far end.
+
+**Three lists in a panel stop reading as one**, and **the session list stops being a wall of buttons** — four per row, sixteen against four titles. They are on the row you are pointing at and on the one that is open. "Delete all sessions", the most destructive control on the page and, as a permanent full-width red bar, the most insistent, is a line of quiet text that turns red on hover.
+
+**The composer is under the column it writes into**, at the same measure and in the same face, so a sentence does not change width the moment it is sent. **A turn's workings are set as apparatus** rather than as blocks interrupting the prose, and **a turn boundary is visible while scrolling past it**.
+
+**A new mark: a bracket pair that closes into a room.** The two square brackets a programmer types every day, their top serifs lifted into a roof and their feet turned back inward, with the doorway between them left open — the same three strokes saying code and saying a place you own. The shoulders are open in the large drawing and closed in the small ones: three separate strokes are what a bracket pair is, and the gap keeps it clear of the solid pentagon every toolbar already has, but below about 48px that gap is smaller than a pixel. What it replaces was a studded brick with a circuit-board face, whose silhouette belongs to somebody else and whose colours had drifted from the stylesheet they were taken from.
+
+**One regression was introduced while building this and is fixed here.** Giving `.pill` a `display` beat the browser's own `[hidden]` rule, which is a `display: none` at the very bottom of the cascade — so the stop button appeared with nothing to stop and the jump-to-latest button sat over the transcript at all times. `[hidden]` now wins with the weight to hold it, and a test says so.
+
+Verified at 1100px with no horizontal scroll, and at 1x, 2x and 3x page zoom with every window staying inside the frame and scrolling internally.
+
+Known and recorded as IMPROVEMENTS #47: the four screenshots in `docs/img/` still show the old interface. Their alt text is accurate, so the pages read correctly with images off.
+
 ## v0.104.0
 
 **A six-lens sweep of everything since v0.100.0, each finding attacked by an independent verifier before it was believed: 39 claimed, 38 survived.** The unifying cause is that v0.101.0 was the first release in which the desktop window's successor lived. Before it the successor always died seconds after starting, so a window served its proxy for a few seconds at most; after it, windows run that way for hours, and every latent defect in a mode nobody had run came out at once.
