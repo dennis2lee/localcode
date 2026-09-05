@@ -259,6 +259,25 @@ func (d *Daemon) Retire(ctx context.Context, newVersion string, newPID int) bool
 		fmt.Fprintf(os.Stderr, "handoff: could not clear owned sessions: %v\n", err)
 	}
 	d.Loop.Store.EndAllStreams()
+	// And let go of the session logs.
+	//
+	// A daemon used to own its files for as long as it ran, and that was
+	// true until a handoff made two daemons exist at once. After one, the
+	// retiring daemon is still a live process — the window, or the
+	// terminal the TUI is in — holding every sessions/*.jsonl open, while
+	// the successor is the one being asked to write and delete them. On
+	// Windows a file cannot be removed while another process has it open,
+	// so "delete session" answered:
+	//
+	//   remove ...\sessions\s-1788558914648805100.jsonl: The process
+	//   cannot access the file because it is being used by another process
+	//
+	// Nothing is lost by closing here. The work has drained, the streams
+	// have ended, and what this daemon owned has been published to the
+	// successor; an append after this point would be a second writer on a
+	// file the new daemon owns, which is worse than the event going
+	// nowhere.
+	d.Loop.Store.Close()
 	return done
 }
 

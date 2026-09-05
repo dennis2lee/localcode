@@ -181,8 +181,22 @@ const handlers = {
     if (d.note) appendTool(`[${d.note}]`);
   },
   'permission.resolved': () => {
+    // The question is gone, however it went: answered from these buttons,
+    // answered in another window, given up on unattended, or cancelled
+    // along with the turn that asked it.
+    //
+    // resolvePermission clears this when the answer came from here. Every
+    // other way out arrives only as this event, and it used to close the
+    // modal and unlock the composer while leaving the id set — so the
+    // light under the prompt went on saying "waiting for you to answer a
+    // permission request" with nothing on screen to answer, for the rest
+    // of the session. Stopping a turn that was asking is the ordinary way
+    // to land there.
+    session.pendingPermissionID = null;
+    session.pendingPermissionCanAlways = false;
     permissionRequest.close();
     setInputLocked(false);
+    renderCommDot();
   },
   // Sidebar + status bar carry task activity; no transcript line.
   'task.spawned': (d) => {
@@ -388,9 +402,18 @@ const handlers = {
   'turn.cancelled': () => {
     session.promptQueue = [];
     session.runningTool = '';
+    // A cancelled turn is not waiting on an answer. The daemon does send
+    // permission.resolved for the question it was holding, and that is
+    // the event that clears this; saying it here too costs nothing and
+    // means the light does not depend on two events arriving in order.
+    session.pendingPermissionID = null;
+    session.pendingPermissionCanAlways = false;
+    permissionRequest.close();
     setWaiting(false);
+    setInputLocked(false);
     abandonRunningToolCalls('stopped');
     appendTool('[cancelled]');
+    renderCommDot();
   },
   error: (d) => {
     // "recovered" means the loop already handled it and the turn is still

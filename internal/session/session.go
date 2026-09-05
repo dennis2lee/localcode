@@ -885,10 +885,14 @@ func (s *Store) EndAllStreams() {
 
 // Close releases every session's log file and ends every stream.
 //
-// A daemon never needs this — its files live as long as it does — but a
-// test does: on Windows an open file cannot be deleted, so a temporary
-// directory holding a store's logs cannot be removed until the store has
-// let go of them.
+// Two callers, for the same Windows reason: an open file cannot be
+// deleted there. A test needs it so the temporary directory holding a
+// store's logs can be removed. A daemon needs it when it retires — the
+// comment here used to say a daemon never did, which was true only while
+// one daemon existed at a time. After a handoff the retiring one goes on
+// living (it is the window, or the terminal the TUI is in) and every log
+// it still holds open is one the successor cannot delete. See
+// daemon.Retire.
 func (s *Store) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -76,12 +76,47 @@ func (in inherited) announceReady() {
 		in.ready.Close()
 	}
 	if in.alive != nil {
-		go func() {
-			// Nothing is ever written; only the close is meaningful.
-			_, _ = io.Copy(io.Discard, in.alive)
-			fmt.Fprintln(os.Stderr, "the terminal this daemon was started from has closed; stopping")
-			os.Exit(0)
-		}()
+		go watchParent(in.alive, func() { os.Exit(0) })
+	}
+}
+
+// watchParent stops this daemon when the process that started it goes,
+// and only then.
+//
+// Nothing is ever written down this pipe; the close is the message. It
+// used to be read with io.Copy, which reports EOF and every other read
+// error identically — as nil — so any fault at all on the handle ran the
+// stop path. What that looks like from outside is the daemon behind the
+// window vanishing mid-turn: the indicator goes grey, the event stream
+// ends, and every request afterwards is a 502 from a proxy pointing at
+// nothing. A parent that has left is a specific thing and gets a specific
+// test.
+//
+// On Windows the write end closing surfaces as ERROR_BROKEN_PIPE, which
+// the os package already translates to io.EOF, so both platforms say the
+// same word here.
+//
+// Any other error means the pipe is unusable, which says nothing about
+// whether the parent is still there. Stopping on it would end a session
+// somebody is in the middle of, to no purpose, so this keeps serving and
+// says so — the parent tees this stream into handoff.log and into the
+// message the window shows.
+func watchParent(alive *os.File, stop func()) {
+	buf := make([]byte, 1)
+	for {
+		_, err := alive.Read(buf)
+		if err == nil {
+			continue // not expected, and not a reason to leave
+		}
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(os.Stderr, "the localcode that started this daemon has closed; stopping")
+			stop()
+			return
+		}
+		fmt.Fprintf(os.Stderr,
+			"the pipe this daemon watches for its parent leaving is unreadable (%v); "+
+				"it will keep serving, and will not stop on its own when the parent goes\n", err)
+		return
 	}
 }
 

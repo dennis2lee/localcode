@@ -40,6 +40,7 @@ type successorOutput struct {
 // and the handoff is not the place to fail over logging.
 func newSuccessorOutput() *successorOutput {
 	o := &successorOutput{}
+	rememberSuccessor(o)
 	base, err := os.UserCacheDir()
 	if err != nil {
 		return o
@@ -148,4 +149,54 @@ func noteSuccessorExit(pid int, err error) {
 		return
 	}
 	fmt.Fprintf(f, "\n[the localcode behind this window (pid %d) exited: %v]\n", pid, err)
+}
+
+// The successor this window last started, and how it ended.
+//
+// A package-level slot because the place that has this is not the place
+// that needs it. The output is teed by whoever spawned the process; the
+// question it answers — "why is every request 502" — is asked much later,
+// in a proxy handler that never saw the spawn and has no way back to it.
+// Pointing that handler at a log file was one step short: the person
+// reading the error is looking at a transcript, not a filesystem, and
+// twice now the file has been asked for and not arrived. So the words go
+// in the error.
+//
+// One slot, because a window runs one daemon at a time.
+var lastSuccessor struct {
+	mu     sync.Mutex
+	out    *successorOutput
+	pid    int
+	exited bool
+	err    error
+}
+
+func rememberSuccessor(o *successorOutput) {
+	lastSuccessor.mu.Lock()
+	defer lastSuccessor.mu.Unlock()
+	lastSuccessor.out, lastSuccessor.pid, lastSuccessor.exited, lastSuccessor.err = o, 0, false, nil
+}
+
+func rememberSuccessorExit(pid int, err error) {
+	lastSuccessor.mu.Lock()
+	defer lastSuccessor.mu.Unlock()
+	lastSuccessor.pid, lastSuccessor.exited, lastSuccessor.err = pid, true, err
+}
+
+// successorEpitaph is what the daemon behind this window said before it
+// stopped, or "" while it is still running — in which case a 502 is about
+// something other than the process being gone, and saying it died would
+// be a guess dressed as a fact.
+func successorEpitaph() string {
+	lastSuccessor.mu.Lock()
+	out, pid, exited, err := lastSuccessor.out, lastSuccessor.pid, lastSuccessor.exited, lastSuccessor.err
+	lastSuccessor.mu.Unlock()
+	if !exited {
+		return ""
+	}
+	how := "exited cleanly"
+	if err != nil {
+		how = "exited with " + err.Error()
+	}
+	return fmt.Sprintf(" It (pid %d) %s.%s", pid, how, out.note())
 }

@@ -279,3 +279,46 @@ func TestRetireGivesUpOnADeadline(t *testing.T) {
 		t.Error("Retire reported finishing although the work never ended")
 	}
 }
+
+// A retiring daemon lets go of the session logs.
+//
+// It used to hold every one of them open for the rest of its process's
+// life, which after a handoff is the life of the window or the terminal —
+// while the successor is the daemon actually being asked to write and
+// delete them. On Windows that made "delete session" impossible: the file
+// cannot be removed while another process has it open, and the retired
+// daemon was that other process.
+func TestARetiredDaemonLetsGoOfTheSessionLogs(t *testing.T) {
+	d, store, dir := handoffDaemon(t)
+	if _, err := store.CreateSession("S1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	store.Append("S1", events.TypeUserMessage, map[string]any{"text": "before"})
+
+	log := filepath.Join(dir, "S1.jsonl")
+	before, err := os.Stat(log)
+	if err != nil {
+		t.Fatalf("the session log was never written: %v", err)
+	}
+
+	if !d.Retire(context.Background(), "9.9.9", 4242) {
+		t.Fatal("Retire did not finish")
+	}
+
+	// The handle is gone, so this reaches nothing. That is the observable
+	// half of "released" that does not depend on the platform's rules
+	// about deleting open files.
+	store.Append("S1", events.TypeUserMessage, map[string]any{"text": "after retiring"})
+	after, err := os.Stat(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != before.Size() {
+		t.Errorf("the retired daemon is still writing to %s: %d bytes, was %d",
+			log, after.Size(), before.Size())
+	}
+	// And what the bug actually broke.
+	if err := os.Remove(log); err != nil {
+		t.Errorf("the session log could not be deleted after the daemon retired: %v", err)
+	}
+}

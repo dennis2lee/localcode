@@ -2,7 +2,10 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -103,6 +106,9 @@ func TestADeadSuccessorSaysWhatIsWrong(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	addr := strings.TrimPrefix(backend.URL, "http://")
 	backend.Close() // the successor is gone; the window still points at it
+	// Nothing was spawned here, so there are no last words to quote: this
+	// is the other branch, and it must not depend on test order to be.
+	rememberSuccessor(nil)
 
 	front := httptest.NewServer(successorProxy(addr))
 	defer front.Close()
@@ -124,6 +130,88 @@ func TestADeadSuccessorSaysWhatIsWrong(t *testing.T) {
 	for _, want := range []string{"not answering", addr, "handoff.log", "Reopen the window"} {
 		if !strings.Contains(body.Error, want) {
 			t.Errorf("the message lacks %q: %s", want, body.Error)
+		}
+	}
+}
+
+// The folder button.
+//
+// The page sends no path — the daemon's own handler resolves the session's
+// workspace itself, deliberately, so that a request cannot ask the machine
+// to open an arbitrary directory. The window's copy of the route had
+// drifted into reading {"path": …} out of the body instead, which meant
+// two things at once: a caller could name any folder, and the real page,
+// which names none, got 500 "no workspace directory to open" on every
+// click.
+func TestTheFolderButtonAsksTheDaemonWhichFolderRatherThanTheCaller(t *testing.T) {
+	const want = `C:\work-o\ocp`
+	var askedSession string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/workspace" {
+			t.Errorf("the window asked the daemon for %s, not the workspace", r.URL.Path)
+		}
+		askedSession = r.URL.Query().Get("session")
+		json.NewEncoder(w).Encode(map[string]any{"path": want, "can_browse": false, "can_reveal": false})
+	}))
+	defer backend.Close()
+
+	var opened string
+	restore := revealDirectory
+	revealDirectory = func(_ context.Context, dir string) error { opened = dir; return nil }
+	defer func() { revealDirectory = restore }()
+
+	front := httptest.NewServer(successorProxy(strings.TrimPrefix(backend.URL, "http://")))
+	defer front.Close()
+
+	// A body naming somewhere else entirely: it must have no effect.
+	resp, err := http.Post(front.URL+"/api/workspace/reveal?session=S1", "application/json",
+		strings.NewReader(`{"path":"C:\\Windows\\System32"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("the folder button answered %s: %s", resp.Status, body)
+	}
+	if askedSession != "S1" {
+		t.Errorf("the window asked about session %q, want S1", askedSession)
+	}
+	if opened != want {
+		t.Errorf("opened %q, want the daemon's workspace %q", opened, want)
+	}
+}
+
+// What a dead successor left behind belongs in the reply, not only in a
+// file: the person reading it is looking at a transcript.
+func TestADeadSuccessorQuotesWhatItSaid(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	addr := strings.TrimPrefix(backend.URL, "http://")
+	backend.Close()
+
+	out := &successorOutput{}
+	rememberSuccessor(out)
+	out.Write([]byte("panic: send on closed channel\n\ngoroutine 41 [running]:\n"))
+	rememberSuccessorExit(4321, errors.New("exit status 2"))
+	t.Cleanup(func() { rememberSuccessor(nil) })
+
+	front := httptest.NewServer(successorProxy(addr))
+	defer front.Close()
+
+	resp, err := http.Get(front.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("the 502 had no readable body: %v", err)
+	}
+	for _, want := range []string{"pid 4321", "exit status 2", "panic: send on closed channel"} {
+		if !strings.Contains(body.Error, want) {
+			t.Errorf("the 502 does not carry %q: %s", want, body.Error)
 		}
 	}
 }

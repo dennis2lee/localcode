@@ -39,13 +39,24 @@ func successorProxy(target string) http.Handler {
 	// A backend that is not there answers 502 with no body, and that is
 	// what every request looked like after a successor died: "POST
 	// /api/sessions/…/agent: 502", with nothing to say which process was
-	// gone or where to look. The handler says both.
+	// gone or where to look.
+	//
+	// Naming the log file was the first answer and it was not enough: the
+	// person reading this is looking at a transcript, and the file has now
+	// been asked for twice without arriving. So when the process really has
+	// gone, its own last words are in the reply — a Go panic's first frames,
+	// a config error, whatever it printed — and the 502 that reaches the
+	// screen is the diagnosis rather than a pointer to one.
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		writeJSONError(w, http.StatusBadGateway, fmt.Sprintf(
-			"the localcode behind this window is not answering at %s (%v). "+
-				"It was started by an update; what it said before it stopped is in %s. "+
-				"Reopen the window to run this version directly.",
-			target, err, handoffLogPath()))
+		msg := fmt.Sprintf("the localcode behind this window is not answering at %s (%v).", target, err)
+		if last := successorEpitaph(); last != "" {
+			msg += last
+		} else {
+			// Still running, as far as this process knows, so this is not
+			// a death to report: say where to look and leave it there.
+			msg += fmt.Sprintf(" It was started by an update; what it says goes to %s.", handoffLogPath())
+		}
+		writeJSONError(w, http.StatusBadGateway, msg+" Reopen the window to run this version directly.")
 	}
 
 	mux := http.NewServeMux()
@@ -54,23 +65,40 @@ func successorProxy(target string) http.Handler {
 			Start string `json:"start"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		path, err := dialog.PickDirectory(r.Context(), "Choose a workspace folder", req.Start)
+		path, err := pickDirectory(r.Context(), "Choose a workspace folder", req.Start)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeJSON(w, map[string]any{"path": path})
 	})
+	// Which folder to open is asked of the daemon, never read from the
+	// request.
+	//
+	// The page sends no path here and must not: this starts a process with
+	// a path argument, and taking that argument from the caller would make
+	// the folder button a way to ask the window to open anything at all.
+	// The daemon's own handler refuses a caller-supplied path for exactly
+	// that reason and resolves the session's workspace itself
+	// (Daemon.handleRevealWorkspace); this copy had drifted into reading
+	// {"path": ...} out of the body, which reintroduced it and never
+	// worked either — there is no path in that body to read. Every click
+	// on the folder icon, in a window that had taken an update, answered
+	// 500 "no workspace directory to open".
 	mux.HandleFunc("POST /api/workspace/reveal", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Path string `json:"path"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if err := dialog.RevealDirectory(context.Background(), req.Path); err != nil {
+		dir, err := successorWorkspace(r.Context(), target, r.URL.Query().Get("session"))
+		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, map[string]any{"path": req.Path})
+		// Not the request's context: this waits on explorer.exe, and
+		// cancelling it when the reply is written would kill the process
+		// that is opening the window.
+		if err := revealDirectory(context.Background(), dir); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"path": dir})
 	})
 	mux.HandleFunc("GET /api/workspace", func(w http.ResponseWriter, r *http.Request) {
 		// Asked of the daemon, then corrected: the workspace is its
@@ -92,6 +120,51 @@ func successorProxy(target string) http.Handler {
 	})
 	mux.Handle("/", proxy)
 	return mux
+}
+
+// The two native dialogs behind variables, so a test can drive these
+// routes without a folder picker and a file-manager window opening on
+// the machine running the suite. They are also the two routes this
+// process keeps for itself, and therefore the two the successor cannot
+// be asked to check.
+var (
+	revealDirectory = dialog.RevealDirectory
+	pickDirectory   = dialog.PickDirectory
+)
+
+// successorWorkspace asks the daemon behind the window which directory a
+// session is working in.
+//
+// A request of its own rather than one routed through the proxy: the proxy
+// carries the page's requests, and this is the window asking a question
+// the page never asked.
+func successorWorkspace(ctx context.Context, target, session string) (string, error) {
+	u := "http://" + target + "/api/workspace"
+	if session != "" {
+		u += "?session=" + url.QueryEscape(session)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ask the localcode behind this window where the workspace is: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("the localcode behind this window answered %s when asked where the workspace is", resp.Status)
+	}
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", fmt.Errorf("read the workspace from the localcode behind this window: %w", err)
+	}
+	if body.Path == "" {
+		return "", fmt.Errorf("the localcode behind this window reports no workspace for this conversation")
+	}
+	return body.Path, nil
 }
 
 // captured is a ResponseWriter that keeps the answer so it can be edited

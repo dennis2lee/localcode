@@ -115,3 +115,55 @@ func versionPID(t *testing.T, addr string) int {
 	t.Fatalf("no answer on %s: %v", addr, last)
 	return 0
 }
+
+// The successor leaves when its parent does, and stays when the pipe
+// merely breaks.
+//
+// The second half is the one that matters. Reading the pipe with io.Copy
+// reported EOF and every other error the same way, so any fault on the
+// handle stopped the daemon — which from the window looks like the daemon
+// vanishing in the middle of a turn and every request afterwards
+// answering 502.
+func TestTheSuccessorLeavesOnlyWhenItsParentGoes(t *testing.T) {
+	t.Run("the parent closing stops it", func(t *testing.T) {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		stopped := make(chan struct{})
+		go watchParent(r, func() { close(stopped) })
+		w.Close() // the parent has gone
+
+		select {
+		case <-stopped:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the daemon did not stop when the process that started it closed the pipe")
+		}
+	})
+
+	t.Run("a broken pipe does not", func(t *testing.T) {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer w.Close()
+		stopped := make(chan struct{})
+		done := make(chan struct{})
+		go func() { watchParent(r, func() { close(stopped) }); close(done) }()
+		// Not the parent leaving: the handle itself becomes unusable
+		// while the write end is still open.
+		r.Close()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("watchParent did not return on an unreadable pipe")
+		}
+		select {
+		case <-stopped:
+			t.Error("an unreadable pipe stopped the daemon; only the parent leaving may do that")
+		default:
+		}
+	})
+}

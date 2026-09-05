@@ -72,6 +72,7 @@ func windowHandoff(d *daemon.Daemon, front *swapHandler, alive *tuiAlivePipe, cl
 	// turns that into something with a cause attached.
 	go func() {
 		err := <-exited
+		rememberSuccessorExit(pid, err)
 		noteSuccessorExit(pid, err)
 	}()
 	addr := ln.Addr().String()
