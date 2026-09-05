@@ -413,6 +413,15 @@ Completed findings remain in this list to preserve item numbers and release hist
     * How to confirm from what Smart Agent already records: with it on, every turn is in `~/.localcode/trace/localcode-<day>.jsonl`. Count `span == "tool"` records with `tool == "Task"` per `trace_id`, and count `span == "tool"` records per trace whose `parent_session_id` is set. A loop that is delegation shows as many Task spans under one trace; one that is re-reading shows as repeated `read_file` spans with the same session. The `stopped: N steps in a row only repeated` notice (v0.95.0) names the calls in the transcript either way.
     * If confirmed, the fix is a muse-specific orchestration variant that recommends delegation rather than ordering it, or that leaves the delegation tools out of a one-profile config where the specialist would be the orchestrator's own model. Not done unasked: it changes what every muse session is told.
 
+46. **The window's installed copy stops updating after a startup handoff. Windows only, open.**
+
+   * On Windows an .exe cannot be replaced in place, so a startup update stages the new binary under `%LOCALAPPDATA%\localcode\bin` and the installed copy under Program Files — the one the shortcut starts — keeps whatever version the MSI put there.
+   * The window then serves `successorProxy`, which forwards `GET /api/update` to the successor. The successor answers with its own version, which is the staged copy's and is current, so `available` is false and the settings panel says "localcode x.y.z is the latest release" with no install button.
+   * The reply that creates the situation promises the opposite (`internal/update/install.go`: "the copy under … is still the old version, and the settings window's install button updates it"), and that button is now hidden by the same answer that hid the problem.
+   * What still reaches the user: the daemon and the whole Web UI, because those are the staged copy. What never does: the window shell itself — the frameless chrome, the resize edges, `RegisterApplicationRestart`, the splash.
+   * Not fixed here because the fix is a decision rather than a patch. Answering `GET /api/update` from the window's own version is easy; making `POST /api/update/install` mean "replace the installed copy" requires the *window* process to run the install, and after a startup handoff the window has already discarded its daemon. Either the window keeps enough of one to install with, or the successor is told which file to replace.
+
+
 ## UI ideas
 
 ### Web UI

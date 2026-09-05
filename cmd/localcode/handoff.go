@@ -207,14 +207,26 @@ func successorArgs() []string { return os.Args[1:] }
 // The order is the whole point. The successor is serving before this
 // process stops accepting, so there is no moment with nobody on the
 // port; the listener is closed here only after that, which ends Serve
-// without touching the connections it already accepted; and only then
-// does the retiring daemon publish what it still owns and drain. srv is
+// without touching the connections it already accepted; and the drain
+// follows. What it owns is published one step earlier still, before the
+// successor is started at all, because that is the only point at which
+// the successor can read it. srv is
 // shut down last, once the streams have been ended, so Shutdown has
 // nothing left to wait for.
 //
 // binary is the program to start: the path this process runs from, now
 // holding the new file, or on Windows possibly a staged copy.
-func handoffTo(d *daemon.Daemon, srv *http.Server, ln net.Listener, alive *os.File, cleanup func(), version, binary string) error {
+// serving, when not nil, is called the moment the successor is answering
+// and before this process stops accepting.
+//
+// It exists because the caller has to know that earlier than the return.
+// Closing the listener makes this process's Serve return, and the
+// goroutine watching it treated any return as fatal — so the process
+// exited with `use of closed network connection` and status 1 microseconds
+// after the handoff began, while Retire was still draining, killing every
+// turn it had just promised to finish. Told here, the watcher knows the
+// return is expected and waits.
+func handoffTo(d *daemon.Daemon, srv *http.Server, ln net.Listener, alive *os.File, cleanup func(), version, binary string, serving func()) error {
 	if binary == "" {
 		exe, err := os.Executable()
 		if err != nil {
@@ -222,9 +234,21 @@ func handoffTo(d *daemon.Daemon, srv *http.Server, ln net.Listener, alive *os.Fi
 		}
 		binary = exe
 	}
+	// Before the successor exists, not after: it reads this file on its
+	// way up, and the parent used to write it in Retire — which runs
+	// after waiting for the successor to announce itself. See
+	// Daemon.PublishOwned.
+	if err := d.PublishOwned(); err != nil {
+		fmt.Fprintf(os.Stderr, "handoff: could not publish owned sessions: %v\n", err)
+	}
 	pid, _, err := spawnSuccessor(binary, ln, alive)
 	if err != nil {
 		return err
+	}
+	// The successor is up. Said before the listener is closed, because
+	// closing it is what makes this process's Serve return.
+	if serving != nil {
+		serving()
 	}
 	// Serve returns as soon as its listener is closed; the connections it
 	// accepted stay up. The successor holds its own handle on the same

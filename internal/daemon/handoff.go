@@ -220,6 +220,22 @@ func (d *Daemon) claimSession(sessionID string) error {
 // waiting for the whole drain.
 //
 // Reports whether everything finished before ctx ended.
+// PublishOwned writes what this daemon is still working on, for the
+// successor to read before it starts serving.
+//
+// Called before the successor is spawned, which is the only ordering that
+// works. The successor reads the file in NoteTakeover, on its way up and
+// before it announces itself; the parent used to write it in Retire,
+// which runs after the parent has waited for that announcement. The read
+// strictly preceded the write, every time, so the successor always
+// started believing nothing was owned — and then never re-read a session
+// the old daemon had gone on writing after the handoff began. Everything
+// typed while the new version was starting disappeared from the
+// conversation, and the successor's next append reused sequence numbers
+// already in the file, which breaks `since=` replay and Last-Event-ID
+// resume for that session permanently.
+func (d *Daemon) PublishOwned() error { return d.publishOwned() }
+
 func (d *Daemon) Retire(ctx context.Context, newVersion string, newPID int) bool {
 	if d.Loop.Schedules != nil {
 		d.Loop.Schedules.Disarm()

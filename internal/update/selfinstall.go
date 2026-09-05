@@ -88,13 +88,8 @@ func selfInstall(archive, exe string) error {
 	}
 	if runtime.GOOS == "windows" {
 		if _, err := os.Stat(exe); err == nil {
-			old := exe + ".old"
-			// A leftover from the update before this one, held by nobody
-			// now. Best effort: if it is somehow still held, the rename
-			// below fails and says so.
-			_ = os.Remove(old)
-			if err := os.Rename(exe, old); err != nil {
-				return fmt.Errorf("could not move the running binary aside: %w", err)
+			if err := moveAside(exe); err != nil {
+				return err
 			}
 		}
 	}
@@ -102,6 +97,53 @@ func selfInstall(archive, exe string) error {
 		return fmt.Errorf("could not put the new binary in place: %w", err)
 	}
 	return nil
+}
+
+// moveAside renames the running binary out of the way so the new one can
+// take its name. Windows only: it permits renaming a running image and
+// forbids deleting one.
+//
+// The name is not simply exe+".old", and the difference is a second
+// update in one session. The first update renamed this process's own
+// running image to that name, and this process — the window, or the
+// terminal holding the TUI — is still alive holding it. Remove then fails
+// silently, and the rename onto it fails with access denied, because
+// MoveFileEx has to delete the destination first. Every second update
+// inside one run answered "could not move the running binary aside".
+//
+// So the aside name gets out of the way of the one before it. Which
+// leaves files behind; sweepAside clears them next start, when nothing
+// holds them.
+func moveAside(exe string) error {
+	candidates := []string{exe + ".old"}
+	for i := 1; i <= 9; i++ {
+		candidates = append(candidates, fmt.Sprintf("%s.old.%d", exe, i))
+	}
+	var lastErr error
+	for _, old := range candidates {
+		// A leftover held by nobody: taking the name back keeps the
+		// directory from filling up over a long-lived session.
+		_ = os.Remove(old)
+		if err := os.Rename(exe, old); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	return fmt.Errorf("could not move the running binary aside: %w", lastErr)
+}
+
+// SweepAside deletes the copies moveAside left behind, and is safe to
+// call at any time: a copy some process still holds simply refuses and
+// stays for the next sweep.
+func SweepAside(exe string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	_ = os.Remove(exe + ".old")
+	for i := 1; i <= 9; i++ {
+		_ = os.Remove(fmt.Sprintf("%s.old.%d", exe, i))
+	}
 }
 
 // openBinary finds the localcode binary inside a release tarball and

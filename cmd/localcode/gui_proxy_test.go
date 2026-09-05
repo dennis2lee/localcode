@@ -189,9 +189,17 @@ func TestADeadSuccessorQuotesWhatItSaid(t *testing.T) {
 	addr := strings.TrimPrefix(backend.URL, "http://")
 	backend.Close()
 
-	out := &successorOutput{}
-	rememberSuccessor(out)
-	out.Write([]byte("panic: send on closed channel\n\ngoroutine 41 [running]:\n"))
+	out := newSuccessorOutput()
+	t.Cleanup(out.Close)
+	if out.path == "" {
+		t.Skip("no cache directory to write the log in")
+	}
+	// The successor writes to the file it was given; this process does
+	// not see the bytes go past.
+	stdout, _ := out.streams()
+	if _, err := stdout.Write([]byte("panic: send on closed channel\n\ngoroutine 41 [running]:\n")); err != nil {
+		t.Fatal(err)
+	}
 	rememberSuccessorExit(4321, errors.New("exit status 2"))
 	t.Cleanup(func() { rememberSuccessor(nil) })
 

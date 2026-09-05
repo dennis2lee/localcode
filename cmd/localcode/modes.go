@@ -63,7 +63,7 @@ func runDaemon(configPath, listen string) error {
 	}
 	handedOff := make(chan struct{}, 1)
 	d.Handoff = func(version, binary string) error {
-		if err := handoffTo(d, srv, ln, nil, cleanupOnce_, version, binary); err != nil {
+		if err := handoffTo(d, srv, ln, nil, cleanupOnce_, version, binary, nil); err != nil {
 			return err
 		}
 		handedOff <- struct{}{}
@@ -334,12 +334,19 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 	handedOff := make(chan struct{}, 1)
 	if d.AllowUpdateInstall {
 		d.Handoff = func(version, binary string) error {
-			if err := handoffTo(d, srv, got.ln, alive.r, cleanupOnce_, version, binary); err != nil {
-				return err
+			// Signalled from inside, the moment the successor is
+			// answering and before the listener is closed: the goroutine
+			// watching Serve unblocks on that close, and without knowing
+			// the handoff is under way it treated the return as fatal and
+			// took the process down mid-drain.
+			marked := func() {
+				select {
+				case handedOff <- struct{}{}:
+				default:
+				}
 			}
-			select {
-			case handedOff <- struct{}{}:
-			default:
+			if err := handoffTo(d, srv, got.ln, alive.r, cleanupOnce_, version, binary, marked); err != nil {
+				return err
 			}
 			return nil
 		}
@@ -404,12 +411,19 @@ func runSuccessor(configPath string, in inherited) error {
 	handedOff := make(chan struct{}, 1)
 	if d.AllowUpdateInstall {
 		d.Handoff = func(version, binary string) error {
-			if err := handoffTo(d, srv, in.ln, in.alive, cleanupOnce_, version, binary); err != nil {
-				return err
+			// Signalled from inside, the moment the successor is
+			// answering and before the listener is closed: the goroutine
+			// watching Serve unblocks on that close, and without knowing
+			// the handoff is under way it treated the return as fatal and
+			// took the process down mid-drain.
+			marked := func() {
+				select {
+				case handedOff <- struct{}{}:
+				default:
+				}
 			}
-			select {
-			case handedOff <- struct{}{}:
-			default:
+			if err := handoffTo(d, srv, in.ln, in.alive, cleanupOnce_, version, binary, marked); err != nil {
+				return err
 			}
 			return nil
 		}

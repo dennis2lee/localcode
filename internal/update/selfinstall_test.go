@@ -262,3 +262,51 @@ func TestAFileThatIsNotAnArchiveIsNotInstalled(t *testing.T) {
 		t.Errorf("the answer does not say what was wrong with the file: %q", out.Detail)
 	}
 }
+
+// A second update in one run has to find a name for the binary it moves
+// aside.
+//
+// Windows permits renaming a running image and forbids deleting one. The
+// first update renamed this process's own image to <exe>.old, and this
+// process is still alive holding it — so the Remove before the second
+// rename fails silently and the rename onto it fails with access denied.
+// Every second update inside one session answered "could not move the
+// running binary aside".
+func TestMovingAsideTwiceFindsAFreeName(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "localcode.exe")
+
+	for i := 0; i < 3; i++ {
+		if err := os.WriteFile(exe, []byte("binary"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := moveAside(exe); err != nil {
+			t.Fatalf("move %d: %v", i+1, err)
+		}
+		if _, err := os.Stat(exe); !os.IsNotExist(err) {
+			t.Fatalf("move %d left the binary in place", i+1)
+		}
+	}
+}
+
+// And the copies go once nothing holds them.
+func TestTheAsideCopiesAreSweptUp(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("moveAside and SweepAside are the Windows answer to a running image")
+	}
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "localcode.exe")
+	for _, name := range []string{exe + ".old", exe + ".old.1", exe + ".old.2"} {
+		if err := os.WriteFile(name, []byte("old"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	SweepAside(exe)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the sweep left %d file(s) behind", len(entries))
+	}
+}

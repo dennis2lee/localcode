@@ -61,6 +61,13 @@ func windowHandoff(d *daemon.Daemon, front *swapHandler, alive *tuiAlivePipe, cl
 	if err != nil {
 		return fmt.Errorf("bind a port for the new localcode: %w", err)
 	}
+	// Before the successor exists, not after: it reads this file on its
+	// way up, and the parent used to write it in Retire — which runs
+	// after waiting for the successor to announce itself. See
+	// Daemon.PublishOwned.
+	if err := d.PublishOwned(); err != nil {
+		fmt.Fprintf(os.Stderr, "handoff: could not publish owned sessions: %v\n", err)
+	}
 	pid, exited, err := spawnSuccessor(binary, ln, alive.r)
 	if err != nil {
 		ln.Close()

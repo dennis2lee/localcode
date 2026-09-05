@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +29,6 @@ const successorTail = 1200
 
 type successorOutput struct {
 	mu   sync.Mutex
-	buf  []byte
 	path string
 	f    *os.File
 }
@@ -58,17 +56,30 @@ func newSuccessorOutput() *successorOutput {
 	return o
 }
 
-func (o *successorOutput) Write(p []byte) (int, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.buf = append(o.buf, p...)
-	if len(o.buf) > 64<<10 {
-		o.buf = o.buf[len(o.buf)-(64<<10):]
+// streams are what the successor is given for its stdout and stderr, and
+// they are always real *os.File values.
+//
+// That is not a detail. os/exec inherits a *os.File straight through to
+// the child; hand it anything else and it builds an os.Pipe instead, with
+// the read end and a copy goroutine living in THIS process. v0.101.0 did
+// exactly that, to tee the output into the buffer below — and a handoff
+// makes a chain, where generation 1 spawns generation 2 and then exits.
+// Generation 2's stderr was a pipe generation 1 owned; when generation 1
+// went, the read end went with it, and the next line generation 2 printed
+// raised SIGPIPE. Go makes SIGPIPE on descriptor 1 or 2 fatal, so the new
+// daemon was killed by its own first diagnostic.
+//
+// The file is the tee now: the child writes to it directly, and note()
+// reads the tail back off it. Nothing in the parent stands between them.
+func (o *successorOutput) streams() (stdout, stderr *os.File) {
+	if o != nil && o.f != nil {
+		return o.f, o.f
 	}
-	if o.f != nil {
-		_, _ = o.f.Write(p)
-	}
-	return len(p), nil
+	// No file to write to — this process's own, which are also real
+	// files, so still never a pipe. In a window they refuse writes and
+	// the output is lost, which is the situation that existed before
+	// there was a file at all.
+	return os.Stdout, os.Stderr
 }
 
 func (o *successorOutput) Close() {
@@ -88,7 +99,7 @@ func (o *successorOutput) note() string {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	text := strings.TrimSpace(string(o.buf))
+	text := strings.TrimSpace(string(o.tail()))
 	if len(text) > successorTail {
 		text = "…" + text[len(text)-successorTail:]
 	}
@@ -103,19 +114,23 @@ func (o *successorOutput) note() string {
 	return fmt.Sprintf(" It said (full output in %s):\n%s", o.path, text)
 }
 
-// passthrough copies to w and swallows what w does with it.
+// tail is the end of what the successor has written, read back off the
+// file it is writing. Called with o.mu held.
 //
-// A GUI-subsystem process has no console, so its os.Stderr is a handle
-// that refuses writes. io.MultiWriter gives up on the first error, which
-// would mean the console's refusal also threw away the copy being kept —
-// the one that exists precisely because there is no console.
-type passthrough struct{ w io.Writer }
-
-func (p passthrough) Write(b []byte) (int, error) {
-	if p.w != nil {
-		_, _ = p.w.Write(b)
+// From the file rather than from a buffer this process keeps, because
+// this process no longer sees the bytes: the child holds the descriptor.
+func (o *successorOutput) tail() []byte {
+	if o.path == "" {
+		return nil
 	}
-	return len(b), nil
+	data, err := os.ReadFile(o.path)
+	if err != nil {
+		return nil
+	}
+	if len(data) > 64<<10 {
+		data = data[len(data)-(64<<10):]
+	}
+	return data
 }
 
 // handoffLogPath is where a successor's output is kept, for the messages

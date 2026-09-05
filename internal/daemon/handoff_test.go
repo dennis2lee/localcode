@@ -399,3 +399,44 @@ func TestRetireWaitsForATurnThatOutlivesItsAdmissionWindow(t *testing.T) {
 		}
 	}
 }
+
+// The successor has something to read when it looks.
+//
+// NoteTakeover reads .handoff.json on the successor's way up, before it
+// announces itself; the parent used to write that file inside Retire,
+// which runs only after it has waited for that announcement. The read
+// strictly preceded the write, so the successor always started believing
+// nothing was owned — and then never re-read a session the old daemon
+// went on writing after the handoff began. Everything typed while the new
+// version was starting disappeared from the conversation, and the
+// successor's next append reused sequence numbers already in the file.
+func TestWhatADaemonOwnsIsOnDiskBeforeTheSuccessorLooks(t *testing.T) {
+	d, store, dir := handoffDaemon(t)
+	if _, err := store.CreateSession("S1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	if !d.turns.begin("S1", func() {}) {
+		t.Fatal("begin")
+	}
+	t.Cleanup(func() { d.turns.end("S1") })
+
+	// What the handoff paths do before they spawn anything.
+	if err := d.PublishOwned(); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, handoffFile))
+	if err != nil {
+		t.Fatalf("the successor would have found no manifest: %v", err)
+	}
+	var m handoffManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Sessions) != 1 || m.Sessions[0] != "S1" {
+		t.Errorf("the manifest names %v, want the session with the turn in it", m.Sessions)
+	}
+	if m.PID != os.Getpid() {
+		t.Errorf("the manifest names pid %d, want this process %d", m.PID, os.Getpid())
+	}
+}

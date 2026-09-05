@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -118,13 +117,14 @@ func spawnSuccessor(binary string, ln net.Listener, alive *os.File) (pid int, ex
 
 	cmd := exec.Command(binary, successorArgs()...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d,%d,%d", envTakeover, hLn, hReady, hAlive))
-	// Teed rather than inherited: see successor_output.go. A window has
-	// no console for the successor to print to, and its account of why
-	// it would not start is the whole of what a failed handoff has to
-	// offer.
+	// Written to a file of its own rather than inherited or teed: see
+	// successor_output.go. A window has no console for the successor to
+	// print to, and its account of why it would not start is the whole of
+	// what a failed handoff has to offer — but the writer has to be a
+	// real file, or os/exec builds a pipe this process owns and the
+	// child dies of SIGPIPE when this process goes.
 	out := newSuccessorOutput()
-	cmd.Stdout = io.MultiWriter(passthrough{os.Stdout}, out)
-	cmd.Stderr = io.MultiWriter(passthrough{os.Stderr}, out)
+	cmd.Stdout, cmd.Stderr = out.streams()
 	childproc.Hide(cmd)
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}

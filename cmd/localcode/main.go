@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"localcode/internal/gui"
+	"localcode/internal/update"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -51,6 +52,13 @@ func runVersionCommand(args []string) error {
 }
 
 func main() {
+	// The copies an update left beside the binary, cleared now that
+	// nothing holds them. Windows only, and a no-op everywhere else: it
+	// permits renaming a running image and forbids deleting one, so an
+	// update moves the old binary aside and it can only go later.
+	if exe, err := os.Executable(); err == nil {
+		update.SweepAside(exe)
+	}
 	if len(os.Args) > 1 {
 		if cmd, ok := subcommands[os.Args[1]]; ok {
 			if err := cmd(os.Args[2:]); err != nil {
