@@ -401,6 +401,20 @@ type modelRun struct {
 	// intact, for adapters whose wire format can keep them.
 	systemBlocks []provider.SystemBlock
 	maxTokens    int
+	// effort is how hard this run asks the model to think, resolved once
+	// when the run is built.
+	//
+	// Pinned rather than read per iteration, which is what it was. Every
+	// other field of the request is fixed for the life of a turn, and
+	// this one was not: a level changed between two tool round-trips
+	// changed the shape of the requests inside one turn. On Anthropic
+	// that turns thinking on and drops temperature partway through, and
+	// the continuation then carries a tool-use message produced without
+	// a thinking block — which is the shape the API refuses.
+	//
+	// Re-derived by a fallback, like the prompt, because a fallback
+	// builds a new run.
+	effort provider.Effort
 	// manifest is the record of how system was assembled: which prompt
 	// assets are in this request, which are not and why. Carried on the
 	// run rather than recomputed, because a fallback builds a new run
@@ -463,6 +477,7 @@ func (l *Loop) buildRun(ctx context.Context, sessionID, resolveAgent string, age
 		system:       env.SystemText(),
 		systemBlocks: blocks,
 		maxTokens:    maxTokens,
+		effort:       l.effortFor(sessionID, profile),
 		manifest:     env.Manifest,
 	}, nil
 }

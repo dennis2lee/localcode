@@ -141,6 +141,13 @@ func (m Model) View() tea.View {
 	if model, ok := m.currentModel(); ok {
 		footer += "  ·  model: " + model
 	}
+	// Beside the model, because the level belongs to that model rather
+	// than to the conversation as a whole. Shown only when there is an
+	// answer: a footer that names every setting nobody has touched is a
+	// footer nobody reads.
+	if m.effort.Level != "" {
+		footer += "  ·  effort: " + m.effort.Level
+	}
 	// The completion hint replaces the agent line while a "/name" is
 	// being typed: it is about the key you are deciding whether to press,
 	// and the agent is not going anywhere.

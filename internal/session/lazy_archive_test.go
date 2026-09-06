@@ -363,3 +363,88 @@ func TestArchivingReturnsTheTreeToDisk(t *testing.T) {
 		}
 	}
 }
+
+// A Session that leaves this package shares nothing with the one inside
+// it.
+//
+// Session is copied by value everywhere, which was enough while every
+// field was a value. The per-model effort levels are a map, and a value
+// copy shares the map header — so a caller ranging over a listed
+// session's levels while another goroutine sets one is a data race. Not
+// hypothetical: the daemon lists sessions on one request and sets the
+// level on another, which is what found this.
+func TestAListedSessionSharesNothingWithTheStore(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := store.SetEffort("s-1", "muse", "xhigh"); err != nil {
+		t.Fatalf("SetEffort: %v", err)
+	}
+
+	// Writing through a handed-out session must not reach the store.
+	got, err := store.Get("s-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got.Efforts["muse"] = "off"
+	if store.EffortFor("s-1", "muse") != "xhigh" {
+		t.Error("a caller wrote into the store through a session it was handed")
+	}
+
+	// And reading one while the store is written is not a race. Run the
+	// suite with -race for this to mean anything; the check gate does.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			if _, err := store.SetEffort("s-1", "muse", "high"); err != nil {
+				return
+			}
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		for _, s := range store.ListVisible() {
+			for range s.Efforts {
+			}
+		}
+	}
+	<-done
+}
+
+// "Back to the profile's" has to reach the answer that is actually in
+// force.
+//
+// A conversation that set a level before this was per model carries it
+// in the old session-wide field, and that is what answers for a model
+// with no entry of its own. Clearing only the per-model entry left it
+// standing, so the one request that means "stop overriding" changed
+// nothing on exactly the conversations the field exists for.
+func TestClearingReachesTheAnswerThatIsInForce(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	// What an old meta file leaves behind.
+	if _, err := store.SetEffort("s-1", "", "xhigh"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetEffort("s-1", "muse", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetEffort("s-1", "muse", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.EffortFor("s-1", "muse"); got != "" {
+		t.Errorf("after clearing, the level is still %q", got)
+	}
+	if got := store.EffortFor("s-1", "some-other-model"); got != "" {
+		t.Errorf("the conversation-wide answer survived a clear: %q", got)
+	}
+}

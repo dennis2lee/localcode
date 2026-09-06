@@ -78,7 +78,7 @@ func TestArchivingKeepsEverythingTheSessionHad(t *testing.T) {
 	if _, err := s.SetPermission("a", SwitchSkipTools, &yes); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetEffort("a", "high"); err != nil {
+	if _, err := s.SetEffort("a", "", "high"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Append("a", "message.user", map[string]any{"text": "hello"}); err != nil {

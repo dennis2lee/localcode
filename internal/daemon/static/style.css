@@ -1022,6 +1022,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    grouping is stated here rather than by moving elements the tests find
    by id. The state pills sit with the sentence they belong to; the first
    verb takes the gap and everything after it is a control. */
+/* Beside the model it belongs to: the status text ends with the model,
+   and this is the first thing after it. */
+#prompt-status #effort-btn { order: 0; }
 #prompt-status #auto-delegate-btn { order: 1; }
 #prompt-status #permission-status-btn { order: 2; }
 #prompt-status #stop-btn { order: 3; margin-left: auto; }
@@ -1077,6 +1080,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    has to name whichever pill can come first. */
 #stop-btn { color: var(--err); border-color: var(--err); }
 #stop-btn:hover { background: color-mix(in srgb, var(--err) 18%, transparent); }
+/* A pill that carries an answer this conversation gave, rather than one
+   inherited from the profile, says so with the second ink. */
+#effort-btn.set { color: var(--text); border-color: var(--border-strong); }
 #auto-delegate-btn, #permission-status-btn {
   /* State, not a verb: no border, and it reads as the sentence the strip
      is already speaking. Still a button, because both of them open the
@@ -1090,6 +1096,43 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #auto-delegate-btn:hover, #permission-status-btn:hover { color: var(--text); border-color: transparent; }
 #auto-delegate-btn.on { color: var(--interactive); border-color: var(--interactive); }
 #permission-status-btn.skip { color: var(--warn); border-color: var(--warn); }
+/* The reasoning-effort picker.
+   Small, because it holds one question: which of the levels this model
+   tells apart. The levels themselves come from the daemon, so the page
+   styles a row of buttons without knowing how many there will be. */
+#effort-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#effort-modal.open { display: flex; }
+#effort-modal .box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  padding: 20px;
+  width: 400px;
+  max-height: calc(80vh / var(--zoom, 1));
+  overflow-y: auto;
+}
+#effort-modal h3 { margin-top: 0; }
+#effort-modal #effort-model { font-family: var(--f-mono); margin-bottom: 12px; }
+#effort-levels { display: flex; flex-wrap: wrap; gap: 6px; }
+/* The level in force is the filled one. One accent on the page's one
+   primary action is the rule everywhere else here; a picker's current
+   value is the same kind of thing. */
+.effort-level.current {
+  background: var(--interactive);
+  color: var(--on-accent);
+  border-color: var(--interactive);
+}
+#effort-modal .note { color: var(--muted); font-size: var(--t-fine); margin: 14px 0 0; }
+#effort-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+
 #permission-settings-modal {
   position: fixed;
   inset: 0;

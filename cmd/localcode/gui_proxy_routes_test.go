@@ -79,6 +79,7 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		{method: "GET", path: "/api/sessions", ok: only(200)},
 		{method: "GET", path: "/api/sessions?archived=1", ok: only(200)},
 		{method: "GET", path: "/api/sessions/" + sid + "/schedules", ok: only(200)},
+		{method: "GET", path: "/api/sessions/" + sid + "/effort", ok: only(200)},
 		{method: "GET", path: "/api/sessions/" + sid + "/permissions", ok: only(200)},
 
 		// The three the window keeps for itself, because they open a
@@ -100,6 +101,8 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		{method: "POST", path: "/api/permissions/rules/remove", body: `{"tool":"bash","match":"echo *","decision":"allow"}`, ok: only(200, 204)},
 
 		{method: "POST", path: "/api/schedules/preview", body: `{"when":"tomorrow 9am"}`, ok: only(200)},
+		{method: "POST", path: "/api/sessions/" + sid + "/effort", body: `{"level":""}`, ok: only(200, 204),
+			note: "the empty level clears it, which every model accepts"},
 		{method: "POST", path: "/api/sessions/" + sid + "/permissions", body: `{"switch":"skip_tools","enabled":false}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/sessions/" + sid + "/permissions/forget", body: `{"class":"read"}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/sessions/" + sid + "/agent", body: `{"agent":"general-purpose"}`, ok: only(200, 204)},

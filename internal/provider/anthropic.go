@@ -365,6 +365,27 @@ func fitBudget(budget, maxTokens int) (int, bool) {
 	return budget, true
 }
 
+// ThinkingBudgetFor is the token budget a level reaches on this model
+// with this reply cap, and whether it reaches one at all.
+//
+// Exported for the one caller that has to know whether two levels are
+// the same request: the control that offers levels. Every budget is
+// clamped to the room the cap leaves, so on an ordinary max_tokens the
+// top two or three levels arrive as the same number, and offering them
+// as separate steps is the dial-over-a-switch this feature exists to
+// avoid. Zero and false for a model that decides for itself, and for a
+// level that leaves no room to think.
+func ThinkingBudgetFor(model string, e Effort, maxTokens int) (int, bool) {
+	if AnthropicAdaptiveThinking(model) {
+		return 0, false
+	}
+	budget, ok := thinkingBudgets[e]
+	if !ok {
+		return 0, false
+	}
+	return fitBudget(budget, maxTokens)
+}
+
 // anthropicThinking is the thinking field for a request, or nil for one
 // that should not carry it.
 //

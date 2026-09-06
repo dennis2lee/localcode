@@ -232,11 +232,11 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// is still not a change to make to everyone's requests
 			// silently. See provider.ChatRequest.CachePrefix.
 			CachePrefix: l.smartOn(ctx),
-			// This conversation's answer if it has one, the profile's
-			// otherwise, and nothing at all unless somebody asked — which
-			// is what keeps every request byte-identical to what it was
-			// for anybody who has not set it. See effort.go.
-			Effort: l.effortFor(sessionID, run.profile),
+			// Fixed when the run was built, like every other field here.
+			// Read per iteration, a level changed between two tool
+			// round-trips changed the shape of the requests inside one
+			// turn. See modelRun.effort.
+			Effort: run.effort,
 		}
 		if askingVerdict {
 			req.ToolChoice = provider.ToolChoiceNone

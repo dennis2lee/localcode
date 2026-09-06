@@ -87,6 +87,10 @@ export function freshSessionState(id) {
     history: [],       // this session's prompts, oldest first
     historyIdx: 0,      // === history.length means "not navigating"
     historyDraft: '',   // text stashed when recall started
+    // How hard the model is asked to think, as the daemon last reported
+    // it: {model, agent, level, source, levels, note}. Per session and
+    // per model, so it is fetched on a switch rather than kept in app.
+    effort: null,
     pendingPermissionID: null,
     // Set when the daemon behind this page says it is handing over, and
     // acted on when the stream comes back — which is when there is a new

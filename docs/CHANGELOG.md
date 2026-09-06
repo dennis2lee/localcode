@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.111.0
+
+**Reasoning effort**
+
+* A control in the line under the prompt box, beside the model it belongs to. Click it for the levels this model tells apart; the terminal has `/effort-set`, which lists the same ones and takes a choice.
+* Only the levels a model tells apart are offered, and one it does not is refused rather than stored. An adaptive Claude has one switch where muse has four steps, and the `reasoning_effort` vocabulary stops at `high`. A level that shows in a control and is never true of the request is worse than no control.
+* The list comes from the daemon with the answer, not from a list written into each client. Which levels exist is a property of the model, so a client with its own list offers steps that do nothing on most models and goes stale the next time a family is added.
+* The level is kept per model, not per conversation alone. A conversation that changes model — through the agent dropdown, or through a fallback nobody asked for — finds the answer it gave for the model it is on, and the other model's answer is still there when it goes back. A conversation that set a level before this existed keeps it for every model until it answers for one.
+* Changing the agent announces the level again, because a new agent is usually a new profile and so a new model. Without it the control went on showing the level and the steps of the model it had just left.
+* `GET` and `POST /api/sessions/{id}/effort`, and an `effort.changed` event so a second client watching the same conversation redraws.
+
+
+**Found by the review before release**
+
+* A data race: a Session is copied by value everywhere it leaves the store, and the per-model levels are a map, so a value copy shared the map header. Listing sessions on one request while another set a level was a race — and JSON encoding iterates the map, so it was the unrecoverable runtime fatal, not a panic a handler could catch. A caller could also write into the store through a session it had been handed. Every path that hands one out now detaches it.
+* The level was the one request field read again on every step of a turn; every other one is fixed when the turn starts. A level changed between two tool calls changed the shape of the requests inside a single turn, which on Anthropic turns thinking on and drops temperature partway through and leaves a tool-use message the API then refuses. It is pinned to the turn, so a change takes effect on the next one.
+* On a Claude that takes a budget per level, the levels offered ignored the reply cap. Every budget is clamped to what the cap leaves, so on an ordinary `max_tokens` medium and high are the same request — a dial over a switch, which is the thing this list exists to prevent. The list is now built from the budgets the wire would actually carry.
+* "Back to the profile's" did nothing on a conversation that set a level before this shipped. It cleared the per-model entry and left the conversation-wide one, which is what was answering.
+* `/effort` stored a level the model does not tell apart, while the picker refused it. Both go through one door now.
+* `/effort` changed the level without announcing it, so the pill and the footer kept showing the old one.
+* A fork did not carry the level over, so a copy quietly reasoned less than the conversation it was taken from.
+* The terminal's footer kept the previous model's level after an agent switch.
+* The window-proxy route test caught both new endpoints before they shipped, which is what it was built for.
+
 ## v0.110.0
 
 **Startup**

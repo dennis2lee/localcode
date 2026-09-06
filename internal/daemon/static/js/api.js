@@ -105,6 +105,8 @@ export const setOrchestrate = (enabled) => api('POST', '/api/settings/orchestrat
 export const setModelInvocable = (enabled) => api('POST', '/api/settings/model-invocable', { enabled });
 export const archiveSession = (id) => api('POST', `/api/sessions/${id}/archive`);
 export const retrieveSession = (id) => api('POST', `/api/sessions/${id}/retrieve`);
+export const getEffort = (id) => api('GET', `/api/sessions/${id}/effort`);
+export const setEffort = (id, level) => api('POST', `/api/sessions/${id}/effort`, { level });
 export const getArchivedSessions = () => api('GET', '/api/sessions?archived=1');
 // The daemon-wide default, still written to config.json. What a
 // conversation that has not answered for itself follows.

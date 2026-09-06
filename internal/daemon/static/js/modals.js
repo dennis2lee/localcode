@@ -8,12 +8,13 @@ import {
   ruleToolInput, ruleMatchInput, ruleDecisionSelect,
   permissionSettingsNote,
   workspaceModal, workspaceInput, workspaceNote, workspaceBrowseBtn, workspaceStopBusyBtn,
+  effortModal, effortModelEl, effortLevelsEl, effortNoteEl, effortDefaultBtn, effortCloseBtn,
 } from './dom.js';
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
 import { appendError } from './transcript.js';
 import { setInputLocked, renderCommDot } from './composer.js';
-import { renderPermissionStatus, renderAutoDelegate, renderWorkspace } from './render.js';
+import { renderPermissionStatus, renderAutoDelegate, renderWorkspace, renderEffort } from './render.js';
 import { Modal } from './modal.js';
 import { settings } from './settings.js';
 import { taskView } from './taskview.js';
@@ -32,6 +33,81 @@ export const permissionRequest = new Modal(modalEl);
 export const permissionSettings = new Modal(permissionSettingsModal);
 export const delegate = new Modal(delegateModal);
 export const workspace = new Modal(workspaceModal);
+export const effort = new Modal(effortModal);
+
+// ---- Reasoning effort ----
+//
+// The levels are not written into the page. Which ones exist is a
+// property of the model this conversation is on — Anthropic's newest
+// families have one switch where muse has four steps — so the daemon
+// sends the list with the answer and this draws whatever it is given.
+// A page with its own list offers steps that do nothing on most models,
+// and goes stale the next time a family is added.
+
+export function applyEffort(view) {
+  session.effort = view || null;
+  renderEffort();
+  if (effort.isOpen) renderEffortModal();
+}
+
+// loadEffort fetches it for the open conversation. Called on a session
+// switch, because the answer belongs to the conversation and to the
+// model it is on.
+export async function loadEffort(sessionID) {
+  if (!sessionID) return;
+  try {
+    const view = await apiClient.getEffort(sessionID);
+    // Two switches in quick succession race, and whichever reply lands
+    // last wins; without this the pill can end up describing a
+    // conversation you have already left.
+    if (sessionID !== session.sessionID) return;
+    applyEffort(view);
+  } catch {
+    // A daemon that cannot answer leaves the last answer standing.
+  }
+}
+
+function renderEffortModal() {
+  const view = session.effort;
+  effortLevelsEl.innerHTML = '';
+  if (!view) {
+    effortModelEl.textContent = 'no conversation open';
+    effortNoteEl.textContent = '';
+    return;
+  }
+  effortModelEl.textContent = view.model
+    ? `${view.model} — ${view.agent}`
+    : 'this conversation';
+  for (const level of view.levels || []) {
+    const btn = document.createElement('button');
+    btn.textContent = level;
+    btn.className = 'effort-level' + (level === view.level ? ' current' : '');
+    btn.addEventListener('click', () => chooseEffort(level));
+    effortLevelsEl.appendChild(btn);
+  }
+  // What the level actually reaches on this model. The whole reason the
+  // control exists is that the same word means different things on
+  // different wires, and saying so is cheaper than being asked.
+  effortNoteEl.textContent = view.note || '';
+  effortDefaultBtn.disabled = view.source !== 'session';
+}
+
+async function chooseEffort(level) {
+  if (!session.sessionID) return;
+  try {
+    applyEffort(await apiClient.setEffort(session.sessionID, level));
+  } catch (err) {
+    appendError(`failed to set the effort: ${err}`);
+  }
+}
+
+export function openEffort() {
+  renderEffortModal();
+  effort.open();
+}
+
+effortDefaultBtn.addEventListener('click', () => chooseEffort(''));
+effortCloseBtn.addEventListener('click', () => effort.close());
 
 // ---- Auto-delegation modal ----
 
@@ -536,5 +612,5 @@ export async function stopBlockingTurns() {
 // forgetting it is silent.
 export function anyModalOpen() {
   return permissionRequest.isOpen || permissionSettings.isOpen || delegate.isOpen ||
-    workspace.isOpen || settings.isOpen || taskView.isOpen;
+    workspace.isOpen || settings.isOpen || taskView.isOpen || effort.isOpen;
 }

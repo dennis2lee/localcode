@@ -80,6 +80,20 @@ type Session struct {
 	// reasoning, and one is a profile people would otherwise have to
 	// duplicate to get both.
 	Effort string `json:"effort,omitempty"`
+	// Efforts is the same answer given per model, and it is what the
+	// clients write now.
+	//
+	// One conversation can change model — the agent dropdown does it, and
+	// a fallback does it without being asked — and the amount of
+	// reasoning that suits a model is a property of the model as much as
+	// of the work. A single value meant that picking xhigh for a muse and
+	// then switching to a Claude carried a word that family has no step
+	// for, and switching back lost the muse's answer. Keyed by model id.
+	//
+	// Effort above is still read when this holds nothing for the model in
+	// hand: it is what conversations set before this existed, and
+	// dropping it would silently reset them.
+	Efforts map[string]string `json:"efforts,omitempty"`
 }
 
 // Permissions is a session's own answer to the four permission switches.
@@ -405,7 +419,7 @@ func (s *Store) CreateSessionIn(id, parentID, agent, workspace string, visible b
 	}
 
 	s.sessions[id] = st
-	metaCopy := meta
+	metaCopy := detach(meta)
 	return &metaCopy, nil
 }
 
@@ -433,7 +447,7 @@ func (s *Store) Get(id string) (*Session, error) {
 	if !ok {
 		return nil, fmt.Errorf("session %s not found", id)
 	}
-	metaCopy := st.meta
+	metaCopy := detach(st.meta)
 	return &metaCopy, nil
 }
 
@@ -450,7 +464,7 @@ func (s *Store) SetAgent(sessionID, agent string) (*Session, error) {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
 	st.meta.Agent = agent
-	metaCopy := st.meta
+	metaCopy := detach(st.meta)
 	if s.dir != "" {
 		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
 			return nil, err
@@ -470,7 +484,7 @@ func (s *Store) SetTitle(sessionID, title string) (*Session, error) {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
 	st.meta.Title = title
-	metaCopy := st.meta
+	metaCopy := detach(st.meta)
 	if s.dir != "" {
 		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
 			return nil, err
@@ -492,7 +506,7 @@ func (s *Store) SetWorkspace(sessionID, dir string) (*Session, error) {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
 	st.meta.Workspace = dir
-	metaCopy := st.meta
+	metaCopy := detach(st.meta)
 	if s.dir != "" {
 		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
 			return nil, err
@@ -518,7 +532,7 @@ func (s *Store) SetPermission(sessionID string, sw Switch, v *bool) (*Session, e
 	if !st.meta.Permissions.set(sw, v) {
 		return nil, fmt.Errorf("unknown permission switch %q", sw)
 	}
-	metaCopy := st.meta
+	metaCopy := detach(st.meta)
 	if s.dir != "" {
 		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
 			return nil, err
@@ -527,23 +541,98 @@ func (s *Store) SetPermission(sessionID string, sw Switch, v *bool) (*Session, e
 	return &metaCopy, nil
 }
 
-// SetEffort records this conversation's own reasoning level, or clears
-// it back to the profile's with "".
-func (s *Store) SetEffort(sessionID, effort string) (*Session, error) {
+// SetEffort records this conversation's own reasoning level for one
+// model, or clears it back to the profile's with "".
+//
+// The model is part of the key. A conversation that switches model — by
+// the agent dropdown, or by a fallback nobody asked for — should find
+// the answer it gave for the model it is on, not the one it gave for
+// another.
+//
+// An empty model writes the conversation-wide value instead, which is
+// what the setting was before it was per model and what still answers
+// for a model with no entry of its own.
+func (s *Store) SetEffort(sessionID, model, effort string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, ok := s.sessions[sessionID]
 	if !ok {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
-	st.meta.Effort = effort
-	metaCopy := st.meta
+	switch {
+	case model == "":
+		st.meta.Effort = effort
+	case effort == "":
+		delete(st.meta.Efforts, model)
+		if len(st.meta.Efforts) == 0 {
+			st.meta.Efforts = nil
+		}
+		// And the conversation-wide answer that predates this, because
+		// that is what would still be in force for this model after the
+		// entry went: leaving it makes "back to the profile's" a request
+		// that changes nothing, on exactly the conversations the field
+		// exists for. It goes for the other models too, which is right —
+		// it was one answer given before there were per-model ones, and
+		// the person is now saying they do not want it.
+		st.meta.Effort = ""
+	default:
+		if st.meta.Efforts == nil {
+			st.meta.Efforts = map[string]string{}
+		}
+		st.meta.Efforts[model] = effort
+	}
+	metaCopy := detach(st.meta)
 	if s.dir != "" {
 		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
 			return nil, err
 		}
 	}
 	return &metaCopy, nil
+}
+
+// EffortFor is the level this conversation has chosen for one model, or
+// "" when it has not chosen one. The per-model answer first, then the
+// conversation-wide one that predates it.
+func (s *Store) EffortFor(sessionID, model string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return ""
+	}
+	if e, ok := st.meta.Efforts[model]; ok && e != "" {
+		return e
+	}
+	return st.meta.Effort
+}
+
+// detach is a Session with nothing shared with the one in the store.
+//
+// Session is copied by value everywhere it leaves this package, which
+// was enough while every field was a value. Efforts is a map, and a
+// value copy shares the map header: a caller ranging over a listed
+// session's levels while another goroutine sets one is a data race, and
+// it is not hypothetical — the daemon lists sessions on one request
+// while another sets the level. Detected by the race detector on
+// exactly that pair.
+//
+// Called with s.mu held, on every path that hands a Session out.
+func detach(meta Session) Session {
+	meta.Efforts = cloneEfforts(meta.Efforts)
+	return meta
+}
+
+// cloneEfforts copies the map so a returned Session cannot be used to
+// reach into the live one, in either direction.
+func cloneEfforts(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // Delete removes one session from the store and, if persisted, deletes its
@@ -679,7 +768,7 @@ func (s *Store) ListVisible() []Session {
 	var out []Session
 	for _, st := range s.sessions {
 		if st.meta.Visible && st.meta.ArchivedAt == nil {
-			out = append(out, st.meta)
+			out = append(out, detach(st.meta))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -768,7 +857,7 @@ func (s *Store) AllSessions() []Session {
 	defer s.mu.Unlock()
 	out := make([]Session, 0, len(s.sessions))
 	for _, st := range s.sessions {
-		out = append(out, st.meta)
+		out = append(out, detach(st.meta))
 	}
 	return out
 }
@@ -780,7 +869,7 @@ func (s *Store) Children(parentID string) []Session {
 	var out []Session
 	for _, st := range s.sessions {
 		if st.meta.ParentID == parentID {
-			out = append(out, st.meta)
+			out = append(out, detach(st.meta))
 		}
 	}
 	return out
@@ -1313,12 +1402,12 @@ func (s *Store) Archive(sessionID string) (*Session, error) {
 		return nil, fmt.Errorf("session %s is a background task, not a conversation", sessionID)
 	}
 	if st.meta.ArchivedAt != nil {
-		metaCopy := st.meta
+		metaCopy := detach(st.meta)
 		return &metaCopy, nil
 	}
 	now := time.Now().UTC()
 	st.meta.ArchivedAt = &now
-	metaCopy := st.meta
+	metaCopy := detach(st.meta)
 	if s.dir != "" {
 		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
 			st.meta.ArchivedAt = nil // the file is the record; do not claim a write that failed
@@ -1384,7 +1473,7 @@ func (s *Store) Retrieve(sessionID string) (*Session, error) {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
 	if st.meta.ArchivedAt == nil {
-		metaCopy := st.meta
+		metaCopy := detach(st.meta)
 		return &metaCopy, nil
 	}
 	want := st.meta.Order
@@ -1460,7 +1549,7 @@ func (s *Store) ListArchived() []Session {
 	var out []Session
 	for _, st := range s.sessions {
 		if st.meta.Visible && st.meta.ArchivedAt != nil {
-			out = append(out, st.meta)
+			out = append(out, detach(st.meta))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

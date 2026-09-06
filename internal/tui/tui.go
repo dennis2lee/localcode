@@ -134,9 +134,15 @@ type Model struct {
 	queue            []string
 	errMsg           string
 	currentAgent     string
-	agents           []client.AgentInfo
-	commandsList     []client.CommandInfo
-	skillsList       []client.SkillInfo
+	// effort is how hard the model is asked to think in this
+	// conversation, as the daemon last reported it, and the levels the
+	// model it is on tells apart. Fetched on a switch and after a change,
+	// because both the answer and the list of choices belong to the
+	// conversation and to its model.
+	effort       client.EffortView
+	agents       []client.AgentInfo
+	commandsList []client.CommandInfo
+	skillsList   []client.SkillInfo
 	// refNames is the conversations "#" can complete to: the visible ones
 	// and the archived ones together, since referring to a conversation is
 	// reading and archiving only ever refuses starting work.

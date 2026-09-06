@@ -11,6 +11,7 @@ import {
   workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, stopBtn,
   workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskDeleteBtn, taskCloseBtn,
   windowBarEl, windowMinimizeBtn, windowMaximizeBtn, windowCloseBtn, windowEdgesEl, windowTitleEl, windowEdges,
+  effortBtn,
 } from './dom.js';
 import { app, session } from './state.js';
 import { uploadFile, switchAgent } from './api.js';
@@ -33,6 +34,7 @@ import {
 } from './debate.js';
 import {
   resolvePermission, openAutoDelegateSettings, closeDelegateModal, saveAutoDelegate, addDelegateMatch,
+  openEffort,
   openPermissionSettings, closePermissionSettings, addPermissionRule,
   wireSessionPermissionCheckboxes,
   openWorkspacePicker, closeWorkspaceModal, saveWorkspace, anyModalOpen, permissionRequest,
@@ -205,6 +207,7 @@ debateStartBtn.addEventListener('click', startDebate);
 debateRoundsInput.addEventListener('input', renderDebatePreview);
 debateTaskInput.addEventListener('input', renderDebatePreview);
 permissionStatusBtn.addEventListener('click', openPermissionSettings);
+effortBtn.addEventListener('click', openEffort);
 permissionSettingsCloseBtn.addEventListener('click', closePermissionSettings);
 // The four switches are per conversation, wired in one place because
 // they behave identically. The daemon-wide default is config.json's.

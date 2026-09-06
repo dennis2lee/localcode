@@ -155,6 +155,30 @@ func (m Model) fetchReferenceNames() tea.Cmd {
 	}
 }
 
+// fetchEffort reads the level for the open conversation. pick opens the
+// picker on the answer, so "/effort-set" is one round trip rather than a
+// list written from a cache that may be a model out of date.
+func (m Model) fetchEffort(pick bool) tea.Cmd {
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		defer cancel()
+		view, err := m.client.GetEffort(ctx, sessionID)
+		return effortMsg{view: view, pick: pick, err: err}
+	}
+}
+
+// setEffort records a level, or clears it with "".
+func (m Model) setEffort(level string) tea.Cmd {
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		defer cancel()
+		view, err := m.client.SetEffort(ctx, sessionID, level)
+		return effortMsg{view: view, err: err}
+	}
+}
+
 func (m Model) fetchCommands() tea.Cmd {
 	return call(m.client.ListCommands, func(c []client.CommandInfo, err error) tea.Msg { return commandsMsg{commands: c, err: err} })
 }

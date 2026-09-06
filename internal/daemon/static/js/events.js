@@ -13,6 +13,7 @@ import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryE
 import {
   refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen, permissionRequest,
   applySessionPermissions,
+  applyEffort,
 } from './modals.js';
 import { applyScheduleEvent } from './schedules.js';
 import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen } from './settings.js';
@@ -90,6 +91,15 @@ const handlers = {
   // busy flag with a 409.
   'message.part.end': (d) => {
     endModelText(typeof d.text === 'string' ? d.text : '');
+  },
+  // How hard the model is asked to think, changed here or in another
+  // client watching the same conversation. Carried in the event rather
+  // than fetched, so a client that opens the session later replays it.
+  'effort.changed': (d) => {
+    applyEffort({
+      model: d.model, agent: d.agent, level: d.level,
+      source: d.source, levels: d.levels || [], note: d.note,
+    });
   },
   // The daemon's real turn boundary, emitted after its busy flag is
   // cleared — safe to stop waiting and let the queue drain.

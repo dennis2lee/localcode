@@ -238,6 +238,8 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/sessions/{id}/schedules/{sid}/seen", d.handleSeenSchedule)
 	d.mux.HandleFunc("POST /api/sessions/{id}/schedules/{sid}/rename", d.handleRenameSchedule)
 	d.mux.HandleFunc("DELETE /api/sessions/{id}/schedules/{sid}", d.handleDeleteSchedule)
+	d.mux.HandleFunc("GET /api/sessions/{id}/effort", d.handleGetSessionEffort)
+	d.mux.HandleFunc("POST /api/sessions/{id}/effort", d.handleSetSessionEffort)
 	d.mux.HandleFunc("GET /api/sessions/{id}/permissions", d.handleGetSessionPermissions)
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions", d.handleSetSessionPermission)
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions/forget", d.handleForgetSessionOutside)

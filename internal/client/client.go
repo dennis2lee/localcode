@@ -165,6 +165,34 @@ func (c *Client) ListArchivedSessions(ctx context.Context) ([]session.Session, e
 	return out, err
 }
 
+// EffortView is how hard the model is asked to think in one
+// conversation, on the model it is on, plus the levels that model tells
+// apart. Mirrors agent.EffortView.
+type EffortView struct {
+	Model  string   `json:"model"`
+	Agent  string   `json:"agent"`
+	Level  string   `json:"level"`
+	Source string   `json:"source"`
+	Levels []string `json:"levels"`
+	Note   string   `json:"note"`
+}
+
+// GetEffort reads the level in force for a conversation.
+func (c *Client) GetEffort(ctx context.Context, sessionID string) (EffortView, error) {
+	var out EffortView
+	err := c.doJSON(ctx, http.MethodGet, "/api/sessions/"+sessionID+"/effort", nil, &out)
+	return out, err
+}
+
+// SetEffort records a level for the model this conversation is on, or
+// clears it with "" so the profile's answer applies again.
+func (c *Client) SetEffort(ctx context.Context, sessionID, level string) (EffortView, error) {
+	var out EffortView
+	err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/effort",
+		map[string]string{"level": level}, &out)
+	return out, err
+}
+
 // ArchiveSession puts a conversation away. Everything it had is kept and
 // RetrieveSession brings it back; what changes is that it leaves the list
 // and nothing new starts in it.

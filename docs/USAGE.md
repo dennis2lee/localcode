@@ -1234,7 +1234,8 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/debate` | `/debate <reviewer>[,<reviewer>] [rounds] <task>`. Author and reviewer iterations. Also available through natural language or the **debate** button. See [Debate](#debate). |
 | `/repeat-limit` | `/repeat-limit [on\|off\|<steps>]`. How many nothing-new steps end a turn; `on` is 3, `off` (the default) never ends one for it. Bare, reports the ceiling. See [A model that repeats itself](#a-model-that-repeats-itself). |
 | `/debug-log` | Toggles writing every model request and response to a file per prompt, in this conversation's workspace. Off at every start and never saved. See [Debug log](#debug-log). |
-| `/effort` | `/effort [off\|low\|medium\|high\|xhigh]`. Conversation reasoning level. `default` restores the profile setting. See [Effort](#effort). |
+| `/effort` | `/effort [off\|low\|medium\|high\|xhigh]`. Conversation reasoning level, kept per model. `default` restores the profile setting. See [Effort](#effort). |
+| `/effort-set` | Lists the levels the current model tells apart and takes a choice. `/effort-set <level>` sets one directly. See [Effort](#effort). |
 | `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
 ## Part 5. Sessions
@@ -2142,14 +2143,38 @@ Debate is available only in interactive top-level conversations. It is unavailab
 
 ### Effort
 
-Effort sets the requested reasoning level for the conversation:
+Effort sets the requested reasoning level for the conversation, and it is remembered per model.
 
 ```
+/effort-set        # pick from the levels this model tells apart
 /effort high
 /effort off
 /effort            # what is in force, and what it reaches on this model
 /effort default    # back to what the profile says
 ```
+
+| Where | How |
+|---|---|
+| Web UI and window | The `effort:` control in the line under the prompt box, beside the model. Click it for the levels this model tells apart. |
+| TUI | `/effort-set` lists them and takes a choice; `/effort-set <level>` sets one directly. `/effort <level>` still works. |
+| API | `GET /api/sessions/{id}/effort` returns the level in force, its source, the levels the model tells apart, and what the level reaches there. `POST` the same path with `{"level":"high"}`, or `""` to go back to the profile's. |
+
+The level is stored against the model, not against the conversation alone. A conversation that changes model — through the agent dropdown, or through a fallback — finds the answer it gave for the model it is now on, and the answer it gave for the other one is still there when it goes back. A conversation that set a level before this existed keeps it for every model until it answers for one.
+
+Only the levels a model tells apart are offered, because the same word reaches different wires:
+
+| Model | Levels offered |
+|---|---|
+| Claude Opus 5, Sonnet 5, Fable 5, Mythos 5, Opus 4.6/4.7/4.8, Sonnet 4.6, on Anthropic or Bedrock | `off`, `high`. The family decides the amount of thinking itself, so this is a switch rather than a dial. |
+| Older Claude models | `off`, and one step per distinct token budget. The budgets are 2,048, 8,192 and 16,384, each clamped to what the reply cap leaves, so a profile with a modest `max_tokens` offers fewer steps than one with a large one — two levels that would send the same number are not offered as two. |
+| Muse | `off`, `low`, `medium`, `high`, `xhigh`. It reads the strength from the system prompt, so every step is distinct. |
+| Every other OpenAI-compatible model | `off`, `low`, `medium`, `high`. The `reasoning_effort` vocabulary stops at `high`. |
+
+A level the model does not tell apart is refused rather than stored, whether it is asked for by the control, by `/effort-set`, or by `/effort`: a stored level would show in both readouts and never be true of a request.
+
+Changing the level takes effect on the next turn. Every field of a request is fixed when the turn starts, this one included, so a level changed while the model is working does not alter the requests inside that turn.
+
+Clearing removes this conversation's answer for the model in hand, and also the conversation-wide answer set before this was per model — that is the one still in force for a model with no entry of its own, so leaving it would make "back to the profile's" change nothing.
 
 Or on the profile, for every conversation that uses it:
 
@@ -2157,9 +2182,9 @@ Or on the profile, for every conversation that uses it:
 "balanced": { "provider": "anthropic", "model": "claude-sonnet-5", "effort": "medium" }
 ```
 
-A conversation effort setting overrides its profile. `default` removes the override.
+A conversation effort setting overrides its profile, for the model it was set on. `default` removes the override.
 
-Unset and `off` send no reasoning fields. `/effort` reports the active setting and its provider-specific effect. `xhigh` is one step past `high`, and only some models have that step; elsewhere it means `high`.
+Unset and `off` send no reasoning fields. `/effort` reports the active setting and its provider-specific effect.
 
 Provider mappings differ:
 

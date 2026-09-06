@@ -165,6 +165,22 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// A fork is a verbatim copy, and how hard the model is asked to think
+	// is part of what it is copying: agent and workspace already come
+	// over, and a fork that quietly reasons less than the conversation it
+	// was taken from is a difference nobody asked for and nothing shows.
+	// Both shapes, because a conversation that set a level before it was
+	// per model carries it in the old field. The levels came through
+	// SetSessionEffort when they were set, so nothing here bypasses a
+	// check.
+	for model, level := range src.Efforts {
+		if _, err := d.Loop.Store.SetEffort(newID, model, level); err != nil {
+			break
+		}
+	}
+	if src.Effort != "" {
+		_, _ = d.Loop.Store.SetEffort(newID, "", src.Effort)
+	}
 
 	// The first line of the fork's transcript says what it is.
 	//
@@ -661,6 +677,14 @@ func (d *Daemon) handleSwitchAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	_, appendErr := d.Loop.Store.Append(id, events.TypeAgentSwitched, map[string]any{"agent": req.Agent})
 	logAppend(id, events.TypeAgentSwitched, appendErr)
+	// A different agent is usually a different profile, and a different
+	// profile is a different model — and the reasoning level is kept per
+	// model, with a list of levels that is also per model. Announced from
+	// here so every client redraws from one place: without it the control
+	// went on showing the level and the steps of the model it had just
+	// left, which on a family with one switch is a dial that does
+	// nothing.
+	d.announceEffort(id)
 
 	writeJSON(w, http.StatusOK, sess)
 }

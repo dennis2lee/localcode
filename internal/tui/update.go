@@ -64,6 +64,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case archivedSessionsMsg:
 		return m.handleArchivedSessionsMsg(msg)
 
+	case effortMsg:
+		return m.handleEffortMsg(msg)
+
 	// Archiving and retrieving both change what "#" completes to — an
 	// archived conversation is still referable, a retrieved one is
 	// referable under a rank it did not have — so the cached names are
@@ -392,7 +395,10 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.completion = completionState{}
 	m.appendLocal("Switched to session " + msg.sessionID + ".")
 	m.refreshViewport()
-	return m, listenForEvent(m.events, m.streamGen)
+	// The level belongs to the conversation and to the model it is on,
+	// so it is read for the one being opened rather than carried over
+	// from the one being left.
+	return m, tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchEffort(false))
 }
 
 // reopenCurrent re-attaches to the session this client is already in,
@@ -430,6 +436,55 @@ func (m *Model) reopenCurrent() tea.Cmd {
 // "/archive" puts this conversation away and moves off it; "/retrieve"
 // offers the ones that have been put away. The picker is the same one
 // "/session" uses, because they are the same gesture aimed at two lists.
+
+// handleEffortMsg takes the answer, and opens the picker when the
+// command asked for one.
+//
+// The levels come from the daemon rather than from a list in this
+// client, because which ones exist is a property of the model the
+// conversation is on: Anthropic's newest families have one switch where
+// muse has four steps, and a picker with its own list offers steps that
+// do nothing.
+func (m Model) handleEffortMsg(msg effortMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("effort: %v", msg.err)
+		return m, nil
+	}
+	m.effort = msg.view
+	if !msg.pick {
+		return m, nil
+	}
+	items := make([]pickerItem, 0, len(msg.view.Levels)+1)
+	for _, level := range msg.view.Levels {
+		detail := ""
+		if level == msg.view.Level {
+			detail = "in force"
+		}
+		items = append(items, pickerItem{id: level, label: level, detail: detail})
+	}
+	// Last, and always: handing the answer back to the profile is a real
+	// choice and not a tidy-up. A conversation that has never been asked
+	// and one that was asked and said off look the same from outside, and
+	// only one of them follows the profile when it changes. It clears the
+	// answer given before this was per model too, since that is the one
+	// still in force for a model with no entry of its own.
+	back := "use the profile's"
+	if msg.view.Source == "profile" || msg.view.Source == "unset" {
+		back += "  (in force)"
+	}
+	items = append(items, pickerItem{id: "", label: back})
+
+	title := "Reasoning effort"
+	if msg.view.Model != "" {
+		title += " — " + msg.view.Model
+	}
+	cmd := m.openPicker(&picker{
+		title:  title,
+		items:  items,
+		onPick: func(m *Model, it pickerItem) tea.Cmd { return m.setEffort(it.id) },
+	}, "This model has no reasoning level to set.")
+	return m, cmd
+}
 
 func (m Model) handleArchivedSessionsMsg(msg archivedSessionsMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {

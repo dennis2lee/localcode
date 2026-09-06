@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"localcode/internal/config"
+	"localcode/internal/events"
 	"localcode/internal/provider"
 	"localcode/internal/session"
 	"localcode/internal/tools"
@@ -120,18 +121,115 @@ func TestTheConversationOverridesTheProfile(t *testing.T) {
 // like the four permission switches, not a runtime flag.
 func TestTheConversationsEffortIsPartOfTheSession(t *testing.T) {
 	loop, sid, _ := effortLoop(t, "")
-	if _, err := loop.Store.SetEffort(sid, "medium"); err != nil {
+	if _, err := loop.Store.SetEffort(sid, "m", "medium"); err != nil {
 		t.Fatalf("SetEffort: %v", err)
 	}
 	sess, err := loop.Store.Get(sid)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if sess.Effort != "medium" {
-		t.Errorf("session effort = %q, want medium", sess.Effort)
+	if sess.Efforts["m"] != "medium" {
+		t.Errorf("session efforts = %v, want m:medium", sess.Efforts)
 	}
-	if got := loop.effortFor(sid, config.Profile{Effort: "low"}); got != provider.EffortMedium {
+	if got := loop.effortFor(sid, config.Profile{Model: "m", Effort: "low"}); got != provider.EffortMedium {
 		t.Errorf("effortFor = %q, want the session's medium", got)
+	}
+}
+
+// The answer is kept per model, because one conversation can change
+// model — by the agent dropdown, or by a fallback nobody asked for — and
+// the amount of reasoning that suits a model belongs to the model as
+// much as to the work. Picking xhigh for a muse and then switching to a
+// Claude used to carry a word that family has no step for, and switching
+// back had lost the muse's answer.
+func TestEachModelInAConversationKeepsItsOwnLevel(t *testing.T) {
+	loop, sid, _ := effortLoop(t, "")
+	if _, err := loop.Store.SetEffort(sid, "muse-glimmer-30b", "xhigh"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Store.SetEffort(sid, "claude-sonnet-5", "off"); err != nil {
+		t.Fatal(err)
+	}
+	for model, want := range map[string]provider.Effort{
+		"muse-glimmer-30b": provider.EffortXHigh,
+		"claude-sonnet-5":  provider.EffortOff,
+	} {
+		if got := loop.effortFor(sid, config.Profile{Model: model}); got != want {
+			t.Errorf("effortFor(%s) = %q, want %q", model, got, want)
+		}
+	}
+	// A model nobody has answered for falls through to the profile.
+	if got := loop.effortFor(sid, config.Profile{Model: "gemma-3-27b-it", Effort: "low"}); got != provider.EffortLow {
+		t.Errorf("effortFor(a model with no answer) = %q, want the profile's low", got)
+	}
+	// And clearing one leaves the other alone.
+	if _, err := loop.Store.SetEffort(sid, "muse-glimmer-30b", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := loop.effortFor(sid, config.Profile{Model: "muse-glimmer-30b", Effort: "low"}); got != provider.EffortLow {
+		t.Errorf("after clearing, effortFor = %q, want the profile's low", got)
+	}
+	if got := loop.effortFor(sid, config.Profile{Model: "claude-sonnet-5"}); got != provider.EffortOff {
+		t.Errorf("clearing one model's answer took another's: %q", got)
+	}
+}
+
+// A conversation that set a level before this was per model keeps it,
+// for every model, until it answers for one.
+func TestTheAnswerFromBeforeThisWasPerModelStillCounts(t *testing.T) {
+	loop, sid, _ := effortLoop(t, "")
+	if _, err := loop.Store.SetEffort(sid, "", "high"); err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{"muse-glimmer-30b", "claude-sonnet-5"} {
+		if got := loop.effortFor(sid, config.Profile{Model: model}); got != provider.EffortHigh {
+			t.Errorf("effortFor(%s) = %q, want the conversation-wide high", model, got)
+		}
+	}
+	if _, err := loop.Store.SetEffort(sid, "claude-sonnet-5", "off"); err != nil {
+		t.Fatal(err)
+	}
+	if got := loop.effortFor(sid, config.Profile{Model: "claude-sonnet-5"}); got != provider.EffortOff {
+		t.Errorf("the per-model answer did not win: %q", got)
+	}
+	if got := loop.effortFor(sid, config.Profile{Model: "muse-glimmer-30b"}); got != provider.EffortHigh {
+		t.Errorf("answering for one model changed another: %q", got)
+	}
+}
+
+// What a control should offer on each model: the levels that reach the
+// wire as different requests, and no more.
+func TestTheLevelsOfferedAreTheOnesThatDoSomething(t *testing.T) {
+	all := []provider.Effort{provider.EffortOff, provider.EffortLow, provider.EffortMedium, provider.EffortHigh, provider.EffortXHigh}
+	toHigh := []provider.Effort{provider.EffortOff, provider.EffortLow, provider.EffortMedium, provider.EffortHigh}
+	onOff := []provider.Effort{provider.EffortOff, provider.EffortHigh}
+	// Room for every budget: 16384 for high, plus what the adapter
+	// reserves for the answer itself.
+	const roomy = 64000
+	for _, c := range []struct {
+		name      string
+		provider  config.ProviderType
+		model     string
+		maxTokens int
+		want      []provider.Effort
+	}{
+		{"an adaptive Claude has one switch", config.ProviderAnthropic, "claude-sonnet-5", roomy, onOff},
+		{"the same on Bedrock", config.ProviderBedrock, "claude-opus-5", roomy, onOff},
+		{"an older Claude takes a budget per level", config.ProviderAnthropic, "claude-3-5-sonnet", roomy, toHigh},
+		{"muse has a word for xhigh", config.ProviderOpenAICompat, "muse-glimmer-30b", roomy, all},
+		{"another local model stops at high", config.ProviderOpenAICompat, "gemma-3-27b-it", roomy, toHigh},
+	} {
+		got := effortLevelsFor(c.provider, c.model, c.maxTokens)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: %v, want %v", c.name, got, c.want)
+				break
+			}
+		}
 	}
 }
 
@@ -260,5 +358,109 @@ func TestTheReasoningLineIsMusesAlone(t *testing.T) {
 	}
 	if got := modelNoteFor("Muse-Glimmer-30B", provider.EffortOff); strings.Contains(got, "Reasoning strength") {
 		t.Errorf("off wrote a line: %q", got)
+	}
+}
+
+// On a model that takes a budget per level, the cap decides how many
+// levels there are.
+//
+// Every budget is clamped to the room the reply cap leaves, so on an
+// ordinary max_tokens medium and high arrive as the same number — and a
+// control that offered both would be a dial over a switch, which is the
+// thing this list exists to prevent. Built from what the wire would
+// carry rather than from a literal.
+func TestTheReplyCapDecidesHowManyLevelsAnOlderClaudeHas(t *testing.T) {
+	const model = "claude-3-5-sonnet"
+	for _, c := range []struct {
+		name      string
+		maxTokens int
+		want      []provider.Effort
+	}{
+		{"room for every budget", 64000, []provider.Effort{provider.EffortOff, provider.EffortLow, provider.EffortMedium, provider.EffortHigh}},
+		// 1024 of every cap is reserved for the answer, so the room a
+		// budget is clamped to is max_tokens less that.
+		{"high clamped onto medium", 8192 + 1024, []provider.Effort{provider.EffortOff, provider.EffortLow, provider.EffortMedium}},
+		{"medium and high both clamped onto low", 2048 + 1024, []provider.Effort{provider.EffortOff, provider.EffortLow}},
+		{"no room to think at all", 1200, []provider.Effort{provider.EffortOff}},
+	} {
+		got := effortLevelsFor(config.ProviderAnthropic, model, c.maxTokens)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: %v, want %v", c.name, got, c.want)
+				break
+			}
+		}
+	}
+}
+
+// Every path that changes the level says so, because two of them do:
+// the HTTP route the controls use, and the "/effort" command. A route
+// that announces beside a command that does not is a readout that is
+// right half the time — the pill and the footer would go on naming the
+// level somebody had just changed.
+func TestChangingTheLevelIsAlwaysAnnounced(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		set  func(*Loop, string)
+	}{
+		{"the control", func(l *Loop, sid string) { _, _ = l.SetSessionEffort(sid, "high") }},
+		{"the command", func(l *Loop, sid string) { _, _ = l.routeEffort(sid, "general-purpose", "/effort high") }},
+		{"the command, clearing", func(l *Loop, sid string) { _, _ = l.routeEffort(sid, "general-purpose", "/effort default") }},
+	} {
+		loop, sid, _ := effortLoop(t, "")
+		before := countEffortEvents(t, loop, sid)
+		c.set(loop, sid)
+		if got := countEffortEvents(t, loop, sid); got <= before {
+			t.Errorf("%s changed the level without announcing it", c.name)
+		}
+	}
+}
+
+func countEffortEvents(t *testing.T, loop *Loop, sessionID string) int {
+	t.Helper()
+	evs, err := loop.Store.Events(sessionID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	n := 0
+	for _, ev := range evs {
+		if ev.Type == events.TypeEffortChanged {
+			n++
+		}
+	}
+	return n
+}
+
+// The same levels are refused whichever way one is asked for.
+//
+// "/effort xhigh" on a model with no such step used to store it, while
+// the picker refused it — and the stored word showed in both readouts
+// and was never true of a request.
+func TestTheCommandRefusesWhatTheControlRefuses(t *testing.T) {
+	loop, sid, _ := effortLoop(t, "")
+	// Not muse: the reasoning_effort vocabulary stops at high, so xhigh
+	// is a word this model does not tell apart.
+	const model = "gemma-3-27b-it"
+	loop.Config.Profiles["only"] = config.Profile{Provider: "local", Model: model}
+
+	if _, err := loop.routeEffort(sid, "boy", "/effort xhigh"); err != nil {
+		t.Fatalf("routeEffort: %v", err)
+	}
+	if got := loop.Store.EffortFor(sid, model); got == "xhigh" {
+		t.Error("the command stored a level this model does not tell apart")
+	}
+	if got := loop.effortFor(sid, config.Profile{Model: model}); got == provider.EffortXHigh {
+		t.Error("the refused level reached a request")
+	}
+	// And a level it does tell apart still lands.
+	if _, err := loop.routeEffort(sid, "boy", "/effort high"); err != nil {
+		t.Fatalf("routeEffort: %v", err)
+	}
+	if got := loop.Store.EffortFor(sid, model); got != "high" {
+		t.Errorf("a level the model tells apart was not stored: %q", got)
 	}
 }

@@ -105,6 +105,15 @@ type referenceNamesMsg struct {
 	err      error
 }
 
+// effortMsg is the reasoning level for the open conversation, either
+// read or just set. pick asks the picker to open on it, which is what
+// "/effort-set" with no argument does.
+type effortMsg struct {
+	view client.EffortView
+	pick bool
+	err  error
+}
+
 type archivedSessionsMsg struct {
 	sessions []session.Session
 	err      error

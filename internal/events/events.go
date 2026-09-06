@@ -224,6 +224,12 @@ const (
 	// conversation A must not repaint its switches because conversation B
 	// answered a prompt.
 	TypePermissionsChanged Type = "permissions.changed"
+	// TypeEffortChanged reports how hard the model is being asked to
+	// think in this conversation, on the model it is on: {"model",
+	// "agent", "level", "source", "levels", "note"}. Written to the log
+	// rather than only broadcast, so a client that opens the
+	// conversation later replays it instead of asking.
+	TypeEffortChanged Type = "effort.changed"
 	// TypePermissionForgotten records "/read-outside mem-clear" and its
 	// write twin: {"class": "read"|"write"}. The remembered directories
 	// are rebuilt from the log when a session is next looked at, and

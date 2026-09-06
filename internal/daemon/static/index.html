@@ -262,6 +262,13 @@
        render as a thin monochrome glyph beside the clock's colour emoji,
        and the two buttons stop looking like the same kind of thing. -->
   <button class="pill" id="debate-btn" title="have another agent review this one's work, round after round"><svg class="ico ico-13"><use href="#i-scales"/></svg>debate</button>
+  <!--
+    How hard the model is asked to think, on the model it is on. A
+    readout and a control at once, like the two pills beside it: the
+    level is a fact about the conversation you want to see without
+    asking, and changing it is one click rather than a command.
+  -->
+  <button class="pill" id="effort-btn" title="how hard this model is asked to think — click to change"></button>
   <button class="pill" id="permission-status-btn" title="click to view or change permission settings"></button>
   <button class="pill" id="settings-btn" title="settings"><svg class="ico ico-13"><use href="#i-sliders"/></svg>settings</button>
 </div>
@@ -508,6 +515,24 @@
   </div>
 </div>
 
+<!--
+  The levels are asked for rather than listed here, because which ones
+  exist is a property of the model the conversation is on: Anthropic's
+  newest families have one switch where muse has four steps, and a list
+  written into the page offers steps that do nothing on most models.
+-->
+<div id="effort-modal">
+  <div class="box">
+    <h3>Reasoning effort</h3>
+    <div class="meta" id="effort-model"></div>
+    <div id="effort-levels"></div>
+    <p class="note" id="effort-note"></p>
+    <div class="actions">
+      <button id="effort-default">use the profile's</button>
+      <button id="effort-close">close</button>
+    </div>
+  </div>
+</div>
 <div id="permission-settings-modal">
   <div class="box">
     <h3>Permissions</h3>

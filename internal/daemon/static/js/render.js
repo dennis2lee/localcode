@@ -1,6 +1,6 @@
 import {
   tasksEl, mcpServersEl, statusTextEl, statusBarEl, agentSelectEl,
-  permissionStatusBtn, autoDelegateBtn, workspaceBtn, workspaceRevealBtn, stopBtn, inputEl,
+  permissionStatusBtn, autoDelegateBtn, workspaceBtn, workspaceRevealBtn, stopBtn, inputEl, effortBtn,
 } from './dom.js';
 import { app, session, turnInFlight } from './state.js';
 import { completionHint } from './complete.js';
@@ -106,6 +106,7 @@ export function renderStatusBar() {
   // should be; they differ when a profile is overridden server-side.
   const model = (session.lastUsage && session.lastUsage.model) || modelForAgent(session.currentAgent);
   if (model) parts.push(`model: ${model}`);
+  renderEffort();
   if (session.lastUsage && typeof session.lastUsage.percent === 'number') {
     parts.push(`context: ${session.lastUsage.percent.toFixed(1)}%`);
   }
@@ -159,6 +160,27 @@ export function renderStatusBar() {
 // "permissions: skip" (in warn color) when skip_permissions is on, or the
 // count of custom rules otherwise. Click opens the settings modal in
 // both the browser Web UI and the native GUI window (same page).
+// The reasoning level, beside the model it belongs to.
+//
+// Blank rather than "unset" when nobody has chosen: a line that names
+// every setting nobody has touched is a line nobody reads. The pill is
+// still there to click, which is what "…" says.
+export function renderEffort() {
+  const e = session.effort;
+  if (!e) {
+    effortBtn.textContent = 'effort: …';
+    effortBtn.classList.remove('set');
+    return;
+  }
+  effortBtn.textContent = e.level ? `effort: ${e.level}` : 'effort: default';
+  // Marked only when this conversation chose it, so the pill says at a
+  // glance whether the answer is the profile's or one somebody gave here.
+  effortBtn.classList.toggle('set', e.source === 'session');
+  effortBtn.title = e.model
+    ? `${e.model}: ${e.note || 'click to change how hard it is asked to think'}`
+    : 'how hard this model is asked to think — click to change';
+}
+
 export function renderPermissionStatus() {
   const ruleCount = Object.values(app.permissionRules).reduce((n, rs) => n + rs.length, 0);
   // This conversation's own answer, not the daemon's default: the four

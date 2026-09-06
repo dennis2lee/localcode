@@ -68,6 +68,20 @@ func localCommands() []localCommand {
 			},
 		},
 		{
+			// A picker rather than a word to remember: which levels exist
+			// is a property of the model this conversation is on, so the
+			// only way to type the right one is to be shown it.
+			name:     "/effort-set",
+			takesArg: true,
+			help:     "choose how hard this model is asked to think, from the levels it tells apart",
+			run: func(m *Model, arg string) tea.Cmd {
+				if arg = strings.TrimSpace(arg); arg != "" {
+					return m.setEffort(arg)
+				}
+				return m.fetchEffort(true)
+			},
+		},
+		{
 			name:     "/agent",
 			takesArg: true,
 			help:     "list agents, or switch with /agent <name> (Tab also cycles through them)",
@@ -236,6 +250,7 @@ const serverSideHelpText = `  /skill              list registered skills
   /show-scheduled-task  list the prompts booked for later
   /debate <reviewer>[,<reviewer>] [rounds] <what to do>  other agents review this one's work, round after round
   /effort [off|low|medium|high|xhigh]  how hard the model is asked to think in this conversation
+  /effort-set        choose from the levels this model tells apart; the answer is kept per model
   /model-invocable [on|off]  whether the model may run this session's commands itself
   /clear             start the model fresh; the conversation itself is kept
   /rewind            undo the last turn, and the files write_file and edit changed in it

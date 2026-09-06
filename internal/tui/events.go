@@ -5,8 +5,36 @@ import (
 	"strings"
 	"time"
 
+	"localcode/internal/client"
 	"localcode/internal/events"
 )
+
+// strField reads a string out of an event payload, or "" when it is
+// missing or something else.
+func strField(data map[string]any, key string) string {
+	s, _ := data[key].(string)
+	return s
+}
+
+// stringsField reads a list of strings. The same payload arrives as
+// []any over the wire and can arrive as []string from a store in this
+// process, so both are taken — the reason intField below takes two
+// number types.
+func stringsField(data map[string]any, key string) []string {
+	switch v := data[key].(type) {
+	case []string:
+		return append([]string(nil), v...)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, x := range v {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
 
 // intField reads a number out of an event payload. JSON has one number
 // type and it arrives as a float64 over the wire but as an int from a
@@ -165,6 +193,23 @@ func (m *Model) applyEvent(ev events.Event) {
 		// just updating the one-line status shown below the prompt.
 		if name, ok := ev.Data["agent"].(string); ok {
 			m.currentAgent = name
+		}
+	case events.TypeEffortChanged:
+		// The whole answer is in the event, so this needs no request of
+		// its own — which matters because applyEvent cannot issue one.
+		//
+		// It arrives when somebody changes the level, here or in another
+		// client, and when the agent changes: a new agent is usually a
+		// new profile and so a new model, and the level is kept per
+		// model. Without this the footer went on naming the level of the
+		// model this conversation had just left.
+		m.effort = client.EffortView{
+			Model:  strField(ev.Data, "model"),
+			Agent:  strField(ev.Data, "agent"),
+			Level:  strField(ev.Data, "level"),
+			Source: strField(ev.Data, "source"),
+			Levels: stringsField(ev.Data, "levels"),
+			Note:   strField(ev.Data, "note"),
 		}
 	case events.TypeDelegated:
 		if name, ok := ev.Data["agent"].(string); ok {
