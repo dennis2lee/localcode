@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 
@@ -77,4 +80,40 @@ func footerOf(m Model) string {
 		}
 	}
 	return ""
+}
+
+// The first frame already knows the level.
+//
+// A level set in this conversation replays from the log as an
+// effort.changed event, but one that comes from the profile has no event
+// to replay — so without asking once at the start the footer named no
+// level on a conversation where one was in force the whole time.
+//
+// Read from the syntax: Init returns a tea.Batch whose members cannot be
+// inspected, and running them makes real requests and blocks on the
+// event stream.
+func TestTheTerminalAsksForTheLevelWhenItStarts(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "tui.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse tui.go: %v", err)
+	}
+	found := false
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "Init" {
+			continue
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if ok && sel.Sel.Name == "fetchEffort" {
+				found = true
+			}
+			return true
+		})
+	}
+	if !found {
+		t.Error("the terminal starts without asking what the reasoning level is, " +
+			"so a level that comes from the profile is missing from the footer until the first switch")
+	}
 }

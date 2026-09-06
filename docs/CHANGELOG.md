@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.112.0
+
+**Startup**
+
+* `--headless` installs a newer release at startup again, on macOS and Linux. The change that added the Windows startup handoff two releases ago replaced `runDaemon`'s update call rather than joining it, so a headless daemon installed nothing whatever `auto_update` said — while the comment above the deleted line went on describing both halves, and the daemon's own refusal told a headless caller it "still installs updates at startup". A test reads the three startup modes and fails on the next change shaped like that one.
+
+**Terminal**
+
+* The footer knows the reasoning level on the first frame. A level set in the conversation replays from the log; one that comes from the profile has no event to replay, so it was missing until the first session switch.
+
 ## v0.111.0
 
 **Reasoning effort**

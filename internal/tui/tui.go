@@ -245,5 +245,10 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents(), m.fetchCommands(), m.fetchSkills(), m.fetchSlashCommands(), m.fetchReferenceNames())
+	// fetchEffort among them: a level that comes from the profile has no
+	// event to replay, so without asking once at the start the footer
+	// named no level until the first switch — on a conversation where one
+	// was in force the whole time.
+	return tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents(), m.fetchCommands(),
+		m.fetchSkills(), m.fetchSlashCommands(), m.fetchReferenceNames(), m.fetchEffort(false))
 }

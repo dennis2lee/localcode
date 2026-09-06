@@ -477,6 +477,14 @@ Completed findings remain in this list to preserve item numbers and release hist
    * The data race is the one worth naming. `Session` is copied by value everywhere it leaves the store, which was enough while every field was a value; the per-model levels are a map, and a value copy shares the map header. The daemon lists sessions on one request and sets a level on another, so that pair raced — and a caller could write into the store through a session it had been handed. Every path that hands one out detaches it now, with a regression test that fails both ways without the fix.
    * Found while building it: an agent switch changes the model and nothing told the control. It went on showing the level and the steps of the model it had left, which on a one-switch family is a dial that does nothing. The daemon announces from the switch handler, so both clients redraw from one place.
 
+53. **The desktop window never installs an update at startup on macOS or Linux. Open.**
+
+   * Two of the three startup modes ask whether there is a newer release: `runDaemon` and `runEmbedded` both call `autoUpdateAtStartup`. `runGUI` never has — the call was added to the other two when the feature landed and the window was already in the tree.
+   * It is not an oversight to copy the line into. The window's daemon is built inside the callback `gui.Launch` runs, which is after the window is on screen, and `autoUpdateAtStartup` ends in `exec`: replacing a process that is holding a native window is not the same operation as replacing a headless one. Doing it before `gui.Launch` would mean building enough of a daemon to read the config before the window appears, which is the several-second blank the splash exists to remove.
+   * Two ways out, both decisions rather than patches. The window could take the successor path it already has on Windows — `startupHandoffBinary` keys off a platform constant, and a caller that says "I cannot exec" rather than a platform that cannot would put every window on the proxy — or the update check could run before `gui.Launch` on a cut-down daemon. The first reuses machinery that took several releases to make reliable; the second reintroduces the delay the splash was built for.
+   * What reaches a window today: the settings panel's install button, and on Windows the startup handoff. What does not: an unattended update on a Mac or Linux desktop.
+
+
 
 
 

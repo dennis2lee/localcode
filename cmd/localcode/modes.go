@@ -50,6 +50,16 @@ func runDaemon(configPath, listen string) error {
 	// the new binary is started beside this process on this listener,
 	// and this process stays only to hold the console: Ctrl+C here ends
 	// both, through the pipe the successor watches.
+	//
+	// Both halves, and for two releases only the second was here. The
+	// change that added the Windows handoff replaced this call rather
+	// than joining it, so a headless daemon on macOS or Linux installed
+	// nothing at startup whatever auto_update said — while the paragraph
+	// above went on describing both, and the daemon's own refusal told
+	// a headless caller it "still installs updates at startup". See
+	// TestEveryStartupModeTriesToUpdate.
+	autoUpdateAtStartup(d, os.Stderr)
+
 	if binary, ok := startupHandoffBinary(d, os.Stderr); ok {
 		cleanupOnce_()
 		return superviseSuccessor(binary, ln)
