@@ -14,10 +14,21 @@ export class ApiError extends Error {
   }
 }
 
+// isHeld is the 409 that must not be queued: a command the daemon
+// refuses to hand to a running turn, which the caller has to show.
+//
+// Told apart by a field rather than by the status, because the ordinary
+// 409 means the opposite — "a turn is running, send this again when it
+// ends" — and answering both the same way is how /clear typed during a
+// long turn vanished and then arrived minutes later.
+export const isHeld = (err) => err instanceof ApiError && err.status === 409 &&
+  !!(err.data && err.data.held);
+
 // isBusy identifies the one status the caller usually has to treat
 // differently: the daemon already has a turn running for this session, so
 // the request is queue material, not a failure to report.
-export const isBusy = (err) => err instanceof ApiError && err.status === 409;
+export const isBusy = (err) => err instanceof ApiError && err.status === 409 &&
+  !(err.data && err.data.held);
 
 export async function api(method, path, body) {
   const resp = await fetch(path, {

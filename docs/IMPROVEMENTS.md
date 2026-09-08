@@ -491,6 +491,16 @@ Completed findings remain in this list to preserve item numbers and release hist
    * Three shapes, three answers. The walks check between entries and return a sentinel the caller can tell from a read error. A scan inside one file checks every 4,096 lines, because the walk only looks between files and one log can be the whole search. A pattern with no `**` is `filepath.Glob`, which has no hook at all, so the wait sits beside it and the abandoned glob finishes unread — safe here in a way it would not be for most work, since it reads directory entries and returns a list.
    * The first cut of this fix missed the third shape and its own comment claimed otherwise. The review measured it: a cancelled non-`**` glob ran 339ms and returned its whole 2.2 MB answer. Two of the new tests were also vacuous, matching nothing because the pattern's depth did not match the fixture; the uncancelled test now asserts every pattern it stops actually matches something.
 
+55. **A slash command that did not exist was handed to the model. Done in v0.114.0.**
+
+   * Reported with the transcript. Somebody typed `/clean`; nothing here recognised it, so it fell through every route and was sent to the model as an ordinary prompt. The model's own reasoning is in the log: "The user typed /clean twice. Possibly they want to clean up the home directory?" — then `find /home/... -name "*.md" -o -name "*.txt" -o -name "*.log"`, `ls -lh`, `du -sh` across the home directory, and the line "Maybe they want to clean up the home directory by removing empty directories or temporary files." It was cancelled before it removed anything.
+   * Nothing was deleted, and that is luck rather than design: the model was choosing between asking for clarification and removing files, with a shell and skipped permissions, because a typed command reached it as an instruction.
+   * A message beginning with a slash is somebody addressing the program. It is now answered here — last in the route table, so every built-in, custom command and skill still wins first — and never sent on. The answer names the closest command when exactly one is a single edit away, which is the case that produced this: `/clean` for `/clear`.
+   * A path is not a command. A first word carrying a second slash or a dot goes to the model as it always did, so "/etc/hosts needs a line" is still prose.
+   * Two existing tests asserted the old behaviour — "unmatched slash text is sent as is" and "unknown slash command still goes to model". Their comments defended it only as "keeps its old behavior". Both were rewritten to the safe contract, keeping the property they were really protecting: a near miss must not load somebody else's skill body.
+   * The same report showed a second fault. `/clear` typed while that stuck turn was running was refused with a 409, and both clients read every 409 as "a turn is running, queue this" — so it was queued in silence and delivered later. The daemon marks this refusal now, and both clients show it.
+
+
 
 
 

@@ -275,11 +275,14 @@ func TestSkillByNameForwardsTrailingArgs(t *testing.T) {
 	}
 }
 
-// TestUnknownSlashCommandStillGoesToModel guards the fallthrough: only a
-// name that actually matches a registered skill is intercepted. Anything
-// else keeps its old behavior of being sent to the model verbatim, rather
-// than erroring out as an unknown command.
-func TestUnknownSlashCommandStillGoesToModel(t *testing.T) {
+// Only a name that matches a registered skill loads one, and a name that
+// matches nothing is refused rather than sent on.
+//
+// This asserted that an unmatched slash reached the model verbatim, which
+// is how a typed command became an instruction to a model holding a
+// shell. What it was really guarding — that a near miss must not load
+// somebody else's skill body — is asserted here without that.
+func TestAnUnmatchedSlashLoadsNoSkillAndIsNotSent(t *testing.T) {
 	var requestBody string
 	model := newSkillEchoServer(t, &requestBody)
 	defer model.Close()
@@ -287,11 +290,11 @@ func TestUnknownSlashCommandStillGoesToModel(t *testing.T) {
 	loop, store := newSkillTestLoop(t, model.URL)
 	runSkillTurn(t, loop, store, "/not-a-skill")
 
-	if !strings.Contains(requestBody, "/not-a-skill") {
-		t.Errorf("an unmatched slash command should reach the model verbatim: %s", requestBody)
+	if requestBody != "" {
+		t.Errorf("an unmatched slash command reached the model: %s", requestBody)
 	}
 	if strings.Contains(requestBody, "Merge and split PDFs.") {
-		t.Error("an unmatched slash command must not load a skill body")
+		t.Error("an unmatched slash command loaded a skill body")
 	}
 }
 

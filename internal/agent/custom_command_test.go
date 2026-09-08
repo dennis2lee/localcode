@@ -182,10 +182,18 @@ func TestCustomCommandModelOverride(t *testing.T) {
 	}
 }
 
-// TestUnmatchedSlashTextIsSentAsIs confirms "/notacommand" (no loaded
-// custom command by that name) falls through to being sent verbatim, not
-// treated as an error.
-func TestUnmatchedSlashTextIsSentAsIs(t *testing.T) {
+// A slash nothing claims is refused, and does not reach the model.
+//
+// This test asserted the opposite until a report: somebody typed a slash
+// command this build does not have, it went to the model as an ordinary
+// prompt, and the model — with a shell and skipped permissions — did what
+// the word meant. Every untracked file in the project was gone. The old
+// comment defended the behaviour only as "keeps its old behavior".
+//
+// The property the old test was really protecting is kept below: a name
+// that does match still resolves, and a message that merely begins with a
+// path still goes to the model.
+func TestAnUnknownSlashCommandDoesNotReachTheModel(t *testing.T) {
 	var lastBody string
 	model := mockChatServer(t, &lastBody)
 	defer model.Close()
@@ -196,11 +204,42 @@ func TestUnmatchedSlashTextIsSentAsIs(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/notacommand hello"); err != nil {
-		t.Fatalf("SendMessage: %v", err)
+	for _, text := range []string{"/notacommand hello", "/clean", "/clear-all", "/cleanup the build dir"} {
+		lastBody = ""
+		if err := loop.SendMessage(context.Background(), sid, "general-purpose", text); err != nil {
+			t.Fatalf("SendMessage(%q): %v", text, err)
+		}
+		if lastBody != "" {
+			t.Errorf("%q reached the model: %s", text, lastBody)
+		}
 	}
-	if !strings.Contains(lastBody, "/notacommand hello") {
-		t.Errorf("expected the raw text to be sent to the model, got: %s", lastBody)
+}
+
+// A message that only begins with a path is prose, and still goes to the
+// model: a second slash or a dot is what tells the two apart.
+func TestAMessageStartingWithAPathStillReachesTheModel(t *testing.T) {
+	var lastBody string
+	model := mockChatServer(t, &lastBody)
+	defer model.Close()
+
+	loop, store := newCustomCommandTestLoop(t, model.URL, nil)
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	for _, text := range []string{
+		"/etc/hosts needs a line",
+		"/Users/someone/work/x.go is the one",
+		"/tmp/build.log has the error",
+	} {
+		lastBody = ""
+		if err := loop.SendMessage(context.Background(), sid, "general-purpose", text); err != nil {
+			t.Fatalf("SendMessage(%q): %v", text, err)
+		}
+		if !strings.Contains(lastBody, text) {
+			t.Errorf("%q was refused instead of reaching the model", text)
+		}
 	}
 }
 

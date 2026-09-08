@@ -192,6 +192,12 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeContext(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeCustomCommand(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeSkillName(ctx, sessionID, agentName, text) },
+		// Last, and it claims what is left that still looks like a
+		// command. Everything above has had its turn, so anything that
+		// resolves has already won; what reaches here is a slash nothing
+		// answers, and sending that to a model is how a typo became
+		// `git clean`. See routeUnknownCommand.
+		func() (bool, error) { return l.routeUnknownCommand(sessionID, text) },
 	}
 }
 

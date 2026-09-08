@@ -58,13 +58,14 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 	if resp.StatusCode >= 300 {
 		var apiErr struct {
 			Error string `json:"error"`
+			Held  string `json:"held"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&apiErr)
 		msg := fmt.Sprintf("%s %s: %d", method, path, resp.StatusCode)
 		if apiErr.Error != "" {
 			msg += ": " + apiErr.Error
 		}
-		return &StatusError{Status: resp.StatusCode, Message: msg}
+		return &StatusError{Status: resp.StatusCode, Message: msg, Held: apiErr.Held}
 	}
 
 	if out != nil {
@@ -79,16 +80,29 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 type StatusError struct {
 	Status  int
 	Message string
+	// Held names the command the daemon refused to hand to a running
+	// turn, or "". It is what tells this 409 from the ordinary one,
+	// which means the opposite: an ordinary 409 is "a turn is running,
+	// send this again when it ends", and answering both the same way is
+	// how "/clear" typed during a long turn vanished and arrived later.
+	Held string
 }
 
 func (e *StatusError) Error() string { return e.Message }
+
+// IsHeld reports whether err is the daemon refusing a command that must
+// not be handed to a running turn. It has to be shown, never queued.
+func IsHeld(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Status == http.StatusConflict && se.Held != ""
+}
 
 // IsBusy reports whether err is the daemon refusing a message because the
 // session already has a turn in flight — the one error a client should
 // queue-and-retry rather than surface.
 func IsBusy(err error) bool {
 	var se *StatusError
-	return errors.As(err, &se) && se.Status == http.StatusConflict
+	return errors.As(err, &se) && se.Status == http.StatusConflict && se.Held == ""
 }
 
 func (c *Client) CreateSession(ctx context.Context, agentName string) (session.Session, error) {

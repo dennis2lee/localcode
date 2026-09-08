@@ -354,7 +354,16 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		if held != "" {
 			cancel()
-			writeJSON(w, http.StatusConflict, map[string]string{
+			// "held", so a client can tell this 409 from the ordinary
+			// one. They are answered oppositely and the status alone
+			// cannot say which: an ordinary 409 means "a turn is
+			// running, queue this and send it when the turn ends", and
+			// both clients do exactly that — which is how a person who
+			// typed /clear during a long turn saw nothing happen, and
+			// then saw it happen minutes later against a conversation
+			// they had stopped thinking about. This one has to be shown.
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"held": held,
 				"error": held + " decides what this conversation is, so it does not go to a turn already running. " +
 					"Stop the turn, or send it again once it has finished.",
 			})

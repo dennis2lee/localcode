@@ -203,6 +203,20 @@ func (m Model) handleServerEvent(msg eventMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
+	// Ahead of IsBusy, and said rather than left to the fact that IsBusy
+	// happens to exclude it. Both are 409 and they mean opposite things:
+	// an ordinary one is "a turn is running, send this again when it
+	// ends", which is what the queue below is for, and this one is a
+	// command the daemon will not hand to a running turn at all. Queueing
+	// it is how "/clear" typed during a long turn vanished and then
+	// arrived minutes later, against a conversation somebody had stopped
+	// thinking about.
+	if client.IsHeld(msg.err) {
+		m.waiting = false
+		m.errMsg = msg.err.Error()
+		m.resolvePendingUser(msg.text)
+		return m, nil
+	}
 	if client.IsBusy(msg.err) {
 		// The daemon already has a turn running (typed during a race
 		// window, or another client's turn). That is queue material, not

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.114.0
+
+**Slash commands**
+
+* An unknown `/name` is answered, not sent to the model. Reported from a transcript: somebody typed `/clean`, nothing recognised it, and it went to the model as an ordinary prompt. The model spent a turn working out what the word meant, running `find`, `ls` and `du` across the home directory, and reasoning aloud about removing temporary files. It was cancelled before it removed anything, and one step short of doing so.
+* The refusal names the closest command when exactly one is a single edit away: `/clean` now answers "Did you mean /clear?".
+* Applies to every shape the request named: no such built-in, no such custom command, no such skill. It is the last route in the table, so anything that resolves still wins.
+* A path is still prose. A first word with a second slash or a dot in it reaches the model as it always has.
+* `/clear` and `/rewind` refused mid-turn say so instead of being queued in silence. Both clients read a 409 as "a turn is running, send this again when it ends" and queued it; the daemon returns the same status for these two with the opposite meaning, so the command vanished and arrived minutes later against a conversation somebody had stopped thinking about. The refusal now carries a marker the clients tell apart.
+
 ## v0.113.0
 
 **Stop**

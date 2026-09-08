@@ -910,6 +910,10 @@ Messages sent during a turn appear immediately and are delivered at the next too
 
 Slash commands are refused while a turn is running. Wait for completion or press Esc to cancel. TUI `exit` and `:q` remain available.
 
+`/clear` and `/rewind` are refused outright rather than queued, and the refusal is shown. Both decide what the conversation is, so neither goes to a turn already in progress; the other commands and ordinary messages are queued and delivered when the turn ends.
+
+A message beginning with `/` is read as a command and is never sent to the model. One that matches no built-in command, custom command or skill is answered with an error naming the closest match, because the alternative is worse: a model reading an unknown command as an instruction acts on what the word means, and it has a shell. A first word with a second slash or a dot in it — `/etc/hosts`, `/tmp/build.log` — is a path, and still reaches the model.
+
 ### Running a skill
 
 Type a skill's own name as a command. You do not have to wait for the model to decide to call the `Skill` tool.
