@@ -926,7 +926,14 @@ footer {
   color: var(--text);
   border-radius: var(--r-ctl);
   padding: 8px 10px;
-  font: inherit;
+  /* The interface face, a fifth larger than the interface.
+     This is the one control on the page somebody looks at while typing
+     into it, often for several sentences, and it was set at the size of
+     a status readout. em rather than a number, so it stays a fifth
+     larger than whatever the strip around it is set to and follows the
+     page's own zoom without a second place to change. */
+  font-family: inherit;
+  font-size: 1.2em;
   resize: none;
   overflow-y: auto;
   max-height: 240px;

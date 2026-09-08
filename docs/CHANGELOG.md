@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.115.0
+
+**Web UI**
+
+* The prompt box is set a fifth larger than the strip around it. It is the one control on the page somebody looks at while typing into it, often for several sentences, and it was set at the size of a status readout. Expressed as a multiple, so it stays a fifth larger than whatever the interface is set to and follows the page's own zoom.
+
 ## v0.114.0
 
 **Slash commands**

@@ -207,3 +207,34 @@ func TestTheTranscriptAndTheComposerShareOneGutter(t *testing.T) {
 		}
 	}
 }
+
+// The prompt box is set a fifth larger than the strip around it.
+//
+// It is the one control on the page somebody looks at while typing into
+// it, often for several sentences, and it was set at the size of a
+// status readout. Expressed as a multiple rather than a number so it
+// stays a fifth larger than whatever the interface is set to, and so the
+// page's own zoom carries it without a second place to change.
+func TestThePromptBoxIsLargerThanTheStripAroundIt(t *testing.T) {
+	css, err := os.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatalf("read style.css: %v", err)
+	}
+	text := string(css)
+
+	i := strings.Index(text, "#input {")
+	if i < 0 {
+		t.Fatal("no #input rule in the stylesheet")
+	}
+	block := text[i:]
+	if j := strings.Index(block, "}"); j >= 0 {
+		block = block[:j]
+	}
+	if !strings.Contains(block, "font-size: 1.2em") {
+		t.Errorf("#input does not set font-size: 1.2em, so the prompt box is not a fifth larger:\n%s", block)
+	}
+	// font: inherit would win over the size and put it back where it was.
+	if strings.Contains(block, "font: inherit") {
+		t.Error("#input still sets the `font` shorthand, which resets the size it just asked for")
+	}
+}
