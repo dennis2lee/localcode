@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.113.0
+
+**Stop**
+
+* Stop reaches the tool a turn is inside, not only the turn. Reported as "clicking stop should stop a running tool too".
+* `grep` and `glob` stop at the next directory entry. The three directory walks took no context at all, so a search over a large tree ran to the end of the disk after a stop, holding the turn's goroutine and the session's busy flag while the model was never asked again.
+* A scan inside one large file stops every few thousand lines. The walk checks between files, and a log of a few hundred megabytes is one entry.
+* A pattern with no `**` returns at once. It goes to the standard library's glob, which offers nothing to check a context at; the wait now sits beside it rather than inside it, and the abandoned glob finishes unread. Measured at 950ms of ignoring the stop before this.
+* One sentence for a stopped tool, in one place: `not run: the turn was cancelled`, whether the stop landed before the tool or part way through it.
+* Everything else already stopped and was measured doing so: `bash` and `check` kill the whole process group, MCP carries the cancellation to the server, a permission prompt is withdrawn, and a sub-agent's turn goes with its parent's.
+
 ## v0.112.0
 
 **Startup**

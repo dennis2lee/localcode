@@ -848,6 +848,21 @@ Turn it off with:
 
 Use commands for explicit session actions and settings. Use Esc to cancel a turn. Ordinary messages can redirect the model at a tool boundary.
 
+#### What stop reaches
+
+Stop ends the turn and the tool it is inside, not only the turn.
+
+| Tool | What a stop does |
+|---|---|
+| `bash`, `check` | The command's whole process group is killed, not just the shell that started it. |
+| `grep`, `glob` | The walk stops at the next directory entry, and a scan inside one large file stops every few thousand lines. A pattern with no `**` goes to the standard library's glob, which has no way to be interrupted, so the call returns at once and that glob is left to finish unread. |
+| MCP tools | The cancellation goes to the server with the call. A server that ignores it holds the turn until it answers. |
+| `Task`, `Orchestrate`, `Debate` | The sub-agent's turn is cancelled with the parent's, and its own tools with it. |
+| A permission prompt | The question is withdrawn from every client showing it and the turn ends. |
+| `read_file`, `write_file`, `edit` | One file each, so there is nothing long to interrupt. |
+
+A stopped tool records `not run: the turn was cancelled` in the transcript, whether the stop landed before it started or part way through it.
+
 ### Screen controls
 
 Common to the TUI and Web UI:
@@ -1461,7 +1476,7 @@ One line directly below the input box:
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Generation rate across the full turn, excluding prefill and queue time. `~` marks a live stream estimate; the final count replaces it. Single-chunk replies show no rate. Controlled by `show_tps`. |
 | Activity light | Grey: disconnected from daemon. Solid green: connected and idle. Blinking green: turn or background work active. Steady amber: permission required. Uses daemon state and reconnects automatically. Tooltip distinguishes turns from tasks. |
-| Stop button | Cancels the active turn, including a turn started by another client. Equivalent to Esc. |
+| Stop button | Cancels the active turn, including a turn started by another client, and the tool it is inside. Equivalent to Esc. See [What stop reaches](#what-stop-reaches). |
 | Auto-delegate pill | Opens target-agent and pattern settings. See [Auto delegation](#auto-delegation). |
 | Permission pill | Shows permission state and opens its controls. See [Permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
 | Settings pill | **settings**. Opens the settings window, which holds the [Smart Agent](#smart-agent) switch and the update controls. See [Checking for updates](#checking-for-updates). |

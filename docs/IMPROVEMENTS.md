@@ -484,6 +484,14 @@ Completed findings remain in this list to preserve item numbers and release hist
    * Two ways out, both decisions rather than patches. The window could take the successor path it already has on Windows — `startupHandoffBinary` keys off a platform constant, and a caller that says "I cannot exec" rather than a platform that cannot would put every window on the proxy — or the update check could run before `gui.Launch` on a cut-down daemon. The first reuses machinery that took several releases to make reliable; the second reintroduces the delay the splash was built for.
    * What reaches a window today: the settings panel's install button, and on Windows the startup handoff. What does not: an unattended update on a Mac or Linux desktop.
 
+54. **Stop did not reach a search. Done in v0.113.0.**
+
+   * Reported as "clicking stop should stop a running tool too". Most of it already worked and was measured doing so: a `sleep` started by the bash tool dies with the turn, because `shell.Command` binds it to the context and kills the whole process group; MCP passes the context to the server; `check` goes through the same shell; a permission prompt has a `ctx.Done()` arm.
+   * The gap was `internal/tools/search.go`. Its three `filepath.WalkDir` sites took no context, so a stop during a `grep` or `glob` ended the turn on paper — the model was never asked again — while the walk carried on to the end of the disk, holding the turn's goroutine and the session's busy flag.
+   * Three shapes, three answers. The walks check between entries and return a sentinel the caller can tell from a read error. A scan inside one file checks every 4,096 lines, because the walk only looks between files and one log can be the whole search. A pattern with no `**` is `filepath.Glob`, which has no hook at all, so the wait sits beside it and the abandoned glob finishes unread — safe here in a way it would not be for most work, since it reads directory entries and returns a list.
+   * The first cut of this fix missed the third shape and its own comment claimed otherwise. The review measured it: a cancelled non-`**` glob ran 339ms and returned its whole 2.2 MB answer. Two of the new tests were also vacuous, matching nothing because the pattern's depth did not match the fixture; the uncancelled test now asserts every pattern it stops actually matches something.
+
+
 
 
 

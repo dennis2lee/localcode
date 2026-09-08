@@ -14,6 +14,16 @@ import (
 	"sync"
 )
 
+// CancelledResult is what a tool returns for work the person stopped.
+//
+// One sentence in one place. The agent loop writes it for a tool it
+// never started, and a search writes it for one it abandoned part way,
+// and a transcript that reads two different ways depending on where the
+// stop landed is a transcript that invites the question.
+func CancelledResult() Result {
+	return Result{Content: "not run: the turn was cancelled", IsError: true}
+}
+
 // Result is what a tool execution produces; Content goes back to the model
 // as a tool_result block.
 type Result struct {

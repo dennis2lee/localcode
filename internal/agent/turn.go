@@ -990,7 +990,7 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		// tool_result is a history the provider rejects — and this history
 		// is what a later /compact or a restart replays.
 		if err := ctx.Err(); err != nil {
-			res = tools.Result{Content: "not run: the turn was cancelled", IsError: true}
+			res = tools.CancelledResult()
 			l.Store.Append(sessionID, events.TypeToolEnd, map[string]any{
 				"tool_use_id": tu.ToolUseID,
 				"content":     res.Content,
