@@ -3,12 +3,11 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 
+	"localcode/internal/agent"
 	"localcode/internal/dialog"
+	"localcode/internal/events"
 )
 
 // handleGetWorkspace reports the directory a session's file paths and bash
@@ -111,18 +110,12 @@ func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	abs, err := filepath.Abs(req.Path)
+	// The same resolver "/workspace <path>" uses, so a directory the
+	// button takes and the command refuses cannot be two answers to one
+	// question.
+	abs, err := agent.ResolveWorkspace(req.Path)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("resolve path: %w", err))
-		return
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("stat %s: %w", abs, err))
-		return
-	}
-	if !info.IsDir() {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("%s is not a directory", abs))
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -140,6 +133,10 @@ func (d *Daemon) handleSetWorkspace(w http.ResponseWriter, r *http.Request) {
 		if _, err := d.Loop.Store.SetWorkspace(req.SessionID, abs); err != nil {
 			return &httpError{http.StatusNotFound, err.Error()}
 		}
+		// Announced for the same reason "/workspace <path>" announces it:
+		// the other client's button names a directory too, and the two
+		// disagreeing is how a file lands in the wrong project.
+		d.Loop.Store.Append(req.SessionID, events.TypeWorkspaceChanged, map[string]any{"path": abs})
 		return nil
 	})
 	if busy {

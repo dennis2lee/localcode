@@ -105,6 +105,16 @@ const (
 	// which is where it gets these in the first place.
 	TypeSettingsChanged Type = "settings.changed"
 
+	// TypeWorkspaceChanged reports that a session moved to another
+	// directory: {"path"}.
+	//
+	// Per session, unlike the switches above, because a workspace is: two
+	// clients on one daemon can be looking at two conversations in two
+	// projects, and a client repainting its workspace button because the
+	// other conversation moved would be naming a directory this one does
+	// not work in.
+	TypeWorkspaceChanged Type = "workspace.changed"
+
 	// TypeUsage reports the latest known token usage/context-window fill
 	// for a turn: {"input_tokens","output_tokens","max_context","percent",
 	// "tps","show_tps","model"}.

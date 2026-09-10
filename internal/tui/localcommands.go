@@ -31,11 +31,23 @@ func renderList(header, empty string, items []namedItem) string {
 // call. name is matched case-insensitively; a command with takesArg also
 // matches "name <argument>" (the argument's original case is preserved
 // even though the command name isn't case-sensitive).
+//
+// aliases match exactly as name does and are not listed in /help. They
+// exist for the words somebody arrives already typing — "/sessions" and
+// "/models" are what opencode calls these, and answering "there is no
+// /models in this build" to a person who meant the picker they are
+// looking at is a worse answer than opening it.
 type localCommand struct {
 	name     string
+	aliases  []string
 	takesArg bool
 	help     string
 	run      func(m *Model, arg string) tea.Cmd
+}
+
+// names is the command's own name followed by its aliases.
+func (c localCommand) names() []string {
+	return append([]string{c.name}, c.aliases...)
 }
 
 // localCommands is tried in order against whatever the user typed once a
@@ -83,6 +95,7 @@ func localCommands() []localCommand {
 		},
 		{
 			name:     "/agent",
+			aliases:  []string{"/agents"},
 			takesArg: true,
 			help:     "list agents, or switch with /agent <name> (Tab also cycles through them)",
 			run: func(m *Model, arg string) tea.Cmd {
@@ -95,6 +108,7 @@ func localCommands() []localCommand {
 		},
 		{
 			name:     "/model",
+			aliases:  []string{"/models", "/mo"},
 			takesArg: true,
 			help:     "pick the agent (and so the model) to answer with; /model <name> switches directly",
 			run: func(m *Model, arg string) tea.Cmd {
@@ -122,6 +136,7 @@ func localCommands() []localCommand {
 		},
 		{
 			name:     "/session",
+			aliases:  []string{"/sessions", "/resume", "/continue"},
 			takesArg: true,
 			help:     "pick a conversation to switch to; /session <id> switches directly",
 			run: func(m *Model, arg string) tea.Cmd {
@@ -129,6 +144,56 @@ func localCommands() []localCommand {
 					return m.openSession(arg)
 				}
 				return m.fetchSessions()
+			},
+		},
+		{
+			// Everything below was reachable only by mouse, in the other
+			// client, until a parity review counted what a terminal
+			// could not do: start a conversation, name one, copy one, or
+			// throw one away.
+			name:    "/new",
+			aliases: []string{"/clear-session"},
+			help:    "start a new conversation and switch to it",
+			run: func(m *Model, _ string) tea.Cmd {
+				return m.createAndOpenSession()
+			},
+		},
+		{
+			name:     "/rename",
+			takesArg: true,
+			help:     "name this conversation: /rename <title>",
+			run: func(m *Model, arg string) tea.Cmd {
+				if arg == "" {
+					m.appendLocal("usage: /rename <title>")
+					return nil
+				}
+				return m.renameSession(m.sessionID, arg)
+			},
+		},
+		{
+			name: "/fork",
+			help: "copy this conversation into a new one and switch to the copy",
+			run: func(m *Model, _ string) tea.Cmd {
+				return m.forkSession(m.sessionID)
+			},
+		},
+		{
+			// No confirmation step, deliberately: /archive is the
+			// reversible one and sits right here, so somebody reaching
+			// for this has passed it. The reply says plainly that it
+			// does not come back.
+			name: "/delete",
+			help: "delete this conversation for good; /archive is the one that keeps it",
+			run: func(m *Model, _ string) tea.Cmd {
+				return m.deleteSession(m.sessionID)
+			},
+		},
+		{
+			name:    "/exit",
+			aliases: []string{"/quit", "/q"},
+			help:    "leave localcode (exit, :q and Ctrl+C do the same)",
+			run: func(m *Model, _ string) tea.Cmd {
+				return tea.Quit
 			},
 		},
 		{
@@ -190,20 +255,23 @@ func localCommands() []localCommand {
 // argument checks didn't); the argument, if any, keeps its original case,
 // since a task ID or agent name is not case-insensitive.
 func matchLocalCommand(text string, cmd localCommand) (arg string, ok bool) {
-	if strings.EqualFold(text, cmd.name) {
-		return "", true
+	for _, name := range cmd.names() {
+		if strings.EqualFold(text, name) {
+			return "", true
+		}
+		if !cmd.takesArg {
+			continue
+		}
+		prefixLen := len(name)
+		if len(text) <= prefixLen+1 {
+			continue
+		}
+		if !strings.EqualFold(text[:prefixLen], name) || text[prefixLen] != ' ' {
+			continue
+		}
+		return strings.TrimSpace(text[prefixLen+1:]), true
 	}
-	if !cmd.takesArg {
-		return "", false
-	}
-	prefixLen := len(cmd.name)
-	if len(text) <= prefixLen+1 {
-		return "", false
-	}
-	if !strings.EqualFold(text[:prefixLen], cmd.name) || text[prefixLen] != ' ' {
-		return "", false
-	}
-	return strings.TrimSpace(text[prefixLen+1:]), true
+	return "", false
 }
 
 // dispatchLocalCommand tries every entry of localCommands against text (the
@@ -236,6 +304,9 @@ const serverSideHelpText = `  /skill              list registered skills
   /update             install the newest release and move the daemon onto it; the terminal keeps running
   /reset-mcp          reconnect MCP servers and pick up config changes, no restart
   /reset-skills       reload skills from disk, no restart
+  /status             what is attached: MCP servers and whether they work, skills, commands, agents
+  /debug              what this build is, in a block to paste into a bug report
+  /workspace [path]   the directory this conversation works in; a path moves it
   /config show_tps on|off       toggle the tokens/sec display under the prompt
   /config auto_delegate on|off  send matching prompts to a cheaper sub-agent
   /config smart_agent on|off    turn the Smart Agent bundle on or off

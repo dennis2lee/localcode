@@ -112,6 +112,15 @@ func (m *Model) applyEvent(ev events.Event) {
 			what = ": " + what
 		}
 		m.appendTool("[rewound one turn" + what + rewoundFiles(ev.Data) + "]")
+		// The undone prompt goes back in the box, so the turn can be
+		// retyped from where it went wrong. Only into an empty box:
+		// whatever is already typed is a newer intention than the one
+		// being undone, and overwriting it would be the same loss in
+		// the other direction.
+		if prompt, _ := ev.Data["prompt"].(string); prompt != "" && strings.TrimSpace(m.input.Value()) == "" {
+			m.input.SetValue(prompt)
+			m.resizeLayout()
+		}
 	case events.TypeSessionScheduled:
 		// Opened on its own, a run session is a conversation that starts
 		// with an instruction nobody in it typed, at a moment nobody was

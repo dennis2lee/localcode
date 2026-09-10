@@ -1,6 +1,7 @@
 import {
   permissionTextEl, permissionAllowAlwaysBtn, permissionAllowSessionBtn,
   permissionOutsideEl, permissionAllowDirBtn, permissionAllowOutsideBtn,
+  inputEl,
 } from './dom.js';
 import { app, session } from './state.js';
 import {
@@ -8,7 +9,7 @@ import {
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, clearTranscript, showEarlierBanner,
 } from './transcript.js';
-import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus } from './render.js';
+import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
 import {
   refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen, permissionRequest,
@@ -281,6 +282,23 @@ const handlers = {
     if (d.skipped) files.push(`${d.skipped} left alone`);
     const what = d.turn_text ? `: ${d.turn_text}` : '';
     appendTool(`[system] rewound one turn${what}${files.length ? ' — ' + files.join(', ') : ''}.`);
+    // The undone prompt goes back in the box so the turn can be retyped
+    // from where it went wrong. Only into an empty box: whatever is
+    // already typed is a newer intention than the one being undone.
+    if (d.prompt && !inputEl.value.trim()) {
+      inputEl.value = d.prompt;
+      // So the box grows to fit it, the way it does while typing.
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  },
+  // A conversation moved to another directory, here or in the terminal.
+  // The button names the workspace, and a button naming the old one is
+  // how a file lands in the wrong project.
+  'workspace.changed': (d) => {
+    if (typeof d.path === 'string' && d.path) {
+      app.workspacePath = d.path;
+      renderWorkspace();
+    }
   },
   compacted: (d) => {
     appendTool(`[system] conversation compacted to save context (summary: ${d.summary_length || 0} chars).`);

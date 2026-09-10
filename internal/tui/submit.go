@@ -13,8 +13,24 @@ import (
 // while a turn is in progress — queueing a command would mean replaying it
 // as literal chat text to the model once dequeued, instead of running it.
 func isPlainPrompt(text string) bool {
-	lower := strings.ToLower(text)
-	return !strings.HasPrefix(text, "/") && lower != "exit" && lower != ":q"
+	return !strings.HasPrefix(text, "/") && !isExitWord(text)
+}
+
+// isExitWord reports whether text is one of the bare words that leave.
+//
+// One function rather than the same comparisons in three places. They
+// were in three, and "quit" — the word people arrive typing, which used
+// to reach the model as an ordinary prompt — could have been added to
+// two of them, which is a word that quits sometimes.
+//
+// A bare "q" is deliberately not here: one letter is too easily a real
+// message, and "/q" covers the habit.
+func isExitWord(text string) bool {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "exit", ":q", "quit":
+		return true
+	}
+	return false
 }
 
 // dequeue sends the next queued prompt once the current turn has actually
@@ -74,7 +90,7 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 		m.rememberPrompt(text)
 		m.input.Reset()
 		m.resizeLayout()
-		if lower := strings.ToLower(text); lower == "exit" || lower == ":q" {
+		if isExitWord(text) {
 			// exit/:q must still work while a turn is running — there was
 			// previously no way to quit except Ctrl+C until the turn
 			// finished.
@@ -102,7 +118,7 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 	m.input.Reset()
 	m.resizeLayout()
 
-	if lower := strings.ToLower(text); lower == "exit" || lower == ":q" {
+	if isExitWord(text) {
 		return m, tea.Quit
 	}
 	if cmd, ok := dispatchLocalCommand(&m, text); ok {

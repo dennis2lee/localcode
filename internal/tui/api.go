@@ -179,6 +179,27 @@ func (m Model) setEffort(level string) tea.Cmd {
 	}
 }
 
+// nextEffort is the level after the one in force, wrapping at the end.
+//
+// Read off the view the footer already shows rather than fetched, so the
+// key is instant; the effort.changed event keeps that view current, which
+// is what makes reading it safe.
+//
+// Wrapping, unlike the picker's arrow keys: cycling is the whole point,
+// and stopping at "high" would leave the only way back through a list.
+func (m Model) nextEffort() (string, bool) {
+	levels := m.effort.Levels
+	if len(levels) == 0 {
+		return "", false
+	}
+	for i, level := range levels {
+		if level == m.effort.Level {
+			return levels[(i+1)%len(levels)], true
+		}
+	}
+	return levels[0], true
+}
+
 func (m Model) fetchCommands() tea.Cmd {
 	return call(m.client.ListCommands, func(c []client.CommandInfo, err error) tea.Msg { return commandsMsg{commands: c, err: err} })
 }
@@ -219,6 +240,33 @@ func (m Model) retrieveSession(id string) tea.Cmd {
 		_, err := m.client.RetrieveSession(ctx, id)
 		return err
 	}, func(err error) tea.Msg { return sessionRetrievedMsg{id: id, err: err} })
+}
+
+// forkSession copies this conversation and opens the copy. The created
+// id comes back as sessionCreatedMsg, the same message a new conversation
+// arrives as, so opening it is one path rather than two.
+func (m Model) forkSession(id string) tea.Cmd {
+	return call(func(ctx context.Context) (string, error) {
+		sess, err := m.client.ForkSession(ctx, id)
+		return sess.ID, err
+	}, func(id string, err error) tea.Msg {
+		return sessionCreatedMsg{id: id, err: err}
+	})
+}
+
+func (m Model) renameSession(id, title string) tea.Cmd {
+	return call(func(ctx context.Context) (string, error) {
+		sess, err := m.client.RenameSession(ctx, id, title)
+		return sess.Title, err
+	}, func(title string, err error) tea.Msg {
+		return sessionRenamedMsg{title: title, err: err}
+	})
+}
+
+func (m Model) deleteSession(id string) tea.Cmd {
+	return callErr(func(ctx context.Context) error {
+		return m.client.DeleteSession(ctx, id)
+	}, func(err error) tea.Msg { return sessionDeletedMsg{id: id, err: err} })
 }
 
 // fetchLanding asks where to go after the conversation on screen has left

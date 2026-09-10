@@ -134,6 +134,20 @@ type sessionCreatedMsg struct {
 	err error
 }
 
+// sessionRenamedMsg and sessionDeletedMsg carry back what "/rename" and
+// "/delete" did. Separate from sessionArchivedMsg because the three end
+// differently: a rename leaves you where you are, an archive and a delete
+// both take the conversation off the list and need somewhere to land.
+type sessionRenamedMsg struct {
+	title string
+	err   error
+}
+
+type sessionDeletedMsg struct {
+	id  string
+	err error
+}
+
 type landingSessionsMsg struct {
 	sessions []session.Session
 	err      error

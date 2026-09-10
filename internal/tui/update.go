@@ -79,6 +79,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model, cmd := m.handleSessionRetrieved(msg)
 		return model, tea.Batch(cmd, m.fetchReferenceNames())
 
+	case sessionRenamedMsg:
+		if msg.err != nil {
+			m.errMsg = fmt.Sprintf("failed to rename: %v", msg.err)
+			return m, nil
+		}
+		m.appendLocal("Renamed this conversation to " + msg.title + ".")
+		return m, m.fetchReferenceNames()
+
+	case sessionDeletedMsg:
+		if msg.err != nil {
+			// The daemon names what is still running; passed through
+			// rather than summarised, the way archive's refusal is.
+			m.errMsg = fmt.Sprintf("failed to delete: %v", msg.err)
+			return m, nil
+		}
+		m.appendLocal("Deleted this conversation. It does not come back.")
+		return m, m.fetchLanding()
+
 	case landingSessionsMsg:
 		return m.handleLandingSessions(msg)
 

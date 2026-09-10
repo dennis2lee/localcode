@@ -36,12 +36,50 @@ type pickerItem struct {
 // is what every other part of Model tests.
 type picker struct {
 	title string
+	// items is what is on screen: all of them, or the ones matching
+	// filter. all is the source it is narrowed from.
 	items []pickerItem
-	idx   int
+	all   []pickerItem
+	// filter is what has been typed to narrow the list. Every key was
+	// already swallowed by the picker and did nothing, so typing into
+	// one costs no keystroke that meant something else.
+	//
+	// Plain case-insensitive substring, not fuzzy matching: a session
+	// list is chosen from by recognising a title, and a fuzzy match that
+	// accepts letters in order surfaces rows a person cannot see the
+	// reason for.
+	filter string
+	idx    int
 	// onPick is what selecting a row does. Returning a tea.Cmd rather
 	// than performing the switch here keeps the picker a widget: it
 	// knows how to choose, not what choosing means.
 	onPick func(m *Model, it pickerItem) tea.Cmd
+}
+
+// applyFilter narrows items to the rows matching filter and keeps the
+// selection inside them.
+func (p *picker) applyFilter() {
+	if p.all == nil {
+		p.all = p.items
+	}
+	if p.filter == "" {
+		p.items = p.all
+	} else {
+		needle := strings.ToLower(p.filter)
+		matched := make([]pickerItem, 0, len(p.all))
+		for _, it := range p.all {
+			if strings.Contains(strings.ToLower(it.label+" "+it.detail), needle) {
+				matched = append(matched, it)
+			}
+		}
+		p.items = matched
+	}
+	if p.idx > len(p.items)-1 {
+		p.idx = len(p.items) - 1
+	}
+	if p.idx < 0 {
+		p.idx = 0
+	}
 }
 
 // pickerVisibleRows bounds how many rows are drawn at once. A session
@@ -87,6 +125,7 @@ func (m *Model) openPicker(p *picker, empty string) tea.Cmd {
 		m.appendLocal(empty)
 		return nil
 	}
+	p.all = p.items
 	m.picker = p
 	return nil
 }
@@ -97,9 +136,23 @@ func (m *Model) openPicker(p *picker, empty string) tea.Cmd {
 // behind a list is the kind of thing you only discover after sending
 // them.
 func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	switch msg.String() {
+	switch key := msg.String(); key {
 	case "esc", "ctrl+c":
+		// Esc undoes the narrowing before it closes the list, so a
+		// mistyped filter costs one key rather than the whole picker.
+		if m.picker.filter != "" {
+			m.picker.filter = ""
+			m.picker.applyFilter()
+			return m, nil, true
+		}
 		m.picker = nil
+		return m, nil, true
+	case "backspace":
+		if f := m.picker.filter; f != "" {
+			r := []rune(f)
+			m.picker.filter = string(r[:len(r)-1])
+			m.picker.applyFilter()
+		}
 		return m, nil, true
 	case "up", "ctrl+p":
 		m.picker.move(-1)
@@ -121,11 +174,23 @@ func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case "enter":
 		p := m.picker
+		if len(p.items) == 0 {
+			// Nothing matches what was typed, so there is nothing to
+			// pick. The list stays open with the filter visible.
+			return m, nil, true
+		}
 		it := p.items[p.idx]
 		m.picker = nil
 		return m, p.onPick(&m, it), true
+	default:
+		// One printable character narrows the list. Everything else is
+		// swallowed, which is what this picker already did with it.
+		if r := []rune(key); len(r) == 1 && r[0] >= ' ' && r[0] != 0x7f {
+			m.picker.filter += key
+			m.picker.applyFilter()
+		}
+		return m, nil, true
 	}
-	return m, nil, true
 }
 
 // pickerView renders the list into exactly height rows, so the frame it
@@ -136,9 +201,20 @@ func (m Model) pickerView(width, height int) string {
 		width = 40
 	}
 	lines := make([]string, 0, height)
-	lines = append(lines, modalStyle.Render(p.title))
-	lines = append(lines, statusStyle.Render("↑/↓ to choose, Enter to select, Esc to cancel"))
+	title := p.title
+	if p.filter != "" {
+		title += "  /" + p.filter
+	}
+	lines = append(lines, modalStyle.Render(title))
+	lines = append(lines, statusStyle.Render("↑/↓ to choose, Enter to select, type to filter, Esc to cancel"))
 	lines = append(lines, "")
+	if len(p.items) == 0 {
+		lines = append(lines, statusStyle.Render("  nothing matches "+p.filter))
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return strings.Join(lines[:height], "\n")
+	}
 
 	rows := height - len(lines) - 1
 	if rows > pickerVisibleRows {

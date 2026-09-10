@@ -63,6 +63,23 @@ func TestAPickerHoldsTheKeyboard(t *testing.T) {
 	if m.input.Value() != "" {
 		t.Errorf("a keypress reached the prompt box behind the picker: %q", m.input.Value())
 	}
+	// It narrows the list instead, which is where a typed letter goes
+	// now. No agent here is called anything with an x in it.
+	if m.picker.filter != "x" {
+		t.Errorf("filter = %q, want the letter typed over the picker", m.picker.filter)
+	}
+	if len(m.picker.items) != 0 {
+		t.Errorf("filtering by x left %d rows, want none", len(m.picker.items))
+	}
+	// And Esc takes the narrowing back before it closes anything, so a
+	// mistyped filter costs one key rather than the whole picker.
+	m = tapKey(t, m, tea.KeyEscape)
+	if m.picker == nil {
+		t.Fatal("Esc closed the picker instead of clearing the filter")
+	}
+	if len(m.picker.items) != 2 {
+		t.Errorf("clearing the filter left %d rows, want both agents back", len(m.picker.items))
+	}
 
 	m = tapKey(t, m, tea.KeyDown)
 	if m.picker.idx != 1 {

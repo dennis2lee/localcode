@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.116.0
+
+Every entry below is one finding from a command-by-command comparison with opencode, each verified by reading both implementations.
+
+**Slash commands**
+
+* A command that exists is no longer answered "there is no such command". `/init`, `/memory` and `/usage` take no argument, so anything typed after them fell to the unknown-command guard and was refused by a message printed directly above a list containing the name.
+* `/init <what to focus on>` reaches the model instead of the guard.
+* `/init` reads lockfiles, CI workflows, pre-commit configuration, monorepo boundaries and rules files another agent left.
+* `/status`: every MCP server and whether it is connected, degraded or disconnected, with the last error. A failed server used to appear only in a Web UI indicator, so a terminal could not see one was down.
+* `/debug`: version, platform, session, agent, model, effort, workspace and config in one unstyled block to paste into a bug report.
+* `/workspace [path]`: the directory a conversation works in, and moving it. There was no way to move one from the terminal at all.
+* `/workspace <path>` waits for an idle session, as `/clear` and `/rewind` do.
+
+**Terminal**
+
+* `/new`, `/rename <title>`, `/fork` and `/delete`. All four existed only as Web UI buttons.
+* `/exit`, `/quit`, `/q`, and the bare word `quit`. `quit` used to reach the model as an ordinary prompt.
+* `/agents`, `/models`, `/mo`, `/sessions`, `/resume`, `/continue` as aliases for the commands they name elsewhere.
+* Ctrl+C clears a half-written prompt before it leaves; a second one leaves. It used to take the draft with it.
+* Type to filter any picker. Esc clears the filter before it closes the list.
+* Ctrl+E steps to the next reasoning level the model tells apart, without opening the picker.
+
+**Both clients**
+
+* `/rewind` puts the undone prompt back in the box, so the turn can be retyped from where it went wrong. Only into an empty box.
+* A workspace moved in one client moves the other's button, on a new `workspace.changed` event.
+
 ## v0.115.0
 
 **Web UI**

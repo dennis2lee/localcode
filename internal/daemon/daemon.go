@@ -178,6 +178,25 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	// call the loop's hook, and the settings endpoints call this method
 	// directly.
 	loop.OnSettingsChanged = d.announceSettings
+	// "/status" asks the daemon what is attached, because the manager
+	// lives here and "/reset-mcp" replaces it. Reading it through
+	// mcpManager() rather than closing over the argument is what makes a
+	// reset visible to the command instead of leaving it describing
+	// servers that are no longer running.
+	loop.MCPStates = func() []agent.IntegrationState {
+		m := d.mcpManager()
+		if m == nil {
+			return nil
+		}
+		states := m.States()
+		out := make([]agent.IntegrationState, 0, len(states))
+		for _, s := range states {
+			out = append(out, agent.IntegrationState{
+				Name: s.Name, Status: string(s.Status), Detail: s.Detail,
+			})
+		}
+		return out
+	}
 	if mcpManager != nil {
 		d.watchMCP(mcpManager)
 	}

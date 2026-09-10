@@ -66,6 +66,18 @@ func (l *Loop) routeUnknownCommand(sessionID, text string) (bool, error) {
 	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 
 	known := l.knownCommandNames()
+	// A name that exists is a different answer. Three built-ins take no
+	// argument at all, so "/init focus on tests" reaches here with /init
+	// perfectly real — and telling somebody a command does not exist,
+	// immediately above a list containing it, is worse than saying
+	// nothing. It is still refused rather than passed to the model: what
+	// arrived was addressed to the program either way.
+	for _, n := range known {
+		if n == name {
+			return true, l.replyText(sessionID, l.rejectedArgument(name, text))
+		}
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "There is no /%s in this build, so nothing was run.\n\n", name)
 	// Named rather than swallowed, because the reason this is refused at
@@ -79,6 +91,38 @@ func (l *Loop) routeUnknownCommand(sessionID, text string) (bool, error) {
 	b.WriteString("Commands: " + strings.Join(withSlashes(known), ", ") + "\n\n")
 	b.WriteString("To say this to the model instead, put a word in front of it or wrap it in backticks.")
 	return true, l.replyText(sessionID, b.String())
+}
+
+// rejectedArgument answers a command that exists and did not take what
+// followed it.
+func (l *Loop) rejectedArgument(name, text string) string {
+	var b strings.Builder
+	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "/"+name))
+	if rest == "" {
+		// Nothing followed, so the route declined for its own reason
+		// rather than over an argument. Say only what is certain.
+		fmt.Fprintf(&b, "/%s did not run.\n\n", name)
+	} else {
+		fmt.Fprintf(&b, "/%s does not take %q, so nothing was run.\n\n", name, rest)
+	}
+	if d := commandDescription(name); d != "" {
+		fmt.Fprintf(&b, "/%s: %s\n\n", name, d)
+	}
+	b.WriteString("It was not sent to the model either: a message beginning with a slash is " +
+		"addressed to the program. To say this to the model instead, put a word in front of it " +
+		"or wrap it in backticks.")
+	return b.String()
+}
+
+// commandDescription is what a built-in says about itself, or "" for a
+// custom command or a skill, which carry their own.
+func commandDescription(name string) string {
+	for _, c := range SlashCommands() {
+		if c.Name == name {
+			return c.Description
+		}
+	}
+	return ""
 }
 
 // nearestCommand is the one command a mistyped name probably meant, or

@@ -19,7 +19,17 @@ import (
 // opencode's "/init": scan the repo and write an AGENTS.md rules file so
 // future turns (in this project or picked up by opencode/Claude Code too,
 // since both read AGENTS.md/CLAUDE.md) start with real project context.
-const initPrompt = `Scan this repository (file listing, README, package/build manifests, existing build/lint/test tooling) and create or update an AGENTS.md file at the project root with concise, project-specific guidance for a coding agent: build/lint/test commands, an architecture overview, and code conventions. If AGENTS.md already exists, improve it in place rather than replacing it wholesale. Use your file tools (Glob/Grep/Read to explore, Write or Edit to save AGENTS.md).`
+const initPrompt = `Scan this repository and create or update an AGENTS.md file at the project root with concise, project-specific guidance for a coding agent.
+
+Read enough to be specific rather than generic. Worth looking at:
+- the README and any docs/ directory
+- package and build manifests, and the lockfiles beside them (they name the versions actually in use)
+- CI workflows and pre-commit configuration, which say what has to pass before a change lands
+- the order build, lint and test commands are meant to run in
+- whether this is a monorepo, and where the boundaries between its parts are
+- rules files another agent already left: CLAUDE.md, .cursorrules, .cursor/rules/, .github/copilot-instructions.md
+
+Write build/lint/test commands, an architecture overview, and the code conventions this repository actually follows. If AGENTS.md already exists, improve it in place rather than replacing it wholesale. Use your file tools (Glob/Grep/Read to explore, Write or Edit to save AGENTS.md).`
 
 // SendMessage appends a user turn to sessionID's history and drives the
 // agent loop (model call -> optional tool calls -> model call -> ...) until
@@ -178,6 +188,9 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeUpdate(sessionID, text) },
 		func() (bool, error) { return l.routeResetMCP(sessionID, text) },
 		func() (bool, error) { return l.routeResetSkills(sessionID, text) },
+		func() (bool, error) { return l.routeStatus(sessionID, text) },
+		func() (bool, error) { return l.routeDebug(sessionID, agentName, text) },
+		func() (bool, error) { return l.routeWorkspace(sessionID, text) },
 		func() (bool, error) { return l.routeCompact(ctx, sessionID, agentName, text) },
 		// Beside compaction, which is the command they are variations of:
 		// all three decide what the model is sent without touching what
@@ -229,11 +242,22 @@ func (l *Loop) routeSkillCommand(ctx context.Context, sessionID, agentName, text
 		messageOrigin{source: "skill.frame." + sk.Name, spans: skillSpans})
 }
 
+// routeInit answers "/init" and "/init <what to focus on>".
+//
+// The argument matters more than it looks: before it was accepted, "/init
+// focus on the tests" matched nothing, fell to routeUnknownCommand, and
+// was answered "there is no /init in this build" — directly above a list
+// with /init in it.
 func (l *Loop) routeInit(ctx context.Context, sessionID, agentName, text string) (bool, error) {
-	if strings.TrimSpace(text) != "/init" {
+	focus, ok := matchToggleCommand(text, "/init")
+	if !ok {
 		return false, nil
 	}
-	return true, l.sendWithModelText(ctx, sessionID, agentName, text, initPrompt, "", "",
+	prompt := initPrompt
+	if focus != "" {
+		prompt += "\n\nThe person asking added this, and it takes precedence over the general guidance above:\n" + focus
+	}
+	return true, l.sendWithModelText(ctx, sessionID, agentName, text, prompt, "", "",
 		messageOrigin{source: "command.init"})
 }
 

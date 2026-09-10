@@ -205,6 +205,16 @@ type Loop struct {
 	ReloadMCP    func() (string, error)
 	ReloadSkills func() (string, error)
 
+	// MCPStates, if set, reports every configured MCP server and whether
+	// it is working, for "/status". A hook for the reason the two above
+	// are: the manager lives above this package, and "/reset-mcp" can
+	// replace it while the loop is running, so this reads whichever one
+	// is current rather than closing over one.
+	//
+	// Nil means no server is configured, or nothing wired it — "/status"
+	// says none either way, which is true of both.
+	MCPStates func() []IntegrationState
+
 	// SelfUpdate, if set, backs "/update": install the newest release and
 	// bring localcode back on it. Wired by the daemon for the same reason
 	// the two above are — everything it needs (which sessions have a turn

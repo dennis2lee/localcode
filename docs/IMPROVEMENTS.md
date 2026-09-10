@@ -501,8 +501,22 @@ Completed findings remain in this list to preserve item numbers and release hist
    * The same report showed a second fault. `/clear` typed while that stuck turn was running was refused with a 409, and both clients read every 409 as "a turn is running, queue this" — so it was queued in silence and delivered later. The daemon marks this refusal now, and both clients show it.
 
 
+56. **A command-by-command comparison with opencode, and the twelve things it found. Done in v0.116.0.**
 
-
+   * Every one of opencode's 33 slash commands was matched against localcode's by reading both implementations, not by comparing names. Sixteen pairs had been called "already covered" in an earlier pass; none of the sixteen turned out to be identical, five were not covered at all, and one of them was a regression this project had just shipped.
+   * The regression first. `routeUnknownCommand`, added in v0.114.0, answered any slash nothing else claimed — without checking whether the name existed. `/init`, `/memory` and `/usage` accept no argument, so `/init focus on tests` fell through to it and was told "There is no /init in this build", directly above a list containing `/init`. A name that is known now gets a different answer, saying what was refused and why, and still does not reach the model.
+   * `/init` takes what to focus on, the way opencode's does, and its prompt asks for the things a repository actually says about itself: lockfiles, CI workflows, pre-commit configuration, monorepo boundaries, and rules files another agent left behind.
+   * `/status` is the one that mattered most. An MCP server that fails to connect said so in a Web UI indicator and nowhere else, so a terminal had no way to see that a server was down, let alone read the error. It now lists every server with its state and last error, plus the skills, custom commands, agents and workspace.
+   * `/debug` is the block to paste into a bug report: version, platform, session, agent, model, effort, workspace, config path, and what is attached. opencode copies its equivalent to the clipboard; this build has no clipboard code at all, so it prints.
+   * `/workspace [path]` closed a plain asymmetry: the directory a conversation works in was reachable only from the Web UI's button. The move waits for an idle session, for the reason `/clear` and `/rewind` do — a relative path resolved either side of it lands in a different project — and both clients now hear about it on a `workspace.changed` event, so one client's button cannot go on naming a directory the other has left.
+   * Four session operations existed only as Web UI buttons: `/new`, `/rename`, `/fork` and `/delete`.
+   * Leaving was three keystrokes short. `/exit`, `/quit` and `/q` did not exist, and the bare word `quit` reached the model as an ordinary prompt. The three places that each held their own copy of the exit check are now one function, which is what would have let `quit` be added to two of them.
+   * Ctrl+C took a half-written prompt with it. The first one clears the line, as a shell prompt does; the second leaves.
+   * Any picker can be narrowed by typing. Every key was already being swallowed by the picker and doing nothing, so this costs no keystroke that meant something else.
+   * Ctrl+E steps the reasoning effort without opening a list, which is what makes dialling it up and down through a long job tedious.
+   * `/rewind` gives the undone prompt back, into an empty box only. This is as much of opencode's `/redo` as is honest here: the conversational half is restored, and the file half cannot be, because the pre-images are kept and the post-images are not.
+   * Six aliases for commands that already existed, because they are the words people arrive typing: `/agents`, `/models`, `/mo`, `/sessions`, `/resume`, `/continue`.
+   * Left for their own cycle, and why. Picking a model independent of the agent (opencode's `/models`) is a session model override, and model resolution also decides the provider, the effort levels and the token ceiling — too much blast radius to attach to this. Detaching a synchronous sub-agent mid-flight into the background (opencode's Ctrl+B) is a redesign of how `SpawnSync` blocks. Re-applying an undone turn's file writes needs post-images that are not kept.
 
 
 

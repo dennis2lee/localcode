@@ -221,9 +221,16 @@ func (l *Loop) routeRewind(ctx context.Context, sessionID, text string) (bool, e
 	undone := turnEvents(filtered, from)
 	restored, removed, skipped := l.restoreCheckpoints(sessionID, undone)
 
-	first := turnLabel(dataString(eventAt(undone, from).Data, "text"))
+	prompt := dataString(eventAt(undone, from).Data, "text")
+	first := turnLabel(prompt)
 	l.Store.Append(sessionID, events.TypeRewound, map[string]any{
 		"from_seq": from, "turn_text": first,
+		// The whole prompt, not the label: a client puts it back in the
+		// box so the turn can be retyped from where it went wrong rather
+		// than from nothing. Undoing something and being left with an
+		// empty prompt is undoing the message too, which is not what was
+		// asked for.
+		"prompt":   prompt,
 		"restored": len(restored), "created": len(removed), "skipped": len(skipped),
 	})
 

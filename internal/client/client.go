@@ -156,6 +156,15 @@ func (c *Client) RenameSession(ctx context.Context, sessionID, title string) (se
 	return sess, err
 }
 
+// ForkSession copies sessionID into a new top-level conversation holding
+// everything this one has so far, and returns it. What the Web UI's fork
+// button does; here so the terminal can do it too.
+func (c *Client) ForkSession(ctx context.Context, sessionID string) (session.Session, error) {
+	var sess session.Session
+	err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/fork", nil, &sess)
+	return sess, err
+}
+
 // DeleteSession removes sessionID (and its persisted log, if any)
 // entirely. Fails with a conflict error if the session has a turn in
 // progress.

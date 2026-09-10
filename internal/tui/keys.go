@@ -16,7 +16,32 @@ import (
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch msg.String() {
 	case "ctrl+c":
+		// A half-written prompt is not thrown away by the key people
+		// press to stop things. The first Ctrl+C clears the line, the
+		// way a shell prompt does; the second leaves. Before this the
+		// message and the program went together, and there was no way
+		// to discard a draft without also quitting.
+		//
+		// Every other way out is still one keypress: exit, :q, /exit,
+		// /quit, /q, and Ctrl+C itself on an empty prompt.
+		if strings.TrimSpace(m.input.Value()) != "" {
+			m.input.Reset()
+			m.resizeLayout()
+			m.appendLocal("Prompt cleared. Ctrl+C again to leave.")
+			return m, nil, true
+		}
 		return m, tea.Quit, true
+
+	case "ctrl+e":
+		// One key steps to the next level this model tells apart.
+		// "/effort-set" opens the same list; this is for dialling it up
+		// and down as a job goes on, which is the thing a list in the
+		// way makes tedious.
+		if next, ok := m.nextEffort(); ok {
+			return m, m.setEffort(next), true
+		}
+		m.appendLocal("This model has no reasoning level to set.")
+		return m, nil, true
 
 	case "esc":
 		// Esc stops whatever is running. Queued prompts go with it: the

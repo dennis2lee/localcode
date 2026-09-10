@@ -876,7 +876,9 @@ Common to the TUI and Web UI:
 | Recall a previous prompt | **Up** and **Down**, in either client |
 | Jump between your own prompts | **Alt+Up** and **Alt+Down**, Web UI only. Moves the view to the previous or next turn of yours and marks where it landed; it does not touch what is in the prompt box, which is what plain Up and Down are for. The TUI marks turns the same way but has no key for this. |
 | Switch agent | **Tab** for the next, **Shift+Tab** for the previous, in either client |
-| Quit the TUI | **Ctrl+C**, or type `exit` or `:q` |
+| Quit the TUI | **Ctrl+C** on an empty prompt, or type `exit`, `quit`, `:q`, `/exit`, `/quit` or `/q`. With something typed, the first Ctrl+C clears the line the way a shell prompt does and the second leaves, so the key that stops things does not also throw away a half-written message. |
+| Step the reasoning effort | **Ctrl+E**, TUI only. Moves to the next level this model tells apart and wraps at the end; `/effort-set` opens the same list. |
+| Narrow a picker | Type, in any TUI picker. Case-insensitive substring over the row and its detail; **Backspace** removes a character and **Esc** clears the filter before it closes the list. |
 
 Other behavior:
 
@@ -1219,6 +1221,14 @@ Replies report inactive configurations, such as Smart Agent without profiles or 
 
 `/config` still works and still lists all four settings including `auto_compact`.
 
+Three daemon commands report on the running install rather than changing it:
+
+| Command | What it does |
+|---|---|
+| `/status` | What is attached to this daemon: every configured MCP server with whether it is connected, degraded or disconnected and the last error when there is one, then the skills, the custom commands, the agents with the model each resolves to, and the workspace. The MCP half is the reason it exists — a server that fails to connect used to say so only in the Web UI's indicator, so a terminal had no way to see that one was down, let alone why. |
+| `/debug` | One plain block naming what this build is, to paste into a bug report: version, platform and Go runtime, session, agent, model, effort and where it was set, workspace, config path, how many MCP servers are configured and how many connected, and the skill and command counts. Deliberately unstyled, because the whole use of it is being copied somewhere else. |
+| `/workspace` | The directory this conversation works in. `/workspace <path>` moves it, taking `~` and relative paths, and refuses anything that is not an existing directory. The Web UI's workspace button does the same thing through the same resolver; before this command there was no way at all to move a conversation from the terminal. Held while a turn is running, for the reason `/clear` and `/rewind` are: a relative path resolved either side of the move would land in a different project. |
+
 Four more daemon commands act on the running install:
 
 | Command | What it does |
@@ -1255,7 +1265,14 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/debug-log` | Toggles writing every model request and response to a file per prompt, in this conversation's workspace. Off at every start and never saved. See [Debug log](#debug-log). |
 | `/effort` | `/effort [off\|low\|medium\|high\|xhigh]`. Conversation reasoning level, kept per model. `default` restores the profile setting. See [Effort](#effort). |
 | `/effort-set` | Lists the levels the current model tells apart and takes a choice. `/effort-set <level>` sets one directly. See [Effort](#effort). |
-| `exit`, `:q` | Quits the TUI, same as Ctrl+C. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
+| `/new` | **TUI.** Starts a conversation and switches to it. The Web UI has its New button. |
+| `/rename` | **TUI.** `/rename <title>` names this conversation. The Web UI has the pencil on the session card. |
+| `/fork` | **TUI.** Copies this conversation into a new one holding everything so far, and switches to the copy. The Web UI has the fork button. |
+| `/delete` | **TUI.** Deletes this conversation for good. No confirmation step: `/archive` is the reversible one and sits beside it. |
+| `/exit`, `/quit`, `/q` | **TUI.** Leaves, same as `exit`. |
+| `exit`, `quit`, `:q` | Quits the TUI, same as Ctrl+C on an empty prompt. A bare `q` is an ordinary message: one letter is too easily something you meant to say, and `/q` covers the habit. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
+
+Six of those names are aliases for commands that already existed, kept because they are the words people arrive typing: `/agents` for `/agent`, `/models` and `/mo` for `/model`, and `/sessions`, `/resume` and `/continue` for `/session`. They do not appear in `/help`, which lists one name per command.
 
 ## Part 5. Sessions
 
