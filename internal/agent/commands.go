@@ -179,6 +179,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeWriteOutside(sessionID, text) },
 		func() (bool, error) { return l.routeDebate(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeEffort(sessionID, agentName, text) },
+		func() (bool, error) { return l.routeModel(sessionID, text) },
 		func() (bool, error) { return l.routeSchedule(sessionID, agentName, text) },
 		func() (bool, error) { return l.routeShowScheduled(sessionID, text) },
 		func() (bool, error) { return l.routeKeepGoing(sessionID, text) },
@@ -199,6 +200,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		// docs/USAGE.md.
 		func() (bool, error) { return l.routeClear(sessionID, text) },
 		func() (bool, error) { return l.routeRewind(ctx, sessionID, text) },
+		func() (bool, error) { return l.routeRedo(ctx, sessionID, text) },
 		func() (bool, error) { return l.routeModelInvocable(sessionID, text) },
 		func() (bool, error) { return l.routeUsage(sessionID, text) },
 		func() (bool, error) { return l.routeLLMDoctor(ctx, sessionID, agentName, text) },

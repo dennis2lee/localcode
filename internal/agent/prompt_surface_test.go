@@ -467,7 +467,7 @@ func TestTheContextPreviewIDIsTheIDTheNextRequestCarries(t *testing.T) {
 			ctx := context.Background()
 
 			// The preview, assembled exactly as "/context" assembles it.
-			profileName, profile, err := loop.profileFor(ctx, "general-purpose")
+			profileName, profile, err := loop.profileFor(ctx, "", "general-purpose")
 			if err != nil {
 				t.Fatalf("profile: %v", err)
 			}

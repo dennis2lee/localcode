@@ -28,7 +28,17 @@ import (
 // one in the file manager. GET /api/workspace is rewritten so the page
 // knows both are available, which the daemon behind the proxy would
 // have said they are not.
-func successorProxy(target string) http.Handler {
+//
+// And two more stay for a different reason: the update check and the
+// install button. The successor is the staged copy and is current by
+// construction, so asking it "is there an update?" always answered no —
+// on Windows that hid a real one, because the copy the shortcut starts
+// lives under Program Files and the staged binary never replaces it.
+// The window's own version is the installed copy's version, so those
+// two questions are answered here, by the daemon this process built
+// before it handed the listener over. It serves nothing else; it is kept
+// precisely so there is something able to run an installer.
+func successorProxy(target string, installer http.Handler) http.Handler {
 	u, err := url.Parse("http://" + target)
 	if err != nil {
 		panic("successorProxy: " + err.Error())
@@ -128,6 +138,14 @@ func successorProxy(target string) http.Handler {
 		w.WriteHeader(rw.status)
 		w.Write(rw.body)
 	})
+	// Answered by this process's own daemon, not the successor: see the
+	// note above. A nil installer means there is nothing kept to ask, and
+	// the successor's answer — which is at least true about the successor
+	// — is better than none.
+	if installer != nil {
+		mux.Handle("GET /api/update", installer)
+		mux.Handle("POST /api/update/install", installer)
+	}
 	mux.Handle("/", proxy)
 	return mux
 }

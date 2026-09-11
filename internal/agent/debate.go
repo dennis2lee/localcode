@@ -106,7 +106,7 @@ func (l *Loop) runDebate(ctx context.Context, d debateRun) error {
 	models := map[string]string{}
 	allowed := map[string][]string{}
 	for _, name := range d.reviewers {
-		_, profile, err := l.profileFor(ctx, name)
+		_, profile, err := l.profileFor(ctx, d.sessionID, name)
 		if err != nil {
 			return l.refuseDebate(d, fmt.Sprintf("cannot run a debate: %v", err))
 		}

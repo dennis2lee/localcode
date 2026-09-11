@@ -1,6 +1,6 @@
 import {
   tasksEl, mcpServersEl, statusTextEl, statusBarEl, agentSelectEl,
-  permissionStatusBtn, autoDelegateBtn, workspaceBtn, workspaceRevealBtn, stopBtn, inputEl, effortBtn,
+  permissionStatusBtn, autoDelegateBtn, workspaceBtn, workspaceRevealBtn, stopBtn, detachBtn, inputEl, effortBtn,
 } from './dom.js';
 import { app, session, turnInFlight } from './state.js';
 import { completionHint } from './complete.js';
@@ -102,9 +102,15 @@ export function modelForAgent(name) {
 export function renderStatusBar() {
   const parts = [];
   parts.push(`agent: ${session.currentAgent || '?'}`);
-  // Prefer what the model actually reported over what config says it
-  // should be; they differ when a profile is overridden server-side.
-  const model = (session.lastUsage && session.lastUsage.model) || modelForAgent(session.currentAgent);
+  // What this conversation chose first, when it chose something: that is
+  // what the next turn will use, and the status bar is about now rather
+  // than about the turn that just ended. Then what the model actually
+  // reported, then what config says the agent resolves to — the middle
+  // one matters because the two can differ when a profile is overridden
+  // server-side.
+  const model = session.chosenModel
+    || (session.lastUsage && session.lastUsage.model)
+    || modelForAgent(session.currentAgent);
   if (model) parts.push(`model: ${model}`);
   renderEffort();
   if (session.lastUsage && typeof session.lastUsage.percent === 'number') {
@@ -129,6 +135,12 @@ export function renderStatusBar() {
   // client believes about it.
   const working = turnInFlight();
   stopBtn.hidden = !working;
+  // Beside stop, because it answers the same moment from the other side:
+  // stop throws the sub-agent's work away, this keeps it and gives the
+  // turn back. Shown whenever a turn is running rather than only when one
+  // is blocked, because the page cannot see that from here — and the
+  // daemon's answer says plainly when there was nothing to let go of.
+  detachBtn.hidden = !working;
   if (working) {
     let busyText = session.runningTool ? `${session.runningTool}…` : 'working…';
     if (session.promptQueue.length > 0) busyText += ` (${session.promptQueue.length} queued)`;

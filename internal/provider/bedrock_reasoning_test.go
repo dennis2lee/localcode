@@ -100,7 +100,7 @@ func reasoningIn(t *testing.T, m types.Message) *types.ReasoningTextBlock {
 // reasoning on a million-token model would have quietly dropped the beta
 // header that makes it a million-token model.
 func TestTheTwoAdditionalFieldsDoNotOverwriteEachOther(t *testing.T) {
-	fields := bedrockExtraFields(true, "us.anthropic.claude-sonnet-4-5-20250929-v1:0", EffortHigh, 0)
+	fields := bedrockExtraFields(true, "us.anthropic.claude-sonnet-4-5-20250929-v1:0", EffortHigh, 0, nil)
 	doc := document.NewLazyDocument(fields)
 	got := unmarshalDocument(t, doc.(interface{ MarshalSmithyDocument() ([]byte, error) }))
 
@@ -119,10 +119,10 @@ func TestTheTwoAdditionalFieldsDoNotOverwriteEachOther(t *testing.T) {
 // The safety property, on this adapter too: nothing is sent for anybody
 // who has not asked, so a request is byte for byte what it was.
 func TestBedrockSendsNoExtraFieldsWhenNobodyAsked(t *testing.T) {
-	if got := bedrockExtraFields(false, "us.anthropic.claude-opus-4-6-v1", EffortUnset, 0); len(got) != 0 {
+	if got := bedrockExtraFields(false, "us.anthropic.claude-opus-4-6-v1", EffortUnset, 0, nil); len(got) != 0 {
 		t.Errorf("unset effort produced %v, want nothing", got)
 	}
-	if got := bedrockExtraFields(false, "us.anthropic.claude-opus-4-6-v1", EffortOff, 0); len(got) != 0 {
+	if got := bedrockExtraFields(false, "us.anthropic.claude-opus-4-6-v1", EffortOff, 0, nil); len(got) != 0 {
 		t.Errorf("off produced %v, want nothing", got)
 	}
 }
@@ -131,7 +131,7 @@ func TestBedrockSendsNoExtraFieldsWhenNobodyAsked(t *testing.T) {
 // ("us.anthropic.claude-opus-5-v1:0"), so the shape has to be chosen by
 // what the id contains rather than by what it equals.
 func TestBedrockPicksTheShapeFromAModelIDWithARegionAndAVersionOnIt(t *testing.T) {
-	fields := bedrockExtraFields(false, "us.anthropic.claude-opus-5-v1:0", EffortLow, 0)
+	fields := bedrockExtraFields(false, "us.anthropic.claude-opus-5-v1:0", EffortLow, 0, nil)
 	th, ok := fields[bedrockThinkingField].(map[string]any)
 	if !ok {
 		t.Fatalf("thinking = %T, want a map", fields[bedrockThinkingField])
@@ -216,7 +216,7 @@ func TestBothAdaptersAskForTheSameThing(t *testing.T) {
 	if err := json.Unmarshal(raw, &direct); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	viaBedrock, _ := bedrockExtraFields(false, model, EffortMedium, 0)[bedrockThinkingField].(map[string]any)
+	viaBedrock, _ := bedrockExtraFields(false, model, EffortMedium, 0, nil)[bedrockThinkingField].(map[string]any)
 	if fmt.Sprint(direct) != fmt.Sprint(viaBedrock) {
 		t.Errorf("bedrock asks for %v and the direct API asks for %v", viaBedrock, direct)
 	}

@@ -69,7 +69,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// config.WithSmartAgent.
 	ctx = l.pinSmart(ctx)
 
-	profileName, profile, err := l.profileFor(ctx, resolveAgent)
+	profileName, profile, err := l.profileFor(ctx, sessionID, resolveAgent)
 	if err != nil {
 		return fmt.Errorf("resolve profile for agent %q: %w", resolveAgent, err)
 	}
@@ -223,6 +223,8 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// error it produces.
 			MaxTokens:   clampMaxTokens(run.maxTokens, l.contextWindow(ctx, run.profile), l.inputEstimate(sessionID, run.system, messages)),
 			Temperature: run.profile.Temperature,
+			TopP:        run.profile.TopP,
+			TopK:        run.profile.TopK,
 			// The stable half of the request is the tools and the system
 			// prompt, and in an agent session it is the same bytes every
 			// turn. Marking it is the single largest cost saving

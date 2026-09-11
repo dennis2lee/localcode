@@ -108,6 +108,8 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		{method: "POST", path: "/api/sessions/" + sid + "/agent", body: `{"agent":"general-purpose"}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/sessions/" + sid + "/rename", body: `{"title":"renamed"}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/sessions/" + sid + "/cancel", body: `{}`, ok: only(200, 204, 409)},
+		{method: "POST", path: "/api/sessions/" + sid + "/detach", body: `{}`, ok: only(200, 204),
+			note: "nothing is delegated here, so it answers that there was nothing to let go of"},
 		{method: "POST", path: "/api/sessions/order", body: `{"ids":["` + sid + `"]}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/sessions/" + sid + "/messages", body: `{"text":"hello"}`,
 			ok:   only(200, 202),
@@ -301,7 +303,7 @@ func windowOnAProxy(t *testing.T) (front, sessionID, scheduleID, workspace strin
 	revealDirectory = func(_ context.Context, dir string) error { revealed = dir; return nil }
 	t.Cleanup(func() { pickDirectory, revealDirectory = restorePick, restoreReveal })
 
-	f := httptest.NewServer(successorProxy(strings.TrimPrefix(backend.URL, "http://")))
+	f := httptest.NewServer(successorProxy(strings.TrimPrefix(backend.URL, "http://"), nil))
 	t.Cleanup(f.Close)
 
 	// The two answers have the id in different places: a session is the

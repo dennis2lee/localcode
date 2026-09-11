@@ -31,7 +31,7 @@ func TestTheWindowProxyPassesThroughAndCorrectsAbilities(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	front := httptest.NewServer(successorProxy(strings.TrimPrefix(backend.URL, "http://")))
+	front := httptest.NewServer(successorProxy(strings.TrimPrefix(backend.URL, "http://"), nil))
 	defer front.Close()
 
 	resp, err := http.Get(front.URL + "/api/workspace")
@@ -74,7 +74,7 @@ func TestTheWindowProxyStreamsWithoutBuffering(t *testing.T) {
 	defer backend.Close()
 	defer close(release)
 
-	front := httptest.NewServer(successorProxy(strings.TrimPrefix(backend.URL, "http://")))
+	front := httptest.NewServer(successorProxy(strings.TrimPrefix(backend.URL, "http://"), nil))
 	defer front.Close()
 
 	resp, err := http.Get(front.URL + "/api/sessions/S1/events")
@@ -110,7 +110,7 @@ func TestADeadSuccessorSaysWhatIsWrong(t *testing.T) {
 	// is the other branch, and it must not depend on test order to be.
 	rememberSuccessor(nil)
 
-	front := httptest.NewServer(successorProxy(addr))
+	front := httptest.NewServer(successorProxy(addr, nil))
 	defer front.Close()
 
 	resp, err := http.Get(front.URL + "/api/sessions")
@@ -162,7 +162,7 @@ func TestTheFolderButtonAsksTheDaemonWhichFolderRatherThanTheCaller(t *testing.T
 	revealDirectory = func(_ context.Context, dir string) error { opened = dir; return nil }
 	defer func() { revealDirectory = restore }()
 
-	front := httptest.NewServer(successorProxy(strings.TrimPrefix(backend.URL, "http://")))
+	front := httptest.NewServer(successorProxy(strings.TrimPrefix(backend.URL, "http://"), nil))
 	defer front.Close()
 
 	// A body naming somewhere else entirely: it must have no effect.
@@ -205,7 +205,7 @@ func TestADeadSuccessorQuotesWhatItSaid(t *testing.T) {
 	rememberSuccessorExit(4321, errors.New("exit status 2"))
 	t.Cleanup(func() { rememberSuccessor(nil) })
 
-	front := httptest.NewServer(successorProxy(addr))
+	front := httptest.NewServer(successorProxy(addr, nil))
 	defer front.Close()
 
 	resp, err := http.Get(front.URL + "/api/sessions")

@@ -8,7 +8,7 @@ import {
   scheduleBtn, scheduleCancelBtn, scheduleSaveBtn, scheduleWhenInput, schedulePromptInput,
   scheduleDetailsCloseBtn,
   debateBtn, debateCancelBtn, debateStartBtn, debateRoundsInput, debateTaskInput,
-  workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, stopBtn,
+  workspaceBtn, workspaceCancelBtn, workspaceSaveBtn, workspaceInput, stopBtn, detachBtn,
   workspaceBrowseBtn, workspaceRevealBtn, workspaceStopBusyBtn, taskCancelBtn, taskDeleteBtn, taskCloseBtn,
   windowBarEl, windowMinimizeBtn, windowMaximizeBtn, windowCloseBtn, windowEdgesEl, windowTitleEl, windowEdges,
   effortBtn,
@@ -18,7 +18,7 @@ import { uploadFile, switchAgent } from './api.js';
 import { appendError, jumpToTurn } from './transcript.js';
 import { renderTasks, renderStatusBar } from './render.js';
 import {
-  sendMessage, cancelTurn, autoResizeInput, insertAtCursor,
+  sendMessage, cancelTurn, detachChild, autoResizeInput, insertAtCursor,
   atInputStart, atInputEnd, historyPrev, historyNext,
   navigatingHistory, endHistoryNavigation,
 } from './composer.js';
@@ -84,6 +84,7 @@ inputEl.addEventListener('drop', async (e) => {
 });
 
 stopBtn.addEventListener('click', cancelTurn);
+detachBtn.addEventListener('click', detachChild);
 
 // submitPrompt is the one way a prompt leaves the box, whichever control
 // asked for it. Enter and the Send button have to stay the same thing:

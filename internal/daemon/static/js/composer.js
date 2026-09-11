@@ -183,6 +183,22 @@ export function historyNext() {
 // comes from the turn.cancelled event the daemon broadcasts, so a cancel
 // from any client is reported in every client the same way — but this
 // client stops waiting on the strength of the reply, not the event.
+// detachChild is stop's counterpart: the sub-agent this turn is waiting
+// on keeps working, and the turn gets on with the rest of its job.
+export async function detachChild() {
+  if (!session.sessionID) return;
+  try {
+    const res = await apiClient.detachSessionChild(session.sessionID);
+    if (res && res.detached) {
+      appendTool(`[system] let go of ${res.task_id}. It keeps working; its answer is in the task panel.`);
+    } else {
+      appendTool('[system] nothing to let go of: this turn is not waiting on a sub-agent.');
+    }
+  } catch (err) {
+    appendError(`could not let go of the sub-agent: ${err}`);
+  }
+}
+
 export async function cancelTurn() {
   // turnInFlight, not session.waiting: the stop button is shown whenever
   // the daemon says this session is busy, so the key and the button that

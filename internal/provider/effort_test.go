@@ -223,7 +223,7 @@ func TestTheTemperatureRuleIsOneRule(t *testing.T) {
 	if got := temperatureFor(req); got != 0 {
 		t.Errorf("a Bedrock reasoning request carries temperature %v", got)
 	}
-	cfg := buildInferenceConfig(req.MaxTokens, temperatureFor(req))
+	cfg := buildInferenceConfig(req.MaxTokens, temperatureFor(req), bedrockTopP(req))
 	if cfg.Temperature != nil {
 		t.Errorf("the inference config still carries a temperature: %v", *cfg.Temperature)
 	}

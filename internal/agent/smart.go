@@ -144,7 +144,27 @@ func (l *Loop) agentConfig(ctx context.Context, agentName string) config.AgentCo
 // The profile's name comes back with it because a fallback chain is
 // looked up by name (see fallback.go), and because the trace records
 // which profile answered rather than only which model.
-func (l *Loop) profileFor(ctx context.Context, agentName string) (string, config.Profile, error) {
+func (l *Loop) profileFor(ctx context.Context, sessionID, agentName string) (string, config.Profile, error) {
+	// A model this conversation chose for this agent wins over the
+	// agent's own. It is a whole profile rather than a model id, so the
+	// provider, the ceiling and the window come with it — see
+	// session.Session.Profiles — and the agent keeps its prompt, tools
+	// and permissions, which is what separates choosing a model from
+	// switching agent.
+	//
+	// Ahead of the Smart Agent branch below: a specialist is still an
+	// agent, and somebody who said which model this conversation answers
+	// on meant it for whoever is answering.
+	if l.Store != nil && sessionID != "" {
+		if name := l.Store.ProfileFor(sessionID, agentName); name != "" {
+			if p, ok := l.Config.Profiles[name]; ok {
+				return name, p, nil
+			}
+			// Named a profile the config no longer has: fall through to
+			// the agent's own rather than failing the turn. A config
+			// edited under a running conversation is ordinary.
+		}
+	}
 	if _, mine := l.Config.Agents[agentName]; !mine {
 		if sa, ok := l.smartAgents(ctx)[agentName]; ok {
 			if p, ok := l.Config.Profiles[sa.Profile]; ok {

@@ -29,18 +29,35 @@ func withAgents(m Model, names ...string) Model {
 	return m
 }
 
-// "/model" is the way to change the agent without already knowing what
-// the agents are called, which is the thing the TUI did not have: "/agent
+// openModelPicker drives what "/model" now does: ask the daemon which
+// profiles exist, then open the list on the answer. The round trip is
+// the point — which models this config can reach is the daemon's answer,
+// and a config edit changes it.
+func openModelPicker(t *testing.T, m Model, choices ...client.ModelChoice) Model {
+	t.Helper()
+	m, cmd := pressEnterWith(t, m, "/model")
+	if cmd == nil {
+		t.Fatal("/model asked the daemon nothing")
+	}
+	updated, _ := m.Update(modelViewMsg{
+		view: client.ModelView{Agent: m.currentAgent, Source: "agent", Choices: choices},
+		pick: true,
+	})
+	return updated.(Model)
+}
+
+// "/model" is the way to change who answers without already knowing what
+// anything is called, which is the thing the TUI did not have: "/agent
 // <name>" needs the name, and Tab cycles blind.
 func TestModelCommandOpensTheAgentPicker(t *testing.T) {
 	m := withAgents(newTestModel(), "general-purpose", "plan", "verify")
-	m, _ = pressEnterWith(t, m, "/model")
+	m = openModelPicker(t, m)
 
 	if m.picker == nil {
 		t.Fatal("/model did not open a picker")
 	}
-	if len(m.picker.items) != 3 {
-		t.Fatalf("picker has %d agents, want 3", len(m.picker.items))
+	if len(m.picker.items) != 4 {
+		t.Fatalf("picker has %d rows, want 3 agents and the way back", len(m.picker.items))
 	}
 	if !strings.Contains(m.picker.items[0].label, "current") {
 		t.Errorf("the agent in use is not marked: %q", m.picker.items[0].label)
@@ -52,12 +69,42 @@ func TestModelCommandOpensTheAgentPicker(t *testing.T) {
 	}
 }
 
+// The other half of the same list: a profile keeps the agent and changes
+// only the model, which is what could not be asked for at all before.
+func TestModelPickerOffersProfilesBesideAgents(t *testing.T) {
+	m := withAgents(newTestModel(), "general-purpose")
+	m = openModelPicker(t, m,
+		client.ModelChoice{Profile: "big", Model: "claude-opus-5", Provider: "anthropic"},
+		client.ModelChoice{Profile: "local", Model: "muse-glimmer-30b", Provider: "lmstudio"},
+	)
+	if m.picker == nil {
+		t.Fatal("/model did not open a picker")
+	}
+	var labels []string
+	for _, it := range m.picker.items {
+		labels = append(labels, it.label)
+	}
+	joined := strings.Join(labels, " | ")
+	for _, want := range []string{"agent general-purpose", "model big", "model local", "use the agent's model"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the picker has no %q row: %s", want, joined)
+		}
+	}
+	// The two kinds are told apart by what picking them does, so the ids
+	// have to carry which kind a row is.
+	for _, it := range m.picker.items {
+		if !strings.HasPrefix(it.id, "agent:") && !strings.HasPrefix(it.id, "profile:") {
+			t.Errorf("row %q has an id that says nothing about what it is: %q", it.label, it.id)
+		}
+	}
+}
+
 // The list is what has focus while it is open. A letter typed over it
 // must not land in the prompt box underneath, where it would be sent as
 // part of the next message.
 func TestAPickerHoldsTheKeyboard(t *testing.T) {
 	m := withAgents(newTestModel(), "a", "b")
-	m, _ = pressEnterWith(t, m, "/model")
+	m = openModelPicker(t, m)
 
 	m = tapKey(t, m, 'x')
 	if m.input.Value() != "" {
@@ -77,8 +124,8 @@ func TestAPickerHoldsTheKeyboard(t *testing.T) {
 	if m.picker == nil {
 		t.Fatal("Esc closed the picker instead of clearing the filter")
 	}
-	if len(m.picker.items) != 2 {
-		t.Errorf("clearing the filter left %d rows, want both agents back", len(m.picker.items))
+	if len(m.picker.items) != 3 {
+		t.Errorf("clearing the filter left %d rows, want both agents and the way back", len(m.picker.items))
 	}
 
 	m = tapKey(t, m, tea.KeyDown)
@@ -88,8 +135,9 @@ func TestAPickerHoldsTheKeyboard(t *testing.T) {
 	// Selection stops at the ends rather than wrapping: jumping from the
 	// last row to the first reads as the list moving, not the cursor.
 	m = tapKey(t, m, tea.KeyDown)
-	if m.picker.idx != 1 {
-		t.Errorf("down past the last row moved to %d, want it to stay at 1", m.picker.idx)
+	m = tapKey(t, m, tea.KeyDown)
+	if m.picker.idx != 2 {
+		t.Errorf("down past the last row moved to %d, want it to stay at 2", m.picker.idx)
 	}
 
 	m = tapKey(t, m, tea.KeyEscape)
@@ -118,7 +166,7 @@ func TestPickingAnAgentSwitchesToIt(t *testing.T) {
 	defer srv.Close()
 
 	m := withAgents(New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event)), "general-purpose", "plan")
-	m, _ = pressEnterWith(t, m, "/model")
+	m = openModelPicker(t, m)
 	m = tapKey(t, m, tea.KeyDown)
 
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})

@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.117.0
+
+The three items a command-parity review left for their own cycle, and the three open items in `docs/IMPROVEMENTS.md`.
+
+**Models**
+
+* `top_p` and `top_k` on a profile. muse's own recipe names all three alongside temperature 1.0, and only `/llm-doctor` could set them because it writes its own request bodies.
+* Both reach OpenAI-compatible, Anthropic and Bedrock. `top_k` is a vLLM extension on the first, travels in `additionalModelRequestFields` on the last, and is sent only when a profile asked.
+* Both are dropped while a Claude model is reasoning, as temperature already was.
+* Bounded at load rather than refused mid-turn by the server.
+
+**Which model answers**
+
+* `/model <profile>` points a conversation at any model this config can reach, keeping the agent's prompt, tools and permissions. Choosing a model and choosing an agent were one choice.
+* A profile rather than a model id, so the provider, the ceiling and the window travel with it.
+* Per agent, kept per conversation, carried by a fork, announced on a new `model.changed` event.
+* The terminal's `/model` picker lists agents and models together; `/models`, `/mo` are aliases.
+
+**Undo**
+
+* `/redo` puts back the turn `/rewind` undid — the exchange and the files both.
+* Post-images are taken during the rewind, in the one moment the turn's own result is still on disk.
+* Refused once the conversation has moved on, and twice over.
+
+**Sub-agents**
+
+* Ctrl+B, and a "let go" button beside stop: the sub-agent a turn is waiting on keeps working while the turn carries on. Stopping it was the only other answer, and it threw the work away.
+* The model is told the work continues, not that it was cancelled — which would have it start the same job again.
+* Until it is let go, cancelling the parent still stops the child.
+
+**Updates**
+
+* The desktop window installs a startup update on macOS and Linux. The handoff asked the platform whether it could exec; the window cannot on any platform, and never called the exec path either, so neither ran.
+* The window's update check and install button answer from the window's own version, not the successor's. The successor is the staged copy and is current by construction, which hid a real update and the button that would have applied it.
+
+**Release gate**
+
+* A plain `go test ./...` lane beside the race one. A search test whose timing assumption only held under `-race` passed the gate and failed for anybody who ran the suite without it.
+
 ## v0.116.0
 
 Every entry below is one finding from a command-by-command comparison with opencode, each verified by reading both implementations.

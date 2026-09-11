@@ -105,6 +105,9 @@ export const cancelTask = (taskID) => api('POST', `/api/tasks/${taskID}/cancel`,
 export const revealWorkspace = (sessionID) =>
   api('POST', '/api/workspace/reveal' + (sessionID ? `?session=${encodeURIComponent(sessionID)}` : ''), {});
 export const cancelSessionTurn = (sessionID) => api('POST', `/api/sessions/${sessionID}/cancel`, {});
+// Lets go of the synchronous sub-agent blocking a turn: it keeps working
+// as a background task, and the turn carries on without it.
+export const detachSessionChild = (sessionID) => api('POST', `/api/sessions/${sessionID}/detach`, {});
 export const resolvePermissionRequest = (sessionID, id, allow, scope) =>
   api('POST', `/api/sessions/${sessionID}/permissions/${id}`, { allow, scope });
 export const answerQuestion = (sessionID, id, answer) =>

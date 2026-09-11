@@ -74,6 +74,11 @@ export function freshSessionState(id) {
     // session like the tasks are, and reloaded on a switch.
     schedules: new Map(), // task_id -> {agent, status}
     lastUsage: null,   // {input_tokens, output_tokens, max_context, percent, tps, show_tps, model}
+    // The model this conversation chose apart from its agent, or '' when
+    // the agent's own is answering. Per session and cleared on a switch
+    // like everything else here: a choice made in one conversation is not
+    // a fact about the next one.
+    chosenModel: '',
     runningTool: '',   // tool currently executing, shown in the status bar
     // tool_use_id -> the transcript row for that call, so tool.end can find
     // the row tool.start created and fill in its result.

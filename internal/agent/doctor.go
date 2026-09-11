@@ -277,7 +277,7 @@ func (l *Loop) routeLLMDoctor(ctx context.Context, sessionID, agentName, text st
 
 	// profileFor's first result is the profile's name; the provider is
 	// the profile's own field, and it is the provider that is probed.
-	_, profile, err := l.profileFor(ctx, agentName)
+	_, profile, err := l.profileFor(ctx, sessionID, agentName)
 	if err != nil {
 		return true, l.replyText(sessionID, "llm-doctor: "+err.Error())
 	}

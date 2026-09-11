@@ -443,6 +443,30 @@ type Profile struct {
 	MaxTokens   int     `json:"max_tokens,omitempty"`
 	Temperature float64 `json:"temperature,omitempty"`
 
+	// TopP and TopK are the rest of the sampling family, and the reason
+	// they are here is that a recipe names all three together. muse's
+	// vLLM recipe is temperature 1.0 with top_p 0.95 and top_k 64;
+	// "/llm-doctor" could set them because it writes its own request
+	// bodies, and a profile could not, so the one model this project
+	// tunes hardest against could not be configured the way its authors
+	// describe it.
+	//
+	// Pointers rather than plain numbers because zero is a value here
+	// and not a default: top_p 0 is a degenerate request and top_k 0
+	// means "no limit" on vLLM, so "unset" has to be distinguishable
+	// from either. Nil sends nothing, which is what every profile
+	// written before this does.
+	//
+	// Where each one reaches: top_p is a first-class field on all three
+	// backends. top_k is native on Anthropic, travels in
+	// additionalModelRequestFields on Bedrock, and is not in the OpenAI
+	// schema at all — it is a vLLM extension, sent only when a profile
+	// asked for it, on the same reasoning "reasoning_effort" is sent on:
+	// a server that has not heard of it ignores it, and one that refuses
+	// it only ever sees it from somebody who set it on purpose.
+	TopP *float64 `json:"top_p,omitempty"`
+	TopK *int     `json:"top_k,omitempty"`
+
 	// ContextWindow is the model's total input+output token limit. Zero
 	// means "look it up from the model name", which is a guess: a local
 	// server can host anything under any name, and the guess for an
@@ -580,6 +604,17 @@ func (c *Config) Validate() error {
 		if profile.Effort != "" && !provider.ValidEffort(profile.Effort) {
 			return fmt.Errorf("profile %q: effort is %q, which is not one of off, low, medium, high, xhigh",
 				name, profile.Effort)
+		}
+		// Bounded here for the same reason: a sampling number outside its
+		// range is refused by the server in the middle of a turn, which
+		// is a worse place to read about a typo than the moment of load.
+		if profile.TopP != nil && (*profile.TopP <= 0 || *profile.TopP > 1) {
+			return fmt.Errorf("profile %q: top_p is %v, which is outside 0..1 (leave it out to say nothing)",
+				name, *profile.TopP)
+		}
+		if profile.TopK != nil && *profile.TopK < 0 {
+			return fmt.Errorf("profile %q: top_k is %d, which is negative (0 means no limit; leave it out to say nothing)",
+				name, *profile.TopK)
 		}
 		if profile.KeepGoing < -1 || profile.KeepGoing > maxKeepGoing {
 			return fmt.Errorf("profile %q: keep_going is %d, which is outside -1..%d (-1 means never, 0 means the model's own default)",

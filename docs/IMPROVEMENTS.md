@@ -400,10 +400,14 @@ Completed findings remain in this list to preserve item numbers and release hist
     * `/llm-doctor` writes the line into its own canaries (v0.90.0), so the probes run the model the way its publisher intends. Real conversations do not.
     * Done as described: `museReasoningLine` in `internal/agent/quirks.go` puts `Reasoning strength: <level>` into the system prompt on the model-quirk asset whenever an effort level is set on a muse profile or conversation, and `xhigh` is a level now, sent to the OpenAI wire as `high` and to Anthropic's as the high budget.
 
-44. **No `top_p` or `top_k` on OpenAI-compatible requests. Open.**
+44. **No `top_p` or `top_k` on OpenAI-compatible requests. Done in v0.117.0.**
 
     * `oaRequest` carries `temperature` and nothing else from the sampling family, so a profile cannot ask for the `top_p` 0.95 and `top_k` 64 that muse's vLLM recipe specifies alongside temperature 1.0. `/llm-doctor` sets them directly on its own request bodies; a profile has no way to.
     * Adding them means a config field each and a decision about servers that reject `top_k`, which is not in the OpenAI schema and which vLLM accepts as an extension.
+    * The decision taken: send it only when a profile asked, on the reasoning `reasoning_effort` is already sent on — most servers ignore an unknown field, and one that refuses it only ever sees it from somebody who set it deliberately.
+    * Pointers rather than plain numbers, because zero is a value here: `top_k` 0 means "no limit" on vLLM, so "unset" had to be distinguishable from it.
+    * Wired to all three backends rather than only the one the complaint named: a profile field that silently did nothing on Anthropic would be a new version of the same complaint. Both are dropped while a Claude model is reasoning, as temperature already was, so one profile can carry a sampling recipe and ask for reasoning without the two colliding.
+    * Bounded in `Config.Validate`, because a sampling number outside its range is refused by the server in the middle of a turn — the worst place to read about a typo.
 
 
 45. **Smart Agent's orchestration prompt told a muse to delegate to itself. Confirmed and fixed in v0.108.0.**
@@ -418,13 +422,15 @@ Completed findings remain in this list to preserve item numbers and release hist
     * **Fixed by roster shape rather than by model id.** `smart.Solo` reports whether every routing category resolves to the same profile, and `OrchestrationPrompt`/`PlanPolicy` take it. The test is what the categories *resolve to*, not `len(Profiles) == 1`: `classify` reads a weight class out of a model id, so two local endpoints whose ids carry no size qualifier route everything to one profile — the population this exists for, and what a profile-count test would have let through.
     * The solo prompt states what delegation still buys — a context this conversation does not pay for — instead of ordering it, and says plainly that review, planning and running the build are not worth handing to the same model. Re-measured on the same model and task: no `Task` span at all in the trace, edits at request four, thirteen requests, both files correct. The penalty for having the switch on is gone.
 
-46. **The window's installed copy stops updating after a startup handoff. Windows only, open.**
+46. **The window's installed copy stops updating after a startup handoff. Windows only, done in v0.117.0.**
 
    * On Windows an .exe cannot be replaced in place, so a startup update stages the new binary under `%LOCALAPPDATA%\localcode\bin` and the installed copy under Program Files — the one the shortcut starts — keeps whatever version the MSI put there.
    * The window then serves `successorProxy`, which forwards `GET /api/update` to the successor. The successor answers with its own version, which is the staged copy's and is current, so `available` is false and the settings panel says "localcode x.y.z is the latest release" with no install button.
    * The reply that creates the situation promises the opposite (`internal/update/install.go`: "the copy under … is still the old version, and the settings window's install button updates it"), and that button is now hidden by the same answer that hid the problem.
    * What still reaches the user: the daemon and the whole Web UI, because those are the staged copy. What never does: the window shell itself — the frameless chrome, the resize edges, `RegisterApplicationRestart`, the splash.
-   * Not fixed here because the fix is a decision rather than a patch. Answering `GET /api/update` from the window's own version is easy; making `POST /api/update/install` mean "replace the installed copy" requires the *window* process to run the install, and after a startup handoff the window has already discarded its daemon. Either the window keeps enough of one to install with, or the successor is told which file to replace.
+   * The decision taken: the window keeps one. `successorProxy` now takes the daemon this process built before it handed the listener over, and answers `GET /api/update` and `POST /api/update/install` from it while everything else goes to the successor. That daemon serves nothing and listens nowhere; it is kept precisely because it is the only thing in the process that knows how to run an installer, and because its version is the installed copy's rather than the staged one's.
+   * The two routes join the two that were already kept for the same class of reason — the folder picker and the reveal — so the shape was there to follow rather than invent.
+   * The mid-session handoff keeps nothing, and should not: that one happens *because* somebody just installed an update, and the daemon being retired is the one that did it. Asking it again would offer the release it has already applied.
 
 
 47. **The four Web UI screenshots in `docs/img/` were of the old interface. Done in v0.106.0.**
@@ -477,12 +483,14 @@ Completed findings remain in this list to preserve item numbers and release hist
    * The data race is the one worth naming. `Session` is copied by value everywhere it leaves the store, which was enough while every field was a value; the per-model levels are a map, and a value copy shares the map header. The daemon lists sessions on one request and sets a level on another, so that pair raced — and a caller could write into the store through a session it had been handed. Every path that hands one out detaches it now, with a regression test that fails both ways without the fix.
    * Found while building it: an agent switch changes the model and nothing told the control. It went on showing the level and the steps of the model it had left, which on a one-switch family is a dial that does nothing. The daemon announces from the switch handler, so both clients redraw from one place.
 
-53. **The desktop window never installs an update at startup on macOS or Linux. Open.**
+53. **The desktop window never installs an update at startup on macOS or Linux. Done in v0.117.0.**
 
    * Two of the three startup modes ask whether there is a newer release: `runDaemon` and `runEmbedded` both call `autoUpdateAtStartup`. `runGUI` never has — the call was added to the other two when the feature landed and the window was already in the tree.
    * It is not an oversight to copy the line into. The window's daemon is built inside the callback `gui.Launch` runs, which is after the window is on screen, and `autoUpdateAtStartup` ends in `exec`: replacing a process that is holding a native window is not the same operation as replacing a headless one. Doing it before `gui.Launch` would mean building enough of a daemon to read the config before the window appears, which is the several-second blank the splash exists to remove.
    * Two ways out, both decisions rather than patches. The window could take the successor path it already has on Windows — `startupHandoffBinary` keys off a platform constant, and a caller that says "I cannot exec" rather than a platform that cannot would put every window on the proxy — or the update check could run before `gui.Launch` on a cut-down daemon. The first reuses machinery that took several releases to make reliable; the second reintroduces the delay the splash was built for.
-   * What reaches a window today: the settings panel's install button, and on Windows the startup handoff. What does not: an unattended update on a Mac or Linux desktop.
+   * The first way out was taken, and it was one line of meaning rather than one of code: `startupHandoffBinary` now takes the caller's answer to "can you exec?" instead of reading `selfRestartAvailable`. A window says no on every platform, because what stops it is holding a native window rather than anything about the operating system. The headless daemon and the terminal still ask the platform, which is right for them.
+   * `ApplyForHandoff` was already correct on Unix — it falls through to `Apply`, which replaces the binary in place — so nothing about the install half had to change. The machinery this reuses is the one that took several releases to make reliable, which is exactly why it was the way out to take.
+   * Guarded by reading the source rather than by running it: the next step of that function asks GitHub for a release and installs it, so a test that drove it would be a test that downloads. What is worth protecting is which answer each caller gives, and that is what is written down.
 
 54. **Stop did not reach a search. Done in v0.113.0.**
 
@@ -517,6 +525,18 @@ Completed findings remain in this list to preserve item numbers and release hist
    * `/rewind` gives the undone prompt back, into an empty box only. This is as much of opencode's `/redo` as is honest here: the conversational half is restored, and the file half cannot be, because the pre-images are kept and the post-images are not.
    * Six aliases for commands that already existed, because they are the words people arrive typing: `/agents`, `/models`, `/mo`, `/sessions`, `/resume`, `/continue`.
    * Left for their own cycle, and why. Picking a model independent of the agent (opencode's `/models`) is a session model override, and model resolution also decides the provider, the effort levels and the token ceiling — too much blast radius to attach to this. Detaching a synchronous sub-agent mid-flight into the background (opencode's Ctrl+B) is a redesign of how `SpawnSync` blocks. Re-applying an undone turn's file writes needs post-images that are not kept.
+57. **The three a parity review left for their own cycle. Done in v0.117.0.**
+
+   * Item 56 closed twelve findings and named three it would not attach to that change: picking a model independent of the agent, letting go of a synchronous sub-agent, and re-applying an undone turn's file writes. Each was a design decision rather than a patch, and each is here with the decision stated.
+   * **Which model answers.** What is chosen is a profile, not a model id. A model does not travel alone — the provider that serves it, the token ceiling, the context window — and storing "answer on claude-opus-5" against an agent pointed at a local vLLM would name a model that provider cannot serve. The profile already knows all of it, and the agent keeps its prompt, its tools and its permissions, which is what separates choosing a model from switching agent. Kept per agent for the reason effort is kept per model: agents are pointed at models that suit them, and a choice made while talking to one should not follow you to another.
+   * **Letting go of a sub-agent.** The obstacle was a context, not a policy: `spawnSync` ran the child on the caller's own goroutine under the caller's own context, and a context cannot change parents once it is built, so a child derived from the parent turn could never outlive it. The child now runs under a context of its own and the link to the parent is a goroutine — which reproduces the old behaviour exactly while attached, and simply stops watching once the child is let go. What the model is told matters as much as the mechanism: "still working, do not start it again" rather than "cancelled", because a model told the second one reasonably starts the same job over, which is two sub-agents doing one piece of work with one of them invisible.
+   * **Redo.** Not a new store, a moment. Pre-images are kept as a matter of course, which is what makes undoing always possible; post-images are not, which is why redoing was not. During a rewind, immediately before each pre-image goes back, the turn's own result is still on disk — so that is when it is copied, into the same content-addressed store, where a file the turn left unchanged costs nothing new. The conversation half is the append-only shape the rewind already uses: a marker naming the rewind it cancels, and `applyRewinds` reading both. Offered only while the rewind is still the last thing that happened, because putting an undone turn back underneath a conversation that has moved on interleaves two histories.
+
+58. **The release gate ran every test one way. Done in v0.117.0.**
+
+   * `check.sh` ran `go test ./... -race` and nothing else. The race detector is five to ten times slower, so a test whose timing assumption only holds at that speed passes the gate and fails for anybody who types `go test ./...`.
+   * One did, and it shipped: a search cancelled two milliseconds in, on a tree that walks in under two without the detector. It was green in v0.116.0's gate and red on a plain run of the same commit.
+   * Two fixes, because either alone leaves the hole. The test now measures how long the search takes on the machine it is running on and cancels a tenth of the way in, so it asserts a property of the code rather than a number from one build mode; and the gate grew a plain lane beside the race one, in its own group so it runs alongside rather than after.
 
 
 

@@ -108,7 +108,7 @@ func TestARewindPutsBackWhatTheTurnChanged(t *testing.T) {
 	}
 
 	evs, _ := loop.Store.Events(sid, 0)
-	restored, removed, skipped := loop.restoreCheckpoints(sid, evs)
+	restored, removed, skipped, _ := loop.restoreCheckpoints(sid, evs)
 	if len(restored) != 1 || len(removed) != 1 || len(skipped) != 0 {
 		t.Fatalf("restored=%v removed=%v skipped=%v", restored, removed, skipped)
 	}

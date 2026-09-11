@@ -1088,7 +1088,40 @@ Coverage follows [Claude Code's checkpointing scope](https://code.claude.com/doc
 
 Use version control for recovery beyond this tool-level checkpoint scope.
 
+### Sampling: `temperature`, `top_p`, `top_k`
+
+A profile carries the whole sampling family, because a recipe names all three together — muse's vLLM recipe is temperature 1.0 with `top_p` 0.95 and `top_k` 64.
+
+```json
+{ "provider": "lmstudio", "model": "muse-glimmer-30b", "temperature": 1.0, "top_p": 0.95, "top_k": 64 }
+```
+
+Leave a field out to say nothing about it, which is what every profile written before these existed does. Zero is a value rather than an absence here: `top_k` 0 means "no limit" on vLLM, so it is sent.
+
+| Setting | OpenAI-compatible | Anthropic | Bedrock |
+|---|---|---|---|
+| `temperature` | `temperature` | `temperature` | inference config |
+| `top_p` | `top_p` | `top_p` | inference config |
+| `top_k` | `top_k` — not in the OpenAI schema, a vLLM extension, sent only when asked for | `top_k` | `additionalModelRequestFields` |
+
+All three are dropped while a Claude model is reasoning: the API decides how it samples then and refuses a request that also says. That is what lets one profile carry a sampling recipe and ask for reasoning without the two colliding. Values outside their range are refused when the config loads rather than by the server in the middle of a turn.
+
 Rewind is refused in scheduled runs and `localcode run` pipes. It is also refused while a background child of the conversation is running.
+
+### `/redo`
+
+`/redo` puts back the turn `/rewind` just undid — both halves: the exchange returns to model context, and the files the turn had written are written again.
+
+It works because of *when* the copy is taken. Pre-images are kept as a matter of course, which is what makes undoing always possible; post-images are not kept, which is why redoing was not. During a rewind, immediately before each pre-image goes back, the turn's own result is still on disk, and that is the moment it is copied.
+
+| Condition | Result |
+|---|---|
+| Straight after a `/rewind` | the turn comes back, files and all |
+| After anything else has happened | refused: the conversation has moved on, and the undone turn is gone for good. Local commands like `/usage` do not count as moving on |
+| Twice | refused: the second one has nothing left to put back |
+| A file `/rewind` could not restore | it was never copied either way, and the report says so |
+
+Coverage is exactly `/rewind`'s, from the other side: what a rewind could not restore, a redo cannot put back. `/redo` is refused in scheduled runs, while a background child is running, and while a turn is in progress — the same three refusals, for the same reasons.
 
 Both `/clear` and `/rewind` are refused while the session has a turn in progress. They are not delivered to the model as text.
 
@@ -1247,7 +1280,7 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/help` | Lists available commands instantly, no model call |
 | `/version` | Shows the version of the **daemon** you are attached to, from `GET /api/version`. With `--server` against a remote daemon this is that daemon's version, which can differ from your local binary. |
 | `/agent` | Lists registered agents; `/agent <name>` switches. See [Switching agents](#switching-agents-with-tab). |
-| `/model` | **TUI.** Opens a list of agents to choose from, with the model each one resolves to, so you can switch without knowing the name first. `/model <name>` switches directly. The Web UI has the header dropdown instead. |
+| `/model` | Which model answers, apart from which agent does. Bare, it reports the model in force and every profile this config can reach. `/model <profile>` points this conversation at that profile's model and keeps the agent — its prompt, its tools, its permissions — so answering on a bigger model no longer means writing a second agent that is the first one with another profile. `/model <agent>` still switches agent, which is what the command always did. `default` goes back to the agent's own. **TUI:** bare opens a picker with agents and models in one list. The choice is kept per agent, survives a fork, and both clients follow it. |
 | `/session` | **TUI.** Opens a list of conversations to switch to. `/session <id>` switches directly. The Web UI has the left panel instead. See [Switching sessions](#switching-sessions). |
 | `/skill` | Lists registered skills. See [Running a skill](#running-a-skill). |
 | `/commands` | Lists the custom commands registered from the project and home agent directories the root chain picked (`commands/*.md`, or `command/*.md`). See [Custom commands](#custom-commands). |
@@ -1264,6 +1297,7 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/repeat-limit` | `/repeat-limit [on\|off\|<steps>]`. How many nothing-new steps end a turn; `on` is 3, `off` (the default) never ends one for it. Bare, reports the ceiling. See [A model that repeats itself](#a-model-that-repeats-itself). |
 | `/debug-log` | Toggles writing every model request and response to a file per prompt, in this conversation's workspace. Off at every start and never saved. See [Debug log](#debug-log). |
 | `/effort` | `/effort [off\|low\|medium\|high\|xhigh]`. Conversation reasoning level, kept per model. `default` restores the profile setting. See [Effort](#effort). |
+| `/redo` | Puts back the turn `/rewind` just undid, files included. See [`/redo`](#redo). |
 | `/effort-set` | Lists the levels the current model tells apart and takes a choice. `/effort-set <level>` sets one directly. See [Effort](#effort). |
 | `/new` | **TUI.** Starts a conversation and switches to it. The Web UI has its New button. |
 | `/rename` | **TUI.** `/rename <title>` names this conversation. The Web UI has the pencil on the session card. |

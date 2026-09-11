@@ -80,11 +80,15 @@ func (l lanes) take(ctx context.Context, provider string) (release func(), ok bo
 // does not resolve gets no lane rather than an error, because refusing to
 // launch a task over a lane lookup would turn a queueing detail into a
 // failure.
+// No session is named, and that is right: the lane is chosen for a task
+// that has not been created yet, and a model this conversation chose for
+// itself is not inherited by a child conversation any more than its
+// history is.
 func (l *Loop) providerFor(ctx context.Context, agentName string) string {
 	if l == nil || l.Config == nil {
 		return ""
 	}
-	_, profile, err := l.profileFor(ctx, agentName)
+	_, profile, err := l.profileFor(ctx, "", agentName)
 	if err != nil {
 		return ""
 	}

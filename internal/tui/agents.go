@@ -22,6 +22,13 @@ func (m Model) nextAgent() (string, bool) {
 // Returns "", false if the current agent isn't in the known list yet
 // (e.g. GET /api/agents hasn't come back) or its profile has no model set.
 func (m Model) currentModel() (string, bool) {
+	// What this conversation chose, when it chose one. The agent's own
+	// otherwise — and the distinction is the point: a footer naming the
+	// agent's model while the requests go somewhere else is the readout
+	// that made the choice invisible.
+	if m.model.Source == "conversation" && m.model.Model != "" {
+		return m.model.Model, true
+	}
 	for _, a := range m.agents {
 		if a.Name == m.currentAgent {
 			return a.Model, a.Model != ""

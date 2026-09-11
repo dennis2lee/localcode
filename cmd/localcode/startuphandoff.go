@@ -37,15 +37,25 @@ import (
 
 // startupHandoffBinary reports the binary a startup handoff should
 // start, or false when there is nothing to hand off to: startup updates
-// are off, this platform execs instead, nothing newer exists, or the
+// are off, this caller execs instead, nothing newer exists, or the
 // install failed. Every failure is printed and none stops startup.
+//
+// canExec is the caller's answer, not the platform's, and that
+// distinction is the whole of a fix. It used to read selfRestartAvailable
+// directly, which is true on macOS and Linux — so on those platforms the
+// handoff never happened, and the desktop window, which is the one caller
+// that cannot exec on any platform, was left with no startup update at
+// all. autoUpdateAtStartup ends in exec, and replacing a process that is
+// holding a native window is not the same operation as replacing a
+// headless one. A window says false here and takes the successor path
+// every platform's headless daemon already takes on Windows.
 //
 // The version the release is compared against is the newest this machine
 // can already run. On a Program Files install that is the staged copy
 // from the last update, not this binary — comparing against this binary
 // alone would download the same release on every start.
-func startupHandoffBinary(d *daemon.Daemon, out io.Writer) (string, bool) {
-	if selfRestartAvailable || !d.Loop.Config.AutoUpdateEnabled() {
+func startupHandoffBinary(d *daemon.Daemon, out io.Writer, canExec bool) (string, bool) {
+	if canExec || !d.Loop.Config.AutoUpdateEnabled() {
 		return "", false
 	}
 	running, staged := d.Version, ""

@@ -121,6 +121,12 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.input.SetValue(prompt)
 			m.resizeLayout()
 		}
+	case events.TypeRedone:
+		what, _ := ev.Data["turn_text"].(string)
+		if what != "" {
+			what = ": " + what
+		}
+		m.appendTool("[put the turn back" + what + redoneFiles(ev.Data) + "]")
 	case events.TypeSessionScheduled:
 		// Opened on its own, a run session is a conversation that starts
 		// with an instruction nobody in it typed, at a moment nobody was
@@ -202,6 +208,16 @@ func (m *Model) applyEvent(ev events.Event) {
 		// just updating the one-line status shown below the prompt.
 		if name, ok := ev.Data["agent"].(string); ok {
 			m.currentAgent = name
+		}
+	case events.TypeModelChanged:
+		// The whole answer is in the event, so the footer follows a model
+		// chosen in another client without a request of its own.
+		m.model = client.ModelView{
+			Agent:    strField(ev.Data, "agent"),
+			Profile:  strField(ev.Data, "profile"),
+			Model:    strField(ev.Data, "model"),
+			Provider: strField(ev.Data, "provider"),
+			Source:   strField(ev.Data, "source"),
 		}
 	case events.TypeEffortChanged:
 		// The whole answer is in the event, so this needs no request of
@@ -370,6 +386,33 @@ func rewoundFiles(data map[string]any) string {
 		if n := num(p.key); n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n, p.label))
 		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " — " + strings.Join(parts, ", ")
+}
+
+// redoneFiles is rewoundFiles for the other direction. Its own function
+// rather than a shared one taking a table, because the two payloads
+// carry different keys and a single function switching on them would be
+// longer than both.
+func redoneFiles(data map[string]any) string {
+	num := func(key string) int {
+		switch v := data[key].(type) {
+		case float64:
+			return int(v)
+		case int:
+			return v
+		}
+		return 0
+	}
+	var parts []string
+	if n := num("written"); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d written again", n))
+	}
+	if n := num("skipped"); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d left alone", n))
 	}
 	if len(parts) == 0 {
 		return ""

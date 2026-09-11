@@ -148,6 +148,22 @@ type sessionDeletedMsg struct {
 	err error
 }
 
+// modelViewMsg is which model this conversation answers on, and whether
+// the answer should open the picker.
+type modelViewMsg struct {
+	view client.ModelView
+	pick bool
+	err  error
+}
+
+// detachedMsg is the answer to Ctrl+B: which sub-agent was let go, or
+// that there was none blocking this turn.
+type detachedMsg struct {
+	taskID   string
+	detached bool
+	err      error
+}
+
 type landingSessionsMsg struct {
 	sessions []session.Session
 	err      error

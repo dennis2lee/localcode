@@ -165,9 +165,6 @@ func (c *Client) ForkSession(ctx context.Context, sessionID string) (session.Ses
 	return sess, err
 }
 
-// DeleteSession removes sessionID (and its persisted log, if any)
-// entirely. Fails with a conflict error if the session has a turn in
-// progress.
 // NewSessionFn adapts CreateSession to the one-return shape the TUI's
 // call helper takes. The default agent, since a conversation started
 // because the last one was archived has no reason to be anything else.
@@ -216,6 +213,44 @@ func (c *Client) SetEffort(ctx context.Context, sessionID, level string) (Effort
 	return out, err
 }
 
+// ModelChoice is one profile a conversation could answer on. Mirrors
+// agent.ModelChoice.
+type ModelChoice struct {
+	Profile  string `json:"profile"`
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
+	Current  bool   `json:"current,omitempty"`
+}
+
+// ModelView is which model a conversation answers on, apart from which
+// agent is answering, plus everything this config can reach. Mirrors
+// agent.ModelView.
+type ModelView struct {
+	Agent    string        `json:"agent"`
+	Profile  string        `json:"profile"`
+	Model    string        `json:"model"`
+	Provider string        `json:"provider"`
+	Source   string        `json:"source"`
+	Choices  []ModelChoice `json:"choices"`
+}
+
+// GetModel reads which model a conversation answers on, and what this
+// config could reach instead.
+func (c *Client) GetModel(ctx context.Context, sessionID string) (ModelView, error) {
+	var out ModelView
+	err := c.doJSON(ctx, http.MethodGet, "/api/sessions/"+sessionID+"/model", nil, &out)
+	return out, err
+}
+
+// SetModel points a conversation at one of the config's profiles, or
+// clears the choice with "" so the agent's own applies again.
+func (c *Client) SetModel(ctx context.Context, sessionID, profile string) (ModelView, error) {
+	var out ModelView
+	err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/model",
+		map[string]string{"profile": profile}, &out)
+	return out, err
+}
+
 // ArchiveSession puts a conversation away. Everything it had is kept and
 // RetrieveSession brings it back; what changes is that it leaves the list
 // and nothing new starts in it.
@@ -240,6 +275,9 @@ func (c *Client) RetrieveSession(ctx context.Context, sessionID string) (*sessio
 	return &out, nil
 }
 
+// DeleteSession removes sessionID (and its persisted log, if any)
+// entirely. Fails with a conflict error if the session has a turn in
+// progress.
 func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/api/sessions/"+sessionID, nil, nil)
 }
@@ -414,6 +452,17 @@ func (c *Client) AnswerQuestion(ctx context.Context, sessionID, askID, answer st
 func (c *Client) CancelTurn(ctx context.Context, sessionID string) error {
 	path := fmt.Sprintf("/api/sessions/%s/cancel", sessionID)
 	return c.doJSON(ctx, http.MethodPost, path, map[string]string{}, nil)
+}
+
+// DetachChild lets go of the synchronous sub-agent blocking a
+// conversation and names it, or reports that there was none.
+func (c *Client) DetachChild(ctx context.Context, sessionID string) (string, bool, error) {
+	var out struct {
+		Detached bool   `json:"detached"`
+		TaskID   string `json:"task_id"`
+	}
+	err := c.doJSON(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/detach", nil, &out)
+	return out.TaskID, out.Detached, err
 }
 
 func (c *Client) SpawnTask(ctx context.Context, sessionID, agentName, prompt string) (string, error) {

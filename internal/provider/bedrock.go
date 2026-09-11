@@ -249,7 +249,7 @@ func toBedrockMessages(msgs []Message) ([]types.Message, error) {
 // there is nothing. Its shape is the model's, and for Claude that is the
 // same object the Anthropic API takes, which is why anthropicThinking
 // answers for both adapters rather than each having its own table.
-func bedrockExtraFields(oneMillionContext bool, model string, effort Effort, maxTokens int) map[string]any {
+func bedrockExtraFields(oneMillionContext bool, model string, effort Effort, maxTokens int, topK *int) map[string]any {
 	fields := map[string]any{}
 	if oneMillionContext {
 		fields["anthropic_beta"] = []string{oneMillionContextBeta}
@@ -258,6 +258,14 @@ func bedrockExtraFields(oneMillionContext bool, model string, effort Effort, max
 		if doc := asDocumentValue(th); doc != nil {
 			fields[bedrockThinkingField] = doc
 		}
+	}
+	// Converse has no top_k of its own, so it travels as a native model
+	// parameter through the same document "anthropic_beta" and extended
+	// thinking use. Dropped while the model is reasoning for the reason
+	// samplingFor drops it on the direct adapter: the API decides how it
+	// samples then, and refuses a request that also says.
+	if topK != nil && anthropicThinking(model, effort, maxTokens) == nil {
+		fields["top_k"] = *topK
 	}
 	return fields
 }
@@ -395,10 +403,23 @@ func parseModelID(model string) (id string, oneMillionContext bool) {
 // providers already dodge this for free via their wire structs'
 // `omitempty` tag; the Bedrock SDK's typed InferenceConfiguration has no
 // such tag, so it needs the same "don't send zero" check done explicitly.
-func buildInferenceConfig(maxTokens int, temperature float64) *types.InferenceConfiguration {
+// bedrockTopP is req.TopP under the rule samplingFor applies on the
+// direct adapter: nothing while the model is reasoning.
+func bedrockTopP(req ChatRequest) *float64 {
+	topP, _ := samplingFor(req)
+	return topP
+}
+
+func buildInferenceConfig(maxTokens int, temperature float64, topP *float64) *types.InferenceConfiguration {
 	cfg := &types.InferenceConfiguration{MaxTokens: aws.Int32(int32(maxTokens))}
 	if temperature != 0 {
 		cfg.Temperature = aws.Float32(float32(temperature))
+	}
+	// Nil rather than zero decides this one, so the "don't send zero"
+	// rule above is not needed: a profile that did not ask sends no
+	// field at all.
+	if topP != nil {
+		cfg.TopP = aws.Float32(float32(*topP))
 	}
 	return cfg
 }
@@ -451,7 +472,7 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 		// Temperature is dropped when reasoning is asked for: the API
 		// fixes it while a model is thinking and refuses a request that
 		// also sets one. See the same rule in the Anthropic adapter.
-		InferenceConfig: buildInferenceConfig(req.MaxTokens, temperatureFor(req)),
+		InferenceConfig: buildInferenceConfig(req.MaxTokens, temperatureFor(req), bedrockTopP(req)),
 	}
 	// One SystemContentBlock per prompt asset when the blocks arrived
 	// with their seams; the folded string only when they did not. The
@@ -470,7 +491,7 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 			Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
 		})
 	}
-	if extra := bedrockExtraFields(oneMillionContext, req.Model, req.Effort, req.MaxTokens); len(extra) > 0 {
+	if extra := bedrockExtraFields(oneMillionContext, req.Model, req.Effort, req.MaxTokens, req.TopK); len(extra) > 0 {
 		input.AdditionalModelRequestFields = document.NewLazyDocument(extra)
 	}
 

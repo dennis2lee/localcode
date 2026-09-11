@@ -470,6 +470,7 @@ async function load(opts = {}) {
       get zoom() { return internals.app.zoom; },
       get mcpServers() { return internals.app.mcpServers; }, set mcpServers(v) { internals.app.mcpServers = v; },
       get lastUsage() { return internals.session.lastUsage; }, set lastUsage(v) { internals.session.lastUsage = v; },
+      get chosenModel() { return internals.session.chosenModel; }, set chosenModel(v) { internals.session.chosenModel = v; },
       get skipPermissions() { return internals.app.skipPermissions; }, set skipPermissions(v) { internals.app.skipPermissions = v; },
       get smartAgent() { return internals.app.smartAgent; }, set smartAgent(v) { internals.app.smartAgent = v; },
       get keepGoing() { return internals.app.keepGoing; }, set keepGoing(v) { internals.app.keepGoing = v; },

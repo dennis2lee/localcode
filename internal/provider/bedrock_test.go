@@ -293,7 +293,7 @@ func TestParseModelIDStripsOneMillionContextSuffix(t *testing.T) {
 }
 
 func TestBuildInferenceConfigOmitsZeroTemperature(t *testing.T) {
-	cfg := buildInferenceConfig(4096, 0)
+	cfg := buildInferenceConfig(4096, 0, nil)
 	if cfg.Temperature != nil {
 		t.Errorf("Temperature = %v, want nil when the profile never configured one (some models reject the field entirely at any value)", cfg.Temperature)
 	}
@@ -303,7 +303,7 @@ func TestBuildInferenceConfigOmitsZeroTemperature(t *testing.T) {
 }
 
 func TestBuildInferenceConfigSetsExplicitTemperature(t *testing.T) {
-	cfg := buildInferenceConfig(4096, 0.7)
+	cfg := buildInferenceConfig(4096, 0.7, nil)
 	if cfg.Temperature == nil {
 		t.Fatal("Temperature = nil, want it set when the profile explicitly configured 0.7")
 	}

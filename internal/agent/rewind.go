@@ -59,9 +59,20 @@ func applyRewinds(evs []events.Event) []events.Event {
 		return evs
 	}
 
+	// A rewind that has been put back stops filtering. "/redo" appends a
+	// marker naming it rather than removing anything, so the log still
+	// records both, and this is the one place that has to read them
+	// together.
+	redone := make(map[uint64]bool)
+	for _, ev := range evs {
+		if ev.Type == events.TypeRedone {
+			redone[dataUint(ev.Data, "rewind_seq")] = true
+		}
+	}
+
 	dropped := make(map[uint64]bool)
 	for _, ev := range evs {
-		if ev.Type != events.TypeRewound {
+		if ev.Type != events.TypeRewound || redone[ev.Seq] {
 			continue
 		}
 		from := dataUint(ev.Data, "from_seq")
@@ -219,7 +230,7 @@ func (l *Loop) routeRewind(ctx context.Context, sessionID, text string) (bool, e
 	}
 
 	undone := turnEvents(filtered, from)
-	restored, removed, skipped := l.restoreCheckpoints(sessionID, undone)
+	restored, removed, skipped, redoable := l.restoreCheckpoints(sessionID, undone)
 
 	prompt := dataString(eventAt(undone, from).Data, "text")
 	first := turnLabel(prompt)
@@ -232,6 +243,11 @@ func (l *Loop) routeRewind(ctx context.Context, sessionID, text string) (bool, e
 		// asked for.
 		"prompt":   prompt,
 		"restored": len(restored), "created": len(removed), "skipped": len(skipped),
+		// What /redo would put back, and the paths it would put it at.
+		// Carried on the marker rather than in a file of its own, because
+		// the marker is already the record of what this rewind did and
+		// two places to look would be two places to disagree.
+		"redo": redoable,
 	})
 
 	// Re-read, so the marker just appended is part of what history is
@@ -256,7 +272,7 @@ func (l *Loop) routeRewind(ctx context.Context, sessionID, text string) (bool, e
 // order is only about determinism. Every skip is counted rather than
 // swallowed: a restore that silently left a file changed is the failure
 // this whole feature would be judged on.
-func (l *Loop) restoreCheckpoints(sessionID string, undone []events.Event) (restored, removed, skipped []string) {
+func (l *Loop) restoreCheckpoints(sessionID string, undone []events.Event) (restored, removed, skipped []string, redo []map[string]any) {
 	dir := l.checkpointRoot()
 	for _, e := range undone {
 		if e.Type != events.TypeCheckpoint {
@@ -281,6 +297,12 @@ func (l *Loop) restoreCheckpoints(sessionID string, undone []events.Event) (rest
 			// The turn created it. Undoing that is a removal, and only if
 			// it is still the file the turn left: something else may have
 			// been put here since.
+			//
+			// Its content is copied first, because this is the last
+			// moment it exists — see keepPostImage, and /redo.
+			if h, mode, ok := l.keepPostImage(sessionID, path); ok {
+				redo = append(redo, map[string]any{"path": path, "sha256": h, "mode": mode, "created": true})
+			}
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				skipped = append(skipped, fmt.Sprintf("%s (could not remove: %v)", path, err))
 				continue
@@ -298,6 +320,11 @@ func (l *Loop) restoreCheckpoints(sessionID string, undone []events.Event) (rest
 		if m := dataInt(e.Data, "mode"); m > 0 {
 			mode = fs.FileMode(m)
 		}
+		// What the turn left here, before the pre-image goes back over
+		// it. The only moment it is on disk to copy.
+		if h, pmode, ok := l.keepPostImage(sessionID, path); ok {
+			redo = append(redo, map[string]any{"path": path, "sha256": h, "mode": pmode})
+		}
 		if err := os.WriteFile(path, blob, mode); err != nil {
 			skipped = append(skipped, fmt.Sprintf("%s (%v)", path, err))
 			continue
@@ -307,7 +334,7 @@ func (l *Loop) restoreCheckpoints(sessionID string, undone []events.Event) (rest
 		_ = os.Chmod(path, mode)
 		restored = append(restored, path)
 	}
-	return restored, removed, skipped
+	return restored, removed, skipped, redo
 }
 
 // rewindReport is what the person is told.

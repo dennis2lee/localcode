@@ -150,6 +150,13 @@ const (
 	// removed, or left alone.
 	TypeRewound Type = "rewound"
 
+	// TypeRedone marks "/redo": {"rewind_seq","turn_text","written",
+	// "skipped"}. rewind_seq names the TypeRewound it cancels, so
+	// applyRewinds can stop filtering that turn out — the same
+	// append-only shape the rewind itself uses, where nothing is edited
+	// and what the model is sent is a reading of the log.
+	TypeRedone Type = "redone"
+
 	// TypeCheckpoint records one file as it stood before a turn changed
 	// it: {"tool","path","sha256","mode","existed","too_large"}. Written
 	// by the write_file/edit path, once per path per turn, and read only
@@ -240,6 +247,17 @@ const (
 	// rather than only broadcast, so a client that opens the
 	// conversation later replays it instead of asking.
 	TypeEffortChanged Type = "effort.changed"
+
+	// TypeModelChanged reports which model a conversation answers on:
+	// {"agent","profile","model","provider","source","choices"}.
+	//
+	// Separate from agent.switched because the two are now separate
+	// choices: an agent carries a prompt and a tool allowlist as well as
+	// a model, and a conversation can keep the agent while answering on
+	// another model. Carries the whole list for the same reason
+	// effort.changed does — a client applies a snapshot rather than
+	// merging a sequence.
+	TypeModelChanged Type = "model.changed"
 	// TypePermissionForgotten records "/read-outside mem-clear" and its
 	// write twin: {"class": "read"|"write"}. The remembered directories
 	// are rebuilt from the log when a session is next looked at, and

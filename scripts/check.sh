@@ -62,8 +62,16 @@ cd "$(dirname "$0")/.."
 # nothing at all once the changes are staged — and a release is cut from a
 # tree that is committed, which is to say the state where the bare form
 # has the least to say. Against HEAD it sees staged and unstaged alike.
+# The plain run is not redundant with the race one, and the reason is a
+# test that shipped broken. -race is five to ten times slower, so a test
+# whose timing assumption only holds at that speed passes the gate and
+# fails for anybody who types `go test ./...`. One did: a search cancelled
+# two milliseconds in, where the whole tree walked in under two without
+# the detector. Its own lane, so it runs beside the slow one rather than
+# after it.
 checks=(
 	"race	race	go test ./... -race -parallel 8 -count=1"
+	"plain	plain	go test ./... -count=1"
 	"go	vet	go vet ./..."
 	"go	gui	go build -tags gui ./... && go test -tags gui ./internal/gui/ -count=1"
 	"go	windows	GOOS=windows GOARCH=amd64 go build ./..."
@@ -74,7 +82,7 @@ checks=(
 	"misc	fmt	scripts/check-fmt.sh"
 	"misc	whitespace	git diff --check HEAD"
 )
-lanes="race go misc"
+lanes="race plain go misc"
 
 lane_of() { printf '%s' "${1%%	*}"; }
 name_of() { local r="${1#*	}"; printf '%s' "${r%%	*}"; }

@@ -475,6 +475,24 @@ func (d *Daemon) handleCancelTurn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"cancelled": running})
 }
 
+// handleDetachChild lets go of the synchronous sub-agent blocking this
+// conversation, so the turn waiting on it gets on with the rest of its
+// work while the sub-agent keeps going in the background.
+//
+// Its own endpoint rather than a slash command, and that is forced: this
+// is only ever pressed while a turn is running, and a message sent then
+// is handed to that turn as trailing text rather than executed. The same
+// reason cancel is an endpoint.
+func (d *Daemon) handleDetachChild(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if d.Tasks == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"detached": false})
+		return
+	}
+	taskID, ok := d.Tasks.DetachChildOf(id)
+	writeJSON(w, http.StatusOK, map[string]any{"detached": ok, "task_id": taskID})
+}
+
 // heldUntilIdle names the command in text that must not be injected into
 // a running turn, or "".
 //
@@ -492,6 +510,8 @@ func heldUntilIdle(text string) string {
 		return "/clear"
 	case "/rewind":
 		return "/rewind"
+	case "/redo":
+		return "/redo"
 	case "/workspace":
 		// Only the form that moves it. Bare "/workspace" reads the
 		// directory back, and refusing a read because a turn is running

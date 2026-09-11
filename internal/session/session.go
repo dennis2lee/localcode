@@ -94,6 +94,24 @@ type Session struct {
 	// hand: it is what conversations set before this existed, and
 	// dropping it would silently reset them.
 	Efforts map[string]string `json:"efforts,omitempty"`
+
+	// Profiles is the model this conversation chose, per agent, as a
+	// profile name.
+	//
+	// A profile rather than a bare model id, and that is the whole
+	// design. A model does not travel alone: it comes with the provider
+	// that serves it, the token ceiling that fits it, the context window
+	// it really has. Storing "use claude-opus-5 here" against an agent
+	// pointed at a local vLLM would name a model that provider cannot
+	// serve, so what is stored is the profile that already knows all of
+	// it — and the agent keeps its own prompt, its own tools and its own
+	// permissions, which is what makes this a model choice rather than
+	// an agent switch.
+	//
+	// Keyed by agent for the reason Efforts is keyed by model: agents
+	// are pointed at models that suit them, and a choice made while
+	// talking to one should not follow you to another.
+	Profiles map[string]string `json:"profiles,omitempty"`
 }
 
 // Permissions is a session's own answer to the four permission switches.
@@ -619,7 +637,52 @@ func (s *Store) EffortFor(sessionID, model string) string {
 // Called with s.mu held, on every path that hands a Session out.
 func detach(meta Session) Session {
 	meta.Efforts = cloneEfforts(meta.Efforts)
+	meta.Profiles = cloneEfforts(meta.Profiles)
 	return meta
+}
+
+// SetSessionProfile records the profile this conversation uses for one
+// agent, or clears it with "" so the agent's own applies again.
+func (s *Store) SetSessionProfile(sessionID, agent, profile string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	if agent == "" {
+		return nil, fmt.Errorf("a profile is chosen for an agent, and none was named")
+	}
+	if profile == "" {
+		delete(st.meta.Profiles, agent)
+		if len(st.meta.Profiles) == 0 {
+			st.meta.Profiles = nil
+		}
+	} else {
+		if st.meta.Profiles == nil {
+			st.meta.Profiles = map[string]string{}
+		}
+		st.meta.Profiles[agent] = profile
+	}
+	metaCopy := detach(st.meta)
+	if s.dir != "" {
+		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
+			return nil, err
+		}
+	}
+	return &metaCopy, nil
+}
+
+// ProfileFor is the profile this conversation chose for one agent, or ""
+// when it has not chosen one.
+func (s *Store) ProfileFor(sessionID, agent string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return ""
+	}
+	return st.meta.Profiles[agent]
 }
 
 // cloneEfforts copies the map so a returned Session cannot be used to

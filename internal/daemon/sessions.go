@@ -181,6 +181,14 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	if src.Effort != "" {
 		_, _ = d.Loop.Store.SetEffort(newID, "", src.Effort)
 	}
+	// And which model it answers on, for exactly the same reason: a fork
+	// that quietly went back to the agent's own model would be answering
+	// as something else, with nothing on screen saying so.
+	for agentName, profile := range src.Profiles {
+		if _, err := d.Loop.Store.SetSessionProfile(newID, agentName, profile); err != nil {
+			break
+		}
+	}
 
 	// The first line of the fork's transcript says what it is.
 	//

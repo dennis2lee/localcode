@@ -60,7 +60,7 @@ func runDaemon(configPath, listen string) error {
 	// TestEveryStartupModeTriesToUpdate.
 	autoUpdateAtStartup(d, os.Stderr)
 
-	if binary, ok := startupHandoffBinary(d, os.Stderr); ok {
+	if binary, ok := startupHandoffBinary(d, os.Stderr, selfRestartAvailable); ok {
 		cleanupOnce_()
 		return superviseSuccessor(binary, ln)
 	}
@@ -176,7 +176,15 @@ func runGUI(configPath string) error {
 		// two routes that open native dialogs stay here. This was
 		// described in v0.88.0 and not wired; the window built its daemon
 		// in-process every start and never asked.
-		if binary, ok := startupHandoffBinary(d, os.Stderr); ok {
+		// false, on every platform: this process is holding a native
+		// window, so it cannot exec into the new version whatever the
+		// platform allows. Before this the window asked the platform
+		// instead, and on macOS and Linux the platform said "you can
+		// exec" — so the handoff was skipped, and the exec that would
+		// have replaced it was never called either, because runGUI has
+		// never called autoUpdateAtStartup. A window simply never updated
+		// itself at startup there.
+		if binary, ok := startupHandoffBinary(d, os.Stderr, false); ok {
 			coming := ""
 			if v, verr := update.VersionOf(binary); verr == nil {
 				coming = v
@@ -203,7 +211,12 @@ func runGUI(configPath string) error {
 				ln.Close()
 				cleanupOnce_()
 				cleanup = nil
-				return successorProxy(addr), nil
+				// d is not served any more, and is kept anyway: it
+				// is the only thing in this process that knows how to
+				// install a release, and its version is the installed
+				// copy's rather than the staged one's. See
+				// successorProxy.
+				return successorProxy(addr, d.Handler()), nil
 			}
 		}
 
@@ -327,7 +340,7 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 	// state a "/update" handoff leaves things in, arrived at from the
 	// start. The daemon built above is torn down; the successor builds
 	// its own.
-	if binary, ok := startupHandoffBinary(d, os.Stderr); ok {
+	if binary, ok := startupHandoffBinary(d, os.Stderr, selfRestartAvailable); ok {
 		cleanupOnce_()
 		return runTUIBehindSuccessor(binary, got.ln, listen, agentName)
 	}

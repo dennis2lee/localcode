@@ -97,6 +97,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendLocal("Deleted this conversation. It does not come back.")
 		return m, m.fetchLanding()
 
+	case detachedMsg:
+		switch {
+		case msg.err != nil:
+			m.errMsg = fmt.Sprintf("could not let go of the sub-agent: %v", msg.err)
+		case msg.detached:
+			m.appendLocal("Let go of " + msg.taskID + ". It keeps working; read what it says with /tasks " + msg.taskID + ".")
+		default:
+			m.appendLocal("Nothing to let go of: this turn is not waiting on a sub-agent.")
+		}
+		return m, nil
+
+	case modelViewMsg:
+		return m.handleModelView(msg)
+
 	case landingSessionsMsg:
 		return m.handleLandingSessions(msg)
 
@@ -477,6 +491,71 @@ func (m *Model) reopenCurrent() tea.Cmd {
 // conversation is on: Anthropic's newest families have one switch where
 // muse has four steps, and a picker with its own list offers steps that
 // do nothing.
+// handleModelView takes the daemon's answer about which model answers
+// here, and opens the picker on it when that is what was asked.
+//
+// One list with both kinds in it, agents first. They are two different
+// operations — an agent brings a prompt and a tool allowlist with it, a
+// profile changes only the model — and the reason to show them together
+// is that "which model answers" is one question a person has, and making
+// them know which of the two words they want before they can look is the
+// thing that sent them to config.json.
+func (m Model) handleModelView(msg modelViewMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.errMsg = fmt.Sprintf("model: %v", msg.err)
+		return m, nil
+	}
+	m.model = msg.view
+	if !msg.pick {
+		return m, nil
+	}
+
+	items := make([]pickerItem, 0, len(m.agents)+len(msg.view.Choices)+1)
+	for _, a := range m.agents {
+		label := "agent " + a.Name
+		if a.Name == m.currentAgent {
+			label += "  (current)"
+		}
+		detail := a.Model
+		if detail == "" {
+			detail = a.Description
+		}
+		items = append(items, pickerItem{id: "agent:" + a.Name, label: label, detail: detail})
+	}
+	for _, c := range msg.view.Choices {
+		label := "model " + c.Profile
+		if c.Current && msg.view.Source == "conversation" {
+			label += "  (in force)"
+		}
+		detail := c.Model
+		if c.Provider != "" {
+			detail += "  on " + c.Provider
+		}
+		items = append(items, pickerItem{id: "profile:" + c.Profile, label: label, detail: detail})
+	}
+	// Last, and always, for the reason the effort picker's is: handing
+	// the answer back to the agent is a choice rather than a tidy-up, and
+	// a conversation that never chose and one that chose the agent's own
+	// profile only look alike until the agent is switched.
+	back := "use the agent's model"
+	if msg.view.Source == "agent" {
+		back += "  (in force)"
+	}
+	items = append(items, pickerItem{id: "profile:", label: back})
+
+	cmd := m.openPicker(&picker{
+		title: "Who answers, and on what",
+		items: items,
+		onPick: func(m *Model, it pickerItem) tea.Cmd {
+			if name, ok := strings.CutPrefix(it.id, "agent:"); ok {
+				return m.switchAgent(name)
+			}
+			return m.setModel(strings.TrimPrefix(it.id, "profile:"))
+		},
+	}, "No agents or profiles configured.")
+	return m, cmd
+}
+
 func (m Model) handleEffortMsg(msg effortMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.errMsg = fmt.Sprintf("effort: %v", msg.err)

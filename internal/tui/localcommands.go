@@ -110,28 +110,24 @@ func localCommands() []localCommand {
 			name:     "/model",
 			aliases:  []string{"/models", "/mo"},
 			takesArg: true,
-			help:     "pick the agent (and so the model) to answer with; /model <name> switches directly",
+			help:     "pick which model answers; an agent name switches agent, a profile keeps the agent and changes the model",
 			run: func(m *Model, arg string) tea.Cmd {
 				if arg != "" {
-					return m.switchAgent(arg)
-				}
-				items := make([]pickerItem, 0, len(m.agents))
-				for _, a := range m.agents {
-					label := a.Name
-					if a.Name == m.currentAgent {
-						label += "  (current)"
+					// An agent name switches agent, which is what this
+					// command has always done. Anything else is asked of
+					// the daemon as a profile, so "/model sonnet" works
+					// without anybody having written an agent for it —
+					// and the daemon's refusal names the choices.
+					for _, a := range m.agents {
+						if strings.EqualFold(a.Name, arg) {
+							return m.switchAgent(a.Name)
+						}
 					}
-					detail := a.Model
-					if detail == "" {
-						detail = a.Description
-					}
-					items = append(items, pickerItem{id: a.Name, label: label, detail: detail})
+					return m.setModel(arg)
 				}
-				return m.openPicker(&picker{
-					title:  "Agents",
-					items:  items,
-					onPick: func(m *Model, it pickerItem) tea.Cmd { return m.switchAgent(it.id) },
-				}, "No agents registered.")
+				// One round trip, because which profiles exist is the
+				// daemon's answer and a config edit can change it.
+				return m.fetchModel(true)
 			},
 		},
 		{
@@ -304,6 +300,7 @@ const serverSideHelpText = `  /skill              list registered skills
   /update             install the newest release and move the daemon onto it; the terminal keeps running
   /reset-mcp          reconnect MCP servers and pick up config changes, no restart
   /reset-skills       reload skills from disk, no restart
+  /redo               put back the turn /rewind just undid
   /status             what is attached: MCP servers and whether they work, skills, commands, agents
   /debug              what this build is, in a block to paste into a bug report
   /workspace [path]   the directory this conversation works in; a path moves it

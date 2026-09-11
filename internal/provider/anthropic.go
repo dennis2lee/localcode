@@ -150,6 +150,8 @@ type anthRequest struct {
 	ToolChoice  *anthToolChoice `json:"tool_choice,omitempty"`
 	MaxTokens   int             `json:"max_tokens"`
 	Temperature float64         `json:"temperature,omitempty"`
+	TopP        *float64        `json:"top_p,omitempty"`
+	TopK        *int            `json:"top_k,omitempty"`
 	Stream      bool            `json:"stream"`
 	Thinking    *anthThinking   `json:"thinking,omitempty"`
 }
@@ -330,6 +332,20 @@ func temperatureFor(req ChatRequest) float64 {
 	return req.Temperature
 }
 
+// samplingFor is top_p and top_k under the same rule temperatureFor
+// applies to temperature: while the model is reasoning, the API decides
+// how it samples and refuses a request that also says. It is stricter
+// here than for temperature — top_k is not accepted with extended
+// thinking at all, and top_p only inside a narrow band — so both are
+// dropped rather than narrowed, which leaves a profile free to carry a
+// sampling recipe and ask for reasoning without the two colliding.
+func samplingFor(req ChatRequest) (*float64, *int) {
+	if anthropicThinking(req.Model, req.Effort, req.MaxTokens) != nil {
+		return nil, nil
+	}
+	return req.TopP, req.TopK
+}
+
 // answerReserve is how much of the output cap is kept back for the answer
 // when reasoning takes a budget out of it.
 //
@@ -505,6 +521,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		Thinking:  anthropicThinking(req.Model, req.Effort, req.MaxTokens),
 	}
 	body.Temperature = temperatureFor(req)
+	body.TopP, body.TopK = samplingFor(req)
 	if req.ToolChoice == ToolChoiceNone && len(tools) > 0 {
 		body.ToolChoice = &anthToolChoice{Type: "none"}
 	}

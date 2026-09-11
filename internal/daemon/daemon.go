@@ -259,6 +259,8 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("DELETE /api/sessions/{id}/schedules/{sid}", d.handleDeleteSchedule)
 	d.mux.HandleFunc("GET /api/sessions/{id}/effort", d.handleGetSessionEffort)
 	d.mux.HandleFunc("POST /api/sessions/{id}/effort", d.handleSetSessionEffort)
+	d.mux.HandleFunc("GET /api/sessions/{id}/model", d.handleGetSessionModel)
+	d.mux.HandleFunc("POST /api/sessions/{id}/model", d.handleSetSessionModel)
 	d.mux.HandleFunc("GET /api/sessions/{id}/permissions", d.handleGetSessionPermissions)
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions", d.handleSetSessionPermission)
 	d.mux.HandleFunc("POST /api/sessions/{id}/permissions/forget", d.handleForgetSessionOutside)
@@ -267,6 +269,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/sessions/{id}/tasks", d.handleSpawnTask)
 	d.mux.HandleFunc("GET /api/sessions/{id}/tasks", d.handleListTasks)
 	d.mux.HandleFunc("POST /api/sessions/{id}/cancel", d.handleCancelTurn)
+	d.mux.HandleFunc("POST /api/sessions/{id}/detach", d.handleDetachChild)
 	d.mux.HandleFunc("POST /api/tasks/{taskId}/cancel", d.handleCancelTask)
 	d.mux.HandleFunc("GET /api/tasks/{taskId}/output", d.handleTaskOutput)
 

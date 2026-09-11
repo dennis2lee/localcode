@@ -179,6 +179,41 @@ func (m Model) setEffort(level string) tea.Cmd {
 	}
 }
 
+// fetchModel reads which model this conversation answers on. pick opens
+// the picker on the answer, so "/model" is one round trip rather than a
+// list written from a cache that may be a config edit out of date.
+func (m Model) fetchModel(pick bool) tea.Cmd {
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		defer cancel()
+		view, err := m.client.GetModel(ctx, sessionID)
+		return modelViewMsg{view: view, pick: pick, err: err}
+	}
+}
+
+// setModel points this conversation at a profile, or clears it with "".
+func (m Model) setModel(profile string) tea.Cmd {
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		defer cancel()
+		view, err := m.client.SetModel(ctx, sessionID, profile)
+		return modelViewMsg{view: view, err: err}
+	}
+}
+
+// detachChild lets go of the sub-agent this turn is waiting on.
+func (m Model) detachChild() tea.Cmd {
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		defer cancel()
+		taskID, ok, err := m.client.DetachChild(ctx, sessionID)
+		return detachedMsg{taskID: taskID, detached: ok, err: err}
+	}
+}
+
 // nextEffort is the level after the one in force, wrapping at the end.
 //
 // Read off the view the footer already shows rather than fetched, so the

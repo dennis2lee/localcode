@@ -128,19 +128,39 @@ func TestASearchIsStoppedInFlight(t *testing.T) {
 		{"grep", Grep{}, `{"pattern":"needle","path":"."}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			ctx = WithWorkingDir(ctx, root)
+			// How long this search takes here, measured rather than
+			// assumed. The first version of this test slept a fixed 2ms
+			// and asserted the search had not finished, which was only
+			// ever true under -race: the gate runs `go test -race`, that
+			// is five to ten times slower, and the same test run without
+			// it walked the whole tree inside the sleep and failed. A
+			// number taken from one machine under one build mode is not
+			// a property of the code.
+			base := WithWorkingDir(context.Background(), root)
+			start := time.Now()
+			if res := c.tool.Execute(base, json.RawMessage(c.input)); res.IsError {
+				t.Fatalf("%s: %s", c.name, res.Content)
+			}
+			full := time.Since(start)
+
+			ctx, cancel := context.WithCancel(base)
 			done := make(chan Result, 1)
 			go func() { done <- c.tool.Execute(ctx, json.RawMessage(c.input)) }()
-			// Long enough for the search to be under way, short enough
-			// that it cannot have finished: the whole tree walks in about
-			// a second.
-			time.Sleep(2 * time.Millisecond)
+			// A tenth of the way in: under way on any machine, and
+			// nowhere near done on any machine.
+			time.Sleep(full / 10)
+			cancelled := time.Now()
 			cancel()
 			select {
 			case res := <-done:
 				if !strings.Contains(res.Content, "cancelled") {
 					t.Errorf("a %s stopped in flight answered %.60q", c.name, res.Content)
+				}
+				// And promptly, which is the property the whole thing is
+				// for: a walk that only checked at the top would return
+				// the cancellation eventually, after finishing.
+				if took := time.Since(cancelled); took > full/2 {
+					t.Errorf("a %s took %v to notice the stop, with a full search taking %v", c.name, took, full)
 				}
 			case <-time.After(10 * time.Second):
 				t.Fatalf("a %s stopped in flight never returned", c.name)

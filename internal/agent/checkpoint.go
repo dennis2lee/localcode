@@ -142,6 +142,40 @@ func (l *Loop) CheckpointWrite(ctx context.Context, tool, path string) {
 	l.Store.Append(sessionID, events.TypeCheckpoint, data)
 }
 
+// keepPostImage copies what is at path right now and returns its hash, or
+// "" when there is nothing to keep.
+//
+// Called from a rewind, just before the pre-image goes back, which is the
+// one moment the turn's own result is still on disk. That is the whole
+// reason redo is possible at all: the pre-images are kept as a matter of
+// course and the post-images are not, so they have to be taken at the
+// moment they are about to be overwritten.
+//
+// The same content-addressed store the pre-images use, so a rewind
+// immediately followed by a redo stores nothing new: the post-image of a
+// file the turn left unchanged hashes to the pre-image already there.
+func (l *Loop) keepPostImage(sessionID, path string) (hash string, mode uint32, ok bool) {
+	dir := l.checkpointRoot()
+	if dir == "" {
+		return "", 0, false
+	}
+	info, err := os.Lstat(path)
+	switch {
+	case err != nil, !info.Mode().IsRegular(), info.Size() > maxCheckpointBytes:
+		return "", 0, false
+	}
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return "", 0, false
+	}
+	sum := sha256.Sum256(blob)
+	h := hex.EncodeToString(sum[:])
+	if err := writeBlob(checkpointDir(dir, sessionID), h, blob); err != nil {
+		return "", 0, false
+	}
+	return h, uint32(info.Mode().Perm()), true
+}
+
 // checkpointRoot is the session directory, or "" for a store that keeps
 // nothing on disk.
 func (l *Loop) checkpointRoot() string {

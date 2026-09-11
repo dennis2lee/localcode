@@ -291,6 +291,16 @@ const handlers = {
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     }
   },
+  // Which model answers here, chosen apart from which agent does — here
+  // or in another client. Carried in the event rather than fetched, so a
+  // client that opens the session later replays it.
+  'model.changed': (d) => {
+    // Only a choice this conversation made. Back on the agent's own, the
+    // status bar goes back to reading it from the agent, which is where
+    // it will stay correct when the agent is switched.
+    session.chosenModel = d.source === 'conversation' ? (d.model || '') : '';
+    renderStatusBar();
+  },
   // A conversation moved to another directory, here or in the terminal.
   // The button names the workspace, and a button naming the old one is
   // how a file lands in the wrong project.
@@ -299,6 +309,13 @@ const handlers = {
       app.workspacePath = d.path;
       renderWorkspace();
     }
+  },
+  redone: (d) => {
+    const files = [];
+    if (d.written) files.push(`${d.written} file(s) written again`);
+    if (d.skipped) files.push(`${d.skipped} left alone`);
+    const what = d.turn_text ? `: ${d.turn_text}` : '';
+    appendTool(`[system] put the turn back${what}${files.length ? ' — ' + files.join(', ') : ''}.`);
   },
   compacted: (d) => {
     appendTool(`[system] conversation compacted to save context (summary: ${d.summary_length || 0} chars).`);

@@ -66,6 +66,14 @@ type oaRequest struct {
 	MaxTokens   int     `json:"max_tokens,omitempty"`
 	Temperature float64 `json:"temperature,omitempty"`
 
+	// TopP is in the OpenAI schema. TopK is not — it is a vLLM
+	// extension, which is where it is wanted: muse's own recipe names
+	// top_k 64 alongside temperature 1.0 and top_p 0.95. Both are sent
+	// only when a profile asked, so a server that has never heard of
+	// top_k only ever sees it from somebody who set it deliberately.
+	TopP *float64 `json:"top_p,omitempty"`
+	TopK *int     `json:"top_k,omitempty"`
+
 	// StreamOptions requests a final usage-only chunk (empty "choices")
 	// at the end of the stream — an OpenAI-compat server that doesn't
 	// recognize this field just ignores it, so it's safe to always send.
@@ -249,6 +257,8 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		Stream:        true,
 		MaxTokens:     req.MaxTokens,
 		Temperature:   req.Temperature,
+		TopP:          req.TopP,
+		TopK:          req.TopK,
 		StreamOptions: &oaStreamOptions{IncludeUsage: true},
 		// "off" is not sent as a level. The field's own vocabulary is
 		// low/medium/high, servers disagree about whether there is a word

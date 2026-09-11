@@ -87,7 +87,11 @@ func windowHandoff(d *daemon.Daemon, front *swapHandler, alive *tuiAlivePipe, cl
 	if !d.Retire(ctx, version, pid) {
 		fmt.Fprintf(os.Stderr, "handoff: some work did not finish within %s and was stopped\n", retireTimeout)
 	}
-	front.Store(successorProxy(addr))
+	// No installer kept here. This handoff happens because somebody has
+	// just installed an update, and the daemon being retired is the one
+	// that did it — asking it again would offer the release it has
+	// already applied.
+	front.Store(successorProxy(addr, nil))
 	cleanup()
 	// A moment for the streams the retiring daemon just ended to close
 	// on the page's side before it is told to load again, so the reload

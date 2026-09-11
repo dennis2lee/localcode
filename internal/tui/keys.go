@@ -32,6 +32,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, tea.Quit, true
 
+	case "ctrl+b":
+		// Let go of the sub-agent this turn is waiting on, so the turn
+		// carries on and the sub-agent keeps working. Esc is the other
+		// answer to the same moment and throws the work away; this one
+		// is for a sub-agent that is doing something useful and slow.
+		return m, m.detachChild(), true
+
 	case "ctrl+e":
 		// One key steps to the next level this model tells apart.
 		// "/effort-set" opens the same list; this is for dialling it up

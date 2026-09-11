@@ -126,6 +126,12 @@ type ChatRequest struct {
 	MaxTokens    int
 	Temperature  float64
 
+	// TopP and TopK are the rest of the sampling family, nil when the
+	// profile did not ask. See config.Profile for what each reaches on
+	// which backend, and why they are pointers.
+	TopP *float64
+	TopK *int
+
 	// CachePrefix asks the backend to mark prompt-cache breakpoints,
 	// where it has them to mark. Two go at the end of the stable part —
 	// the tool schemas and the system prompt, byte-identical from turn

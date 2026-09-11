@@ -49,6 +49,22 @@ type TaskManager struct {
 	// the cancel is removed on the way out, while the turn may still be
 	// finishing a tool call and appending to the log.
 	done map[string]chan struct{}
+
+	// detach is how a synchronous sub-agent is let go: closing the
+	// channel unblocks the parent turn that is waiting on it and leaves
+	// the child running as an ordinary background task.
+	//
+	// It exists because a synchronous delegation had exactly two
+	// endings, finish or be killed, and the common third case had
+	// neither: the sub-agent is doing something useful and slow, and the
+	// person wants their own turn back. Stopping it threw the work away.
+	//
+	// syncParent is the other half, so "let go of whatever is blocking
+	// this conversation" can be asked without knowing a task id — which
+	// is how it is actually asked, since the id is on a line that has
+	// scrolled away.
+	detach     map[string]chan struct{}
+	syncParent map[string]string
 }
 
 func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *TaskManager {
@@ -56,15 +72,17 @@ func NewTaskManager(rootCtx context.Context, loop *Loop, maxConcurrent int) *Tas
 		maxConcurrent = 1
 	}
 	tm := &TaskManager{
-		loop:    loop,
-		sem:     make(chan struct{}, maxConcurrent),
-		lanes:   newLanes(loop.Config),
-		rootCtx: rootCtx,
-		cancels: map[string]context.CancelFunc{},
-		waiters: map[string]chan struct{}{},
-		results: map[string]taskOutcome{},
-		pending: map[string][]string{},
-		done:    map[string]chan struct{}{},
+		loop:       loop,
+		sem:        make(chan struct{}, maxConcurrent),
+		lanes:      newLanes(loop.Config),
+		rootCtx:    rootCtx,
+		cancels:    map[string]context.CancelFunc{},
+		detach:     map[string]chan struct{}{},
+		syncParent: map[string]string{},
+		waiters:    map[string]chan struct{}{},
+		results:    map[string]taskOutcome{},
+		pending:    map[string][]string{},
+		done:       map[string]chan struct{}{},
 	}
 	// Back-reference so the loop can delegate a turn on its own (see
 	// Loop.delegatePrompt) rather than only when the model calls the Task
@@ -483,22 +501,38 @@ func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, 
 	// rather than only knowing about the tasks it launched itself. The
 	// registration is the last thing inside the admission window: after
 	// this the child is visible to a claim.
-	ctx, cancel := context.WithCancel(ctx)
+	// The child runs under a context of its own rather than the caller's,
+	// and the link to the caller is a goroutine rather than the context
+	// tree. That is what makes letting go possible at all: a context
+	// cannot change parents once it is built, so a child derived from the
+	// parent turn dies with the parent turn and could never outlive it.
+	//
+	// While it is attached the watcher below reproduces exactly the old
+	// behaviour — the parent turn ending or being cancelled cancels the
+	// child. Once it is let go, the watcher stops watching and the child
+	// carries on as an ordinary background task.
+	parentCtx := ctx
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	syncDone := make(chan struct{})
+	detached := make(chan struct{})
 	tm.mu.Lock()
 	tm.cancels[taskID] = cancel
 	tm.done[taskID] = syncDone
+	tm.detach[taskID] = detached
+	tm.syncParent[taskID] = parentSessionID
 	tm.mu.Unlock()
 	tm.loop.lifecycle.admitted(parentSessionID)
 
-	defer func() {
+	release := func() {
 		tm.mu.Lock()
 		delete(tm.cancels, taskID)
 		delete(tm.done, taskID)
+		delete(tm.detach, taskID)
+		delete(tm.syncParent, taskID)
 		tm.mu.Unlock()
 		cancel()
 		close(syncDone)
-	}()
+	}
 
 	// No semaphore here, deliberately.
 	//
@@ -518,25 +552,120 @@ func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, 
 	// the provider is therefore the number of concurrent top-level turns,
 	// which was never gated by this semaphore either. Background
 	// delegation is the one that fans out, and it still queues here.
-	if err := ctx.Err(); err != nil {
+	if err := parentCtx.Err(); err != nil {
+		release()
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "cancelled"})
 		return taskID, "", err
 	}
 
 	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "running"})
 
-	// The task travels with the child's own turn, so the request that
-	// actually contains it is the one whose manifest names it.
-	err := tm.loop.SendMessage(withDelegatedTask(ctx, agentName, prompt), taskID, agentName, prompt)
-	if err != nil {
-		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
-			"task_id": taskID, "status": "failed", "error": err.Error(),
-		})
-		return taskID, "", err
-	}
+	// The parent's cancellation, carried by hand for as long as this
+	// child is still the parent's to cancel.
+	go func() {
+		select {
+		case <-parentCtx.Done():
+			select {
+			case <-detached:
+				// Let go first. The parent's turn ending is no longer
+				// anything to do with this child.
+			default:
+				cancel()
+			}
+		case <-detached:
+		case <-syncDone:
+		}
+	}()
 
-	tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "completed"})
-	return taskID, lastAssistantText(tm.loop.Store, taskID), nil
+	type syncResult struct {
+		text string
+		err  error
+	}
+	answered := make(chan syncResult, 1)
+	go func() {
+		defer release()
+		// The task travels with the child's own turn, so the request that
+		// actually contains it is the one whose manifest names it.
+		err := tm.loop.SendMessage(withDelegatedTask(ctx, agentName, prompt), taskID, agentName, prompt)
+		if err != nil {
+			tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
+				"task_id": taskID, "status": "failed", "error": err.Error(),
+			})
+			answered <- syncResult{err: err}
+			return
+		}
+		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "completed"})
+		answered <- syncResult{text: lastAssistantText(tm.loop.Store, taskID)}
+	}()
+
+	select {
+	case r := <-answered:
+		return taskID, r.text, r.err
+	case <-detached:
+		// The caller gets its turn back and the child keeps working. What
+		// it eventually says is read the way every other background
+		// task's answer is — "/tasks <id>", the task panel — rather than
+		// spliced into a conversation that has moved on without it.
+		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{
+			"task_id": taskID, "status": "detached",
+		})
+		return taskID, detachedNote(taskID, agentName), nil
+	}
+}
+
+// detachedNote is what the model is told in place of the answer it was
+// waiting for.
+//
+// It says the work is still happening rather than that it failed,
+// because a model handed "the task was cancelled" reasonably starts it
+// again — which is two sub-agents doing the same job, one of them
+// invisible.
+func detachedNote(taskID, agentName string) string {
+	return fmt.Sprintf("The %s sub-agent for this step is still working; it was moved into the background as %s "+
+		"so this turn could carry on. Do not start it again. Its answer will be readable with \"/tasks %s\" "+
+		"when it finishes.", agentName, taskID, taskID)
+}
+
+// Detach lets go of one synchronous sub-agent, and reports whether there
+// was one to let go of.
+func (tm *TaskManager) Detach(taskID string) bool {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	ch, ok := tm.detach[taskID]
+	if !ok {
+		return false
+	}
+	select {
+	case <-ch:
+		// Already let go. Closing it twice would panic, and asking twice
+		// is what a person does when the first one looked like nothing.
+		return false
+	default:
+		close(ch)
+	}
+	return true
+}
+
+// DetachChildOf lets go of whatever synchronous sub-agent is blocking one
+// conversation, and names it.
+//
+// By conversation rather than by task id, because that is how it is
+// asked: the id was printed on a line that has scrolled away, and the
+// question a person has is "give me my turn back".
+func (tm *TaskManager) DetachChildOf(parentSessionID string) (string, bool) {
+	tm.mu.Lock()
+	var taskID string
+	for id, parent := range tm.syncParent {
+		if parent == parentSessionID {
+			taskID = id
+			break
+		}
+	}
+	tm.mu.Unlock()
+	if taskID == "" {
+		return "", false
+	}
+	return taskID, tm.Detach(taskID)
 }
 
 // lastAssistantText finds the most recent message.part.end event in a

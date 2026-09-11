@@ -112,6 +112,7 @@ export const rightPanel = document.getElementById('right-panel');
 export const resizeLeftHandle = document.getElementById('resize-left');
 export const resizeRightHandle = document.getElementById('resize-right');
 export const stopBtn = document.getElementById('stop-btn');
+export const detachBtn = document.getElementById('detach-btn');
 export const toggleLeftBtn = document.getElementById('toggle-left');
 export const toggleRightBtn = document.getElementById('toggle-right');
 export const appVersionEl = document.getElementById('app-version');

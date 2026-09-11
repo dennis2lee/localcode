@@ -56,3 +56,25 @@ test('rewinding does not overwrite something already typed', async () => {
   // What is in the box is a newer intention than the one being undone.
   assert.equal(app.el('input').value, 'something else entirely');
 });
+
+test('a model chosen apart from the agent shows in the status bar', async () => {
+  const app = await load();
+  app.sse.emit({
+    type: 'model.changed',
+    data: { agent: 'general-purpose', profile: 'big', model: 'a-much-larger-model', source: 'conversation' },
+  });
+
+  assert.equal(app.state.chosenModel, 'a-much-larger-model');
+  assert.match(app.el('status-text').textContent, /a-much-larger-model/);
+});
+
+test('going back to the agent stops overriding the readout', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'model.changed', data: { model: 'a-much-larger-model', source: 'conversation' } });
+  app.sse.emit({ type: 'model.changed', data: { model: 'muse-glimmer-30b', source: 'agent' } });
+
+  // Cleared rather than pinned to the agent's current model: the status
+  // bar reads that from the agent, which is where it stays right when the
+  // agent is switched.
+  assert.equal(app.state.chosenModel, '');
+});

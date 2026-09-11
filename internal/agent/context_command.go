@@ -94,7 +94,7 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 	// request that would actually be sent rather than one built under a
 	// setting that could differ by the time it is.
 	ctx = l.pinSmart(ctx)
-	profileName, profile, err := l.profileFor(ctx, agentName)
+	profileName, profile, err := l.profileFor(ctx, sessionID, agentName)
 	if err != nil {
 		return l.replyLocal(sessionID, displayText, "Cannot describe the context: "+err.Error())
 	}

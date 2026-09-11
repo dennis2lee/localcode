@@ -139,7 +139,12 @@ type Model struct {
 	// model it is on tells apart. Fetched on a switch and after a change,
 	// because both the answer and the list of choices belong to the
 	// conversation and to its model.
-	effort       client.EffortView
+	effort client.EffortView
+	// model is which model this conversation answers on when it has
+	// chosen one apart from the agent's. Zero until a model.changed
+	// event or a /model lands, which is exactly when the footer should
+	// stop naming the agent's own.
+	model        client.ModelView
 	agents       []client.AgentInfo
 	commandsList []client.CommandInfo
 	skillsList   []client.SkillInfo
