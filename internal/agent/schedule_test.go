@@ -302,6 +302,7 @@ func TestAnUnattendedTurnDoesNotWaitForeverForPermission(t *testing.T) {
 // An attended turn is unaffected: it waits, because somebody is there.
 func TestAnAttendedTurnStillWaits(t *testing.T) {
 	store, _ := session.NewStore("")
+	t.Cleanup(store.Close)
 	store.CreateSession("s1", "", "general-purpose", true)
 	broker := NewPermissionBroker(store)
 	restore := SetUnattendedWait(20 * time.Millisecond)

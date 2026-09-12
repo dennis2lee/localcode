@@ -36,6 +36,7 @@ func TestCreateSessionAndGet(t *testing.T) {
 
 func TestCreateSessionDuplicateID(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("dup", "", "a", true); err != nil {
 		t.Fatalf("first CreateSession: %v", err)
 	}
@@ -46,6 +47,7 @@ func TestCreateSessionDuplicateID(t *testing.T) {
 
 func TestSetAgentUpdatesSessionAndPersistsAcrossGet(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "plan", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -69,6 +71,7 @@ func TestSetAgentUpdatesSessionAndPersistsAcrossGet(t *testing.T) {
 
 func TestSetAgentUnknownSession(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.SetAgent("nope", "build"); err == nil {
 		t.Error("expected an error switching the agent of an unknown session")
 	}
@@ -76,6 +79,7 @@ func TestSetAgentUnknownSession(t *testing.T) {
 
 func TestGetUnknownSession(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.Get("nope"); err == nil {
 		t.Error("expected an error getting an unknown session")
 	}
@@ -83,6 +87,7 @@ func TestGetUnknownSession(t *testing.T) {
 
 func TestSetTitleUpdatesSessionAndPersistsAcrossGet(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -106,6 +111,7 @@ func TestSetTitleUpdatesSessionAndPersistsAcrossGet(t *testing.T) {
 
 func TestSetTitleUnknownSession(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.SetTitle("nope", "x"); err == nil {
 		t.Error("expected an error renaming an unknown session")
 	}
@@ -113,6 +119,7 @@ func TestSetTitleUnknownSession(t *testing.T) {
 
 func TestDeleteRemovesSessionFromStore(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -127,6 +134,7 @@ func TestDeleteRemovesSessionFromStore(t *testing.T) {
 
 func TestDeleteUnknownSession(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if err := s.Delete("nope"); err == nil {
 		t.Error("expected an error deleting an unknown session")
 	}
@@ -159,6 +167,7 @@ func TestDeleteRemovesPersistedFile(t *testing.T) {
 
 func TestDeleteThenRecreateSameID(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -172,6 +181,7 @@ func TestDeleteThenRecreateSameID(t *testing.T) {
 
 func TestDeleteAllRemovesEveryVisibleAndChildSession(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession s1: %v", err)
 	}
@@ -227,6 +237,7 @@ func TestDeleteAllRemovesPersistedFiles(t *testing.T) {
 
 func TestDeleteAllOnEmptyStoreIsNoop(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if err := s.DeleteAll(); err != nil {
 		t.Errorf("DeleteAll on an empty store should not error, got %v", err)
 	}
@@ -234,6 +245,7 @@ func TestDeleteAllOnEmptyStoreIsNoop(t *testing.T) {
 
 func TestChildrenFiltersToParent(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	s.CreateSession("parent", "", "a", true)
 	s.CreateSession("other-parent", "", "a", true)
 	s.CreateSession("child1", "parent", "explore", false)
@@ -255,6 +267,7 @@ func TestChildrenFiltersToParent(t *testing.T) {
 
 func TestListVisibleExcludesBackgroundTasksNewestFirst(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	s.CreateSession("s1", "", "a", true)
 	time.Sleep(2 * time.Millisecond)
 	s.CreateSession("s2", "", "a", true)
@@ -271,6 +284,7 @@ func TestListVisibleExcludesBackgroundTasksNewestFirst(t *testing.T) {
 
 func TestAppendAssignsIncreasingSeq(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	s.CreateSession("s1", "", "a", true)
 
 	ev1, err := s.Append("s1", events.TypeUserMessage, map[string]any{"text": "hi"})
@@ -292,6 +306,7 @@ func TestAppendAssignsIncreasingSeq(t *testing.T) {
 
 func TestAppendUnknownSession(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, err := s.Append("nope", events.TypeError, nil); err == nil {
 		t.Error("expected an error appending to an unknown session")
 	}
@@ -299,6 +314,7 @@ func TestAppendUnknownSession(t *testing.T) {
 
 func TestEventsSinceFiltering(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	s.CreateSession("s1", "", "a", true)
 	s.Append("s1", events.TypeUserMessage, map[string]any{"n": 1})
 	s.Append("s1", events.TypeUserMessage, map[string]any{"n": 2})
@@ -331,6 +347,7 @@ func TestEventsSinceFiltering(t *testing.T) {
 
 func TestSubscribeReceivesLiveEventsAndClosesOnUnsubscribe(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	s.CreateSession("s1", "", "a", true)
 
 	ch, _, unsub, err := s.Subscribe("s1")
@@ -365,6 +382,7 @@ func TestSubscribeReceivesLiveEventsAndClosesOnUnsubscribe(t *testing.T) {
 
 func TestSubscribeUnknownSession(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	if _, _, _, err := s.Subscribe("nope"); err == nil {
 		t.Error("expected an error subscribing to an unknown session")
 	}
@@ -637,6 +655,7 @@ func TestTailSince(t *testing.T) {
 // beginning" is already what 0 means everywhere else.
 func TestTailSinceOnAShortLog(t *testing.T) {
 	store, _ := NewStore(t.TempDir())
+	t.Cleanup(store.Close)
 	store.CreateSession("s1", "", "general-purpose", true)
 	for i := 0; i < 5; i++ {
 		store.Append("s1", events.TypeUserMessage, map[string]any{"text": "q"})
@@ -667,6 +686,7 @@ func countExcludingDeltas(evs []events.Event) int {
 // must not quietly become "send the whole log".
 func TestTailSinceIsBoundedByAVeryLongTurn(t *testing.T) {
 	store, _ := NewStore(t.TempDir())
+	t.Cleanup(store.Close)
 	store.CreateSession("s1", "", "general-purpose", true)
 	for turn := 0; turn < 40; turn++ {
 		store.Append("s1", events.TypeUserMessage, map[string]any{"text": "q"})
@@ -693,6 +713,7 @@ func TestTailSinceIsBoundedByAVeryLongTurn(t *testing.T) {
 // makes re-opening a conversation mid-sentence show the sentence so far.
 func TestTailSinceKeepsAnUnfinishedReply(t *testing.T) {
 	store, _ := NewStore(t.TempDir())
+	t.Cleanup(store.Close)
 	store.CreateSession("s1", "", "general-purpose", true)
 	store.Append("s1", events.TypeUserMessage, map[string]any{"text": "q"})
 	for i := 0; i < 500; i++ {

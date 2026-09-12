@@ -210,6 +210,7 @@ func TestABackgroundTasksSessionCannotBeArchived(t *testing.T) {
 // and the first timestamp is the one that means something.
 func TestArchivingTwiceIsANoOpAndKeepsTheFirstTime(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	s.CreateSession("a", "", "general-purpose", true)
 
 	first, err := s.Archive("a")
@@ -239,6 +240,7 @@ func TestArchivingTwiceIsANoOpAndKeepsTheFirstTime(t *testing.T) {
 // of a hand-arranged list returns to the middle.
 func TestRetrieveRestoresThePlaceInAHandArrangedList(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	for _, id := range []string{"a", "b", "c", "d"} {
 		s.CreateSession(id, "", "general-purpose", true)
 	}
@@ -274,6 +276,7 @@ func TestRetrieveRestoresThePlaceInAHandArrangedList(t *testing.T) {
 // message, because the fix is its own: retrieve it first.
 func TestReorderingRefusesAnArchivedSession(t *testing.T) {
 	s, _ := NewStore("")
+	t.Cleanup(s.Close)
 	s.CreateSession("a", "", "general-purpose", true)
 	s.CreateSession("b", "", "general-purpose", true)
 	s.Archive("b")

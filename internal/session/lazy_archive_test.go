@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -264,6 +265,14 @@ func TestTheWholeShelvedTreeStaysOnDisk(t *testing.T) {
 // number breaks `since=` replay and Last-Event-ID resume for that
 // session permanently — the corruption parseLog's own comment describes.
 func TestAnUnreadableShelvedLogRefusesRatherThanCorrupts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The same class of skip as root below: this test makes a file
+		// unreadable and then reads it. Windows does not carry the read
+		// bit that os.Chmod sets, so the file stays readable and the
+		// premise never holds — the refusal being tested cannot happen
+		// there, rather than being broken there.
+		t.Skip("os.Chmod cannot make a file unreadable on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: an unreadable file is still readable")
 	}

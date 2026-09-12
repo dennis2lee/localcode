@@ -550,7 +550,11 @@ func TestDaemonSessionStartHookFires(t *testing.T) {
 	marker := filepath.Join(dir, "started")
 
 	d := newTestDaemon(t, model.URL)
-	d.Loop.Config.Hooks = hooks.Config{hooks.EventSessionStart: {{Command: "echo started > " + marker}}}
+	// Forward slashes, because the command goes to a shell rather than to
+	// the filesystem API. internal/shell prefers sh on Windows, where a
+	// backslash is an escape character, so a native path pasted into the
+	// command comes out mangled and the redirect writes somewhere else.
+	d.Loop.Config.Hooks = hooks.Config{hooks.EventSessionStart: {{Command: "echo started > " + filepath.ToSlash(marker)}}}
 	httpSrv := httptest.NewServer(d.Handler())
 	defer httpSrv.Close()
 
