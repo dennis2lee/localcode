@@ -9,7 +9,8 @@ Open and partial work remains in security, orchestration, and client behavior. T
 | Security | Network destination controls and structural source provenance in summaries |
 | Orchestration | Resume, loops, per-item pipelines, child-session retention, and permission feasibility |
 | Agent selection | Direct selection of dynamic Smart Agent specialists |
-| Client behavior | Rewind recovery, multiline TUI completion, and the UI items below |
+| Client behavior | Rewind recovery and the UI items below |
+| Coverage | No Linux or macOS CI; 23 tested packages never run on Windows; the fmt check cannot fail |
 
 Original review: 2026-07-18. Item numbers and recorded version statuses are preserved.
 
@@ -73,8 +74,7 @@ Completed findings remain in this list to preserve item numbers and release hist
    * Sessions open with recent events rather than the complete log.
    * Recorded measurement for 7,680 events: 1.63 MB and 751 ms for full replay; 0.08 MB and 4 ms for recent events.
    * v0.37.0 changed replay accounting so completed replies remain whole instead of consuming the window as individual streamed fragments.
-   * Remaining: a client control to load earlier events. Earlier content is otherwise available only in the session's `.jsonl`.
-   * The daemon already supports `?since=`.
+   * The client control shipped: both clients ask for earlier events, over the `?since=` the daemon already supported. Verified against the code in the v0.120.0 sweep.
 
 7. **MCP connection checks. Done in v0.28.0.**
 
@@ -554,6 +554,20 @@ Completed findings remain in this list to preserve item numbers and release hist
    * The 27 were one bug and one blind spot in the fix for it. `Store.Close` was being registered by a pass that matched `session.NewStore(` — which is every call outside the package and none inside it, so `internal/session`'s own tests got nothing; and `LoadAllFromDisk` returns a store too, which nothing was closing anywhere. Both shapes are covered now, and the check that found them is the one worth keeping: grep for every construction and assert a `t.Cleanup` within a few lines of it.
 
 
+60. **Two permission tables nothing walked. Fixed in v0.120.0.**
+
+    * A sweep for remaining work looked for hand-maintained lists with no guard — the shape item 59's coverage guard had just found four untested commands in. Both permission tables in `internal/config` were that shape, and neither was merely untested.
+    * `secretPatterns` denied the absolute spelling of seven credential files and allowed the relative one. The patterns read `*/.npmrc`, and `*` matching any run of characters still leaves the `/` a literal the subject must carry. The subject arrives as the model wrote it, so the guarded spelling was the one that almost never arrived: `.npmrc`, `.pypirc`, `.aws/credentials`, `.aws/config`, `.kube/config`, `.docker/config.json`, `.gnupg/secring.gpg` and `.ssh/config` were all readable with Smart Agent on. The existing test passed because its one `.npmrc` path was `/home/u/.npmrc`. Two entries — `.env` and `.netrc` — were listed bare beside their prefixed forms, so whoever wrote the list saw this twice and the other seven were not caught.
+    * `wideProgramNames` never trimmed `.exe`, so on Windows an "always" on one narrow command became a wildcard: `rm.exe -rf build` persisted `rm.exe *`, and so did `python3.exe`, `bash.exe`, `node.exe` and `sudo.exe`. Two names were worked around by listing them twice; the other forty-five were not.
+    * The guards state the requirement rather than the list: a table of credential files each checked relative, absolute and tilde, because keying the test on the patterns is what let the hole survive. Reverting either fix fails them with the symptom.
+
+61. **What the v0.120.0 sweep found, and what it did not.**
+
+    * Ninety-five candidates were raised from six angles — this file's own open items, the UI ideas table, the CI and gate lanes, source markers, hand-maintained lists with no guard, and documentation drift — and each was verified against the code by a separate reader, because a record saying "Open" two releases after the work shipped is the failure mode this file has.
+    * Seventy-four are genuinely open or partial, twelve had already shipped without the record being updated, and nine were notes with no work in them. The stale twelve are corrected in place above.
+    * The largest single gap is coverage, not features: there is no Linux or macOS CI job at all, so `vet`, `gofmt`, `-race`, `deadcode`, the doc-link check and the Web UI suite run only on the developer's machine, and 23 packages with tests — `internal/agent`, `internal/tui`, `internal/tools` and `internal/provider` among them — never run on Windows. Item 33 records the decision to defer a second workflow; that decision predates v0.118.0 shipping green with 27 failing Windows tests.
+    * `scripts/check-fmt.sh` discarded `gofmt`'s stderr and forced success, so a Go file that would not parse passed the fmt check — the fifth check-that-cannot-fail found in three releases, and in a script whose own comment exists to explain why the naive version cannot fail. Fixed in v0.120.0.
+
 ## UI ideas
 
 ### Web UI
@@ -561,7 +575,7 @@ Completed findings remain in this list to preserve item numbers and release hist
 | Idea | Status and scope |
 |---|---|
 | Markdown rendering | Done in v0.27.0. The dependency-free renderer supports headings, emphasis, code, lists, blockquotes, links, and rules in the Web UI and GUI. Code syntax highlighting remains open. |
-| Collapsible tool-call cards | Open. Expandable tool input and output. |
+| Collapsible tool-call cards | Done. `internal/daemon/static/js/transcript.js` expands tool input and output. The row said "Open" until the v0.120.0 sweep read the code. |
 | Diff viewer | Open. Before-and-after views for `edit` and `write_file` results. |
 | Persistent permission approval | Done in v0.20.0. Options: allow once, allow for session, and always allow. The last option writes a matching config rule. |
 | Usage visualization | Open. Per-model token bars and context-use indicator. |
@@ -570,8 +584,8 @@ Completed findings remain in this list to preserve item numbers and release hist
 | Scroll control | Done in TUI v0.31.0 and Web UI v0.51.0. Output follows only when the view was already at the bottom before an update. Web UI and background-task windows provide a jump-to-bottom control. |
 | Workspace is process-wide | Done in v0.39.0. Relative paths resolve per session. `os.Chdir` was removed. File tools use the session directory and bash uses `cmd.Dir`. Only the session's own running turn blocks its workspace switch. |
 | Per-session workspace | Added in v0.28.0; underlying isolation completed in v0.39.0. Switching one client's session no longer changes another client's workspace. |
-| Dark/light theme and mobile layout | Open. v0.52.0 introduced role-based color properties with a test for undefined properties. A light theme still requires another value set. |
-| MCP server status | Open. Connection status and reconnect controls. |
+| Dark/light theme and mobile layout | **Declined.** v0.52.0 introduced role-based color properties with a test for undefined properties, so a light theme is a second value set away — and the decision is not to add one, nor a mobile layout, nor `/themes`. |
+| MCP server status | Partial. `/status` reports each server's connection state and its last error (v0.116.0), and `/mcps` turns one off for one conversation (v0.119.0). Remaining: a control in the Web UI panel. The cheap version sends `/reset-mcp`, which is a machine-wide reset rather than a per-row retry. |
 
 ### TUI
 
@@ -580,7 +594,7 @@ Completed findings remain in this list to preserve item numbers and release hist
 | Markdown and code rendering | Open. Consider a renderer such as glamour. |
 | In-program session picker | Done in v0.59.0. `/session` selects a conversation without restart. `/model` provides agent selection. Session deletion remains in the startup picker, not the in-program picker. |
 | Tool progress | Done in v0.25.0; extended in v0.32.11. Displays the running tool, queue depth, and background-task count. Transcript tool-call entries persist. Elapsed time remains open. |
-| Context indicator | Open. Proposed bar thresholds: yellow at 70%, red at 85%. |
+| Context indicator | Done in v0.119.0. The terminal was ignoring usage events entirely; it warns at 70% of the window and again at 90%, matching the Web UI. The 85% in the original proposal was not adopted — the two clients agreeing matters more. Remaining: a graphical bar rather than a percentage. Note that auto-compaction fires at 50% by default, before either warning. |
 | History search | Open. Search earlier output with the `/` key. |
 
 ### Both clients
