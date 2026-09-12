@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.119.0
+
+The commands a parity review asked for, one place for the help, and a test for each of them that runs at release.
+
+**Commands**
+
+* `/review` reads what changed and says what is wrong with it, modifying nothing. It takes `staged`, `head`, a revision, a range or a path, and it is the one built-in that yields to a custom command of the same name — that name was in people's `.localcode/commands` before the built-in existed.
+* `/export` renders the conversation from its own log to Markdown and writes it, `0600`. Written rather than printed: printing it puts a copy of the whole conversation inside the conversation, and the next request carries it.
+* `/mcps` turns one MCP server off for one conversation. Off hides that server's tools from the next request here and leaves the server connected, because another conversation may be using it.
+* `/thinking` and `/timestamps` are daemon-wide, so two clients draw a conversation the same way and the choice survives a restart.
+
+**Help**
+
+* One list. Every command was written down three times — `SlashCommands`, the terminal's help text, the Web UI's — and two of the three were prose somebody had to remember to edit. `SlashCommand` carries its own usage string now and both clients render the daemon's list.
+* The guard that compared the three copies is turned around: it checks that they have not come back, and that every command describes itself.
+
+**Terminal**
+
+* A context indicator. The terminal ignored usage events entirely, so it had none while the Web UI has had one for releases; the numbers were arriving the whole time. It warns at 70% of the window and again at 90%.
+
+**Release tests**
+
+* Every command added over the last three releases is sent the way a client sends it, over HTTP where the daemon answers it, and what it changed is read back.
+* `TestEveryCommandIsNamedInATest` walks `SlashCommands()` and requires some test to name each entry. It found `/permission-skip-tools`, `/write-outside`, `/show-scheduled-task` and `/model-invocable` with nothing exercising them — all four share a route with a sibling that was tested, which is why they were missed.
+* Each new test was checked against a deliberately broken build: a `/status` reporting no MCP servers, a `/workspace` that announces and does not move, a rename that sends the wrong title, a `/rewind` that restores nothing, an MCP switch that records nothing, an `/export` that writes no file. Six mutants, six caught.
+
+**Fixed**
+
+* A flake with a real cause. `retryWaitBarrier` was a bare `func()` and process-global, so a turn still retrying from an earlier test could trip the barrier the current test had just armed, cancelling its context before it made a request. It failed one run in five as "the provider was asked 0 times". The barrier takes the session now.
+* A transcript this build had been writing into its own source tree. The guard that walks every command through the router had no workspace of its own, so `/export` landed a `session-s1.md` in `internal/agent` on every run, and one was committed. The package directory is compared before and after the walk now.
+
 ## v0.118.0
 
 The eleven items left open in `docs/IMPROVEMENTS.md`.
