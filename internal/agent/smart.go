@@ -239,6 +239,13 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 //     approved, which is the one thing a review must not be.
 func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	hidden := map[string]bool{verdictToolName: true}
+	// A server this conversation has turned off. Read from the store
+	// rather than pinned at turn start, for the reason the permission
+	// switches are: it is a switch somebody flips between turns, and the
+	// next request is where they expect it to land. See mcps.go.
+	for name := range l.hiddenMCPTools(ctx) {
+		hidden[name] = true
+	}
 	// A debate can only be started from a conversation somebody is having.
 	// The tool would refuse anyway, and an offered tool that always refuses
 	// is a call the model spends a turn discovering it cannot make.

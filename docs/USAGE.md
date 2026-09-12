@@ -1196,6 +1196,22 @@ An argument widens it past this conversation:
 
 Archived conversations are counted: they are conversations that happened, and a total quietly leaving them out would be wrong in the direction nobody checks — the same reason a turn later undone still counts what it cost. The figures are read out of the conversations' own logs at the moment you ask, rather than kept as a running total somewhere else, so there is one place the truth lives. A log that cannot be read is named in the reply rather than skipped in silence.
 
+### `/export`
+
+`/export` writes this conversation to a Markdown file and reports the path. `/export <path>` chooses where; a directory means "in there, under the default name", which is what `/export ~/Desktop` means.
+
+Written to a file rather than printed, because printing it would put a copy of the whole conversation inside the conversation — and the next request would carry it. Rendered from the conversation's own log rather than from a client's screen, so the two clients cannot produce different files from the same conversation, and an archived conversation exports as readily as an open one. An undone turn is not in the file, because it is not in the conversation.
+
+The file is written `0600`, like the session logs: it is the conversation in one piece, in a directory somebody chose. Tool output longer than 4000 characters is cut, and the file says where.
+
+### `/mcps`
+
+`/mcps` lists every configured MCP server with whether it is connected and whether this conversation is using it. `/mcps off <server>` stops offering that server's tools here; `/mcps on <server>` puts them back.
+
+Per conversation, like the permission switches and the effort: a server that is noisy or slow is noisy for the job in hand, and the only way to stop one before this was editing `config.json` and running `/reset-mcp` — which stops it for every conversation on the machine and needs a file edit.
+
+Off hides that server's tools from the next request here. The server stays connected, because another conversation may be using it and reconnecting is the expensive part. A server added to the config later arrives on, which is what adding one means.
+
 ### What the transcript shows
 
 Two switches, both daemon-wide and persisted, so two clients watching the same conversation draw it the same way and the choice survives a restart. A preference kept in one browser is lost on the next machine, which is why neither is per client.

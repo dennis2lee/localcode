@@ -544,11 +544,19 @@ func TestCancellationDuringTheBackoffEndsTheTurnWithoutFallback(t *testing.T) {
 	retryBase.Store(int64(time.Hour))
 	t.Cleanup(func() { retryBase.Store(old) })
 
+	const sid = "s1"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// The cancellation lands after the retry is announced and before its
 	// wait begins, which is the deterministic middle of the backoff.
-	setRetryWaitBarrier(cancel)
+	// Only this test's session, because the barrier is process-global and
+	// another test's still-retrying turn would otherwise cancel this one
+	// before it had made a request.
+	setRetryWaitBarrier(func(id string) {
+		if id == sid {
+			cancel()
+		}
+	})
 	t.Cleanup(func() { setRetryWaitBarrier(nil) })
 
 	var mu sync.Mutex
@@ -564,7 +572,6 @@ func TestCancellationDuringTheBackoffEndsTheTurnWithoutFallback(t *testing.T) {
 	loop := newFallbackLoop(t, srv.URL)
 	loop.SetSmartAgentEnabled(true)
 
-	const sid = "s1"
 	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}

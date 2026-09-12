@@ -239,9 +239,9 @@ var retryPhrases = []string{
 // finishing from an earlier test, while the test that owns the hook sets
 // and clears it. Under -race that is a reported race between two tests
 // that never referred to each other.
-var retryWaitBarrier atomic.Pointer[func()]
+var retryWaitBarrier atomic.Pointer[func(sessionID string)]
 
-func setRetryWaitBarrier(fn func()) {
+func setRetryWaitBarrier(fn func(sessionID string)) {
 	if fn == nil {
 		retryWaitBarrier.Store(nil)
 		return
@@ -249,9 +249,18 @@ func setRetryWaitBarrier(fn func()) {
 	retryWaitBarrier.Store(&fn)
 }
 
-func runRetryWaitBarrier() {
+// runRetryWaitBarrier takes the session, so a barrier armed by one test
+// cannot be tripped by another test's leftover goroutine.
+//
+// It was a bare func() and process-global, and that combination made a
+// flake nobody could place: a turn still retrying from an earlier test
+// would call the barrier the current test had just armed, cancelling its
+// context before it had made a single request. The failure read as "the
+// provider was asked 0 times", which points at everything except the
+// global it actually was.
+func runRetryWaitBarrier(sessionID string) {
 	if fn := retryWaitBarrier.Load(); fn != nil {
-		(*fn)()
+		(*fn)(sessionID)
 	}
 }
 
@@ -313,7 +322,7 @@ func (l *Loop) maybeRetrySameEndpoint(ctx context.Context, sessionID string, run
 			describeRun(run), err, wait, attempt, maxSameEndpointRetries),
 		"recovered": true,
 	})
-	runRetryWaitBarrier()
+	runRetryWaitBarrier(sessionID)
 	if !sleepFor(ctx, wait) {
 		// Cancelled mid-backoff. Said in the transcript so the announced
 		// retry does not read as one that happened.

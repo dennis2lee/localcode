@@ -112,6 +112,20 @@ type Session struct {
 	// are pointed at models that suit them, and a choice made while
 	// talking to one should not follow you to another.
 	Profiles map[string]string `json:"profiles,omitempty"`
+
+	// MCPOff names the MCP servers this conversation has turned off.
+	//
+	// Per conversation rather than daemon-wide, the way the permission
+	// switches and the effort are: a server that is noisy or slow is
+	// noisy for the job in hand, and turning it off for every
+	// conversation on the machine is a bigger answer than the question.
+	// The alternative, before this, was editing config.json and running
+	// "/reset-mcp" — which stops it everywhere and needs a file edit.
+	//
+	// A set rather than a list of the ones left on, so a server added to
+	// the config later arrives on, which is what somebody adding one
+	// means.
+	MCPOff map[string]bool `json:"mcp_off,omitempty"`
 }
 
 // Permissions is a session's own answer to the four permission switches.
@@ -685,7 +699,64 @@ func (s *Store) EffortFor(sessionID, model string) string {
 func detach(meta Session) Session {
 	meta.Efforts = cloneEfforts(meta.Efforts)
 	meta.Profiles = cloneEfforts(meta.Profiles)
+	meta.MCPOff = cloneFlags(meta.MCPOff)
 	return meta
+}
+
+// cloneFlags is cloneEfforts for a set. Its own function because Go
+// generics would buy one line here and cost the reader a type parameter
+// in a file that has none.
+func cloneFlags(m map[string]bool) map[string]bool {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// SetMCPEnabled turns one MCP server on or off for a conversation.
+func (s *Store) SetMCPEnabled(sessionID, server string, on bool) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", sessionID)
+	}
+	if server == "" {
+		return nil, fmt.Errorf("a server has to be named")
+	}
+	if on {
+		delete(st.meta.MCPOff, server)
+		if len(st.meta.MCPOff) == 0 {
+			st.meta.MCPOff = nil
+		}
+	} else {
+		if st.meta.MCPOff == nil {
+			st.meta.MCPOff = map[string]bool{}
+		}
+		st.meta.MCPOff[server] = true
+	}
+	metaCopy := detach(st.meta)
+	if s.dir != "" {
+		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
+			return nil, err
+		}
+	}
+	return &metaCopy, nil
+}
+
+// MCPOffIn is the servers this conversation has turned off.
+func (s *Store) MCPOffIn(sessionID string) map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return nil
+	}
+	return cloneFlags(st.meta.MCPOff)
 }
 
 // SetSessionProfile records the profile this conversation uses for one

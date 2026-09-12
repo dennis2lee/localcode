@@ -403,6 +403,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "debug-log", Description: "write every model request and response to a file per prompt, in this workspace"},
 		{Name: "auto-compact", Description: "toggle auto-compaction, or set its threshold with a percent", Usage: "[on|off|<percent>]"},
 		{Name: "update", Description: "install the newest release and move the daemon onto it; the terminal keeps running"},
+		{Name: "mcps", Description: "which MCP servers this conversation uses, and turning one off here", Usage: "[on|off <server>]"},
 		{Name: "reset-mcp", Description: "reconnect MCP servers and pick up config changes without a restart"},
 		{Name: "reset-skills", Description: "reload skills from disk without a restart"},
 		{Name: "status", Description: "what is attached: MCP servers and whether they are working, skills, custom commands, agents"},
@@ -414,6 +415,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "redo", Description: "put back the turn /rewind just undid, while the rewind is still the last thing that happened"},
 		{Name: "model-invocable", Description: "whether the model may run this session's commands itself", Usage: "[on|off]"},
 		{Name: "usage", Description: "cumulative token usage per model; /usage all|today|week|month counts every conversation", Usage: "[all|today|week|month]"},
+		{Name: "export", Description: "write this conversation to a Markdown file", Usage: "[path]"},
 		{Name: "llm-doctor", Description: "probe a muse or gemma server: its facts, four canaries, what differs from the baseline; /llm-doctor baseline keeps the last run", Usage: "[baseline]"},
 		{Name: "context", Description: "what the next request is made of; /context all, /context <id>", Usage: "[all|<id>]"},
 	}
