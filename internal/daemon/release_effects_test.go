@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -396,6 +397,29 @@ func TestWorkspaceMovesTheConversation(t *testing.T) {
 	}
 }
 
+// wantOwnerOnly requires the file at path to be readable by its owner and
+// nobody else.
+//
+// Not checked on Windows, where the mode bits are not the permission: Go
+// reports 0666 for a file created 0600, because access there is governed
+// by an ACL the mode never reached. Asserting 0600 fails on a file that
+// is correctly protected, and dropping the check entirely would lose it
+// on the platforms where it is the guarantee — an exported conversation
+// is a copy of everything said in one.
+func wantOwnerOnly(t *testing.T, path, what string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s %s: %v", what, path, err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("%s mode = %o, want 0600", what, perm)
+	}
+}
+
 // /export writes a Markdown file and reports the path; the file holds the
 // conversation; it is written 0600; an undone turn is not in it.
 func TestExportWritesTheConversationToAFile(t *testing.T) {
@@ -419,16 +443,7 @@ func TestExportWritesTheConversationToAFile(t *testing.T) {
 		t.Fatalf("could not parse export path from reply: %q", reply)
 	}
 
-	// Verify file exists on disk.
-	info, err := os.Stat(exportPath)
-	if err != nil {
-		t.Fatalf("stat exported file %s: %v", exportPath, err)
-	}
-
-	// Verify written mode is 0600.
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("exported file mode = %o, want 0600", perm)
-	}
+	wantOwnerOnly(t, exportPath, "exported file")
 
 	// Verify the file holds the conversation.
 	data, err := os.ReadFile(exportPath)
@@ -458,13 +473,7 @@ func TestExportWritesTheConversationToAFile(t *testing.T) {
 		t.Fatalf("could not parse second export path from reply: %q", reply)
 	}
 
-	info2, err := os.Stat(secondExportPath)
-	if err != nil {
-		t.Fatalf("stat second exported file: %v", err)
-	}
-	if perm := info2.Mode().Perm(); perm != 0o600 {
-		t.Errorf("second exported file mode = %o, want 0600", perm)
-	}
+	wantOwnerOnly(t, secondExportPath, "second exported file")
 
 	data2, err := os.ReadFile(secondExportPath)
 	if err != nil {
