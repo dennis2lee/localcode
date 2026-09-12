@@ -112,19 +112,25 @@ jobs:
       # executed on Windows rather than reasoned about from filepath's
       # documentation.
       #
-      # Scoped to the tests that are Windows-clean today. The rest of
-      # these packages' suites fail on Windows for reasons of their own —
-      # a temporary directory holding a store's open log files cannot be
-      # removed, a path with backslashes pasted into JSON, an allowlist
-      # compared with forward slashes — none of which is the code under
-      # test. Widening this is docs/IMPROVEMENTS.md item 41, making the
-      # suites run on Windows.
+      # The filter is gone from internal/daemon and internal/session, and
+      # the three reasons it was there are fixed rather than worked
+      # around: every test that builds a store now closes it, so a
+      # temporary directory holding open log files can be removed; the
+      # tool arguments in the end-to-end test are marshalled twice
+      # instead of hand-escaped once, which is what left a Windows path
+      # as `\U` inside a JSON string; and the tests that isolate HOME
+      # now set USERPROFILE beside it, which is what os.UserHomeDir
+      # actually reads there. See docs/IMPROVEMENTS.md item 41.
+      #
+      # cmd/localcode keeps its filter for now: it drives real processes
+      # and a terminal, and the remaining failures there are about the
+      # harness rather than about path handling.
       - name: Test the Windows code paths
         run: |
           go test ./internal/update/ ./internal/childproc/
           go test ./internal/userdirs/ ./internal/skills/ ./internal/rules/
+          go test ./internal/session/ ./internal/daemon/
           go test ./cmd/localcode/ -run 'Successor|UnknownCommand|WindowProxy|ChosenRoot|OwnChain|SwapHandler|SwappedUnderTheWindow'
-          go test ./internal/daemon/ -run 'SessionIDInPath|TheGateRefuses|DeadDaemon|TakingOverASession|Retire|Update|Startup|Busy'
         env:
           CGO_ENABLED: '0'
 

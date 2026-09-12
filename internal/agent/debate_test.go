@@ -178,6 +178,7 @@ func newDebateLoop(t *testing.T, modelURL string) *Loop {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	// A permission handler that says yes: booking a debate asks, and a
 	// registry with no handler answers every ask with "no handler
 	// configured", which would make this suite test the absence of one.
@@ -671,6 +672,7 @@ func TestDebateProgressSeparatesWhatWasWrittenFromWhatWasRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	loop := New(store, tools.NewRegistry(nil), nil, &config.Config{})
 	const sid = "s1"
 	if _, err := store.CreateSession(sid, "", "boy", true); err != nil {

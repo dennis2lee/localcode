@@ -8,6 +8,7 @@ import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, clearTranscript, showEarlierBanner,
+  abandonPendingUsers,
 } from './transcript.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
@@ -486,6 +487,10 @@ const handlers = {
     setWaiting(false);
     setInputLocked(false);
     abandonRunningToolCalls('stopped');
+    // The queue went with the turn: the daemon drops it in
+    // turnTracker.cancel, so anything still showing as sent was never
+    // handed to anybody.
+    abandonPendingUsers();
     appendTool('[cancelled]');
     renderCommDot();
   },

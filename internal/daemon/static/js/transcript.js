@@ -89,6 +89,7 @@ export function appendPendingUser(text, midTurn = false) {
     ? { div: appendDiv('msg-tool', `[sent — the model will pick this up at its next step] ${text}`) }
     : appendUserBlock(text, true);
   const div = parts.div;
+  parts.text = text;
   const list = sentPlaceholders.get(text) || [];
   list.push(parts);
   sentPlaceholders.set(text, list);
@@ -110,6 +111,27 @@ export function resolvePendingUser(text) {
   // the transcript grows a boundary with nothing after it.
   if (parts.sep) parts.sep.remove();
   parts.div.remove();
+}
+
+// abandonPendingUsers answers a stopped turn: every prompt still showing
+// as sent was in the queue the daemon has just dropped, and it was never
+// handed to the model.
+//
+// Rewritten rather than removed. What is on screen is text somebody
+// typed, and taking it away silently is the other half of the same
+// fault — they would be left knowing neither that it was discarded nor
+// what it said. The line keeps the words and stops claiming they went
+// anywhere.
+export function abandonPendingUsers() {
+  for (const list of sentPlaceholders.values()) {
+    for (const parts of list) {
+      // The separator announced a turn boundary that never happened.
+      if (parts.sep) parts.sep.remove();
+      parts.div.className = 'msg-tool';
+      parts.div.textContent = `[not sent — the turn was stopped before the model saw this] ${parts.text}`;
+    }
+  }
+  sentPlaceholders.clear();
 }
 
 // Moving between your own turns.

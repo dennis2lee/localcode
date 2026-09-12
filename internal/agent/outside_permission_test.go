@@ -188,6 +188,7 @@ func TestTheSwitchesArePerConversation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	for _, id := range []string{"a", "b"} {
 		if _, err := store.CreateSession(id, "", "general-purpose", true); err != nil {
 			t.Fatalf("create session: %v", err)
@@ -237,6 +238,7 @@ func TestATaskFollowsItsParentsSwitches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("parent", "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -280,6 +282,7 @@ func TestATurnReadingOutsideTheProjectAsksAndRemembers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	const sid = "s1"
 	if _, err := store.CreateSessionIn(sid, "", "general-purpose", project, true); err != nil {
 		t.Fatalf("create session: %v", err)

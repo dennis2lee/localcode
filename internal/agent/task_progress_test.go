@@ -69,6 +69,7 @@ func TestTaskProgressReachesTheParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	registry := tools.NewRegistry(nil)
 	registry.Register(slowTool{release: release})
 

@@ -99,6 +99,7 @@ func orchestrateLoop(t *testing.T, url string) *Loop {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	reg := tools.NewRegistry(nil)
 	reg.Register(tools.ReadFile{})
 	reg.Register(NewAnswerTool())

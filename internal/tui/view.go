@@ -78,7 +78,7 @@ func renderTranscript(entries []transcriptEntry, width int) string {
 			// The same block, dimmed: it says "on its way" without moving
 			// or changing shape when the real one replaces it.
 			parts = append(parts, turnSeparator(width)+"\n"+pendingStyle.Width(width).Render(text))
-		case entryTool, entryLocal:
+		case entryTool, entryLocal, entrySent:
 			parts = append(parts, toolStyle.Render(text))
 		default: // entryModel: streamed as-is, no style
 			parts = append(parts, text)

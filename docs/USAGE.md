@@ -669,7 +669,8 @@ Hooks and permissions are separate checks. `pre_tool_use` runs first. A successf
 {
   "hooks": {
     "pre_tool_use": [
-      { "matcher": "bash", "command": "echo \"$STDIN\" | jq -e '.tool_input.command | test(\"rm -rf\") | not' >/dev/null || (echo blocked >&2; exit 2)" }
+      { "matcher": "bash", "command": "echo \"$STDIN\" | jq -e '.tool_input.command | test(\"rm -rf\") | not' >/dev/null || (echo blocked >&2; exit 2)" },
+      { "matcher": "bash", "command": "./scripts/scan-for-secrets.sh", "timeout": 120, "fail_closed": true }
     ],
     "post_tool_use": [
       { "command": "cat >> /tmp/tool-log.jsonl" }
@@ -703,7 +704,10 @@ Other details:
 * `matcher` applies only to `pre_tool_use` and `post_tool_use`. It is a full-name regular expression. Examples: `bash|edit`, `mcp__github__.*`. Omit it for every tool.
 * Blocking result: `{"decision":"block","reason":"..."}` on stdout, or exit 2 with the reason on stderr.
 * Other non-zero exits produce a warning and allow execution to continue.
-* Timeout: 30 seconds per hook. Multiple hooks run in registration order and stop at the first block.
+* Timeout: 30 seconds per hook by default, or `"timeout": <seconds>` on the hook. A check that has to walk a large tree or ask something over a network does not fit a number chosen for everything, and the alternative was writing the hook to give up early and let the tool through.
+* A hook that does not finish never reached a decision, and the warning says exactly that. By default the action still goes ahead. `"fail_closed": true` blocks it instead.
+* `fail_closed` covers not-finishing only — a timeout, or a hook that could not be started. A hook that ran and exited non-zero has decided: exit 2 is the way to block, and anything else is a broken script. Treating those as a veto would turn every bug in a hook into a lockout, which is why the permissive default stands and this is opt-in per hook.
+* Multiple hooks run in registration order and stop at the first block.
 * Project hooks replace global hooks per event.
 
 ### Authenticating with `/login`
@@ -1163,6 +1167,54 @@ Shows cumulative token counts per model for the current session, with no model c
 `/usage` sums every API call since session creation, including repeatedly sent history. The status-bar context percentage describes the latest request instead.
 
 With no calls yet, it just says so.
+
+An argument widens it past this conversation:
+
+| Command | Counts |
+|---|---|
+| `/usage all` | every conversation this daemon holds |
+| `/usage today` | everything since midnight, local time |
+| `/usage week` | the last 7 days |
+| `/usage month` | the last 30 days |
+
+Archived conversations are counted: they are conversations that happened, and a total quietly leaving them out would be wrong in the direction nobody checks — the same reason a turn later undone still counts what it cost. The figures are read out of the conversations' own logs at the moment you ask, rather than kept as a running total somewhere else, so there is one place the truth lives. A log that cannot be read is named in the reply rather than skipped in silence.
+
+### Where localcode may connect
+
+Permission rules answer "which tool, on which path". They say nothing about destinations, and a model with a shell can reach anything the machine can.
+
+`network.egress` bounds the half localcode can actually enforce: **its own** outbound connections — the model providers, remote MCP servers, the update check.
+
+```json
+{
+  "network": {
+    "egress": {
+      "enforced": true,
+      "allow": ["api.anthropic.com", "*.internal.example"]
+    }
+  }
+}
+```
+
+* A bare name matches that host exactly. `*.base` matches any sub-domain of `base` and `base` itself, and that is the only wildcard. A rule with a scheme or a port in it is refused when the config loads, rather than silently matching nothing.
+* Loopback is always allowed and needs no entry — a local model server is the case this project is built around, and the daemon talks to itself.
+* `enforced: false` leaves the list inert, so it can be written and read back before anything depends on it. Enforcing an empty list is refused: it would turn off every provider, which is not what turning it on means.
+* A refused connection says which host and where to change it. "Not allowed" and "no route to host" are different problems, and one reported as the other is debugged for hours.
+
+**What it does not cover**, stated plainly because a partial control described as a complete one is worse than none:
+
+| Not covered | Why, and what does bound it |
+|---|---|
+| A shell command's own connections | `curl`, a package manager, a test suite that calls an API: a separate process with its own sockets. Nothing inside this program can stop those. Refusing to *run* commands whose names look networked would be theatre — a script, a different binary name, or a here-document defeats it in seconds. What bounds them is the permission prompt on `bash`, and below that the operating system: a firewall, a network namespace, or a proxy the child inherits. |
+| An MCP server started as a subprocess | Same reason: it is a child process. A *remote* MCP server is reached by localcode itself and is covered. |
+
+### What a session log holds, and who can read it
+
+A session's log is the conversation: every prompt, every reply, every tool result. Compaction adds one more — the summary is recorded in full so a restart can rebuild the model's history from it, which means a condensed copy of everything above it lives in a single event.
+
+Logs are written `0600` in a `0700` directory under `~/.localcode/sessions`, so on a shared machine no other account can read them. Opening a store also narrows a directory and the `.jsonl` and `.meta.json` files already in it, because a directory keeps the mode it was created with and every conversation written before this was `0644` in a `0755` directory. Files the store does not write are left alone. Narrowing is best effort: a store that refused to open over a permission it could not change would be a worse answer than one whose modes are as they were.
+
+Retention is manual and deliberately so. Nothing is deleted on a timer — a conversation is yours until you remove it — and the ways to remove one are the delete button, `/delete` in the terminal, and deleting the files under `~/.localcode/sessions` directly. `/archive` is not deletion: it hides a conversation from the list and keeps everything.
 
 ### `/llm-doctor`
 

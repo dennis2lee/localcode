@@ -303,6 +303,9 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.appendTool("[localcode " + version + " took over this address; the next message goes to it]")
 	case events.TypeTurnCancelled:
 		m.endTurn()
+		// The queue went with the turn — turnTracker.cancel drops it — so
+		// anything still drawn as sent was never handed to anybody.
+		m.abandonPendingUsers()
 		m.appendTool("[cancelled]")
 	case events.TypeError:
 		// A recovered condition is not the end of anything: the loop has

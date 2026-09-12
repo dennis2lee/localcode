@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.118.0
+
+The eleven items left open in `docs/IMPROVEMENTS.md`.
+
+**Hooks**
+
+* A hook that does not finish says it never decided, rather than arriving as `signal: killed` in a warning indistinguishable from a script that ran and failed.
+* `"timeout": <seconds>` per hook. The shared 30 seconds does not fit a check that has to walk a large tree or ask something over a network.
+* `"fail_closed": true` blocks the action when a hook cannot finish. Off by default: a hook that cannot run and blocks everything locks somebody out of their own tools, which is the more common accident. It covers not-finishing only — a hook that ran and exited non-zero has decided.
+
+**Session logs**
+
+* Written `0600` in a `0700` directory. They were `0644` in `0755`, which on a shared machine is every other account on it, and a compaction summary puts a condensed copy of the whole conversation in one event.
+* Opening a store narrows a directory and the files already in it. A directory keeps the mode it was created with, so creating it tighter only helps a new install.
+
+**Usage**
+
+* `/usage all|today|week|month` counts every conversation, archived ones included, read from the logs at the moment you ask.
+
+**Terminal**
+
+* Completion works on a multi-line prompt. It was switched off for anything past the first newline, because a splice had no way to put the cursor back.
+* A stopped turn stops its queued prompts claiming they were sent. The daemon drops the queue; the line kept promising delivery.
+
+**Agents**
+
+* The six Smart Agent specialists are selectable, not only delegatable: Tab, the Web UI menu and `localcode run --agent oracle` can all reach them now.
+* `Orchestrate` is not offered to a turn that could never authorize it. It asks on every call and a run is 32 agent turns; unattended, the model built a whole plan and got a refusal. The permission resolver is asked before the tools are advertised, so a flag or an allow rule still works.
+* `/keep-going` says what this conversation's model actually gets, and what to do when it is outside the family the nudge applies to.
+
+**Network**
+
+* `network.egress` bounds where localcode itself connects: the model providers, remote MCP servers, the update check. Host names and `*.base`, loopback always allowed, enforced only when asked for.
+* What it does not cover is documented rather than implied: a shell command and a subprocess MCP server are separate processes with their own sockets.
+
+**Windows**
+
+* Every test that builds a store now closes it, the end-to-end test marshals its nested tool arguments instead of hand-escaping them, and the tests that isolate `HOME` set `USERPROFILE` beside it. `internal/session` and `internal/daemon` run whole on Windows CI.
+
 ## v0.117.0
 
 The three items a command-parity review left for their own cycle, and the three open items in `docs/IMPROVEMENTS.md`.

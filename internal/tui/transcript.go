@@ -53,6 +53,7 @@ const (
 	entryTool                     // a server-driven status line ([delegated to x], [cancelled])
 	entryLocal                    // a client-only reply (/help, /version, a queued-prompt notice, ...)
 	entryPending                  // a prompt drawn on Enter, until the daemon confirms it
+	entrySent                     // a message handed to a turn already running
 )
 
 // transcriptEntry is one unit of transcript content. Plain data — no
@@ -84,6 +85,16 @@ func (m *Model) appendUser(text string) {
 	m.streamOpen = false
 }
 
+// appendSent draws a message handed to a turn that is already running.
+//
+// Its own kind rather than an ordinary local note, so a stop can find it
+// again: the daemon drops the queue when a turn is cancelled, and a line
+// still saying the model will pick this up at its next step is then a
+// promise about a message nobody has.
+func (m *Model) appendSent(text string) {
+	m.appendEntry(entrySent, text)
+}
+
 // appendPendingUser draws a prompt the instant Enter is pressed, dimmed,
 // until the daemon's message.user event arrives with the real line.
 //
@@ -112,6 +123,37 @@ func (m *Model) resolvePendingUser(text string) bool {
 		return true
 	}
 	return false
+}
+
+// abandonPendingUsers answers a stopped turn: every prompt still drawn as
+// sent was in the queue the daemon has just dropped, and it was never
+// handed to the model.
+//
+// Rewritten rather than removed. What is on screen is text somebody
+// typed, and taking it away silently is the other half of the same
+// fault — they would be left knowing neither that it was discarded nor
+// what it said. The line keeps the words and stops claiming they went
+// anywhere.
+func (m *Model) abandonPendingUsers() {
+	changed := false
+	for i, e := range m.transcript {
+		if e.kind != entryPending && e.kind != entrySent {
+			continue
+		}
+		m.transcript[i].kind = entryTool
+		// An entrySent line already carries its own "[sent — ...]"
+		// prefix; replacing it rather than prepending keeps the result a
+		// sentence rather than two contradicting ones.
+		text := e.text
+		if _, rest, found := strings.Cut(text, "] "); found && e.kind == entrySent {
+			text = rest
+		}
+		m.transcript[i].text = "[not sent — the turn was stopped before the model saw this] " + text
+		changed = true
+	}
+	if changed {
+		m.transcriptRev++
+	}
 }
 
 // appendLocal writes text straight into the transcript without going

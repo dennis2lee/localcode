@@ -398,14 +398,14 @@ func SlashCommands() []SlashCommand {
 		{Name: "rewind", Description: "undo the last turn, and the files write_file and edit changed in it"},
 		{Name: "redo", Description: "put back the turn /rewind just undid, while the rewind is still the last thing that happened"},
 		{Name: "model-invocable", Description: "whether the model may run this session's commands itself"},
-		{Name: "usage", Description: "cumulative token usage per model"},
+		{Name: "usage", Description: "cumulative token usage per model; /usage all|today|week|month counts every conversation"},
 		{Name: "llm-doctor", Description: "probe a muse or gemma server: its facts, four canaries, what differs from the baseline; /llm-doctor baseline keeps the last run"},
 		{Name: "context", Description: "what the next request is made of; /context all, /context <id>"},
 	}
 }
 
 // routeKeepGoing answers "/keep-going [on|off]".
-func (l *Loop) routeKeepGoing(sessionID, text string) (bool, error) {
+func (l *Loop) routeKeepGoing(sessionID, agentName, text string) (bool, error) {
 	arg, ok := matchToggleCommand(text, "/keep-going")
 	if !ok {
 		return false, nil
@@ -425,6 +425,27 @@ func (l *Loop) routeKeepGoing(sessionID, text string) (bool, error) {
 	// profile runs another model has changed nothing, and should hear
 	// that from the reply rather than from the absence of any effect.
 	b.WriteString("\nApplies only to models whose id contains \"muse\"; other models are never nudged.")
+	// And what that means here, which is the half somebody on another
+	// model had no way to find out. The switch is daemon-wide and the
+	// default is a family table, so "on" answered nothing about the
+	// conversation it was typed in: a model outside the table needs a
+	// keep_going on its profile, and nothing said so.
+	profileName, profile := l.profileOrZero(agentName)
+	switch budget := l.effectiveKeepGoing(profile); {
+	case budget > 0:
+		fmt.Fprintf(&b, "\nThis conversation is on %s, which gets %d carry-on(s).", modelName(profile), budget)
+	case profile.Model == "":
+		// Nothing resolved, so there is nothing true to say about it.
+	case !keepGoingApplies(profile.Model):
+		fmt.Fprintf(&b, "\nThis conversation is on %s, which is not in that family, so it is never nudged. "+
+			"To give it a budget anyway, set \"keep_going\" on the %q profile in config.json.",
+			modelName(profile), profileName)
+	case !want:
+		fmt.Fprintf(&b, "\nThis conversation is on %s, which the switch would apply to.", modelName(profile))
+	default:
+		fmt.Fprintf(&b, "\nThis conversation is on %s, and its %q profile sets keep_going to %d.",
+			modelName(profile), profileName, profile.KeepGoing)
+	}
 	if want && !l.anyMuseProfile() {
 		b.WriteString("\n(no configured profile currently runs a muse model, so nothing changes until one does)")
 	}

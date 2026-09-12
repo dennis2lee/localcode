@@ -159,6 +159,7 @@ func changeReportLoop(t *testing.T, dir string) (*Loop, string) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	loop := New(store, tools.NewRegistry(nil), nil, &config.Config{})
 	const sid = "s1"
 	if _, err := store.CreateSessionIn(sid, "", "boy", dir, true); err != nil {

@@ -42,6 +42,7 @@ func effortLoop(t *testing.T, profileEffort string) (*Loop, string, func() []map
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL}},
 		Profiles:       map[string]config.Profile{"only": {Provider: "local", Model: "muse-glimmer-30b", Effort: profileEffort}},

@@ -94,6 +94,7 @@ func scriptedLoop(t *testing.T, p provider.Provider, reg *tools.Registry) (*Loop
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	const sessionID = "s-1"
 	if _, err := store.CreateSession(sessionID, "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)

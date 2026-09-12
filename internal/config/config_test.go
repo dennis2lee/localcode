@@ -142,6 +142,9 @@ func TestLoadMergedProjectOverridesGlobal(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows, so isolating HOME
+	// alone leaves the test reading the real home there.
+	t.Setenv("USERPROFILE", home)
 
 	global := Config{
 		Providers: map[string]ProviderConfig{
@@ -185,6 +188,9 @@ func TestLoadMergedOnlyGlobalExists(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir() // no .localcode/config.json here
 	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows, so isolating HOME
+	// alone leaves the test reading the real home there.
+	t.Setenv("USERPROFILE", home)
 
 	global := validConfig()
 	writeConfig(t, filepath.Join(home, ".localcode", "config.json"), &global)
@@ -202,6 +208,9 @@ func TestLoadMergedNeitherExists(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
 	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows, so isolating HOME
+	// alone leaves the test reading the real home there.
+	t.Setenv("USERPROFILE", home)
 
 	if _, err := LoadMerged(project); err == nil {
 		t.Error("expected an error when neither global nor project config exists")
@@ -258,6 +267,10 @@ func TestMergeFieldsGuard(t *testing.T) {
 		// project that turns the whole thing off certainly must not.
 		"ModelInvocable": true,
 		"ModelCommands":  true,
+		// Where this process may connect. Merged wholesale rather than
+		// entry by entry: an allow list is a set, and combining two of
+		// them would produce a third nobody wrote.
+		"Network": true,
 	}
 	intentionallyNotMerged := map[string]bool{}
 
@@ -281,6 +294,9 @@ func TestLoadMergedCarriesMCPServersPermissionsAutoDelegateAndSkipPermissions(t 
 	home := t.TempDir()
 	project := t.TempDir()
 	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows, so isolating HOME
+	// alone leaves the test reading the real home there.
+	t.Setenv("USERPROFILE", home)
 
 	global := validConfig()
 	global.Agents["worker"] = AgentConfig{Profile: "balanced"}

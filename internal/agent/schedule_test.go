@@ -22,6 +22,7 @@ func scheduleLoop(t *testing.T) *Loop {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: "http://127.0.0.1:1"}},
 		Profiles:       map[string]config.Profile{"balanced": {Provider: "local", Model: "m"}},
@@ -243,6 +244,7 @@ func TestAnUnattendedTurnDoesNotWaitForeverForPermission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -657,6 +659,7 @@ func TestAPipeIsToldThereWasNobodyToAskRatherThanThatNobodyAnswered(t *testing.T
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}

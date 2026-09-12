@@ -78,3 +78,24 @@ test('going back to the agent stops overriding the readout', async () => {
   // agent is switched.
   assert.equal(app.state.chosenModel, '');
 });
+
+test('stopping a turn stops the queued prompts claiming they were sent', async () => {
+  const app = await load();
+  app.state.waiting = true;
+  // Typed while a turn was running: shown as sent, with a promise the
+  // model will pick it up at its next step.
+  app.type('and also check the tests');
+  await app.el('send').click();
+  await app.settle();
+  assert.match(app.transcript(), /the model will pick this up/);
+
+  app.sse.emit({ type: 'turn.cancelled', data: {} });
+
+  // The daemon drops the queue with the turn, so that promise was about a
+  // message nobody has.
+  assert.doesNotMatch(app.transcript(), /the model will pick this up/);
+  assert.match(app.transcript(), /not sent — the turn was stopped/);
+  // And the words are kept: taking them away silently is the other half
+  // of the same fault.
+  assert.match(app.transcript(), /and also check the tests/);
+});

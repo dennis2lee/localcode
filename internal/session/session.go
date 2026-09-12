@@ -360,11 +360,27 @@ type Store struct {
 	warnedClosed bool
 }
 
+// Session logs are the conversation itself: every prompt, every reply,
+// every tool result, and since compaction began recording its summary in
+// full, a condensed copy of all of it in one event. They were written
+// 0644 in a 0755 directory, which on a shared machine is every other
+// account on it. The checkpoint blobs next door have been 0700 since they
+// were added — the tighter answer was already in this package, applied to
+// the copies of files and not to the conversations about them.
+const (
+	logDirMode  = 0o700
+	logFileMode = 0o600
+)
+
 func NewStore(persistDir string) (*Store, error) {
 	if persistDir != "" {
-		if err := os.MkdirAll(persistDir, 0o755); err != nil {
+		if err := os.MkdirAll(persistDir, logDirMode); err != nil {
 			return nil, fmt.Errorf("create session dir: %w", err)
 		}
+		// A directory that already exists keeps the mode it was made
+		// with, so creating it tighter only helps a new install. Every
+		// conversation written before this is in the old one.
+		tightenLogs(persistDir)
 	}
 	return &Store{
 		sessions: map[string]*sessionState{},
@@ -424,7 +440,7 @@ func (s *Store) CreateSessionIn(id, parentID, agent, workspace string, visible b
 	}
 
 	if s.dir != "" {
-		f, err := os.OpenFile(filepath.Join(s.dir, id+".jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		f, err := os.OpenFile(filepath.Join(s.dir, id+".jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, logFileMode)
 		if err != nil {
 			return nil, fmt.Errorf("open session log: %w", err)
 		}
@@ -447,12 +463,43 @@ func (s *Store) CreateSessionIn(id, parentID, agent, workspace string, visible b
 // its per-session settings, not just replay the event log. Rewritten
 // wholesale on every metadata change (CreateSession/SetAgent/SetTitle);
 // small enough that this is simpler and safer than patching in place.
+// tightenLogs narrows an existing session directory and everything in it.
+//
+// Best effort and silent: a file somebody has deliberately opened up, or
+// one owned by another account on a shared machine, is not a reason to
+// refuse to start — and a store that would not open is a worse answer
+// than one whose permissions are as they were.
+//
+// Only the modes this package writes are narrowed, and only downwards.
+// os.Chmod on a file already at 0600 costs one syscall and changes
+// nothing, which is the common case after the first run.
+func tightenLogs(dir string) {
+	if info, err := os.Stat(dir); err == nil && info.Mode().Perm()&0o077 != 0 {
+		_ = os.Chmod(dir, logDirMode)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !(strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, ".meta.json")) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.Mode().Perm()&0o077 == 0 {
+			continue
+		}
+		_ = os.Chmod(filepath.Join(dir, name), logFileMode)
+	}
+}
+
 func writeSessionMeta(dir string, meta Session) error {
 	data, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshal session meta: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, meta.ID+".meta.json"), data, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, meta.ID+".meta.json"), data, logFileMode); err != nil {
 		return fmt.Errorf("write session meta: %w", err)
 	}
 	return nil
@@ -1337,7 +1384,7 @@ func (s *Store) restoreOne(dir, id string) error {
 		meta.ID = id
 	}
 
-	f, err := os.OpenFile(filepath.Join(dir, id+".jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, id+".jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, logFileMode)
 	if err != nil {
 		return fmt.Errorf("open session log: %w", err)
 	}

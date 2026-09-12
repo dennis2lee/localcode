@@ -673,7 +673,11 @@ func (d *Daemon) handleSwitchAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if _, ok := d.Loop.Config.Agents[req.Agent]; !ok {
+	// Against the same set the listing offers, so a name a client was
+	// just shown can actually be chosen. Checking Config.Agents alone is
+	// what made the specialists visible to delegation and unreachable by
+	// hand.
+	if _, ok := d.Loop.DelegatableAgents(r.Context())[req.Agent]; !ok {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("unknown agent %q", req.Agent))
 		return
 	}
@@ -734,29 +738,51 @@ type AgentInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Model       string `json:"model,omitempty"`
+	// Builtin marks one of the Smart Agent specialists rather than an
+	// agent somebody declared. They come and go with the switch, which
+	// is worth a client saying rather than leaving a name to vanish out
+	// of a list with no explanation.
+	Builtin bool `json:"builtin,omitempty"`
 }
 
 // handleListAgents returns every agent defined in config.json's agents
 // map, sorted by name — the picklist for switching a session's active
 // agent (e.g. plan -> build).
 func (d *Daemon) handleListAgents(w http.ResponseWriter, r *http.Request) {
-	names := make([]string, 0, len(d.Loop.Config.Agents))
-	for name := range d.Loop.Config.Agents {
+	// Everything a turn could actually run as, which is the same set the
+	// Task tools may target: the declared agents, plus the Smart Agent
+	// specialists while that switch is on.
+	//
+	// It used to be Config.Agents alone, and the six specialists were
+	// therefore delegatable but not selectable — Tab, the Web UI menu and
+	// "localcode run --agent oracle" could not reach any of them. Nothing
+	// below this list was ever the obstacle: profileFor and agentConfig
+	// have always resolved a specialist by name.
+	all := d.Loop.DelegatableAgents(r.Context())
+	names := make([]string, 0, len(all))
+	for name := range all {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
 	out := make([]AgentInfo, 0, len(names))
 	for _, name := range names {
-		agentCfg := d.Loop.Config.Agents[name]
-		info := AgentInfo{Name: name, Description: agentCfg.Description}
+		agentCfg := all[name]
+		_, declared := d.Loop.Config.Agents[name]
+		info := AgentInfo{Name: name, Description: agentCfg.Description, Builtin: !declared}
 		// ResolveProfile, not a direct Profiles lookup: it is what the turn
 		// itself calls, so it also applies the default_profile fallback for
 		// an agent whose profile key is missing or unknown. Looking the map
 		// up directly reported no model at all for those agents, while the
 		// turn went ahead and answered with the default profile's.
-		if profile, err := d.Loop.Config.ResolveProfile(name); err == nil {
+		if profile, err := d.Loop.Config.ResolveProfile(name); err == nil && declared {
 			info.Model = profile.Model
+		} else if p, ok := d.Loop.Config.Profiles[agentCfg.Profile]; ok {
+			// A specialist is not in Config.Agents, so ResolveProfile
+			// would fall through to the default profile and report every
+			// specialist as running on the session's own model — which is
+			// most of the cost of Smart Agent and none of the benefit.
+			info.Model = p.Model
 		}
 		out = append(out, info)
 	}

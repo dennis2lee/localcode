@@ -157,6 +157,7 @@ func TestCompactWorksOnAHistoryThatNoLongerFits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	// A window small enough that fitHistory has to throw most of the
 	// conversation away to get under it.
 	profile := config.Profile{Provider: "local", Model: "small-model", ContextWindow: defaultMaxTokens + contextHeadroom + 250}
@@ -263,6 +264,7 @@ func TestTurnRecoversFromAContextOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
 			"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL},
@@ -365,6 +367,7 @@ func TestConfiguredContextWindowReachesTheMeter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	// A name the lookup table would guess 1,000,000 for, configured to the
 	// 32k this server actually serves.
 	cfg := &config.Config{
@@ -566,6 +569,7 @@ func TestASecondOverflowIsTrimmedRatherThanEndingTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
 			"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL},
@@ -666,6 +670,7 @@ func probeTestLoop(t *testing.T, p *probeCounter, profile config.Profile) *Loop 
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: "http://127.0.0.1:1/v1"}},
 		Profiles:       map[string]config.Profile{"p": profile},

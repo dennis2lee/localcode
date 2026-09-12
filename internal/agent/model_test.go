@@ -23,6 +23,7 @@ func twoProfileLoop(t *testing.T) (*Loop, string) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
 			"local":  {Type: config.ProviderOpenAICompat, BaseURL: "http://127.0.0.1:1"},

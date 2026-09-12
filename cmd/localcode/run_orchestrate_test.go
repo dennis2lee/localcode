@@ -50,6 +50,9 @@ type planModel struct {
 	orchestrated int
 	stagePrompts []string
 	toolResults  []string
+	// toolsOffered is every tool name this server was shown, so a test
+	// can tell "offered and refused" from "never offered".
+	toolsOffered []string
 }
 
 func (m *planModel) server(t *testing.T) *httptest.Server {
@@ -70,9 +73,12 @@ func (m *planModel) server(t *testing.T) *httptest.Server {
 		_ = json.Unmarshal(raw, &body)
 
 		has := map[string]bool{}
+		m.mu.Lock()
 		for _, tl := range body.Tools {
 			has[tl.Function.Name] = true
+			m.toolsOffered = append(m.toolsOffered, tl.Function.Name)
 		}
+		m.mu.Unlock()
 		user, spoken := "", false
 		for _, msg := range body.Messages {
 			switch msg.Role {
@@ -206,40 +212,41 @@ func TestAOneShotRunsAPlan(t *testing.T) {
 	}
 }
 
-// The finding this test was written for. Orchestrate asks for permission
-// every time, by design: a run is up to 32 agent turns and half an hour.
-// A pipe has nobody to ask, so without --skip-permissions the model
-// authors the whole plan and gets a refusal for it, and nothing runs.
+// The finding this test was written for, and what became of it.
 //
-// Pinned rather than fixed, because the gate is right and the flag is the
-// documented way through it. What must not happen quietly is the other
-// thing: a release in which the refusal stops arriving, or in which the
-// flag stops being enough.
-func TestAPlanNeedsPermissionThatAPipeCannotAnswer(t *testing.T) {
+// Orchestrate asks for permission every time, by design: a run is up to
+// 32 agent turns and half an hour. A pipe has nobody to ask, so without
+// --skip-permissions the model used to author the whole plan and get a
+// refusal for it — a plan nobody could run, paid for in full.
+//
+// It is not offered there at all now. The question "could this call be
+// authorized?" is asked of the permission resolver before the tools are
+// advertised, so the flag and an allow rule both still work (the tests
+// either side of this one) and only the turn that would have to ask,
+// with nobody to ask, loses the tool.
+func TestAPlanIsNotOfferedToAPipeThatCannotAuthorizeIt(t *testing.T) {
 	m := &planModel{}
 	smartHome(t, m.server(t).URL, orchestrateOn)
 
-	if _, err := doRun(t, runOptions{
+	out, err := doRun(t, runOptions{
 		format: formatText, agent: "general-purpose",
-	}, "check the thing"); err != nil {
-		t.Fatalf("run: %v", err)
+	}, "check the thing")
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.orchestrated != 1 {
-		t.Fatalf("the model called Orchestrate %d times, want 1", m.orchestrated)
+	if m.orchestrated != 0 {
+		t.Errorf("the model called Orchestrate %d times; it should not have been offered", m.orchestrated)
 	}
-	if len(m.stagePrompts) != 0 {
-		t.Errorf("a refused plan ran %d stages: %q", len(m.stagePrompts), m.stagePrompts)
-	}
-	if len(m.toolResults) != 1 {
-		t.Fatalf("the orchestrator got %d tool results, want 1", len(m.toolResults))
-	}
-	// The model has to be able to tell "it did not run" from "it ran and
-	// found nothing", or the turn reports a step it never took.
-	if !strings.Contains(m.toolResults[0], "not run") {
-		t.Errorf("the refusal does not say the plan did not run:\n%s", m.toolResults[0])
+	// stagePrompts is not asserted here: with no orchestration the only
+	// prompt this server sees is the person's own, and it lands in the
+	// same list. What is worth asserting is that the tool was never
+	// offered, which is the difference this change is about — absent
+	// from the request rather than present and refused.
+	if containsLine(m.toolsOffered, "Orchestrate") {
+		t.Errorf("Orchestrate was advertised to a turn that could never run it: %q", m.toolsOffered)
 	}
 }
 

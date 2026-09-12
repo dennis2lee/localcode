@@ -267,6 +267,23 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	if Unattended(ctx) || l.Input == nil {
 		hidden[askUserToolName] = true
 	}
+	// Orchestration asks for permission on every call, and a run is up to
+	// 32 agent turns and half an hour. Unattended there is nobody to
+	// answer the prompt, so the model builds a whole plan and discovers
+	// at the last step that it cannot be started — which is the same
+	// waste debate was hidden to avoid, arriving by a different route.
+	//
+	// Asked of the resolver rather than assumed, which is the part that
+	// was missing: skip_all, skip_tools or an allow rule all authorize
+	// the call, and a turn that has one of those can orchestrate
+	// unattended perfectly well. Only a turn that would have to ask, with
+	// nobody to ask, loses the tool.
+	// Offered unattended only when it is already authorized: anything
+	// else — a prompt nobody can answer, or a rule that denies — ends the
+	// same way, with the plan built and the run refused.
+	if Unattended(ctx) && l.Tools != nil && l.Tools.Decide(ctx, orchestrateToolName) != tools.DecisionAllow {
+		hidden[orchestrateToolName] = true
+	}
 	// Answer belongs to one role in one situation: a stage that declared
 	// what it returns, which is given it explicitly through the pinned
 	// allowlist. Offered to anyone else it is a tool that can only refuse.

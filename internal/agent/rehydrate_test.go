@@ -283,6 +283,7 @@ func TestRehydrateAllRestoresContextAndCostAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}

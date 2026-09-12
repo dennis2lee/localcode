@@ -32,6 +32,7 @@ func checkpointLoop(t *testing.T) (*Loop, *tools.Registry, string) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	registry := tools.NewRegistry(func(context.Context, tools.Ask) (bool, error) { return true, nil })
 	registry.Register(tools.WriteFile{})
 	registry.Register(tools.Edit{})
@@ -161,6 +162,7 @@ func TestARefusedWriteIsNotCheckpointed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	// The handler that says no, which is the whole of this test.
 	registry := tools.NewRegistry(func(context.Context, tools.Ask) (bool, error) { return false, nil })
 	registry.Register(tools.WriteFile{})

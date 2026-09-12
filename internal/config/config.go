@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"localcode/internal/egress"
 	"localcode/internal/hooks"
 	"localcode/internal/provider"
 )
@@ -81,6 +82,10 @@ type Config struct {
 	// pre_tool_use/post_tool_use/user_prompt_submit/stop/session_start),
 	// keyed by event name. See internal/hooks.
 	Hooks hooks.Config `json:"hooks,omitempty"`
+
+	// Network bounds where localcode itself connects. Absent — every
+	// configuration written before this existed — nothing is checked.
+	Network *NetworkConfig `json:"network,omitempty"`
 
 	// AutoDelegate routes matching prompts to a cheaper agent instead of
 	// the session's own. Off unless configured. Also runtime-toggleable
@@ -574,6 +579,40 @@ type AgentConfig struct {
 	Tools []string `json:"tools,omitempty"`
 }
 
+// NetworkConfig is the egress half of "which tool, on which path" — the
+// question permission rules do not answer.
+//
+// It covers this process's own connections and says so: the model
+// providers, remote MCP servers, the update check. A shell command is a
+// separate process with its own sockets and is not bounded by anything
+// here; see internal/egress for why refusing to run commands that look
+// networked would be theatre rather than a control.
+type NetworkConfig struct {
+	Egress *EgressConfig `json:"egress,omitempty"`
+}
+
+// EgressConfig is the destination allow list.
+type EgressConfig struct {
+	// Enforced turns the list on. Off, the list is inert — which is what
+	// makes it safe to write one down and try it before relying on it.
+	Enforced bool `json:"enforced,omitempty"`
+	// Allow is the destinations permitted: a bare host name, or "*.base"
+	// for any sub-domain of base and base itself. Loopback is always
+	// allowed and does not need listing.
+	Allow []string `json:"allow,omitempty"`
+}
+
+// EgressPolicy is this config's egress rule, in the form the enforcing
+// package takes. Zero when nothing is configured, which permits
+// everything — the behaviour of every build before this existed.
+func (c *Config) EgressPolicy() egress.Policy {
+	if c == nil || c.Network == nil || c.Network.Egress == nil {
+		return egress.Policy{}
+	}
+	e := c.Network.Egress
+	return egress.Policy{Allow: append([]string(nil), e.Allow...), Enforced: e.Enforced}
+}
+
 // Validate checks that all cross-references (agent -> profile -> provider)
 // resolve, so the daemon fails fast at startup rather than mid-task.
 func (c *Config) Validate() error {
@@ -591,6 +630,26 @@ func (c *Config) Validate() error {
 		if p.MaxConcurrentTasks < 0 || p.MaxConcurrentTasks > maxProviderConcurrency {
 			return fmt.Errorf("provider %q: max_concurrent_tasks is %d, outside 0..%d (0 means no per-provider limit)",
 				name, p.MaxConcurrentTasks, maxProviderConcurrency)
+		}
+	}
+
+	// Bounded at load: a rule with a scheme or a port in it looks like it
+	// works and silently matches nothing, which is the worst shape a
+	// security control can take.
+	if c.Network != nil && c.Network.Egress != nil {
+		for _, rule := range c.Network.Egress.Allow {
+			r := strings.TrimSpace(rule)
+			switch {
+			case r == "":
+				return fmt.Errorf("network.egress.allow has an empty entry")
+			case strings.Contains(r, "/"), strings.Contains(r, ":"):
+				return fmt.Errorf("network.egress.allow entry %q looks like a URL; it takes host names, as in api.example.com or *.example.com", rule)
+			case strings.Contains(r, "*") && !strings.HasPrefix(r, "*."):
+				return fmt.Errorf("network.egress.allow entry %q: the only wildcard is a leading \"*.\"", rule)
+			}
+		}
+		if c.Network.Egress.Enforced && len(c.Network.Egress.Allow) == 0 {
+			return fmt.Errorf("network.egress is enforced with an empty allow list, which would refuse every model provider; list the hosts to permit, or set enforced to false")
 		}
 	}
 

@@ -175,6 +175,7 @@ func testLoop(t *testing.T, serverURL string) (*Loop, string) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	const sessionID = "s1"
 	if _, err := store.CreateSession(sessionID, "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)

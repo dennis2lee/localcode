@@ -70,6 +70,7 @@ func taskWorkspaceLoop(t *testing.T, turns int) (*Loop, *string, string) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	var seen string
 	reg := tools.NewRegistry(nil)
 	reg.Register(pwdTool{seen: &seen})

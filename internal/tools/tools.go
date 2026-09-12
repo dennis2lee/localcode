@@ -366,6 +366,37 @@ func (r *Registry) Names() []string {
 	return append([]string(nil), r.order...)
 }
 
+// Decide answers what a call to name would meet, before it is made.
+//
+// The same question Call asks the resolver, asked early. It exists for
+// the turn that cannot answer a prompt at all — a scheduled run, a
+// one-shot in a pipe — where offering a tool whose permission can only
+// be refused costs the model a whole plan before it finds out. Debate
+// was kept out of those turns by hiding it; this is how a tool whose
+// answer depends on the rules rather than on the situation can be kept
+// out too.
+//
+// Asked with no input, so it speaks for the tool rather than for one
+// call. That is the right granularity here: what is being decided is
+// whether to offer the tool at all.
+func (r *Registry) Decide(ctx context.Context, name string) Decision {
+	r.mu.RLock()
+	t, ok := r.tools[name]
+	resolver := r.Resolver
+	r.mu.RUnlock()
+	if !ok {
+		return DecisionDeny
+	}
+	static := t.RequiresPermission(nil)
+	if resolver == nil {
+		if static {
+			return DecisionAsk
+		}
+		return DecisionAllow
+	}
+	return resolver(ctx, Query{Tool: name, Static: static, Class: ClassOf(t)}).Decision
+}
+
 // IsAllowed reports whether name is permitted under an allowed list from
 // an agent's Tools restriction. A nil/empty list means unrestricted.
 func IsAllowed(allowed []string, name string) bool {

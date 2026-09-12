@@ -1,5 +1,7 @@
 package tui
 
+import "strings"
+
 // rememberPrompt appends a submitted prompt to the recall history and
 // resets navigation back to the composing position. Consecutive duplicates
 // are collapsed, the way a shell's history does, so holding Enter on the
@@ -54,23 +56,37 @@ func (m Model) atInputBottom() bool {
 
 // cursorRune is where the cursor is, in runes from the start of the box.
 //
-// A single line only, which is what the completions need: both of them
-// look backwards for a token, and putting the cursor back after a splice
-// means naming a column on a row this widget will not let us pick.
-// Reporting -1 for the multi-line case makes targetAt find nothing, which
-// is the right answer until that is solved.
+// Every line, not only the first. It used to report -1 for anything
+// multi-line, which switched both completions off: they look backwards
+// for a token and then have to put the cursor back after the splice, and
+// there is no row setter on this widget to put it back with.
+//
+// Both halves are solved without one. Reading is exact arithmetic, and
+// the widget makes it so: it stores its value as logical lines, Line()
+// is the logical row and Column() the rune column within it, so the
+// offset is the runes in the rows above plus one newline each plus the
+// column. Writing is setInputAt below, which never names a row at all.
 //
 // Column, and not LineInfo's CharOffset, which is what this used to read.
 // CharOffset is a display width: it counts a double-width rune twice, so
 // on a Korean prompt it ran ahead of the text and cursorCompletable
 // indexed past the end of it and took the TUI down. The two are equal for
 // anything ASCII, which is why it survived so long. Column is the rune
-// the cursor is on, and the unit SetCursorColumn takes back.
+// the cursor is on.
 func (m Model) cursorRune() int {
-	if m.input.LineCount() != 1 {
+	row := m.input.Line()
+	if row < 0 {
 		return -1
 	}
-	return m.input.Column()
+	lines := strings.Split(m.input.Value(), "\n")
+	if row >= len(lines) {
+		return -1
+	}
+	at := 0
+	for _, line := range lines[:row] {
+		at += len([]rune(line)) + 1 // the newline that ended it
+	}
+	return at + m.input.Column()
 }
 
 // cursorCompletable reports whether Right is completion rather than
@@ -107,8 +123,20 @@ func (m *Model) setInputTo(text string) {
 // completed mid-sentence, the cursor belongs after the name rather than
 // at the end of a sentence the person has already written.
 func (m *Model) setInputAt(text string, at int) {
-	m.input.SetValue(text)
-	m.input.SetCursorColumn(at)
+	r := []rune(text)
+	at = min(max(at, 0), len(r))
+	// Backwards, and that is what makes it exact on a multi-line prompt.
+	// SetCursorColumn only names a column on the row the cursor is
+	// already on, and the only ways to change rows move by *visual* row,
+	// which stops matching logical lines the moment anything wraps. So no
+	// row is ever named: the tail goes in first, the cursor is sent to
+	// the very beginning — the one position that needs no arithmetic —
+	// and the head is typed in front of it, which leaves the cursor
+	// exactly where the head ends.
+	m.input.Reset()
+	m.input.InsertString(string(r[at:]))
+	m.input.MoveToBegin()
+	m.input.InsertString(string(r[:at]))
 	m.resizeLayout()
 }
 

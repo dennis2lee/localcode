@@ -59,6 +59,7 @@ func laneLoop(t *testing.T, localURL, hostedURL string, localCap, globalCap int)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
 			"local":  {Type: config.ProviderOpenAICompat, BaseURL: localURL, MaxConcurrentTasks: localCap},

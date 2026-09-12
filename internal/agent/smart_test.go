@@ -78,6 +78,7 @@ func newSmartLoop(t *testing.T, modelURL string) *Loop {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	registry := tools.NewRegistry(nil)
 	registry.Register(tools.ReadFile{})
 	registry.Register(tools.Glob{})

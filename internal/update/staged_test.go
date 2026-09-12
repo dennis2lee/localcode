@@ -41,7 +41,12 @@ func TestVersionOfAsksTheBinary(t *testing.T) {
 func TestStagedBinaryIsEmptyWhenNothingIsStaged(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("LOCALAPPDATA", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows, so isolating HOME
+	// alone leaves the test reading the real home there. One directory,
+	// not two: t.TempDir() makes a fresh one on every call.
+	t.Setenv("USERPROFILE", home)
 	if got := StagedBinary(); got != "" {
 		t.Errorf("StagedBinary = %q with nothing staged", got)
 	}

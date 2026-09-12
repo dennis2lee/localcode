@@ -73,6 +73,7 @@ func TestLoopEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	const sessionID = "test-session"
 	if _, err := store.CreateSession(sessionID, "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)

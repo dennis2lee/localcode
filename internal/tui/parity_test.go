@@ -212,3 +212,110 @@ func TestRewindLeavesATypedPromptAlone(t *testing.T) {
 		t.Errorf("a typed prompt was overwritten with the undone one: %q", got)
 	}
 }
+
+// Stopping a turn drops the queue the daemon was holding, so a line still
+// saying the model will pick a message up is a promise about a message
+// nobody has.
+func TestStoppingATurnStopsTheQueuedPromptsClaimingTheyWereSent(t *testing.T) {
+	m := newTestModel()
+	m.waiting = true
+	m, _ = pressEnterWith(t, m, "and also check the tests")
+	if !strings.Contains(m.transcriptText(), "pick this up at its next step") {
+		t.Fatalf("a mid-turn send did not say when the model would see it: %q", m.transcriptText())
+	}
+
+	m.applyEvent(events.Event{Type: events.TypeTurnCancelled})
+
+	if strings.Contains(m.transcriptText(), "pick this up at its next step") {
+		t.Errorf("a stopped turn still promises delivery: %q", m.transcriptText())
+	}
+	if !strings.Contains(m.transcriptText(), "not sent — the turn was stopped") {
+		t.Errorf("nothing says the message was discarded: %q", m.transcriptText())
+	}
+	// And the words are kept: taking them away silently is the other half
+	// of the same fault.
+	if !strings.Contains(m.transcriptText(), "and also check the tests") {
+		t.Errorf("the discarded message's text is gone: %q", m.transcriptText())
+	}
+}
+
+// A prompt drawn on Enter into an idle session is the other shape, and a
+// stop before the daemon confirmed it means the same thing.
+func TestAStoppedTurnAlsoAnswersAnUnconfirmedPrompt(t *testing.T) {
+	m := newTestModel()
+	m, _ = pressEnterWith(t, m, "do the thing")
+
+	m.applyEvent(events.Event{Type: events.TypeTurnCancelled})
+
+	if !strings.Contains(m.transcriptText(), "not sent — the turn was stopped") {
+		t.Errorf("an unconfirmed prompt was left claiming it was sent: %q", m.transcriptText())
+	}
+}
+
+// Completion used to stop at the first newline.
+//
+// cursorRune reported -1 for anything multi-line, which switched both
+// completions off — and the reason was the other half: there is no row
+// setter on the widget, so a splice could not put the cursor back.
+func TestCompletionWorksOnAMultilinePrompt(t *testing.T) {
+	m := newTestModel()
+	m.skillsList = []client.SkillInfo{{Name: "pdf-tools"}}
+
+	// Two logical lines, cursor at the end of the second.
+	m.setInputTo("first line\n/pdf-t")
+	if got := m.cursorRune(); got != len([]rune("first line\n/pdf-t")) {
+		t.Fatalf("cursorRune = %d on a two-line prompt, want the end", got)
+	}
+	if !m.cursorCompletable() {
+		t.Fatal("a multi-line prompt is still not completable")
+	}
+	next, at, ok := m.nextCompletion(m.input.Value(), m.cursorRune())
+	if !ok {
+		t.Fatal("nothing completed on the second line")
+	}
+	if next != "first line\n/pdf-tools" {
+		t.Errorf("completed to %q, want the first line left alone", next)
+	}
+	if at != len([]rune(next)) {
+		t.Errorf("the cursor was put at %d, want %d", at, len([]rune(next)))
+	}
+}
+
+// Putting the cursor back lands on the right line as well as the right
+// column, which is what naming a row could not do.
+func TestTheCursorGoesBackToTheRightLine(t *testing.T) {
+	m := newTestModel()
+	text := "alpha\nbeta\ngamma"
+
+	for _, at := range []int{0, 3, 6, 10, 11, len([]rune(text))} {
+		m.setInputAt(text, at)
+		if got := m.input.Value(); got != text {
+			t.Fatalf("the text changed: %q", got)
+		}
+		if got := m.cursorRune(); got != at {
+			t.Errorf("put the cursor at %d, read it back at %d", at, got)
+		}
+	}
+
+	// Out of range is clamped rather than panicking: a completion
+	// computed against text that has since changed is a real race.
+	m.setInputAt(text, 999)
+	if got := m.cursorRune(); got != len([]rune(text)) {
+		t.Errorf("an offset past the end landed at %d, want the end", got)
+	}
+	m.setInputAt(text, -5)
+	if got := m.cursorRune(); got != 0 {
+		t.Errorf("a negative offset landed at %d, want the start", got)
+	}
+}
+
+// A double-width character counts once, which is the bug that took the
+// TUI down when this read a display width instead of a rune count.
+func TestAKoreanPromptCountsRunesNotColumns(t *testing.T) {
+	m := newTestModel()
+	text := "첫째 줄\n둘째 줄"
+	m.setInputAt(text, len([]rune(text)))
+	if got := m.cursorRune(); got != len([]rune(text)) {
+		t.Errorf("cursorRune = %d on a Korean two-line prompt, want %d", got, len([]rune(text)))
+	}
+}

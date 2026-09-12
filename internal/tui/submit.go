@@ -101,7 +101,7 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 			// message.user event the daemon writes once the model is
 			// actually given it; until then this says it was accepted,
 			// since that wait can be minutes.
-			m.appendLocal(fmt.Sprintf("[sent — the model will pick this up at its next step] %s", text))
+			m.appendSent(fmt.Sprintf("[sent — the model will pick this up at its next step] %s", text))
 			return m, m.sendMessage(text)
 		} else {
 			// Commands can't be queued (replaying one later via

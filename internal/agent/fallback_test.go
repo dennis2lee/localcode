@@ -75,6 +75,7 @@ func newFallbackLoop(t *testing.T, url string) *Loop {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
 			"local": {Type: config.ProviderOpenAICompat, BaseURL: url},

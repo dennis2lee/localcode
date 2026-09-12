@@ -68,6 +68,17 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// its parent's snapshot already set and keeps that instead. See
 	// config.WithSmartAgent.
 	ctx = l.pinSmart(ctx)
+	// Which conversation this turn belongs to, from here rather than from
+	// runTools alone. It was set only around the tool calls, which was
+	// enough while nothing before them asked — and then hiddenTools began
+	// asking the permission resolver whether a tool could be authorized
+	// at all, which is a question about a session. Without this the
+	// resolver could not see the session's own switches, so a one-shot
+	// run with --skip-permissions looked exactly like one without.
+	//
+	// Safe to set early: every reader either wants it or ignores its
+	// absence, and runTools setting it again is the same value.
+	ctx = WithSessionID(ctx, sessionID)
 
 	profileName, profile, err := l.profileFor(ctx, sessionID, resolveAgent)
 	if err != nil {

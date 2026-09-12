@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"localcode/internal/commands"
 	"localcode/internal/events"
@@ -182,7 +183,7 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeModel(sessionID, text) },
 		func() (bool, error) { return l.routeSchedule(sessionID, agentName, text) },
 		func() (bool, error) { return l.routeShowScheduled(sessionID, text) },
-		func() (bool, error) { return l.routeKeepGoing(sessionID, text) },
+		func() (bool, error) { return l.routeKeepGoing(sessionID, agentName, text) },
 		func() (bool, error) { return l.routeRepeatLimit(sessionID, text) },
 		func() (bool, error) { return l.routeDebugLog(sessionID, text) },
 		func() (bool, error) { return l.routeAutoCompact(sessionID, text) },
@@ -287,10 +288,23 @@ func (l *Loop) routeCompact(ctx context.Context, sessionID, agentName, text stri
 }
 
 func (l *Loop) routeUsage(sessionID, text string) (bool, error) {
-	if strings.TrimSpace(text) != "/usage" {
+	arg, ok := matchToggleCommand(text, "/usage")
+	if !ok {
 		return false, nil
 	}
-	return true, l.handleCostCommand(sessionID, text)
+	if arg == "" {
+		return true, l.handleCostCommand(sessionID, text)
+	}
+	// A window, or nothing this command knows. The usage line names the
+	// words rather than guessing at one, because guessing wrong here
+	// answers a question about a different period than the one asked.
+	w, valid := parseUsageWindow(arg, time.Now())
+	if !valid {
+		return true, l.replyLocal(sessionID, text,
+			"usage: /usage for this conversation, or /usage all|today|week|month across every conversation.")
+	}
+	totals, sessions, unread := l.usageAcross(w)
+	return true, l.replyLocal(sessionID, text, usageAcrossReport(w, totals, sessions, unread))
 }
 
 func (l *Loop) routeCustomCommand(ctx context.Context, sessionID, agentName, text string) (bool, error) {

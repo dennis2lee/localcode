@@ -19,7 +19,10 @@ import (
 // /init perfectly real — and was told there is no /init, directly above
 // a list containing /init.
 func TestAKnownCommandIsNeverCalledUnknown(t *testing.T) {
-	for _, name := range []string{"/memory", "/usage"} {
+	// /memory only, now. /usage grew windows of its own — "/usage week"
+	// is a question rather than a mistake — and /init takes what to focus
+	// on, which is the fix directly below this one.
+	for _, name := range []string{"/memory"} {
 		t.Run(name, func(t *testing.T) {
 			loop, sid, bodies := effortLoop(t, "")
 
@@ -248,4 +251,72 @@ func firstBytes(s string) string {
 		return s[:400] + "..."
 	}
 	return s
+}
+
+// A command that takes an argument answers with its own usage line rather
+// than the guard's, which is the other side of the same fix: the guard
+// exists for names that do not resolve, not for arguments a command
+// declines.
+func TestACommandWithArgumentsAnswersForItself(t *testing.T) {
+	loop, sid, bodies := effortLoop(t, "")
+
+	if err := loop.SendMessage(context.Background(), sid, "boy", "/usage sideways"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if n := len(bodies()); n != 0 {
+		t.Fatalf("it reached the model (%d requests)", n)
+	}
+	reply := lastReply(t, loop, sid)
+	if strings.Contains(reply, "There is no /usage") {
+		t.Errorf("/usage was called unknown: %s", reply)
+	}
+	if !strings.Contains(reply, "all|today|week|month") {
+		t.Errorf("the answer does not name the windows it does take: %s", reply)
+	}
+}
+
+// "/keep-going" says what this conversation's model actually gets.
+//
+// The switch is daemon-wide and the default is a family table, so "on"
+// answered nothing about the conversation it was typed in: a model
+// outside the table gets no carry-on at all and needs one on its
+// profile, and nothing said so. That was the half of the stalled-turn
+// finding that stayed open after the completion signal landed.
+func TestKeepGoingSaysWhatThisConversationGets(t *testing.T) {
+	loop, sid, bodies := effortLoop(t, "")
+
+	if err := loop.SendMessage(context.Background(), sid, "boy", "/keep-going on"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if n := len(bodies()); n != 0 {
+		t.Fatalf("/keep-going reached the model (%d requests)", n)
+	}
+	reply := lastReply(t, loop, sid)
+	// This fixture runs muse-glimmer-30b, which is in the family.
+	if !strings.Contains(reply, "muse-glimmer-30b") {
+		t.Errorf("the reply does not name this conversation's model: %s", reply)
+	}
+	if !strings.Contains(reply, "carry-on") {
+		t.Errorf("the reply does not say what this conversation gets: %s", reply)
+	}
+}
+
+// And on a model outside the family it says so, and says what to do
+// about it — which is the whole complaint.
+func TestKeepGoingNamesTheWayOutForAnUnlistedModel(t *testing.T) {
+	loop, sid, _ := effortLoop(t, "")
+	// The same conversation, pointed at something the table does not know.
+	p := loop.Config.Profiles["only"]
+	p.Model = "some-other-model"
+	loop.Config.Profiles["only"] = p
+
+	if err := loop.SendMessage(context.Background(), sid, "boy", "/keep-going on"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	reply := lastReply(t, loop, sid)
+	for _, want := range []string{"some-other-model", "never nudged", "keep_going", "config.json"} {
+		if !strings.Contains(reply, want) {
+			t.Errorf("the reply does not mention %q: %s", want, reply)
+		}
+	}
 }

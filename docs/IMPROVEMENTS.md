@@ -53,7 +53,7 @@ Completed findings remain in this list to preserve item numbers and release hist
    * Any deny decision rejects the complete command.
    * Command substitution and output redirection never receive automatic approval.
 
-4. **Configurable hook timeout. Open.**
+4. **Configurable hook timeout. Done in v0.118.0.**
 
    * Fixed timeout: 30 seconds.
    * Proposed setting: per-hook `timeout`.
@@ -105,7 +105,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * `localcode mcp` sorts top-level keys when rewriting configuration.
     * Values are preserved, but diffs include ordering changes.
 
-11. **Cross-session usage totals. Open.**
+11. **Cross-session usage totals. Done in v0.118.0.**
 
     * `/usage` reports one session.
     * Daily or weekly totals require separate aggregation.
@@ -136,13 +136,13 @@ Completed findings remain in this list to preserve item numbers and release hist
 
     * `permission-skip-tools` provides a way to reduce repeated prompts without disabling the other permission controls.
 
-16. **Hook timeout failure policy. Open.**
+16. **Hook timeout failure policy. Done in v0.118.0.**
 
     * A `pre_tool_use` hook terminated after 30 seconds does not block the tool.
     * Current documented behavior: fail open.
     * Required decisions: per-hook `timeout`, a `fail_closed` option, and the default failure policy.
 
-17. **Sensitive content in compaction logs. Open.**
+17. **Sensitive content in compaction logs. Done in v0.118.0.**
 
     * Since v0.12.0, the `compacted` event stores the full summary for restart recovery.
     * A summary may retain sensitive session content.
@@ -180,7 +180,7 @@ Completed findings remain in this list to preserve item numbers and release hist
 
     * Dictation, the speech engine, and the Windows installer model download were removed.
 
-23. **Distinguishing stalled and completed turns. Open.**
+23. **Distinguishing stalled and completed turns. Done in v0.118.0.**
 
     * v0.48.0 added bounded continuation for models that describe a next step without executing it.
     * Known model families receive an instruction and a `keep_going` budget.
@@ -189,7 +189,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Models outside the quirk table require manual `keep_going` configuration.
     * Remaining: an explicit completion signal. Tool-use history alone does not distinguish completion from abandonment.
 
-24. **Cancelled queued messages retain a sent indication. Open.**
+24. **Cancelled queued messages retain a sent indication. Done in v0.118.0.**
 
     * Source: August 2026 review, M19. Rechecked against v0.48.0.
     * Mid-turn input is displayed as sent with a promise of delivery at the next model step.
@@ -245,7 +245,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Trust labels are declarations, not enforcement. They do not guarantee that a model ignores instructions in external content.
     * Permission checks remain the enforcement mechanism.
 
-29. **Network egress policy. Open.**
+29. **Network egress policy. Done in v0.118.0.**
 
     * Permission rules control tools and paths.
     * They do not restrict network destinations used by an executing shell command or MCP server.
@@ -336,7 +336,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     | Child-session retention | A 32-agent run creates 32 stored sessions and 32 `/tasks` rows. No cleanup policy exists. |
     | Concurrent permission display | The broker represents concurrent requests, but client presentation is unspecified. All four execution slots can wait while the user sees one request. |
 
-37. **Direct selection of Smart Agent specialists. Open.**
+37. **Direct selection of Smart Agent specialists. Done in v0.118.0.**
 
     * Specialists are available for delegation but absent from direct selection.
     * `GET /api/agents` returns only `config.Agents`. TUI Tab, the Web UI menu, and `localcode run --agent oracle` therefore cannot select the six dynamic specialists.
@@ -346,7 +346,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Adding a specialist to `config.Agents` marks it as user-defined in `smart.Agents`. That changes its prompt assignment to the orchestration prompt.
     * Required design: an override interface in `internal/smart` that preserves specialist identity.
 
-38. **Orchestration permission feasibility. Open.**
+38. **Orchestration permission feasibility. Done in v0.118.0.**
 
     * `Orchestrate` requires permission for every call.
     * A run can contain up to 32 agent turns and last half an hour.
@@ -367,7 +367,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     | MCP filesystem writes | Tools outside the two-name capture set are not captured, even when registered through the same registry. |
     | Background-task events | Rewind can remove `task.spawned` while later `task.status` events remain. Refusing rewind while a child is live reduces but does not eliminate the inconsistency. |
 
-40. **Multiline TUI completion. Open.**
+40. **Multiline TUI completion. Done in v0.118.0.**
 
     * Both clients complete commands and references within a sentence.
     * The TUI disables completion when the input contains more than one line.
@@ -377,7 +377,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * The Web UI uses the textarea's absolute `selectionStart` offset and supports multiline completion.
     * Required change: an upstream line setter or local row tracking consistent with the widget.
 
-41. **Test suites that run on Windows. Open.**
+41. **Test suites that run on Windows. Done in v0.118.0.**
 
     * The Windows CI job runs tests since v0.87.0, scoped to what passes there: `internal/update` and `internal/childproc` whole, the handoff test in `cmd/localcode`, and the handoff and update tests in `internal/daemon`.
     * Widened in v0.92.0: `internal/userdirs`, `internal/skills` and `internal/rules` run whole, and the `cmd/localcode` filter also covers the two agent-directory wiring tests. Path resolution is a claim that has to be executed on the platform it is claimed for.
@@ -538,6 +538,18 @@ Completed findings remain in this list to preserve item numbers and release hist
    * One did, and it shipped: a search cancelled two milliseconds in, on a tree that walks in under two without the detector. It was green in v0.116.0's gate and red on a plain run of the same commit.
    * Two fixes, because either alone leaves the hole. The test now measures how long the search takes on the machine it is running on and cancels a tenth of the way in, so it asserts a property of the code rather than a number from one build mode; and the gate grew a plain lane beside the race one, in its own group so it runs alongside rather than after.
 
+
+
+59. **The eleven that were still open. Done in v0.118.0.**
+
+   * Closed together because they were the whole remaining list, and several turned out to share a shape: a control that existed and could not be seen, or a claim wider than what was enforced.
+   * **Hooks (4, 16).** A timeout arrived as `signal: killed` in a warning, indistinguishable from a script that ran and failed, and the tool went ahead — so a `pre_tool_use` guard written to stop something dangerous was silently not stopping it. A hook that does not finish now says it never decided. The default failure policy stays permissive and that is the decision, not inertia: a hook that cannot run and blocks everything locks somebody out of their own tools mid-session, which is the commoner accident and the more damaging one. `fail_closed` is one line of config for the other case, and covers not-finishing only — a script that ran and exited non-zero has decided, and treating each of its bugs as a veto would be a lockout per bug.
+   * **Session logs (17).** The review's answer: `0644` in a `0755` directory, which on a shared machine is every other account on it — and compaction records its summary in full, so one event holds a condensed copy of the whole conversation. The checkpoint blobs in the same package had been `0700` since they were added; the tighter answer was already here, applied to the copies of files and not to the conversations about them. Existing directories are narrowed on open, because a directory keeps the mode it was made with. Retention stays manual and documented rather than automatic: deleting somebody's conversations on a timer is not a default to introduce.
+   * **Usage (11).** Read from the logs when asked rather than kept as a running total, so there is one place the truth lives. Archived conversations count — they happened, and a total quietly leaving them out is wrong in the direction nobody checks, which is the same reasoning that keeps a rewound turn's tokens in the per-session figure.
+   * **Terminal (24, 40).** A stopped turn left its queued prompts saying they had been sent, about messages the daemon had already dropped; they are rewritten rather than removed, because taking the words away silently is the other half of the same fault. And completion works past the first newline: reading the offset is exact arithmetic over the widget's own logical lines, and writing the cursor back never names a row at all — the tail goes in first, the cursor goes to the one position that needs no arithmetic, and the head is typed in front of it.
+   * **Agents (37, 38, 23).** The specialists were delegatable and not selectable, and nothing underneath was ever the obstacle: `profileFor` and `agentConfig` have always resolved one by name, so the gap was the listing and the check beside it. Orchestration is no longer offered to a turn that could never authorize it — the permission resolver is asked before the tools are advertised, which needed the session id to be on the context from the start of a turn rather than only around the tool calls. And `/keep-going` now says what the conversation it was typed in actually gets; the explicit completion signal that item asked for arrived with the keep_going redesign, measured at 13 requests down to 7 with one tool-less question and no carry-ons.
+   * **Network (29).** The honest scope, and saying so is the point. localcode's own outbound connections all meet at `http.DefaultTransport` or a clone of it, so one checked dialer covers the providers, remote MCP and the update check. A shell command is a separate process with its own sockets and is not covered; refusing to *run* commands whose names look networked would be theatre, defeated by a script or a different binary name in seconds. What bounds those is the permission prompt on bash and the operating system, and the documentation says exactly that rather than implying a control that is not there.
+   * **Windows (41).** The three named causes fixed rather than worked around: every test that builds a store closes it, the end-to-end test marshals its nested tool arguments instead of hand-escaping one of the two levels, and the tests isolating `HOME` set `USERPROFILE` — which is what `os.UserHomeDir` reads there. `internal/session` and `internal/daemon` run whole on Windows CI now; `cmd/localcode` keeps its filter, since what remains there is about driving real processes rather than about paths.
 
 
 ## UI ideas

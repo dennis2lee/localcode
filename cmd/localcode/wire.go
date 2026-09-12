@@ -12,6 +12,7 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/credentials"
 	"localcode/internal/daemon"
+	"localcode/internal/egress"
 	mcpclient "localcode/internal/mcp"
 	"localcode/internal/memory"
 	"localcode/internal/prompt"
@@ -77,6 +78,13 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// Before any client is built, because it works by replacing the
+	// transport every one of them ends up using. Installed once per
+	// process: a "/reset-mcp" that re-reads the config must not wrap the
+	// transport a second time, and egress.Install is idempotent for that
+	// reason.
+	egress.Install(cfg.EgressPolicy())
 
 	progress("opening model providers")
 	providers, err := buildProviders(ctx, cfg, e)

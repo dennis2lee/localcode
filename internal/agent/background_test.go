@@ -64,6 +64,7 @@ func newBackgroundLoop(t *testing.T, modelURL string) (*Loop, *TaskManager) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	registry := tools.NewRegistry(nil)
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
@@ -663,6 +664,7 @@ func TestNestedSynchronousDelegationCompletesAtTheDefaultConcurrency(t *testing.
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	registry := tools.NewRegistry(nil)
 	cfg := &config.Config{
 		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL}},

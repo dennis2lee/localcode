@@ -67,6 +67,7 @@ func compactTestLoop(t *testing.T, url string) (*Loop, *session.Store) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
 			"local": {Type: config.ProviderOpenAICompat, BaseURL: url},
@@ -234,6 +235,7 @@ func TestTheProbedWindowReachesTheMeter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
 			"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL + "/v1"},
@@ -319,6 +321,7 @@ func TestATruncatedReplySaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	cfg := &config.Config{
 		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL}},
 		Profiles:       map[string]config.Profile{"p": {Provider: "local", Model: "m", MaxTokens: 4096, ContextWindow: 200000}},

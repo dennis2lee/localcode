@@ -23,6 +23,7 @@ func TestEachSessionGetsItsOwnWorkspaceRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSessionIn("s-alpha", "", "general-purpose", "/projects/alpha", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -90,6 +91,7 @@ func TestOnlyTheModelsThatNeedItGetAFormattingNote(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new store: %v", err)
 		}
+		t.Cleanup(store.Close)
 		if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
 			t.Fatalf("create session: %v", err)
 		}

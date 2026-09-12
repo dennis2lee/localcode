@@ -24,6 +24,7 @@ func askingBroker(t *testing.T) (*PermissionBroker, *session.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatal(err)
 	}

@@ -51,11 +51,23 @@ func mockModelServer(t *testing.T, writePath string) *httptest.Server {
 
 		var chunks []string
 		if !hasToolResult {
-			escapedPath := strings.ReplaceAll(writePath, `\`, `\\`)
-			args := `{\"path\":\"` + escapedPath + `\",\"content\":\"hi\"}`
+			// The arguments field is a JSON string holding JSON, so a
+			// path needs escaping twice. Hand-escaping got one of the two
+			// levels: a Windows path arrived as {"path":"C:\Users\..."}
+			// and the inner parser stopped at `\U` with "invalid
+			// character 'U' in string escape code". Marshalling twice is
+			// the same operation done by something that counts.
+			inner, err := json.Marshal(map[string]string{"path": writePath, "content": "hi"})
+			if err != nil {
+				t.Fatalf("marshal tool arguments: %v", err)
+			}
+			argsField, err := json.Marshal(string(inner))
+			if err != nil {
+				t.Fatalf("marshal the arguments string: %v", err)
+			}
 			chunks = []string{
 				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"write_file","arguments":""}}]}}]}`,
-				`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"` + args + `"}}]}}]}`,
+				`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":` + string(argsField) + `}}]}}]}`,
 				`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
 			}
 		} else {
@@ -79,6 +91,7 @@ func newTestDaemon(t *testing.T, modelURL string) *Daemon {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 
 	broker := agent.NewPermissionBroker(store)
 	registry := tools.NewRegistry(broker.Func())
@@ -562,6 +575,9 @@ func TestDaemonUploadFile(t *testing.T) {
 
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
+	// os.UserHomeDir reads USERPROFILE on Windows, so isolating HOME
+	// alone leaves the test reading the real home there.
+	t.Setenv("USERPROFILE", fakeHome)
 
 	d := newTestDaemon(t, model.URL)
 	httpSrv := httptest.NewServer(d.Handler())
@@ -596,7 +612,12 @@ func TestDaemonUploadFile(t *testing.T) {
 func TestDaemonUploadFileUnknownSession(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer model.Close()
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows, so isolating HOME
+	// alone leaves the test reading the real home there. One directory,
+	// not two: t.TempDir() makes a fresh one on every call.
+	t.Setenv("USERPROFILE", home)
 
 	d := newTestDaemon(t, model.URL)
 	httpSrv := httptest.NewServer(d.Handler())
@@ -616,6 +637,9 @@ func TestDaemonUploadFileSanitizesPathTraversal(t *testing.T) {
 
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
+	// os.UserHomeDir reads USERPROFILE on Windows, so isolating HOME
+	// alone leaves the test reading the real home there.
+	t.Setenv("USERPROFILE", fakeHome)
 
 	d := newTestDaemon(t, model.URL)
 	httpSrv := httptest.NewServer(d.Handler())

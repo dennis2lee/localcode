@@ -21,6 +21,7 @@ func newPermissionTestBroker(t *testing.T) (*PermissionBroker, *session.Store, s
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -375,6 +376,7 @@ func TestSpawnLeavesNoOrphanWhenTheParentIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	tm := NewTaskManager(context.Background(), &Loop{Store: store}, 1)
 	before := len(store.AllSessions())
 	if _, err := tm.Spawn("s-does-not-exist", "general-purpose", "hi"); err == nil {

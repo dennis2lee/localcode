@@ -28,6 +28,7 @@ func newCustomCommandTestLoop(t *testing.T, modelURL string, cmds []commands.Com
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	registry := tools.NewRegistry(nil)
 
 	cfg := &config.Config{

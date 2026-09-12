@@ -173,6 +173,14 @@ func (c *Config) merge(other *Config) {
 	if other.AutoDelegate != nil {
 		c.AutoDelegate = other.AutoDelegate
 	}
+	// Wholesale rather than field by field, the way AutoDelegate is: an
+	// allow list is a set, and merging two of them would produce a third
+	// nobody wrote — the project quietly widening what the home
+	// directory permits is the wrong direction for this particular
+	// setting to be wrong in.
+	if other.Network != nil {
+		c.Network = other.Network
+	}
 	if other.SkipPermissions != nil {
 		c.SkipPermissions = other.SkipPermissions
 	}

@@ -82,6 +82,41 @@ var KnownEvents = map[string]bool{
 type Hook struct {
 	Matcher string `json:"matcher,omitempty"`
 	Command string `json:"command"`
+
+	// Timeout bounds this hook in seconds, or 0 for the 30-second
+	// default. A check that has to look at a large tree, or ask
+	// something over a network, does not fit in a number chosen for
+	// everything; the alternative to a per-hook setting was writing the
+	// hook to exit early and let the tool through, which is a guard that
+	// gives up rather than one that takes longer.
+	Timeout int `json:"timeout,omitempty"`
+
+	// FailClosed blocks the action when this hook does not finish —
+	// killed at its timeout, or unable to start at all.
+	//
+	// Off by default, and the default is a real decision rather than
+	// inertia. A hook that cannot run and blocks everything locks
+	// somebody out of their own tools in the middle of a session, which
+	// is the more common accident and the more damaging one; a hook that
+	// cannot run and allows leaves a guard silently not guarding, which
+	// matters to the smaller number of people who deliberately wrote
+	// one. So the safe-for-most default stays, the other is one line of
+	// config away, and a timeout now says loudly that the hook never got
+	// to decide rather than reporting it as an ordinary script failure.
+	//
+	// It covers not-finishing only. A hook that ran and exited nonzero
+	// has decided: the contract says exit 2 to block, and anything else
+	// is a broken script rather than a veto. Treating that as a block
+	// would make every bug in a hook a lockout.
+	FailClosed bool `json:"fail_closed,omitempty"`
+}
+
+// timeout is how long this hook may take.
+func (h Hook) timeout() time.Duration {
+	if h.Timeout > 0 {
+		return time.Duration(h.Timeout) * time.Second
+	}
+	return defaultTimeout
 }
 
 // Config maps an event name to the ordered list of hooks registered for
@@ -178,7 +213,7 @@ func RunOutcome(ctx context.Context, cfg Config, event, dir string, payload map[
 			}
 		}
 
-		hookCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
+		hookCtx, cancel := context.WithTimeout(ctx, h.timeout())
 		cmd := shell.Command(hookCtx, h.Command)
 		cmd.Dir = dir
 		cmd.Stdin = bytes.NewReader(data)
@@ -186,6 +221,11 @@ func RunOutcome(ctx context.Context, cfg Config, event, dir string, payload map[
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 		runErr := cmd.Run()
+		// Read before cancel, not after. A context keeps its first cause,
+		// so this would be right either way, and depending on that is
+		// depending on a detail of the standard library for a line whose
+		// whole job is to tell two failures apart.
+		timedOut := hookCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
 		cancel()
 
 		var resp struct {
@@ -210,6 +250,29 @@ func RunOutcome(ctx context.Context, cfg Config, event, dir string, payload map[
 					r = fmt.Sprintf("hook %q exited with status 2", h.Command)
 				}
 				out.Blocked, out.Reason = true, r
+				return out
+			}
+			// Killed at its timeout is a different thing from a script
+			// that ran and failed, and it used to be reported as the
+			// same thing: "signal: killed", in a warning, with the tool
+			// going ahead. The hook never reached a decision, and that
+			// is what the message has to say — and what fail_closed acts
+			// on.
+			//
+			// hookCtx rather than the error, because a killed process
+			// reports a signal rather than a deadline.
+			if timedOut {
+				note := fmt.Sprintf("hook %q did not finish within %s, so it never decided",
+					h.Command, h.timeout())
+				if h.FailClosed {
+					out.Blocked, out.Reason = true, note+" (fail_closed)"
+					return out
+				}
+				out.Warnings = append(out.Warnings, errors.New(note+"; the action went ahead"))
+				continue
+			}
+			if h.FailClosed && errors.Is(runErr, exec.ErrNotFound) {
+				out.Blocked, out.Reason = true, fmt.Sprintf("hook %q could not be started, so it never decided (fail_closed)", h.Command)
 				return out
 			}
 			out.Warnings = append(out.Warnings, fmt.Errorf("hook %q: %w (stderr: %s)", h.Command, runErr, strings.TrimSpace(stderr.String())))
