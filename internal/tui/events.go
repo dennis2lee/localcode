@@ -219,6 +219,21 @@ func (m *Model) applyEvent(ev events.Event) {
 			Provider: strField(ev.Data, "provider"),
 			Source:   strField(ev.Data, "source"),
 		}
+	case events.TypeUsage:
+		// Merged rather than replaced: the live estimates broadcast
+		// during a stream carry tps alone, and the exact figures arrive
+		// at the end. A client that overwrote the whole readout each
+		// time would blank the context percentage every few hundred
+		// milliseconds while the model was talking.
+		if p, ok := ev.Data["percent"].(float64); ok && p > 0 {
+			m.usagePercent = p
+		}
+		if v, ok := ev.Data["tps"].(float64); ok {
+			m.tps = v
+		}
+		if v, ok := ev.Data["show_tps"].(bool); ok {
+			m.showTPS = v
+		}
 	case events.TypeEffortChanged:
 		// The whole answer is in the event, so this needs no request of
 		// its own — which matters because applyEvent cannot issue one.

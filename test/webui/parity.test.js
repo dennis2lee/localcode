@@ -99,3 +99,30 @@ test('stopping a turn stops the queued prompts claiming they were sent', async (
   // of the same fault.
   assert.match(app.transcript(), /and also check the tests/);
 });
+
+test('reasoning is not painted while /thinking is off', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'weighing it up' } });
+  assert.match(app.transcript(), /weighing it up/);
+
+  app.sse.emit({ type: 'settings.changed', data: { show_thinking: false } });
+  app.sse.emit({ type: 'thinking.end', data: {} });
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'this should not appear' } });
+
+  assert.doesNotMatch(app.transcript(), /this should not appear/);
+  // The deltas still arrive and are simply not painted, so turning it
+  // back on mid-turn shows the rest rather than nothing until next turn.
+  app.sse.emit({ type: 'settings.changed', data: { show_thinking: true } });
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'and now it does' } });
+  assert.match(app.transcript(), /and now it does/);
+});
+
+test('a turn boundary carries a time only while /timestamps is on', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'message.user', data: { text: 'first' } });
+  assert.doesNotMatch(app.transcript(), /turn-time/);
+
+  app.sse.emit({ type: 'settings.changed', data: { show_timestamps: true } });
+  app.sse.emit({ type: 'message.user', data: { text: 'second' } });
+  assert.match(app.transcript(), /turn-time/);
+});

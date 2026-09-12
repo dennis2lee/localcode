@@ -1112,6 +1112,23 @@ All three are dropped while a Claude model is reasoning: the API decides how it 
 
 Rewind is refused in scheduled runs and `localcode run` pipes. It is also refused while a background child of the conversation is running.
 
+### `/review`
+
+`/review` reads what changed and says what is wrong with it. It modifies nothing.
+
+| Argument | Reviewed |
+|---|---|
+| none | the uncommitted changes in the working tree, staged and unstaged together |
+| `staged` | the staged changes |
+| `head` or `last` | the most recent commit |
+| anything else | handed to `git diff` as typed: a revision, a range, a branch, a path |
+
+The range is named in the prompt rather than left for the model to work out, and a range that turns up empty is reported rather than quietly replaced with something else — a review of the wrong diff reads exactly like a review of the right one.
+
+It is not `/debate`, which sends the work to other agents and runs rounds. This is one turn, by whoever is answering, about a diff.
+
+**A `review` command of your own wins.** This is the one built-in that yields to a custom command and a skill of the same name, and the reason is that the name was in people's `.localcode/commands/` before the built-in existed — there was none, the documentation said to write one for exactly this, and they did. Taking the name now would silently replace a file somebody wrote and tuned for their repository with a template that knows nothing about it. Every other built-in comes first; see [the note on shadowing](#other-local-commands).
+
 ### `/redo`
 
 `/redo` puts back the turn `/rewind` just undid — both halves: the exchange returns to model context, and the files the turn had written are written again.
@@ -1178,6 +1195,19 @@ An argument widens it past this conversation:
 | `/usage month` | the last 30 days |
 
 Archived conversations are counted: they are conversations that happened, and a total quietly leaving them out would be wrong in the direction nobody checks — the same reason a turn later undone still counts what it cost. The figures are read out of the conversations' own logs at the moment you ask, rather than kept as a running total somewhere else, so there is one place the truth lives. A log that cannot be read is named in the reply rather than skipped in silence.
+
+### What the transcript shows
+
+Two switches, both daemon-wide and persisted, so two clients watching the same conversation draw it the same way and the choice survives a restart. A preference kept in one browser is lost on the next machine, which is why neither is per client.
+
+| Command | Effect | Default |
+|---|---|---|
+| `/thinking [on\|off]` | Whether a client paints the model's reasoning while it arrives | on |
+| `/timestamps [on\|off]` | Whether a time is shown beside each turn boundary | off |
+
+`/thinking off` is about what the clients paint, not about what the model does: reasoning is broadcast and never logged either way, so turning it off hides what is arriving rather than deleting anything. `/effort` is the one that changes how much reasoning there is. Turning it back on mid-turn shows the rest of the reasoning, because the switch is read where the text is painted rather than where it arrives.
+
+The time goes on the turn boundary rather than on every line. A transcript is read as a conversation, and a column of times down the side of one is noise until the question is "when did this happen" — which is the question the switch exists for.
 
 ### Where localcode may connect
 

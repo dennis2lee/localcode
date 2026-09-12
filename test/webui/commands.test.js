@@ -7,15 +7,25 @@ const assert = require('node:assert/strict');
 
 const { load } = require('./harness');
 
-// Regression, B7. Every line of HELP_TEXT is raw text that tryLocalCommand
+// Regression, B7. Every help line is raw text that tryLocalCommand
 // escapes exactly once on the way to the transcript. One entry used to be
 // pre-escaped in the source, so it went through escapeHtml twice and the page
 // showed a literal "&lt;skill name&gt;".
+//
+// helpLines() rather than a constant, because the daemon half of the help
+// is rendered from the list the daemon serves now — which is also worth
+// checking here: a description written on the daemon reaches the page the
+// same way this line does.
 test('the help text is raw, not pre-escaped', async () => {
   const app = await load();
-  assert.ok(Array.isArray(app.HELP_TEXT), app.HELP_TEXT);
-  assert.ok(app.HELP_TEXT.some((line) => line.includes('/<skill name>')), app.HELP_TEXT);
-  for (const line of app.HELP_TEXT) {
+  app.state.slashCommands = [{ name: 'compact', description: 'summarize <now>', usage: '[instructions]' }];
+  const lines = app.helpLines();
+  assert.ok(Array.isArray(lines), lines);
+  assert.ok(lines.some((line) => line.includes('/<skill name>')), lines);
+  // And the daemon's own half is there, unescaped.
+  assert.ok(lines.some((line) => line.includes('/compact [instructions]')), lines);
+  assert.ok(lines.some((line) => line.includes('summarize <now>')), lines);
+  for (const line of lines) {
     assert.ok(!line.includes('&lt;'), line);
     assert.ok(!line.includes('&gt;'), line);
     assert.ok(!line.includes('&amp;'), line);

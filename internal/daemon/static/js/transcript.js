@@ -1,7 +1,7 @@
 import { transcriptEl, jumpBottomBtn } from './dom.js';
 import { renderMarkdown } from './markdown.js';
 import { createFollower } from './scroll.js';
-import { session } from './state.js';
+import { app, session } from './state.js';
 
 // The transcript follows the newest output only while the reader is at
 // the bottom of it. See scroll.js: this is the module that owns
@@ -46,6 +46,16 @@ function appendUserBlock(text, pending) {
   // left saying "you" once the inline prefix is gone, so it has to be
   // readable by a screen reader and findable by the browser's own find.
   sep.appendChild(document.createTextNode('You'));
+  // The time goes on the boundary rather than on every line: a
+  // transcript is read as a conversation, and a column of times down the
+  // side of one is noise. What somebody asking "when did this happen"
+  // wants is when the turn started.
+  if (app.showTimestamps) {
+    const at = document.createElement('span');
+    at.className = 'turn-time';
+    at.textContent = new Date().toLocaleTimeString();
+    sep.appendChild(at);
+  }
 
   const div = document.createElement('div');
   div.className = pending ? 'msg-user pending' : 'msg-user';
@@ -454,6 +464,11 @@ let thinkingEl = null;
 let thinkingBuffer = '';
 
 export function appendThinking(text) {
+  // The switch is read here rather than at the event handler, so the
+  // deltas still arrive and are simply not painted: turning it back on
+  // mid-turn then shows the rest of the reasoning instead of nothing
+  // until the next turn.
+  if (!app.showThinking) return;
   if (!thinkingEl) {
     thinkingEl = document.createElement('div');
     thinkingEl.className = 'msg-thinking';

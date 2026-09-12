@@ -466,6 +466,7 @@ async function load(opts = {}) {
       get agents() { return internals.app.agents; }, set agents(v) { internals.app.agents = v; },
       get currentAgent() { return internals.session.currentAgent; },
       get customCommands() { return internals.app.customCommands; }, set customCommands(v) { internals.app.customCommands = v; },
+      get slashCommands() { return internals.app.slashCommands; }, set slashCommands(v) { internals.app.slashCommands = v; },
       get sessions() { return internals.app.sessions; }, set sessions(v) { internals.app.sessions = v; },
       get zoom() { return internals.app.zoom; },
       get mcpServers() { return internals.app.mcpServers; }, set mcpServers(v) { internals.app.mcpServers = v; },

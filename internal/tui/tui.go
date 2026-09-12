@@ -51,6 +51,12 @@ var (
 	errorStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
 	modalStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
 	statusStyle = lipgloss.NewStyle().Faint(true)
+	// The context readout at its two thresholds, matching the Web UI's
+	// ctx-warn and ctx-crit rather than the 70/85 an older note proposed:
+	// the same number should not turn a different colour depending on
+	// which client is looking at it.
+	ctxWarnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	ctxCritStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
 )
 
 // inputMaxHeight caps how tall the prompt box can grow (in rows) before it
@@ -159,6 +165,14 @@ type Model struct {
 	// the real list when the message is sent.
 	refNames  []session.Session
 	slashList []client.SlashCommandInfo
+
+	// What the last request cost, for the readout under the prompt box.
+	// The terminal ignored usage events entirely, so it had no context
+	// indicator at all while the Web UI has had one for releases — the
+	// numbers were arriving the whole time and nothing read them.
+	usagePercent float64
+	tps          float64
+	showTPS      bool
 
 	// picker is the open selection list, or nil. See picker.go.
 	picker *picker

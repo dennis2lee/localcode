@@ -319,3 +319,53 @@ func TestAKoreanPromptCountsRunesNotColumns(t *testing.T) {
 		t.Errorf("cursorRune = %d on a Korean two-line prompt, want %d", got, len([]rune(text)))
 	}
 }
+
+// The terminal ignored usage events entirely, so it had no context
+// indicator at all while the Web UI has had one for releases. The numbers
+// were arriving the whole time and nothing read them.
+func TestTheFooterShowsHowFullTheWindowIs(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	m.applyEvent(events.Event{Type: events.TypeUsage, Data: map[string]any{
+		"percent": 42.5, "tps": 13.5, "show_tps": true,
+	}})
+	if m.usagePercent != 42.5 {
+		t.Errorf("percent = %v, want 42.5", m.usagePercent)
+	}
+	view := m.View().Content
+	if !strings.Contains(view, "context: 42.5%") {
+		t.Errorf("the footer does not show the context fill: %q", lastLine(view))
+	}
+	if !strings.Contains(view, "13.5 tok/s") {
+		t.Errorf("show_tps was on and the rate is not shown: %q", lastLine(view))
+	}
+
+	// Merged rather than replaced: the live estimates during a stream
+	// carry tps alone, and a client that overwrote the whole readout
+	// would blank the percentage every few hundred milliseconds while
+	// the model was talking.
+	m.applyEvent(events.Event{Type: events.TypeUsage, Data: map[string]any{"tps": 20.0, "estimated": true}})
+	if m.usagePercent != 42.5 {
+		t.Errorf("a tps-only estimate blanked the context fill: %v", m.usagePercent)
+	}
+}
+
+// Off unless the daemon says so, because it is a setting.
+func TestTheRateIsHiddenUnlessItIsTurnedOn(t *testing.T) {
+	m := newTestModel()
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+
+	m.applyEvent(events.Event{Type: events.TypeUsage, Data: map[string]any{"percent": 10.0, "tps": 9.9}})
+	if strings.Contains(m.View().Content, "tok/s") {
+		t.Error("the rate is shown with show_tps off")
+	}
+}
+
+// lastLine is the footer, which is what these assertions are about.
+func lastLine(view string) string {
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	return lines[len(lines)-1]
+}

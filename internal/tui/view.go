@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -148,13 +149,35 @@ func (m Model) View() tea.View {
 	if m.effort.Level != "" {
 		footer += "  ·  effort: " + m.effort.Level
 	}
+	// How full the window is, and the two thresholds. Rendered as its own
+	// styled piece rather than folded into the faint line, because the
+	// whole use of it is being noticed at 90%.
+	ctx := ""
+	if m.usagePercent > 0 {
+		ctx = fmt.Sprintf("context: %.1f%%", m.usagePercent)
+		switch {
+		case m.usagePercent >= 90:
+			ctx = ctxCritStyle.Render(ctx)
+		case m.usagePercent >= 70:
+			ctx = ctxWarnStyle.Render(ctx)
+		default:
+			ctx = statusStyle.Render(ctx)
+		}
+	}
+	if m.showTPS && m.tps > 0 {
+		footer += fmt.Sprintf("  ·  %.1f tok/s", m.tps)
+	}
 	// The completion hint replaces the agent line while a "/name" is
 	// being typed: it is about the key you are deciding whether to press,
 	// and the agent is not going anywhere.
 	if hint := m.completionHint(); hint != "" && m.picker == nil {
 		footer = hint
 	}
-	lines = append(lines, statusStyle.Render(footer))
+	rendered := statusStyle.Render(footer)
+	if ctx != "" && m.completionHint() == "" {
+		rendered += statusStyle.Render("  ·  ") + ctx
+	}
+	lines = append(lines, rendered)
 
 	v := tea.NewView(strings.Join(lines, "\n"))
 	// Alt screen is a property of the frame in bubbletea v2, not a program

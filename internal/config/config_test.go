@@ -271,6 +271,9 @@ func TestMergeFieldsGuard(t *testing.T) {
 		// entry by entry: an allow list is a set, and combining two of
 		// them would produce a third nobody wrote.
 		"Network": true,
+		// The two display switches, beside ShowTPS.
+		"ShowThinking":   true,
+		"ShowTimestamps": true,
 	}
 	intentionallyNotMerged := map[string]bool{}
 

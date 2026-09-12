@@ -10,69 +10,58 @@ export function isPlainPrompt(text) {
   return !text.startsWith('/');
 }
 
-// Every line here is plain text, rendered through appendToolLines (text
-// nodes, never HTML) — so "/<skill name>" displays as written with no
-// escaping step for any call site to forget. A previous version built this
-// as an HTML string with one entry pre-escaped and the rest not, so that one
-// line rendered double-escaped as "&lt;skill name&gt;" (bug B7); the current
-// text-node rendering makes that class of bug unrepresentable.
-export const HELP_TEXT = [
+// The help, in two halves: what this client answers itself, and what the
+// daemon answers.
+//
+// The second half is read off the daemon's own list rather than written
+// down here. There used to be three copies of every command —
+// agent.SlashCommands, the terminal's own paragraph, and an array in
+// this file — and two of them were prose somebody had to remember to
+// edit. Four guard-test failures in one afternoon are what that cost;
+// they were the duplication reporting itself rather than a defence of
+// it.
+//
+// Plain text, rendered through appendToolLines (text nodes, never HTML),
+// so "/<skill name>" displays as written with no escaping step for any
+// call site to forget. A previous version built this as an HTML string
+// with one entry pre-escaped and the rest not, so that one line rendered
+// double-escaped as "&lt;skill name&gt;" (bug B7).
+const LOCAL_HELP = [
   'Available commands:',
   '  /help              show this help',
   '  /version            show the daemon version',
-  '  /skill              list registered skills',
   '  /<skill name>        run that skill (e.g. /pdf-tools)',
   '                        type part of a name and press the right arrow to complete it;',
   '                        press it again to cycle through the other matches',
+  '  /<custom command>   run a command defined in .localcode/commands/*.md',
   '  Esc                 cancel the running turn',
   '  Tab / Shift+Tab      switch to the next/previous agent',
   '  Alt+Up / Alt+Down    jump back and forth between your own prompts',
   '  /agent              list registered agents',
   '  /agent <name>        switch to that agent (also available via the header dropdown)',
-  '  /init              scan the repo and create/improve an AGENTS.md rules file',
-  '  /memory            show the auto memory directory/index (MEMORY.md)',
-  '  /config            show current settings (auto_compact, show_tps, auto_delegate)',
-  '  /auto-compact [on|off|<percent>]  toggle auto-compaction, or set its threshold (default 50%)',
-  '  /keep-going [on|off]  toggle the carry-on nudge for muse models',
-  '  /repeat-limit [on|off|N]  end a turn after N nothing-new steps; on is 3, off (default) never',
-  '  /debug-log            write every model request and response to a file per prompt, here',
-  '  /llm-doctor [baseline]  probe a muse or gemma server: facts, four canaries, what differs from the baseline',
-  '  /update             install the newest release and move the daemon onto it; the terminal keeps running',
-  '  /reset-mcp          reconnect MCP servers and pick up config changes, no restart',
-  '  /reset-skills       reload skills from disk, no restart',
-  '  /status             what is attached: MCP servers and whether they work, skills, commands, agents',
-  '  /debug              what this build is, in a block to paste into a bug report',
-  '  /workspace          the directory this conversation works in',
-  '  /workspace <path>    move this conversation to another directory',
-  '  /config show_tps on|off       toggle the tokens/sec display under the prompt',
-  '  /config auto_delegate on|off  send matching prompts to a cheaper sub-agent',
-  '  /config smart_agent on|off    turn the Smart Agent bundle on or off',
-  '  /smart-agent [on|off]  toggle the Smart Agent bundle, and save the choice',
-  '  /orchestrate [on|off]  toggle the Orchestrate tool, and save the choice',
-  '  /auto-delegate [on|off]  toggle auto-delegation, and save the choice',
-  '  /permission-skip-all [on|off]  allow every prompt that would have asked',
-  '                        (the pill under the prompt box also sets the target agent and patterns)',
-  '  /permission-skip-tools [on|off]  allow tool prompts, still ask before leaving the project',
-  '  /read-outside [on|off|mem-clear]   reading outside this project\'s directory',
-  '  /write-outside [on|off|mem-clear]  writing outside it',
-  '  /effort [off|low|medium|high|xhigh]  how hard the model is asked to think in this conversation',
-  '  /debate <reviewer>[,<reviewer>] [rounds] <what to do>  other agents review this one\'s work, round after round',
-  '  /schedule <when> <what to do>  book a prompt for later (only while localcode runs)',
-  '  /show-scheduled-task  list the prompts booked for later',
-  '  /model-invocable [on|off]  whether the model may run this session\'s commands itself',
-  '  /clear             start the model fresh; the conversation itself is kept',
-  '  /rewind            undo the last turn, and the files write_file and edit changed in it',
-  '  /redo              put it back, while the rewind is still the last thing that happened',
-  '  /model             which model answers here, apart from which agent does',
-  '  /model <profile>    answer on that profile\'s model, keeping this agent',
-  '  /compact           summarize and compact the conversation right now',
-  '  /compact <instructions>      give instructions for how to compact',
-  '  /usage              show cumulative token usage per model',
-  '  /context            what the next request is made of; /context all, /context <id>',
   '  /commands          list registered custom commands',
-  '  /<custom command>   run a command defined in .localcode/commands/*.md',
   '  exit, :q            just show a message (close the browser tab yourself)',
 ];
+
+// helpLines is what /help prints now: the local half, then one line per
+// command the daemon serves.
+export function helpLines() {
+  const out = LOCAL_HELP.slice();
+  if (!app.slashCommands.length) {
+    // Honest rather than hardcoded: this page can be attached to a
+    // daemon of a different version, and a paragraph written here would
+    // be right until it is not.
+    out.push('', '  (the daemon\'s own commands have not been fetched yet)');
+    return out;
+  }
+  out.push('', 'Answered by the daemon:');
+  for (const c of app.slashCommands) {
+    const name = `/${c.name}${c.usage ? ' ' + c.usage : ''}`;
+    out.push(`  ${name.padEnd(34)} ${c.description || ''}`);
+  }
+  return out;
+}
+
 
 // Commands handled entirely client-side — never touch the session's
 // event log, so they don't show up again on session replay. Returns
@@ -88,7 +77,7 @@ export async function tryLocalCommand(text) {
 
   if (lower === '/help') {
     appendUser(text);
-    appendToolLines(HELP_TEXT.concat(['', 'You can drag a file onto the input box to attach it.']));
+    appendToolLines(helpLines().concat(['', 'You can drag a file onto the input box to attach it.']));
     return true;
   }
 

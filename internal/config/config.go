@@ -78,6 +78,25 @@ type Config struct {
 	// defaulting to enabled. Also runtime-toggleable via "/config".
 	ShowTPS *bool `json:"show_tps,omitempty"`
 
+	// ShowThinking toggles whether a client paints the model's reasoning
+	// while it arrives. Nil means unset, defaulting to enabled, which is
+	// what every build before this did.
+	//
+	// A setting rather than a per-client preference, for the reason
+	// show_tps is one: two clients watching the same conversation
+	// showing different amounts of it is a difference nobody asked for,
+	// and a preference kept in a browser is lost on the next machine.
+	// Reasoning is broadcast and never logged, so turning this off
+	// hides what is arriving rather than deleting anything.
+	ShowThinking *bool `json:"show_thinking,omitempty"`
+
+	// ShowTimestamps toggles a time beside each message. Nil means
+	// unset, defaulting to OFF: a transcript is read as a conversation,
+	// and a column of times down the side of one is noise until the
+	// question is "when did this happen", which is the question this
+	// exists for.
+	ShowTimestamps *bool `json:"show_timestamps,omitempty"`
+
 	// Hooks holds Claude Code-style lifecycle hooks (shell commands run at
 	// pre_tool_use/post_tool_use/user_prompt_submit/stop/session_start),
 	// keyed by event name. See internal/hooks.
@@ -388,6 +407,18 @@ func (c *Config) KeepGoing() bool {
 // default when ShowTPS is unset.
 func (c *Config) TPSEnabled() bool {
 	return c.ShowTPS == nil || *c.ShowTPS
+}
+
+// ShowThinkingEnabled reports whether reasoning is painted while it
+// arrives. Enabled when unset.
+func (c *Config) ShowThinkingEnabled() bool {
+	return c.ShowThinking == nil || *c.ShowThinking
+}
+
+// ShowTimestampsEnabled reports whether a time is shown beside each
+// message. Off when unset.
+func (c *Config) ShowTimestampsEnabled() bool {
+	return c.ShowTimestamps != nil && *c.ShowTimestamps
 }
 
 // SmartAgentEnabled reports the configured default for Smart Agent. Unset

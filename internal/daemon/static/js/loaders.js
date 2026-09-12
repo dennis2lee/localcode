@@ -88,6 +88,8 @@ export async function loadSettings() {
     const s = await apiClient.getSettings();
     app.autoCompactEnabled = s.auto_compact_enabled;
     app.showTPS = s.show_tps;
+    if (typeof s.show_thinking === 'boolean') app.showThinking = s.show_thinking;
+    if (typeof s.show_timestamps === 'boolean') app.showTimestamps = s.show_timestamps;
     app.autoDelegate = !!s.auto_delegate;
     app.autoDelegateAgent = s.auto_delegate_agent || '';
     app.autoDelegateMatch = s.auto_delegate_match || [];

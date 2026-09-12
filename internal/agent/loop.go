@@ -32,6 +32,8 @@ type liveSettings struct {
 	// autoCompactPercent is the context fill that triggers it.
 	autoCompactPercent int
 	showTPS            bool
+	showThinking       bool
+	showTimestamps     bool
 	autoDelegate       bool
 	// keepGoing gates the carry-on nudge. The switch is daemon-wide;
 	// whether it applies to a model at all is decided in keep_going.go,
@@ -116,6 +118,30 @@ func (s *liveSettings) SetShowTPS(v bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.showTPS = v
+}
+
+func (s *liveSettings) ShowThinking() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.showThinking
+}
+
+func (s *liveSettings) SetShowThinking(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.showThinking = v
+}
+
+func (s *liveSettings) ShowTimestamps() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.showTimestamps
+}
+
+func (s *liveSettings) SetShowTimestamps(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.showTimestamps = v
 }
 
 func (s *liveSettings) AutoDelegate() bool {
@@ -388,6 +414,8 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 			autoCompact:        cfg.CompactEnabled(),
 			autoCompactPercent: cfg.CompactPercent(),
 			showTPS:            cfg.TPSEnabled(),
+			showThinking:       cfg.ShowThinkingEnabled(),
+			showTimestamps:     cfg.ShowTimestampsEnabled(),
 			autoDelegate:       cfg.DelegateEnabled(),
 			keepGoing:          cfg.KeepGoing(),
 			repeatLimit:        cfg.RepeatLimit(),
@@ -615,6 +643,16 @@ func (l *Loop) ShowTPS() bool { return l.settings.ShowTPS() }
 
 // SetShowTPS changes the live TPS-display setting.
 func (l *Loop) SetShowTPS(v bool) { l.settings.SetShowTPS(v) }
+
+// ShowThinking reports whether a client should paint reasoning while it
+// arrives, and ShowTimestamps whether a time goes beside each message.
+// Both live, both read by the clients rather than acted on here: what
+// they change is how a transcript is drawn, and localcode does not draw
+// one.
+func (l *Loop) ShowThinking() bool       { return l.settings.ShowThinking() }
+func (l *Loop) SetShowThinking(v bool)   { l.settings.SetShowThinking(v) }
+func (l *Loop) ShowTimestamps() bool     { return l.settings.ShowTimestamps() }
+func (l *Loop) SetShowTimestamps(v bool) { l.settings.SetShowTimestamps(v) }
 
 // AutoDelegateEnabled reports whether prompts matching the auto_delegate
 // rules are routed to the configured sub-agent — process-global,

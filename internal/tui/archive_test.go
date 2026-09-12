@@ -63,7 +63,7 @@ func TestArchiveAndRetrieveAreCompletableAndDocumented(t *testing.T) {
 		if !found {
 			t.Errorf("%s cannot be completed", want)
 		}
-		if !strings.Contains(renderHelp(), want) {
+		if !strings.Contains(m.renderHelp(), want) {
 			t.Errorf("%s is not in /help", want)
 		}
 	}

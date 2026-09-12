@@ -344,7 +344,7 @@ export { session, app } from './state.js';
 export { escapeHtml, formatTime, shortenPath } from './format.js';
 export { renderMarkdown, inline, unwrapMath } from './markdown.js';
 export { jumpToTurn } from './transcript.js';
-export { HELP_TEXT, isPlainPrompt, tryLocalCommand } from './commands.js';
+export { helpLines, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
 export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage, autoResizeInput } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';

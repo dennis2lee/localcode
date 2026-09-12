@@ -184,6 +184,8 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeSchedule(sessionID, agentName, text) },
 		func() (bool, error) { return l.routeShowScheduled(sessionID, text) },
 		func() (bool, error) { return l.routeKeepGoing(sessionID, agentName, text) },
+		func() (bool, error) { return l.routeThinking(sessionID, text) },
+		func() (bool, error) { return l.routeTimestamps(sessionID, text) },
 		func() (bool, error) { return l.routeRepeatLimit(sessionID, text) },
 		func() (bool, error) { return l.routeDebugLog(sessionID, text) },
 		func() (bool, error) { return l.routeAutoCompact(sessionID, text) },
@@ -208,6 +210,20 @@ func (l *Loop) commandRoutes(ctx context.Context, sessionID, agentName, text str
 		func() (bool, error) { return l.routeContext(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeCustomCommand(ctx, sessionID, agentName, text) },
 		func() (bool, error) { return l.routeSkillName(ctx, sessionID, agentName, text) },
+		// After the two above, and it is the only built-in that is.
+		//
+		// Every other built-in comes first, so a name the product owns
+		// cannot be shadowed — see the note on shadowing in
+		// docs/USAGE.md. "/review" is the exception because the name was
+		// in people's .localcode/commands before it was a built-in:
+		// there was no built-in, the docs said to write a custom command
+		// for exactly this, and they did. Taking the name now would
+		// silently replace a file somebody wrote and tuned with a
+		// template that knows nothing about their repository.
+		//
+		// So a review.md of your own still wins, and this answers for
+		// everybody who never wrote one.
+		func() (bool, error) { return l.routeReview(ctx, sessionID, agentName, text) },
 		// Last, and it claims what is left that still looks like a
 		// command. Everything above has had its turn, so anything that
 		// resolves has already won; what reaches here is a slash nothing

@@ -1493,3 +1493,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: default;
 }
 .session-item.archived:hover { background: none; }
+
+/* The time beside a turn boundary, when /timestamps is on. Faint and to
+   the side: it is there to be looked up, not read. */
+.turn-time {
+  margin-left: .6em;
+  font-size: .85em;
+  opacity: .55;
+  font-variant-numeric: tabular-nums;
+}

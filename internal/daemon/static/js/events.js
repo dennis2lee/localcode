@@ -324,6 +324,8 @@ const handlers = {
   'config.changed': (d) => {
     if (typeof d.auto_compact_enabled === 'boolean') app.autoCompactEnabled = d.auto_compact_enabled;
     if (typeof d.show_tps === 'boolean') app.showTPS = d.show_tps;
+    if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
+    if (typeof d.show_timestamps === 'boolean') app.showTimestamps = d.show_timestamps;
     if (typeof d.auto_delegate === 'boolean') {
       app.autoDelegate = d.auto_delegate;
       renderAutoDelegate();
@@ -354,6 +356,8 @@ const handlers = {
   'settings.changed': (d) => {
     if (typeof d.auto_compact_enabled === 'boolean') app.autoCompactEnabled = d.auto_compact_enabled;
     if (typeof d.show_tps === 'boolean') app.showTPS = d.show_tps;
+    if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
+    if (typeof d.show_timestamps === 'boolean') app.showTimestamps = d.show_timestamps;
     if (typeof d.auto_delegate === 'boolean') {
       app.autoDelegate = d.auto_delegate;
       renderAutoDelegate();

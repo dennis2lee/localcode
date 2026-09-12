@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"localcode/internal/agent"
+	"localcode/internal/client"
 )
 
 // A command the daemon answers and this client's own help never names is
@@ -19,10 +20,27 @@ import (
 // two lists.
 //
 // renderHelp is called rather than the source file being read, so the
-// test sees what the user sees: both the local command table and
-// serverSideHelpText, in the form they are printed.
+// test sees what the user sees.
+//
+// The drift it was written for is gone: the daemon half of the help is
+// rendered from the list the daemon serves rather than from a paragraph
+// kept in this package, so there is no second copy left to fall behind.
+// The test stays because the rendering is still code — a loop that
+// skipped a field, or a client that never fetched the list, would show a
+// help with commands missing from it, and that is the thing a reader of
+// /help would notice and nobody else would.
 func TestEveryDaemonCommandIsNamedInTheHelp(t *testing.T) {
-	help := renderHelp()
+	m := newTestModel()
+	// What the client has fetched is what it can show, so the fixture
+	// hands it the daemon's own list — which is also the assertion: a
+	// client with an empty list must not print a help that looks
+	// complete.
+	for _, c := range agent.SlashCommands() {
+		m.slashList = append(m.slashList, client.SlashCommandInfo{
+			Name: c.Name, Description: c.Description, Usage: c.Usage,
+		})
+	}
+	help := m.renderHelp()
 
 	cmds := agent.SlashCommands()
 	if len(cmds) < 5 {

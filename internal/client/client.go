@@ -326,6 +326,9 @@ func (c *Client) ListSkills(ctx context.Context) ([]SkillInfo, error) {
 type SlashCommandInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// Usage is the argument form, so a client can render help without
+	// keeping a paragraph of its own. See agent.SlashCommand.
+	Usage string `json:"usage,omitempty"`
 }
 
 // ListSlashCommands returns the daemon's own slash commands.

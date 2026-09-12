@@ -350,6 +350,18 @@ func matchToggleCommand(text, name string) (arg string, ok bool) {
 type SlashCommand struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// Usage is the argument form, without the name: "[on|off]",
+	// "<profile>", "[on|off|<percent>]". Empty for a command that takes
+	// none.
+	//
+	// Here rather than in each client's help text, which is the whole
+	// point of this field. Every command used to be written down three
+	// times — this list, the terminal's serverSideHelpText, the Web UI's
+	// HELP_TEXT — and two of the three were prose somebody had to
+	// remember to edit. The guard tests caught the omissions, four times
+	// in one afternoon, which is evidence of the duplication rather than
+	// a defence of it. Both clients render this now.
+	Usage string `json:"usage,omitempty"`
 }
 
 // SlashCommands is every command SendMessage intercepts before the text
@@ -367,41 +379,104 @@ type SlashCommand struct {
 // finish.
 func SlashCommands() []SlashCommand {
 	return []SlashCommand{
-		{Name: "skill", Description: "list installed skills"},
-		{Name: "init", Description: "scan the repository and write or improve AGENTS.md"},
+		{Name: "skill", Description: "list installed skills", Usage: "[<name> [args]]"},
+		{Name: "init", Description: "scan the repository and write or improve AGENTS.md", Usage: "[what to focus on]"},
+		{Name: "review", Description: "read what changed and say what is wrong with it; nothing is modified", Usage: "[staged|head|<revision>|<range>|<path>]"},
 		{Name: "memory", Description: "show the auto-memory directory and index"},
-		{Name: "config", Description: "show settings, or change one with /config <name> on|off"},
-		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off"},
-		{Name: "orchestrate", Description: "turn the Orchestrate tool on or off"},
-		{Name: "auto-delegate", Description: "turn auto-delegation on or off"},
-		{Name: "permission-skip-all", Description: "allow every prompt in this conversation, the workspace boundary included"},
-		{Name: "permission-skip-tools", Description: "allow every tool prompt, but still ask before leaving the workspace"},
-		{Name: "effort", Description: "how hard the model is asked to think in this conversation: off, low, medium, high"},
-		{Name: "model", Description: "which model answers in this conversation, apart from which agent does; /model <profile> chooses one"},
-		{Name: "debate", Description: "have other agents review this one's work, round after round: /debate <reviewer>[,<reviewer>] [rounds] <what to do>"},
-		{Name: "schedule", Description: "book a prompt for later: /schedule <when> <what to do>; also cancel and rename"},
+		{Name: "config", Description: "show settings, or change one with /config <name> on|off", Usage: "[<name> on|off]"},
+		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off", Usage: "[on|off]"},
+		{Name: "orchestrate", Description: "turn the Orchestrate tool on or off", Usage: "[on|off]"},
+		{Name: "auto-delegate", Description: "turn auto-delegation on or off", Usage: "[on|off]"},
+		{Name: "permission-skip-all", Description: "allow every prompt in this conversation, the workspace boundary included", Usage: "[on|off]"},
+		{Name: "permission-skip-tools", Description: "allow every tool prompt, but still ask before leaving the workspace", Usage: "[on|off]"},
+		{Name: "effort", Description: "how hard the model is asked to think in this conversation: off, low, medium, high", Usage: "[off|low|medium|high|xhigh|default]"},
+		{Name: "model", Description: "which model answers in this conversation, apart from which agent does; /model <profile> chooses one", Usage: "[<profile>|<agent>|default]"},
+		{Name: "debate", Description: "have other agents review this one's work, round after round: /debate <reviewer>[,<reviewer>] [rounds] <what to do>", Usage: "<reviewer>[,<reviewer>] [rounds] <what to do>"},
+		{Name: "schedule", Description: "book a prompt for later: /schedule <when> <what to do>; also cancel and rename", Usage: "<when> <what to do>"},
 		{Name: "show-scheduled-task", Description: "list the prompts booked for later in this conversation"},
-		{Name: "read-outside", Description: "reading outside the workspace: on, off, or mem-clear to forget approved directories"},
-		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories"},
-		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models"},
-		{Name: "repeat-limit", Description: "how many nothing-new steps end a turn; /repeat-limit off turns the guard off"},
+		{Name: "read-outside", Description: "reading outside the workspace: on, off, or mem-clear to forget approved directories", Usage: "[on|off|mem-clear]"},
+		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories", Usage: "[on|off|mem-clear]"},
+		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models", Usage: "[on|off]"},
+		{Name: "thinking", Description: "whether the clients paint the model's reasoning while it arrives", Usage: "[on|off]"},
+		{Name: "timestamps", Description: "whether a time is shown beside each message", Usage: "[on|off]"},
+		{Name: "repeat-limit", Description: "how many nothing-new steps end a turn; /repeat-limit off turns the guard off", Usage: "[on|off|<steps>]"},
 		{Name: "debug-log", Description: "write every model request and response to a file per prompt, in this workspace"},
-		{Name: "auto-compact", Description: "toggle auto-compaction, or set its threshold with a percent"},
+		{Name: "auto-compact", Description: "toggle auto-compaction, or set its threshold with a percent", Usage: "[on|off|<percent>]"},
 		{Name: "update", Description: "install the newest release and move the daemon onto it; the terminal keeps running"},
 		{Name: "reset-mcp", Description: "reconnect MCP servers and pick up config changes without a restart"},
 		{Name: "reset-skills", Description: "reload skills from disk without a restart"},
 		{Name: "status", Description: "what is attached: MCP servers and whether they are working, skills, custom commands, agents"},
 		{Name: "debug", Description: "what this build is, in a block to paste into a bug report"},
-		{Name: "workspace", Description: "the directory this conversation works in; /workspace <path> moves it"},
-		{Name: "compact", Description: "summarize the conversation now, optionally with instructions"},
+		{Name: "workspace", Description: "the directory this conversation works in; /workspace <path> moves it", Usage: "[<path>]"},
+		{Name: "compact", Description: "summarize the conversation now, optionally with instructions", Usage: "[instructions]"},
 		{Name: "clear", Description: "start the model fresh: it keeps none of this conversation, and the conversation keeps all of it"},
 		{Name: "rewind", Description: "undo the last turn, and the files write_file and edit changed in it"},
 		{Name: "redo", Description: "put back the turn /rewind just undid, while the rewind is still the last thing that happened"},
-		{Name: "model-invocable", Description: "whether the model may run this session's commands itself"},
-		{Name: "usage", Description: "cumulative token usage per model; /usage all|today|week|month counts every conversation"},
-		{Name: "llm-doctor", Description: "probe a muse or gemma server: its facts, four canaries, what differs from the baseline; /llm-doctor baseline keeps the last run"},
-		{Name: "context", Description: "what the next request is made of; /context all, /context <id>"},
+		{Name: "model-invocable", Description: "whether the model may run this session's commands itself", Usage: "[on|off]"},
+		{Name: "usage", Description: "cumulative token usage per model; /usage all|today|week|month counts every conversation", Usage: "[all|today|week|month]"},
+		{Name: "llm-doctor", Description: "probe a muse or gemma server: its facts, four canaries, what differs from the baseline; /llm-doctor baseline keeps the last run", Usage: "[baseline]"},
+		{Name: "context", Description: "what the next request is made of; /context all, /context <id>", Usage: "[all|<id>]"},
 	}
+}
+
+// routeThinking and routeTimestamps answer the two display switches.
+//
+// On the daemon rather than in each client, for the reason show_tps is:
+// two clients watching the same conversation showing different amounts
+// of it is a difference nobody asked for, and a preference kept in a
+// browser is lost on the next machine. What they change is how a
+// transcript is drawn, so nothing here acts on them — the clients read
+// them off the settings event.
+func (l *Loop) routeThinking(sessionID, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/thinking")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+
+	want, valid := toggleArg(arg, l.ShowThinking())
+	if !valid {
+		return true, l.replyText(sessionID, "usage: /thinking [on|off]")
+	}
+	l.SetShowThinking(want)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "show_thinking: %s", onOff(want))
+	// What it does and does not do, because "off" could be read as
+	// asking the model to stop reasoning, which is /effort's job.
+	b.WriteString("\nThis is what the clients paint, not what the model does: reasoning is not logged either way, " +
+		"so turning it off hides what is arriving rather than deleting anything. /effort changes how much there is.")
+	b.WriteString(l.persist(func(path string) error { return config.SetShowThinkingInFile(path, want) }))
+
+	l.announceConfig(sessionID)
+	if l.OnSettingsChanged != nil {
+		l.OnSettingsChanged()
+	}
+	return true, l.replyText(sessionID, b.String())
+}
+
+func (l *Loop) routeTimestamps(sessionID, text string) (bool, error) {
+	arg, ok := matchToggleCommand(text, "/timestamps")
+	if !ok {
+		return false, nil
+	}
+	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
+
+	want, valid := toggleArg(arg, l.ShowTimestamps())
+	if !valid {
+		return true, l.replyText(sessionID, "usage: /timestamps [on|off]")
+	}
+	l.SetShowTimestamps(want)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "show_timestamps: %s", onOff(want))
+	b.WriteString(l.persist(func(path string) error { return config.SetShowTimestampsInFile(path, want) }))
+
+	l.announceConfig(sessionID)
+	if l.OnSettingsChanged != nil {
+		l.OnSettingsChanged()
+	}
+	return true, l.replyText(sessionID, b.String())
 }
 
 // routeKeepGoing answers "/keep-going [on|off]".

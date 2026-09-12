@@ -68,7 +68,7 @@ func localCommands() []localCommand {
 			name: "/help",
 			help: "show this help",
 			run: func(m *Model, _ string) tea.Cmd {
-				m.appendLocal(renderHelp())
+				m.appendLocal(m.renderHelp())
 				return nil
 			},
 		},
@@ -283,59 +283,24 @@ func dispatchLocalCommand(m *Model, text string) (tea.Cmd, bool) {
 	return nil, false
 }
 
-// serverSideHelpText documents the slash commands SendMessage intercepts
-// on the daemon (internal/agent/commands.go), which have no entry in
-// localCommands since the TUI never runs them itself — it just forwards
-// the text like any other prompt.
-const serverSideHelpText = `  /skill              list registered skills
-  /<skill name>        run that skill (e.g. /pdf-tools)
-  /init              scan the repo and create/improve an AGENTS.md rules file
-  /memory            show the auto memory directory/index (MEMORY.md)
-  /config            show current settings (auto_compact, show_tps, auto_delegate)
-  /auto-compact [on|off|<percent>]  toggle auto-compaction, or set its threshold (default 50%)
-  /keep-going [on|off]  toggle the carry-on nudge for muse models
-  /repeat-limit [on|off|N]  end a turn after N nothing-new steps; on is 3, off (default) never
-  /debug-log            write every model request and response to a file per prompt, here
-  /llm-doctor [baseline]  probe a muse or gemma server: facts, four canaries, what differs from the baseline
-  /update             install the newest release and move the daemon onto it; the terminal keeps running
-  /reset-mcp          reconnect MCP servers and pick up config changes, no restart
-  /reset-skills       reload skills from disk, no restart
-  /redo               put back the turn /rewind just undid
-  /status             what is attached: MCP servers and whether they work, skills, commands, agents
-  /debug              what this build is, in a block to paste into a bug report
-  /workspace [path]   the directory this conversation works in; a path moves it
-  /config show_tps on|off       toggle the tokens/sec display under the prompt
-  /config auto_delegate on|off  send matching prompts to a cheaper sub-agent
-  /config smart_agent on|off    turn the Smart Agent bundle on or off
-  /smart-agent [on|off]  toggle the Smart Agent bundle, and save the choice
-  /orchestrate [on|off]  toggle the Orchestrate tool, and save the choice
-  /auto-delegate [on|off]  toggle auto-delegation, and save the choice
-  /permission-skip-all [on|off]  allow every prompt in this conversation
-  /permission-skip-tools [on|off]  allow tool prompts, still ask before leaving the project
-  /read-outside [on|off|mem-clear]   reading outside this project's directory
-  /write-outside [on|off|mem-clear]  writing outside it
-  /schedule <when> <what to do>  book a prompt for later (only while localcode runs)
-  /show-scheduled-task  list the prompts booked for later
-  /debate <reviewer>[,<reviewer>] [rounds] <what to do>  other agents review this one's work, round after round
-  /effort [off|low|medium|high|xhigh]  how hard the model is asked to think in this conversation
-  /effort-set        choose from the levels this model tells apart; the answer is kept per model
-  /model-invocable [on|off]  whether the model may run this session's commands itself
-  /clear             start the model fresh; the conversation itself is kept
-  /rewind            undo the last turn, and the files write_file and edit changed in it
-  /compact           summarize and compact the conversation right now
-  /compact <instructions>      give instructions for how to compact
-  /usage              show cumulative token usage per model
-  /context            what the next request is made of; /context all, /context <id>
-  /<custom command>   run a command defined in .localcode/commands/*.md
-  exit, :q            quit the TUI (same as Ctrl+C)
-
-Enter to send, Ctrl+J for a newline, Tab to switch agents, Esc to cancel a running turn.
-Right arrow completes "/<name>" against the installed skills and custom commands,
-and completes to the next candidate each time it is pressed.`
-
 // renderHelp lists every local command from the table above, plus the
 // daemon-side commands documented in serverSideHelpText.
-func renderHelp() string {
+// renderHelp lists what this client can do, in two halves: the commands
+// it answers itself, and the ones the daemon answers.
+//
+// A method rather than a function, because the second half is now read
+// off the daemon's own list instead of a paragraph kept in this file.
+// There used to be three copies of every command — SlashCommands, the
+// constant that was here, and the Web UI's own array — and two of them
+// were prose somebody had to remember to edit. Four guard-test failures
+// in one afternoon are what that costs; they were the duplication
+// reporting itself rather than a defence of it.
+//
+// A client that has not fetched the list yet says so, which is honest:
+// the alternative was a hardcoded paragraph that is right until the
+// daemon is a different version from the client, and this client can be
+// attached to one over --server.
+func (m Model) renderHelp() string {
 	var b strings.Builder
 	b.WriteString("Available commands:\n")
 	for _, cmd := range localCommands() {
@@ -345,6 +310,17 @@ func renderHelp() string {
 		}
 		fmt.Fprintf(&b, "  %-20s %s\n", name, cmd.help)
 	}
-	b.WriteString(serverSideHelpText)
+	if len(m.slashList) == 0 {
+		b.WriteString("\n  (the daemon's own commands have not been fetched yet)\n")
+		return b.String()
+	}
+	b.WriteString("\nAnswered by the daemon:\n")
+	for _, c := range m.slashList {
+		name := "/" + c.Name
+		if c.Usage != "" {
+			name += " " + c.Usage
+		}
+		fmt.Fprintf(&b, "  %-34s %s\n", name, c.Description)
+	}
 	return b.String()
 }

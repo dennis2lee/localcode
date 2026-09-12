@@ -311,6 +311,29 @@ func SetKeepGoingInFile(path string, enabled bool) error {
 	})
 }
 
+// SetShowThinkingInFile and SetShowTimestampsInFile write the two
+// display switches, leaving everything else in the file alone.
+func SetShowThinkingInFile(path string, enabled bool) error {
+	return setBoolInFile(path, "show_thinking", enabled)
+}
+
+func SetShowTimestampsInFile(path string, enabled bool) error {
+	return setBoolInFile(path, "show_timestamps", enabled)
+}
+
+// setBoolInFile is the shape the three above share. Written once here
+// rather than copied a fourth time.
+func setBoolInFile(path, key string, enabled bool) error {
+	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
+		encoded, err := json.Marshal(enabled)
+		if err != nil {
+			return fmt.Errorf("marshal %s: %w", key, err)
+		}
+		raw[key] = encoded
+		return nil
+	})
+}
+
 // SetAutoCompactInFile writes the switch, and the threshold when percent
 // is nonzero, so "/auto-compact 70" is one write rather than two chances
 // to fail halfway.

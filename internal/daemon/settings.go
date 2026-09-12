@@ -37,6 +37,8 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"model_commands":       d.Loop.ModelCommandNames(),
 		"smart_agent_roster":   smart.Names(),
 		"show_tps":             d.Loop.ShowTPS(),
+		"show_thinking":        d.Loop.ShowThinking(),
+		"show_timestamps":      d.Loop.ShowTimestamps(),
 		"auto_delegate":        d.Loop.AutoDelegateEnabled(),
 		"auto_delegate_agent":  delegateAgent,
 		"auto_delegate_match":  delegateMatch,

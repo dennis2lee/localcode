@@ -170,6 +170,12 @@ func (c *Config) merge(other *Config) {
 	if other.ShowTPS != nil {
 		c.ShowTPS = other.ShowTPS
 	}
+	if other.ShowThinking != nil {
+		c.ShowThinking = other.ShowThinking
+	}
+	if other.ShowTimestamps != nil {
+		c.ShowTimestamps = other.ShowTimestamps
+	}
 	if other.AutoDelegate != nil {
 		c.AutoDelegate = other.AutoDelegate
 	}

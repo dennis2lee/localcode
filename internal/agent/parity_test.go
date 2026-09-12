@@ -320,3 +320,46 @@ func TestKeepGoingNamesTheWayOutForAnUnlistedModel(t *testing.T) {
 		}
 	}
 }
+
+// The two display switches. On the daemon rather than in each client, so
+// two clients watching the same conversation draw it the same way and
+// the choice survives a restart.
+func TestTheDisplaySwitchesAreDaemonWideAndExplained(t *testing.T) {
+	loop, sid, bodies := effortLoop(t, "")
+
+	// Defaults: reasoning shown, times not.
+	if !loop.ShowThinking() {
+		t.Error("reasoning is hidden by default; that is a change to what every build showed")
+	}
+	if loop.ShowTimestamps() {
+		t.Error("timestamps are on by default; a column of times is noise until asked for")
+	}
+
+	if err := loop.SendMessage(context.Background(), sid, "boy", "/thinking off"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if n := len(bodies()); n != 0 {
+		t.Fatalf("/thinking reached the model (%d requests)", n)
+	}
+	if loop.ShowThinking() {
+		t.Error("/thinking off did not take")
+	}
+	reply := lastReply(t, loop, sid)
+	// "off" could be read as asking the model to stop reasoning, which
+	// is /effort's job, so the reply says which is which.
+	for _, want := range []string{"show_thinking: off", "not what the model does", "/effort"} {
+		if !strings.Contains(reply, want) {
+			t.Errorf("the reply does not say %q: %s", want, reply)
+		}
+	}
+
+	if err := loop.SendMessage(context.Background(), sid, "boy", "/timestamps on"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if !loop.ShowTimestamps() {
+		t.Error("/timestamps on did not take")
+	}
+	if reply := lastReply(t, loop, sid); !strings.Contains(reply, "show_timestamps: on") {
+		t.Errorf("the reply does not confirm the switch: %s", reply)
+	}
+}
