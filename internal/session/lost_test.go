@@ -23,6 +23,7 @@ func TestASubscriberThatFallsBehindIsTold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +80,7 @@ func TestAMissedTransientEventIsNotFallingBehind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatal(err)
 	}

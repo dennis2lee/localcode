@@ -62,6 +62,7 @@ func TestAnArchivedLogIsNotReadUntilSomethingAsksForIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings: %v", warnings)
 	}
@@ -102,6 +103,7 @@ func TestAppendingToAShelvedSessionContinuesItsSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(store.Close)
 	ev, err := store.Append("s-shelf", events.TypeUserMessage, map[string]any{"text": "after"})
 	if err != nil {
 		t.Fatalf("Append: %v", err)
@@ -128,6 +130,7 @@ func TestTailSinceReadsAShelvedLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.TailSince("s-shelf", 3); err != nil {
 		t.Fatalf("TailSince: %v", err)
 	}
@@ -148,6 +151,7 @@ func TestArchivingReturnsTheEventsToDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -181,6 +185,7 @@ func TestArchivingAnUnpersistedSessionKeepsItsEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -218,6 +223,7 @@ func TestTheWholeShelvedTreeStaysOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings: %v", warnings)
 	}
@@ -268,6 +274,7 @@ func TestAnUnreadableShelvedLogRefusesRatherThanCorrupts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(store.Close)
 	// Write-only: the append handle restoreOne holds still opens, and
 	// the read does not.
 	if err := os.Chmod(filepath.Join(dir, "s-shelf.jsonl"), 0o222); err != nil {
@@ -331,6 +338,7 @@ func TestArchivingReturnsTheTreeToDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -378,6 +386,7 @@ func TestAListedSessionSharesNothingWithTheStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -428,6 +437,7 @@ func TestClearingReachesTheAnswerThatIsInForce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}

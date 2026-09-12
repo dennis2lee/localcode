@@ -37,7 +37,8 @@ The eleven items left open in `docs/IMPROVEMENTS.md`.
 
 **Windows**
 
-* Every test that builds a store now closes it, the end-to-end test marshals its nested tool arguments instead of hand-escaping them, and the tests that isolate `HOME` set `USERPROFILE` beside it. `internal/session` and `internal/daemon` run whole on Windows CI.
+* Every test that builds a store now closes it — including the ones inside `internal/session`, whose calls carry no package qualifier, and the stores `LoadAllFromDisk` returns. The end-to-end test marshals its nested tool arguments instead of hand-escaping one of the two levels, and the tests that isolate `HOME` set `USERPROFILE` beside it. `internal/session` and `internal/daemon` run whole on Windows CI.
+* The Windows test step can fail the job. A multi-line `run:` under PowerShell reports only the last command's exit code, so a run with 27 failing tests was reported green.
 
 ## v0.117.0
 

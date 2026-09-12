@@ -29,6 +29,7 @@ func handoffDaemon(t *testing.T) (*Daemon, *session.Store, string) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if len(warnings) > 0 {
 		t.Fatalf("store warnings: %v", warnings)
 	}

@@ -36,6 +36,7 @@ func TestArchivingMovesAConversationBetweenTheTwoLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.Close)
 	for _, id := range []string{"a", "b", "c"} {
 		if _, err := s.CreateSession(id, "", "general-purpose", true); err != nil {
 			t.Fatal(err)
@@ -68,6 +69,7 @@ func TestArchivingKeepsEverythingTheSessionHad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSessionIn("a", "", "oracle", "/work/thing", true); err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +118,7 @@ func TestArchivingSurvivesARestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.Close)
 	for _, id := range []string{"a", "b"} {
 		if _, err := s.CreateSession(id, "", "general-purpose", true); err != nil {
 			t.Fatal(err)
@@ -129,6 +132,7 @@ func TestArchivingSurvivesARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
+	t.Cleanup(reopened.Close)
 	if got := archived(t, reopened); len(got) != 1 || got[0] != "a" {
 		t.Errorf("after restart, archived = %v", got)
 	}
@@ -149,6 +153,7 @@ func TestAMetaFileWithoutTheFieldLoadsAsActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.Close)
 	if got := active(t, s); len(got) != 1 || got[0] != "old" {
 		t.Errorf("a session from before the field is not active: %v", got)
 	}
@@ -163,6 +168,7 @@ func TestNothingIsCreatedUnderAnArchivedConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("parent", "", "general-purpose", true); err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +195,7 @@ func TestABackgroundTasksSessionCannotBeArchived(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(s.Close)
 	s.CreateSession("parent", "", "general-purpose", true)
 	s.CreateSession("task-1", "parent", "explore", false)
 

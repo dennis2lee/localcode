@@ -315,6 +315,7 @@ func TestRehydrateAllRestoresContextAndCostAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(restoredStore.Close)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want none", warnings)
 	}

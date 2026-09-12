@@ -50,6 +50,7 @@ func TestRestoreSurvivesAnOversizedLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	evs, err := store.Events("s1", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +87,7 @@ func TestRestoreKeepsEverythingBeforeATornLastLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	evs, err := store.Events("s1", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +108,7 @@ func TestConcurrentAppendsReachTheFileInSeqOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +153,7 @@ func TestDeleteEndsLiveSubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s1", "", "a", true); err != nil {
 		t.Fatal(err)
 	}

@@ -125,7 +125,16 @@ jobs:
       # cmd/localcode keeps its filter for now: it drives real processes
       # and a terminal, and the remaining failures there are about the
       # harness rather than about path handling.
+      #
+      # shell: bash, and that line is the one carrying weight. Without
+      # it this step runs under PowerShell, where a multi-line `run:`
+      # reports only the last command's exit code — so every `go test`
+      # but the last could fail and the step still passed. It did: a run
+      # with 27 failing tests in internal/session was reported green,
+      # and the only reason anybody saw them was reading the log. Under
+      # bash, Actions sets `-e`, and the first failure ends the step.
       - name: Test the Windows code paths
+        shell: bash
         run: |
           go test ./internal/update/ ./internal/childproc/
           go test ./internal/userdirs/ ./internal/skills/ ./internal/rules/

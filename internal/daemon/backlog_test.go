@@ -128,6 +128,7 @@ func attachAndRead(t *testing.T, dir, id string) string {
 	if err != nil {
 		t.Fatalf("load sessions: %v", err)
 	}
+	t.Cleanup(store.Close)
 	for _, w := range warnings {
 		t.Logf("restore warning: %v", w)
 	}

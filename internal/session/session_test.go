@@ -15,6 +15,7 @@ func TestCreateSessionAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(s.Close)
 
 	sess, err := s.CreateSession("s1", "", "general-purpose", true)
 	if err != nil {
@@ -137,6 +138,7 @@ func TestDeleteRemovesPersistedFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -200,6 +202,7 @@ func TestDeleteAllRemovesPersistedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -374,6 +377,7 @@ func TestPersistenceAndLoadAllFromDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -384,6 +388,7 @@ func TestPersistenceAndLoadAllFromDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(restored.Close)
 	if len(warnings) != 0 {
 		t.Errorf("warnings = %v, want none", warnings)
 	}
@@ -425,6 +430,7 @@ func TestLoadAllFromDiskEmptyDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk on an empty dir: %v", err)
 	}
+	t.Cleanup(s.Close)
 	if len(warnings) != 0 {
 		t.Errorf("warnings = %v, want none", warnings)
 	}
@@ -439,6 +445,7 @@ func TestLoadAllFromDiskRestoresMultipleSessionsAndTitle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession s1: %v", err)
 	}
@@ -453,6 +460,7 @@ func TestLoadAllFromDiskRestoresMultipleSessionsAndTitle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(restored.Close)
 	if len(warnings) != 0 {
 		t.Errorf("warnings = %v, want none", warnings)
 	}
@@ -483,6 +491,7 @@ func TestLoadAllFromDiskWarnsOnCorruptMetaButRestoresOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSession("good", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -495,6 +504,7 @@ func TestLoadAllFromDiskWarnsOnCorruptMetaButRestoresOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(restored.Close)
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %+v, want exactly 1 for the corrupt session", warnings)
 	}
@@ -517,6 +527,7 @@ func TestWorkspaceSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(s.Close)
 	if _, err := s.CreateSessionIn("s1", "", "general-purpose", "/projects/alpha", true); err != nil {
 		t.Fatalf("CreateSessionIn: %v", err)
 	}
@@ -530,6 +541,7 @@ func TestWorkspaceSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(restored.Close)
 
 	got, err := restored.Get("s1")
 	if err != nil {
@@ -556,6 +568,7 @@ func TestWorkspaceSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second LoadAllFromDisk: %v", err)
 	}
+	t.Cleanup(again.Close)
 	after, err := again.Get("s1")
 	if err != nil {
 		t.Fatalf("Get s1 after rename: %v", err)
@@ -575,6 +588,7 @@ func TestTailSince(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatal(err)
 	}
@@ -702,6 +716,7 @@ func TestSetOrderPlacesSessionsAndSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	for _, id := range []string{"s-1", "s-2", "s-3"} {
 		if _, err := store.CreateSession(id, "", "general-purpose", true); err != nil {
 			t.Fatalf("create %s: %v", id, err)
@@ -719,6 +734,7 @@ func TestSetOrderPlacesSessionsAndSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAllFromDisk: %v (%v)", err, warnings)
 	}
+	t.Cleanup(restarted.Close)
 	if got := listedIDs(restarted); !reflect.DeepEqual(got, []string{"s-3", "s-1", "s-2"}) {
 		t.Errorf("order after restart = %v, want [s-3 s-1 s-2]", got)
 	}
@@ -732,6 +748,7 @@ func TestANewSessionSortsAboveAnArrangedList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	for _, id := range []string{"s-1", "s-2"} {
 		if _, err := store.CreateSession(id, "", "general-purpose", true); err != nil {
 			t.Fatalf("create %s: %v", id, err)
@@ -755,6 +772,7 @@ func TestSetOrderRejectsAnUnknownSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	if _, err := store.CreateSession("s-1", "", "general-purpose", true); err != nil {
 		t.Fatalf("create: %v", err)
 	}
