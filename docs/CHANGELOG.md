@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.120.0
+
+Two permission tables nothing walked, and both were wrong.
+
+**Security**
+
+* The credential deny list guarded the absolute spelling of a secret file and allowed the relative one. The patterns read `*/.npmrc`, and `*` matching any run of characters still leaves the `/` a literal the path must carry — so `/home/u/.npmrc` was refused and `.npmrc` in the workspace root was read. The path arrives as the model wrote it, and a model reading a file in the directory it is working in writes the relative form, so the guarded spelling was the one that almost never arrived. `.npmrc`, `.pypirc`, `.aws/credentials`, `.aws/config`, `.kube/config`, `.docker/config.json`, `.gnupg/secring.gpg` and `.ssh/config` were all readable with Smart Agent on. The existing test passed because its one `.npmrc` path was the absolute one.
+* On Windows, "always allow" on one narrow command became a wildcard. The table of programs too dangerous to generalize never trimmed `.exe`, so `rm.exe -rf build` persisted `rm.exe *` — and so did `python3.exe`, `bash.exe`, `node.exe` and `sudo.exe`. Two names had been worked around by listing them twice; the other forty-five had not.
+
+**Guards**
+
+* Both tables are walked now, and the guards state the requirement rather than the list: every credential file is checked relative, absolute and tilde, because keying the test on the patterns is what let the hole survive. Every wide-program name is checked in five spellings, and a name the lookup could never match fails the build.
+* The fmt check could not fail on a file that is not Go. It exists because `gofmt -l` prints names and exits 0; it recreated the hole for the other way gofmt fails, sending stderr to `/dev/null` and forcing the exit code to 0. A broken file exited 2 and the check reported 0.
+
+**Records**
+
+* `docs/IMPROVEMENTS.md` corrected where it had fallen behind the build: the long-session client control shipped, the collapsible tool-call cards are built, the context indicator landed in v0.119.0 at 70/90 rather than the proposed 85, MCP status is half done, and the light theme and mobile layout are declined rather than open.
+* Items 60 and 61 record a sweep that raised 95 candidates from six angles and verified each against the code: 74 genuinely open, 12 already shipped without the record being updated, 9 notes with no work in them.
+
 ## v0.119.0
 
 The commands a parity review asked for, one place for the help, and a test for each of them that runs at release.
