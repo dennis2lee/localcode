@@ -280,14 +280,24 @@ var builtinRules = map[string][]PermissionRule{
 // Matched against the path as the model wrote it, with "*" matching any
 // run of characters including "/" — so "*.env" catches ".env",
 // "config/.env" and "/home/u/app/.env" alike.
+//
+// Every pattern is written so that "*" can match nothing, which is the
+// relative spelling. The list used to say "*/.npmrc", and "*" matching
+// any run of characters still leaves the "/" a literal one must match:
+// "/home/u/.npmrc" was denied and ".npmrc" in the workspace root was
+// allowed. The path arrives as the model wrote it, and a model asked for
+// a file in the directory it is working in writes the relative form, so
+// the guarded spelling was the one that almost never arrived. Whoever
+// wrote the list saw it for two entries — ".env" and ".netrc" are listed
+// bare beside their prefixed forms — and the other seven were not.
 var secretPatterns = []string{
 	"*.env", "*.env.*", ".env", ".env.*",
 	"*id_rsa*", "*id_ed25519*", "*id_ecdsa*", "*id_dsa*",
 	"*.pem", "*.key", "*.p12", "*.pfx", "*.keystore",
-	"*/.ssh/*", "*/.aws/credentials", "*/.aws/config",
-	"*/.gnupg/*", "*/.kube/config", "*/.docker/config.json",
-	"*credentials.json", "*/.netrc", ".netrc", "*.htpasswd",
-	"*/.npmrc", "*/.pypirc", "*service-account*.json",
+	"*.ssh/*", "*.aws/credentials", "*.aws/config",
+	"*.gnupg/*", "*.kube/config", "*.docker/config.json",
+	"*credentials.json", "*.netrc", "*.htpasswd",
+	"*.npmrc", "*.pypirc", "*service-account*.json",
 }
 
 // secretGuardedTools are the tools that take a path and can therefore be
@@ -375,7 +385,20 @@ func PermissionRuleFor(toolName, subject string) PermissionRule {
 // "always" available — a repeated "rm -rf build" still stops asking —
 // while making the approval mean what it said.
 func tooWideToGeneralize(program string) bool {
-	return wideProgramNames[strings.ToLower(baseName(program))]
+	return wideProgramNames[normalizeProgram(program)]
+}
+
+// normalizeProgram is the program as the table spells it: no directory, no
+// case, no ".exe".
+//
+// The trim is the part that was missing. Without it "rm.exe -rf build"
+// answered false and persisted "rm.exe *" — a wildcard grant for every
+// rm on the machine, from an approval that named one command. Two names
+// were worked around by listing them twice ("powershell.exe", "cmd.exe")
+// and the other forty-five were not. Lowercasing has to come first, the
+// way internal/shell does it: "RM.EXE" trims to "rm" only in that order.
+func normalizeProgram(program string) string {
+	return strings.TrimSuffix(strings.ToLower(baseName(program)), ".exe")
 }
 
 // baseName is the program without its directory, so "/usr/bin/sudo" and
@@ -394,8 +417,8 @@ var wideProgramNames = map[string]bool{
 	"python": true, "python2": true, "python3": true, "py": true,
 	"perl": true, "ruby": true, "node": true, "deno": true, "bun": true,
 	"php": true, "lua": true, "osascript": true,
-	"powershell": true, "powershell.exe": true, "pwsh": true,
-	"cmd": true, "cmd.exe": true, "wscript": true, "cscript": true,
+	"powershell": true, "pwsh": true,
+	"cmd": true, "wscript": true, "cscript": true,
 	"eval": true, "exec": true, "xargs": true, "env": true,
 	// Privilege: the argument is the whole question.
 	"sudo": true, "doas": true, "su": true, "runas": true,
