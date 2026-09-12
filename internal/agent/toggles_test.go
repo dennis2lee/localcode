@@ -183,6 +183,18 @@ func TestEverySlashCommandIsAnsweredByTheDaemon(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
+	// A workspace of the test's own, because this walks every command
+	// through the router and some of them write. Without it the session
+	// directory falls back to the process's, which under "go test" is the
+	// package directory: "/export" landed a transcript in internal/agent
+	// on every run from the day it joined the list, and one of them was
+	// committed before anybody noticed.
+	work := t.TempDir()
+	if _, err := loop.Store.SetWorkspace(sid, work); err != nil {
+		t.Fatal(err)
+	}
+	before := dirEntryNames(t, ".")
+
 	cmds := SlashCommands()
 	if len(cmds) < 5 {
 		t.Fatalf("only %d slash commands listed", len(cmds))
@@ -204,6 +216,29 @@ func TestEverySlashCommandIsAnsweredByTheDaemon(t *testing.T) {
 			t.Errorf("%s has no description", text)
 		}
 	}
+
+	// And nothing landed where the test runs. The assertion is the point
+	// rather than the tidiness: a command that writes to the wrong
+	// directory in a test writes to the wrong directory in a daemon.
+	for name := range dirEntryNames(t, ".") {
+		if !before[name] {
+			t.Errorf("running every command created %q in the package directory", name)
+		}
+	}
+}
+
+// dirEntryNames is the set of names directly inside dir.
+func dirEntryNames(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		out[e.Name()] = true
+	}
+	return out
 }
 
 // The three toggles are in that list, since being completable is half of
