@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,12 +203,15 @@ func TestRunExecutesInTheDirectoryItIsGiven(t *testing.T) {
 	}
 	got := strings.TrimSpace(string(data))
 	// Resolved on both sides: a temp dir on macOS is reached through
-	// /var -> /private/var, and pwd reports what it resolves to.
+	// /var -> /private/var, and pwd reports what it resolves to. On Windows,
+	// Git Bash pwd -W emits forward slashes (C:/...) while cmd.exe cd emits
+	// backslashes (C:\...); filepath.Clean and EvalSymlinks normalize both
+	// to the canonical native form.
 	want, _ := filepath.EvalSymlinks(project)
 	if resolved, err := filepath.EvalSymlinks(got); err == nil {
 		got = resolved
 	}
-	if got != want {
+	if filepath.Clean(got) != filepath.Clean(want) {
 		t.Errorf("the hook ran in %q, want the directory it was given (%q)", got, want)
 	}
 }
@@ -227,8 +231,19 @@ func TestRunPutsTheDirectoryInThePayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read captured stdin: %v", err)
 	}
-	if !strings.Contains(string(data), `"cwd":`) || !strings.Contains(string(data), project) {
-		t.Errorf("captured stdin = %q, want a cwd of %q", string(data), project)
+	// The payload is JSON, so string fields with backslashes (like Windows
+	// paths) have their separators escaped (e.g. "C:\\Users\\..."). A raw
+	// substring search for the unescaped path fails on Windows while passing
+	// on Unix; unmarshaling the JSON decodes the escapes and lets us compare
+	// the actual directory string.
+	var captured struct {
+		Cwd string `json:"cwd"`
+	}
+	if err := json.Unmarshal(data, &captured); err != nil {
+		t.Fatalf("captured stdin is not valid JSON (%v): %q", err, string(data))
+	}
+	if captured.Cwd != project {
+		t.Errorf("captured cwd = %q, want %q", captured.Cwd, project)
 	}
 	if _, added := payload["cwd"]; added {
 		t.Error("the caller's own payload map was written into; it should have been copied")

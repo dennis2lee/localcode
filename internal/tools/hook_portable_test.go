@@ -18,6 +18,13 @@ func toSlash(path string) string {
 	return strings.ReplaceAll(path, `\`, "/")
 }
 
+func toSlashFor(goos, path string) string {
+	if goos == "windows" {
+		return strings.ReplaceAll(path, `\`, "/")
+	}
+	return path
+}
+
 // hookWriteCommand produces a shell command string that writes a known string
 // to a given path, portable across Unix shells (sh) and Windows environments.
 func hookWriteCommand(path, text string) string {
@@ -74,6 +81,18 @@ func TestToolHookCommandsArePortableAcrossOperatingSystems(t *testing.T) {
 		text     = "ran"
 	)
 
+	// Negative control: verify toSlashFor differentiates Windows from Unix
+	const probe = `C:\path\to\tool`
+	if got := toSlashFor("windows", probe); got != "C:/path/to/tool" {
+		t.Fatalf("toSlashFor for Windows = %q, want %q", got, "C:/path/to/tool")
+	}
+	if got := toSlashFor("linux", probe); got != probe {
+		t.Fatalf("toSlashFor for Linux = %q, want %q", got, probe)
+	}
+	if got := toSlashFor("darwin", probe); got != probe {
+		t.Fatalf("toSlashFor for Darwin = %q, want %q", got, probe)
+	}
+
 	platforms := []struct {
 		goos    string
 		isWin   bool
@@ -86,6 +105,16 @@ func TestToolHookCommandsArePortableAcrossOperatingSystems(t *testing.T) {
 
 	for _, p := range platforms {
 		t.Run(p.goos, func(t *testing.T) {
+			slashPath := toSlashFor(p.goos, p.rawPath)
+			if p.isWin {
+				if strings.Contains(slashPath, `\`) {
+					t.Errorf("windows toSlashFor path contains backslash: %q", slashPath)
+				}
+			} else {
+				if slashPath != p.rawPath {
+					t.Errorf("unix toSlashFor path modified: got %q, want %q", slashPath, p.rawPath)
+				}
+			}
 			writeCmd := hookWriteCommandFor(p.goos, p.rawPath, text)
 			stdinCmd := hookStdinCommandFor(p.goos, p.rawPath)
 			blockCmd := hookBlockCommandFor(p.goos, p.rawPath, text, 2)
@@ -148,6 +177,18 @@ func TestToolHookCommandPicksPlatformCommandForUnixAndWindows(t *testing.T) {
 		unixPath = `/tmp/test-tool-001/marker`
 		payload  = "ran"
 	)
+
+	unixPathSlash := toSlashFor("darwin", unixPath)
+	winPathSlash := toSlashFor("windows", winPath)
+	t.Logf("unix slash path:       %s", unixPathSlash)
+	t.Logf("windows slash path:    %s", winPathSlash)
+
+	if want := "C:/Users/runneradmin/AppData/Local/Temp/TestTool001/marker"; winPathSlash != want {
+		t.Errorf("windows toSlashFor = %q, want %q", winPathSlash, want)
+	}
+	if want := "/tmp/test-tool-001/marker"; unixPathSlash != want {
+		t.Errorf("unix toSlashFor = %q, want %q", unixPathSlash, want)
+	}
 
 	unixWrite := hookWriteCommandFor("darwin", unixPath, payload)
 	winWrite := hookWriteCommandFor("windows", winPath, payload)

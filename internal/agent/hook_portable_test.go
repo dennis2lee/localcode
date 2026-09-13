@@ -45,14 +45,20 @@ func hookAppendStdinCommandFor(goos, path string) string {
 }
 
 // hookPwdCommand produces a shell command string that records the current working
-// directory to path, portable across Unix sh (`pwd`) and Windows (`cd` or Git Bash `pwd`).
+// directory to path, portable across Unix sh (`pwd`) and Windows (`pwd -W` under Git Bash
+// or `cd` under cmd.exe).
+//
+// On Windows, bare `pwd` under Git Bash prints an MSYS2 virtual path like `/tmp/...`
+// which native Windows APIs cannot resolve. `pwd -W` forces Git Bash to print the
+// native Win32 path. When falling back to cmd.exe where `pwd` is not a command,
+// `2>nul` suppresses the failure and `|| cd` prints the current working directory.
 func hookPwdCommand(path string) string {
 	return hookPwdCommandFor(runtime.GOOS, path)
 }
 
 func hookPwdCommandFor(goos, path string) string {
 	if goos == "windows" {
-		return fmt.Sprintf("(pwd 2>nul || cd) > %s", toSlash(path))
+		return fmt.Sprintf("(pwd -W 2>nul || cd) > %s", toSlash(path))
 	}
 	return fmt.Sprintf("pwd > %s", path)
 }
@@ -124,6 +130,9 @@ func TestAgentHookCommandsArePortableAcrossOperatingSystems(t *testing.T) {
 				if !strings.Contains(pwdCmd, "cd") {
 					t.Errorf("windows pwd command lacks cmd.exe fallback: %q", pwdCmd)
 				}
+				if !strings.Contains(pwdCmd, "pwd -W") {
+					t.Errorf("windows pwd command lacks pwd -W for Git Bash: %q", pwdCmd)
+				}
 			} else {
 				if !strings.HasPrefix(appendCmd, "cat >>") {
 					t.Errorf("unix append command should use POSIX cat: %q", appendCmd)
@@ -177,7 +186,7 @@ func TestAgentHookCommandPicksPlatformCommandForUnixAndWindows(t *testing.T) {
 	if want := "pwd > /tmp/test-agent-001/hook.log"; unixPwd != want {
 		t.Errorf("unix pwd = %q, want %q", unixPwd, want)
 	}
-	if want := "(pwd 2>nul || cd) > C:/Users/runneradmin/AppData/Local/Temp/TestAgent001/hook.log"; winPwd != want {
+	if want := "(pwd -W 2>nul || cd) > C:/Users/runneradmin/AppData/Local/Temp/TestAgent001/hook.log"; winPwd != want {
 		t.Errorf("windows pwd = %q, want %q", winPwd, want)
 	}
 }

@@ -296,7 +296,9 @@ func TestACustomCommandExpandsInTheSessionsWorkspace(t *testing.T) {
 
 // hookPwd reads back the directory a "pwd > file" hook recorded, with
 // both sides resolved: a temp dir on macOS is reached through
-// /var -> /private/var and pwd reports what it resolves to.
+// /var -> /private/var and pwd reports what it resolves to. On Windows,
+// Git Bash pwd -W outputs forward slashes while cmd.exe cd outputs
+// backslashes; filepath.Clean normalizes both to the canonical native form.
 func hookPwd(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -305,17 +307,17 @@ func hookPwd(t *testing.T, path string) string {
 	}
 	got := strings.TrimSpace(string(data))
 	if resolved, err := filepath.EvalSymlinks(got); err == nil {
-		return resolved
+		return filepath.Clean(resolved)
 	}
-	return got
+	return filepath.Clean(got)
 }
 
 func resolved(t *testing.T, dir string) string {
 	t.Helper()
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
-		return r
+		return filepath.Clean(r)
 	}
-	return dir
+	return filepath.Clean(dir)
 }
 
 // A hook is a shell command, so where it runs decides what it sees. Fired

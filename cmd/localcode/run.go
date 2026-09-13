@@ -376,6 +376,15 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 			fmt.Fprintf(os.Stderr, "waiting for %d background sub-agent(s) to finish\n", n)
 		}
 		tasks.Drain(ctx)
+		// And close the session log, after the tasks that might still be
+		// writing to it. A one-shot run exits straight afterwards, so on
+		// Unix this leaked nothing anybody noticed — the process took the
+		// handle with it. Windows is where it showed: a file another
+		// handle still holds cannot be deleted, so the run's own
+		// t.TempDir could not be cleaned up, and the same is true of any
+		// caller that runs one-shot twice in a process or tries to tidy
+		// the directory afterwards.
+		store.Close()
 	}, nil
 }
 

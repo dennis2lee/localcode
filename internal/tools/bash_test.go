@@ -60,8 +60,12 @@ func TestAGrepThatFoundNothingIsNotAFailedCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// On Windows, paths must be converted to slash notation before being passed
+	// into bash command strings; otherwise bash treats backslashes as escape
+	// characters (turning \n into a newline, \r into carriage return, etc.),
+	// causing grep to look for a corrupted path and exit with a file-not-found error.
 	input, _ := json.Marshal(map[string]string{
-		"command": "grep -n \"nslut_lookup_resp\" " + file,
+		"command": "grep -n \"nslut_lookup_resp\" " + toSlash(file),
 	})
 	result := Bash{}.Execute(context.Background(), input)
 
@@ -80,7 +84,7 @@ func TestAGrepThatFoundNothingIsNotAFailedCommand(t *testing.T) {
 // happened must not read like a search that came back clean.
 func TestAGrepThatCouldNotReadTheFileIsStillAFailedCommand(t *testing.T) {
 	input, _ := json.Marshal(map[string]string{
-		"command": "grep -n x " + filepath.Join(t.TempDir(), "no-such-file"),
+		"command": "grep -n x " + toSlash(filepath.Join(t.TempDir(), "no-such-file")),
 	})
 	result := Bash{}.Execute(context.Background(), input)
 

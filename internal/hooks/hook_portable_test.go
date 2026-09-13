@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
@@ -55,17 +56,19 @@ func hookStdinCommandFor(goos, path string) string {
 // hookPwdCommand produces a shell command string that records the current working
 // directory to path, portable across Unix sh and Windows environments.
 //
-// In POSIX sh, `pwd` prints the working directory. Under cmd.exe, `pwd` is unrecognized
-// and `cd` with no arguments prints the current directory. Under Git Bash, bare `cd`
-// changes directory to $HOME instead of printing it. The fallback `(pwd 2>nul || cd)`
-// lets Git Bash execute `pwd` and cmd.exe execute `cd`.
+// In POSIX sh, `pwd` prints the working directory. Under Git Bash on Windows, bare
+// `pwd` prints an MSYS2 virtual filesystem mount path (e.g. `/tmp/...` for the user's
+// Temp directory), which native Windows binaries cannot locate or stat. Passing `-W`
+// (`pwd -W`) tells Git Bash to output the Win32 physical directory. Under cmd.exe,
+// `pwd` is unrecognized; the `2>nul` suppresses the error and `|| cd` falls back to
+// cmd.exe's built-in `cd` which outputs the current directory.
 func hookPwdCommand(path string) string {
 	return hookPwdCommandFor(runtime.GOOS, path)
 }
 
 func hookPwdCommandFor(goos, path string) string {
 	if goos == "windows" {
-		return fmt.Sprintf("(pwd 2>nul || cd) > %s", toSlash(path))
+		return fmt.Sprintf("(pwd -W 2>nul || cd) > %s", toSlash(path))
 	}
 	return fmt.Sprintf("pwd > %s", path)
 }
@@ -140,6 +143,9 @@ func TestHookCommandsArePortableAcrossOperatingSystems(t *testing.T) {
 				if !strings.Contains(pwdCmd, "cd") {
 					t.Errorf("windows pwd command lacks cmd.exe fallback: %q", pwdCmd)
 				}
+				if !strings.Contains(pwdCmd, "pwd -W") {
+					t.Errorf("windows pwd command lacks pwd -W for Git Bash: %q", pwdCmd)
+				}
 			} else {
 				if !strings.HasPrefix(stdinCmd, "cat >") {
 					t.Errorf("unix stdin command should use POSIX cat: %q", stdinCmd)
@@ -193,7 +199,39 @@ func TestHookCommandPicksPlatformCommandForUnixAndWindows(t *testing.T) {
 	if want := "pwd > /tmp/test-run-001/ran"; unixPwd != want {
 		t.Errorf("unix pwd = %q, want %q", unixPwd, want)
 	}
-	if want := "(pwd 2>nul || cd) > C:/Users/runneradmin/AppData/Local/Temp/TestRun001/ran"; winPwd != want {
+	if want := "(pwd -W 2>nul || cd) > C:/Users/runneradmin/AppData/Local/Temp/TestRun001/ran"; winPwd != want {
 		t.Errorf("windows pwd = %q, want %q", winPwd, want)
+	}
+}
+
+// TestPayloadJSONPreservesWindowsSeparators proves that a Windows directory path
+// containing backslashes survives JSON marshaling and unmarshaling intact, whereas
+// a raw substring search on the JSON wire bytes fails because JSON escapes backslashes.
+func TestPayloadJSONPreservesWindowsSeparators(t *testing.T) {
+	const winDir = `C:\Users\runneradmin\AppData\Local\Temp\TestRun001`
+
+	payload := map[string]any{"cwd": winDir}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Negative control: searching the raw wire text for the native Windows path
+	// FAILS because the backslashes are escaped as "\\". This is the exact defect
+	// that caused hooks_test.go:231 to fail on Windows.
+	rawWire := string(data)
+	if strings.Contains(rawWire, winDir) {
+		t.Fatalf("raw JSON string contains unescaped path %q; JSON encoder should have escaped backslashes: %q", winDir, rawWire)
+	}
+
+	// The fix: unmarshaling decodes the escapes and reproduces the original path.
+	var captured struct {
+		Cwd string `json:"cwd"`
+	}
+	if err := json.Unmarshal(data, &captured); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if captured.Cwd != winDir {
+		t.Errorf("decoded cwd = %q, want %q", captured.Cwd, winDir)
 	}
 }

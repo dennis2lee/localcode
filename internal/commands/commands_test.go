@@ -181,7 +181,13 @@ func TestExpandShellOutputNotReScannedForImports(t *testing.T) {
 	}
 	// The shell prints an @-reference to the secret file; it must survive
 	// as literal text, not be expanded into the file's contents.
-	cmd := Command{Body: "!`echo @" + secret + "`"}
+	//
+	// On Windows, the path is converted to forward slashes before embedding
+	// in the shell command. Otherwise Git Bash reads backslashes as escapes
+	// (e.g. \001 as octal, \r as carriage return), corrupting the printed
+	// path before it ever reaches stdout.
+	target := toSlash(secret)
+	cmd := Command{Body: "!`echo @" + target + "`"}
 	got, err := Expand(cmd, "", dir)
 	if err != nil {
 		t.Fatalf("Expand: %v", err)
@@ -189,7 +195,7 @@ func TestExpandShellOutputNotReScannedForImports(t *testing.T) {
 	if strings.Contains(got, "TOP SECRET") {
 		t.Errorf("shell output was re-scanned and the file got inlined: %q", got)
 	}
-	if !strings.Contains(got, "@"+secret) {
+	if !strings.Contains(got, "@"+target) {
 		t.Errorf("expected the @-reference to remain literal in the output, got %q", got)
 	}
 }

@@ -14,7 +14,7 @@ import (
 func TestGlobSubjectIsTheDirectoryBeingListed(t *testing.T) {
 	for _, tt := range []struct{ pattern, want string }{
 		{"src/**/*.go", "src"},
-		{"/etc/*.conf", "/etc"},
+		{"/etc/*.conf", filepath.Dir("/etc/*.conf")},
 		{"*.go", "."},
 		{"internal/tools/read.go", "internal/tools/read.go"},
 		{"../other/**/*.go", "../other"},
