@@ -3,7 +3,9 @@
   "providers": {
     "bedrock": {
       "type": "bedrock",
-      "region": "us-west-2"
+      "region": "us-west-2",
+      "//profile": "AWS named profile to use, such as one created by `localcode login bedrock`. Empty or omitted uses the default AWS credential chain. See docs/USAGE.md.",
+      "profile": ""
     },
     "anthropic": {
       "type": "anthropic",
@@ -45,6 +47,12 @@
       "model": "qwen3-30b-a3b",
       "max_tokens": 4096,
       "context_window": 32768,
+      "//temperature": "Sampling temperature. 0, as here, sends nothing and leaves it to the backend; this file is a worked setup as well as a key reference, so the three sampling keys are shown at values that change nothing. Dropped automatically while a model is reasoning, because provider APIs refuse both together. See docs/USAGE.md.",
+      "temperature": 0,
+      "//top_p": "Nucleus sampling threshold between 0 and 1; 1.0, as here, truncates nothing. Omit the key entirely to send nothing at all. Reaches OpenAI-compatible, Anthropic, and Bedrock. Dropped while a Claude model is reasoning, as temperature already was. Bounded at load rather than refused mid-turn by the server. See docs/USAGE.md.",
+      "top_p": 1.0,
+      "//top_k": "Only sample from the top K candidates at each step; 0, as here, is no limit on vLLM. Omit the key entirely to send nothing at all. Native on Anthropic, sent in additionalModelRequestFields on Bedrock, and sent as a vLLM extension to OpenAI-compatible servers. Dropped while reasoning. See docs/USAGE.md.",
+      "top_k": 0,
       "//keep_going": "How many times one turn may be told to carry on after the model stops with the task unfinished. Only ever applies to muse models (any id containing 'muse'); on them 0 (the default) means 3 out of the box and -1 forces it off. /keep-going toggles the whole feature. See docs/USAGE.md.",
       "keep_going": 0
     }
@@ -148,7 +156,7 @@
   },
   "//mcp_servers": "MCP servers to connect at startup, name -> server. Three transports: \"stdio\" runs a command and talks over its pipes ({\"type\": \"stdio\", \"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/srv/data\"], \"env\": {}}), while \"http\" and \"sse\" take {\"url\": \"https://...\", \"headers\": {\"Authorization\": \"Bearer <an environment reference, see the note on base_url>\"}}. Omitting \"type\" infers one from whether command or url is set. Header values are secrets and are never printed, only their names. Their tools join the session as mcp__<server>__<tool>; /reset-mcp reconnects after a change here without a restart. See docs/USAGE.md.",
   "mcp_servers": {},
-  "//hooks": "Shell commands run at points in a turn, event -> list. The events are pre_tool_use, post_tool_use, user_prompt_submit, stop and session_start. Each entry is {\"command\": \"...\", \"matcher\": \"...\"}, where matcher is optional and limits the hook to tools whose name matches it. The event payload is piped to the command as JSON on stdin, the command runs in the session's workspace, and a pre_tool_use hook that exits non-zero blocks the call. Each is bounded by a 30-second timeout so one hung script cannot wedge a turn. See docs/USAGE.md.",
+  "//hooks": "Shell commands run at points in a turn, event -> list. The events are pre_tool_use, post_tool_use, user_prompt_submit, stop, session_start, pre_model, post_model, delegate, compact and retry. Each entry is {\"command\": \"...\", \"matcher\": \"...\", \"timeout\": 0, \"fail_closed\": false}, where matcher is optional and limits the hook to tools whose name matches it, timeout bounds execution in seconds (0 for the 30-second default), and fail_closed blocks the action when the hook cannot finish (timeout or start failure; off by default so a broken script does not lock out tools). The event payload is piped to the command as JSON on stdin, the command runs in the session's workspace, and a pre_tool_use hook that exits non-zero blocks the call. Each is bounded by a 30-second timeout by default so one hung script cannot wedge a turn. See docs/USAGE.md.",
   "hooks": {},
   "//network": "Where localcode itself may connect: the model providers, remote MCP servers, the update check. \"enforced\" off leaves the list inert so it can be tried before it is relied on; enforcing an empty list is refused, since it would turn off every provider. An entry is a host name, or \"*.base\" for any sub-domain of base and base itself, and loopback is always allowed. It does NOT cover a shell command's own connections or a subprocess MCP server — those are separate processes with their own sockets, and what bounds them is the permission prompt on bash and the operating system. See docs/USAGE.md.",
   "network": { "egress": { "enforced": false, "allow": [] } },

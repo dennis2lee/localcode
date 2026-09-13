@@ -59,19 +59,32 @@ const (
 	EventRetry = "retry"
 )
 
+// AllEvents lists every lifecycle event Run recognizes, in definition order.
+// It is the single source of truth for event enumeration across the codebase:
+// KnownEvents, config validation error messages, and tests derive from it
+// rather than maintaining parallel lists that drift.
+var AllEvents = []string{
+	EventPreToolUse,
+	EventPostToolUse,
+	EventUserPromptSubmit,
+	EventStop,
+	EventSessionStart,
+	EventPreModel,
+	EventPostModel,
+	EventDelegate,
+	EventCompact,
+	EventRetry,
+}
+
 // KnownEvents lists every event name Run recognizes, for config
-// validation.
-var KnownEvents = map[string]bool{
-	EventPreToolUse:       true,
-	EventPostToolUse:      true,
-	EventUserPromptSubmit: true,
-	EventStop:             true,
-	EventSessionStart:     true,
-	EventPreModel:         true,
-	EventPostModel:        true,
-	EventDelegate:         true,
-	EventCompact:          true,
-	EventRetry:            true,
+// validation. Built from AllEvents at startup so the map and the
+// slice can never drift.
+var KnownEvents = map[string]bool{}
+
+func init() {
+	for _, e := range AllEvents {
+		KnownEvents[e] = true
+	}
 }
 
 // Hook is one shell command registered against an event. Matcher, if set,

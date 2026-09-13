@@ -732,7 +732,7 @@ func (c *Config) Validate() error {
 
 	for event := range c.Hooks {
 		if !hooks.KnownEvents[event] {
-			return fmt.Errorf("hooks: unknown event %q (want one of pre_tool_use, post_tool_use, user_prompt_submit, stop, session_start)", event)
+			return fmt.Errorf("hooks: unknown event %q (want one of %s)", event, strings.Join(hooks.AllEvents, ", "))
 		}
 	}
 
