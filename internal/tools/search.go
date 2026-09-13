@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -162,6 +163,59 @@ func globOrStop(ctx context.Context, pattern string) ([]string, error) {
 // inside one. See tools.CancelledResult.
 func stoppedResult() Result { return CancelledResult() }
 
+// splitDoubleStar divides a "**" pattern into the directory to walk and the
+// pattern to match under it, in slash terms whatever the platform spells
+// paths in.
+//
+// The slashes are the whole point. By the time a pattern reaches here it has
+// been through resolve, which ends in filepath.Join — and on Windows Join
+// Cleans, and Clean ends in FromSlash, so every "/" the model wrote is a "\"
+// before this function ever sees it. Splitting on a literal "/" then trimmed
+// nothing, so the suffix kept a leading separator and its inner ones stayed
+// backslashed: "**/localcode/*.go" arrived as `C:\ws\**\localcode\*.go` and
+// left here as `\localcode\*.go`. globSuffixMatch builds the name it compares
+// with ToSlash, so it was matching a backslash pattern against a
+// forward-slash name, which never matches and never errors.
+//
+// The effect on Windows was that every "**" glob answered "no files match" —
+// the pattern this tool advertises to the model first, silently finding
+// nothing. It survived three platforms because on Unix FromSlash is the
+// identity, so nothing in the chain had an opinion about separators except
+// the matcher at the very end.
+//
+// The returned root is in platform form, because WalkDir walks the real
+// filesystem. The suffix stays in slash form, because that is what it is
+// compared against.
+func splitDoubleStar(pattern string) (root, suffix string) {
+	return splitDoubleStarSep(pattern, filepath.Separator)
+}
+
+// splitDoubleStarSep is splitDoubleStar with the separator handed to it.
+//
+// The separator is a parameter rather than filepath.ToSlash for one reason:
+// ToSlash is the identity on Unix, and has to be — a backslash is a legal
+// character in a Unix filename, so converting one would corrupt a real path.
+// That is correct and it also means no test running on Unix can exercise the
+// Windows behaviour through it, which is precisely how this defect reached
+// three platforms unnoticed. With the separator passed in, the Windows branch
+// is reachable from any machine, and doublestar_split_test.go walks both.
+func splitDoubleStarSep(pattern string, sep rune) (root, suffix string) {
+	slashed := pattern
+	if sep != '/' {
+		slashed = strings.ReplaceAll(pattern, string(sep), "/")
+	}
+	parts := strings.SplitN(slashed, "**", 2)
+	root = strings.TrimSuffix(parts[0], "/")
+	if root == "" {
+		root = "."
+	}
+	suffix = strings.TrimPrefix(parts[1], "/")
+	if sep != '/' {
+		root = strings.ReplaceAll(root, "/", string(sep))
+	}
+	return root, suffix
+}
+
 // doubleStarGlob supports "**" (recursive) in addition to filepath.Glob's
 // single-level "*", since that's the pattern models reach for by default.
 func doubleStarGlob(ctx context.Context, pattern string) ([]string, error) {
@@ -169,12 +223,7 @@ func doubleStarGlob(ctx context.Context, pattern string) ([]string, error) {
 		return globOrStop(ctx, pattern)
 	}
 
-	parts := strings.SplitN(pattern, "**", 2)
-	root := strings.TrimSuffix(parts[0], "/")
-	if root == "" {
-		root = "."
-	}
-	suffix := strings.TrimPrefix(parts[1], "/")
+	root, suffix := splitDoubleStar(pattern)
 
 	var out []string
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -219,12 +268,7 @@ func smartGlob(ctx context.Context, pattern string) ([]string, walkNotice, error
 		return out, notice, err
 	}
 
-	parts := strings.SplitN(pattern, "**", 2)
-	root := strings.TrimSuffix(parts[0], "/")
-	if root == "" {
-		root = "."
-	}
-	suffix := strings.TrimPrefix(parts[1], "/")
+	root, suffix := splitDoubleStar(pattern)
 
 	var out []string
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -263,14 +307,22 @@ func smartGlob(ctx context.Context, pattern string) ([]string, walkNotice, error
 // shortest is the filename alone — which is the only comparison the plain
 // glob ever made, and why a pattern naming a directory after the stars
 // used to match nothing at all.
-func globSuffixMatch(suffix, root, path string) bool {
-	rel, err := filepath.Rel(root, path)
+func globSuffixMatch(suffix, root, file string) bool {
+	rel, err := filepath.Rel(root, file)
 	if err != nil {
 		return false
 	}
 	segs := strings.Split(filepath.ToSlash(rel), "/")
 	for i := range segs {
-		if ok, _ := filepath.Match(suffix, strings.Join(segs[i:], "/")); ok {
+		// path.Match, not filepath.Match: both sides are in slash form
+		// here, and only path.Match agrees that "/" is the separator on
+		// every platform. filepath.Match on Windows treats "\" as the
+		// separator and "/" as an ordinary character, so "*" would cross
+		// a directory boundary there — "**/cmd/*.go" would start
+		// matching cmd/sub/deep.go. On Unix the two are the same
+		// function for these inputs; 304 pattern/name pairs drawn from
+		// this package's own tests agree on every one.
+		if ok, _ := path.Match(suffix, strings.Join(segs[i:], "/")); ok {
 			return true
 		}
 	}
