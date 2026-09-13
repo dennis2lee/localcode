@@ -617,7 +617,7 @@ For `bash`, session and permanent grants generalize the first word. Approving `n
 
 "Always allow" updates the file passed through `--config`, or global `~/.localcode/config.json` when no explicit file is set. It never updates the project override. Only the `permission` key changes. Without a writable config target, this option is unavailable.
 
-Session grants are forgotten when a session is deleted, and when the daemon restarts. Permanent ("always") grants live in config.json and survive both.
+Session grants are forgotten when a session is deleted. A daemon restart keeps them: the grant is rebuilt from the session log on the next permission check. Permanent ("always") grants live in config.json and survive both.
 
 The Web UI locks the prompt box while the permission modal is open. The TUI keeps its separate permission line and shows a one-time hint if Enter is pressed while a request is pending.
 
@@ -910,7 +910,7 @@ Recall starts with Up on the first prompt line or Down on the last line. Inside 
 
 Prompt history belongs to the session. It combines newly sent prompts with prompts replayed from the session log, including messages from other clients. No separate history file is written.
 
-Up to 200 entries per session are kept.
+The Web UI keeps up to 200 entries per session. The TUI keeps every entry until the session is switched.
 
 Unsent drafts also belong to the conversation. Switching sessions in either client restores the selected conversation's draft.
 
@@ -1406,7 +1406,7 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/exit`, `/quit`, `/q` | **TUI.** Leaves, same as `exit`. |
 | `exit`, `quit`, `:q` | Quits the TUI, same as Ctrl+C on an empty prompt. A bare `q` is an ordinary message: one letter is too easily something you meant to say, and `/q` covers the habit. The Web UI only prints a note, since a browser cannot quit the program. Close the tab yourself. |
 
-Six of those names are aliases for commands that already existed, kept because they are the words people arrive typing: `/agents` for `/agent`, `/models` and `/mo` for `/model`, and `/sessions`, `/resume` and `/continue` for `/session`. They do not appear in `/help`, which lists one name per command.
+Seven of those names are aliases for commands that already existed, kept because they are the words people arrive typing: `/agents` for `/agent`, `/models` and `/mo` for `/model`, `/sessions`, `/resume` and `/continue` for `/session`, and `/clear-session` for `/new`. They do not appear in `/help`, which lists one name per command.
 
 ## Part 5. Sessions
 
