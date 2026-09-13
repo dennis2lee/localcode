@@ -88,16 +88,94 @@ func worthFallingBackOver(err error) bool {
 	// request itself is answered the same way by every endpoint, however
 	// much else the message happens to say.
 	for _, p := range deterministicPhrases {
-		if strings.Contains(msg, p) {
+		if containsPhrase(msg, p) {
 			return false
 		}
 	}
 	for _, p := range fallbackPhrases {
-		if strings.Contains(msg, p) {
+		if containsPhrase(msg, p) {
 			return true
 		}
 	}
 	return false
+}
+
+// containsPhrase reports whether msg matches phrase. For 3-digit HTTP status
+// codes (such as "500", "504", or "429"), it requires that the status number
+// is not embedded inside a longer number (such as token counts or request IDs)
+// or attached to a unit suffix (such as "500ms").
+//
+// Without digit boundary checking, provider errors that embed raw response
+// bodies (e.g. formatting an HTTP 400 Bad Request response body containing
+// "15000 tokens", "142900 characters", or "req_50231") match status codes like
+// "500", "429", or "502" and get wrongly classified as retryable server blips.
+// Localcode would then execute same-endpoint retries with backoff and traverse
+// the fallback chain for an unrecoverable request bug.
+//
+// We deliberately do not check for specific status prefix phrases (such as
+// "status:", "returned", or "http/1.1"). An allowlist of prefixes fails in the
+// costly direction: local servers like llama.cpp, vllm, and ollama format error
+// messages in diverse shapes ("vllm: 429", "llama.cpp server: 503 ...",
+// "ollama: 502 from proxy", "provider responded with 502"). An unrecognised
+// prefix wrongly classifies genuine server overloads as non-retryable and
+// non-fallback, causing turns to abort instead of recovering. Checking digit
+// adjacency alone is sufficient to eliminate embedded numbers without guessing
+// provider-specific phrasing.
+func containsPhrase(msg, phrase string) bool {
+	if isStatusNumber(phrase) {
+		return matchStatus(msg, phrase)
+	}
+	return strings.Contains(msg, phrase)
+}
+
+// isStatusNumber reports whether phrase is a 3-digit HTTP status code.
+func isStatusNumber(phrase string) bool {
+	if len(phrase) != 3 {
+		return false
+	}
+	return phrase[0] >= '1' && phrase[0] <= '5' &&
+		phrase[1] >= '0' && phrase[1] <= '9' &&
+		phrase[2] >= '0' && phrase[2] <= '9'
+}
+
+// matchStatus scans msg for occurrences of status that are not part of longer
+// numbers or suffixed by units.
+func matchStatus(msg, status string) bool {
+	start := 0
+	for {
+		idx := strings.Index(msg[start:], status)
+		if idx < 0 {
+			return false
+		}
+		pos := start + idx
+		end := pos + len(status)
+		start = pos + 1
+
+		// Reject status numbers embedded in longer numbers:
+		// "15000 tokens" has '1' before "500"; "req_50231" has '3' after "502".
+		if pos > 0 && isDigit(msg[pos-1]) {
+			continue
+		}
+		if end < len(msg) {
+			ch := msg[end]
+			if isDigit(ch) || isLetter(ch) {
+				// "142900" has '0' after "429".
+				// Letter suffixes like "500ms" or "500k" are duration or count
+				// units in 400 error bodies, not HTTP statuses.
+				continue
+			}
+		}
+
+		return true
+	}
+}
+
+func isDigit(ch byte) bool {
+	return ch >= '0' && ch <= '9'
+}
+
+func isLetter(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
 
 // deterministicPhrases are request defects: the shape of what was sent,
@@ -196,12 +274,12 @@ func retryableInPlace(err error) bool {
 	// worthFallingBackOver: a defect in the request is answered the same
 	// way however many times it is sent.
 	for _, p := range deterministicPhrases {
-		if strings.Contains(msg, p) {
+		if containsPhrase(msg, p) {
 			return false
 		}
 	}
 	for _, p := range retryPhrases {
-		if strings.Contains(msg, p) {
+		if containsPhrase(msg, p) {
 			return true
 		}
 	}
