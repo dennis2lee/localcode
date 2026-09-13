@@ -16,7 +16,7 @@ import (
 func TestTheCheckCommandCannotBeInfluencedByTheModel(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
-	c := NewCheck(func() string { return "echo checked > " + marker })
+	c := NewCheck(func() string { return hookWriteCommand(marker, "checked") })
 
 	var schema struct {
 		Properties           map[string]any `json:"properties"`

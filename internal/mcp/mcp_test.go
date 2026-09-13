@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -15,18 +16,43 @@ import (
 	"localcode/internal/config"
 )
 
+// helperExeName returns the binary name for a test fixture on the target OS.
+// On Windows, executables require a .exe extension for the OS process loader
+// and exec.LookPath to resolve and execute them by path.
+func helperExeName(fixture, goos string) string {
+	if goos == "windows" {
+		return fixture + ".exe"
+	}
+	return fixture
+}
+
+// buildTestHelper compiles a test fixture from ./testdata/<fixture> into a
+// temporary directory and returns the absolute path to the resulting
+// executable.
+//
+// On Windows, executables must carry the .exe extension for the OS process
+// loader to find and run them by path. Without it, exec.Command fails with:
+//
+//	exec: "<path>\echoserver": executable file not found in %PATH%
+//
+// On non-Windows platforms, executables are left without an extension.
+func buildTestHelper(t *testing.T, fixture string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), helperExeName(fixture, runtime.GOOS))
+	cmd := exec.Command("go", "build", "-o", bin, "./testdata/"+fixture)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build %s fixture: %v\n%s", fixture, err, out)
+	}
+	return bin
+}
+
 // buildEchoServer compiles the testdata/echoserver fixture once per test
 // run into a temp binary, so Connect() can be exercised against a real
 // stdio subprocess speaking actual MCP JSON-RPC, not an in-process mock.
 func buildEchoServer(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "echoserver")
-	cmd := exec.Command("go", "build", "-o", bin, "./testdata/echoserver")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("build echoserver fixture: %v\n%s", err, out)
-	}
-	return bin
+	return buildTestHelper(t, "echoserver")
 }
 
 func TestConnectAndCallTool(t *testing.T) {

@@ -73,7 +73,7 @@ func TestRunNonZeroExitWithoutBlockSignalIsWarningNotBlock(t *testing.T) {
 func TestRunMatcherFiltersRegisteredHooks(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
-	cfg := Config{EventPreToolUse: {{Matcher: "^write_file$", Command: "echo ran > " + marker}}}
+	cfg := Config{EventPreToolUse: {{Matcher: "^write_file$", Command: hookWriteCommand(marker, "ran")}}}
 
 	Run(context.Background(), cfg, EventPreToolUse, "", map[string]any{"tool_name": "bash"})
 	if _, err := os.Stat(marker); err == nil {
@@ -89,7 +89,7 @@ func TestRunMatcherFiltersRegisteredHooks(t *testing.T) {
 func TestRunMatcherIsAnchoredToFullToolName(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
-	cfg := Config{EventPreToolUse: {{Matcher: "bash", Command: "echo ran > " + marker}}}
+	cfg := Config{EventPreToolUse: {{Matcher: "bash", Command: hookWriteCommand(marker, "ran")}}}
 
 	Run(context.Background(), cfg, EventPreToolUse, "", map[string]any{"tool_name": "mcp__server__run_bash"})
 	if _, err := os.Stat(marker); err == nil {
@@ -105,7 +105,7 @@ func TestRunMatcherIsAnchoredToFullToolName(t *testing.T) {
 func TestRunMatcherAlternationAndWildcards(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
-	cfg := Config{EventPreToolUse: {{Matcher: "bash|mcp__github__.*", Command: "echo ran > " + marker}}}
+	cfg := Config{EventPreToolUse: {{Matcher: "bash|mcp__github__.*", Command: hookWriteCommand(marker, "ran")}}}
 
 	Run(context.Background(), cfg, EventPreToolUse, "", map[string]any{"tool_name": "mcp__github__create_issue"})
 	if _, err := os.Stat(marker); err != nil {
@@ -122,7 +122,7 @@ func TestRunMatcherAlternationAndWildcards(t *testing.T) {
 func TestRunEmptyMatcherAlwaysRuns(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "ran")
-	cfg := Config{EventPreToolUse: {{Command: "echo ran > " + marker}}}
+	cfg := Config{EventPreToolUse: {{Command: hookWriteCommand(marker, "ran")}}}
 
 	Run(context.Background(), cfg, EventPreToolUse, "", map[string]any{"tool_name": "anything"})
 	if _, err := os.Stat(marker); err != nil {
@@ -135,7 +135,7 @@ func TestRunStopsAtFirstBlockingHook(t *testing.T) {
 	marker := filepath.Join(dir, "second-ran")
 	cfg := Config{EventPreToolUse: {
 		{Command: "exit 2"},
-		{Command: "echo ran > " + marker}, // should never run
+		{Command: hookWriteCommand(marker, "ran")}, // should never run
 	}}
 
 	blocked, _, _ := Run(context.Background(), cfg, EventPreToolUse, "", map[string]any{"tool_name": "bash"})
@@ -150,7 +150,7 @@ func TestRunStopsAtFirstBlockingHook(t *testing.T) {
 func TestRunReceivesPayloadOnStdin(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "captured")
-	cfg := Config{EventPreToolUse: {{Command: "cat > " + out}}}
+	cfg := Config{EventPreToolUse: {{Command: hookStdinCommand(out)}}}
 
 	Run(context.Background(), cfg, EventPreToolUse, "", map[string]any{"tool_name": "bash", "session_id": "s1"})
 
@@ -169,7 +169,7 @@ func TestRunUnmatchedRegexInvalidPatternWarnsAndContinues(t *testing.T) {
 	marker := filepath.Join(dir, "ran")
 	cfg := Config{EventPreToolUse: {
 		{Matcher: "(unclosed", Command: "echo bad"},
-		{Command: "echo ran > " + marker},
+		{Command: hookWriteCommand(marker, "ran")},
 	}}
 
 	blocked, _, warnings := Run(context.Background(), cfg, EventPreToolUse, "", map[string]any{"tool_name": "bash"})
@@ -192,7 +192,7 @@ func TestRunUnmatchedRegexInvalidPatternWarnsAndContinues(t *testing.T) {
 func TestRunExecutesInTheDirectoryItIsGiven(t *testing.T) {
 	project := t.TempDir()
 	out := filepath.Join(t.TempDir(), "where")
-	cfg := Config{EventPreToolUse: {{Command: "pwd > " + out}}}
+	cfg := Config{EventPreToolUse: {{Command: hookPwdCommand(out)}}}
 
 	Run(context.Background(), cfg, EventPreToolUse, project, map[string]any{"tool_name": "bash"})
 
@@ -218,7 +218,7 @@ func TestRunExecutesInTheDirectoryItIsGiven(t *testing.T) {
 func TestRunPutsTheDirectoryInThePayload(t *testing.T) {
 	project := t.TempDir()
 	out := filepath.Join(t.TempDir(), "captured")
-	cfg := Config{EventPreToolUse: {{Command: "cat > " + out}}}
+	cfg := Config{EventPreToolUse: {{Command: hookStdinCommand(out)}}}
 
 	payload := map[string]any{"tool_name": "bash"}
 	Run(context.Background(), cfg, EventPreToolUse, project, payload)

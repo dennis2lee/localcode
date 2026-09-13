@@ -22,7 +22,7 @@ import (
 func writeHook(t *testing.T) (command, path string) {
 	t.Helper()
 	path = filepath.Join(t.TempDir(), "hook.log")
-	return "cat >> " + path, path
+	return hookAppendStdinCommand(path), path
 }
 
 func hookLog(t *testing.T, path string) string {

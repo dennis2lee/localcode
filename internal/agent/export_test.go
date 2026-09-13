@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -55,12 +56,29 @@ func TestExportWritesTheConversationToAFile(t *testing.T) {
 	// 0600, like the session logs: this file is the conversation in one
 	// piece, in a directory somebody chose, and 0644 would leave a
 	// readable copy of everything in a project on a shared machine.
-	info, err := os.Stat(entries[0])
+	wantOwnerOnly(t, entries[0], "exported file")
+}
+
+// wantOwnerOnly requires the file at path to be readable by its owner and
+// nobody else.
+//
+// Not checked on Windows, where the mode bits are not the permission: Go
+// reports 0666 for a file created 0600, because access there is governed
+// by an ACL the mode never reached. Asserting 0600 fails on a file that
+// is correctly protected, and dropping the check entirely would lose it
+// on the platforms where it is the guarantee — an exported conversation
+// is a copy of everything said in one.
+func wantOwnerOnly(t *testing.T, path, what string) {
+	t.Helper()
+	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("stat %s %s: %v", what, path, err)
 	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		t.Errorf("the exported file is %04o, want nothing for group or other", perm)
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("%s mode = %o, want 0600", what, perm)
 	}
 }
 

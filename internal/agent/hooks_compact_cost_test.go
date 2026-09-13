@@ -81,7 +81,7 @@ func TestStopHookFiresWhenTurnCompletes(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "stopped")
 	loop, store := newUsageTestLoop(t, server.URL)
-	loop.Config.Hooks = hooks.Config{hooks.EventStop: {{Command: "echo done > " + marker}}}
+	loop.Config.Hooks = hooks.Config{hooks.EventStop: {{Command: hookWriteCommand(marker, "done")}}}
 	const sid = "s1"
 	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)

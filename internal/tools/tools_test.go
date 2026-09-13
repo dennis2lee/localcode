@@ -276,7 +276,7 @@ func TestRegistryCallPostToolUseHookRunsAfterExecuteAndCannotUndo(t *testing.T) 
 	r := NewRegistry(nil)
 	// A post_tool_use hook that "blocks" is a documented no-op — the tool
 	// has already run by the time it fires.
-	r.Hooks = hooks.Config{hooks.EventPostToolUse: {{Command: "echo ran > " + marker + "; exit 2"}}}
+	r.Hooks = hooks.Config{hooks.EventPostToolUse: {{Command: hookBlockCommand(marker, "ran", 2)}}}
 
 	ft := &fakeTool{name: "safe", needsPerm: false}
 	r.Register(ft)
@@ -297,7 +297,7 @@ func TestRegistryCallHookReceivesToolNameAndInput(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "captured")
 	r := NewRegistry(nil)
-	r.Hooks = hooks.Config{hooks.EventPreToolUse: {{Command: "cat > " + out}}}
+	r.Hooks = hooks.Config{hooks.EventPreToolUse: {{Command: hookStdinCommand(out)}}}
 
 	ft := &fakeTool{name: "bash", needsPerm: false}
 	r.Register(ft)

@@ -328,7 +328,7 @@ func TestAToolHookRunsInTheProjectTheTurnBelongsTo(t *testing.T) {
 	tm := NewTaskManager(context.Background(), loop, 5)
 
 	out := filepath.Join(t.TempDir(), "where")
-	loop.Tools.Hooks = hooks.Config{hooks.EventPreToolUse: {{Command: "pwd > " + out}}}
+	loop.Tools.Hooks = hooks.Config{hooks.EventPreToolUse: {{Command: hookPwdCommand(out)}}}
 
 	projectDir := t.TempDir()
 	const parentID = "s-parent"
@@ -361,7 +361,7 @@ func TestATurnHookRunsInTheProjectTheSessionBelongsTo(t *testing.T) {
 	loop, _, daemonDir := taskWorkspaceLoop(t, 1)
 
 	out := filepath.Join(t.TempDir(), "where")
-	loop.Config.Hooks = hooks.Config{hooks.EventUserPromptSubmit: {{Command: "pwd > " + out}}}
+	loop.Config.Hooks = hooks.Config{hooks.EventUserPromptSubmit: {{Command: hookPwdCommand(out)}}}
 
 	projectDir := t.TempDir()
 	const sid = "s1"

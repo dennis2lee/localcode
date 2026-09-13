@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -66,12 +67,29 @@ func TestWriteTokenCacheRoundTrip(t *testing.T) {
 		t.Errorf("startUrl = %q, want the start URL preserved", got.StartURL)
 	}
 
+	wantOwnerOnly(t, path, "cache file")
+}
+
+// wantOwnerOnly requires the file at path to be readable by its owner and
+// nobody else.
+//
+// Not checked on Windows, where the mode bits are not the permission: Go
+// reports 0666 for a file created 0600, because access there is governed
+// by an ACL the mode never reached. Asserting 0600 fails on a file that
+// is correctly protected, and dropping the check entirely would lose it
+// on the platforms where it is the guarantee — the SSO cache file holds a
+// bearer token and client secret that grant access to AWS accounts and roles.
+func wantOwnerOnly(t *testing.T, path, what string) {
+	t.Helper()
 	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("stat %s %s: %v", what, path, err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("cache file mode = %v, want 0600 (contains a bearer token)", info.Mode().Perm())
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("%s mode = %o, want 0600", what, perm)
 	}
 }
 

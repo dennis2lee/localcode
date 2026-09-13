@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,11 +21,7 @@ import (
 func startRemoteServer(t *testing.T, args ...string) string {
 	t.Helper()
 
-	bin := filepath.Join(t.TempDir(), "httpserver")
-	build := exec.Command("go", "build", "-o", bin, "./testdata/httpserver")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build httpserver fixture: %v\n%s", err, out)
-	}
+	bin := buildTestHelper(t, "httpserver")
 
 	cmd := exec.Command(bin, args...)
 	stdout, err := cmd.StdoutPipe()
