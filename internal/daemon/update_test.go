@@ -15,13 +15,25 @@ import (
 // without the internet and without a published version to match against.
 func githubWith(t *testing.T, tag string) *httptest.Server {
 	t.Helper()
+	// Every asset a real release publishes, all nine of them, and the
+	// Linux four are the reason this says so. They were missing, so a
+	// daemon asked on Linux found nothing built for it: can_install came
+	// back false and TestTheDesktopWindowIsOfferedTheInstall failed
+	// there — on this platform only, silently, for as long as the gate
+	// ran on one machine. The fixture, not the updater: `make dist`
+	// writes all nine and check-dist.sh refuses a release missing any.
+	v := strings.TrimPrefix(tag, "v")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"tag_name":%q,"html_url":"https://github.com/o/r/releases/tag/%s","body":"what changed","assets":[
 			{"name":"localcode-%s-windows-amd64.msi","browser_download_url":"https://example/msi","size":10,"digest":"sha256:aa"},
 			{"name":"localcode-%s-windows-arm64.zip","browser_download_url":"https://example/zip","size":10,"digest":"sha256:bb"},
 			{"name":"LocalCode-%s-darwin-universal-app.tar.gz","browser_download_url":"https://example/app","size":10,"digest":"sha256:cc"},
-			{"name":"localcode-%s-darwin-universal.tar.gz","browser_download_url":"https://example/tgz","size":10,"digest":"sha256:dd"}
-		]}`, tag, tag, strings.TrimPrefix(tag, "v"), strings.TrimPrefix(tag, "v"), strings.TrimPrefix(tag, "v"), strings.TrimPrefix(tag, "v"))
+			{"name":"localcode-%s-darwin-universal.tar.gz","browser_download_url":"https://example/tgz","size":10,"digest":"sha256:dd"},
+			{"name":"localcode-%s-linux-amd64.deb","browser_download_url":"https://example/deb64","size":10,"digest":"sha256:ee"},
+			{"name":"localcode-%s-linux-amd64.tar.gz","browser_download_url":"https://example/tgz64","size":10,"digest":"sha256:ff"},
+			{"name":"localcode-%s-linux-arm64.deb","browser_download_url":"https://example/debarm","size":10,"digest":"sha256:11"},
+			{"name":"localcode-%s-linux-arm64.tar.gz","browser_download_url":"https://example/tgzarm","size":10,"digest":"sha256:22"}
+		]}`, tag, tag, v, v, v, v, v, v, v, v)
 	}))
 	t.Cleanup(srv.Close)
 	return srv

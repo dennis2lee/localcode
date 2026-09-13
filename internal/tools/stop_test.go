@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,35 @@ func bigTree(t *testing.T) string {
 		}
 		for j := 0; j < 40; j++ {
 			name := filepath.Join(dir, "f"+string(rune('a'+j%26))+".go")
+			if err := os.WriteFile(name, []byte("package p\n// needle\n"), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+		}
+	}
+	return root
+}
+
+// deeperTree is bigTree's workload at a size where a search is long
+// enough to be interrupted part way through on a machine that is not
+// this one.
+//
+// bigTree walks in about two milliseconds here and about five on a CI
+// runner, which is inside one scheduling quantum: a test that tried to
+// cancel a tenth of the way into that was comparing noise with noise,
+// and it failed on both runners the first time the gate ran anywhere
+// but the machine it was written on. At this size the glob takes tens of
+// milliseconds and the grep hundreds, so a fixed two-millisecond wait is
+// comfortably inside the search on any machine, and no ratio is needed.
+func deeperTree(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for i := 0; i < 480; i++ {
+		dir := filepath.Join(root, "pkg", "a"+strings.Repeat("x", i%7), "b", "c", fmt.Sprintf("d%d", i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		for j := 0; j < 26; j++ {
+			name := filepath.Join(dir, fmt.Sprintf("f%d.go", j))
 			if err := os.WriteFile(name, []byte("package p\n// needle\n"), 0o644); err != nil {
 				t.Fatalf("write: %v", err)
 			}
@@ -114,7 +144,7 @@ func TestASearchThatIsNotStoppedStillAnswers(t *testing.T) {
 // get going and stops it in flight, which only a search that checks as it
 // goes can answer promptly.
 func TestASearchIsStoppedInFlight(t *testing.T) {
-	root := bigTree(t)
+	root := deeperTree(t)
 	for _, c := range []struct {
 		name  string
 		tool  Tool
@@ -128,39 +158,44 @@ func TestASearchIsStoppedInFlight(t *testing.T) {
 		{"grep", Grep{}, `{"pattern":"needle","path":"."}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			// How long this search takes here, measured rather than
-			// assumed. The first version of this test slept a fixed 2ms
-			// and asserted the search had not finished, which was only
-			// ever true under -race: the gate runs `go test -race`, that
-			// is five to ten times slower, and the same test run without
-			// it walked the whole tree inside the sleep and failed. A
-			// number taken from one machine under one build mode is not
-			// a property of the code.
+			// What the search ANSWERS, on a workload big enough that
+			// the answer means something, rather than how fast it
+			// answers. Two earlier versions timed it and both measured
+			// the machine: a fixed 2ms sleep held only under -race, and
+			// measuring the search and cancelling a tenth of the way in
+			// held only where a tenth of a search is a measurable
+			// interval — which it is not on a CI runner, where this used
+			// to walk in five milliseconds and the sleep, the cancel and
+			// the answer landed in one scheduling quantum.
+			//
+			// So the workload is deeperTree, the wait is a flat 2ms, and
+			// there is no ratio. The goroutine says when it has begun, so
+			// the cancel cannot land before the search starts and quietly
+			// turn this into the cancel-on-entry case that
+			// TestAStoppedTurnStopsTheSearch already covers — that
+			// distinction is the whole reason this test exists, because
+			// an implementation checking the context once at the top
+			// passes that one and fails this.
+			//
+			// How promptly is tested where it can be measured honestly:
+			// TestAStoppedSearchDoesNotFinishOneHugeFile greps 40MB,
+			// where stopping when asked and finishing first are seconds
+			// apart rather than microseconds.
 			base := WithWorkingDir(context.Background(), root)
-			start := time.Now()
-			if res := c.tool.Execute(base, json.RawMessage(c.input)); res.IsError {
-				t.Fatalf("%s: %s", c.name, res.Content)
-			}
-			full := time.Since(start)
-
 			ctx, cancel := context.WithCancel(base)
+			started := make(chan struct{})
 			done := make(chan Result, 1)
-			go func() { done <- c.tool.Execute(ctx, json.RawMessage(c.input)) }()
-			// A tenth of the way in: under way on any machine, and
-			// nowhere near done on any machine.
-			time.Sleep(full / 10)
-			cancelled := time.Now()
+			go func() {
+				close(started)
+				done <- c.tool.Execute(ctx, json.RawMessage(c.input))
+			}()
+			<-started
+			time.Sleep(2 * time.Millisecond)
 			cancel()
 			select {
 			case res := <-done:
 				if !strings.Contains(res.Content, "cancelled") {
 					t.Errorf("a %s stopped in flight answered %.60q", c.name, res.Content)
-				}
-				// And promptly, which is the property the whole thing is
-				// for: a walk that only checked at the top would return
-				// the cancellation eventually, after finishing.
-				if took := time.Since(cancelled); took > full/2 {
-					t.Errorf("a %s took %v to notice the stop, with a full search taking %v", c.name, took, full)
 				}
 			case <-time.After(10 * time.Second):
 				t.Fatalf("a %s stopped in flight never returned", c.name)
