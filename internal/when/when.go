@@ -272,8 +272,14 @@ var namedTimes = []struct {
 	{"새벽", 5}, {"dawn", 5},
 }
 
+// koreanClockRe reads a clock time without consuming any trailing particle.
+// Particles belong to stripParticle, which inspects the whole inventory
+// longest-first ("에다가" before "에") and checks boundaryAfter: a clock
+// regex that ate an optional "에" here left compound particles stranded as
+// dangling fragments ("3시에다가 확인" became "다가 확인") and mangled any
+// request opening with the same syllable ("3시 에러 로그" lost its "에").
 var (
-	koreanClockRe  = regexp.MustCompile(`^\s*(오전|오후)?\s*(\d{1,2})\s*시\s*(?:(\d{1,2})\s*분)?\s*(?:에)?`)
+	koreanClockRe  = regexp.MustCompile(`^\s*(오전|오후)?\s*(\d{1,2})\s*시\s*(?:(\d{1,2})\s*분)?`)
 	westernClockRe = regexp.MustCompile(`^(?i)\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b`)
 )
 
