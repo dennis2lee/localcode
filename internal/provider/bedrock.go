@@ -97,8 +97,22 @@ func (p *Bedrock) clientFor(ctx context.Context) (bedrockClient, error) {
 // either." This is easy to hit on Windows: a working `aws sso login` /
 // `localcode login bedrock` profile does nothing unless something tells
 // the SDK to actually use it.
+//
+// What went wrong here previously: "no ec2imds role found" was matched
+// against remembered text rather than the library's own, which emits
+// "no EC2 IMDS role found" (credentials/ec2rolecreds/provider.go:185).
+// Lowercasing preserves the space between "ec2" and "imds", so the
+// spaceless substring could never match. Nothing noticed because the
+// one entry that did fire — "failed to refresh cached credentials"
+// (aws/credential_cache.go:128) — wraps the IMDS error in the default
+// cached provider chain and covered the exact same symptom.
+//
+// "no valid credential sources" and "unable to find credentials" match no
+// string the pinned SDK produces (they resemble Terraform AWS provider or
+// botocore/v1 phrases). They are retained with doubt noted rather than
+// deleted, in case an older SDK or unexamined service client surfaces them.
 var credentialHintSubstrings = []string{
-	"no ec2imds role found",
+	"no ec2 imds role found",
 	"failed to refresh cached credentials",
 	"no valid credential sources",
 	"unable to find credentials",
