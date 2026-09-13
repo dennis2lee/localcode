@@ -150,6 +150,11 @@ func modelFamily(model string) string {
 
 // modelKeepGoing is the default carry-on budget for a model, keyed the
 // same way as the notes. Zero for a model with no known stalling habit.
+//
+// Also serves as the authority for whether the carry-on feature applies to
+// a model at all: keepGoingApplies gates the entire feature on whether this
+// returns greater than zero, ensuring the table remains the single source
+// of truth rather than a hardcoded substring check beside it.
 func modelKeepGoing(model string) int {
 	id := strings.ToLower(model)
 	for _, q := range modelQuirks {

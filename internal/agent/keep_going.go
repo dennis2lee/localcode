@@ -34,20 +34,27 @@ import (
 // not of the work, and bounded, because the one thing worse than a model
 // that stops early is a session that prompts itself forever.
 
-// keepGoingApplies reports whether the feature exists for this model at
-// all: only when its id contains "muse", case-insensitively.
+// keepGoingApplies reports whether the carry-on feature exists for this
+// model at all: only when its family is registered in modelQuirks with a
+// non-zero default carry-on budget.
 //
-// A hard gate rather than a default, and the distinction matters. The
-// quirk table already made muse the only family with a budget, but a
-// profile's own keep_going number could opt any model in, and the switch
-// below could be read as arming the feature everywhere. Neither is
-// wanted: the habit this compensates for is one family's, a nudge sent
-// to a model without it is localcode second-guessing a finished answer,
-// and the person flipping "/keep-going on" should not have to know which
-// of their profiles it could reach. On anything that is not muse, this
-// feature does not exist, whatever else is configured.
+// The table is the source of truth for which families have the stalling
+// habit, rather than a hardcoded substring beside it. A hard gate rather
+// than a default, and the distinction matters: a profile's own keep_going
+// number could otherwise opt any model in, and the switch below could be
+// read as arming the feature everywhere. Neither is wanted: the habit this
+// compensates for is specific to certain families, a nudge sent to a model
+// without it is localcode second-guessing a finished answer, and the person
+// flipping "/keep-going on" should not have to know which of their profiles
+// it could reach. On anything that does not declare a carry-on budget in the
+// quirk table, this feature does not exist, whatever else is configured.
+//
+// When this function hardcoded "muse", any new family added to modelQuirks
+// with a keepGoing value had that budget silently discarded: both
+// effectiveKeepGoing and toggles.go consult keepGoingApplies first. Keying
+// off modelKeepGoing makes the table the single authority.
 func keepGoingApplies(model string) bool {
-	return strings.Contains(strings.ToLower(model), "muse")
+	return modelKeepGoing(model) > 0
 }
 
 // effectiveKeepGoing resolves the carry-on budget for a profile.

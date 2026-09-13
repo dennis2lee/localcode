@@ -152,6 +152,7 @@ var promptVariants = []struct {
 	match  string
 	prompt string
 }{
+	{"gpt-oss", localVariant},
 	{"gpt-", gptVariant},
 	{"o3", gptVariant},
 	{"o4", gptVariant},
@@ -252,6 +253,7 @@ var planVariants = []struct {
 	match  string
 	prompt string
 }{
+	{"gpt-oss", localPlanPolicy},
 	{"gpt-", gptPlanPolicy},
 	{"o3", gptPlanPolicy},
 	{"o4", gptPlanPolicy},

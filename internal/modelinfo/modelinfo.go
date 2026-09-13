@@ -25,11 +25,12 @@ var knownFamilies = []entry{
 	// family name.
 	//
 	// Getting these wrong is not cosmetic. The meter drives automatic
-	// compaction at 80%, so a window reported as 200k when it is really
-	// 1M summarizes the conversation at 160k — a fifth of the way in, and
-	// four times over before the real limit is anywhere near. It also
-	// makes every request's reply cap shrink against a ceiling that isn't
-	// there. Under-reporting the window is the expensive direction.
+	// compaction (default 50%, Loop.CompactPercent), so a window
+	// reported as 200k when it is really 1M summarizes the conversation
+	// at 100k: a tenth of the way in, and ten times over before the real
+	// limit is anywhere near. It also makes every request's reply cap
+	// shrink against a ceiling that is not there. Under-reporting the
+	// window is the expensive direction.
 	{"claude-opus-5", 1000000},
 	{"claude-opus-4-8", 1000000},
 	{"claude-opus-4-7", 1000000},
