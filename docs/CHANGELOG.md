@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.121.0
+
+Three defects that only Windows could see, and the CI that made it possible to see them.
+
+**Fixed on Windows**
+
+* Every `**` glob found nothing. The pattern the tool advertises first — `src/**/*.go` is in its own description — answered "no files match" for every input, with no error. A pattern reaches the glob through `filepath.Join`, which Cleans, and Clean ends in FromSlash, so every `/` the model wrote was a `\` before the split looked for a literal `/`. The suffix kept its separators and was compared against a name built with ToSlash; a backslash pattern against a forward-slash name never matches and never errors. It survived three platforms because on Unix FromSlash is the identity.
+* A command killed at its timeout was reported as a command that failed. Unix kills with a signal, so there is no exit status and the deadline was found on the way through that branch; Windows exits a killed process with an ordinary code, so it read as `exited with status 1` — which a model treats as something to fix and retry rather than as work that needs narrowing.
+* `localcode run --session` never closed its session log. On Unix the process took the handle with it and nobody noticed; Windows will not delete a file another handle holds, so the run's own directory could not be cleaned up.
+
+**Windows CI**
+
+* Every package with tests runs on Windows, in a job of its own so red is visible without blocking the release artifact. Twenty-four packages had never run there. 38 tests failed on the first run; three were the defects above and the rest were fixtures — helper binaries built without `.exe`, hook commands whose Windows temp paths bash read as escape sequences, `pwd` answering in Git Bash's spelling, a JSON payload searched as raw text, and mode assertions on a platform where the mode is not the permission.
+
+**The gate, elsewhere**
+
+* `scripts/check.sh` runs on ubuntu and macOS for every push and every pull request. It had only ever run on the machine a commit was written on, and both of this project's CI accidents were a check reporting success without checking.
+* It found two on its first run: a search test measuring the machine for the third time, and an update fixture publishing no Linux assets, so the desktop-window test failed on Linux and nowhere else.
+* A skipped check no longer counts as a passed gate. A full run on Linux skipped the macOS-only `gui` check and still wrote the release stamp.
+
+**Guards**
+
+* A decision that depends on the platform now takes the platform as an argument, in three places: the glob separator, the kill-versus-exit decision, and the test-helper extension. Each was invisible from the platforms that worked, and each is now reachable from any machine — the glob regression fails on macOS today, without a Windows runner.
+* Five hand-maintained tables walked: the model-quirk table, `knownFamilies`, the prompt variants, the event type constants against all four consumers, and the terminal's own command list. Two carried a live defect — `gpt-oss` took the frontier prompt, and a new family's carry-on budget was discarded.
+* Both permission tables, the error-classification phrase lists, `session.Switches()`, the hook events, and the nested config keys.
+
+**Fixed**
+
+* A Korean particle the clock regex ate before the stripper could see it: `3시에다가 확인` scheduled a prompt reading `다가 확인`, and `3시 에러 로그` booked `러 로그`.
+* A request defect was retried and then sent down the whole fallback chain whenever its body happened to contain the digits of a status — a request id, a token count.
+* A Bedrock credential hint that could never fire, misspelled against the SDK's own text and hidden by a second entry covering the same symptom.
+* Eight things the documentation said that the build does not do, each read against the code first.
+
 ## v0.120.0
 
 Two permission tables nothing walked, and both were wrong.
