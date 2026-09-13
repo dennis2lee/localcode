@@ -170,3 +170,38 @@ jobs:
           name: localcode-gui-windows-amd64
           path: localcode-gui.exe
           if-no-files-found: error
+
+  # Every package with tests, on Windows, in a job of its own.
+  #
+  # Separate from `build` on purpose. The build job produces the GUI
+  # artifact a release needs, and this one is bringing twenty-four
+  # packages onto Windows for the first time — internal/agent alone has
+  # seventy-nine test files and not one GOOS guard. Red here must be
+  # visible without also blocking the artifact, and it must be red rather
+  # than filtered down to what already passes: a -run filter that hides
+  # the failures is the same thing as not running them.
+  #
+  # The path this is walking was measured before it was started: the last
+  # widening turned up 52 failures, none in the code under test, and three
+  # causes accounted for nearly all of them — a store holding a file
+  # Windows will not let t.TempDir() delete, a native path pasted into
+  # JSON unescaped, and HOME isolated without USERPROFILE beside it.
+  test-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # shell: bash for the reason written in the build job: a multi-line
+      # `run:` under PowerShell reports only the last command's status.
+      - name: Test every package
+        shell: bash
+        run: go test ./... -count=1
+        env:
+          CGO_ENABLED: '0'
