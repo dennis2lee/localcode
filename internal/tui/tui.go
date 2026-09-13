@@ -210,6 +210,12 @@ type Model struct {
 	// indicator below the prompt box. Tool activity is deliberately NOT
 	// written into the transcript anymore — the indicator is its home.
 	runningTool string
+	// toolStartedAt is when the running tool started, for the elapsed
+	// time beside its name in the busy indicator. How long the current
+	// tool has been running is the part of that line people actually
+	// wait on; the name alone says what, never how much longer. Zero
+	// when no tool is running, set on tool.start next to runningTool.
+	toolStartedAt time.Time
 	// thinking is true while the model is reasoning rather than
 	// answering. The busy indicator's word, not a transcript entry: it is
 	// worth knowing about live and not worth scrolling past afterwards,

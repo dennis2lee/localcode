@@ -164,6 +164,28 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, nil, false
 
+	case "ctrl+r":
+		// Search the recall history, the missing half of Up/Down, which
+		// can only walk one entry at a time. This used to be "/" on an
+		// empty prompt, and that stole the first character of every
+		// slash command: once any history existed, "/help" opened the
+		// search instead of reaching the box, because every command
+		// starts on an empty prompt. Ctrl+R is the shell's key for
+		// exactly this (reverse-i-search) and collides with nothing
+		// here: no other binding uses it, and being non-printable it
+		// can never be the start of a command. Only on an empty
+		// prompt, so choosing a row cannot silently discard composed
+		// text (the picker's Enter overwrites the box with no draft
+		// to come back to). Only with something to search, and never
+		// over a permission or a question, where the keyboard already
+		// belongs to answering.
+		if m.pending == nil && m.asking == nil &&
+			strings.TrimSpace(m.input.Value()) == "" && len(m.history) > 0 {
+			m.openHistoryPicker()
+			return m, nil, true
+		}
+		return m, nil, false
+
 	case "right":
 		// Completion, but only where the key has nothing else to do:
 		// the cursor at the end of a word. Inside one Right moves the

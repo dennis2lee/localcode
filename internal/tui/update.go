@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -314,6 +315,14 @@ func (m Model) handleSessionsMsg(msg sessionsMsg) (tea.Model, tea.Cmd) {
 		title:  "Sessions",
 		items:  items,
 		onPick: func(m *Model, it pickerItem) tea.Cmd { return m.openSession(it.id) },
+		// Deleting is the startup picker and /delete's job as well;
+		// this is the third way, for the conversation you found by
+		// arrowing rather than by id. The picker confirms first (see
+		// ctrl+d), where /delete deliberately does not: a typed id
+		// says which conversation goes, a highlight may be one row
+		// off. The daemon's reply lands in sessionDeletedMsg, the
+		// same message /delete's answer arrives as.
+		onDelete: func(m *Model, it pickerItem) tea.Cmd { return m.deleteSession(it.id) },
 	}, "No sessions to switch to.")
 	return m, cmd
 }
@@ -435,6 +444,7 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.pendingHintShown = false
 	m.waiting = false
 	m.runningTool = ""
+	m.toolStartedAt = time.Time{}
 	m.thinking = false
 	m.errMsg = ""
 	m.tasks = map[string]taskState{}

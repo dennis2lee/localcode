@@ -60,6 +60,7 @@ func intField(data map[string]any, key string) int {
 func (m *Model) endTurn() {
 	m.waiting = false
 	m.runningTool = ""
+	m.toolStartedAt = time.Time{}
 	m.thinking = false
 }
 
@@ -142,6 +143,10 @@ func (m *Model) applyEvent(ev events.Event) {
 		// clears when it stops, so a turn that spends minutes in tools
 		// left nothing on screen either while it worked or afterwards.
 		m.runningTool, _ = ev.Data["name"].(string)
+		// The clock starts with the start event rather than the first
+		// paint of the indicator, so a tool that runs between frames is
+		// still timed from when it actually began.
+		m.toolStartedAt = time.Now()
 		name, _ := ev.Data["name"].(string)
 		input, _ := ev.Data["input"].(string)
 		m.endModelStream("")
@@ -152,6 +157,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		}
 	case events.TypeToolEnd:
 		m.runningTool = ""
+		m.toolStartedAt = time.Time{}
 	case events.TypePermissionRequest:
 		id, _ := ev.Data["id"].(string)
 		tool, _ := ev.Data["tool"].(string)

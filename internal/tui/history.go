@@ -1,6 +1,10 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 // rememberPrompt appends a submitted prompt to the recall history and
 // resets navigation back to the composing position. Consecutive duplicates
@@ -170,4 +174,27 @@ func (m *Model) historyNext() bool {
 	}
 	m.setInputTo(m.history[m.historyIdx])
 	return true
+}
+
+// openHistoryPicker opens a search over the recall history: the missing
+// half of Up/Down, which can only walk one entry at a time. Newest
+// first, because a search is usually for something recent and the walk
+// starts at the newest end too. Choosing a row puts it in the prompt box
+// (to edit, then send); leaving the list changes nothing, which Esc
+// already does for every picker.
+func (m *Model) openHistoryPicker() {
+	items := make([]pickerItem, 0, len(m.history))
+	for i := len(m.history) - 1; i >= 0; i-- {
+		items = append(items, pickerItem{id: m.history[i], label: m.history[i]})
+	}
+	m.openPicker(&picker{
+		title: "History",
+		items: items,
+		onPick: func(m *Model, it pickerItem) tea.Cmd {
+			m.setInputTo(it.label)
+			m.historyIdx = len(m.history)
+			m.draft = ""
+			return nil
+		},
+	}, "")
 }

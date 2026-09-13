@@ -42,6 +42,28 @@ func (m Model) activeTasks() int {
 // show: this client's own turn, or background tasks.
 func (m Model) busy() bool { return m.waiting || m.activeTasks() > 0 }
 
+// formatElapsed renders a duration the way the busy indicator says it:
+// whole seconds, minutes, or hours, never a decimal. Sub-second precision
+// would churn the line every frame for no information — whether a tool
+// has run 3.1 or 3.9 seconds never changed what anybody did about it.
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Truncate(time.Second)
+	h := int(d.Hours())
+	min := int(d.Minutes()) % 60
+	sec := int(d.Seconds()) % 60
+	switch {
+	case h > 0:
+		return fmt.Sprintf("%dh%dm%ds", h, min, sec)
+	case min > 0:
+		return fmt.Sprintf("%dm%ds", min, sec)
+	default:
+		return fmt.Sprintf("%ds", sec)
+	}
+}
+
 // busyLine renders the indicator shown below the prompt box while
 // anything is running: an animation frame, what the turn is doing (the
 // running tool's name when one is executing), the queue depth, and the
@@ -60,6 +82,14 @@ func (m Model) busyLine() string {
 		}
 		if m.runningTool != "" {
 			what = m.runningTool
+			// How long it has been at it, which is the piece of this
+			// line people actually wait on. Guarded on the timestamp
+			// rather than assumed from the name: a tool.start that
+			// arrived without one (or a test that sets the name
+			// directly) still names the tool, it just has no age.
+			if !m.toolStartedAt.IsZero() {
+				what += " " + formatElapsed(time.Since(m.toolStartedAt))
+			}
 		}
 		part := what + "… esc to cancel"
 		if n := len(m.queue); n > 0 {

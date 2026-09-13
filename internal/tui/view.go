@@ -88,6 +88,35 @@ func renderTranscript(entries []transcriptEntry, width int) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// contextBarWidth is how many cells the graphical context bar beside the
+// percentage is. Ten cells at one decimal of percent is coarse on purpose:
+// the number carries the precision and the bar carries the glance.
+const contextBarWidth = 10
+
+// contextBar draws the fill beside the context percentage. The scale is
+// the whole window, 0 to 100: under the default setup auto-compaction
+// fires at 50%, so the bar reads half-full when a conversation compacts,
+// and it must never read as a countdown to a full window. The warning
+// thresholds stay exactly where they are (amber at 70, red at 90) — they
+// match the Web UI on purpose, and the 85% from an earlier note was not
+// adopted — so this only draws, it never redecides.
+func contextBar(percent float64) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	filled := int(percent/float64(100)*contextBarWidth + 0.5)
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > contextBarWidth {
+		filled = contextBarWidth
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", contextBarWidth-filled)
+}
+
 // inputBorder draws a horizontal rule spanning the input box's width, used
 // above and below it so its boundary reads clearly against the transcript.
 func (m Model) inputBorder() string {
@@ -154,14 +183,14 @@ func (m Model) View() tea.View {
 	// whole use of it is being noticed at 90%.
 	ctx := ""
 	if m.usagePercent > 0 {
-		ctx = fmt.Sprintf("context: %.1f%%", m.usagePercent)
+		text := fmt.Sprintf("context: %.1f%% %s", m.usagePercent, contextBar(m.usagePercent))
 		switch {
 		case m.usagePercent >= 90:
-			ctx = ctxCritStyle.Render(ctx)
+			ctx = ctxCritStyle.Render(text)
 		case m.usagePercent >= 70:
-			ctx = ctxWarnStyle.Render(ctx)
+			ctx = ctxWarnStyle.Render(text)
 		default:
-			ctx = statusStyle.Render(ctx)
+			ctx = statusStyle.Render(text)
 		}
 	}
 	if m.showTPS && m.tps > 0 {

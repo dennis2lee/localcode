@@ -54,6 +54,14 @@ type picker struct {
 	// than performing the switch here keeps the picker a widget: it
 	// knows how to choose, not what choosing means.
 	onPick func(m *Model, it pickerItem) tea.Cmd
+	// onDelete is what deleting a row does, or nil where rows cannot
+	// be deleted. Only the session picker sets it: the startup picker
+	// is still the only other place a conversation can be thrown away
+	// from, and the other lists have nothing worth deleting.
+	onDelete func(m *Model, it pickerItem) tea.Cmd
+	// confirmID is the row a first ctrl+d marked for deletion, waiting
+	// on a second one. Empty means no deletion is armed.
+	confirmID string
 }
 
 // applyFilter narrows items to the rows matching filter and keeps the
@@ -138,6 +146,13 @@ func (m *Model) openPicker(p *picker, empty string) tea.Cmd {
 func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch key := msg.String(); key {
 	case "esc", "ctrl+c":
+		// An armed deletion is undone first, before the narrowing and
+		// before the list: Esc means keep the row, whatever else was
+		// typed on the way there.
+		if m.picker.confirmID != "" {
+			m.picker.confirmID = ""
+			return m, nil, true
+		}
 		// Esc undoes the narrowing before it closes the list, so a
 		// mistyped filter costs one key rather than the whole picker.
 		if m.picker.filter != "" {
@@ -147,7 +162,30 @@ func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		m.picker = nil
 		return m, nil, true
+	case "ctrl+d":
+		// Delete the selected row, but only where something said what
+		// deleting means: only the session picker sets onDelete. A
+		// plain "d" could never be the key — the default branch below
+		// swallows every printable character into the filter — so it
+		// is ctrl+d.
+		//
+		// Two presses, because a list you arrow through is easy to be
+		// one row off in, and unlike /delete there is no command line
+		// saying which conversation is about to go. The first press
+		// only marks the row; moving, typing, or Esc unmarks it.
+		if m.picker.onDelete == nil || len(m.picker.items) == 0 {
+			return m, nil, true
+		}
+		it := m.picker.items[m.picker.idx]
+		if m.picker.confirmID != "" && m.picker.confirmID == it.id {
+			p := m.picker
+			m.picker = nil
+			return m, p.onDelete(&m, it), true
+		}
+		m.picker.confirmID = it.id
+		return m, nil, true
 	case "backspace":
+		m.picker.confirmID = ""
 		if f := m.picker.filter; f != "" {
 			r := []rune(f)
 			m.picker.filter = string(r[:len(r)-1])
@@ -155,21 +193,27 @@ func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, nil, true
 	case "up", "ctrl+p":
+		m.picker.confirmID = ""
 		m.picker.move(-1)
 		return m, nil, true
 	case "down", "ctrl+n":
+		m.picker.confirmID = ""
 		m.picker.move(1)
 		return m, nil, true
 	case "pgup":
+		m.picker.confirmID = ""
 		m.picker.move(-pickerVisibleRows)
 		return m, nil, true
 	case "pgdown":
+		m.picker.confirmID = ""
 		m.picker.move(pickerVisibleRows)
 		return m, nil, true
 	case "home":
+		m.picker.confirmID = ""
 		m.picker.idx = 0
 		return m, nil, true
 	case "end":
+		m.picker.confirmID = ""
 		m.picker.idx = len(m.picker.items) - 1
 		return m, nil, true
 	case "enter":
@@ -185,6 +229,9 @@ func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	default:
 		// One printable character narrows the list. Everything else is
 		// swallowed, which is what this picker already did with it.
+		// Typing also unmarks a row armed for deletion: the selection
+		// it was armed on may no longer be under the cursor.
+		m.picker.confirmID = ""
 		if r := []rune(key); len(r) == 1 && r[0] >= ' ' && r[0] != 0x7f {
 			m.picker.filter += key
 			m.picker.applyFilter()
@@ -206,8 +253,28 @@ func (m Model) pickerView(width, height int) string {
 		title += "  /" + p.filter
 	}
 	lines = append(lines, modalStyle.Render(title))
-	lines = append(lines, statusStyle.Render("↑/↓ to choose, Enter to select, type to filter, Esc to cancel"))
-	lines = append(lines, "")
+	hint := "↑/↓ to choose, Enter to select, type to filter, Esc to cancel"
+	if p.onDelete != nil {
+		hint = "↑/↓ to choose, Enter to select, type to filter, ctrl+d deletes, Esc to cancel"
+	}
+	lines = append(lines, statusStyle.Render(hint))
+	if p.confirmID != "" {
+		// The armed row, named rather than pointed at: the whole
+		// reason for confirming is that the highlight may be one row
+		// off, so the question says which conversation would go.
+		// Replaces the blank spacer rather than adding a line, so the
+		// frame below does not move between the two presses.
+		name := p.confirmID
+		for _, it := range p.all {
+			if it.id == p.confirmID {
+				name = it.label
+				break
+			}
+		}
+		lines = append(lines, modalStyle.Render("Delete "+truncate(name, width-4)+"?  ctrl+d again to confirm, Esc to keep"))
+	} else {
+		lines = append(lines, "")
+	}
 	if len(p.items) == 0 {
 		lines = append(lines, statusStyle.Render("  nothing matches "+p.filter))
 		for len(lines) < height {
