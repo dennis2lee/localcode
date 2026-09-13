@@ -16,7 +16,7 @@ LocalCode supports interactive TUI, Web UI, desktop, daemon, and one-shot CLI wo
 | Part | Sections |
 |---|---|
 | [1. Getting started](#part-1-getting-started) | [Run modes](#run-modes), [Remote daemon over an SSH tunnel](#remote-daemon-over-an-ssh-tunnel) |
-| [2. Configuration](#part-2-configuration) | [Config file (config.json)](#config-file-configjson), [Managing MCP servers](#managing-mcp-servers-with-localcode-mcp), [Permission rules](#fine-grained-permission-rules), [Permission settings panel](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt), [Switching the workspace directory](#switching-the-workspace-directory), [Hooks](#hooks), [Authenticating with /login](#authenticating-with-login) |
+| [2. Configuration](#part-2-configuration) | [Config file (config.json)](#config-file-configjson), [Managing MCP servers](#managing-mcp-servers-with-localcode-mcp), [Permission rules](#fine-grained-permission-rules), [Permission settings panel](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt), [Switching the workspace directory](#switching-the-workspace-directory), [Hooks](#hooks), [Authenticating with localcode login](#authenticating-with-localcode-login) |
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [AGENTS.md](#agentsmd-project-rules), [Auto memory](#auto-memory) |
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Archive](#archiving-a-conversation), [Referring to another conversation](#referring-to-another-conversation-with-name), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
@@ -85,7 +85,7 @@ The prompt may be an argument or stdin. Use stdin for prompts that contain newli
 | Permission request | Refused immediately because no interactive client can answer it. `--skip-permissions` is equivalent to `/permission-skip-all` for the run. |
 | Failure | Non-zero exit status. JSON output includes an `error` field. |
 | Smart Agent | Supports the six specialists plus `Task`, `TaskBackground`, `TaskCollect`, and `update_plan` when `smart_agent` is enabled. |
-| Orchestration | Available when `orchestrate` is enabled, but every plan requires permission. Use one of the following settings for unattended execution. |
+| Orchestration | Available when `orchestrate` is enabled, but every plan requires permission, and there is nobody here to ask. Without one of the following settings the tool is not offered at all, so the model does not orchestrate rather than being refused after planning. |
 
 ```
 localcode run --skip-permissions "..."
@@ -285,7 +285,7 @@ Rules:
 * Placeholder retained on disk during LocalCode updates
 * Invalid placeholder-like text such as `{envelope}` or `{env: something}` left unchanged
 
-Use placeholders for portable configuration without embedded secrets. [`localcode login`](#authenticating-with-login) stores Anthropic and Bedrock credentials outside config.json.
+Use placeholders for portable configuration without embedded secrets. [`localcode login`](#authenticating-with-localcode-login) stores Anthropic and Bedrock credentials outside config.json.
 
 #### Top level fields
 
@@ -710,7 +710,7 @@ Other details:
 * Multiple hooks run in registration order and stop at the first block.
 * Project hooks replace global hooks per event.
 
-### Authenticating with `/login`
+### Authenticating with `localcode login`
 
 Run `localcode login <bedrock|anthropic>` in a terminal before starting the daemon. Credentials remain outside config.json. Bedrock login does not require the AWS CLI.
 
@@ -862,6 +862,7 @@ Stop ends the turn and the tool it is inside, not only the turn.
 | `grep`, `glob` | The walk stops at the next directory entry, and a scan inside one large file stops every few thousand lines. A pattern with no `**` goes to the standard library's glob, which has no way to be interrupted, so the call returns at once and that glob is left to finish unread. |
 | MCP tools | The cancellation goes to the server with the call. A server that ignores it holds the turn until it answers. |
 | `Task`, `Orchestrate`, `Debate` | The sub-agent's turn is cancelled with the parent's, and its own tools with it. |
+| `Task`, letting go instead | **Ctrl+B** in the TUI is the other answer while a turn waits on one sub-agent: the parent stops waiting and the sub-agent is left running. Its answer is not lost and not delivered either — it lands in the task, readable with `/tasks <id>`, and the turn that asked for it has already finished without it. |
 | A permission prompt | The question is withdrawn from every client showing it and the turn ends. |
 | `read_file`, `write_file`, `edit` | One file each, so there is nothing long to interrupt. |
 
@@ -881,6 +882,7 @@ Common to the TUI and Web UI:
 | Jump between your own prompts | **Alt+Up** and **Alt+Down**, Web UI only. Moves the view to the previous or next turn of yours and marks where it landed; it does not touch what is in the prompt box, which is what plain Up and Down are for. The TUI marks turns the same way but has no key for this. |
 | Switch agent | **Tab** for the next, **Shift+Tab** for the previous, in either client |
 | Quit the TUI | **Ctrl+C** on an empty prompt, or type `exit`, `quit`, `:q`, `/exit`, `/quit` or `/q`. With something typed, the first Ctrl+C clears the line the way a shell prompt does and the second leaves, so the key that stops things does not also throw away a half-written message. |
+| Let go of a sub-agent | **Ctrl+B**, TUI only, while a turn is waiting on one. The turn carries on without its answer and the sub-agent keeps working; **Esc** is the other answer to the same moment and throws the work away. |
 | Step the reasoning effort | **Ctrl+E**, TUI only. Moves to the next level this model tells apart and wraps at the end; `/effort-set` opens the same list. |
 | Narrow a picker | Type, in any TUI picker. Case-insensitive substring over the row and its detail; **Backspace** removes a character and **Esc** clears the filter before it closes the list. |
 
@@ -888,7 +890,7 @@ Other behavior:
 
 * The input box grows as you type, up to about 10 lines, then scrolls internally.
 * A permission prompt appears whenever the model wants `write_file`, `edit`, a non-git `bash` command, or an MCP tool. Any client attached to the session can answer it, and answering closes the prompt on every other client.
-* The TUI draws a rule above and below the input box, with a status line directly underneath showing `agent: <name>  ·  model: <model id>`. Switching with Tab updates only that line and adds nothing to the transcript.
+* The TUI draws a rule above and below the input box, with a status line directly underneath showing `agent: <name>  ·  model: <model id>`, and beside them whatever else has an answer: `effort: <level>` when a level is set for that model, `context: <percent>` once a reply has reported usage — amber past 70% of the window and red past 90%, the same thresholds the Web UI uses — and `<n> tok/s` when `show_tps` is on. A setting nobody has touched is not named, so the line stays short. Switching with Tab updates only that line and adds nothing to the transcript.
 * The TUI places the real terminal cursor at the insertion point inside the prompt box, so IME composition for Korean, Japanese, and Chinese renders in the box while you type rather than below it.
 * **Running work shows below the prompt box, not in the conversation.** While a turn is in flight the TUI animates a line naming what it is doing (the running tool's name, or `working`), the queue depth, and how many background tasks are going. It disappears the moment the turn ends. The Web UI shows the same information in its status bar. Tool starts and finishes no longer write `[tool] ...` lines into the transcript.
 
@@ -1127,7 +1129,7 @@ The range is named in the prompt rather than left for the model to work out, and
 
 It is not `/debate`, which sends the work to other agents and runs rounds. This is one turn, by whoever is answering, about a diff.
 
-**A `review` command of your own wins.** This is the one built-in that yields to a custom command and a skill of the same name, and the reason is that the name was in people's `.localcode/commands/` before the built-in existed — there was none, the documentation said to write one for exactly this, and they did. Taking the name now would silently replace a file somebody wrote and tuned for their repository with a template that knows nothing about it. Every other built-in comes first; see [the note on shadowing](#other-local-commands).
+**A `review` command of your own wins.** This is the one built-in that yields to a custom command and a skill of the same name, and the reason is that the name was in people's `.localcode/commands/` before the built-in existed — there was none, the documentation said to write one for exactly this, and they did. Taking the name now would silently replace a file somebody wrote and tuned for their repository with a template that knows nothing about it. Every other built-in comes first; see [the note on shadowing](#running-a-skill).
 
 ### `/redo`
 
@@ -1630,6 +1632,7 @@ One line directly below the input box:
 | TPS | Generation rate across the full turn, excluding prefill and queue time. `~` marks a live stream estimate; the final count replaces it. Single-chunk replies show no rate. Controlled by `show_tps`. |
 | Activity light | Grey: disconnected from daemon. Solid green: connected and idle. Blinking green: turn or background work active. Steady amber: permission required. Uses daemon state and reconnects automatically. Tooltip distinguishes turns from tasks. |
 | Stop button | Cancels the active turn, including a turn started by another client, and the tool it is inside. Equivalent to Esc. See [What stop reaches](#what-stop-reaches). |
+| Let go button | **let go**. Appears only while the turn is waiting on a sub-agent. The turn carries on without the answer and the sub-agent keeps working; the Stop button is the other answer to the same moment and ends both. The TUI has this on **Ctrl+B**. |
 | Auto-delegate pill | Opens target-agent and pattern settings. See [Auto delegation](#auto-delegation). |
 | Permission pill | Shows permission state and opens its controls. See [Permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
 | Settings pill | **settings**. Opens the settings window, which holds the [Smart Agent](#smart-agent) switch and the update controls. See [Checking for updates](#checking-for-updates). |
@@ -1640,7 +1643,9 @@ Tab selects the next agent and Shift+Tab the previous agent. Focus remains in th
 
 The header dropdown does the same thing and lists each agent with the model it resolves to, e.g. `explore (qwen3-1.7b)`; the agent's description is in the option's tooltip.
 
-In the TUI, `/model` opens an agent list with model IDs. Use arrows to select, Enter to switch, and Esc to cancel.
+In the TUI, `/model` opens a picker listing every profile and agent with the model each resolves to. Use arrows to select, Enter to choose, and Esc to cancel. Choosing a profile changes the model for this conversation and leaves the agent alone; choosing an agent switches the agent as `/agent` does. `/model default` goes back to whatever the agent resolves to.
+
+Which model answers and which agent is answering are separate: before v0.117.0 the only way to change model was to switch agent, which also changed the prompt, the tools and the permissions.
 
 ### Model output renders as markdown
 
@@ -1701,7 +1706,7 @@ Agents select models and tool scopes. Smart Agent adds built-in specialists. Orc
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only when there are 2 or more agents to delegate to, which [Smart Agent](#smart-agent) is one way to arrange. |
 | `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [Smart Agent](#smart-agent) on. |
 | `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [Smart Agent](#smart-agent) on. |
-| `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. |
+| `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. In a turn with nobody to ask — `localcode run`, a background task, a scheduled prompt — it is not offered at all unless something already authorizes it: `skip_all`, `skip_tools`, or an `"Orchestrate": "allow"` rule. It asks on every call and a run is up to 32 agent turns, so a turn that would have to ask loses the tool rather than building a whole plan and being refused at the last step. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 | `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and one-step plans are refused. The model is also told never to move a step from `pending` straight to `completed`, but that is guidance in the tool description rather than a refusal: the tool records the list it is given and does not compare it with the last one. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
 | `ask_user` | No | Ask the user one question mid-turn and wait for the answer, without ending the turn. 2 to 4 short options, most recommended first; the user can answer in their own words instead. Once per turn. Offered only with [Smart Agent](#smart-agent) on, and only where somebody is watching: never in a one-shot run, a scheduled run, or a delegated sub agent. |
@@ -2150,13 +2155,15 @@ Tool restrictions are enforced both when schemas are exposed and before executio
 
 | Client | How to switch |
 |---|---|
-| TUI | **Tab** cycles through configured agents. The status line under the input box always shows `agent: <name>  ·  model: <model id>`. |
+| TUI | **Tab** cycles through the selectable agents, the Smart Agent specialists included while that switch is on. The status line under the input box always shows `agent: <name>  ·  model: <model id>`, plus effort, context use and tok/s when those have an answer. |
 | Web UI | The header dropdown |
 | Both | `/agent` to list, `/agent <name>` to switch |
 
 Switching posts to `POST /api/sessions/{id}/agent`. On success an `agent.switched` event goes to the session, so every attached client, including a TUI and Web UI open at once, updates together.
 
-Use `plan` for analysis, then switch to a writable agent. `config.example.json` defines `implement` for this purpose. Only names in the configured `agents` map are selectable; unknown names are refused.
+Use `plan` for analysis, then switch to a writable agent. `config.example.json` defines `implement` for this purpose.
+
+Selectable names are the ones a client was just shown: your own `agents` map, plus the six Smart Agent specialists while `/smart-agent` is on. Anything else is refused. Checking the configured map alone is what used to make the specialists reachable by delegation and not by hand — turning the switch off while a specialist is selected leaves a name that no longer resolves.
 
 ### Auto delegation
 
@@ -2324,7 +2331,7 @@ Effort sets the requested reasoning level for the conversation, and it is rememb
 | Where | How |
 |---|---|
 | Web UI and window | The `effort:` control in the line under the prompt box, beside the model. Click it for the levels this model tells apart. |
-| TUI | `/effort-set` lists them and takes a choice; `/effort-set <level>` sets one directly. `/effort <level>` still works. |
+| TUI | `/effort-set` lists them and takes a choice; `/effort-set <level>` sets one directly. `/effort <level>` still works, and **Ctrl+E** steps to the next level this model tells apart. The level in force reads back in the status line under the prompt box, beside the model, once one is set. |
 | API | `GET /api/sessions/{id}/effort` returns the level in force, its source, the levels the model tells apart, and what the level reaches there. `POST` the same path with `{"level":"high"}`, or `""` to go back to the profile's. |
 
 The level is stored against the model, not against the conversation alone. A conversation that changes model — through the agent dropdown, or through a fallback — finds the answer it gave for the model it is now on, and the answer it gave for the other one is still there when it goes back. A conversation that set a level before this existed keeps it for every model until it answers for one.
@@ -2541,7 +2548,7 @@ Switching agents changes the profile, provider, model, system prompt, and tool s
 
 | Where | How |
 |---|---|
-| TUI | `Tab` cycles, `/agent <name>` switches, `/model` lists every agent with the model it resolves to |
+| TUI | `Tab` cycles, `/agent <name>` switches the agent, `/model <profile>` changes only the model and keeps the agent's prompt, tools and permissions, `/model` on its own reports what answers now and lists what it could be |
 | Web UI | The selector in the header, or `/agent <name>` |
 | Either | The switch is appended to the session log, so it survives a restart |
 
@@ -2728,7 +2735,7 @@ Development builds reporting `dev` are not offered updates.
 ## Known limitations
 
 * Long sessions initially load recent events. Use **Load the whole conversation** for the full transcript.
-* If an MCP server dies and reconnection fails, later tool calls fail until daemon restart.
+* If an MCP server dies, the next tool call tries once to bring it back. If that fails, later calls to that server keep failing until `/reset-mcp`; nothing retries on its own, and the health poller does not re-dial a server it has given up on. `/reset-mcp` reconnects every server, so it affects every conversation.
 * There is no auth token. Anyone who can reach the `--listen` address gets the entire API, shell execution included. Expose it only over loopback plus an SSH tunnel.
 * On Windows, shell execution resolves to `sh` on PATH, then Git for Windows' `bash.exe` at its usual install paths, then `cmd /c`. Under the `cmd` fallback, bash-only syntax does not work; the bash tool tells the model so in its description. Installing Git for Windows gives the full POSIX behavior.
 * There is no desktop window on Linux. It links a native webview through CGo, which on Linux means WebKitGTK and a build per distribution; the daemon, the TUI, and the Web UI in a browser all work there. The `.deb` and the Linux tarballs carry the `localcode` binary only.

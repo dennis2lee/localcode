@@ -366,7 +366,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <ul>
 <li><strong>What changes</strong>: the model, the system prompt and the tool scope, from the next message on. All three belong to the agent.</li>
 <li><strong>What carries</strong>: the whole conversation. The model taking over reads what the previous one was asked and what it answered.</li>
-<li><strong>How</strong>: <kbd>Tab</kbd> cycles in the TUI, <code>/agent &lt;name&gt;</code> in both clients, <code>/model</code> in the TUI lists every agent with the model it resolves to, and the Web UI has a selector in its header.</li>
+<li><strong>How</strong>: <kbd>Tab</kbd> cycles in the TUI, <code>/agent &lt;name&gt;</code> in both clients, <code>/model &lt;profile&gt;</code> changes only the model and leaves the agent's prompt, tools and permissions in place, <code>/model</code> on its own lists what this conversation could answer on, and the Web UI has a selector in its header.</li>
 <li><strong>Recorded</strong>: the switch is an event in the session log, so it survives a restart and reads back in order with the messages around it.</li>
 </ul>
 </div>

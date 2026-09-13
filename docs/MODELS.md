@@ -10,7 +10,7 @@ Choose a provider, configure a model profile, and assign that profile to an agen
 
 See [USAGE.md](USAGE.md#config-file-configjson) for configuration field definitions.
 
-Use `localcode login <bedrock|anthropic>` for cloud authentication. See [USAGE.md, authenticating with /login](USAGE.md#authenticating-with-login).
+Use `localcode login <bedrock|anthropic>` for cloud authentication. See [USAGE.md, authenticating with localcode login](USAGE.md#authenticating-with-localcode-login).
 
 claude.ai Pro and Max subscriptions are not supported. That sign in flow requires a private OAuth client issued for Claude Code. localcode does not reproduce those credentials because of the Anthropic terms of service risk.
 

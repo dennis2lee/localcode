@@ -360,7 +360,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <ul>
 <li><strong>바뀌는 것</strong>: 모델, 시스템 프롬프트, 도구 범위. 다음 메시지부터입니다. 셋 다 에이전트에 속한 것들입니다.</li>
 <li><strong>넘어가는 것</strong>: 대화 전체. 이어받는 모델은 앞 모델이 무엇을 받았고 무엇이라 답했는지 읽습니다.</li>
-<li><strong>방법</strong>: TUI에서는 <kbd>Tab</kbd>으로 순환, 양쪽 클라이언트에서 <code>/agent &lt;이름&gt;</code>, TUI의 <code>/model</code>은 에이전트마다 어떤 모델로 해석되는지 함께 보여주고, Web UI는 헤더에 선택기가 있습니다.</li>
+<li><strong>방법</strong>: TUI에서는 <kbd>Tab</kbd>으로 순환, 양쪽 클라이언트에서 <code>/agent &lt;이름&gt;</code>, <code>/model &lt;프로필&gt;</code>은 모델만 바꾸고 에이전트의 프롬프트·도구·권한은 그대로 두며, <code>/model</code>만 치면 이 대화가 답할 수 있는 것들을 나열합니다. Web UI는 헤더에 선택기가 있습니다.</li>
 <li><strong>기록됨</strong>: 전환은 세션 로그의 이벤트입니다. 재시작해도 남고, 앞뒤 메시지와 순서대로 다시 읽힙니다.</li>
 </ul>
 </div>
