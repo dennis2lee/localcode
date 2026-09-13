@@ -78,7 +78,8 @@ func (b Bash) Execute(ctx context.Context, input json.RawMessage) Result {
 	}
 
 	status, exited := exitStatus(err)
-	if !exited {
+
+	if !commandChoseItsStatus(ctx.Err(), exited) {
 		// Not a status the command chose: it could not be started at all,
 		// or it was killed before it could exit.
 		//
@@ -116,6 +117,28 @@ func (b Bash) Execute(ctx context.Context, input json.RawMessage) Result {
 
 // killNotice explains a command that never got to choose an exit status.
 //
+// commandChoseItsStatus reports whether the status a command exited with is
+// one it chose, rather than the mark of localcode having killed it.
+//
+// A function, and taking the context's error rather than reading it, for a
+// reason the ordering alone could not carry: this decision is
+// platform-dependent in a way no test on one platform can reach. A process
+// localcode kills is killed by a signal on Unix, so exitStatus answers "no
+// status" and the kill is obvious; Windows exits a killed process with an
+// ordinary code, so it looks exactly like a command that failed. Reading
+// `exited` first therefore reported a timed-out command on Windows as a
+// command that chose to fail with status 1 — the confusion this file's exit
+// handling exists to remove, arriving by a platform difference instead of a
+// signal, and leaving a model there to read a timeout as an ordinary
+// failure and retry it.
+//
+// localcode set the deadline and holds the context, so it never has to read
+// the answer out of an exit code. Written this way, every combination is
+// reachable from any machine; see bash_kill_test.go.
+func commandChoseItsStatus(ctxErr error, exited bool) bool {
+	return ctxErr == nil && exited
+}
+
 // A command that ran past its timeout and a command the person cancelled
 // both arrive here as "signal: killed", and the two call for opposite
 // things: one that ran out of time wants narrowing and trying again, one

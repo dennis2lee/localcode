@@ -17,7 +17,7 @@ func TestGlobSubjectIsTheDirectoryBeingListed(t *testing.T) {
 		{"/etc/*.conf", filepath.Dir("/etc/*.conf")},
 		{"*.go", "."},
 		{"internal/tools/read.go", "internal/tools/read.go"},
-		{"../other/**/*.go", "../other"},
+		{"../other/**/*.go", filepath.FromSlash("../other")},
 		{"", ""},
 	} {
 		if got := globSubject(tt.pattern); got != tt.want {
