@@ -26,10 +26,15 @@ func TestGlobSubjectIsTheDirectoryBeingListed(t *testing.T) {
 	}
 	// And the tool actually exposes it, which is the half a rule and the
 	// boundary both depend on.
+	// The directory part of an absolute pattern, spelled the way the
+	// running platform's filepath spells it: globSubject is filepath.Dir,
+	// and on Windows that answers "\\etc" for "/etc/*.conf" because a
+	// path with no volume is not absolute there. What matters is that the
+	// subject is the directory being listed, not which separator it wears.
 	var g Glob
-	got := g.Subject(json.RawMessage(`{"pattern":"/etc/*.conf"}`))
-	if got != "/etc" {
-		t.Errorf("Glob.Subject = %q, want %q", got, "/etc")
+	want := filepath.Dir("/etc/*.conf")
+	if got := g.Subject(json.RawMessage(`{"pattern":"/etc/*.conf"}`)); got != want {
+		t.Errorf("Glob.Subject = %q, want %q", got, want)
 	}
 	var gr Grep
 	if got := gr.Subject(json.RawMessage(`{"pattern":"x"}`)); got != "." {

@@ -15,6 +15,21 @@ import (
 // but worth being asked about once, which is the difference between an
 // agent that stays where it was pointed and one that is discovered to have
 // been somewhere else.
+// systemPathOutsideAnyWorkspace is an absolute path that no temporary
+// workspace can contain, on whichever platform is running.
+//
+// Windows needs a volume for a path to be absolute at all, and needs the
+// volume to be one filepath.Rel can relate to the workspace's — a
+// different volume returns an error, which the boundary already treats as
+// outside, so this deliberately uses the same volume as the workspace and
+// leans on the path rather than the volume.
+func systemPathOutsideAnyWorkspace() string {
+	if runtime.GOOS == "windows" {
+		return `C:\Windows\System32\drivers\etc\hosts`
+	}
+	return "/etc/passwd"
+}
+
 func TestOutsideWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	ctx := WithWorkingDir(context.Background(), dir)
@@ -31,8 +46,21 @@ func TestOutsideWorkspace(t *testing.T) {
 	}
 
 	outside := []string{
-		"/etc/passwd", "../sibling/main.go", "../../etc/hosts",
+		"../sibling/main.go", "../../etc/hosts",
 		filepath.Join(filepath.Dir(dir), "other", "main.go"),
+		// An absolute path somewhere else, spelled the way the running
+		// platform spells absolute.
+		//
+		// It used to be "/etc/passwd" on both, and that failed on
+		// Windows for a reason worth keeping written down rather than
+		// patching around: filepath.IsAbs("/etc/passwd") is FALSE there,
+		// because a Windows absolute path carries a volume. A path with
+		// no volume is joined to the workspace, so the model asking for
+		// "/etc/passwd" on Windows is asking for
+		// <workspace>\etc\passwd — which really is inside, and calling
+		// it inside is right. The check was correct and the test was
+		// asserting POSIX.
+		systemPathOutsideAnyWorkspace(),
 	}
 	for _, p := range outside {
 		if !OutsideWorkspace(ctx, p) {
