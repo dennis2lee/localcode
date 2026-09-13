@@ -154,12 +154,13 @@ for pid in "${pids[@]}"; do wait "$pid"; done
 elapsed=$(($(date +%s) - started))
 
 failed=()
+skipped=()
 printf '\n'
 for name in "${names[@]}"; do
 	IFS=$'\t' read -r status secs note < "$logdir/$name.status"
 	case "$status" in
 	pass) mark="ok  " ;;
-	skip) mark="skip" ;;
+	skip) mark="skip"; skipped+=("$name") ;;
 	*) mark="FAIL"; failed+=("$name") ;;
 	esac
 	if [ -n "${note:-}" ]; then
@@ -178,10 +179,20 @@ if [ ${#failed[@]} -eq 0 ]; then
 	# Only ever written by a full run. "scripts/check.sh vet" passing is
 	# not the gate passing, and a stamp that said otherwise would let a
 	# release out on one check out of nine.
-	if [ ${#want[@]} -eq 0 ]; then
-		scripts/tree-id.sh > .check-passed
-	else
+	#
+	# A skip is not a pass either, and this is the same rule. The gui
+	# check is CGo against Cocoa and skips off macOS, so a full run on
+	# Linux used to leave a stamp saying eleven checks had passed when
+	# ten had and one had not been attempted — and the release preflight
+	# reads that stamp as permission to build. Releases are cut on the Mac
+	# where gui runs, so it never got out, but the stamp claimed more than
+	# it knew.
+	if [ ${#want[@]} -gt 0 ]; then
 		printf '  (a partial run leaves no stamp: the release gate needs all of them)\n'
+	elif [ ${#skipped[@]} -gt 0 ]; then
+		printf '  (no stamp: %s did not run, and the release gate needs every check)\n' "${skipped[*]}"
+	else
+		scripts/tree-id.sh > .check-passed
 	fi
 	exit 0
 fi

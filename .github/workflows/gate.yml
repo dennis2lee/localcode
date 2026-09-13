@@ -1,0 +1,74 @@
+# The gate, on a machine that is not the one it was written on.
+#
+# Everything here already ran locally: scripts/check.sh is the same eleven
+# checks a commit is supposed to pass. What it did not do is run anywhere
+# else, and that is the hole this fills. Both of this project's CI
+# accidents were the same shape — a check that reported success without
+# checking — and the second one, 27 failing Windows tests reported green,
+# was found only because somebody read the log of a job that said it had
+# passed. One machine cannot catch that about itself.
+#
+# docs/IMPROVEMENTS.md item 33 recorded the decision to defer this,
+# because development and releases happen on one machine and a second
+# workflow is more to maintain. That decision predates v0.118.0 shipping
+# green with those 27 failures.
+#
+# Two runners rather than one, and the second is not redundant:
+#   ubuntu   the cheap one, and the only place the Linux cross-build is
+#            exercised by something other than a cross-build
+#   macos    where the `gui` check actually runs. It is CGo against Cocoa,
+#            so it cannot cross-compile and it is skipped everywhere else;
+#            without a macOS runner the desktop window is built by the
+#            developer's own machine and by nothing else.
+#
+# Pull requests as well as pushes, because a gate that runs after the
+# merge tells you about a branch you have already merged.
+name: gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A second push to the same branch makes the first run's answer stale.
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    strategy:
+      # Both runners report, rather than the first failure hiding the
+      # other's answer — "it fails on Linux too" is worth knowing in the
+      # same run.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      # The Web UI suite is node's, and the gate calls it directly rather
+      # than through a package manager: there is no package.json and no
+      # dependency to install, only the runtime.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run the gate
+        # bash explicitly. A multi-line `run:` under PowerShell reports
+        # only the last command's exit code, which is how 27 failing tests
+        # once passed for green; this job is not on Windows, and the habit
+        # is still worth keeping.
+        shell: bash
+        run: ./scripts/check.sh
