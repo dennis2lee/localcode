@@ -252,7 +252,7 @@ Supported JSONC syntax:
 * Trailing commas before `}` or `]`
 * Literal `//` inside strings, including `https://example.com/v1`
 
-LocalCode preserves comments, indentation, key order, and unrelated bytes when updating an existing key. It refuses to add a missing key to a commented file because there is no unambiguous insertion point. The runtime change still applies, and the key can be added manually.
+When the file has comments and the change updates an existing key, LocalCode splices the new value in place: comments, indentation, key order, and unrelated bytes survive. A file with no comments is rewritten whole with top-level keys sorted alphabetically, so one edit there can reorder the file. LocalCode refuses to add a missing key to a commented file because there is no unambiguous insertion point. The runtime change still applies, and the key can be added manually.
 
 #### Values from the environment: `{env:NAME}`
 
@@ -305,10 +305,14 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `smart_agent` | Turns on the built-in specialist roster and the orchestration prompt. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
+| `model_invocable` | The switch for whether the model may run commands itself. Off unless set; `/model-invocable` toggles it. On opens nothing by itself: each built-in must be named in `model_commands`, and each custom command or skill must opt in from its own frontmatter. See [/model-invocable](#model-invocable). |
+| `model_commands` | Which built-in commands the model may run, each with its leading slash. Empty, the default, means none. Inert while `model_invocable` is off. |
 | `auto_compact_enabled` | Automatic compaction past the threshold. On unless set to false; `/auto-compact` toggles it. |
 | `auto_compact_percent` | The threshold, as a percent of the context window. `50` unless set; `/auto-compact <percent>` changes it live and saves it. |
 | `auto_memory_enabled` | The notes the model keeps for itself across sessions. On unless set to false. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
+| `show_thinking` | Whether the clients paint the model's reasoning while it arrives. On unless set to false; `/thinking` toggles it. Daemon-wide, like `show_tps`. This changes nothing about what the model does: reasoning is broadcast and never logged either way. See [What the transcript shows](#what-the-transcript-shows). |
+| `show_timestamps` | Whether a time is shown beside each turn boundary. Off unless set to true; `/timestamps` toggles it. Daemon-wide. See [What the transcript shows](#what-the-transcript-shows). |
 | `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
 | `trace_max_total_mb` | Optional cap on the trace directory, and separately on the prompt-manifest directory beside it. When set, each is bounded on its own: the oldest files go until it fits, and today's file is never removed. See [What it did](#the-turn-log). |
 | `default_profile` | The profile used when an agent name resolves to nothing. |
@@ -321,6 +325,9 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 | `model` | Model id, as the provider names it |
 | `max_tokens` | Maximum output tokens per reply. Default: 4096. Reduced to fit remaining context space. Reaching the cap is reported. This is a configured limit, not a discovered model property. |
 | `temperature` | Sampling temperature |
+| `top_p` | Nucleus sampling threshold, 0 to 1. `1.0` truncates nothing. Omit the key to send nothing at all. Reaches OpenAI-compatible, Anthropic, and Bedrock. Dropped while a Claude model is reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
+| `top_k` | Only sample from the top K candidates at each step. `0` is no limit on vLLM. Omit the key to send nothing at all. Native on Anthropic, in `additionalModelRequestFields` on Bedrock, and a vLLM extension on OpenAI-compatible servers. Dropped while reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
+| `effort` | How hard this model is asked to think. Unset sends nothing at all. See [Effort](#effort). |
 | `keep_going` | Maximum automatic continuations for Muse models. Zero or unset: 3. `-1`: disabled. Ignored for other model families. See [Continuation behavior](#a-model-that-stops-mid-task). |
 | `fallback` | Other profile names to try, in order, when a request to this one fails for a reason another model could survive. Read only with [Smart Agent](#smart-agent) on. See [Fallback chains](#fallback-chains-when-a-model-will-not-answer). |
 | `context_window` | Total input and output limit. Discovery uses `GET /v1/models` or llama.cpp `/props`, then model-ID matching, then 128k. An explicit value overrides discovery. Do not exceed the model's actual limit. |

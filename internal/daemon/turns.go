@@ -496,13 +496,14 @@ func (d *Daemon) handleDetachChild(w http.ResponseWriter, r *http.Request) {
 // heldUntilIdle names the command in text that must not be injected into
 // a running turn, or "".
 //
-// Only these three. Every other local command either reads something
+// Only these four. Every other local command either reads something
 // ("/usage") or flips a switch the next turn will notice, and arriving as
 // trailing text is a harmless oddity. These rewrite what the model is
 // holding, or the ground it is standing on: two write to the working tree
-// — the tree the turn in progress is still editing — and "/workspace"
-// moves which tree that is, so a relative path resolved either side of it
-// would land in a different project.
+// — the tree the turn in progress is still editing — "/compact" replaces
+// the history the turn in progress is still answering from, and
+// "/workspace" moves which tree that is, so a relative path resolved
+// either side of it would land in a different project.
 func heldUntilIdle(text string) string {
 	first, rest, _ := strings.Cut(strings.TrimSpace(text), " ")
 	switch first {
@@ -512,6 +513,12 @@ func heldUntilIdle(text string) string {
 		return "/rewind"
 	case "/redo":
 		return "/redo"
+	case "/compact":
+		// With or without instructions: "/compact keep only the file
+		// paths" summarizes with different words, but it is the same
+		// replacement of the history either way, so the held marker
+		// names the command and not the argument.
+		return "/compact"
 	case "/workspace":
 		// Only the form that moves it. Bare "/workspace" reads the
 		// directory back, and refusing a read because a turn is running

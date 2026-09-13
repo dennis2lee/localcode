@@ -157,3 +157,31 @@ export async function loadMCPServers() {
   }
   renderMCPServers();
 }
+
+// The confirmation for the reconnect control in the MCP panel. A const,
+// not an inline string, so the exact words the person answers are the
+// thing a test can read: the requirement here is wording ("machine-wide,
+// not per row"), and wording tested anywhere else would be tested through
+// a stub that never sees it.
+export const mcpResetConfirmText =
+  'Reconnect ALL MCP servers?\n\n/reset-mcp closes every server and deregisters every mcp__ tool ' +
+  'for every conversation on this machine, then reconnects from the current configuration. ' +
+  'This is not a per-server retry.';
+
+// resetMCPServers sends /reset-mcp from the current session. The command
+// itself is daemon-side (see routeResetMCP: stop the servers, re-read
+// their configuration, reconnect), so the client needs no new endpoint —
+// a chat message carrying the slash command, which is also why this works
+// unchanged in the desktop window serving the same assets.
+export async function resetMCPServers() {
+  if (!session.sessionID) {
+    appendError('no session is open to send /reset-mcp from');
+    return;
+  }
+  if (!window.confirm(mcpResetConfirmText)) return;
+  try {
+    await apiClient.sendChatMessage(session.sessionID, '/reset-mcp');
+  } catch (err) {
+    appendError(`could not reset MCP servers: ${err}`);
+  }
+}

@@ -42,24 +42,62 @@ export function renderSessionHeader() {
   sessionIdEl.title = session.sessionID;
 }
 
+// sessionMatchesFilter decides whether one session row survives the
+// panel filter. Pure, and exported, for the same reason reorderList is:
+// the answer it gives is easy to get wrong in a way the eye forgives —
+// matching the shortened card text instead of the full workspace path
+// would pass every glance at the panel and fail every real search.
+export function sessionMatchesFilter(s, q) {
+  const query = (q || '').trim().toLowerCase();
+  if (!query) return true;
+  // The FULL workspace path, not the shortened text the card shows. The
+  // card keeps the tail (see shortenPath) and drops the leading
+  // directories, which are exactly what somebody typing a directory name
+  // is looking for.
+  return (s.title || '').toLowerCase().includes(query) ||
+    (s.workspace || '').toLowerCase().includes(query);
+}
+
 export function renderSessionList() {
   sessionListEl.innerHTML = '';
   if (!app.sessions || app.sessions.length === 0) {
     sessionListEl.innerHTML = '<div style="color:var(--muted)">no sessions</div>';
     return;
   }
-  for (const s of app.sessions) {
+  const query = (app.sessionFilter || '').trim();
+  const visible = app.sessions.filter(s => sessionMatchesFilter(s, query));
+  if (visible.length === 0) {
+    sessionListEl.innerHTML = '<div style="color:var(--muted)">no sessions match this filter</div>';
+    return;
+  }
+  // While a filter is on, dragging is off. The rows on screen are a
+  // subset of app.sessions, and dropSessionOn/reorderList count positions
+  // in the full array — so a drop among filtered rows would move a
+  // session nobody pointed at. Mapping the index back through the filter
+  // would keep the gesture but land the card somewhere the filtered view
+  // never showed, which is a stranger surprise than a gesture that waits
+  // until the filter is cleared. The tooltip drops the drag half for the
+  // same reason: offering a move that will not happen is worse than not
+  // offering it.
+  const filtering = query !== '';
+  for (const s of visible) {
     const div = document.createElement('div');
     div.className = 'session-item' + (s.id === session.sessionID ? ' active' : '');
     // The whole card switches to the session — the old dedicated "switch"
     // button made the single most common action the smallest target on
     // the row. The rename/delete buttons below stop propagation so they
     // don't switch as a side effect of being clicked.
-    div.title = `${s.id}\nclick to switch to this session, drag to move it up or down`;
+    div.title = filtering
+      ? `${s.id}\nclick to switch to this session`
+      : `${s.id}\nclick to switch to this session, drag to move it up or down`;
     div.addEventListener('click', () => {
       if (s.id !== session.sessionID) selectSession(s.id, s.agent, s.workspace);
     });
-    makeDraggable(div, s.id);
+    if (filtering) {
+      div.draggable = false;
+    } else {
+      makeDraggable(div, s.id);
+    }
 
     const title = document.createElement('div');
     title.className = 'title';

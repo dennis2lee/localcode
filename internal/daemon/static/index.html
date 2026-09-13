@@ -175,6 +175,9 @@
         <h2>Sessions</h2>
         <button class="icon-btn" id="new-session-btn" title="start a new session">+ new</button>
       </div>
+      <input type="text" id="session-filter" placeholder="filter by title or workspace" autocomplete="off"
+             spellcheck="false" autocapitalize="off" autocorrect="off"
+             title="show only sessions whose title or workspace contains this text">
       <div id="session-list"></div>
       <button class="icon-btn danger-btn" id="delete-all-sessions-btn" title="delete all sessions" style="width:100%">delete all sessions</button>
     </div>
@@ -233,9 +236,18 @@
       <h2>Scheduled tasks</h2>
       <div id="schedules"></div>
     </div>
+    <!--
+      The reconnect control. One button for the whole panel, under the
+      rows, because that is what it acts on: /reset-mcp stops every
+      server and deregisters every mcp__ tool for every conversation on
+      this machine, then reconnects. A button on each row would say
+      "retry this server" and do something else entirely.
+    -->
     <div class="side-section">
       <h2>MCP servers</h2>
       <div id="mcp-servers"></div>
+      <button class="icon-btn" id="mcp-reset-btn"
+              title="/reset-mcp for every conversation on this machine: closes every MCP server and deregisters every mcp__ tool, then reconnects from the current configuration. This is not a per-server retry.">reconnect all</button>
     </div>
   </aside>
 </main>

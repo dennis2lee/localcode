@@ -513,8 +513,8 @@ type Profile struct {
 	ContextWindow int `json:"context_window,omitempty"`
 
 	// Effort is how hard this model is asked to think: "off", "low",
-	// "medium" or "high". Empty, the default, says nothing at all and
-	// leaves the request exactly as it has always been.
+	// "medium", "high" or "xhigh". Empty, the default, says nothing at
+	// all and leaves the request exactly as it has always been.
 	//
 	// One word over several wires, and what it reaches depends on the
 	// model. An OpenAI-compatible server is sent "reasoning_effort",
@@ -523,8 +523,11 @@ type Profile struct {
 	// the field. Anthropic's API is sent extended thinking: the newest
 	// Claude families decide the amount themselves and every level maps
 	// to the same switch there, while an older one gets a token budget
-	// per level. Bedrock is not wired to it yet and says so rather than
-	// pretending. See internal/provider.
+	// per level. Bedrock carries the same thinking object inside
+	// additionalModelRequestFields, which is where its native parameters
+	// travel. Converse has no first-class field for reasoning, so
+	// leaving it out would run a cheaper turn than the one asked for.
+	// See internal/provider.
 	//
 	// Off by default on purpose: this changes what a model does with a
 	// request and what it costs, so nothing happens to anybody who has

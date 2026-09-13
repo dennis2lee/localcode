@@ -122,7 +122,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <p class="lede">localcode supports multi-model approval, scheduled execution, and validated multi-agent plans. This page describes capabilities that are not standard in coding agents and states the use case for each capability.</p>
 
 <p class="lang"><span>English</span> &nbsp;&middot;&nbsp; <a href="where-localcode-differs.ko.html">한국어</a></p>
-<div class="meta">version &nbsp;&nbsp;&nbsp;0.105.1<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-05<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
+<div class="meta">version &nbsp;&nbsp;&nbsp;0.121.0<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-13<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
 
 <nav class="toc" aria-label="Contents">
 <h2>Contents</h2>
@@ -328,6 +328,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <li><strong>Model per specialist</strong>: worked out from the profiles already in config.json, not named in the build. A profile called <code>smart-quick</code>, <code>smart-balanced</code> or <code>smart-deep</code> pins it by hand.</li>
 <li><strong>No recursion</strong>: no specialist can delegate. This is a tool allowlist, not a line of prompt.</li>
 <li><strong>Parallelism</strong>: <code>TaskBackground</code> and <code>TaskCollect</code> run several at once.</li>
+<li><strong>Directly selectable</strong>: <kbd>Tab</kbd> and the Web UI menu switch a conversation onto a specialist, and <code>localcode run --agent oracle</code> answers a single prompt as one.</li>
 </ul>
 
 <p>On the 25-instance SWE-bench Verified run in the <a href="coding-agent-benchmark.html">benchmark</a>, Smart Agent on resolved 21 of 25 against 19 with it off, on the same model. That spread is inside run-to-run variance and does not rank anything; the measured difference that run does support is output tokens, 7,586 against 9,434 per instance.</p>
@@ -373,6 +374,8 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <p>Switching agents can change the system prompt and tool schemas. The first request after a switch may therefore require a new provider cache entry.</p>
 
+<p>Choosing the model is separate from choosing the agent. <code>/model &lt;profile&gt;</code> points one conversation at that profile's model and keeps the agent — its prompt, its tools, its permissions — so answering on a bigger model no longer means writing a second agent that is the first one with another profile. The choice is kept per agent in each conversation, survives a fork, and is announced on a <code>model.changed</code> event so a second client follows it. Bare <code>/model</code> reports the model in force and every profile the config can reach; the terminal opens a picker with agents and models in one list (<code>/models</code> and <code>/mo</code> are aliases), and <code>default</code> hands the choice back to the agent.</p>
+
 <h2 id="prompt-inventory">8. Prompt inventory</h2>
 <p class="kicker">Prompt inventory</p>
 
@@ -391,6 +394,8 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 </div>
 
 <p>The same manifest ids appear in the trace, so a failover that reused the failed model's prompt is visible as an unchanged manifest id on a changed model family.</p>
+
+<p>The terminal keeps the same window in view another way: the footer under the prompt box shows <code>context: N%</code> beside the model, warning at 70% of the window and critical at 90%. The Web UI has long had its own indicator; the terminal ignored the usage events that feed it, so it had none.</p>
 
 <h2 id="trace">9. Execution traces</h2>
 <p class="kicker">Trace</p>
@@ -425,7 +430,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <div class="part"><span>Part 2</span><h2>Client operation</h2></div>
 
-<p>One daemon holds every session. What attaches to it is a choice, and more than one thing can attach to the same session at the same time. The screenshots below are of localcode 0.109.0; the claims in this document were last checked against 0.105.1.</p>
+<p>One daemon holds every session. What attaches to it is a choice, and more than one thing can attach to the same session at the same time. The screenshots below are of localcode 0.115.0; the claims in this document were last checked against 0.121.0.</p>
 
 <h2 id="front-ends">11. A terminal, a browser tab, and a native window</h2>
 <p class="kicker">Three front ends, one daemon</p>
@@ -504,11 +509,12 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="scroll"><table>
 <thead><tr><th>Action</th><th>What it does</th><th>Where</th></tr></thead>
 <tbody>
-<tr><td class="nw">Rename</td><td>Gives a conversation a title of your own instead of its generated id. The title is what <code>#&lt;name&gt;</code> resolves against, so renaming is also how a conversation becomes worth citing from another one.</td><td>Browser and desktop window</td></tr>
+<tr><td class="nw">Rename</td><td>Gives a conversation a title of your own instead of its generated id. The title is what <code>#&lt;name&gt;</code> resolves against, so renaming is also how a conversation becomes worth citing from another one.</td><td>Both clients (<code>/rename</code>)</td></tr>
 <tr><td class="nw">Reorder</td><td>Drag a card up or down. The order is saved on the daemon, so it is the same order in every client and after a restart.</td><td>Browser and desktop window</td></tr>
 <tr><td class="nw">Archive</td><td>Moves a quiet conversation off the list, keeping everything it had, the whole event log included.</td><td>Both clients (<code>/archive</code>)</td></tr>
 <tr><td class="nw">Retrieve</td><td>Brings it back with one press, restoring its rank rather than its number, and says which.</td><td>Both clients (<code>/retrieve</code>)</td></tr>
-<tr><td class="nw">Fork</td><td>Copies a conversation, so a different approach can be tried from the same point.</td><td>Browser and desktop window</td></tr>
+<tr><td class="nw">Fork</td><td>Copies a conversation, so a different approach can be tried from the same point.</td><td>Both clients (<code>/fork</code>)</td></tr>
+<tr><td class="nw">Export</td><td>Renders the conversation to a Markdown file from its own log, so an archived conversation exports as readily as an open one. Written rather than printed, <code>0600</code>. Tool output past 4000 characters is cut, and the file says where.</td><td>Both clients (<code>/export</code>)</td></tr>
 </tbody>
 </table></div>
 
@@ -527,6 +533,8 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <p class="kicker">Workspace boundary</p>
 
 <p>A path that leaves the session's own workspace is its own question, separate from whether the tool is allowed at all. Answering "yes, this agent may read files" is not answering "yes, it may read <code>~/.ssh</code>".</p>
+
+<p>A second boundary guards destinations rather than paths. <code>network.egress</code> bounds the connections localcode itself makes: the model providers, remote MCP servers, the update check. The list holds host names and <code>*.base</code> entries; loopback is always allowed and needs no listing. It is enforced only when asked for, so a list can be written down and tried before it is relied on. A shell command and a subprocess MCP server are separate processes with their own sockets and stand outside it, and the setting says so rather than implying otherwise.</p>
 
 <figure>
 <img src="img/webui-outside.png" alt="The permissions dialog: two skip switches, then a section headed Outside this project explaining that paths landing outside the project directory include an absolute path, a dot-dot, or a symlink that leads out, with separate checkboxes for allowing reads and writes outside without asking, and a note that a shell command is not a path.">
@@ -561,8 +569,13 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <thead><tr><th>Area</th><th>What differs</th></tr></thead>
 <tbody>
 <tr><td class="nw">Search results</td><td>A 200-match cap, a line over 1MB and an unreadable file are each named in the output. Paths, at most three, rather than a count. With Smart Agent on, no single file may take more than 30 of grep's 200 results.</td></tr>
-<tr><td class="nw">Lifecycle hooks</td><td>Beyond tool hooks: <code>pre_model</code> (block a request, or inject a fact the model could not look up), <code>post_model</code>, <code>delegate</code> (refuse a sub-agent, which a prompt cannot do), <code>compact</code>, <code>retry</code>.</td></tr>
-<tr><td class="nw">Per-session workspace</td><td>Two sessions in two projects on one daemon. Only that session's own turn blocks its own switch.</td></tr>
+<tr><td class="nw">Lifecycle hooks</td><td>Beyond tool hooks: <code>pre_model</code> (block a request, or inject a fact the model could not look up), <code>post_model</code>, <code>delegate</code> (refuse a sub-agent, which a prompt cannot do), <code>compact</code>, <code>retry</code>. A hook may carry <code>"timeout"</code> in seconds (30 by default) and <code>"fail_closed": true</code>, which blocks the action when the hook never finishes — killed at its timeout, or unable to start. Off by default: a hook that cannot run and blocks everything locks somebody out of their own tools, the more common accident. A hook that ran and exited non-zero has decided, so fail_closed does not touch it.</td></tr>
+<tr><td class="nw">Per-session workspace</td><td>Two sessions in two projects on one daemon. Only that session's own turn blocks its own switch. <code>/workspace</code> reports the directory and moves it; a move waits for an idle session the way <code>/clear</code> and <code>/rewind</code> do, and the other client's button follows on a <code>workspace.changed</code> event.</td></tr>
+<tr><td class="nw">Review</td><td><code>/review</code> reads what changed — the uncommitted diff by default, or staged, head, a revision, a range or a path — and says what is wrong with it, worst first, modifying nothing. A custom command of the same name wins: the name was in people's <code>.localcode/commands</code> before the built-in existed.</td></tr>
+<tr><td class="nw">Status and debug</td><td><code>/status</code> reports what is attached: every MCP server with connected, degraded or disconnected and the last error, plus skills, custom commands, agents and the workspace. <code>/debug</code> prints version, platform, session, agent, model, effort, workspace and config as one plain block to paste into a bug report. Both are answered by the daemon, so both clients read the same answer.</td></tr>
+<tr><td class="nw">MCP servers</td><td><code>/mcps</code> lists every server with whether it is working and whether this conversation uses it. <code>/mcps off &lt;server&gt;</code> hides that server's tools from the next request here; the server stays connected, because another conversation may be using it and reconnecting is the expensive part.</td></tr>
+<tr><td class="nw">Usage</td><td><code>/usage</code> answers for this conversation. <code>/usage all|today|week|month</code> counts every conversation from the logs at the moment it is asked, archived ones included; a turn that was later undone still cost what it cost, so it is still counted.</td></tr>
+<tr><td class="nw">Sampling</td><td><code>temperature</code>, <code>top_p</code> and <code>top_k</code> live on the profile — muse's own vLLM recipe names all three with temperature 1.0. <code>top_k</code> is a vLLM extension on OpenAI-compatible endpoints, sent only when set, and travels in <code>additionalModelRequestFields</code> on Bedrock. Both are dropped while a Claude model is reasoning, and out-of-range values are refused at load rather than mid-turn.</td></tr>
 <tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>, per profile, or per conversation and per model within it. Only the levels a model tells apart are offered. Unset sends nothing, so an unchanged setup produces byte-identical requests.</td></tr>
 <tr><td class="nw">Steering</td><td>A message typed during a turn reaches that turn at the model's next tool call, in the order typed.</td></tr>
 <tr><td class="nw">Nearly-right tool names</td><td>A decorated name that unambiguously means one tool the agent has runs it and says which spelling worked. Resolution searches only the tools that agent was offered, so a misspelling cannot reach past a <code>tools</code> restriction.</td></tr>
@@ -591,15 +604,15 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <h2 id="qualifications">Qualifications</h2>
 
 <ul>
-<li><strong>The comparison column describes a general baseline</strong> across coding agents in common use as of 2026-09-01, and was not re-surveyed when the localcode column was checked against v0.105.1, not a feature audit of any one product. These tools ship frequently, and a capability listed as absent may exist by the time this is read.</li>
+<li><strong>The comparison column describes a general baseline</strong> across coding agents in common use as of 2026-09-01, and was not re-surveyed when the localcode column was checked against v0.121.0, not a feature audit of any one product. These tools ship frequently, and a capability listed as absent may exist by the time this is read.</li>
 <li><strong>Part 2 is not uniformly unique.</strong> Sharing one live session between front ends, and moving the view between your own turns, are uncommon. Rename, reorder and fork are conveniences that several tools have in some form; they are here because this page is also about what using localcode is like.</li>
-<li><strong>Every localcode claim is a shipped behaviour</strong> at v0.105.1, documented in <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> and covered by the repository's test gate.</li>
+<li><strong>Every localcode claim is a shipped behaviour</strong> at v0.121.0, documented in <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> and covered by the repository's test gate.</li>
 <li><strong>Benchmark numbers are one run of 25 instances</strong> and the spread between agents is inside run-to-run variance. See the <a href="coding-agent-benchmark.html">benchmark page</a> for what it does and does not support.</li>
 <li><strong>One capability is marked experimental</strong> in the product: the native desktop window. Updating on Windows was the other rough edge at v0.84.0, when it applied the new version but could not restart localcode; since v0.87.0 it hands the daemon over like every other platform, and since v0.88.0 it does so at startup as well.</li>
 </ul>
 
 <footer>
-localcode 0.105.1 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
+localcode 0.121.0 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
 </footer>
 
 </div>

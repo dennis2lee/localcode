@@ -116,7 +116,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 
 <p class="lang"><a href="where-localcode-differs.html">English</a> &nbsp;&middot;&nbsp; <span>한국어</span></p>
 
-<div class="meta">version &nbsp;&nbsp;&nbsp;0.105.1<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-05<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
+<div class="meta">version &nbsp;&nbsp;&nbsp;0.121.0<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-13<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
 
 <nav class="toc" aria-label="목차">
 <h2>목차</h2>
@@ -322,6 +322,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 <li><strong>전문가별 모델</strong>: 빌드에 박아 넣는 게 아니라 이미 config.json에 있는 프로파일로부터 결정됩니다. <code>smart-quick</code>, <code>smart-balanced</code>, <code>smart-deep</code>이라는 이름의 프로파일이 있으면 손으로 고정됩니다.</li>
 <li><strong>재귀 없음</strong>: 어떤 전문가도 위임할 수 없습니다. 프롬프트 한 줄이 아니라 도구 허용 목록으로 막습니다.</li>
 <li><strong>병렬</strong>: <code>TaskBackground</code>와 <code>TaskCollect</code>가 여러 개를 동시에 돌립니다.</li>
+<li><strong>직접 선택</strong>: <kbd>Tab</kbd>과 웹 UI 메뉴로 대화의 담당을 전문가에게 바로 넘길 수 있습니다. <code>localcode run --agent oracle</code>은 프롬프트 하나를 그 전문가로 실행합니다.</li>
 </ul>
 
 <p><a href="coding-agent-benchmark.html">벤치마크</a>의 SWE-bench Verified 25개 실행에서, 같은 모델로 Smart Agent를 켰을 때 25개 중 21개, 껐을 때 19개를 해결했습니다. 이 차이는 실행 간 편차 안에 있어 순위를 매기지 못합니다. 그 실행이 실제로 뒷받침하는 측정값은 인스턴스당 출력 토큰으로, 7,586 대 9,434입니다.</p>
@@ -367,6 +368,8 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 
 <p>에이전트 전환은 시스템 프롬프트와 도구 스키마를 변경할 수 있습니다. 전환 후 첫 요청에서 provider 캐시를 새로 생성해야 할 수 있습니다.</p>
 
+<p>모델 선택은 에이전트 선택과 분리되어 있습니다. <code>/model &lt;프로필&gt;</code>은 그 대화가 그 프로필의 모델로 답하게 하고, 에이전트의 프롬프트·도구·권한은 그대로 둡니다. 더 큰 모델로 답하게 하려고 앞의 에이전트와 프로필만 다른 에이전트를 하나 더 쓸 필요가 없습니다. 선택은 대화마다 에이전트별로 유지되고, fork에도 넘어가며, <code>model.changed</code> 이벤트로 알려져 다른 클라이언트도 따라갑니다. <code>/model</code>만 치면 지금 답하는 모델과 이 설정이 닿을 수 있는 프로파일을 보여주고, 터미널은 에이전트와 모델을 한 목록에서 고르게 합니다(<code>/models</code>와 <code>/mo</code>도 같은 명령). <code>default</code>는 선택을 에이전트에게 되돌립니다.</p>
+
 <h2 id="prompt-inventory">8. 프롬프트 인벤토리</h2>
 <p class="kicker">프롬프트 인벤토리</p>
 
@@ -385,6 +388,8 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 </div>
 
 <p>같은 매니페스트 id가 트레이스에도 나타납니다. 그래서 실패한 모델의 프롬프트를 그대로 재사용한 페일오버는, 모델 계열이 바뀌었는데 매니페스트 id가 그대로인 형태로 드러납니다.</p>
+
+<p>창이 얼마나 찼는지는 터미널 풋터가 따로 보여줍니다. 프롬프트 창 아래 줄이 모델 옆에 <code>context: N%</code>를 표시하고, 창의 70%에서 경고, 90%에서 심각 단계로 바뀝니다. 웹 UI에는 오래전부터 같은 표시가 있었고, 터미널은 그 재료인 usage 이벤트를 무시해서 표시가 없었습니다.</p>
 
 <h2 id="trace">9. 실행 트레이스</h2>
 <p class="kicker">트레이스</p>
@@ -419,7 +424,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em}
 
 <div class="part"><span>2부</span><h2>클라이언트</h2></div>
 
-<p>모든 세션은 데몬 하나가 들고 있습니다. 거기에 무엇을 붙일지는 선택이고, 같은 세션에 여러 개가 동시에 붙을 수 있습니다. 아래 스크린샷은 localcode 0.109.0의 실제 화면입니다. 본문의 서술은 0.105.1 기준으로 마지막 검증했습니다.</p>
+<p>모든 세션은 데몬 하나가 들고 있습니다. 거기에 무엇을 붙일지는 선택이고, 같은 세션에 여러 개가 동시에 붙을 수 있습니다. 아래 스크린샷은 localcode 0.115.0의 실제 화면입니다. 본문의 서술은 0.121.0 기준으로 마지막 검증했습니다.</p>
 
 <h2 id="front-ends">11. 터미널, 브라우저 탭, 네이티브 창</h2>
 <p class="kicker">하나의 데몬, 세 가지 화면</p>
@@ -498,11 +503,12 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <div class="scroll"><table>
 <thead><tr><th>동작</th><th>하는 일</th><th>사용 가능한 곳</th></tr></thead>
 <tbody>
-<tr><td class="nw">이름 변경</td><td>자동 생성된 id 대신 내가 지은 제목을 붙입니다. <code>#&lt;이름&gt;</code>이 해석하는 대상이 바로 이 제목이므로, 이름을 바꾸는 것은 그 대화를 다른 대화에서 인용할 만하게 만드는 일이기도 합니다.</td><td>브라우저, 데스크톱 창</td></tr>
+<tr><td class="nw">이름 변경</td><td>자동 생성된 id 대신 내가 지은 제목을 붙입니다. <code>#&lt;이름&gt;</code>이 해석하는 대상이 바로 이 제목이므로, 이름을 바꾸는 것은 그 대화를 다른 대화에서 인용할 만하게 만드는 일이기도 합니다.</td><td>양쪽 클라이언트 (<code>/rename</code>)</td></tr>
 <tr><td class="nw">순서 변경</td><td>카드를 드래그해서 위아래로 옮깁니다. 순서는 데몬에 저장되므로 모든 클라이언트에서, 재시작 후에도 같은 순서입니다.</td><td>브라우저, 데스크톱 창</td></tr>
 <tr><td class="nw">보관 (archive)</td><td>조용해진 대화를 목록에서 내립니다. 이벤트 로그를 포함해 갖고 있던 것은 전부 유지합니다.</td><td>양쪽 클라이언트 (<code>/archive</code>)</td></tr>
 <tr><td class="nw">복원 (retrieve)</td><td>한 번 눌러 되돌립니다. 번호가 아니라 순위를 복원하며, 어느 쪽인지 알려줍니다.</td><td>양쪽 클라이언트 (<code>/retrieve</code>)</td></tr>
-<tr><td class="nw">fork</td><td>대화를 복사합니다. 같은 지점에서 다른 접근을 시도해 볼 수 있습니다.</td><td>브라우저, 데스크톱 창</td></tr>
+<tr><td class="nw">fork</td><td>대화를 복사합니다. 같은 지점에서 다른 접근을 시도해 볼 수 있습니다.</td><td>양쪽 클라이언트 (<code>/fork</code>)</td></tr>
+<tr><td class="nw">내보내기 (export)</td><td>대화를 로그에서 Markdown 파일로 만듭니다. 보관된 대화도 열린 대화와 똑같이 내보낼 수 있습니다. 화면에 찍는 게 아니라 파일에 쓰고, 권한은 <code>0600</code>입니다. 4000자를 넘는 도구 출력은 자르고 자른 자리를 파일에 밝힙니다.</td><td>양쪽 클라이언트 (<code>/export</code>)</td></tr>
 </tbody>
 </table></div>
 
@@ -521,6 +527,8 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <p class="kicker">workspace 경계</p>
 
 <p>세션 자신의 workspace를 벗어나는 경로는 그 자체로 별개의 질문이며, 도구를 써도 되는지와 다릅니다. "이 에이전트가 파일을 읽어도 된다"에 예라고 답한 것이 "<code>~/.ssh</code>를 읽어도 된다"에 답한 것은 아닙니다.</p>
+
+<p>경로 말고 목적지를 묶는 경계가 하나 더 있습니다. <code>network.egress</code>는 localcode 자신이 여는 연결을 묶습니다. 모델 provider, 원격 MCP 서버, 업데이트 확인이 대상입니다. 목록에는 호스트 이름과 <code>*.base</code> 형식을 적고, loopback은 항상 허용이라 적을 필요가 없습니다. 켜 달라고 하기 전에는 동작하지 않으므로 목록을 먼저 적어두고 시험해 본 뒤 믿고 쓸 수 있습니다. 셸 명령과 서브프로세스 MCP 서버는 소켓이 따로인 별개 프로세스라 이 바깥에 있고, 설정도 그렇게 밝히고 있습니다.</p>
 
 <figure>
 <img src="img/webui-outside.png" alt="권한 대화상자. 두 개의 건너뛰기 스위치 아래에 'Outside this project' 섹션이 있고, 프로젝트 디렉터리 밖으로 나가는 경로란 절대 경로, 점 두 개, 또는 밖으로 나가는 심볼릭 링크임을 설명한다. 밖에서의 읽기와 쓰기를 각각 묻지 않고 허용하는 체크박스가 따로 있고, 셸 명령은 경로가 아니라는 안내가 붙어 있다.">
@@ -555,8 +563,13 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <thead><tr><th>영역</th><th>다른 점</th></tr></thead>
 <tbody>
 <tr><td class="nw">검색 결과</td><td>200개 상한, 1MB를 넘는 줄, 읽지 못한 파일을 각각 출력에 명시합니다. 개수가 아니라 경로를, 최대 세 개까지. Smart Agent가 켜져 있으면 한 파일이 grep 결과 200개 중 30개를 넘게 차지할 수 없습니다.</td></tr>
-<tr><td class="nw">라이프사이클 훅</td><td>도구 훅 외에 <code>pre_model</code>(요청 차단, 또는 모델이 찾을 수 없는 사실 주입), <code>post_model</code>, <code>delegate</code>(서브 에이전트 거절. 프롬프트로는 못 하는 일), <code>compact</code>, <code>retry</code>.</td></tr>
-<tr><td class="nw">세션별 workspace</td><td>데몬 하나에서 두 프로젝트의 두 세션. 자기 세션의 턴만 자기 전환을 막습니다.</td></tr>
+<tr><td class="nw">라이프사이클 훅</td><td>도구 훅 외에 <code>pre_model</code>(요청 차단, 또는 모델이 찾을 수 없는 사실 주입), <code>post_model</code>, <code>delegate</code>(서브 에이전트 거절. 프롬프트로는 못 하는 일), <code>compact</code>, <code>retry</code>. 훅마다 <code>"timeout"</code>을 초 단위로 둘 수 있고(기본 30초), <code>"fail_closed": true</code>는 훅이 끝나지 못했을 때 — 제한을 넘겨 죽었거나 시작조차 못 했을 때 — 동작을 막습니다. 기본은 꺼짐입니다. 돌지 못하는 훅이 모든 것을 막으면 자기 도구를 쓰다가 잠기는 쪽이 더 흔한 사고이기 때문입니다. 실행은 됐는데 0이 아닌 값으로 끝난 훅은 결정을 내린 것이므로 fail_closed의 대상이 아닙니다.</td></tr>
+<tr><td class="nw">세션별 workspace</td><td>데몬 하나에서 두 프로젝트의 두 세션. 자기 세션의 턴만 자기 전환을 막습니다. <code>/workspace</code>가 디렉터리를 보여주고 옮깁니다. 옮기기는 <code>/clear</code>·<code>/rewind</code>와 마찬가지로 턴이 돌고 있지 않을 때만 일어나고, 다른 클라이언트의 버튼도 <code>workspace.changed</code> 이벤트로 따라 움직입니다.</td></tr>
+<tr><td class="nw">리뷰</td><td><code>/review</code>가 바뀐 부분을 읽고 무엇이 문제인지 말합니다. 기본은 커밋되지 않은 diff, 또는 staged·head·리비전·범위·경로 지정. 고치는 일은 없습니다. 같은 이름의 커스텀 명령이 있으면 그쪽이 이깁니다. 내장 명령이 생기기 전부터 사람들의 <code>.localcode/commands</code>에 그 이름이 있었기 때문입니다.</td></tr>
+<tr><td class="nw">상태와 디버그</td><td><code>/status</code>가 붙어 있는 것들을 보고합니다. 모든 MCP 서버의 연결·고장 여부와 마지막 오류, 그리고 스킬·커스텀 명령·에이전트·workspace입니다. <code>/debug</code>는 버전·플랫폼·세션·에이전트·모델·effort·workspace·설정을 버그 보고에 붙여 넣기 좋게 한 덩어리로 찍습니다. 둘 다 데몬이 답하므로 양쪽 클라이언트가 같은 답을 읽습니다.</td></tr>
+<tr><td class="nw">MCP 서버</td><td><code>/mcps</code>가 모든 서버를, 연결 상태와 이 대화의 사용 여부와 함께 보여줍니다. <code>/mcps off &lt;서버&gt;</code>는 그 서버의 도구를 여기서 나가는 다음 요청에서 뺍니다. 서버는 연결된 채로 둡니다. 다른 대화가 쓰고 있을 수 있고, 다시 연결하는 쪽이 비싼 작업이기 때문입니다.</td></tr>
+<tr><td class="nw">사용량</td><td><code>/usage</code>는 이 대화의 사용량을 답합니다. <code>/usage all|today|week|month</code>는 묻는 시점에 로그를 읽어 모든 대화를 셉니다. 보관된 대화까지 포함합니다. 나중에 되돌린 턴도 비용이 들었던 건 사실이므로 그대로 셉니다.</td></tr>
+<tr><td class="nw">샘플링</td><td><code>temperature</code>, <code>top_p</code>, <code>top_k</code>는 프로파일에 있습니다. muse의 vLLM 레시피가 temperature 1.0과 함께 셋을 함께 지정하기 때문입니다. <code>top_k</code>는 OpenAI 호환 엔드포인트에서는 vLLM 확장이라 설정했을 때만 보내고, Bedrock에서는 <code>additionalModelRequestFields</code>로 갑니다. 둘 다 Claude 모델이 추론 중일 때는 빠지고, 범위를 벗어난 값은 턴 중간이 아니라 로드 시점에 거절됩니다.</td></tr>
 <tr><td class="nw">Effort</td><td><code>off</code>, <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code>를 프로파일별로, 또는 대화별로 그리고 그 안에서 모델별로. 해당 모델이 구분하는 레벨만 제시합니다. 설정하지 않으면 아무것도 보내지 않으므로, 손대지 않은 환경의 요청은 바이트까지 그대로입니다.</td></tr>
 <tr><td class="nw">진행 중 지시</td><td>턴이 도는 동안 입력한 메시지가 모델의 다음 도구 호출 지점에서 그 턴에 전달됩니다. 입력한 순서대로입니다.</td></tr>
 <tr><td class="nw">거의 맞는 도구 이름</td><td>장식이 붙었지만 그 에이전트가 실제로 가진 도구 하나를 명확히 가리키는 이름은 실행하고 어느 철자가 맞았는지 알려줍니다. 해석은 그 에이전트에게 제공된 도구 안에서만 이루어지므로, 오타가 <code>tools</code> 제한을 넘어설 수 없습니다.</td></tr>
@@ -585,15 +598,15 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <h2 id="qualifications">전제와 한계</h2>
 
 <ul>
-<li><strong>비교 표의 오른쪽 열은 일반적 기준선</strong>입니다. 2026-09-01 기준이며, localcode 열을 v0.105.1에 맞춰 재검증할 때 이 열은 다시 조사하지 않았습니다. 널리 쓰이는 코딩 에이전트들의 공통 모습을 서술한 것이지, 특정 제품에 대한 기능 감사가 아닙니다. 이 도구들은 자주 출시되므로, 없다고 적힌 기능이 이 글을 읽는 시점에는 있을 수 있습니다.</li>
+<li><strong>비교 표의 오른쪽 열은 일반적 기준선</strong>입니다. 2026-09-01 기준이며, localcode 열을 v0.121.0에 맞춰 재검증할 때 이 열은 다시 조사하지 않았습니다. 널리 쓰이는 코딩 에이전트들의 공통 모습을 서술한 것이지, 특정 제품에 대한 기능 감사가 아닙니다. 이 도구들은 자주 출시되므로, 없다고 적힌 기능이 이 글을 읽는 시점에는 있을 수 있습니다.</li>
 <li><strong>2부가 전부 유일한 것은 아닙니다.</strong> 하나의 라이브 세션을 여러 화면이 공유하는 것과, 내가 보낸 턴 사이를 이동하는 것은 드뭅니다. 이름 변경·순서 변경·fork는 여러 도구가 어떤 형태로든 갖고 있는 편의 기능이며, 이 문서가 <em>localcode를 쓰는 경험</em>에 대한 것이기도 해서 실었습니다.</li>
-<li><strong>localcode에 대한 모든 서술은 v0.105.1에 실제로 들어 있는 동작</strong>입니다. <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a>에 문서화되어 있고 저장소의 테스트 게이트가 검증합니다.</li>
+<li><strong>localcode에 대한 모든 서술은 v0.121.0에 실제로 들어 있는 동작</strong>입니다. <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a>에 문서화되어 있고 저장소의 테스트 게이트가 검증합니다.</li>
 <li><strong>벤치마크 수치는 25개 인스턴스 한 번의 실행</strong>이고 에이전트 간 격차는 실행 간 편차 안에 있습니다. 그 실행이 무엇을 뒷받침하고 무엇을 뒷받침하지 않는지는 <a href="coding-agent-benchmark.html">벤치마크 문서</a>를 보십시오.</li>
 <li><strong>한 기능은 제품에서 실험적</strong>이라고 표시되어 있습니다. 네이티브 데스크톱 창입니다. 거친 부분은 v0.84.0의 Windows 자체 업데이트가 하나 더 있었습니다. 새 버전을 적용은 하지만 localcode를 재시작하지는 못했습니다. v0.87.0부터는 다른 플랫폼처럼 데몬을 새 버전에 넘겨주고, v0.88.0부터는 시작 시에도 그렇게 합니다.</li>
 </ul>
 
 <footer>
-localcode 0.105.1 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
+localcode 0.121.0 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
 </footer>
 
 </div>

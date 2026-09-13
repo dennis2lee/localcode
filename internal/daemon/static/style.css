@@ -786,6 +786,21 @@ aside h2 {
 #task-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 8px; }
 #task-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
 #task-modal .danger-btn { background: transparent; color: var(--err); border-color: var(--err); }
+/* The session filter: one line above the list, full width, in the same
+   voice as the dialog fields — a box that is clearly for typing into,
+   not another row. */
+#session-filter {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--r-ctl);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: var(--t-ui);
+  margin-bottom: 8px;
+}
 .session-item {
   position: relative;
   border: 1px solid var(--border);
@@ -898,6 +913,10 @@ aside h2 {
   margin-bottom: 6px;
   font-family: var(--f-mono);
 }
+/* The reconnect control sits under the server rows it acts on, full width
+   like the delete-all line under the session list: a panel-wide action,
+   which is what keeps it from reading as a per-row retry. */
+#mcp-reset-btn { width: 100%; margin-top: 2px; }
 /* The composer is under the column it writes into and as wide as it.
    What you type becomes the first thing in the transcript, so the two
    share two verticals: the box begins where the text begins, and Send

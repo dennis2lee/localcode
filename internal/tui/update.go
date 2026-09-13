@@ -672,15 +672,17 @@ func (m Model) handleLandingSessions(msg landingSessionsMsg) (tea.Model, tea.Cmd
 			return m, m.openSession(s.ID)
 		}
 	}
-	// Nothing left. Refusing would strand the reader: the TUI has no
-	// "/new", and the pre-TUI picker is behind a restart.
+	// Nothing left. Refusing would strand the reader with no conversation
+	// open. "/new" starts one from here, and the pre-TUI picker is
+	// behind a restart.
 	m.appendLocal("That was the only conversation, so a new one is starting.")
 	return m, m.createAndOpenSession()
 }
 
-// createAndOpenSession starts a conversation and opens it. The TUI's first
-// use of CreateSession: until now it only ever opened one the picker in
-// cmd/localcode had already made.
+// createAndOpenSession starts a conversation and opens it. Two callers:
+// "/new", and the fallback above that opens a fresh conversation when
+// the last one is archived. Before "/new" the TUI only ever opened one
+// the picker in cmd/localcode had already made.
 //
 // Two steps rather than one, because opening is what attaches the event
 // stream and that is openSession's job. The created id comes back as its
