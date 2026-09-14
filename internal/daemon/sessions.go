@@ -697,6 +697,12 @@ func (d *Daemon) handleSwitchAgent(w http.ResponseWriter, r *http.Request) {
 	// left, which on a family with one switch is a dial that does
 	// nothing.
 	d.announceEffort(id)
+	// The model this conversation answers on is kept per agent too, and
+	// the status lines name it next to the agent — so the new agent's
+	// view is announced from the same place, for the same reason. The
+	// view carries which agent it belongs to, which is what lets each
+	// client tell a stale cached choice from the one in force.
+	d.Loop.AnnounceModel(id)
 
 	writeJSON(w, http.StatusOK, sess)
 }

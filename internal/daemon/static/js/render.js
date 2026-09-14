@@ -119,7 +119,14 @@ export function renderStatusBar() {
   // reported, then what config says the agent resolves to — the middle
   // one matters because the two can differ when a profile is overridden
   // server-side.
-  const model = session.chosenModel
+  //
+  // The choice is only read while it still belongs to the current agent:
+  // the server keeps one per agent, so a cached choice outlives the
+  // switch that made it stale. Without the comparison the line goes on
+  // naming the agent just left until something happens to clear it.
+  const choiceFresh = session.chosenModel
+    && (!session.chosenModelAgent || session.chosenModelAgent === session.currentAgent);
+  const model = (choiceFresh && session.chosenModel)
     || (session.lastUsage && session.lastUsage.model)
     || modelForAgent(session.currentAgent);
   if (model) parts.push(`model: ${model}`);

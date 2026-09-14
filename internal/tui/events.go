@@ -283,6 +283,13 @@ func (m *Model) applyEvent(ev events.Event) {
 		if name, ok := ev.Data["agent"].(string); ok {
 			m.currentAgent = name
 		}
+		// The conversation's own model choice is kept per agent on the
+		// server, so the cached view belonged to the agent just left.
+		// Dropped outright: the daemon announces the new agent's view
+		// right after this event, which refills it when that agent has
+		// its own — and until then the footer falls back to the new
+		// agent's profile, which is what the next turn will run on.
+		m.model = client.ModelView{}
 	case events.TypeModelChanged:
 		// The whole answer is in the event, so the footer follows a model
 		// chosen in another client without a request of its own.

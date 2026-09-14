@@ -273,6 +273,12 @@ const handlers = {
     // counts and context percentage belong to the conversation, which the
     // switch doesn't reset. The next turn's usage event refills it.
     if (session.lastUsage) session.lastUsage = { ...session.lastUsage, model: '' };
+    // The conversation's own choice is kept per agent on the server, so
+    // the cached one belonged to the agent just left. Dropped with the
+    // usage model above: the daemon announces the new agent's view right
+    // after this event, which refills it when that agent has its own.
+    session.chosenModel = '';
+    session.chosenModelAgent = '';
   },
   // Merged, not replaced: the live tokens-per-second estimate broadcast
   // during a generation carries only the rate, and overwriting would blank
@@ -308,6 +314,9 @@ const handlers = {
     // status bar goes back to reading it from the agent, which is where
     // it will stay correct when the agent is switched.
     session.chosenModel = d.source === 'conversation' ? (d.model || '') : '';
+    // The agent the choice belongs to, so the status bar can tell a
+    // cached choice from the one in force after a switch.
+    session.chosenModelAgent = d.source === 'conversation' ? (d.agent || '') : '';
     renderStatusBar();
   },
   // A conversation moved to another directory, here or in the terminal.

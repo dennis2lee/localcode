@@ -26,7 +26,12 @@ func (m Model) currentModel() (string, bool) {
 	// otherwise — and the distinction is the point: a footer naming the
 	// agent's model while the requests go somewhere else is the readout
 	// that made the choice invisible.
-	if m.model.Source == "conversation" && m.model.Model != "" {
+	//
+	// Only while the choice still belongs to the current agent. The
+	// server keeps one choice per agent, so a cached choice outlives the
+	// switch that made it stale — and the view says which agent it was
+	// made for, so there is no reason to trust it blind.
+	if m.model.Source == "conversation" && m.model.Model != "" && m.model.Agent == m.currentAgent {
 		return m.model.Model, true
 	}
 	for _, a := range m.agents {
