@@ -433,15 +433,29 @@ func TestDeleteAllRemovesChildrenAndStopsTheirWork(t *testing.T) {
 // two is a few instructions wide and no amount of retrying would land in
 // it reliably.
 func TestDeleteAllRaisesItsBarrierBeforeCheckingWhatIsBusy(t *testing.T) {
+	// The model holds the turn open until this test lets it finish.
+	//
+	// It used to answer immediately, and that made the last assertion a
+	// race rather than a check: after the admitted message registers its
+	// turn, delete-all re-evaluates its busy check, and a turn that has
+	// already finished by then is correctly not busy. On this machine the
+	// re-check won and the test passed; on a slower runner the turn won
+	// and delete-all answered 204, which is the right answer to a question
+	// the test did not mean to ask. Holding the turn open makes the window
+	// the test is about exist for as long as the test needs it.
+	finish := make(chan struct{})
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		<-finish
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 		w.(http.Flusher).Flush()
 	}))
 	defer model.Close()
+	defer close(finish)
 
 	d := newTestDaemon(t, model.URL)
 	httpSrv := httptest.NewServer(d.Handler())
@@ -576,7 +590,8 @@ func TestDeleteAllWaitsForAMessageThatHasNotRegisteredItsTurnYet(t *testing.T) {
 	if code := <-sent; code != http.StatusAccepted {
 		t.Fatalf("POST message = %d, want 202", code)
 	}
-	// The turn committed, so the busy check has to see it and refuse.
+	// The turn committed and is still running, because the model above is
+	// holding it, so the busy check has to see it and refuse.
 	if code := <-deleted; code != http.StatusConflict {
 		t.Errorf("delete all = %d, want 409 for the turn that started", code)
 	}
