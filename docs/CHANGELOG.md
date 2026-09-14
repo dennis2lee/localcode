@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.124.0
+
+**New**
+
+* A skill file can be run by pointing at it, without installing it. `/skill <path>` reads that file, parses it as a skill and runs it exactly as a registered one runs — same model text, same frame — and registers nothing: the next turn does not have it, `/skill` does not list it, and completion does not offer it. Until now a skill had to live at `<root>/skills/<name>/SKILL.md` to exist at all, so a file somebody already had could only be run by copying it into place and reloading. A registered name wins over a file of the same spelling, `~` expands, a relative path resolves against the conversation's workspace, and the file does not have to be called `SKILL.md`. A bare word is still a name: the path shape is the one the unknown-command route already uses, so `./scratch.md` is a file and `scratch` is a skill that does not exist.
+* The boundary is the point of it. A skill body is instructions the model then follows, so a file outside the workspace goes through the same outside-read boundary `read_file` uses, rather than a second one written for the occasion — the `read_outside` switch, the broker's question, the remembered directories and the unattended refusal all apply unchanged. The question names the file and says its contents will be given to the model as instructions, because the consequence is not the same as reading a file into a tool result. A turn with nobody watching is refused rather than silently allowed, and without a registry to ask through nothing runs at all: a gate a differently-assembled loop can step around is not a gate.
+
+**Fixed**
+
+* A symlinked skill directory was skipped in silence. `DirEntry.IsDir` does not follow symlinks, so `ln -s ~/skills/thing .localcode/skills/thing` produced a skill that was never loaded and never complained about. A symlink is followed now; one pointing nowhere, or at a file, is skipped the way a malformed skill already is rather than failing startup.
+
 ## v0.123.0
 
 Five defects in how a conversation's permissions are decided, found by taking one user report seriously enough to keep tracing after the first answer came back "no such thing".
