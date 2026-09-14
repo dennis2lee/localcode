@@ -482,6 +482,12 @@ func (b *PermissionBroker) hydrate(sessionID string) {
 			if !allow || !ok {
 				continue
 			}
+			// A mirrored copy of another session's question is a record
+			// that it was shown here, not that this session granted
+			// anything: the answer belongs to the task that asked.
+			if task := dataString(req, "task_session"); task != "" && task != sessionID {
+				continue
+			}
 			switch dataString(ev.Data, "scope") {
 			case ScopeSession, ScopeAlways:
 				// ScopeAlways also wrote a rule to config.json, which the
