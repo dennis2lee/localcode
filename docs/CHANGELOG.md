@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.122.0
+
+Eighteen items delegated across six isolated worktrees, plus the API written down and the terminal rendering markdown.
+
+**New**
+
+* The HTTP API has a reference, `docs/API.md`. Fifty-nine routes were registered and none documented, so the only way to learn the surface was to read `daemon.go`. The two things a reader most needs are at the top rather than in a footnote: there is no auth token, so anyone who can reach the `--listen` address has the whole API including shell execution, and there is no stated stability. The SSE event types are in it too, because what a client receives is as much the API as what it can call. A guard walks the registered routes and fails when one is undocumented.
+* The terminal renders markdown. The browser has had a dependency-free renderer for releases and the TUI showed the same text raw. Headings, emphasis, code, lists, blockquotes, links and rules, written in Go rather than by adding this project's first markdown dependency — glamour would have brought goldmark, chroma, reflow and termenv into a module that cross-compiles to two more platforms and links a CGo GUI. Where the two renderers differ is written down: the terminal nests lists and the browser does not, the browser renders tables and the terminal passes them through.
+* Elapsed time on the running tool, a bar beside the context percentage, search over the prompt history on **Ctrl+R**, and delete from the in-program session picker on **Ctrl+D** with a confirm.
+* The Web UI filters the session list by title and by full workspace path, and has a reconnect button for MCP servers.
+
+**Fixed**
+
+* `/compact` can no longer be injected into a running turn. It rewrites what the model is holding, which is why the other three commands of that kind are held until idle, and it was not on the list — so a `/compact` from a second client, or from one that attached mid-turn, reached the model as chat text.
+* Three claims in USAGE that the code does otherwise: session permission grants survive a daemon restart, the 200-entry recall cap is the Web UI's and the terminal has none, and the alias count was six when there are seven.
+* The README described changing model as switching agent, which stopped being true in v0.117.0. Two stale comments with it: Bedrock does take an effort level, and the TUI does have `/new`.
+* Both comparison pages were stamped v0.105.1 against a build on v0.121.0. Restamped in English and Korean, with a guard so the header stamp cannot fall behind the newest release again.
+
+**Coverage**
+
+* Windows CI vets every package, and `cmd/localcode` runs all 75 of its tests there rather than 18 behind a hand-written filter — the shape that hides new tests by default. Its dead `SwapHandler` alternative went with it; it matched none of them.
+* The `gui` check runs under `-race`, and the folder picker's cancellation has seven automatic tests instead of one that needed a real window.
+
 ## v0.121.0
 
 Three defects that only Windows could see, and the CI that made it possible to see them.
