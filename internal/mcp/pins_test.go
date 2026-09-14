@@ -43,20 +43,25 @@ func TestFingerprintIsOrderBlindAndDescriptionSensitive(t *testing.T) {
 func TestCheckPinRecordsThenDetectsChange(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp-pins.json")
 
-	changed, err := checkPin(path, "srv", "aaa")
+	changed, _, err := checkPin(path, "srv", "aaa", "1.0")
 	if err != nil || changed {
 		t.Fatalf("first sight = (changed=%v, err=%v), want silent recording", changed, err)
 	}
-	changed, err = checkPin(path, "srv", "aaa")
+	changed, _, err = checkPin(path, "srv", "aaa", "1.0")
 	if err != nil || changed {
 		t.Fatalf("unchanged surface = (changed=%v, err=%v), want nothing", changed, err)
 	}
-	changed, err = checkPin(path, "srv", "bbb")
+	// The version moves with the surface here, so this is an upgrade, not
+	// stillness: reported, but not as an unchanged version.
+	changed, versionUnchanged, err := checkPin(path, "srv", "bbb", "2.0")
 	if err != nil || !changed {
 		t.Fatalf("moved surface = (changed=%v, err=%v), want it reported", changed, err)
 	}
+	if versionUnchanged {
+		t.Error("a surface that moved alongside its version was reported as an unchanged version")
+	}
 	// Warn once: the new surface is now the pin.
-	changed, err = checkPin(path, "srv", "bbb")
+	changed, _, err = checkPin(path, "srv", "bbb", "2.0")
 	if err != nil || changed {
 		t.Fatalf("the updated pin was reported again = (changed=%v, err=%v)", changed, err)
 	}
@@ -70,8 +75,103 @@ func TestCheckPinRecordsThenDetectsChange(t *testing.T) {
 		t.Fatalf("pin file is not JSON: %v", uerr)
 	}
 	e := data.Servers["srv"]
-	if e.Fingerprint != "bbb" || e.FirstSeen == "" || e.LastChanged == "" {
-		t.Errorf("pin entry = %+v, want the new fingerprint with both timestamps", e)
+	if e.Fingerprint != "bbb" || e.Version != "2.0" || e.FirstSeen == "" || e.LastChanged == "" {
+		t.Errorf("pin entry = %+v, want the new fingerprint and version with both timestamps", e)
+	}
+}
+
+// The signal the fingerprint alone cannot give: a surface that moves
+// while the declared version does not is named as such, so the caller
+// can tell an upgrade apart from something that changed under a version
+// that claims nothing changed.
+func TestASurfaceThatMovesUnderAnUnchangedVersionIsNamed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp-pins.json")
+
+	if changed, _, err := checkPin(path, "srv", "aaa", "1.0"); err != nil || changed {
+		t.Fatalf("first sight = (changed=%v, err=%v), want silent recording", changed, err)
+	}
+	changed, versionUnchanged, err := checkPin(path, "srv", "bbb", "1.0")
+	if err != nil || !changed {
+		t.Fatalf("moved surface = (changed=%v, err=%v), want it reported", changed, err)
+	}
+	if !versionUnchanged {
+		t.Error("a surface that moved under an unchanged version was not named as such")
+	}
+	// Warn once: the new surface is now the pin, under the same version.
+	changed, _, err = checkPin(path, "srv", "bbb", "1.0")
+	if err != nil || changed {
+		t.Fatalf("the updated pin was reported again = (changed=%v, err=%v)", changed, err)
+	}
+}
+
+// No pin file in the wild has the version field, so the first version
+// ever seen for a server is migration, not evidence: it is recorded
+// silently and must never read as a version that stayed put — somebody
+// upgrading localcode must not get a warning about every server they
+// already have.
+func TestAFirstSeenVersionIsMigrationNotStillness(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp-pins.json")
+	if err := os.WriteFile(path, []byte(`{"servers":{"srv":{"fingerprint":"aaa","first_seen":"2026-01-01T00:00:00Z"}}}`), 0o600); err != nil {
+		t.Fatalf("write pins: %v", err)
+	}
+
+	changed, versionUnchanged, err := checkPin(path, "srv", "bbb", "1.0")
+	if err != nil || !changed {
+		t.Fatalf("moved surface = (changed=%v, err=%v), want it reported", changed, err)
+	}
+	if versionUnchanged {
+		t.Error("a version recorded for the first time was reported as a version that did not change")
+	}
+
+	raw, rerr := os.ReadFile(path)
+	if rerr != nil {
+		t.Fatalf("read pins: %v", rerr)
+	}
+	var data pinFileData
+	if uerr := json.Unmarshal(raw, &data); uerr != nil {
+		t.Fatalf("pin file is not JSON: %v", uerr)
+	}
+	if got := data.Servers["srv"].Version; got != "1.0" {
+		t.Errorf("migrated pin version = %q, want the newly seen version recorded", got)
+	}
+}
+
+// A version that moves on its own, with the surface untouched, is an
+// upgrade (or a server that stopped declaring), not a steering change:
+// recorded so the pin stops lying, but never warned about — and the
+// fingerprint's LastChanged must not move, since the surface did not.
+func TestAVersionThatMovesAloneIsRecordedWithoutWarning(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp-pins.json")
+
+	if changed, _, err := checkPin(path, "srv", "aaa", "1.0"); err != nil || changed {
+		t.Fatalf("first sight = (changed=%v, err=%v), want silent recording", changed, err)
+	}
+	changed, versionUnchanged, err := checkPin(path, "srv", "aaa", "2.0")
+	if err != nil || changed || versionUnchanged {
+		t.Fatalf("version-only move = (changed=%v, versionUnchanged=%v, err=%v), want silence", changed, versionUnchanged, err)
+	}
+
+	raw, rerr := os.ReadFile(path)
+	if rerr != nil {
+		t.Fatalf("read pins: %v", rerr)
+	}
+	var data pinFileData
+	if uerr := json.Unmarshal(raw, &data); uerr != nil {
+		t.Fatalf("pin file is not JSON: %v", uerr)
+	}
+	e := data.Servers["srv"]
+	if e.Version != "2.0" {
+		t.Errorf("pin version = %q, want the newly declared version recorded", e.Version)
+	}
+	if e.LastChanged != "" {
+		t.Errorf("pin LastChanged = %q, want it untouched when only the version moved", e.LastChanged)
+	}
+
+	// Nothing left to write: the same state again must take the
+	// unchanged early return rather than rewriting the file.
+	changed, _, err = checkPin(path, "srv", "aaa", "2.0")
+	if err != nil || changed {
+		t.Fatalf("settled state = (changed=%v, err=%v), want nothing", changed, err)
 	}
 }
 
@@ -83,7 +183,7 @@ func TestACorruptPinFileStartsTrustOver(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	changed, err := checkPin(path, "srv", "aaa")
+	changed, _, err := checkPin(path, "srv", "aaa", "1.0")
 	if err != nil || changed {
 		t.Fatalf("corrupt file = (changed=%v, err=%v), want a fresh first sight", changed, err)
 	}
@@ -125,6 +225,94 @@ func TestAChangedServerSurfaceIsWarnedAboutAtConnect(t *testing.T) {
 	m3.Close()
 	if len(warnings3) != 0 {
 		t.Errorf("the warning repeated after the pin was updated: %v", warnings3)
+	}
+
+	// The pin the connects above settled on must carry what the server
+	// declares itself to be: the echoserver fixture answers 0.0.1, and a
+	// pin without it means the version was never read off the session.
+	raw, rerr := os.ReadFile(pins)
+	if rerr != nil {
+		t.Fatalf("read pins: %v", rerr)
+	}
+	var data pinFileData
+	if uerr := json.Unmarshal(raw, &data); uerr != nil {
+		t.Fatalf("pin file is not JSON: %v", uerr)
+	}
+	if got := data.Servers["echo"].Version; got != "0.0.1" {
+		t.Errorf("pinned version = %q, want the version the server declares", got)
+	}
+}
+
+// The wiring for the case the fingerprint alone cannot name: a surface
+// that moves while the declared version does not warns with a sentence
+// saying so, while a surface that moves alongside a version upgrade gets
+// the ordinary warning without it. Same three-connect shape as above —
+// silent, warned, silent — driven against the real stdio subprocess.
+func TestASurfaceThatMovesUnderItsDeclaredVersionSaysSoAtConnect(t *testing.T) {
+	bin := buildEchoServer(t)
+	pins := filepath.Join(t.TempDir(), "mcp-pins.json")
+	servers := map[string]config.MCPServerConfig{"echo": {Command: bin}}
+
+	// First run: trust on first use, no warning. The fixture declares
+	// 0.0.1, which this connect pins.
+	m, _, warnings := Connect(context.Background(), servers, pins, nil)
+	m.Close()
+	if len(warnings) != 0 {
+		t.Fatalf("first connect warned: %v", warnings)
+	}
+
+	// The surface moved but the declared version did not: the warning
+	// must say so, naming the version that stayed put.
+	if err := os.WriteFile(pins, []byte(`{"servers":{"echo":{"fingerprint":"not-what-it-says-now","version":"0.0.1","first_seen":"2026-01-01T00:00:00Z"}}}`), 0o600); err != nil {
+		t.Fatalf("write pins: %v", err)
+	}
+
+	m2, _, warnings2 := Connect(context.Background(), servers, pins, nil)
+	m2.Close()
+	found := false
+	for _, w := range warnings2 {
+		msg := w.Error()
+		if strings.Contains(msg, `"echo"`) && strings.Contains(msg, "changed since the last run") &&
+			strings.Contains(msg, "declared version") && strings.Contains(msg, "0.0.1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a surface moved under an unchanged version with no such warning: %v", warnings2)
+	}
+
+	m3, _, warnings3 := Connect(context.Background(), servers, pins, nil)
+	m3.Close()
+	if len(warnings3) != 0 {
+		t.Errorf("the warning repeated after the pin was updated: %v", warnings3)
+	}
+
+	// The surface moved alongside an upgrade instead: the ordinary
+	// changed-surface warning, with no claim about an unchanged version.
+	if err := os.WriteFile(pins, []byte(`{"servers":{"echo":{"fingerprint":"not-what-it-says-now","version":"9.9.9","first_seen":"2026-01-01T00:00:00Z"}}}`), 0o600); err != nil {
+		t.Fatalf("write pins: %v", err)
+	}
+
+	m4, _, warnings4 := Connect(context.Background(), servers, pins, nil)
+	m4.Close()
+	found = false
+	for _, w := range warnings4 {
+		msg := w.Error()
+		if strings.Contains(msg, `"echo"`) && strings.Contains(msg, "changed since the last run") {
+			found = true
+			if strings.Contains(msg, "declared version") {
+				t.Errorf("an upgrade-shaped change claimed an unchanged version: %v", msg)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("an upgraded surface produced no warning: %v", warnings4)
+	}
+
+	m5, _, warnings5 := Connect(context.Background(), servers, pins, nil)
+	m5.Close()
+	if len(warnings5) != 0 {
+		t.Errorf("the warning repeated after the pin was updated: %v", warnings5)
 	}
 }
 

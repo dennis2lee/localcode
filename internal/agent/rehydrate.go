@@ -201,8 +201,17 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 					Role: provider.RoleUser,
 					// The same header compactHistory writes, so a restart
 					// rehydrates the summary with its provenance rather
-					// than as bare user text.
-					Content: []provider.Block{provider.TextBlock(summaryHeader + summary)},
+					// than as bare user text. And the same Source tag it
+					// writes, so the label survives the restart: without
+					// this the rebuilt block carries an empty Source, the
+					// manifest folds it into the aggregate conversation
+					// entry, and a summary this build's model wrote reads
+					// as external content from a tool result on every
+					// request after the restart.
+					Content: []provider.Block{{
+						Type: provider.BlockText, Text: summaryHeader + summary,
+						Source: compactSummarySource,
+					}},
 				}}
 				resetPending()
 				inDebate = false

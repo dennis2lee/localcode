@@ -305,6 +305,8 @@ func entryForSource(id, text string, delegated bool) (prompt.Entry, bool) {
 		return injectedEntry(text), true
 	case id == referenceNoticeID:
 		return referenceNoticeEntry(text), true
+	case id == compactSummarySource:
+		return summaryEntry(text), true
 	case strings.HasPrefix(id, "argument."):
 		return argumentEntry(strings.TrimPrefix(id, "argument."), text), true
 	case strings.HasPrefix(id, "file."):
@@ -451,6 +453,43 @@ func skillFrameEntry(name, text string) prompt.Entry {
 	return prompt.RuntimeEntry(
 		"skill.frame."+name, prompt.KindRuntimeReminder, prompt.FromProduct, prompt.TrustSystem,
 		prompt.PlaceMessage, text, "localcode's framing around the "+name+" skill")
+}
+
+// compactSummarySource is the manifest id of the compaction summary as it
+// re-enters the conversation.
+//
+// A summary arrives as one opaque string from the model, so nothing
+// downstream can attribute spans within it: which sentence condenses tool
+// output and which condenses the person's own words is gone by the time
+// the text exists. Saying the whole block is generated is the honest
+// claim available. Without this tag the block carries an empty Source,
+// historyEntries skips it, and the manifest describes it only through the
+// aggregate conversation entry, which is typed as external content from a
+// tool result. That names the wrong author: the text is what this build's
+// own model wrote about earlier text, not what a tool printed.
+//
+// Declared here rather than beside the code that sets it, because this
+// file is where the entry is constructed and the inventory guard resolves
+// a named id only within the file that uses it. An id kept somewhere else
+// is an id the guard cannot see, which is how a previous entry went a
+// whole change without a row.
+const compactSummarySource = "compact.summary"
+
+// summaryEntry describes the compaction summary as what it is: generated
+// text this build produced about earlier text.
+//
+// External content, not instruction. A summary of untrusted content is
+// still untrusted, and generated text may be recalled and reasoned about
+// but never followed as an instruction: a tool result or a fetched page
+// can influence what the model chooses to save, so letting the saved
+// rendering instruct would turn any untrusted content into a standing
+// instruction with one compaction in between. That is the same laundering
+// path TrustGenerated exists to close for auto-memory notes.
+func summaryEntry(text string) prompt.Entry {
+	return prompt.RuntimeEntry(
+		compactSummarySource, prompt.KindExternalContent, prompt.FromGeneratedSummary,
+		prompt.TrustGenerated, prompt.PlaceMessage, text,
+		"the compaction summary this build's own model wrote")
 }
 
 // referenceNoticeID is the manifest id of the notice.

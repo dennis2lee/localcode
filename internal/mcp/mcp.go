@@ -355,11 +355,25 @@ func (m *Manager) add(ctx context.Context, name string, sc config.MCPServerConfi
 	// did not upgrade this server needs to hear that what it tells the
 	// model has moved — and the person who did upgrade it expects to.
 	if m.pinFile != "" {
-		changed, perr := checkPin(m.pinFile, name, fingerprintTools(result.Tools))
+		// The declared version is read here, inside the pin-file guard,
+		// never outside it: a build with no pin file must not pay for a
+		// handshake fact nobody will compare. Both pointers can be nil —
+		// a server that never answered initialize, or answered without
+		// server info — and a missing declaration is recorded as "", not
+		// reported as anything.
+		version := ""
+		if init := session.InitializeResult(); init != nil && init.ServerInfo != nil {
+			version = init.ServerInfo.Version
+		}
+		changed, versionUnchanged, perr := checkPin(m.pinFile, name, fingerprintTools(result.Tools), version)
 		if perr != nil {
 			warnings = append(warnings, fmt.Errorf("mcp server %q: tool pinning: %v — its surface is not being audited this run", name, perr))
 		} else if changed {
-			warnings = append(warnings, fmt.Errorf("mcp server %q: its advertised tools changed since the last run — tool descriptions steer the model, so if you did not update or reconfigure this server, review it (pin updated in %s)", name, m.pinFile))
+			if versionUnchanged {
+				warnings = append(warnings, fmt.Errorf("mcp server %q: its advertised tools changed since the last run but its declared version (%s) did not — tool descriptions steer the model, so if you did not update or reconfigure this server, review it (pin updated in %s)", name, version, m.pinFile))
+			} else {
+				warnings = append(warnings, fmt.Errorf("mcp server %q: its advertised tools changed since the last run — tool descriptions steer the model, so if you did not update or reconfigure this server, review it (pin updated in %s)", name, m.pinFile))
+			}
 		}
 	}
 

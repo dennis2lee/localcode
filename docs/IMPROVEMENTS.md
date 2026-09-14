@@ -214,7 +214,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * `trace_max_total_mb`: optional total-size limit, deleting oldest files first.
     * Today's file is never deleted.
     * Retention uses rotation-generated filenames rather than mtime.
-    * Remaining: compression and enabling tracing independently of Smart Agent.
+    * Remaining: compression, and tracing that writes without Smart Agent. Note what that second half actually is: the writer is already independent — `cmd/localcode/wire.go` opens the trace writer and applies retention unconditionally, because a daemon started with Smart Agent off may have it turned on ten minutes later. What is still gated is the switch that decides what gets written: `Loop.tracer` returns nil unless Smart Agent is on for the turn (`internal/agent/observe.go`), deliberately, since the trace records which models answered and what they cost. Independence means ungating that switch, not building the writer.
 
 27. **Retrying an endpoint before fallback. Done in v0.55.0.**
 
@@ -241,7 +241,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * MCP results identify the external server, including error results.
     * Compaction summaries identify machine-generated content and state that quoted content retains its original authority.
     * Conversation tool results do not reenter the user-message processing path. Embedded references and slash commands therefore do not execute through that path.
-    * Remaining: structural provenance inside compaction summaries.
+    * The provenance machinery is used, not defined-and-unused: `prompt.FromGeneratedSummary` marks live content in three production sites — the carried system prompt and carried unknown-source blocks in a compaction call (`internal/agent/compact.go`), and the recalled memory index (`internal/agent/prompt_assets.go`) — and `internal/prompt/activation.go` flags any asset pairing it with instruction trust, since text a model wrote cannot be an instruction. What is genuinely not there is structural provenance *inside* a compaction summary, and that half is impossible downstream rather than merely undone: the summary arrives from the model as one opaque string and re-enters the conversation as a single text block behind a header that declares it machine-written, so no later layer can attribute spans within it. The header and the prompt's source discipline are the whole mechanism, by necessity rather than by deferral.
     * Trust labels are declarations, not enforcement. They do not guarantee that a model ignores instructions in external content.
     * Permission checks remain the enforcement mechanism.
 
@@ -259,18 +259,18 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Remaining: a known-server registry and declared-version pinning.
     * Fingerprints describe the advertised interface. They cannot detect behavior changes that leave that interface unchanged.
 
-31. **Debate review capabilities. Four planned parts completed in v0.69.0.**
+31. **Debate review capabilities. Four planned parts completed in v0.69.0, each since grown past its bullet.**
 
-    * Reviewers can run the configured `verify_command` without arguments. The model cannot choose the command contents.
-    * Review briefs include `git diff HEAD` in a repository. Other workspaces use an explicitly labelled tool-call list.
-    * Up to three reviewers run independently. All must approve.
-    * Entry points: command, natural-language tool, and debate button.
+    * Reviewers run the configured `verify_command` — and, beyond the bullet, they read too. The reviewer allowlist is the reading tools plus the check plus the verdict (`internal/agent/debate.go`): `read_file`, `glob`, `grep`, `check`. The shell is excluded deliberately, because a reviewer with a shell is a reviewer that can write; `check` is the narrow exception, running one person-written line no model can change or add an argument to.
+    * Review briefs include `git diff HEAD` in a repository — and, beyond the bullet, the brief separates what the author says from what actually changed, so the reviewer checks the second against the first rather than reviewing a summary. Outside a repository the fallback is the watched file-tool list, labelled as what it is rather than passed off as a diff.
+    * Up to three reviewers run independently — and, beyond the bullet, concurrently in child sessions of their own that persist across rounds, unable to see each other, because three models agreeing is worth something only if they arrived there separately. Ending still needs every reviewer that answered to approve, inside the round budget or a measured stall.
+    * Entry points: command (`/debate`), natural-language tool (the Debate tool in `internal/agent/debate_tool.go`, which books the run for when the turn ends), and debate button (the Web UI dialog in `internal/daemon/static/js/debate.js`, which types the same `/debate` through the same guards rather than owning a path of its own).
 
-    | Remaining gap | Constraint |
+    | Prior question, not a task | Settled position |
     |---|---|
-    | One verification command | Tests and linters cannot be selected independently. Named checks would require a constrained selection interface. |
-    | No diff outside Git | The tool-call list misses shell changes. Workspace snapshots would require a tree hash per round. |
-    | Reviewer disagreement | The author resolves conflicting findings within the round budget. No additional model or automatic tie-breaking rule is configured. |
+    | One verification command | Tests and linters cannot be selected independently. Named checks would require a constrained selection interface. Open only if somebody designs that interface. |
+    | No diff outside Git | The tool-call list misses shell changes. Workspace snapshots would require a tree hash per round. Open only with that design. |
+    | Reviewer disagreement | The author resolves conflicting findings within the round budget. No additional model or automatic tie-breaking rule is configured. That is the decision, not a gap awaiting a rule. |
 
 32. **Bedrock reasoning effort. Done in v0.71.0; API compatibility remains unverified in part.**
 
@@ -320,20 +320,21 @@ Completed findings remain in this list to preserve item numbers and release hist
 
     | Missing capability | Constraint |
     |---|---|
-    | Validate edited syntax | Language-independent bracket checks would reject valid strings and comments. A project can use `post_tool_use` for validation, but no validator ships by default and the hook cannot block an edit. |
+    | Validate edited syntax | Language-independent bracket checks would reject valid strings and comments. A project with `verify_command` configured gets the `check` tool on the default path (`internal/tools/check.go`, registered in `cmd/localcode/wire.go` with no Smart Agent gate), so a validator does ship by default for such projects — but it checks the tree on demand, not an edit at write time, and a project without the key gets no tool at all. A `post_tool_use` hook still cannot block an edit. |
     | Reject stale edits | A per-session read register must distinguish external changes from formatter changes made by localcode hooks. Timestamp comparison alone is insufficient. |
 
 36. **Repeatable orchestration. Partial.**
 
     * Implemented: plan, validator, runner, and structured results.
     * Completed follow-up: settings toggle and model instructions describing when to use the tool.
+    * Since shipped but still listed as missing: each stage announces itself running and completed on the task channel (`internal/agent/orchestrate_run.go`), so progress events already fire; every unit's structured answer is recovered from its own child's durable log (`internal/agent/answer_tool.go`) rather than carried in memory, so per-unit results are already durable and reconstructable; stage children run in sessions of their own that no list shows, and deleting the parent takes them with it (`internal/session/session.go`) — the deletion machinery exists, and only the retention policy (when an old child goes) is missing.
 
     | Missing capability | Required design |
     |---|---|
-    | Resume | Durable results keyed by stage, item, and copy. Write-step invalidation rules. An unchanged completed prefix could then be reused. |
-    | Loop | `repeat_until` with mandatory `max_rounds` and a report of the stopping round. |
-    | Pipeline | Per-item state tracking so a slow item does not block every later stage. This also requires phase visibility and a run ledger. |
-    | Child-session retention | A 32-agent run creates 32 stored sessions and 32 `/tasks` rows. No cleanup policy exists. |
+    | Resume | Durable results keyed by stage, item, and copy. Write-step invalidation rules. An unchanged completed prefix could then be reused. Genuinely absent: nothing reuses a previous run today. |
+    | Loop | `repeat_until` with mandatory `max_rounds` and a report of the stopping round. Genuinely absent. |
+    | Pipeline | Per-item state tracking so a slow item does not block every later stage. This also requires phase visibility and a run ledger. Genuinely absent — and a settled exclusion rather than an oversight: stages run in order with every stage a barrier, stated as deliberate with the tradeoff at `internal/agent/orchestrate.go:66-69`. |
+    | Child-session retention | A 32-agent run creates 32 stored sessions and 32 `/tasks` rows. The sessions delete with the parent; what does not exist is a policy for when anything else cleans them up. |
     | Concurrent permission display | The broker represents concurrent requests, but client presentation is unspecified. All four execution slots can wait while the user sees one request. |
 
 37. **Direct selection of Smart Agent specialists. Done in v0.118.0.**
@@ -356,10 +357,10 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Debate's structural refusal was handled by hiding its tool in v0.80.0. Orchestration needs a resolver-aware check instead.
     * Until then, the required flag is documented in USAGE and covered by a test.
 
-39. **Rewind recovery and capture coverage. Partial.**
+39. **Rewind recovery and capture coverage. Mostly done in v0.117.0; the capture set stays narrow by decision.**
 
-    * `/rewind` has no `/redo`.
-    * Restore does not capture the content it overwrites. The reply therefore lists every affected path.
+    * `/redo` shipped in v0.117.0 and exists end to end: `routeRedo` answers it (`internal/agent/redo.go`), the rewind copies each file's about-to-be-overwritten content through `keepPostImage` (`internal/agent/checkpoint.go`) in the one moment it is still on disk, and the copies ride on the rewound marker itself, so there is no second store to disagree with the first. Offered only while the rewind is still the last thing that happened, because putting an undone turn back underneath a conversation that has moved on interleaves two histories.
+    * What is genuinely left is the capture set, and it is narrow on purpose rather than by omission. Only `write_file` and `edit` are captured — a fixed two-name set the registry enforces structurally, matching Claude Code's documented scope. A shell command's writes, a file too large to keep, and anything behind a symlink are never copied either way, and both replies say which paths they could not put back rather than silently skipping them. The rows below are that decision's consequences, not oversights to pick up.
 
     | Capture gap | Effect |
     |---|---|
@@ -567,6 +568,24 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Seventy-four are genuinely open or partial, twelve had already shipped without the record being updated, and nine were notes with no work in them. The stale twelve are corrected in place above.
     * The largest single gap is coverage, not features: there is no Linux or macOS CI job at all, so `vet`, `gofmt`, `-race`, `deadcode`, the doc-link check and the Web UI suite run only on the developer's machine, and 23 packages with tests — `internal/agent`, `internal/tui`, `internal/tools` and `internal/provider` among them — never run on Windows. Item 33 records the decision to defer a second workflow; that decision predates v0.118.0 shipping green with 27 failing Windows tests.
     * `scripts/check-fmt.sh` discarded `gofmt`'s stderr and forced success, so a Go file that would not parse passed the fmt check — the fifth check-that-cannot-fail found in three releases, and in a script whose own comment exists to explain why the naive version cannot fail. Fixed in v0.120.0.
+
+62. **Six records describing shipped work as remaining. Corrected in this pass.**
+
+    * Items 39, 31, 35, 26, 28, and 36 each described work as remaining that the code already did: `/redo` end to end, all four debate parts (each past its bullet), the `check` validator on the default path, the unconditional trace writer with retention, a provenance class used in three production sites, and orchestration's stage events, durable per-unit answers, and child-session deletion. It had already happened that week: somebody was sent to build something that exists.
+    * The cause is structural, not carelessness. Nothing ties an item's status to the code it describes — a record goes stale the moment the work ships, and no check fails when it does. The v0.120.0 sweep found twelve of the same shape for the same reason. A file whose value is being the record cannot rely on being re-read.
+    * What was done about it: each correction above cites the file that proves it, so the next reader can re-verify rather than re-trust; settled exclusions (the two-name capture set, per-item pipelining) are named as decisions with their locations instead of sitting in missing-capability tables where they read as oversights; and prior questions (item 31's table) are labelled as questions so nobody picks one up as a task. What was not done: no status is wired to any test, so this file will go stale again — that wiring is the actual remaining work, recorded here so it is not lost with the rest.
+
+63. **Seven questions that were somebody's to answer, answered: none of them.**
+
+    * A scoping pass over the eight partially-done items separated what the code could settle from what it could not, and the second list came back to the owner. All seven are declined. They are recorded here rather than left out, because a question nobody wrote down is a question the next sweep re-opens — twelve items came back that way in v0.120.0.
+    * **Signing and notarization.** Who holds the Apple Developer ID and the Windows code-signing certificate, and where the private keys live during a release cut from one machine. Declined. The macOS `.app` stays unsigned and the `.msi` unsigned, which is a real cost to somebody installing either, and it is the cost being accepted rather than an oversight. Nothing in the tree references a key, and no build script asks for one.
+    * **A known-server registry for MCP.** What the source of truth for "known" would be. Declined, and it is the one with no buildable answer either way: there is no list, no feed and nothing to fetch, so the choice was between inventing a curation source and not having the feature. Declared-version pinning, the half that needed no such source, shipped instead.
+    * **Language-specific syntax validators.** Whether to ship Go validation through `go/parser`, which would be exact and small here, or stay language-agnostic. Declined. localcode stays agnostic and leans on the project's own `verify_command` and `post_tool_use` hook, which already reach the default path.
+    * **Widening the rewind capture set to MCP filesystem writes.** Declined. The two-name set is a documented structural exclusion, not an omission: a restore that quietly puts back three of the five files a turn changed is worse than one that puts back none, and every reply says which files it could not cover.
+    * **A retention default for orchestration child sessions.** How many to keep. Declined, which leaves the sessions on disk and the deletion machinery unused — the mechanism exists for a policy nobody has chosen, and that is the state, written down.
+    * **Turn-log compression.** Declined, and it was declined once already: `docs/SMART_AGENT_DEFERRED_ITEMS_IMPLEMENTATION_2026_08_26.md` records under its design decisions that "compression is not implemented. The recorded decision favored bounded line-JSON retention over maintaining another file format." The bound it was meant to provide exists. Re-asking a settled question and getting the same answer is worth recording once so it stops being asked.
+    * **Per-item pipelining in Orchestrate.** Declined, and likewise already settled in the code itself: `internal/agent/orchestrate.go:66-69` states the tradeoff and the decision — "pipelining an item through the remaining stages on its own buys wall clock and costs a per-item state machine, and it is deliberately not in this version."
+    * The pattern in the last two is worth naming: both were listed as open work in this file while the decision against them sat in a source comment and a design document. A record that does not know what the code already decided will keep proposing it.
 
 ## UI ideas
 

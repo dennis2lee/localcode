@@ -252,9 +252,17 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	if l.smartOn(ctx) {
 		replaced = droppedCarriedAssets(history)
 	}
+	// The Source tags the block as the compaction summary, so the next
+	// turn's manifest names it as generated text this build's model wrote
+	// rather than folding it into the aggregate conversation entry. A bare
+	// TextBlock carries no Source and is skipped there, which is how the
+	// summary read as external content from a tool result.
 	l.setHistory(sessionID, []provider.Message{{
-		Role:    provider.RoleUser,
-		Content: []provider.Block{provider.TextBlock(summaryHeader + summary + carriedAssetNote(replaced))},
+		Role: provider.RoleUser,
+		Content: []provider.Block{{
+			Type: provider.BlockText, Text: summaryHeader + summary + carriedAssetNote(replaced),
+			Source: compactSummarySource,
+		}},
 	}})
 	l.clearUsage(sessionID)
 	// "summary" (not just its length) and the compaction call's own usage
