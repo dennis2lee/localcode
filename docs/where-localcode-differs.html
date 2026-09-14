@@ -122,7 +122,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <p class="lede">localcode supports multi-model approval, scheduled execution, and validated multi-agent plans. This page describes capabilities that are not standard in coding agents and states the use case for each capability.</p>
 
 <p class="lang"><span>English</span> &nbsp;&middot;&nbsp; <a href="where-localcode-differs.ko.html">한국어</a></p>
-<div class="meta">version &nbsp;&nbsp;&nbsp;0.121.0<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-13<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
+<div class="meta">version &nbsp;&nbsp;&nbsp;0.122.0<br>date &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2026-09-13<br>source &nbsp;&nbsp;&nbsp;<a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a><br>related &nbsp;&nbsp;<a href="coding-agent-benchmark.html">Coding agents on one model</a> (SWE-bench Verified)</div>
 
 <nav class="toc" aria-label="Contents">
 <h2>Contents</h2>
@@ -430,7 +430,7 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 
 <div class="part"><span>Part 2</span><h2>Client operation</h2></div>
 
-<p>One daemon holds every session. What attaches to it is a choice, and more than one thing can attach to the same session at the same time. The screenshots below are of localcode 0.115.0; the claims in this document were last checked against 0.121.0.</p>
+<p>One daemon holds every session. What attaches to it is a choice, and more than one thing can attach to the same session at the same time. The screenshots below are of localcode 0.115.0; the claims in this document were last checked against 0.122.0.</p>
 
 <h2 id="front-ends">11. A terminal, a browser tab, and a native window</h2>
 <p class="kicker">Three front ends, one daemon</p>
@@ -449,6 +449,8 @@ figcaption{font-size:.85rem;color:var(--muted);margin-top:.6em;
 <tr><td class="nw">Daemon only</td><td><code>localcode --headless</code></td><td>A remote machine you attach to</td></tr>
 </tbody>
 </table></div>
+
+<p>All three render the model's markdown — headings, emphasis, code, lists, blockquotes and links — rather than showing it raw. The terminal does it with a renderer of its own rather than a dependency, so the two differ in two places worth knowing: the terminal nests lists and the browser does not, and the browser lays out tables where the terminal passes them through as lines. Styling is applied when a reply is drawn and never when it is stored, so an exported conversation and a session log carry the markdown a model wrote and no escape sequences.</p>
 
 <div class="case">
 <h4>Use case: showing a running session to someone else</h4>
@@ -604,15 +606,15 @@ ssh -L 4096:127.0.0.1:4096 you@your-machine
 <h2 id="qualifications">Qualifications</h2>
 
 <ul>
-<li><strong>The comparison column describes a general baseline</strong> across coding agents in common use as of 2026-09-01, and was not re-surveyed when the localcode column was checked against v0.121.0, not a feature audit of any one product. These tools ship frequently, and a capability listed as absent may exist by the time this is read.</li>
+<li><strong>The comparison column describes a general baseline</strong> across coding agents in common use as of 2026-09-01, and was not re-surveyed when the localcode column was checked against v0.122.0, not a feature audit of any one product. These tools ship frequently, and a capability listed as absent may exist by the time this is read.</li>
 <li><strong>Part 2 is not uniformly unique.</strong> Sharing one live session between front ends, and moving the view between your own turns, are uncommon. Rename, reorder and fork are conveniences that several tools have in some form; they are here because this page is also about what using localcode is like.</li>
-<li><strong>Every localcode claim is a shipped behaviour</strong> at v0.121.0, documented in <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> and covered by the repository's test gate.</li>
+<li><strong>Every localcode claim is a shipped behaviour</strong> at v0.122.0, documented in <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> and covered by the repository's test gate.</li>
 <li><strong>Benchmark numbers are one run of 25 instances</strong> and the spread between agents is inside run-to-run variance. See the <a href="coding-agent-benchmark.html">benchmark page</a> for what it does and does not support.</li>
 <li><strong>One capability is marked experimental</strong> in the product: the native desktop window. Updating on Windows was the other rough edge at v0.84.0, when it applied the new version but could not restart localcode; since v0.87.0 it hands the daemon over like every other platform, and since v0.88.0 it does so at startup as well.</li>
 </ul>
 
 <footer>
-localcode 0.121.0 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
+localcode 0.122.0 &middot; <a href="https://github.com/dennis2lee/localcode">github.com/dennis2lee/localcode</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/USAGE.md">USAGE.md</a> &middot; <a href="https://github.com/dennis2lee/localcode/blob/main/docs/CHANGELOG.md">CHANGELOG.md</a>
 </footer>
 
 </div>
