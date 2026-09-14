@@ -78,6 +78,71 @@ func TestLoadAllSkipsMalformed(t *testing.T) {
 	}
 }
 
+func TestASymlinkedSkillDirectoryIsLoaded(t *testing.T) {
+	dir := t.TempDir()
+	target := t.TempDir()
+
+	writeSkill(t, target, "linked", "name: linked\ndescription: via a symlink", "linked body")
+	if err := os.Symlink(filepath.Join(target, "linked"), filepath.Join(dir, "linked")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	list, err := LoadAll(dir)
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "linked" || list[0].Body != "linked body" {
+		t.Errorf("symlinked skill directory was not loaded, got %+v", list)
+	}
+}
+
+func TestABrokenSymlinkIsSkippedLikeAMalformedSkill(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), filepath.Join(dir, "broken")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	writeSkill(t, dir, "good", "name: good\ndescription: fine", "body")
+
+	list, err := LoadAll(dir)
+	if err != nil {
+		t.Fatalf("a broken symlink must not fail startup, got: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "good" {
+		t.Errorf("expected only the well-formed skill to load, got %+v", list)
+	}
+}
+
+func TestASymlinkToAFileIsSkippedLikeAMalformedSkill(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "plain.md")
+	if err := os.WriteFile(file, []byte("not a skill dir"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Symlink(file, filepath.Join(dir, "filelink")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	writeSkill(t, dir, "good", "name: good\ndescription: fine", "body")
+
+	list, err := LoadAll(dir)
+	if err != nil {
+		t.Fatalf("a symlink to a file must not fail startup, got: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "good" {
+		t.Errorf("expected only the well-formed skill to load, got %+v", list)
+	}
+}
+
+func TestParseContentReadsAFileOfAnyName(t *testing.T) {
+	sk, err := ParseContent("/tmp/scratch.md",
+		"---\nname: scratch\ndescription: pointed at directly\n---\nDo the thing.")
+	if err != nil {
+		t.Fatalf("ParseContent: %v", err)
+	}
+	if sk.Body != "Do the thing." {
+		t.Errorf("body = %q, want %q", sk.Body, "Do the thing.")
+	}
+}
+
 func TestSystemPromptSection(t *testing.T) {
 	if got := SystemPromptSection(nil); got != "" {
 		t.Errorf("empty list should render empty string, got %q", got)

@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"localcode/internal/prompt"
 	"localcode/internal/provider"
 	"localcode/internal/skills"
+	"localcode/internal/tools"
 )
 
 // initPrompt is what "/init" sends to the model — the same idea as
@@ -250,16 +254,144 @@ func (l *Loop) routeSkillCommand(ctx context.Context, sessionID, agentName, text
 	if idx := strings.IndexAny(arg, " \t"); idx >= 0 {
 		name, args = arg[:idx], strings.TrimSpace(arg[idx+1:])
 	}
-	sk, found := l.findSkill(name)
-	if !found {
+	// A registered name always wins: the ambiguity between a name and
+	// a file of the same spelling resolves the safe way, toward the
+	// skill that was installed and listed rather than an arbitrary
+	// file that happens to read the same.
+	if sk, found := l.findSkill(name); found {
+		skillText, skillSpans := skillModelText(sk, args)
+		return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillText, "", "",
+			messageOrigin{source: "skill.frame." + sk.Name, spans: skillSpans})
+	}
+	// Otherwise a path-shaped argument names a file to run for this
+	// turn. The shape follows looksLikeCommand: a second slash, a
+	// backslash, a dot, or a leading ~ reads as a path, so a bare word
+	// stays a name and keeps the unknown-skill answer below.
+	if !looksLikeSkillPath(name) {
 		l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text, "local": true})
 		l.Store.Append(sessionID, events.TypeError, map[string]any{
 			"error": fmt.Sprintf("unknown skill %q. Available: %s", name, l.skillNames()),
 		})
 		return true, nil
 	}
+	return true, l.runSkillPath(ctx, sessionID, agentName, text, name, args)
+}
+
+// looksLikeSkillPath reports whether a /skill argument that matched no
+// registered skill reads as a path. The same shape the unknown-command
+// route uses: a second slash or a dot is what a path looks like, so
+// "/etc/hosts" is prose about a file and "/clean" is a command. A
+// leading ~ and a backslash are paths for the same reason on their own
+// platforms. A bare word is not: without a slash or a dot there is no
+// telling it from a skill name, and it keeps the unknown-skill answer.
+func looksLikeSkillPath(name string) bool {
+	if strings.HasPrefix(name, "~") {
+		return true
+	}
+	return strings.ContainsAny(name, "/\\.")
+}
+
+// resolveSkillPathArg turns what was typed after /skill into the file it
+// names. A leading ~ expands to the home directory; a relative path
+// resolves against the session's workspace, the same claim a tool makes
+// when it takes a relative path.
+func resolveSkillPathArg(raw, workspace string) string {
+	p := strings.TrimSpace(raw)
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	if workspace != "" {
+		return filepath.Join(workspace, p)
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
+// runSkillPath reads the file name points at, parses it as a skill, and
+// runs it exactly as a registered skill runs — same model text, same
+// skill.frame origin — without registering it. The next turn does not
+// have it, /skill with no argument does not list it, and completion
+// does not offer it, because the registry is never touched.
+//
+// A file outside the session's workspace goes through the same
+// outside-read boundary read_file does: the read is gated through the
+// tool registry's read_file call, so the read_outside switch, the
+// broker's ask, the remembered directories, and the unattended refusal
+// all apply unchanged. The question names the file and says its
+// contents will be given to the model as instructions, because the
+// consequence is different from reading a file into a tool result.
+//
+// Without a registry there is nobody to ask, so the fallback refuses
+// what it cannot ask about: a file outside the workspace is refused,
+// the way the unattended path refuses, and the refusal says so. A file
+// inside the workspace runs without a question — it is a file in the
+// project. The inside-vs-outside question is the boundary's own
+// OutsideWorkspace, not a second containment check.
+func (l *Loop) runSkillPath(ctx context.Context, sessionID, agentName, displayText, rawPath, args string) error {
+	resolved := resolveSkillPathArg(rawPath, l.SessionDir(sessionID))
+	fail := func(format string, fargs ...any) error {
+		l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": displayText, "local": true})
+		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": fmt.Sprintf(format, fargs...)})
+		return nil
+	}
+	available := func() string { return l.skillNames() }
+
+	if l.Tools != nil {
+		gate := tools.WithWorkingDir(WithSessionID(ctx, sessionID), l.SessionDir(sessionID))
+		input, _ := json.Marshal(map[string]string{"path": resolved})
+		res := l.Tools.Call(gate, "read_file", input,
+			fmt.Sprintf("run skill file %q: its contents will be given to the model as instructions for this turn", resolved))
+		if res.Refused {
+			return fail("cannot run skill file %q: %s", rawPath, res.Content)
+		}
+		if res.IsError {
+			return fail("cannot run skill file %q: %s. Available: %s", rawPath, res.Content, available())
+		}
+	} else {
+		// Nothing to ask with, so nothing runs. Production always wires
+		// a registry (see agent.New), which is the point: a gate that
+		// can be stepped around by a Loop assembled differently is not a
+		// gate. Refusing here costs nothing real and keeps the rule one
+		// sentence long — a file only becomes instructions through the
+		// boundary that asks about it.
+		return fail("cannot run skill file %q: there is no tool registry, so there is nothing to ask permission with", rawPath)
+	}
+
+	if fi, err := os.Stat(resolved); err != nil {
+		return fail("cannot run skill file %q: %v. Available: %s", rawPath, err, available())
+	} else if fi.IsDir() {
+		return fail("cannot run skill file %q: it is a directory, not a file. Available: %s", rawPath, available())
+	}
+	// Read raw rather than running the gate's result. The tool's result
+	// is not the file: with Smart Agent on it can come back windowed and
+	// annotated ("[lines 1-800 of 2000 ...]"), and running a truncated
+	// skill body as instructions would be worse than not running it. The
+	// gate above is permission only; this read is what gets parsed.
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return fail("cannot run skill file %q: %v. Available: %s", rawPath, err, available())
+	}
+	sk, err := skills.ParseContent(resolved, string(data))
+	if err != nil {
+		return fail("cannot run skill file %q: %v. Available: %s", rawPath, err, available())
+	}
+	if strings.TrimSpace(sk.Body) == "" {
+		return fail("cannot run skill file %q: it has no usable body. Available: %s", rawPath, available())
+	}
+	// The path is the identity: frontmatter name and description stay
+	// advisory, and the quoted path in the model text is what makes
+	// clear which file ran.
+	sk.Name = resolved
+	sk.Path = resolved
 	skillText, skillSpans := skillModelText(sk, args)
-	return true, l.sendWithModelText(ctx, sessionID, agentName, text, skillText, "", "",
+	return l.sendWithModelText(ctx, sessionID, agentName, displayText, skillText, "", "",
 		messageOrigin{source: "skill.frame." + sk.Name, spans: skillSpans})
 }
 
