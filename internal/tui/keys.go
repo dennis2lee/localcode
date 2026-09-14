@@ -90,8 +90,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			if key == "d" && !outside {
 				return m, nil, false // an ordinary letter everywhere else
 			}
-			m.pending = nil
-			m.pendingHintShown = false
+			// Answered here, so the next queued request comes up now
+			// rather than waiting for this answer's own resolved event
+			// to arrive — that event then matches nothing and is
+			// ignored, which is exactly what an answer already given
+			// should do.
+			m.settlePermission(id)
 			switch key {
 			case "n":
 				return m, m.resolvePermission(id, false, ""), true

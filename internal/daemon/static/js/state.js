@@ -106,6 +106,12 @@ export function freshSessionState(id) {
     // per model, so it is fetched on a switch rather than kept in app.
     effort: null,
     pendingPermissionID: null,
+    // Requests waiting behind the one on screen, oldest first. An
+    // Orchestrate fanout raises up to four at once and the broker keeps
+    // one question per waiter, so a single slot would show the newest
+    // arrival over the oldest unanswered one and strand the turn behind
+    // it. The screen always holds the oldest unresolved request.
+    pendingPermissionQueue: [],
     // Set when the daemon behind this page says it is handing over, and
     // acted on when the stream comes back — which is when there is a new
     // daemon there to load the interface from.

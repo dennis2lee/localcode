@@ -153,7 +153,19 @@ func (m Model) View() tea.View {
 	// the busy indicator (own turn and/or background tasks), or the last
 	// error — one at a time, gone when there is nothing to say.
 	if m.pending != nil {
-		lines = append(lines, modalStyle.Render(m.pending.prompt(strings.TrimSpace(m.input.Value()) != "")))
+		// The queue behind it is named, or answering the modal answers
+		// a question the reader cannot see coming: with a fanout of
+		// four the modal would otherwise clear three times with no
+		// warning of what each answer was for.
+		text := m.pending.prompt(strings.TrimSpace(m.input.Value()) != "")
+		switch len(m.pendingQueue) {
+		case 0:
+		case 1:
+			text += "\n(1 more permission request waiting)"
+		default:
+			text += fmt.Sprintf("\n(%d more permission requests waiting)", len(m.pendingQueue))
+		}
+		lines = append(lines, modalStyle.Render(text))
 	}
 	if m.asking != nil {
 		lines = append(lines, modalStyle.Render(m.asking.prompt(strings.TrimSpace(m.input.Value()) != "")))

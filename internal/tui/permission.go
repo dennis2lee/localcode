@@ -62,6 +62,63 @@ func (p pendingPermission) prompt(typing bool) string {
 	return head + "\n" + keys
 }
 
+// enqueuePermission shows a request, or queues it behind the one on
+// screen. The screen always holds the oldest unresolved request: a newer
+// arrival must not cover an older question whose turn is still blocked
+// on it, or answering the second would strand the first with no way to
+// reach it again.
+func (m *Model) enqueuePermission(p *pendingPermission) {
+	if m.pending == nil {
+		m.pending = p
+		m.pendingHintShown = false
+		m.pendingSince = time.Now()
+		return
+	}
+	if m.pending.id == p.id {
+		m.pending = p
+		return
+	}
+	for i, q := range m.pendingQueue {
+		if q.id == p.id {
+			m.pendingQueue[i] = p
+			return
+		}
+	}
+	m.pendingQueue = append(m.pendingQueue, p)
+}
+
+// settlePermission drops the request with this id wherever it is. A
+// resolution for the request on screen promotes the oldest queued one;
+// a resolution for a queued request just removes it. That second half
+// is what keeps replay honest: both halves of every permission live in
+// the log, so reopening a session replays each old resolution in turn,
+// and without it every request answered days ago would pile up as a
+// modal behind the live one.
+//
+// A promoted request gets a fresh pendingSince, so the arm delay applies
+// to it as its own modal: a keypress already travelling when the first
+// answer went out must not land on the question that appears in its
+// place.
+func (m *Model) settlePermission(id string) {
+	if m.pending != nil && m.pending.id == id {
+		m.pendingHintShown = false
+		if len(m.pendingQueue) == 0 {
+			m.pending = nil
+			return
+		}
+		m.pending = m.pendingQueue[0]
+		m.pendingQueue = m.pendingQueue[1:]
+		m.pendingSince = time.Now()
+		return
+	}
+	for i, q := range m.pendingQueue {
+		if q.id == id {
+			m.pendingQueue = append(m.pendingQueue[:i], m.pendingQueue[i+1:]...)
+			return
+		}
+	}
+}
+
 // permissionArmDelay is how long after a request appears before a single
 // letter can answer it.
 //

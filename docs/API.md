@@ -295,7 +295,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `input.request` | `{"id", "question", "options"?}`; answered at `POST /api/sessions/{id}/input/{askId}` |
 | `input.resolved` | `{"id", "answer"?}` or `{"id", "cancelled": true}` |
 | `plan.updated` | `{"plan": [{"step", "status"}], "explanation"?}`; logged, unlike `task.progress` |
-| `debate.started` | `{"author", "reviewer", "model", "rounds", "task"}` |
+| `debate.started` | `{"author", "reviewer", "reviewers", "model", "models", "rounds", "task"}`. `reviewer` holds the reviewers joined and `model` the first reviewer's. Clients prefer the plurals and fall back to the singulars for logs written before them |
 | `debate.review` | `{"round", "rounds", "reviewer", "model", "text", "approved", "session"}` |
 | `debate.ended` | `{"reason" ("approved", "rounds", "stalled", "stopped", "failed"), "rounds", "approved", "note"}` |
 | `delegated` | `{"agent", "prompt"}`; a sub-agent answered on its own model |

@@ -33,6 +33,44 @@ test('the banner says who is writing and who is reviewing, before anything runs'
   assert.ok(text.includes('10 rounds'), text);
 });
 
+// The daemon sends the panel as reviewers/models and keeps the
+// singulars beside them. The banner must name every reviewer with its
+// own model — and a log written before the plural fields existed must
+// still render through the singular fallback.
+test('the banner names every reviewer with its own model', async () => {
+  const app = await load();
+
+  app.sse.emit({
+    seq: 1,
+    type: 'debate.started',
+    data: {
+      author: 'boy', reviewer: 'girl, tom', reviewers: ['girl', 'tom'],
+      model: 'review-model', models: { girl: 'review-model', tom: 'third-model' },
+      rounds: 4, task: 'sum 1..10',
+    },
+  });
+  await app.settle();
+
+  const text = panel(app).textContent;
+  assert.ok(text.includes('girl (review-model)'), text);
+  assert.ok(text.includes('tom (third-model)'), text);
+});
+
+test('a banner from a log without plurals still names its reviewer', async () => {
+  const app = await load();
+
+  app.sse.emit({
+    seq: 1,
+    type: 'debate.started',
+    data: { author: 'boy', reviewer: 'girl', model: 'review-model', rounds: 3, task: 'sum 1..10' },
+  });
+  await app.settle();
+
+  const text = panel(app).textContent;
+  assert.ok(text.includes('girl (review-model)'), text);
+  assert.ok(text.includes('3 rounds'), text);
+});
+
 test('a review is drawn as the reviewing agent, not as the model or the user', async () => {
   const app = await load();
 

@@ -36,6 +36,30 @@ func stringsField(data map[string]any, key string) []string {
 	return nil
 }
 
+// modelsField reads a name-to-model map out of an event payload. The
+// same payload arrives as map[string]any over the wire and can arrive
+// as map[string]string from a store in this process, so both are taken
+// — the reason stringsField above takes two list types.
+func modelsField(data map[string]any, key string) map[string]string {
+	switch v := data[key].(type) {
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for name, model := range v {
+			out[name] = model
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]string, len(v))
+		for name, x := range v {
+			if model, ok := x.(string); ok {
+				out[name] = model
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // intField reads a number out of an event payload. JSON has one number
 // type and it arrives as a float64 over the wire but as an int from a
 // store in this same process, so both are accepted — a debate round
@@ -170,12 +194,10 @@ func (m *Model) applyEvent(ev events.Event) {
 		outside, _ := ev.Data["outside"].(string)
 		outsideDir, _ := ev.Data["outside_dir"].(string)
 		workspace, _ := ev.Data["workspace"].(string)
-		m.pending = &pendingPermission{
+		m.enqueuePermission(&pendingPermission{
 			id: id, tool: tool, description: desc, rule: rule, canAlways: canAlways,
 			outside: outside, outsideDir: outsideDir, workspace: workspace,
-		}
-		m.pendingHintShown = false
-		m.pendingSince = time.Now()
+		})
 	case events.TypePermissionResolved:
 		// Both halves of a permission are in the log, and resume replays
 		// the log from the start — so without this, every request ever
@@ -187,21 +209,38 @@ func (m *Model) applyEvent(ev events.Event) {
 		//
 		// Matched on id rather than cleared outright: the broker's ids
 		// are process-global, so a stale event from an earlier session
-		// must not dismiss the request currently on screen.
-		if id, _ := ev.Data["id"].(string); m.pending != nil && m.pending.id == id {
-			m.pending = nil
-			m.pendingHintShown = false
+		// must not dismiss the request currently on screen. Settled
+		// through the queue rather than against the screen alone, so a
+		// resolution for a request waiting behind the shown one drops
+		// just that one instead of being ignored until replay buries
+		// the modal in answered questions.
+		if id, _ := ev.Data["id"].(string); id != "" {
+			m.settlePermission(id)
 		}
 	case events.TypeTaskSpawned:
 		// No transcript line — background tasks surface in the busy
 		// indicator below the prompt box, and /tasks inspects them.
 		taskID, _ := ev.Data["task_id"].(string)
+		if _, ok := orchestrateStage(taskID); ok {
+			// A progress report filed as a birth: the daemon reports
+			// stage progress on this channel, and there is no session
+			// behind an orchestrate: id to ever open.
+			break
+		}
 		agentName, _ := ev.Data["agent"].(string)
 		prompt, _ := ev.Data["prompt"].(string)
 		m.tasks[taskID] = taskState{agent: agentName, status: "spawned", prompt: prompt}
 	case events.TypeTaskStatus:
 		taskID, _ := ev.Data["task_id"].(string)
 		status, _ := ev.Data["status"].(string)
+		if stage, ok := orchestrateStage(taskID); ok {
+			// Stage progress is a transcript line, not a task row.
+			// Filing it as a task drew a row with an empty agent and
+			// an empty prompt, and /tasks offered output for a
+			// session id that does not exist.
+			m.appendTool(stageLine(stage, status, ev.Data))
+			break
+		}
 		t := m.tasks[taskID]
 		t.status = status
 		m.tasks[taskID] = t
@@ -291,11 +330,31 @@ func (m *Model) applyEvent(ev events.Event) {
 		// question than the one the person is asking.
 		m.appendTool(planLines(ev.Data))
 	case events.TypeDebateStarted:
-		author, _ := ev.Data["author"].(string)
-		reviewer, _ := ev.Data["reviewer"].(string)
-		model, _ := ev.Data["model"].(string)
+		author := strField(ev.Data, "author")
+		// The panel arrives as reviewers/models; the singulars stay as
+		// the fallback, because a log written before the plural fields
+		// existed replays through this same renderer and must still
+		// name its reviewer and model.
+		reviewers := stringsField(ev.Data, "reviewers")
+		if len(reviewers) == 0 {
+			if reviewer := strField(ev.Data, "reviewer"); reviewer != "" {
+				reviewers = []string{reviewer}
+			}
+		}
+		models := modelsField(ev.Data, "models")
+		fallback := strField(ev.Data, "model")
+		names := make([]string, 0, len(reviewers))
+		for _, r := range reviewers {
+			name := r
+			if mdl := models[r]; mdl != "" {
+				name += " (" + mdl + ")"
+			} else if len(models) == 0 && fallback != "" {
+				name += " (" + fallback + ")"
+			}
+			names = append(names, name)
+		}
 		rounds := intField(ev.Data, "rounds")
-		m.appendTool(fmt.Sprintf("[debate: %s writes, %s (%s) reviews, up to %d rounds]", author, reviewer, model, rounds))
+		m.appendTool(fmt.Sprintf("[debate: %s writes, %s reviews, up to %d rounds]", author, strings.Join(names, ", "), rounds))
 	case events.TypeDebateReview:
 		// The review in full, not a one-line note. It is the half of a
 		// debate the person is here for, and it is another model's

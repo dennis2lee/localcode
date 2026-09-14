@@ -483,6 +483,7 @@ async function load(opts = {}) {
       get autoDelegateMatch() { return internals.app.autoDelegateMatch; }, set autoDelegateMatch(v) { internals.app.autoDelegateMatch = v; },
       get showTPS() { return internals.app.showTPS; }, set showTPS(v) { internals.app.showTPS = v; },
       get pendingPermissionID() { return internals.session.pendingPermissionID; }, set pendingPermissionID(v) { internals.session.pendingPermissionID = v; },
+      get pendingPermissionQueue() { return internals.session.pendingPermissionQueue; },
       get workspacePath() { return internals.app.workspacePath; }, set workspacePath(v) { internals.app.workspacePath = v; },
     },
   });

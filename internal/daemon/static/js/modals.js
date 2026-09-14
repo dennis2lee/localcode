@@ -1,5 +1,7 @@
 import {
   modalEl,
+  permissionTextEl, permissionAllowAlwaysBtn, permissionAllowSessionBtn,
+  permissionOutsideEl, permissionAllowDirBtn, permissionAllowOutsideBtn,
   delegateModal, delegateEnabledCheckbox, delegateAgentSelect, delegateMatchListEl,
   delegateMatchInput, delegateNote,
   permissionSettingsModal, skipPermissionsCheckbox, skipToolsCheckbox,
@@ -399,6 +401,111 @@ async function removePermissionRule(tool, rule) {
 
 // ---- Permission request modal (SSE-driven; see events.js) ----
 
+// showPermissionRequest puts one request on screen: the light, the text,
+// the buttons for its shape, the lock on the composer. waiting names how
+// many requests sit behind it, so answering the modal never answers a
+// question the reader cannot see coming.
+function showPermissionRequest(req, waiting) {
+  session.pendingPermissionID = req.id;
+  session.pendingPermissionCanAlways = !!req.can_always;
+  // The light says what the modal says. Without this the dot went on
+  // blinking green — "working" — behind a dialog that had stopped the
+  // work to ask a question.
+  renderCommDot();
+  let text = `[${req.tool}] ${req.description || '(no description given)'}`;
+  if (waiting === 1) text += ' (1 more permission request waiting)';
+  else if (waiting > 1) text += ` (${waiting} more permission requests waiting)`;
+  permissionTextEl.textContent = text;
+  // A boundary question is a different question, so it gets different
+  // buttons: a place is answered at one of two sizes, and "always
+  // allow" would write a tool rule that outlives the reason for it.
+  const outside = req.outside === 'read' || req.outside === 'write' ? req.outside : '';
+  permissionOutsideEl.hidden = !outside;
+  if (outside) {
+    permissionOutsideEl.textContent =
+      `This path is outside the project this conversation is working in (${req.workspace || 'unknown'}).`;
+    permissionAllowDirBtn.hidden = false;
+    permissionAllowDirBtn.textContent = `Allow ${outside} under ${req.outside_dir || 'this directory'}`;
+    permissionAllowDirBtn.title = 'for the rest of this session; /'
+      + outside + '-outside mem-clear forgets it';
+    permissionAllowOutsideBtn.hidden = false;
+    permissionAllowOutsideBtn.textContent = `Allow ${outside} anywhere outside`;
+    permissionAllowOutsideBtn.title = `turns ${outside}-outside on for this conversation`;
+  } else {
+    permissionAllowDirBtn.hidden = true;
+    permissionAllowOutsideBtn.hidden = true;
+  }
+  const offerAlways = session.pendingPermissionCanAlways && !outside;
+  permissionAllowAlwaysBtn.style.display = offerAlways ? '' : 'none';
+  permissionAllowSessionBtn.style.display = outside ? 'none' : '';
+  if (offerAlways) {
+    permissionAllowAlwaysBtn.title = `don't ask again — writes "${req.rule}" to config.json`;
+  }
+  permissionRequest.open();
+  setInputLocked(true, 'Resolve the permission request above to continue.');
+}
+
+// enqueuePermissionRequest shows a request, or queues it behind the one
+// on screen. The screen always holds the oldest unresolved request: a
+// newer arrival must not cover an older question whose turn is still
+// blocked on it, or answering the second would strand the first with no
+// way to reach it again. A repeat of an id already held replaces it,
+// keeping the latest description rather than stacking a duplicate.
+export function enqueuePermissionRequest(req) {
+  if (!req || !req.id) return;
+  if (!session.pendingPermissionID) {
+    showPermissionRequest(req, session.pendingPermissionQueue.length);
+    return;
+  }
+  if (session.pendingPermissionID === req.id) return;
+  const i = session.pendingPermissionQueue.findIndex((q) => q.id === req.id);
+  if (i >= 0) session.pendingPermissionQueue[i] = req;
+  else session.pendingPermissionQueue.push(req);
+}
+
+// settlePermissionRequest drops the request with this id wherever it is.
+// A resolution for the request on screen promotes the oldest queued one;
+// a resolution for a queued request just removes it. That second half is
+// what keeps replay honest: both halves of every permission live in the
+// log, so opening a session replays each old resolution in turn, and
+// without it every request answered days ago would pile up as a modal
+// behind the live one. An id that matches nothing is ignored, so a stale
+// resolution — another session's answer, or a replayed one — never
+// closes the modal on a live question.
+export function settlePermissionRequest(id) {
+  if (!id) return;
+  if (session.pendingPermissionID === id) {
+    const next = session.pendingPermissionQueue.shift();
+    if (next) {
+      showPermissionRequest(next, session.pendingPermissionQueue.length);
+      return;
+    }
+    closePermissionRequest();
+    return;
+  }
+  const i = session.pendingPermissionQueue.findIndex((q) => q.id === id);
+  if (i >= 0) session.pendingPermissionQueue.splice(i, 1);
+}
+
+// closePermissionRequest takes the modal down however the question went:
+// answered from these buttons, answered in another window, given up on
+// unattended, or cancelled along with the turn that asked it.
+//
+// resolvePermission clears this when the answer came from here. Every
+// other way out arrives only as permission.resolved, and it used to close
+// the modal and unlock the composer while leaving the id set — so the
+// light under the prompt went on saying "waiting for you to answer a
+// permission request" with nothing on screen to answer, for the rest
+// of the session. Stopping a turn that was asking is the ordinary way
+// to land there.
+function closePermissionRequest() {
+  session.pendingPermissionID = null;
+  session.pendingPermissionCanAlways = false;
+  permissionRequest.close();
+  setInputLocked(false);
+  renderCommDot();
+}
+
 // resolvePermission answers a pending permission request. scope is 'once',
 // 'session' (don't ask again this session), or 'always' (don't ask again
 // ever — the daemon writes a matching rule to config.json). The policy
@@ -406,8 +513,11 @@ async function removePermissionRule(tool, rule) {
 export async function resolvePermission(allow, scope) {
   if (!session.pendingPermissionID) return;
   const id = session.pendingPermissionID;
-  session.pendingPermissionID = null;
-  permissionRequest.close();
+  // The next queued request comes up now rather than waiting for this
+  // answer's own resolved event to arrive — that event then matches
+  // nothing and is ignored, which is exactly what an answer already
+  // given should do.
+  settlePermissionRequest(id);
   // Answered, so the light stops being yours: back to blinking green if
   // the turn it interrupted is still going, steady green if it is not.
   renderCommDot();
@@ -419,7 +529,7 @@ export async function resolvePermission(allow, scope) {
   // composer disabled under "Resolve the permission request above" with
   // no request on screen and nothing to click, while the turn carried on
   // server-side. cancelTurn already works this way.
-  setInputLocked(false);
+  if (!session.pendingPermissionID) setInputLocked(false);
   try {
     await apiClient.resolvePermissionRequest(session.sessionID, id, allow, scope);
   } catch (err) {

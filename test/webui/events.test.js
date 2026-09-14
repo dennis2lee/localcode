@@ -145,7 +145,12 @@ test('the always-allow button is hidden when the daemon cannot persist a rule', 
   const app = await load();
   app.applyEvent({ type: 'permission.request', data: { id: 'p', tool: 'bash', can_always: false } });
   assert.equal(app.el('permission-allow-always').style.display, 'none');
+  // A second request waits behind the first rather than replacing it, so
+  // the button still reflects the request on screen until that one
+  // resolves and the next comes up.
   app.applyEvent({ type: 'permission.request', data: { id: 'p2', tool: 'bash', can_always: true, rule: 'bash(*)' } });
+  assert.equal(app.el('permission-allow-always').style.display, 'none');
+  app.applyEvent({ type: 'permission.resolved', data: { id: 'p' } });
   assert.equal(app.el('permission-allow-always').style.display, '');
 });
 

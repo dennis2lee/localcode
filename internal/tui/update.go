@@ -441,6 +441,7 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	delete(m.drafts, msg.sessionID)
 	m.queue = nil
 	m.pending = nil
+	m.pendingQueue = nil
 	m.pendingHintShown = false
 	m.waiting = false
 	m.runningTool = ""

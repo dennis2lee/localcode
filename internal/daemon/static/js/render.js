@@ -47,6 +47,17 @@ export function renderTasks() {
     // The whole row opens the task's own conversation. A task is a
     // session, so there is a full transcript behind these three words —
     // there was just no way to reach it.
+    //
+    // Never for an orchestrate: id. Those are stage progress reports,
+    // not sessions — the intake in events.js files them as transcript
+    // lines instead of rows — and opening a task view for one asks the
+    // daemon for a conversation that does not exist. This guard stands
+    // even if such a row is ever drawn again by another path.
+    if (typeof id === 'string' && id.startsWith('orchestrate:')) {
+      div.title = 'stage progress, not a task';
+      tasksEl.appendChild(div);
+      continue;
+    }
     div.title = 'click to watch this task';
     div.addEventListener('click', () => openTaskView(id));
 

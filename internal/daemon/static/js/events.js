@@ -1,8 +1,4 @@
-import {
-  permissionTextEl, permissionAllowAlwaysBtn, permissionAllowSessionBtn,
-  permissionOutsideEl, permissionAllowDirBtn, permissionAllowOutsideBtn,
-  inputEl,
-} from './dom.js';
+import { inputEl } from './dom.js';
 import { app, session } from './state.js';
 import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
@@ -13,7 +9,8 @@ import {
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
 import {
-  refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen, permissionRequest,
+  refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen,
+  enqueuePermissionRequest, settlePermissionRequest,
   applySessionPermissions,
   applyEffort,
 } from './modals.js';
@@ -28,6 +25,33 @@ import { refreshTaskViewStatus } from './taskview.js';
 import { loadSessions, renderSessionList, loadArchived, selectSession } from './sessions.js';
 
 let eventSource = null;
+
+// isOrchestrateStage reports whether a task id is an orchestration stage
+// progress report rather than a task. The daemon reports stage progress
+// on the task.status channel with task_id "orchestrate:<stage>", and
+// that id names a report, not a session: there is no conversation
+// behind it to open, inspect, or cancel.
+function isOrchestrateStage(taskID) {
+  return typeof taskID === 'string' && taskID.startsWith('orchestrate:');
+}
+
+// stageLine renders one orchestration stage report as the transcript
+// line it is: a running stage names how many agents it launched, a
+// finished one how many answers it kept. Anything else falls back to the
+// status word itself, so a future stage state is still legible rather
+// than silently dropped.
+function stageLine(d) {
+  const stage = d.stage || String(d.task_id || '').replace(/^orchestrate:/, '');
+  if (d.status === 'running') {
+    const n = Number(d.agents) || 0;
+    return `[orchestrate: ${stage} running (${n} agent${n === 1 ? '' : 's'})]`;
+  }
+  if (d.status === 'completed') {
+    return `[orchestrate: ${stage} finished (${Number(d.kept) || 0} kept)]`;
+  }
+  if (!d.status) return `[orchestrate: ${stage}]`;
+  return `[orchestrate: ${stage} ${d.status}]`;
+}
 
 // Each handler receives ev.data ?? {}, so a malformed event (missing data)
 // degrades to "nothing to read" instead of throwing out of the whole
@@ -121,41 +145,13 @@ const handlers = {
     session.runningTool = '';
     finishToolCall(d.tool_use_id, d.content, d.is_error);
   },
+  // The screen always holds the oldest unresolved request: a newer
+  // arrival queues behind it, and a resolution for any other id leaves
+  // the modal alone. Answering the second of two requests used to close
+  // the first without answering it, and a replayed answer from days ago
+  // closed a live modal — see the TUI's events.go, which states the rule.
   'permission.request': (d) => {
-    session.pendingPermissionID = d.id;
-    session.pendingPermissionCanAlways = !!d.can_always;
-    // The light says what the modal says. Without this the dot went on
-    // blinking green — "working" — behind a dialog that had stopped the
-    // work to ask a question.
-    renderCommDot();
-    permissionTextEl.textContent = `[${d.tool}] ${d.description || '(no description given)'}`;
-    // A boundary question is a different question, so it gets different
-    // buttons: a place is answered at one of two sizes, and "always
-    // allow" would write a tool rule that outlives the reason for it.
-    const outside = d.outside === 'read' || d.outside === 'write' ? d.outside : '';
-    permissionOutsideEl.hidden = !outside;
-    if (outside) {
-      permissionOutsideEl.textContent =
-        `This path is outside the project this conversation is working in (${d.workspace || 'unknown'}).`;
-      permissionAllowDirBtn.hidden = false;
-      permissionAllowDirBtn.textContent = `Allow ${outside} under ${d.outside_dir || 'this directory'}`;
-      permissionAllowDirBtn.title = 'for the rest of this session; /'
-        + outside + '-outside mem-clear forgets it';
-      permissionAllowOutsideBtn.hidden = false;
-      permissionAllowOutsideBtn.textContent = `Allow ${outside} anywhere outside`;
-      permissionAllowOutsideBtn.title = `turns ${outside}-outside on for this conversation`;
-    } else {
-      permissionAllowDirBtn.hidden = true;
-      permissionAllowOutsideBtn.hidden = true;
-    }
-    const offerAlways = session.pendingPermissionCanAlways && !outside;
-    permissionAllowAlwaysBtn.style.display = offerAlways ? '' : 'none';
-    permissionAllowSessionBtn.style.display = outside ? 'none' : '';
-    if (offerAlways) {
-      permissionAllowAlwaysBtn.title = `don't ask again — writes "${d.rule}" to config.json`;
-    }
-    permissionRequest.open();
-    setInputLocked(true, 'Resolve the permission request above to continue.');
+    enqueuePermissionRequest(d);
   },
   // The four switches for this conversation moved: at its own prompt, in
   // another window, or by somebody answering "allow anywhere" above.
@@ -196,9 +192,19 @@ const handlers = {
     const head = d.explanation ? `[plan] ${d.explanation}` : '[plan]';
     appendTool([head, ...steps.map((s) => `  [${mark(s.status)}] ${s.step}`)].join('\n'));
   },
+  // The panel arrives as reviewers/models; the singulars stay as the
+  // fallback, because a log written before the plural fields existed
+  // replays through this same renderer and must still name its reviewer
+  // and model.
   'debate.started': (d) => {
-    const model = d.model ? ` (${d.model})` : '';
-    appendTool(`[debate: ${d.author} writes, ${d.reviewer}${model} reviews, up to ${d.rounds} rounds]`);
+    const reviewers = Array.isArray(d.reviewers) && d.reviewers.length
+      ? d.reviewers
+      : (d.reviewer ? [d.reviewer] : []);
+    const models = (d.models && typeof d.models === 'object' && !Array.isArray(d.models)) ? d.models : {};
+    const named = Object.keys(models).length === 0 && d.model
+      ? reviewers.map((r) => `${r} (${d.model})`)
+      : reviewers.map((r) => (models[r] ? `${r} (${models[r]})` : r));
+    appendTool(`[debate: ${d.author} writes, ${named.join(', ')} reviews, up to ${d.rounds} rounds]`);
   },
   'debate.review': (d) => appendReview(d),
   // The note is composed by the daemon and travels on the event, so both
@@ -207,26 +213,20 @@ const handlers = {
   'debate.ended': (d) => {
     if (d.note) appendTool(`[${d.note}]`);
   },
-  'permission.resolved': () => {
-    // The question is gone, however it went: answered from these buttons,
-    // answered in another window, given up on unattended, or cancelled
-    // along with the turn that asked it.
-    //
-    // resolvePermission clears this when the answer came from here. Every
-    // other way out arrives only as this event, and it used to close the
-    // modal and unlock the composer while leaving the id set — so the
-    // light under the prompt went on saying "waiting for you to answer a
-    // permission request" with nothing on screen to answer, for the rest
-    // of the session. Stopping a turn that was asking is the ordinary way
-    // to land there.
-    session.pendingPermissionID = null;
-    session.pendingPermissionCanAlways = false;
-    permissionRequest.close();
-    setInputLocked(false);
-    renderCommDot();
+  // The question is gone, however it went: answered from these buttons,
+  // answered in another window, given up on unattended, or cancelled
+  // along with the turn that asked it. Matched on id: a resolution for
+  // anything but the request on screen drops just that queued request,
+  // and a stale one matches nothing at all.
+  'permission.resolved': (d) => {
+    settlePermissionRequest(d.id);
   },
   // Sidebar + status bar carry task activity; no transcript line.
   'task.spawned': (d) => {
+    // An orchestration stage is a progress report, not a task: the
+    // daemon sends task_id "orchestrate:<stage>" for stage progress,
+    // and there is no session behind that id to ever open.
+    if (isOrchestrateStage(d.task_id)) return;
     session.tasks.set(d.task_id, { agent: d.agent, status: 'spawned' });
     renderTasks();
   },
@@ -237,6 +237,14 @@ const handlers = {
     if (d.status === 'deleted') {
       session.tasks.delete(d.task_id);
       renderTasks();
+      return;
+    }
+    // Stage progress is a transcript line, not a task row. Filing it as
+    // a task drew a clickable row out of a zero-value task — empty
+    // agent — and the click opened a task view for a session id that
+    // does not exist.
+    if (isOrchestrateStage(d.task_id)) {
+      appendTool(stageLine(d));
       return;
     }
     if (session.tasks.has(d.task_id)) session.tasks.get(d.task_id).status = d.status;
@@ -485,11 +493,13 @@ const handlers = {
     // permission.resolved for the question it was holding, and that is
     // the event that clears this; saying it here too costs nothing and
     // means the light does not depend on two events arriving in order.
-    session.pendingPermissionID = null;
-    session.pendingPermissionCanAlways = false;
-    permissionRequest.close();
+    // Settled rather than just cleared, so a second request queued behind
+    // the cancelled one comes up instead of being stranded with the
+    // composer unlocked and no modal to answer it in. The resolved event
+    // for the cancelled question then matches nothing and is ignored.
+    settlePermissionRequest(session.pendingPermissionID);
     setWaiting(false);
-    setInputLocked(false);
+    if (!session.pendingPermissionID) setInputLocked(false);
     abandonRunningToolCalls('stopped');
     // The queue went with the turn: the daemon drops it in
     // turnTracker.cancel, so anything still showing as sent was never

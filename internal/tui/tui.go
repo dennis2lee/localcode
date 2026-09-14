@@ -130,6 +130,14 @@ type Model struct {
 	// scroll position.
 	transcriptRev uint64
 	pending       *pendingPermission
+	// pendingQueue holds the requests behind the one on screen. An
+	// Orchestrate fanout raises up to four at once, and the broker keeps
+	// a question per waiter rather than one flag for the session — a
+	// client with a single slot would show the newest arrival over the
+	// oldest unanswered one and strand the turn behind it. FIFO: the
+	// oldest unresolved request is what is shown, and answering nothing
+	// never promotes.
+	pendingQueue []*pendingPermission
 	// asking is the model's own question, waiting on an answer. Its own
 	// field rather than a mode on pending: the two can be on screen for
 	// different reasons and take different keys.
