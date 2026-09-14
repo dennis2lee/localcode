@@ -57,7 +57,7 @@ func LoadAll(dirs ...string) ([]Skill, error) {
 		}
 
 		for _, e := range entries {
-			if !e.IsDir() {
+			if !isSkillDir(dir, e) {
 				continue
 			}
 			path := filepath.Join(dir, e.Name(), "SKILL.md")
@@ -82,13 +82,39 @@ func LoadAll(dirs ...string) ([]Skill, error) {
 	return out, nil
 }
 
+// isSkillDir reports whether a skills-directory entry is a directory to
+// load a skill from. DirEntry.IsDir does not follow symlinks, so a
+// symlinked skill directory read as a plain file and was skipped without
+// a word. A symlink is followed here; one that points nowhere, or at a
+// file rather than a directory, is not a directory and is skipped the
+// way a malformed skill already is rather than failing startup.
+func isSkillDir(dir string, e os.DirEntry) bool {
+	if e.IsDir() {
+		return true
+	}
+	if e.Type()&os.ModeSymlink == 0 {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(dir, e.Name()))
+	return err == nil && info.IsDir()
+}
+
+// ParseContent parses content already read from path as a skill file.
+// Exported so a caller pointing at a file directly runs the same parse
+// a registered skill went through at load, rather than a second one.
+func ParseContent(path, content string) (Skill, error) {
+	return parseContent(path, content)
+}
+
 func parseSkillFile(path string) (Skill, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Skill{}, err
 	}
-	content := string(data)
+	return parseContent(path, string(data))
+}
 
+func parseContent(path, content string) (Skill, error) {
 	if !strings.HasPrefix(content, "---\n") {
 		return Skill{}, fmt.Errorf("%s: missing YAML frontmatter (must start with \"---\")", path)
 	}

@@ -772,7 +772,7 @@ Only skill names and descriptions enter the initial system prompt. The full body
 
 To reference other files such as `scripts/*.py` from the body, write relative paths and let the model read them with `read_file` or `bash`.
 
-Run a skill directly by its own name with `/<skill name>`. See [Running a skill](#running-a-skill).
+Run a skill directly by its own name with `/<skill name>`. To run a file without installing it, point at it with `/skill <path>`. See [Running a skill](#running-a-skill).
 
 ### Where skills, commands and global rules are read from
 
@@ -940,8 +940,13 @@ Type a skill's own name as a command. You do not have to wait for the model to d
 | `/skill` | Lists registered skill names and descriptions instantly, with no model call |
 | `/<skill name>` | Runs that skill, for example `/pdf-tools` |
 | `/<skill name> <request>` | Runs the skill with your request attached, for example `/pdf-tools merge a.pdf and b.pdf` |
+| `/skill <path>` | Runs that file as a skill for this turn, without installing it, for example `/skill ~/notes/scratch.md` |
 
 The transcript keeps just the short command you typed. The full skill body goes only to the model.
+
+**Running a file directly.** `/skill <path>` reads that file, parses it as a skill, and runs it exactly as a registered skill runs. Nothing is registered: the next turn does not have it, `/skill` does not list it, and completion does not offer it. A registered name wins over a file of the same spelling. A bare word is a name, so point at a file the way you would in prose: `./scratch.md`, `notes/scratch.md`, `/tmp/scratch.md`, `~/notes/scratch.md`. `~` expands to home and a relative path resolves against this conversation's workspace. The file does not have to be called `SKILL.md`. Its frontmatter `name` and `description` are advisory; the path is the identity, and the model text quotes the path so the transcript shows which file ran.
+
+A file outside the workspace asks first, through the same outside-read boundary `read_file` uses. The prompt names the file and says its contents will be given to the model as instructions. Approving a directory covers later files under it. A turn with nobody watching (a background task, a scheduled prompt, `localcode run`) is refused rather than silently allowed, unless an approval or the `read_outside` switch already covers it.
 
 **Completing a name.** Type part of one and press the right arrow. In both the TUI and the Web UI, a `/name` completes against the installed skills and the custom commands, and pressing the key again offers the next match:
 
@@ -1391,7 +1396,7 @@ These commands are handled locally or by the daemon without a model call. Client
 | `/agent` | Lists registered agents; `/agent <name>` switches. See [Switching agents](#switching-agents-with-tab). |
 | `/model` | Which model answers, apart from which agent does. Bare, it reports the model in force and every profile this config can reach. `/model <profile>` points this conversation at that profile's model and keeps the agent — its prompt, its tools, its permissions — so answering on a bigger model no longer means writing a second agent that is the first one with another profile. `/model <agent>` still switches agent, which is what the command always did. `default` goes back to the agent's own. **TUI:** bare opens a picker with agents and models in one list. The choice is kept per agent, survives a fork, and both clients follow it. |
 | `/session` | **TUI.** Opens a list of conversations to switch to. `/session <id>` switches directly. The Web UI has the left panel instead. See [Switching sessions](#switching-sessions). |
-| `/skill` | Lists registered skills. See [Running a skill](#running-a-skill). |
+| `/skill` | Lists registered skills; `/skill <path>` runs a skill file for this turn without installing it. See [Running a skill](#running-a-skill). |
 | `/commands` | Lists the custom commands registered from the project and home agent directories the root chain picked (`commands/*.md`, or `command/*.md`). See [Custom commands](#custom-commands). |
 | `/tasks` | Lists background tasks in this session. See [`/tasks`](#tasks). |
 | `/smart-agent` | Toggles the Smart Agent bundle and saves the choice. `/smart-agent on\|off` sets it outright. Answered by the daemon, so both clients have it. See [The switches](#the-switches). |
