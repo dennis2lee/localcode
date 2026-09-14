@@ -533,8 +533,10 @@ func (s *Store) Get(id string) (*Session, error) {
 // SetAgent changes which agent a session sends future messages as —
 // e.g. switching a session from "plan" to "build" mid-conversation.
 // Message history is untouched; only the agent used for the *next*
-// SendMessage call changes, since callers re-read Session.Agent fresh on
-// every send rather than caching it.
+// SendMessage call changes, so every send re-reads Session.Agent fresh
+// instead of reusing the agent an earlier send ran as. A switch can land
+// while a turn is still running, and the message queued behind it is a
+// turn of its own that has to run as the current agent.
 func (s *Store) SetAgent(sessionID, agent string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

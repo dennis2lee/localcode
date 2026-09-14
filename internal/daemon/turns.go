@@ -406,8 +406,19 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		text := req.Text
+		agent := sess.Agent
 		for {
-			err := d.Loop.SendMessage(turnCtx, id, sess.Agent, text)
+			// The agent is read fresh for every turn, not once at
+			// handler entry: a switch can land while a turn is
+			// running (or in the gap before the first send), and
+			// the message queued behind it is a turn of its own
+			// that has to run as the current agent. A failed
+			// read keeps the last agent rather than killing the
+			// turn over a message that was already accepted.
+			if fresh, err := d.Loop.Store.Get(id); err == nil {
+				agent = fresh.Agent
+			}
+			err := d.Loop.SendMessage(turnCtx, id, agent, text)
 
 			// Read the cancellation state BEFORE calling cancel() below —
 			// cancel() makes turnCtx.Err() non-nil unconditionally, so
