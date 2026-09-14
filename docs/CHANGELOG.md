@@ -18,6 +18,22 @@ Eighteen items delegated across six isolated worktrees, plus the API written dow
 * The README described changing model as switching agent, which stopped being true in v0.117.0. Two stale comments with it: Bedrock does take an effort level, and the TUI does have `/new`.
 * Both comparison pages were stamped v0.105.1 against a build on v0.121.0. Restamped in English and Korean, with a guard so the header stamp cannot fall behind the newest release again.
 
+**Fixed, found while scoping**
+
+* Answering one permission prompt closed another. The Web UI cleared its pending request on any `permission.resolved` without comparing the id, so with two outstanding, answering the second dismissed the first unanswered — and on log replay a request answered days ago closed a live modal. Both clients queue prompts now, oldest first, where the broker has always supported many and an Orchestrate fanout raises up to four.
+* An orchestration stage drew a task row that opened nothing. Stage progress arrives on the task channel with an `orchestrate:<stage>` id, and neither client knew the prefix, so both built a row out of a zero-value task and the Web UI made it clickable to a session that does not exist. It reads as a line now.
+* A debate with two reviewers named one. The event has carried the plural fields since debate rounds were added and both renderers read only the singular.
+
+**Provenance and trust**
+
+* A compaction summary is named as text this build's model wrote, rather than folded into the whole-conversation entry as external content from a tool result. Both construction sites carry it, so the label survives a restart.
+* MCP pins record the server's declared version, which buys the case fingerprinting alone cannot express: a tool surface that moved under a version that did not. A pin file without the field migrates silently.
+
+**Records**
+
+* Six items in `docs/IMPROVEMENTS.md` described work as remaining that the code already did, `/redo` and all four debate parts among them. Corrected, each citing the file that proves it, with the cause recorded: nothing ties a record's status to the code it describes.
+* Seven questions that were the owner's to answer are recorded as declined, with what each costs — signing certificates, a known-server registry, per-language validators, widening the rewind capture set, a retention default for orchestration children, turn-log compression, per-item pipelining. Two had already been decided in writing, in a source comment and a design document, while the record went on listing them as open.
+
 **Coverage**
 
 * Windows CI vets every package, and `cmd/localcode` runs all 75 of its tests there rather than 18 behind a hand-written filter — the shape that hides new tests by default. Its dead `SwapHandler` alternative went with it; it matched none of them.
