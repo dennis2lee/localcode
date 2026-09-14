@@ -455,7 +455,14 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	// The level belongs to the conversation and to the model it is on,
 	// so it is read for the one being opened rather than carried over
 	// from the one being left.
-	return m, tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchEffort(false))
+	//
+	// The model view likewise: which model answers is a choice this
+	// conversation made per agent, so the conversation being opened gets
+	// a blank one and a fetch of its own rather than inheriting the one
+	// being left. Without the reset a conversation that never chose
+	// went on naming the previous conversation's model in its footer.
+	m.model = client.ModelView{}
+	return m, tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchEffort(false), m.fetchModel(false))
 }
 
 // reopenCurrent re-attaches to the session this client is already in,

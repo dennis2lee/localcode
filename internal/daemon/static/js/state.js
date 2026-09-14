@@ -97,6 +97,12 @@ export function freshSessionState(id) {
     // like everything else here: a choice made in one conversation is not
     // a fact about the next one.
     chosenModel: '',
+    // Which agent the choice above was made for. The server keeps one
+    // choice per agent, so a cached choice only names the next turn's
+    // model while this still names the current agent — the renderer
+    // ignores it otherwise, which is what stops a switch from showing
+    // the agent just left.
+    chosenModelAgent: '',
     runningTool: '',   // tool currently executing, shown in the status bar
     // tool_use_id -> the transcript row for that call, so tool.end can find
     // the row tool.start created and fill in its result.
