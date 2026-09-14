@@ -96,12 +96,17 @@ test('model text can never inject an element', () => {
   assert.ok(out.includes('&lt;script&gt;'), out);
 });
 
-test('fenced code is escaped, keeps its language class, and is not marked up', () => {
+test('fenced code is escaped, keeps its language class, and is highlighted', () => {
   const out = app.renderMarkdown('```go\nif a < b && c { *p = "x" }\n```');
-  assert.equal(
-    out,
-    '<pre><code class="language-go">if a &lt; b &amp;&amp; c { *p = &quot;x&quot; }</code></pre>',
-  );
+  assert.ok(out.includes('<pre><code class="language-go">'), out);
+  // Escaped, not interpreted: the raw characters are gone.
+  assert.ok(out.includes('a &lt; b &amp;&amp; c'), out);
+  assert.ok(!out.includes(' & '), out);
+  // Highlighted: the keyword and the string are tinted spans.
+  assert.match(out, /<span class="tok-kw">if<\/span>/);
+  assert.match(out, /<span class="tok-str">&quot;x&quot;<\/span>/);
+  // Markdown inside code is still not markup: *p did not become emphasis.
+  assert.ok(!out.includes('<em>'), out);
 });
 
 test('an unterminated fence still renders while the reply is streaming', () => {

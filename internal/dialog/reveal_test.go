@@ -4,8 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -28,6 +26,14 @@ func stubReveal(t *testing.T) *string {
 // explorer.exe does not: handed C:/Users/me/proj it opens the default
 // Documents window instead, which looks exactly like the button working and
 // going to the wrong place.
+//
+// The Clean comparison below is the entire guard for that, on Windows too:
+// Clean's output carries native separators (it ends in FromSlash, and Abs
+// Cleans as well), so a handed path that still held forward slashes could
+// not equal Clean(dir). A second assertion scanning for slashes sat here
+// for a while; it never fired on its own, because anything it could see,
+// this comparison had already rejected — so it was removed rather than
+// kept as decoration.
 func TestRevealNormalizesThePathForTheOS(t *testing.T) {
 	got := stubReveal(t)
 	dir := t.TempDir()
@@ -37,9 +43,6 @@ func TestRevealNormalizesThePathForTheOS(t *testing.T) {
 	}
 	if *got != filepath.Clean(dir) {
 		t.Errorf("handed %q to the file manager, want %q", *got, filepath.Clean(dir))
-	}
-	if runtime.GOOS == "windows" && strings.Contains(*got, "/") {
-		t.Errorf("path %q still has forward slashes; explorer.exe ignores those", *got)
 	}
 }
 

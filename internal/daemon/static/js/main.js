@@ -351,6 +351,7 @@ export const ready = init();
 export { session, app } from './state.js';
 export { escapeHtml, formatTime, shortenPath } from './format.js';
 export { renderMarkdown, inline, unwrapMath } from './markdown.js';
+export { highlightCode } from './highlight.js';
 export { jumpToTurn } from './transcript.js';
 export { helpLines, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';

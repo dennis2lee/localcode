@@ -205,6 +205,8 @@ localcode --server http://localhost:4096   # terminal
 
 > Binding `0.0.0.0` exposes an arbitrary code execution API, since the bash tool is part of it. There is no auth token yet. Always reach the daemon over loopback plus an SSH tunnel, and never bind it directly to an untrusted network.
 
+The full route list lives in [docs/API.md](API.md): method and path, inputs, answers, and errors for all 59 routes, plus the event stream.
+
 ## Part 2. Configuration
 
 Configuration uses a global file plus an optional project override. Use `config.example.json` as the complete reference. Runtime controls can change selected settings without a restart.
@@ -2070,6 +2072,8 @@ Smart Agent marks stable request prefixes for provider prompt caching.
 Conversation markers move as history grows. Two message markers preserve cache lookup coverage after long tool rounds. Tool, system, and message markers use four cache points in total.
 
 Providers ignore unsupported or undersized cache prefixes. Minimum sizes depend on the provider and model.
+
+A hosted OpenAI-compatible provider with its own explicit cache controls gets nothing marked today: the openai-compatible request builder sends no cache fields at all, so there is nothing to switch on. Supporting one would mean adding that provider's fields to `internal/provider/openai.go` (the `CachePrefix` flag on the request is already set provider-agnostically; only the Anthropic and Bedrock adapters read it). Until then, those providers serve the stable-prefix request shape with no breakpoints, and any caching is whatever the server does on its own.
 
 Each specialist has its own session prefix and cache.
 

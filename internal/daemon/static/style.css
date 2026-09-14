@@ -584,6 +584,14 @@ main {
   margin: 0 0 10px;
 }
 #transcript .msg-model pre code { background: none; border: none; padding: 0; }
+/* Highlighted code tokens. These four reuse the palette's existing
+   voices rather than adding new ones: keywords speak in the interactive
+   ink, strings in the ok green, numbers in the warn gold, comments in
+   the muted aside voice. */
+#transcript .msg-model .tok-kw { color: var(--interactive); font-weight: 600; }
+#transcript .msg-model .tok-str { color: var(--ok); }
+#transcript .msg-model .tok-num { color: var(--warn); }
+#transcript .msg-model .tok-com { color: var(--muted); font-style: italic; }
 #transcript .msg-model blockquote {
   border-left: 3px solid var(--border);
   color: var(--muted);

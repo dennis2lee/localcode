@@ -122,9 +122,17 @@ jobs:
       # now set USERPROFILE beside it, which is what os.UserHomeDir
       # actually reads there. See docs/IMPROVEMENTS.md item 41.
       #
-      # cmd/localcode keeps its filter for now: it drives real processes
-      # and a terminal, and the remaining failures there are about the
-      # harness rather than about path handling.
+      # cmd/localcode runs whole too now, by the same three fixes: every
+      # test that isolates HOME sets USERPROFILE beside it, Windows paths
+      # are marshalled into JSON rather than pasted into it, and the
+      # one-shot run closes its session store so t.TempDir() can be
+      # removed. The binary-building test names its .exe, and the one
+      # test that cannot run here is tagged out of the build itself
+      # (restart_unix_test.go is !windows) rather than filtered.
+      #
+      # An inclusion filter is the wrong shape for this even when it is
+      # green: a test added tomorrow does not run on Windows and nobody
+      # is told. A guard test in cmd/localcode holds this line whole.
       #
       # shell: bash, and that line is the one carrying weight. Without
       # it this step runs under PowerShell, where a multi-line `run:`
@@ -139,7 +147,7 @@ jobs:
           go test ./internal/update/ ./internal/childproc/
           go test ./internal/userdirs/ ./internal/skills/ ./internal/rules/
           go test ./internal/session/ ./internal/daemon/
-          go test ./cmd/localcode/ -run 'Successor|UnknownCommand|WindowProxy|ChosenRoot|OwnChain|SwapHandler|SwappedUnderTheWindow'
+          go test ./cmd/localcode/
         env:
           CGO_ENABLED: '0'
 
@@ -198,6 +206,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # go vet is platform-aware through build tags: it compiles the
+      # Windows files (handoff_windows.go, listen_windows.go, ...) that
+      # the ubuntu/macOS gate never sees, so a Windows-only type error
+      # has nowhere else to surface. gofmt and the doc-link check are
+      # platform-independent and already run in the gate; repeating them
+      # here would only duplicate it.
+      - name: Vet every package
+        shell: bash
+        run: go vet ./...
+        env:
+          CGO_ENABLED: '0'
       # shell: bash for the reason written in the build job: a multi-line
       # `run:` under PowerShell reports only the last command's status.
       - name: Test every package

@@ -81,8 +81,10 @@ func renderTranscript(entries []transcriptEntry, width int) string {
 			parts = append(parts, turnSeparator(width)+"\n"+pendingStyle.Width(width).Render(text))
 		case entryTool, entryLocal, entrySent:
 			parts = append(parts, toolStyle.Render(text))
-		default: // entryModel: streamed as-is, no style
-			parts = append(parts, text)
+		default: // entryModel: markdown, rendered here at display time
+			// so the stored entry stays raw text with no escape
+			// sequences in it. See markdown.go.
+			parts = append(parts, renderModelMarkdown(text, width))
 		}
 	}
 	return strings.Join(parts, "\n\n")

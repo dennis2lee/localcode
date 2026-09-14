@@ -1,4 +1,5 @@
 import { escapeHtml } from './format.js';
+import { highlightCode } from './highlight.js';
 
 // renderMarkdown turns model output into safe HTML for display. It is
 // deliberately small (no dependency, this is a fully offline app) and
@@ -23,7 +24,9 @@ export function renderMarkdown(src) {
   const placeholder = (i) => `\u0000${i}\u0000`;
   let text = src.replace(/```([^\n`]*)\n([\s\S]*?)(```|$)/g, (_, lang, code) => {
     const cls = lang.trim() ? ` class="language-${escapeHtml(lang.trim())}"` : '';
-    const html = `<pre><code${cls}>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`;
+    // Code is highlighted, not merely escaped: highlightCode escapes
+    // every span itself, so raw code never reaches the output.
+    const html = `<pre><code${cls}>${highlightCode(code.replace(/\n$/, ''), lang.trim())}</code></pre>`;
     blocks.push(html);
     return placeholder(blocks.length - 1);
   });
@@ -39,6 +42,13 @@ export function renderMarkdown(src) {
   // across two cells.
   const spans = [];
   const spanToken = (i) => `${i}`;
+  // Double-backtick spans first: they may hold single backticks
+  // inside (that is their whole point), and the single-backtick pass
+  // below would otherwise eat the inner pair and leave the outers.
+  text = text.replace(/``((?:[^`]|`[^`])*?)``/g, (_, code) => {
+    spans.push(`<code>${code}</code>`);
+    return spanToken(spans.length - 1);
+  });
   text = text.replace(/`([^`\n]+)`/g, (_, code) => {
     spans.push(`<code>${code}</code>`);
     return spanToken(spans.length - 1);
