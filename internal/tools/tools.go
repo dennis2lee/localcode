@@ -11,6 +11,7 @@ import (
 
 	"localcode/internal/hooks"
 	"localcode/internal/provider"
+	"strings"
 	"sync"
 )
 
@@ -166,6 +167,27 @@ const (
 	DecisionAsk   Decision = "ask"
 	DecisionDeny  Decision = "deny"
 )
+
+// AllDecisions is this package's half of the roster config.Decision holds,
+// in the same order. The two are joined by a bare string conversion at the
+// wiring (see cmd/localcode, which hands the registry a resolver built from
+// the config), so nothing in the type system says they still agree — a
+// guard test there compares them, and the switch in Call fails closed for
+// anything neither knows.
+var AllDecisions = []Decision{
+	DecisionAllow,
+	DecisionAsk,
+	DecisionDeny,
+}
+
+// DecisionNames renders AllDecisions for "want one of" error text.
+func DecisionNames() string {
+	names := make([]string, len(AllDecisions))
+	for i, d := range AllDecisions {
+		names[i] = string(d)
+	}
+	return strings.Join(names, ", ")
+}
 
 // PermissionResolver decides allow/ask/deny for a call to toolName given
 // subject (see PermissionSubject) and the tool's own static default
@@ -498,6 +520,15 @@ func (r *Registry) Call(ctx context.Context, name string, input json.RawMessage,
 		if !allowed {
 			return Result{Content: "denied by user", IsError: true, Refused: true}
 		}
+	case DecisionAllow:
+		// Proceeds to execution below the switch.
+	default:
+		// Fail closed: a decision nobody taught the registry (a typo'd
+		// rule that survived load and API validation, e.g. "denied")
+		// refuses rather than falling through to execution. Deny rather
+		// than ask, because ask is downgraded to allow by
+		// skip_permissions, which would reopen the hole.
+		return Result{Content: fmt.Sprintf("tool %q has unknown permission decision %q (want one of %s)", name, outcome.Decision, DecisionNames()), IsError: true, Refused: true}
 	}
 
 	// The last moment at which the file is still as it was. Everything

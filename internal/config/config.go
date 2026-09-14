@@ -739,6 +739,21 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Policed the way hook events are above. An unknown decision used to
+	// fall through the registry's switch to execution, so a typo'd
+	// prohibition ("denied") silently allowed; failing at load says so
+	// where it can still be fixed.
+	for tool, tp := range c.Permissions {
+		if tp.Flat != "" && !ValidDecision(tp.Flat) {
+			return fmt.Errorf("permission %q: unknown decision %q (want one of %s)", tool, tp.Flat, DecisionNames())
+		}
+		for _, r := range tp.Rules {
+			if !ValidDecision(r.Decision) {
+				return fmt.Errorf("permission %q match %q: unknown decision %q (want one of %s)", tool, r.Match, r.Decision, DecisionNames())
+			}
+		}
+	}
+
 	for name, server := range c.MCPServers {
 		if err := server.Validate(); err != nil {
 			return fmt.Errorf("mcp_servers %q: %w", name, err)
