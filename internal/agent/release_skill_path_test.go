@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +155,56 @@ func writeSkillFile(t *testing.T, path, frontmatter, body string) {
 	}
 }
 
+// messageNamesPath reports whether msg names path the way the skill-path
+// failures format it. Every one of them uses %q, which escapes each
+// backslash, so on Windows the message holds C:\\Users\\... while the
+// path itself holds single separators and a raw strings.Contains cannot
+// match. Comparing against strconv.Quote keeps "names the path" as the
+// requirement: a message about another file still does not match.
+func messageNamesPath(msg, path string) bool {
+	return strings.Contains(msg, strconv.Quote(path))
+}
+
+// windowsGateErrorReadFile replays the Windows gate error for a
+// directory on any machine: read <path>: read <path>: Incorrect
+// function. It answers only inside the workspace, the way the real
+// read_file does, so no permission question is raised and the product's
+// post-gate directory check is what stands between the call and the model.
+type windowsGateErrorReadFile struct{}
+
+func (windowsGateErrorReadFile) Name() string { return "read_file" }
+
+func (windowsGateErrorReadFile) Description() string { return "windows gate error stub" }
+
+func (windowsGateErrorReadFile) InputSchema() json.RawMessage { return json.RawMessage(`{}`) }
+
+func (windowsGateErrorReadFile) RequiresPermission(json.RawMessage) bool { return false }
+
+func (windowsGateErrorReadFile) OutsideClass() tools.OutsideClass { return tools.OutsideRead }
+
+func (windowsGateErrorReadFile) Subject(input json.RawMessage) string {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return ""
+	}
+	return args.Path
+}
+
+func (windowsGateErrorReadFile) Execute(_ context.Context, input json.RawMessage) tools.Result {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return tools.Result{Content: fmt.Sprintf("invalid input: %v", err), IsError: true}
+	}
+	return tools.Result{
+		Content: "read " + args.Path + ": read " + args.Path + ": Incorrect function.",
+		IsError: true,
+	}
+}
+
 func lastLocalError(t *testing.T, store *session.Store, sid string) string {
 	t.Helper()
 	evs, err := store.Events(sid, 0)
@@ -248,7 +301,11 @@ func TestASkillPathRunsOutsideAnySkillsDirectory(t *testing.T) {
 func TestSkillPathsExpandTildeAndResolveRelative(t *testing.T) {
 	project := t.TempDir()
 	home := t.TempDir()
+	// Both variables name the same temp home: the resolver reads HOME
+	// everywhere but Windows, where it reads USERPROFILE, so each
+	// platform expands ~ to this dir through its own variable.
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	p := scriptedReply("done.")
 	loop, store, _ := newSkillPathLoop(t, p, project)
@@ -445,7 +502,7 @@ func TestASkillOutsideTheWorkspaceAsksAndRunsOnceApproved(t *testing.T) {
 		t.Fatal("no permission question was shown for an outside skill file")
 	}
 	desc, _ := question["description"].(string)
-	if !strings.Contains(desc, outside) {
+	if !messageNamesPath(desc, outside) {
 		t.Errorf("the question does not name the path: %q", desc)
 	}
 	if !strings.Contains(desc, "instructions") {
@@ -514,7 +571,7 @@ func TestADeclinedSkillFileDoesNotBecomeInstructions(t *testing.T) {
 	if got := sentText(p); strings.Contains(got, "OUTSIDE BODY") {
 		t.Errorf("the declined skill body reached the model: %s", got)
 	}
-	if msg := lastLocalError(t, store, sid); !strings.Contains(msg, outside) {
+	if msg := lastLocalError(t, store, sid); !messageNamesPath(msg, outside) {
 		t.Errorf("the refusal does not name the declined path: %q", msg)
 	}
 }
@@ -639,7 +696,7 @@ func TestWithoutTheBoundaryNoFileBecomesInstructions(t *testing.T) {
 				t.Fatalf("SendMessage: %v", err)
 			}
 			msg := lastLocalError(t, store, sid)
-			if !strings.Contains(msg, tc.arg) {
+			if !messageNamesPath(msg, tc.arg) {
 				t.Errorf("the refusal does not name the path: %q", msg)
 			}
 			if !strings.Contains(msg, "nothing to ask") {
@@ -655,5 +712,71 @@ func TestWithoutTheBoundaryNoFileBecomesInstructions(t *testing.T) {
 				t.Errorf("raised %d permission question(s) with nothing to ask with", len(got))
 			}
 		})
+	}
+}
+
+// The quoted form is what the failure assertions check, so a Windows path
+// typed out with single separators must match its escaped quoted form,
+// and a message about another file must not. This runs the Windows branch
+// on any machine: the CI lines arrived as C:\\Users\\... text, and the
+// raw comparison below is the diagnosis locked in — it cannot see the
+// path even though the message names it.
+func TestSkillFailuresNameAWindowsShapedPath(t *testing.T) {
+	win := `C:\Users\RUNNER~1\work\outside.md`
+	msg := fmt.Sprintf("cannot run skill file %q: denied by user", win)
+	if !messageNamesPath(msg, win) {
+		t.Errorf("quoted assertion does not name the Windows path: %q", msg)
+	}
+	if strings.Contains(msg, win) {
+		t.Errorf("raw comparison matched, so this test proves nothing: %q", msg)
+	}
+	other := fmt.Sprintf("cannot run skill file %q: denied by user", `C:\other\file.md`)
+	if messageNamesPath(other, win) {
+		t.Errorf("quoted assertion matched a message about another file: %q", other)
+	}
+}
+
+// A directory answered with the Windows gate error still gets our own
+// sentence. The gate reads before the product Stats, and on Windows the
+// OS error ("Incorrect function.") never mentions directories, so without
+// the post-gate Stat the failure names the path but not what is wrong
+// with it. The stub replays that error against a real temp directory, so
+// this is the Windows branch from macOS.
+func TestAWindowsDirectoryErrorStillSaysDirectory(t *testing.T) {
+	project := t.TempDir()
+	loop, store, _ := newSkillPathLoop(t, scriptedReply("done."), project)
+	loop.Tools.Deregister("read_file")
+	loop.Tools.Register(windowsGateErrorReadFile{})
+
+	const sid = "s1"
+	if _, err := store.CreateSessionIn(sid, "", "general-purpose", project, true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "windir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	before, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/skill ./windir"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	msg := lastLocalError(t, store, sid)
+	if !messageNamesPath(msg, "./windir") {
+		t.Errorf("the failure does not name the directory: %q", msg)
+	}
+	if !strings.Contains(msg, "directory") {
+		t.Errorf("the failure does not say it is a directory: %q", msg)
+	}
+	if strings.Contains(msg, "Incorrect function") {
+		t.Errorf("the OS error leaked through instead of our sentence: %q", msg)
+	}
+	if !strings.Contains(msg, "pdf-tools") {
+		t.Errorf("the failure does not list the available skills: %q", msg)
+	}
+	if got := permissionRequests(t, store, sid, len(before)); len(got) != 0 {
+		t.Errorf("an inside directory raised %d permission question(s)", len(got))
 	}
 }
