@@ -18,6 +18,44 @@ const (
 	DecisionDeny  Decision = "deny"
 )
 
+// AllDecisions lists every valid Decision, in definition order. Error
+// messages derive from it rather than restating the roster, so adding a
+// fourth decision without teaching the validator is a drift a test catches
+// rather than a hole nobody notices. See the hooks package's AllEvents,
+// which exists for the same reason.
+var AllDecisions = []Decision{
+	DecisionAllow,
+	DecisionAsk,
+	DecisionDeny,
+}
+
+// DecisionNames renders AllDecisions for "want one of" error text, so the
+// message and the roster cannot drift apart.
+func DecisionNames() string {
+	names := make([]string, len(AllDecisions))
+	for i, d := range AllDecisions {
+		names[i] = string(d)
+	}
+	return strings.Join(names, ", ")
+}
+
+// ValidDecision reports whether d is one of the three known decisions.
+// Matching is exact: a near-miss ("denied"), a case difference ("DENY")
+// or padding ("deny ") is not a decision, it is a typo, and silently
+// folding it into a valid one would rewrite a prohibition the user wrote
+// into whatever the fold happened to pick.
+func ValidDecision(d Decision) bool {
+	// Derived from AllDecisions rather than restating the three values,
+	// so the roster and the predicate cannot drift apart: teaching a new
+	// decision to one teaches it to the other.
+	for _, known := range AllDecisions {
+		if d == known {
+			return true
+		}
+	}
+	return false
+}
+
 // PermissionRule pattern-matches a call's "subject" (a bash command, a
 // file path — whatever a tool exposes as pattern-matchable; see
 // tools.PermissionSubject) against Match, an opencode-style glob ("*"

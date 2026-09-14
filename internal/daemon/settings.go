@@ -329,6 +329,12 @@ func (d *Daemon) handleAddPermissionRule(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "tool, match, and decision are all required", http.StatusBadRequest)
 		return
 	}
+	// Refused before anything is stored: an unknown decision would
+	// otherwise persist a rule the registry cannot honour.
+	if !config.ValidDecision(config.Decision(req.Decision)) {
+		http.Error(w, fmt.Sprintf("unknown decision %q (want one of %s)", req.Decision, config.DecisionNames()), http.StatusBadRequest)
+		return
+	}
 	rule := config.PermissionRule{Match: req.Match, Decision: config.Decision(req.Decision)}
 	d.Loop.Config.AddPermissionRuleRuntime(req.Tool, rule)
 	if d.Broker.ConfigPath != "" {
@@ -344,6 +350,12 @@ func (d *Daemon) handleRemovePermissionRule(w http.ResponseWriter, r *http.Reque
 	var req permissionRuleRequest
 	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil || req.Tool == "" || req.Match == "" || req.Decision == "" {
 		http.Error(w, "tool, match, and decision are all required", http.StatusBadRequest)
+		return
+	}
+	// Same struct as add, so the same refusal: removing with a decision
+	// that could never have been stored must not reach the file either.
+	if !config.ValidDecision(config.Decision(req.Decision)) {
+		http.Error(w, fmt.Sprintf("unknown decision %q (want one of %s)", req.Decision, config.DecisionNames()), http.StatusBadRequest)
 		return
 	}
 	rule := config.PermissionRule{Match: req.Match, Decision: config.Decision(req.Decision)}
