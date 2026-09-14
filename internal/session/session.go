@@ -372,6 +372,12 @@ type Store struct {
 	dir      string // empty = no persistence
 	// warnedClosed keeps the note below to one line per store.
 	warnedClosed bool
+	// writeMeta persists one session's metadata, or nil for the real
+	// writeSessionMeta. Tests set it to fail on demand: making a real
+	// directory unwritable needs a non-root POSIX account and behaves
+	// differently on Windows, so a suite that depends on it runs
+	// nowhere reliably.
+	writeMeta func(dir string, meta Session) error
 }
 
 // Session logs are the conversation itself: every prompt, every reply,
@@ -530,6 +536,63 @@ func (s *Store) Get(id string) (*Session, error) {
 	return &metaCopy, nil
 }
 
+// writeMetaLocked persists one session's metadata through the test
+// hook when one is set. Called with s.mu held, like every other path
+// that touches the record.
+func (s *Store) writeMetaLocked(meta Session) error {
+	if s.writeMeta != nil {
+		return s.writeMeta(s.dir, meta)
+	}
+	return writeSessionMeta(s.dir, meta)
+}
+
+// updateMetaLocked applies mutate to one session's record, persists it,
+// and restores the previous record when the write fails. The file is
+// the record: what a restart would restore must be what the store
+// claims, so a failed write cannot leave a value behind in memory.
+//
+// Every single-record setter goes through here rather than each keeping
+// its own rollback, which is how SetAgent shipped without one while
+// Archive two screens down had it.
+func (s *Store) updateMetaLocked(st *sessionState, mutate func(*Session)) (*Session, error) {
+	prev := snapshotMeta(st.meta)
+	mutate(&st.meta)
+	if s.dir == "" {
+		metaCopy := detach(st.meta)
+		return &metaCopy, nil
+	}
+	metaCopy := detach(st.meta)
+	if err := s.writeMetaLocked(metaCopy); err != nil {
+		st.meta = prev
+		return nil, err
+	}
+	return &metaCopy, nil
+}
+
+// snapshotMeta copies the record so a failed persist can put it back.
+// detach covers the maps; the permission answers are pointers, and a
+// plain struct copy would leave the snapshot sharing them with the live
+// record, so each answer gets its own bool.
+func snapshotMeta(meta Session) Session {
+	out := detach(meta)
+	out.Permissions = clonePermissions(meta.Permissions)
+	return out
+}
+
+// clonePermissions copies each answer into a bool of its own. Kept next
+// to the snapshot because that is the only caller that needs the
+// pointers to be distinct rather than merely read.
+func clonePermissions(p Permissions) Permissions {
+	out := p
+	for _, f := range []*(*bool){&out.SkipAll, &out.SkipTools, &out.ReadOutside, &out.WriteOutside} {
+		if *f != nil {
+			v := **f
+			*f = &v
+		}
+	}
+	return out
+}
+
 // SetAgent changes which agent a session sends future messages as —
 // e.g. switching a session from "plan" to "build" mid-conversation.
 // Message history is untouched; only the agent used for the *next*
@@ -542,14 +605,7 @@ func (s *Store) SetAgent(sessionID, agent string) (*Session, error) {
 	if !ok {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
-	st.meta.Agent = agent
-	metaCopy := detach(st.meta)
-	if s.dir != "" {
-		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
-			return nil, err
-		}
-	}
-	return &metaCopy, nil
+	return s.updateMetaLocked(st, func(m *Session) { m.Agent = agent })
 }
 
 // SetTitle renames a session — purely cosmetic (a user-facing label for
@@ -562,14 +618,7 @@ func (s *Store) SetTitle(sessionID, title string) (*Session, error) {
 	if !ok {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
-	st.meta.Title = title
-	metaCopy := detach(st.meta)
-	if s.dir != "" {
-		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
-			return nil, err
-		}
-	}
-	return &metaCopy, nil
+	return s.updateMetaLocked(st, func(m *Session) { m.Title = title })
 }
 
 // SetWorkspace records dir as the session's current workspace. The daemon
@@ -584,14 +633,7 @@ func (s *Store) SetWorkspace(sessionID, dir string) (*Session, error) {
 	if !ok {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
-	st.meta.Workspace = dir
-	metaCopy := detach(st.meta)
-	if s.dir != "" {
-		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
-			return nil, err
-		}
-	}
-	return &metaCopy, nil
+	return s.updateMetaLocked(st, func(m *Session) { m.Workspace = dir })
 }
 
 // SetPermission records this session's own answer to one permission
@@ -608,16 +650,14 @@ func (s *Store) SetPermission(sessionID string, sw Switch, v *bool) (*Session, e
 	if !ok {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
-	if !st.meta.Permissions.set(sw, v) {
+	// Validated against a throwaway first: the unknown-switch error must
+	// come back with nothing mutated, and the helper below has no way
+	// to report a failure to apply.
+	var probe Permissions
+	if !probe.set(sw, v) {
 		return nil, fmt.Errorf("unknown permission switch %q", sw)
 	}
-	metaCopy := detach(st.meta)
-	if s.dir != "" {
-		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
-			return nil, err
-		}
-	}
-	return &metaCopy, nil
+	return s.updateMetaLocked(st, func(m *Session) { m.Permissions.set(sw, v) })
 }
 
 // SetEffort records this conversation's own reasoning level for one
@@ -638,35 +678,30 @@ func (s *Store) SetEffort(sessionID, model, effort string) (*Session, error) {
 	if !ok {
 		return nil, fmt.Errorf("session %s not found", sessionID)
 	}
-	switch {
-	case model == "":
-		st.meta.Effort = effort
-	case effort == "":
-		delete(st.meta.Efforts, model)
-		if len(st.meta.Efforts) == 0 {
-			st.meta.Efforts = nil
+	return s.updateMetaLocked(st, func(m *Session) {
+		switch {
+		case model == "":
+			m.Effort = effort
+		case effort == "":
+			delete(m.Efforts, model)
+			if len(m.Efforts) == 0 {
+				m.Efforts = nil
+			}
+			// And the conversation-wide answer that predates this, because
+			// that is what would still be in force for this model after the
+			// entry went: leaving it makes "back to the profile's" a request
+			// that changes nothing, on exactly the conversations the field
+			// exists for. It goes for the other models too, which is right —
+			// it was one answer given before there were per-model ones, and
+			// the person is now saying they do not want it.
+			m.Effort = ""
+		default:
+			if m.Efforts == nil {
+				m.Efforts = map[string]string{}
+			}
+			m.Efforts[model] = effort
 		}
-		// And the conversation-wide answer that predates this, because
-		// that is what would still be in force for this model after the
-		// entry went: leaving it makes "back to the profile's" a request
-		// that changes nothing, on exactly the conversations the field
-		// exists for. It goes for the other models too, which is right —
-		// it was one answer given before there were per-model ones, and
-		// the person is now saying they do not want it.
-		st.meta.Effort = ""
-	default:
-		if st.meta.Efforts == nil {
-			st.meta.Efforts = map[string]string{}
-		}
-		st.meta.Efforts[model] = effort
-	}
-	metaCopy := detach(st.meta)
-	if s.dir != "" {
-		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
-			return nil, err
-		}
-	}
-	return &metaCopy, nil
+	})
 }
 
 // EffortFor is the level this conversation has chosen for one model, or
@@ -728,24 +763,19 @@ func (s *Store) SetMCPEnabled(sessionID, server string, on bool) (*Session, erro
 	if server == "" {
 		return nil, fmt.Errorf("a server has to be named")
 	}
-	if on {
-		delete(st.meta.MCPOff, server)
-		if len(st.meta.MCPOff) == 0 {
-			st.meta.MCPOff = nil
+	return s.updateMetaLocked(st, func(m *Session) {
+		if on {
+			delete(m.MCPOff, server)
+			if len(m.MCPOff) == 0 {
+				m.MCPOff = nil
+			}
+		} else {
+			if m.MCPOff == nil {
+				m.MCPOff = map[string]bool{}
+			}
+			m.MCPOff[server] = true
 		}
-	} else {
-		if st.meta.MCPOff == nil {
-			st.meta.MCPOff = map[string]bool{}
-		}
-		st.meta.MCPOff[server] = true
-	}
-	metaCopy := detach(st.meta)
-	if s.dir != "" {
-		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
-			return nil, err
-		}
-	}
-	return &metaCopy, nil
+	})
 }
 
 // MCPOffIn is the servers this conversation has turned off.
@@ -771,24 +801,19 @@ func (s *Store) SetSessionProfile(sessionID, agent, profile string) (*Session, e
 	if agent == "" {
 		return nil, fmt.Errorf("a profile is chosen for an agent, and none was named")
 	}
-	if profile == "" {
-		delete(st.meta.Profiles, agent)
-		if len(st.meta.Profiles) == 0 {
-			st.meta.Profiles = nil
+	return s.updateMetaLocked(st, func(m *Session) {
+		if profile == "" {
+			delete(m.Profiles, agent)
+			if len(m.Profiles) == 0 {
+				m.Profiles = nil
+			}
+		} else {
+			if m.Profiles == nil {
+				m.Profiles = map[string]string{}
+			}
+			m.Profiles[agent] = profile
 		}
-	} else {
-		if st.meta.Profiles == nil {
-			st.meta.Profiles = map[string]string{}
-		}
-		st.meta.Profiles[agent] = profile
-	}
-	metaCopy := detach(st.meta)
-	if s.dir != "" {
-		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
-			return nil, err
-		}
-	}
-	return &metaCopy, nil
+	})
 }
 
 // ProfileFor is the profile this conversation chose for one agent, or ""
@@ -1016,11 +1041,21 @@ func (s *Store) SetOrder(ids []string) error {
 		at[meta.ID] = len(ids) + i + 1
 	}
 
+	// Snapshot first: a write can fail partway down the list, and the
+	// sessions already renumbered must go back rather than leave the
+	// list half arranged in memory while the files say otherwise.
+	prev := make(map[string]int, len(at))
+	for id := range at {
+		prev[id] = s.sessions[id].meta.Order
+	}
 	for id, pos := range at {
 		st := s.sessions[id]
 		st.meta.Order = pos
 		if s.dir != "" {
-			if err := writeSessionMeta(s.dir, st.meta); err != nil {
+			if err := s.writeMetaLocked(st.meta); err != nil {
+				for rid, order := range prev {
+					s.sessions[rid].meta.Order = order
+				}
 				return err
 			}
 		}
@@ -1590,7 +1625,7 @@ func (s *Store) Archive(sessionID string) (*Session, error) {
 	st.meta.ArchivedAt = &now
 	metaCopy := detach(st.meta)
 	if s.dir != "" {
-		if err := writeSessionMeta(s.dir, metaCopy); err != nil {
+		if err := s.writeMetaLocked(metaCopy); err != nil {
 			st.meta.ArchivedAt = nil // the file is the record; do not claim a write that failed
 			return nil, err
 		}
@@ -1706,6 +1741,15 @@ func (s *Store) Retrieve(sessionID string) (*Session, error) {
 // out of SetOrder so "dense over the active list" is defined once and
 // Retrieve cannot drift from it.
 func (s *Store) renumberLocked(order []string) error {
+	// Same partial-write hazard as SetOrder: Retrieve restores the
+	// archived flag when this fails, and the orders touched before the
+	// failure go back here, so the session is exactly as it was.
+	prev := make(map[string]int, len(order))
+	for _, id := range order {
+		if st, ok := s.sessions[id]; ok {
+			prev[id] = st.meta.Order
+		}
+	}
 	for i, id := range order {
 		st, ok := s.sessions[id]
 		if !ok {
@@ -1713,7 +1757,12 @@ func (s *Store) renumberLocked(order []string) error {
 		}
 		st.meta.Order = i + 1
 		if s.dir != "" {
-			if err := writeSessionMeta(s.dir, st.meta); err != nil {
+			if err := s.writeMetaLocked(st.meta); err != nil {
+				for rid, want := range prev {
+					if rst, ok := s.sessions[rid]; ok {
+						rst.meta.Order = want
+					}
+				}
 				return err
 			}
 		}
