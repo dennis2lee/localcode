@@ -224,6 +224,12 @@ type Model struct {
 	// wait on; the name alone says what, never how much longer. Zero
 	// when no tool is running, set on tool.start next to runningTool.
 	toolStartedAt time.Time
+	// pendingTools remembers what each running call is, by tool_use_id,
+	// so its tool.end can say what changed: the end event carries no
+	// name, only the id, the content and the input. See diff.go. An
+	// entry is consumed by its end; whatever is left when the turn
+	// ends (a cancelled call has no end) is dropped with it.
+	pendingTools map[string]pendingToolCall
 	// thinking is true while the model is reasoning rather than
 	// answering. The busy indicator's word, not a transcript entry: it is
 	// worth knowing about live and not worth scrolling past afterwards,

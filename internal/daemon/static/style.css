@@ -554,6 +554,29 @@ main {
   overflow: auto;
   font-size: 0.88em;
 }
+/* The before/after of an edit or a created file: the same collapsed
+   box as the detail above it, opened by the same click on the row's
+   head. Removed and added lines reuse the error and ok voices the
+   transcript already speaks — a diff is a result, and results elsewhere
+   are ✓/green and ✗/red — while context and the truncation count step
+   back into the muted voice. */
+#transcript .msg-toolcall .todiff {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  padding: 8px 10px;
+  margin: 4px 0 6px;
+  max-height: 340px;
+  overflow: auto;
+  font-family: var(--f-mono);
+  font-size: 0.88em;
+}
+#transcript .msg-toolcall .diff-del { color: var(--err); }
+#transcript .msg-toolcall .diff-add { color: var(--ok); }
+#transcript .msg-toolcall .diff-ctx { color: var(--muted); }
+#transcript .msg-toolcall .diff-more { color: var(--muted); font-style: italic; }
 @keyframes toolpulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.25 } }
 
 #transcript .msg-model { margin-bottom: 4px; }
@@ -1166,6 +1189,42 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 #effort-modal .note { color: var(--muted); font-size: var(--t-fine); margin: 14px 0 0; }
 #effort-modal .actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+
+/* Spend by model. One row per model: the figures, then one track whose
+   two segments are that model's input and output tokens. Two segments
+   rather than one summed bar because input and output are neither
+   interchangeable nor priced alike; the legend is text, not colour alone,
+   so the distinction survives a monochrome display. */
+#usage-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#usage-modal.open { display: flex; }
+#usage-modal .box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+  padding: 20px;
+  width: min(560px, calc(90vw / var(--zoom, 1)));
+  max-height: calc(80vh / var(--zoom, 1));
+  overflow-y: auto;
+}
+#usage-modal h3 { margin-top: 0; }
+#usage-modal .meta { color: var(--muted); font-size: var(--t-fine); margin: 0 0 12px; }
+#usage-modal .note { color: var(--muted); font-size: var(--t-fine); margin: 14px 0 0; }
+#usage-modal .close-row { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+.usage-row { margin-bottom: 12px; }
+.usage-row .usage-model { font-family: var(--f-mono); font-size: var(--t-ui); overflow-wrap: anywhere; }
+.usage-row .usage-figures { color: var(--muted); font-size: var(--t-fine); margin: 2px 0 4px; }
+.usage-track { display: flex; height: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-ctl); overflow: hidden; }
+.usage-seg { height: 100%; }
+.usage-seg.usage-input { background: var(--interactive); }
+.usage-seg.usage-output { background: var(--ok); }
 
 #permission-settings-modal {
   position: fixed;

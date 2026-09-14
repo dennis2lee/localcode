@@ -18,6 +18,7 @@ import { appendError } from './transcript.js';
 import { setInputLocked, renderCommDot } from './composer.js';
 import { renderPermissionStatus, renderAutoDelegate, renderWorkspace, renderEffort } from './render.js';
 import { Modal } from './modal.js';
+import { usageView } from './usage.js';
 import { settings } from './settings.js';
 import { taskView } from './taskview.js';
 // Circular with sessions.js, which imports permissionRequest from here —
@@ -722,5 +723,5 @@ export async function stopBlockingTurns() {
 // forgetting it is silent.
 export function anyModalOpen() {
   return permissionRequest.isOpen || permissionSettings.isOpen || delegate.isOpen ||
-    workspace.isOpen || settings.isOpen || taskView.isOpen || effort.isOpen;
+    workspace.isOpen || settings.isOpen || taskView.isOpen || effort.isOpen || usageView.isOpen;
 }

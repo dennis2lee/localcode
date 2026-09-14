@@ -86,6 +86,9 @@ func (m *Model) endTurn() {
 	m.runningTool = ""
 	m.toolStartedAt = time.Time{}
 	m.thinking = false
+	// A cancelled call never gets its tool.end, so whatever its start
+	// left behind would otherwise sit here until a call reuses its id.
+	clear(m.pendingTools)
 }
 
 func (m *Model) applyEvent(ev events.Event) {
@@ -173,6 +176,16 @@ func (m *Model) applyEvent(ev events.Event) {
 		m.toolStartedAt = time.Now()
 		name, _ := ev.Data["name"].(string)
 		input, _ := ev.Data["input"].(string)
+		// Kept for the end event, which has to know this was an edit
+		// to draw its diff but carries no name of its own. Several
+		// calls can be in flight at once, hence keyed by id rather
+		// than one slot.
+		if id, _ := ev.Data["tool_use_id"].(string); id != "" {
+			if m.pendingTools == nil {
+				m.pendingTools = map[string]pendingToolCall{}
+			}
+			m.pendingTools[id] = pendingToolCall{name: name, input: input}
+		}
 		m.endModelStream("")
 		if arg := summarizeToolInput(input); arg != "" {
 			m.appendEntry(entryTool, "▸ "+name+"  "+arg)
@@ -182,6 +195,22 @@ func (m *Model) applyEvent(ev events.Event) {
 	case events.TypeToolEnd:
 		m.runningTool = ""
 		m.toolStartedAt = time.Time{}
+		// An edit or a created file says what changed, in "- "/"+" rows
+		// stored as plain text — no escape sequences, which
+		// renderTranscript alone may introduce. Anything else (a bash
+		// call, a failed edit, an end nobody's start preceded) adds
+		// nothing, the way ends never did.
+		if id, _ := ev.Data["tool_use_id"].(string); id != "" {
+			if pend, ok := m.pendingTools[id]; ok {
+				delete(m.pendingTools, id)
+				if isErr, _ := ev.Data["is_error"].(bool); !isErr {
+					content, _ := ev.Data["content"].(string)
+					if rows := editToolDiff(pend.name, pend.input, content); len(rows) > 0 {
+						m.appendEntry(entryTool, renderToolDiff(rows))
+					}
+				}
+			}
+		}
 	case events.TypePermissionRequest:
 		id, _ := ev.Data["id"].(string)
 		tool, _ := ev.Data["tool"].(string)

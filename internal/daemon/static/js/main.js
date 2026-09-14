@@ -352,6 +352,7 @@ export { session, app } from './state.js';
 export { escapeHtml, formatTime, shortenPath } from './format.js';
 export { renderMarkdown, inline, unwrapMath } from './markdown.js';
 export { highlightCode } from './highlight.js';
+export { diffLines, editDiffForTool } from './diff.js';
 export { jumpToTurn } from './transcript.js';
 export { helpLines, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
@@ -359,6 +360,7 @@ export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, can
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { renderSchedules, applyScheduleEvent, loadSchedules, openScheduleDetails } from './schedules.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
+export { usageView, openUsage, closeUsage, summarizeUsageEvents, foldUsageEvent, addModelTokens } from './usage.js';
 export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';

@@ -18,6 +18,10 @@ Eighteen items delegated across six isolated worktrees, plus the API written dow
 * The README described changing model as switching agent, which stopped being true in v0.117.0. Two stale comments with it: Bedrock does take an effort level, and the TUI does have `/new`.
 * Both comparison pages were stamped v0.105.1 against a build on v0.121.0. Restamped in English and Korean, with a guard so the header stamp cannot fall behind the newest release again.
 
+* An `edit` shows what changed. The result said "replaced 2 occurrences in main.go" and the conversation had to take that on trust; both clients draw a minus/plus diff now, collapsed by default so a fifty-line change does not push the conversation off the screen. Computed from the call's own arguments, so nothing new goes on the wire — which is also why a `write_file` that replaced an existing file shows only its new lines: the old text is not anywhere a client can reach, and inventing a wire field for it belongs in its own change.
+* Code blocks are highlighted in the browser, with YAML and Markdown added to the languages already covered. Not in the terminal: that would mean a highlighting dependency, and the terminal renderer was written to avoid one.
+* The Web UI shows tokens per model. Input and output are shown separately rather than summed into one comforting bar — they are not interchangeable and are not priced alike — and archived conversations are counted, because the tokens were spent whether or not the conversation is still open.
+
 **Fixed, found while scoping**
 
 * Answering one permission prompt closed another. The Web UI cleared its pending request on any `permission.resolved` without comparing the id, so with two outstanding, answering the second dismissed the first unanswered — and on log replay a request answered days ago closed a live modal. Both clients queue prompts now, oldest first, where the broker has always supported many and an Orchestrate fanout raises up to four.

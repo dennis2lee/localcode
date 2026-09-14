@@ -102,3 +102,40 @@ test('a fenced block with a language keeps its class and is highlighted', () => 
   assert.ok(out.includes('class="language-go"'), out);
   assert.ok(out.includes('tok-kw'), out);
 });
+
+test('yaml tints keys, comments, strings, numbers and booleans', () => {
+  const out = app.highlightCode('server:\n  host: "example.com" # where\n  port: 8080\nenabled: true\n', 'yaml');
+  assert.match(out, /<span class="tok-kw">server<\/span>/);
+  assert.match(out, /<span class="tok-kw">port<\/span>/);
+  assert.match(out, /<span class="tok-com"># where<\/span>/);
+  assert.match(out, /<span class="tok-str">&quot;example\.com&quot;<\/span>/);
+  assert.match(out, /<span class="tok-num">8080<\/span>/);
+  assert.match(out, /<span class="tok-kw">true<\/span>/);
+  // A dashed key and a key behind a list marker are still keys; the
+  // scheme in a URL is not one.
+  const keys = app.highlightCode('my-key: 1\n- name: x\nurl: http://example.com\n', 'yaml');
+  assert.match(keys, /<span class="tok-kw">my-key<\/span>/);
+  assert.match(keys, /<span class="tok-kw">name<\/span>/);
+  assert.ok(!keys.includes('<span class="tok-kw">http</span>'), keys);
+  // yml is the same language under its other name.
+  assert.match(app.highlightCode('a: 1', 'yml'), /<span class="tok-kw">a<\/span>/);
+});
+
+test('markdown tints code spans, comments and headings, not prose', () => {
+  const out = app.highlightCode('# Title\n\nSome `code` here <!-- note -->\n', 'markdown');
+  assert.match(out, /<span class="tok-com"># Title<\/span>/);
+  assert.match(out, /<span class="tok-str">`code`<\/span>/);
+  assert.match(out, /<span class="tok-com">&lt;!-- note --&gt;<\/span>/);
+  // Digits in prose are not quantities: no gold numbers in a paragraph.
+  assert.ok(!app.highlightCode('in 2026 we met at 3pm', 'md').includes('tok-num'),
+    app.highlightCode('in 2026 we met at 3pm', 'md'));
+  // A # mid-line is prose, not a heading.
+  assert.ok(!app.highlightCode('C# code and #hashtag', 'markdown').includes('tok-com'));
+});
+
+test('a yaml fence renders highlighted end to end', () => {
+  const out = app.renderMarkdown('```yaml\nkey: "value" # comment\n```');
+  assert.ok(out.includes('class="language-yaml"'), out);
+  assert.ok(out.includes('tok-kw'), out);
+  assert.ok(out.includes('tok-str'), out);
+});

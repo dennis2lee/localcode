@@ -282,6 +282,13 @@
     asking, and changing it is one click rather than a command.
   -->
   <button class="pill" id="effort-btn" title="how hard this model is asked to think — click to change"></button>
+  <!--
+    Token spend by model, across every conversation on this daemon. A
+    window, not a readout: the label never carries a number, because a
+    number here would read as this conversation's context fill, which is
+    what the status line's own "context: …%" already says.
+  -->
+  <button class="pill" id="usage-btn" title="which models this daemon has spent tokens on, and how much each — archived conversations included">usage by model</button>
   <button class="pill" id="permission-status-btn" title="click to view or change permission settings"></button>
   <button class="pill" id="settings-btn" title="settings"><svg class="ico ico-13"><use href="#i-sliders"/></svg>settings</button>
 </div>
@@ -621,6 +628,25 @@
   </div>
 </div>
 
+<!--
+  Spend by model. One row per model: the input, output and combined token
+  figures beside a bar showing the same two numbers as two segments of one
+  track. Two segments because input and output tokens are neither
+  interchangeable nor priced alike; the caption under the rows says what
+  the bars hold and what they are scaled to, so the scale is never a
+  secret. Totals only, never percentages: a token total has no window to
+  be a percent of, and the 70/90 context thresholds belong to this
+  conversation's window fill in the status line, a different thing.
+-->
+<div id="usage-modal">
+  <div class="box">
+    <h3>Usage by model</h3>
+    <p class="meta" id="usage-scope"></p>
+    <div id="usage-rows"></div>
+    <p class="note" id="usage-note"></p>
+    <div class="close-row"><button id="usage-close">Close</button></div>
+  </div>
+</div>
 <div id="permission-modal">
   <div class="box">
     <h3>Permission request</h3>

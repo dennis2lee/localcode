@@ -2,6 +2,7 @@ import { transcriptEl, jumpBottomBtn } from './dom.js';
 import { renderMarkdown } from './markdown.js';
 import { createFollower } from './scroll.js';
 import { app, session } from './state.js';
+import { editDiffForTool, diffMaxRenderLines } from './diff.js';
 
 // The transcript follows the newest output only while the reader is at
 // the bottom of it. See scroll.js: this is the module that owns
@@ -325,27 +326,69 @@ export function appendToolCall(toolUseID, name, inputJSON) {
   detail.textContent = prettyJSON(inputJSON);
 
   head.title = 'click to show the full arguments and result';
-  head.addEventListener('click', () => { detail.hidden = !detail.hidden; });
+  head.addEventListener('click', () => {
+    detail.hidden = !detail.hidden;
+    const diff = row.querySelector('.todiff');
+    if (diff) diff.hidden = detail.hidden;
+  });
 
   row.appendChild(head);
   row.appendChild(detail);
   follower.keeping(() => transcriptEl.appendChild(row));
-  session.toolRows.set(toolUseID, { row, stateEl, marker, detail });
+  // name and inputJSON stay on the entry so finishToolCall can build
+  // the diff then: tool.end carries the same input, but keying the
+  // diff on what the call started with keeps one source — the row —
+  // rather than trusting two events to agree.
+  session.toolRows.set(toolUseID, { row, stateEl, marker, detail, name, inputJSON });
   return row;
+}
+
+// appendDiff draws the before/after rows editDiffForTool computed for a
+// finished edit or write_file: removed lines marked, added lines
+// marked, collapsed like the detail block itself so a fifty-line change
+// does not push the conversation off the screen. Every row is a
+// textContent node — never HTML — because a diff is file content, the
+// most attacker-influenced text this page draws.
+function appendDiff(row, rows) {
+  const wrap = document.createElement('div');
+  wrap.className = 'todiff';
+  wrap.hidden = true;
+  const shown = rows.slice(0, diffMaxRenderLines);
+  for (const r of shown) {
+    const line = document.createElement('div');
+    line.className = r.kind === 'del' ? 'diff-del' : r.kind === 'add' ? 'diff-add' : 'diff-ctx';
+    line.textContent = (r.kind === 'del' ? '- ' : r.kind === 'add' ? '+ ' : '  ') + r.text;
+    wrap.appendChild(line);
+  }
+  // Capped, not dropped: the count says how much is behind the cut, the
+  // way the detail block's line count does for long results.
+  if (rows.length > shown.length) {
+    const more = document.createElement('div');
+    more.className = 'diff-more';
+    more.textContent = `… (${rows.length - shown.length} more diff lines, not shown)`;
+    wrap.appendChild(more);
+  }
+  row.appendChild(wrap);
+  return wrap;
 }
 
 export function finishToolCall(toolUseID, content, isError) {
   const entry = session.toolRows.get(toolUseID);
   if (!entry) return;
   session.toolRows.delete(toolUseID);
-  const { row, stateEl, marker, detail } = entry;
+  const { row, stateEl, marker, detail, name, inputJSON } = entry;
   row.classList.remove('running');
   row.classList.toggle('failed', !!isError);
   marker.textContent = isError ? '✗' : '✓';
   const text = String(content ?? '');
+  // A failed call changed nothing, so there is nothing to diff — and a
+  // call whose input is gone or unparseable gets no diff rather than a
+  // wrong one.
+  const rows = !isError ? editDiffForTool(name, inputJSON, text) : null;
   follower.keeping(() => {
     stateEl.textContent = isError ? 'failed' : resultSize(text);
     detail.textContent = `${detail.textContent}\n\n${text}`;
+    if (rows && rows.length > 0) appendDiff(row, rows);
   });
 }
 
