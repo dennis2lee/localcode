@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.123.0
+
+Five defects in how a conversation's permissions are decided, found by taking one user report seriously enough to keep tracing after the first answer came back "no such thing".
+
+**Fixed**
+
+* A message typed while a turn was running was answered by the agent the user had just switched away from. The daemon read the session once when the message arrived and reused that agent for every turn it chained, so a message queued behind a running turn came back from `finishOrTake` as a turn of its own and ran on the previous agent's tool allowlist, system prompt and model profile — while the session record and every client already showed the new one. Reachable with two keystrokes: Tab switches agent with no busy check, and the window is while the model is writing its closing reply, which is exactly when people type. The agent is now read fresh before every send, which closes the narrower race at handler entry with it.
+* A permission rule whose decision was misspelled allowed everything it was written to forbid. `Decision` is a bare string, the registry's switch had cases for `deny` and `ask` and no default, and anything else fell through to execution with no prompt at all — overriding the built-in defaults that would have asked. `"denied"`, `"DENY"` and `"deny "` all did it. Refused at load, refused at the settings endpoint, and failed closed at the registry: deny rather than ask, because ask is downgraded to allow by `skip_permissions` and would reopen the hole. Near-misses are refused rather than folded into a valid value, since a prohibition someone wrote should not be rewritten into whatever the fold picks.
+* A background task's approval became the parent conversation's after a restart. A task has no client attached, so its permission question is mirrored into the conversation above it and answered there; the mirrored event names who actually asked, and log replay ignored that and granted to whoever owned the log. The parent gained a tool grant and a remembered out-of-workspace directory it was never asked about, silently and across restarts.
+* The status line went on naming the model of the agent just left. Which model a conversation answers on is kept per agent on the server, and both clients cached one copy with nothing saying whose it was — the Web UI already dropped the stale model from the usage report and left the conversation's own choice, which outranks it. Announced from the daemon next to the effort it already announces, and each client now compares the agent a cached choice was made for against the one in force.
+* A metadata write that failed left the session changed in memory anyway. `Archive` says it two screens down — the file is the record; do not claim a write that failed — and puts its value back; `SetAgent` and six siblings did not. One helper now snapshots, applies, persists and restores, so the next setter added inherits the rollback instead of having to remember it.
+
+**Guards**
+
+* The two permission-decision rosters live in separate packages joined by a bare string conversion at the wiring, with nothing pinning that they agree. A guard in the one package that imports both compares them, so a fourth decision taught to one and not the other fails by name rather than arriving at the registry as a value it refuses.
+* Release-verification tests for all five, driving the real surfaces: the HTTP API for the queued turn and the decision endpoints, the event log for the mirrored approval, the rendered status line and footer for the model name, and an injectable write failure for the rollback table — the last because making a directory unwritable needs a non-root POSIX account and does something else on Windows, which is a test that runs nowhere.
+
 ## v0.122.0
 
 Eighteen items delegated across six isolated worktrees, plus the API written down and the terminal rendering markdown.
