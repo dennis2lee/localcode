@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.125.0
+
+**New**
+
+* A clickable scrollbar in the TUI, behind `"mouse": true`. The transcript could only be scrolled by keys, and the alt screen takes the terminal's own scrollback away, so somebody who did not know `PgUp` reported that scrolling did not work at all. The arrows move a line, the track a screen, and the thumb drags — keeping the grab, so the pressed row stays inside the thumb rather than the thumb jumping out from under the pointer. Off by default, because the cost is real: mouse reporting hands the terminal's mouse to the program and a plain drag stops making a native selection, though Shift still does. Reporting is requested only while the switch is on and the transcript actually overflows, so a conversation that fits leaves the mouse alone entirely. The switch is read from the config on the machine running the TUI, never from the daemon — over `--server` a remote daemon would otherwise be deciding whether your terminal gives up its mouse.
+* The settings window is in tabs, and sets the type. Four groups — agents, turns, updates, typography — because the modal had grown past the point where another block could be added to it. The typography tab sets the three faces and the text size, and takes effect on the next frame: the stylesheet was already tokenised, so the change is a custom property on the root element. The nine-step scale is multiplied by a factor rather than re-derived as ratios of a base — the steps are not a clean series and rewriting them would have moved sizes nobody asked to move, so at a factor of 1 every computed size is exactly what it has always been. The choice lives in the browser beside the zoom factor, for the reason zoom already wrote down: a comfortable size belongs to the person and their screen, not to the window, and not to a daemon on another machine.
+
+**Fixed**
+
+* Escape with the settings window open cancelled the running turn as well as closing the window. Opening settings mid-turn, changing nothing and pressing Escape is not a request to throw the turn away; the document handler now stands down while the window is open, the way it already did for a permission request.
+
+**Guards**
+
+* Every setting is reachable through exactly one tab, checked against the shipped markup rather than a list of ids, so a setting added later without a tab fails by name instead of disappearing.
+* The scrollbar's geometry is a pure function of the layout — which cell is an arrow, where the thumb sits — so a test feeds coordinates in and reads an action out with no terminal and no render, and the drag test grabs the thumb away from its edge, where an absolute mapping and a relative one finally differ.
+* The typography read that runs before first paint is a second copy of the module's, so a guard compares their storage keys exactly. Quoted rather than by prefix: a substring match passes when the head script reads a longer key that merely starts the same way, which is the drift it exists to catch.
+
 ## v0.124.0
 
 **New**
