@@ -97,6 +97,17 @@ type Config struct {
 	// exists for.
 	ShowTimestamps *bool `json:"show_timestamps,omitempty"`
 
+	// Mouse hands the mouse to the TUI running on this machine: a
+	// scrollbar down the transcript's right edge, driven by clicking
+	// rather than by the wheel. Nil means unset, defaulting to OFF,
+	// because while it is on the terminal no longer makes a native
+	// text selection on drag (hold Shift instead).
+	//
+	// Read only by the TUI client, never by the daemon: with --server
+	// pointed at another machine, that machine's config must not
+	// decide whether this terminal gives up its mouse.
+	Mouse *bool `json:"mouse,omitempty"`
+
 	// Hooks holds Claude Code-style lifecycle hooks (shell commands run at
 	// pre_tool_use/post_tool_use/user_prompt_submit/stop/session_start),
 	// keyed by event name. See internal/hooks.

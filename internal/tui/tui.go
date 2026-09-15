@@ -80,8 +80,11 @@ type Model struct {
 	viewport   viewport.Model
 	input      textarea.Model
 	termHeight int
-	termWidth  int
-	events     <-chan events.Event
+	// termWidth is the full terminal width from the last resize. The
+	// viewport runs one narrower while the scrollbar is drawn, so the
+	// frame reads this rather than the viewport for its own width.
+	termWidth int
+	events    <-chan events.Event
 	// streamCancel stops the event stream this model is currently
 	// reading, and streamGen identifies it.
 	//
@@ -247,9 +250,25 @@ type Model struct {
 	// connect, so the map is correct after a reattach too). It feeds the
 	// busy indicator's task count and the /tasks command.
 	tasks map[string]taskState
+
+	// mouseEnabled is the local "mouse" switch, read from the config on
+	// the machine running this TUI rather than from the daemon it is
+	// attached to. While it is on and the transcript overflows, the
+	// frame takes the mouse for the scrollbar beside the transcript.
+	mouseEnabled bool
+	// scrollbarDragging is true between a press on the thumb and its
+	// release: motion events in between move the transcript instead of
+	// being ignored. Cleared by a resize, which moves what every row
+	// means mid-drag.
+	scrollbarDragging bool
+	// scrollbarDragGrab is the press point measured down from the
+	// thumb's top row in track rows. The motion handler holds it while
+	// the drag runs, so the thumb stays under the pointer instead of
+	// jumping its top to the pointer. Valid only while dragging.
+	scrollbarDragGrab int
 }
 
-func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Event) Model {
+func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Event, mouseEnabled bool) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message (Enter to send, /help for help, exit to quit)"
 	ta.ShowLineNumbers = false
@@ -280,6 +299,7 @@ func New(c *client.Client, sessionID, agentName string, eventCh <-chan events.Ev
 		currentAgent: agentName,
 		tasks:        map[string]taskState{},
 		drafts:       map[string]string{},
+		mouseEnabled: mouseEnabled,
 	}
 }
 

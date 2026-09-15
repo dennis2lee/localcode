@@ -91,8 +91,13 @@ func (m *Model) scrollInputToTop() {
 // appended — a resize just invalidated that.
 func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.termHeight = msg.Height
+	m.termWidth = msg.Width
 	m.viewport.SetWidth(msg.Width)
 	m.input.SetWidth(msg.Width - 2)
+	// A resize moves what every scrollbar row means, so a drag held
+	// across one ends rather than landing somewhere it never pointed.
+	m.scrollbarDragging = false
+	m.scrollbarDragGrab = 0
 	m.resizeLayout()
 	m.refreshViewport()
 	return m, nil

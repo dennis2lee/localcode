@@ -315,6 +315,7 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
 | `show_thinking` | Whether the clients paint the model's reasoning while it arrives. On unless set to false; `/thinking` toggles it. Daemon-wide, like `show_tps`. This changes nothing about what the model does: reasoning is broadcast and never logged either way. See [What the transcript shows](#what-the-transcript-shows). |
 | `show_timestamps` | Whether a time is shown beside each turn boundary. Off unless set to true; `/timestamps` toggles it. Daemon-wide. See [What the transcript shows](#what-the-transcript-shows). |
+| `mouse` | Whether the TUI takes the mouse for a clickable scrollbar beside the transcript. Off unless set to true. Read from the config on the machine running the TUI, never from the daemon. See [Screen controls](#screen-controls). |
 | `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
 | `trace_max_total_mb` | Optional cap on the trace directory, and separately on the prompt-manifest directory beside it. When set, each is bounded on its own: the oldest files go until it fits, and today's file is never removed. See [What it did](#the-turn-log). |
 | `default_profile` | The profile used when an agent name resolves to nothing. |
@@ -906,6 +907,8 @@ Other behavior:
 Both clients follow new output only while the transcript is at the bottom. Scrolling up pauses following. Returning to the bottom resumes it. In the Web UI, **↓ latest** jumps to the bottom. Sending a prompt or opening a session also moves to the bottom. Background-task windows use the same behavior.
 
 TUI transcript scrolling: `PgUp` and `PgDn` by screen, `Shift+Up` and `Shift+Down` by line. Plain arrows move within the prompt or recall history. Resizing the prompt box preserves transcript following.
+
+TUI mouse scrollbar: `"mouse": true` in config.json draws a scrollbar down the transcript's right edge. Click the top arrow for up one line and the bottom arrow for down one line. Click the track above or below the thumb for up or down one screen. Press the thumb and move to drag the transcript proportionally. The wheel scrolls a few lines either way. Off by default. The cost is real: while reporting is on, the terminal hands the mouse to the program, so a plain drag no longer makes a native text selection (hold Shift instead). Reporting turns on only while the transcript overflows; a conversation that fits on screen draws no scrollbar and leaves the mouse entirely to the terminal. The switch is read from the config on the machine running the TUI, so it works over `--server` and a remote daemon never decides it.
 
 The Web UI initially loads the most recent events. If earlier events are omitted, **Load the whole conversation** reloads from the first event. Switching sessions returns to the default recent-event view.
 

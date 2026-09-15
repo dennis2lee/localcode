@@ -20,7 +20,7 @@ import (
 // Init() or a real tea.Program, so the client is never called.
 func newTestModel() Model {
 	ch := make(chan events.Event)
-	return New(client.New("http://unused.invalid"), "s1", "general-purpose", ch)
+	return New(client.New("http://unused.invalid"), "s1", "general-purpose", ch, false)
 }
 
 // transcriptText joins every transcript entry's raw text, unstyled — what
@@ -156,7 +156,7 @@ func TestVersionCommandFetchesFromDaemon(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	m, cmd := pressEnterWith(t, m, "/version")
 	if cmd == nil {
 		t.Fatal("/version should issue a command to fetch the daemon's version")
@@ -216,7 +216,7 @@ func TestTabKeySwitchesAgent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "plan", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "plan", make(chan events.Event), false)
 	m.agents = []client.AgentInfo{{Name: "build"}, {Name: "plan"}}
 
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -663,7 +663,7 @@ func TestQueuedPromptAutoSendsWhenTurnFinishes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	m.waiting = true
 	// Seeded directly: a prompt typed mid-turn now goes straight to the
 	// daemon, so the only thing that still lands in this queue is a send
@@ -1017,7 +1017,7 @@ func TestBackgroundTaskDoesNotQueuePrompts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	m.tasks = map[string]taskState{"t1": {agent: "explore", status: "running"}}
 
 	m, cmd := pressEnterWith(t, m, "a new question")

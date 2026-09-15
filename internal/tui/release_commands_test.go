@@ -60,7 +60,7 @@ func TestNewSessionAsksTheDaemon(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	cmd, ok := dispatchLocalCommand(&m, "/new")
 	if !ok || cmd == nil {
 		t.Fatal("/new produced no command")
@@ -102,7 +102,7 @@ func TestRenameSessionAsksTheDaemon(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	cmd, ok := dispatchLocalCommand(&m, "/rename awesome title")
 	if !ok || cmd == nil {
 		t.Fatal("/rename produced no command")
@@ -146,7 +146,7 @@ func TestDeleteSessionAsksTheDaemon(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	cmd, ok := dispatchLocalCommand(&m, "/delete")
 	if !ok || cmd == nil {
 		t.Fatal("/delete produced no command")
@@ -194,7 +194,7 @@ func TestCtrlBDetachesChildSubAgent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl})
 	m = updated.(Model)
 	if cmd == nil {
@@ -237,7 +237,7 @@ func TestCtrlBReportsWhenNoSubAgentRunning(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl})
 	m = updated.(Model)
 	if cmd == nil {

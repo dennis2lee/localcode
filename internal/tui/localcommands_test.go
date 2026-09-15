@@ -71,7 +71,7 @@ func TestClearSessionAliasCreatesAndOpensNewSession(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	cmd, ok := dispatchLocalCommand(&m, "/clear-session")
 	if !ok || cmd == nil {
 		t.Fatal("/clear-session produced no command")

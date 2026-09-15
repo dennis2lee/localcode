@@ -235,12 +235,29 @@ func (m *Model) appendTool(text string) {
 // scrolled up to reread something, which is exactly what happened when
 // this unconditionally called GotoBottom on every event.
 func (m *Model) refreshViewport() {
-	w := m.viewport.Width()
-	if w <= 0 {
-		w = fallbackWidth
+	full := m.termWidth
+	if full <= 0 {
+		full = m.viewport.Width()
+		if full <= 0 {
+			full = fallbackWidth
+		}
+	}
+	w := full
+	render := func(width int) {
+		m.viewport.SetWidth(width)
+		m.viewport.SetContent(lipgloss.NewStyle().Width(width).Render(renderTranscript(m.transcript, width)))
 	}
 	atBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(lipgloss.NewStyle().Width(w).Render(renderTranscript(m.transcript, w)))
+	render(w)
+	// The scrollbar stands in the transcript's last column rather than
+	// over it, so a transcript that overflows gives up one column while
+	// the switch is on. Decided at the full width every time, which is
+	// what keeps it stable: narrowing can only lengthen the transcript,
+	// so a scrollbar earned at full width is still earned one narrower.
+	if m.mouseEnabled && full > 1 && m.viewport.TotalLineCount() > m.viewport.Height() {
+		w = full - 1
+		render(w)
+	}
 	if atBottom {
 		m.viewport.GotoBottom()
 	}
