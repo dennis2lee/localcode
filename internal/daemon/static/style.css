@@ -74,15 +74,21 @@
 
   /* The scale, and it is the whole scale: every font-size below is one of
      these nine. */
-  --t-cap: 10.5px;    /* letterspaced caps: the name of a region */
-  --t-fine: 11.5px;   /* meta, notes, marginal apparatus */
-  --t-ui: 12.5px;     /* the interface default, and the voice of controls */
-  --t-code: 13px;     /* mono, wherever it is set as code */
-  --t-ui-l: 13.5px;   /* inputs and panel rows */
-  --t-read-s: 15px;   /* the second reading size: thinking, review, tables */
-  --t-sub: 16.5px;
-  --t-read: 17px;     /* the document body, and what you type into it */
-  --t-head: 18.5px;   /* a heading inside an answer, and a window's title */
+  /* The text size, owned by this browser (see js/typography.js). A
+     multiplier, never a rewrite of the steps: each one is its own pixel
+     value times this factor, so at 1 every computed size is exactly what
+     it has always been. Type only: spacing never reads this, which is
+     what separates it from --zoom above. */
+  --t-scale: 1;
+  --t-cap: calc(10.5px * var(--t-scale, 1));    /* letterspaced caps: the name of a region */
+  --t-fine: calc(11.5px * var(--t-scale, 1));   /* meta, notes, marginal apparatus */
+  --t-ui: calc(12.5px * var(--t-scale, 1));     /* the interface default, and the voice of controls */
+  --t-code: calc(13px * var(--t-scale, 1));     /* mono, wherever it is set as code */
+  --t-ui-l: calc(13.5px * var(--t-scale, 1));   /* inputs and panel rows */
+  --t-read-s: calc(15px * var(--t-scale, 1));   /* the second reading size: thinking, review, tables */
+  --t-sub: calc(16.5px * var(--t-scale, 1));
+  --t-read: calc(17px * var(--t-scale, 1));     /* the document body, and what you type into it */
+  --t-head: calc(18.5px * var(--t-scale, 1));   /* a heading inside an answer, and a window's title */
 
   /* The space the page keeps clear at the window's left and right edges.
      One value for the transcript, the composer and the status strip, so
@@ -758,7 +764,7 @@ aside h2 {
   width: min(560px, calc(90vw / var(--zoom, 1)));
 }
 #schedule-modal h3, #debate-modal h3 { margin-top: 0; }
-#schedule-modal .field-label, #debate-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: var(--t-ui); }
+#schedule-modal .field-label, #debate-modal .field-label, #settings-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: var(--t-ui); }
 #schedule-modal input, #schedule-modal textarea, #debate-modal input, #debate-modal textarea {
   width: 100%;
   background: var(--bg);
@@ -1540,6 +1546,40 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 #settings-modal .check-row input[type="checkbox"] { margin-top: 3px; flex: 0 0 auto; }
 /* A note that has to be noticed rather than merely available. */
 #settings-modal .note.warn { color: var(--warn); }
+/* The settings tabs: one row of plain buttons under the title, the
+   current one marked with the select colour rather than a fill. No new
+   hue: the palette has already spent both of its accents. */
+#settings-modal .settings-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+#settings-modal [role="tab"] {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--t-ui);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+#settings-modal [role="tab"]:hover { color: var(--text); }
+#settings-modal [role="tab"][aria-selected="true"] {
+  color: var(--select);
+  border-bottom-color: var(--select);
+}
+/* The focus ring: tabs are keyboard controls, and the ring is what says
+   which one the arrows will move. Outlined, never filled. */
+#settings-modal [role="tab"]:focus-visible {
+  outline: 2px solid var(--interactive);
+  outline-offset: 1px;
+}
+/* The named-font box under a face picker. Full width like every other
+   settings input, with a gap above so it reads as the picker's second
+   half rather than the next field. */
+#settings-modal .typo-custom { margin-top: 6px; }
 
 /* The archive.
 

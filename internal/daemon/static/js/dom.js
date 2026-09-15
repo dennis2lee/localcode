@@ -160,3 +160,18 @@ export const modelInvocableWarnEl = document.getElementById('model-invocable-war
 export const updateCheckBtn = document.getElementById('update-check-btn');
 export const updateInstallBtn = document.getElementById('update-install-btn');
 export const updateNoteEl = document.getElementById('update-note');
+// The settings tabs. One entry per tab, in the order the tablist shows
+// them: the first is where the window always opens, and settings.js
+// reads the panels' visibility from the Modal flag, never from the DOM.
+export const settingsTabs = ['agents', 'turns', 'updates', 'typography'].map((name) => ({
+  name,
+  tab: document.getElementById('settings-tab-' + name),
+  panel: document.getElementById('settings-panel-' + name),
+}));
+export const typoDocSelect = document.getElementById('typo-doc-select');
+export const typoDocCustom = document.getElementById('typo-doc-custom');
+export const typoUiSelect = document.getElementById('typo-ui-select');
+export const typoUiCustom = document.getElementById('typo-ui-custom');
+export const typoMonoSelect = document.getElementById('typo-mono-select');
+export const typoMonoCustom = document.getElementById('typo-mono-custom');
+export const typoSizeSelect = document.getElementById('typo-size-select');
