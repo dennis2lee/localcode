@@ -20,7 +20,7 @@ LocalCode supports interactive TUI, Web UI, desktop, daemon, and one-shot CLI wo
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [AGENTS.md](#agentsmd-project-rules), [Auto memory](#auto-memory) |
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/usage](#usage), [Other local commands](#other-local-commands) |
 | [5. Sessions](#part-5-sessions) | [Switching sessions](#switching-sessions), [Archive](#archiving-a-conversation), [Referring to another conversation](#referring-to-another-conversation-with-name), [Rename and delete](#renaming-and-deleting-sessions), [Context window](#context-window-management), [Session logs](#session-logs), [Restart recovery](#daemon-restart-and-session-recovery) |
-| [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
+| [6. Web UI](#part-6-web-ui) | [Resizing and hiding the panels](#resizing-and-hiding-the-side-panels), [Left panel: sessions](#left-panel-sessions), [Right panel](#right-panel), [Drag and drop attach](#drag-and-drop-file-attach), [Status bar](#status-bar-under-the-prompt), [Settings](#settings), [Switching agents with Tab](#switching-agents-with-tab), [Markdown rendering](#model-output-renders-as-markdown), [Watching a long turn](#watching-a-long-turn), [Redirecting a turn](#redirecting-a-turn-while-it-runs) |
 | [7. Agents and automation](#part-7-agents-and-automation) | [Available tools](#available-tools), [Combining agents](#combining-agents), [Orchestration](#orchestration), [Smart Agent](#smart-agent), [Plan mode](#plan-mode), [Auto delegation](#auto-delegation), [Effort](#effort), [Zoom and what a reload keeps](#zoom-and-what-a-reload-keeps), [Debug log](#debug-log), [Background tasks](#background-tasks), [Switching models](#switching-models), [Python on Windows](#python-on-windows), [Local LLMs](#attaching-a-local-llm) |
 | [Known limitations](#known-limitations) | |
 
@@ -1649,7 +1649,22 @@ One line directly below the input box:
 | Let go button | **let go**. Appears only while the turn is waiting on a sub-agent. The turn carries on without the answer and the sub-agent keeps working; the Stop button is the other answer to the same moment and ends both. The TUI has this on **Ctrl+B**. |
 | Auto-delegate pill | Opens target-agent and pattern settings. See [Auto delegation](#auto-delegation). |
 | Permission pill | Shows permission state and opens its controls. See [Permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
-| Settings pill | **settings**. Opens the settings window, which holds the [Smart Agent](#smart-agent) switch and the update controls. See [Checking for updates](#checking-for-updates). |
+| Settings pill | **settings**. Opens the settings window, grouped into tabs. See [Settings](#settings). |
+
+### Settings
+
+The **settings** pill opens the settings window, grouped into one tab per subject. Tabs are keyboard controls: arrows move between them, Home and End jump, Escape closes the window.
+
+| Tab | What is in it |
+|---|---|
+| Agents | [Smart Agent](#smart-agent), [Orchestration](#orchestration), and whether the model may run opted-in commands itself |
+| Turns | The carry-on nudge for muse models, and the repeat guard that ends a turn which only repeats earlier tool calls |
+| Updates | Check for updates, and download and install. See [Checking for updates](#checking-for-updates) |
+| Typography | The reading, interface and monospace faces, and the text size. See below |
+
+Typography is per person, not per daemon. The faces and the size live in this browser's storage, survive a reload, and apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
+
+Text size is the type only, from 87.5% to 140% of the nine-step scale. [Zoom](#zoom-and-what-a-reload-keeps) is separate: ctrl+wheel scales the whole page, spacing included. The two compose: zoom multiplies everything, text size multiplies only the type.
 
 ### Switching agents with Tab
 
@@ -2401,6 +2416,8 @@ Ctrl and the wheel, or ctrl with `+`, `-` and `0`, size the page. The zoom belon
 Which conversation a window is looking at survives a reload too, per window: two windows on one daemon each come back to their own. A window opened fresh starts at the newest conversation, as before.
 
 Both matter because `/update` reloads the page on its own when the daemon behind a desktop window hands over. An update that finished by moving you to a different conversation at 100% zoom was taking something away from whoever ran it.
+
+The [Typography](#settings) text size is the other half of sizing: zoom scales the whole page, spacing included, while text size scales only the type. Both are stored in the browser and restored on reload, and changing one never resets the other.
 
 ### Debug log
 

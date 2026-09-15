@@ -1,12 +1,14 @@
-// The settings window.
+// The settings window: tabs over daemon-wide settings, plus the
+// Typography tab owned by this browser (see typography.js).
 //
-// Everything here belongs to the daemon rather than to this browser, and
-// is shared by every client attached to it. Adding a setting later should
-// be adding a block to index.html and a line to one of the handlers
-// below, not a redesign.
+// Everything outside Typography belongs to the daemon rather than to
+// this browser, and is shared by every client attached to it. Adding a
+// setting later is adding a block to a panel in index.html and a line
+// to one of the handlers below; a setting in no panel fails the
+// reachability test rather than disappearing.
 
 import {
-  settingsModalEl, settingsBtn, settingsCloseBtn,
+  settingsModalEl, settingsBtn, settingsCloseBtn, settingsTabs,
   smartAgentCheckbox, smartAgentNoteEl, smartAgentWarnEl,
   orchestrateCheckbox, orchestrateNoteEl, orchestrateWarnEl,
   modelInvocableCheckbox, modelInvocableNoteEl, modelInvocableWarnEl,
@@ -17,14 +19,52 @@ import {
 import { Modal } from './modal.js';
 import { app } from './state.js';
 import * as apiClient from './api.js';
+import { wireTypography, renderTypography } from './typography.js';
 
 export const settings = new Modal(settingsModalEl);
+
+// The tabs. One panel visible at a time, chosen by name; the first tab
+// is where the window always opens, so a choice made last time never
+// leaks into the next opening.
+let activeSettingsTab = settingsTabs.length ? settingsTabs[0].name : '';
+
+export function selectSettingsTab(name, focus) {
+  const known = settingsTabs.some((t) => t.name === name);
+  if (!known) return;
+  activeSettingsTab = name;
+  for (const t of settingsTabs) {
+    const on = t.name === name;
+    if (t.tab) {
+      t.tab.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.tab.tabIndex = on ? 0 : -1;
+    }
+    if (t.panel) t.panel.hidden = !on;
+  }
+  if (focus) {
+    const current = settingsTabs.find((t) => t.name === name);
+    if (current && current.tab) current.tab.focus();
+  }
+}
+
+// moveSettingsTab steps between tabs with wrapping, for the arrow keys.
+// The selection follows the focus: one keypress both moves and shows.
+function moveSettingsTab(from, dir) {
+  const i = settingsTabs.findIndex((t) => t.name === from);
+  if (i < 0) return;
+  const next = settingsTabs[(i + dir + settingsTabs.length) % settingsTabs.length];
+  selectSettingsTab(next.name, true);
+}
 
 export function openSettings() {
   // Cleared rather than checked: opening the panel is not asking GitHub
   // anything, and a stale answer from ten minutes ago would look like one.
   updateNoteEl.textContent = '';
   updateInstallBtn.hidden = true;
+  // The window always opens on the first tab: the tab is navigation,
+  // not state, and reopening where it was left is how a setting ends
+  // up changed in a panel nobody watched open.
+  renderTypography();
+  selectSettingsTab(settingsTabs.length ? settingsTabs[0].name : '');
   renderSmartAgent();
   renderOrchestrate();
   renderModelInvocable();
@@ -365,6 +405,37 @@ async function installUpdate() {
 export function initSettings() {
   settingsBtn.addEventListener('click', openSettings);
   settingsCloseBtn.addEventListener('click', () => settings.close());
+  wireTypography();
+  selectSettingsTab(activeSettingsTab);
+  for (const t of settingsTabs) {
+    if (!t.tab) continue;
+    t.tab.addEventListener('click', () => selectSettingsTab(t.name));
+    // Arrow keys move between tabs, with wrapping; Home and End jump.
+    // Attached to each tab rather than the tablist, since that is what
+    // holds the focus the keys move.
+    t.tab.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        moveSettingsTab(t.name, 1);
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveSettingsTab(t.name, -1);
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        selectSettingsTab(settingsTabs[0].name, true);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        selectSettingsTab(settingsTabs[settingsTabs.length - 1].name, true);
+      }
+    });
+  }
+  // Escape closes the window, and only closes it: main.js's cancel-turn
+  // handler stands down while this window is open, the way it already
+  // does for a permission request. Closing a window you opened to look
+  // at is not a request to stop the work going on behind it.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && settings.isOpen) settings.close();
+  });
   smartAgentCheckbox.addEventListener('change', toggleSmartAgent);
   orchestrateCheckbox.addEventListener('change', toggleOrchestrate);
   modelInvocableCheckbox.addEventListener('change', toggleModelInvocable);

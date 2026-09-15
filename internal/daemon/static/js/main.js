@@ -43,7 +43,7 @@ import {
 import { closeTaskView, cancelOpenTask, deleteOpenTask, taskView } from './taskview.js';
 import { initResizers } from './resize.js';
 import { tryComplete, resetCompletion } from './complete.js';
-import { initSettings } from './settings.js';
+import { initSettings, settings } from './settings.js';
 
 agentSelectEl.addEventListener('change', async () => {
   const name = agentSelectEl.value;
@@ -152,7 +152,12 @@ inputEl.addEventListener('keydown', (e) => {
 // modal and in the modals' own fields, where moving between inputs is
 // the only thing it could reasonably mean.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && e.target !== inputEl && !permissionRequest.isOpen) {
+  // An open window owns Escape. The permission request has always said
+  // so; the settings window says it now for the same reason, and it is
+  // the stronger case: somebody who opened settings mid-turn, changed
+  // nothing, and pressed Escape to put the window away has not asked to
+  // throw the turn away with it.
+  if (e.key === 'Escape' && e.target !== inputEl && !permissionRequest.isOpen && !settings.isOpen) {
     cancelTurn();
     return;
   }

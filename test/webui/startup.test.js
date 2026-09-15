@@ -27,7 +27,18 @@ test('index.html loads the split-out stylesheet and the ES module entry point', 
   assert.match(html, /<script type="module" src="js\/main\.js"><\/script>/);
   // The markup and the code stay separate — no inline blocks crept back in.
   assert.ok(!/<style[\s>]/.test(html), 'index.html has an inline <style> block again');
-  assert.ok(!/<script(?!\s+type="module")/.test(html), 'index.html has a non-module inline <script> block again');
+  // One exception, and it is pinned rather than open: the typography
+  // pre-paint read must run before the stylesheet first applies, which
+  // no deferred module can guarantee, so it lives inline in the head.
+  // Anything else inline is the drift this guard exists to catch.
+  const inline = [...html.matchAll(/<script(?!\s+type="module")[\s>]([\s\S]*?)<\/script>/g)];
+  assert.ok(inline.length <= 1, 'index.html has a non-module inline <script> block again');
+  if (inline.length === 1) {
+    assert.match(inline[0][1], /Typography before first paint/);
+    assert.match(inline[0][1], /localcode\.textScale/);
+    assert.ok(!/fetch\s*\(|XMLHttpRequest|document\.write/.test(inline[0][1]),
+      'the pre-paint script reaches past localStorage and the root element');
+  }
 });
 
 test('the shipped files contain no stray NUL bytes', () => {

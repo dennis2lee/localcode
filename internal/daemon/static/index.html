@@ -6,6 +6,32 @@
 <title>LocalCode</title>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
+<!--
+  Typography before first paint.
+
+  The faces and the text size live in localStorage (see js/typography.js:
+  they belong to the person and their screen, not to the daemon). A module
+  script runs after the stylesheet has already painted once, so waiting
+  for it flashes the default face on every reload. This repeats the same
+  read inline, in the head, so the properties are on the root element
+  before anything is drawn.
+-->
+<script>
+// Typography before first paint: stored faces and size onto the root
+// element ahead of the stylesheet. Mirrors js/typography.js.
+(function () {
+  try {
+    var root = document.documentElement;
+    var faces = { doc: 'localcode.face.doc', ui: 'localcode.face.ui', mono: 'localcode.face.mono' };
+    for (var role in faces) {
+      var v = localStorage.getItem(faces[role]);
+      if (v) root.style.setProperty('--f-' + role, v);
+    }
+    var s = parseFloat(localStorage.getItem('localcode.textScale'));
+    if (isFinite(s) && s > 0) root.style.setProperty('--t-scale', String(s));
+  } catch (e) { /* storage refused: the defaults stand */ }
+})();
+</script>
 </head>
 <body>
 <!--
@@ -404,12 +430,27 @@
   Settings.
 
   One section per subject, each self-contained: adding a setting later is
-  adding a block here and a line in settings.js, not a redesign.
+  adding a block to a panel here and a line in settings.js, and putting
+  it in no panel fails the reachability test in test/webui/settings_tabs
+  rather than disappearing into a tab nobody opens.
 -->
 <div id="settings-modal">
   <div class="box">
     <h3>Settings</h3>
+    <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+      <button type="button" role="tab" id="settings-tab-agents" aria-controls="settings-panel-agents" aria-selected="true">Agents</button>
+      <button type="button" role="tab" id="settings-tab-turns" aria-controls="settings-panel-turns" aria-selected="false" tabindex="-1">Turns</button>
+      <button type="button" role="tab" id="settings-tab-updates" aria-controls="settings-panel-updates" aria-selected="false" tabindex="-1">Updates</button>
+      <button type="button" role="tab" id="settings-tab-typography" aria-controls="settings-panel-typography" aria-selected="false" tabindex="-1">Typography</button>
+    </div>
 
+    <!--
+      Agents: everything about what the model may do on its own (Smart
+      Agent, Orchestration, and the commands it may run). One tab because
+      the three switches compose into a single answer: how much of the
+      work leaves this conversation.
+    -->
+    <section role="tabpanel" id="settings-panel-agents" aria-labelledby="settings-tab-agents" tabindex="0">
     <!--
       Smart Agent.
 
@@ -474,7 +515,14 @@
       <p class="note" id="model-invocable-note"></p>
       <p class="note warn" id="model-invocable-warn" hidden></p>
     </div>
+    </section>
 
+    <!--
+      Turns: how a turn proceeds and when it ends. Keep going and the
+      repeat guard are the two answers to "why did it stop", so they sit
+      together rather than one screen apart.
+    -->
+    <section role="tabpanel" id="settings-panel-turns" aria-labelledby="settings-tab-turns" tabindex="0" hidden>
     <!--
       Keep going.
 
@@ -509,7 +557,14 @@
       </div>
       <p class="note warn" id="repeat-limit-warn" hidden></p>
     </div>
+    </section>
 
+    <!--
+      Updates: asking what the latest release is, and installing it. Its
+      own tab because it is maintenance of the program, unrelated to any
+      conversation or model.
+    -->
+    <section role="tabpanel" id="settings-panel-updates" aria-labelledby="settings-tab-updates" tabindex="0" hidden>
     <!--
       Updates.
 
@@ -528,6 +583,45 @@
       </div>
       <p class="note" id="update-note"></p>
     </div>
+    </section>
+
+    <!--
+      Typography: the faces and the text size. Per person, not per
+      daemon, so these live in this browser's localStorage (see
+      js/typography.js) and never in config.json. Each face offers the
+      stacks that fit its role plus a free-text field; whatever is
+      chosen keeps a fallback stack behind it, so a name that resolves
+      to nothing degrades to something readable.
+    -->
+    <section role="tabpanel" id="settings-panel-typography" aria-labelledby="settings-tab-typography" tabindex="0" hidden>
+    <h4 class="settings-section">Reading face</h4>
+    <div class="settings-field">
+      <label class="field-label" for="typo-doc-select">The transcript and anything set as a document</label>
+      <select id="typo-doc-select"></select>
+      <input type="text" id="typo-doc-custom" class="typo-custom" placeholder="A font name you have installed" spellcheck="false" autocomplete="off" hidden>
+    </div>
+
+    <h4 class="settings-section">Interface face</h4>
+    <div class="settings-field">
+      <label class="field-label" for="typo-ui-select">Controls, panels and the status strip</label>
+      <select id="typo-ui-select"></select>
+      <input type="text" id="typo-ui-custom" class="typo-custom" placeholder="A font name you have installed" spellcheck="false" autocomplete="off" hidden>
+    </div>
+
+    <h4 class="settings-section">Monospace face</h4>
+    <div class="settings-field">
+      <label class="field-label" for="typo-mono-select">Paths, ids, tool names and code</label>
+      <select id="typo-mono-select"></select>
+      <input type="text" id="typo-mono-custom" class="typo-custom" placeholder="A font name you have installed" spellcheck="false" autocomplete="off" hidden>
+    </div>
+
+    <h4 class="settings-section">Text size</h4>
+    <div class="settings-field">
+      <label class="field-label" for="typo-size-select">Type only, from 87.5% to 140% of the nine-step scale</label>
+      <select id="typo-size-select"></select>
+      <p class="note" id="typo-note">Stored in this browser, restored on reload. Ctrl+wheel zoom is separate: it scales the whole page, spacing included.</p>
+    </div>
+    </section>
 
     <div class="close-row">
       <button id="settings-close">Close</button>
