@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -296,22 +297,91 @@ func looksLikeSkillPath(name string) bool {
 // resolves against the session's workspace, the same claim a tool makes
 // when it takes a relative path.
 func resolveSkillPathArg(raw, workspace string) string {
+	goos := runtime.GOOS
+	resolved := resolveSkillPathFor(goos, raw, workspace, skillHomeDir(goos))
+	// Normalised on the way out rather than inside the resolver: cleaning
+	// is the host's job, since the host is where the path is about to be
+	// opened, and keeping it out of the resolver is what lets the resolver
+	// answer for a platform this machine is not.
+	return filepath.Clean(resolved)
+}
+
+// skillHomeDir is os.UserHomeDir with the platform handed to it: the
+// home variable is HOME everywhere but Windows, where it is USERPROFILE
+// (os/file.go UserHomeDir). Reading it through runtime.GOOS inside the
+// resolver hid the Windows branch from every test run elsewhere, which
+// is how "~ did not expand to home" reached CI.
+func skillHomeDir(goos string) string {
+	if goos == "windows" {
+		return os.Getenv("USERPROFILE")
+	}
+	return os.Getenv("HOME")
+}
+
+// isAbsSkillPath is filepath.IsAbs with the platform handed to it. On
+// Windows a drive-letter path with a rooted remainder (C:\work) and a
+// UNC path (\\host\share\work) are absolute, and a merely rooted path
+// (\work) is not, which filepath.IsAbs on Unix never says.
+func isAbsSkillPath(goos, p string) bool {
+	if goos != "windows" {
+		return strings.HasPrefix(p, "/")
+	}
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		return true
+	}
+	if len(p) > 2 && ((p[0] == '\\' && p[1] == '\\') || (p[0] == '/' && p[1] == '/')) {
+		return true
+	}
+	return false
+}
+
+// resolveSkillPathFor is resolveSkillPathArg with the platform and the
+// home directory handed to it, so tests can drive the Windows branch
+// from any machine. Joining and cleaning still use the host filepath:
+// the platform-dependent decisions are which variable names home and
+// what counts as absolute, not how separators spell.
+func resolveSkillPathFor(goos, raw, workspace, home string) string {
 	p := strings.TrimSpace(raw)
 	if p == "~" || strings.HasPrefix(p, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+		if home != "" {
+			p = joinSkillPath(goos, home, strings.TrimPrefix(p, "~"))
 		}
 	}
-	if filepath.IsAbs(p) {
-		return filepath.Clean(p)
+	if isAbsSkillPath(goos, p) {
+		return p
 	}
 	if workspace != "" {
-		return filepath.Join(workspace, p)
-	}
-	if abs, err := filepath.Abs(p); err == nil {
-		return abs
+		return joinSkillPath(goos, workspace, p)
 	}
 	return p
+}
+
+// skillSeparator is the path separator of the platform being answered
+// for. Handed in rather than read from the host for the same reason the
+// rest of this is: a separator taken from runtime.GOOS spells every
+// answer in the running machine's alphabet, so a test driving the
+// Windows branch from a Mac gets slashes back and proves nothing.
+func skillSeparator(goos string) string {
+	if goos == "windows" {
+		return `\`
+	}
+	return "/"
+}
+
+// joinSkillPath joins two path pieces in the spelling of goos. Only the
+// separator differs, which is all this needs: the caller has already
+// decided which piece is a base and which is a remainder.
+func joinSkillPath(goos, base, rest string) string {
+	sep := skillSeparator(goos)
+	base = strings.TrimRight(base, `/\`)
+	rest = strings.TrimLeft(rest, `/\`)
+	switch {
+	case base == "":
+		return rest
+	case rest == "":
+		return base
+	}
+	return base + sep + rest
 }
 
 // runSkillPath reads the file name points at, parses it as a skill, and
@@ -352,6 +422,15 @@ func (l *Loop) runSkillPath(ctx context.Context, sessionID, agentName, displayTe
 			return fail("cannot run skill file %q: %s", rawPath, res.Content)
 		}
 		if res.IsError {
+			// The gate reads before we do, so a directory arrives here
+			// as the gate's read error. On Unix that error says "is a
+			// directory"; on Windows the OS says "Incorrect function."
+			// Stat after the gate (never before: a refused path must
+			// answer "denied", not confirm it is a directory) and say
+			// our own sentence on both platforms.
+			if fi, err := os.Stat(resolved); err == nil && fi.IsDir() {
+				return fail("cannot run skill file %q: it is a directory, not a file. Available: %s", rawPath, available())
+			}
 			return fail("cannot run skill file %q: %s. Available: %s", rawPath, res.Content, available())
 		}
 	} else {
