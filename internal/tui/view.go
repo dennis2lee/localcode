@@ -123,6 +123,11 @@ func contextBar(percent float64) string {
 // above and below it so its boundary reads clearly against the transcript.
 func (m Model) inputBorder() string {
 	w := m.viewport.Width()
+	if _, ok := m.scrollbarLayout(); ok {
+		// The transcript gave its last column to the scrollbar, and
+		// the rule spans the frame rather than the transcript.
+		w++
+	}
 	if w <= 0 {
 		w = 40
 	}
@@ -140,6 +145,15 @@ func (m Model) View() tea.View {
 		body = m.pickerView(m.viewport.Width(), m.viewport.Height())
 	}
 	lines := strings.Split(body, "\n")
+
+	// The scrollbar beside the transcript, drawn only while the switch
+	// is on and the transcript overflows. With the switch off this
+	// whole branch is dead, and the frame below is byte for byte what
+	// it was before the feature existed.
+	scrollGeom, scrollbarDrawn := m.scrollbarLayout()
+	if scrollbarDrawn {
+		lines = overlayScrollbar(lines, scrollGeom)
+	}
 
 	lines = append(lines, m.inputBorder())
 	// Row the prompt box's first line lands on. Derived from the frame
@@ -226,6 +240,13 @@ func (m Model) View() tea.View {
 	// Alt screen is a property of the frame in bubbletea v2, not a program
 	// option, so it's declared here rather than at tea.NewProgram.
 	v.AltScreen = true
+	// The mouse belongs to the terminal unless the scrollbar is drawn.
+	// Requesting reporting is what takes drag-to-select away (Shift
+	// still selects), so it is on only while there is something to
+	// scroll: a transcript that fits leaves the mouse entirely alone.
+	if scrollbarDrawn {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 
 	// Put the *physical* terminal cursor at the text insertion point inside
 	// the prompt box. Terminals draw IME composition ("marked text" — a

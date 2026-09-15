@@ -32,6 +32,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Not handled above — fall through to the textarea below, same as
 		// every other message type.
 
+	// The scrollbar's gestures, behind the "mouse" switch. Consumed
+	// here either way, so a stray mouse event can never land in the
+	// prompt box as typed input.
+	case tea.MouseClickMsg:
+		return m.handleScrollbarClick(msg.X, msg.Y, msg.Button == tea.MouseLeft), nil
+
+	case tea.MouseMotionMsg:
+		return m.handleScrollbarMotion(msg.Y), nil
+
+	case tea.MouseReleaseMsg:
+		m.scrollbarDragging = false
+		m.scrollbarDragGrab = 0
+		return m, nil
+
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			return m.handleScrollbarWheel(true), nil
+		case tea.MouseWheelDown:
+			return m.handleScrollbarWheel(false), nil
+		}
+		return m, nil
+
 	case eventMsg:
 		if msg.gen != m.streamGen {
 			// From a session this client has left. Dropping it is the
@@ -443,6 +466,8 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.pending = nil
 	m.pendingQueue = nil
 	m.pendingHintShown = false
+	m.scrollbarDragging = false
+	m.scrollbarDragGrab = 0
 	m.waiting = false
 	m.runningTool = ""
 	m.toolStartedAt = time.Time{}

@@ -217,7 +217,7 @@ func TestSessionPickerDeleteReachesTheDaemon(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	updated, _ := m.Update(sessionsMsg{sessions: []session.Session{
 		{ID: "s1", Title: "first", Agent: "general-purpose"},
 		{ID: "s2", Title: "second", Agent: "plan"},

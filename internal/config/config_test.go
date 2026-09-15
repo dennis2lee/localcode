@@ -274,6 +274,9 @@ func TestMergeFieldsGuard(t *testing.T) {
 		// The two display switches, beside ShowTPS.
 		"ShowThinking":   true,
 		"ShowTimestamps": true,
+		// The TUI's scrollbar: a project that says nothing keeps the
+		// global answer, and one that answers turns it either way.
+		"Mouse": true,
 	}
 	intentionallyNotMerged := map[string]bool{}
 

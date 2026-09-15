@@ -573,6 +573,23 @@ func loadConfig(explicitPath string, e env) (*config.Config, error) {
 	return config.LoadMerged(e.cwd)
 }
 
+// localMouseEnabled reports whether the TUI on this machine takes the
+// mouse for its scrollbar. Read from the config on this machine rather
+// than from the daemon the TUI attaches to: with --server pointed at
+// another machine, that daemon's config must not decide whether this
+// terminal gives up drag-to-select. Anything unreadable means off.
+func localMouseEnabled(configPath string) bool {
+	e, err := resolveEnv()
+	if err != nil {
+		return false
+	}
+	cfg, err := loadConfig(configPath, e)
+	if err != nil {
+		return false
+	}
+	return cfg.Mouse != nil && *cfg.Mouse
+}
+
 func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]provider.Provider, error) {
 	out := map[string]provider.Provider{}
 	for name, pc := range cfg.Providers {

@@ -128,7 +128,7 @@ func TestForkAsksTheDaemonAndOpensTheCopy(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	cmd, ok := dispatchLocalCommand(&m, "/fork")
 	if !ok || cmd == nil {
 		t.Fatal("/fork produced no command")

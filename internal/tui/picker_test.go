@@ -165,7 +165,7 @@ func TestPickingAnAgentSwitchesToIt(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := withAgents(New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event)), "general-purpose", "plan")
+	m := withAgents(New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false), "general-purpose", "plan")
 	m = openModelPicker(t, m)
 	m = tapKey(t, m, tea.KeyDown)
 
@@ -199,7 +199,7 @@ func TestSessionCommandListsAndSwitches(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event))
+	m := New(client.New(srv.URL), "s1", "general-purpose", make(chan events.Event), false)
 	m, cmd := pressEnterWith(t, m, "/session")
 	if cmd == nil {
 		t.Fatal("/session issued no listing request")

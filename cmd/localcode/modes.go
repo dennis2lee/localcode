@@ -255,6 +255,10 @@ func runGUI(configPath string) error {
 // independently-addressable components, just sharing a process for
 // single-binary convenience.
 func runEmbedded(configPath, listen, agentName string, listenExplicit bool) error {
+	// What the TUI reads its mouse switch from, on every path below:
+	// the attach, the TUI beside the new daemon, and the TUI behind a
+	// successor, which takes no config path of its own.
+	tuiLocalConfigPath = configPath
 	// A process started by a handoff has no terminal of its own to draw
 	// in: the TUI is still running in the process that started it. What
 	// it has is that process's listener, and it serves that until the
@@ -508,6 +512,13 @@ func runSuccessor(configPath string, in inherited) error {
 	return err
 }
 
+// tuiLocalConfigPath is the config file the TUI's mouse switch is read
+// from. Assigned by runEmbedded and by the --server path in run(), which
+// both know it; runTUIBehindSuccessor takes no config path, and it runs
+// under runEmbedded's assignment either way. Read once, before the
+// program starts, so there is no lifetime to guard.
+var tuiLocalConfigPath string
+
 // runTUIClient attaches a TUI to a daemon. prog, when not nil, is handed
 // the running program so something outside this function can end it — the
 // update path, which has to bring the terminal back before it restarts.
@@ -525,7 +536,10 @@ func runTUIClient(serverURL, agentName string, prog *atomic.Pointer[tea.Program]
 	// does not reconnect and resume would sit on a half-finished reply.
 	eventCh := c.StreamEvents(ctx, sess.ID, 0)
 
-	model := tui.New(c, sess.ID, sess.Agent, eventCh)
+	// The mouse is the terminal's own, so the switch comes from the
+	// config on this machine rather than from the daemon over there —
+	// which, over --server, may be on another machine entirely.
+	model := tui.New(c, sess.ID, sess.Agent, eventCh, localMouseEnabled(tuiLocalConfigPath))
 	p := tea.NewProgram(model)
 	if prog != nil {
 		prog.Store(p)

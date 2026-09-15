@@ -176,6 +176,12 @@ func (c *Config) merge(other *Config) {
 	if other.ShowTimestamps != nil {
 		c.ShowTimestamps = other.ShowTimestamps
 	}
+	// A project where the mouse stays with the terminal (shared
+	// editing over a multiplexer, say) can say so, the same way it
+	// can for the display switches beside this one.
+	if other.Mouse != nil {
+		c.Mouse = other.Mouse
+	}
 	if other.AutoDelegate != nil {
 		c.AutoDelegate = other.AutoDelegate
 	}

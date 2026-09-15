@@ -117,6 +117,7 @@ func run() error {
 	if *server != "" {
 		// No restart hook: this TUI is attached to a daemon somewhere else,
 		// and that daemon is not ours to replace.
+		tuiLocalConfigPath = *configPath
 		return runTUIClient(*server, *agentName, nil)
 	}
 	// Whether --listen was typed, not just what it holds. An address
