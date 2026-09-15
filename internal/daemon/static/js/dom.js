@@ -175,3 +175,6 @@ export const typoUiCustom = document.getElementById('typo-ui-custom');
 export const typoMonoSelect = document.getElementById('typo-mono-select');
 export const typoMonoCustom = document.getElementById('typo-mono-custom');
 export const typoSizeSelect = document.getElementById('typo-size-select');
+export const typoSizeReadSelect = document.getElementById('typo-size-read-select');
+export const typoSizeUiSelect = document.getElementById('typo-size-ui-select');
+export const typoSizeCodeSelect = document.getElementById('typo-size-code-select');

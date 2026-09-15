@@ -23,6 +23,7 @@
 import {
   typoDocSelect, typoDocCustom, typoUiSelect, typoUiCustom,
   typoMonoSelect, typoMonoCustom, typoSizeSelect,
+  typoSizeReadSelect, typoSizeUiSelect, typoSizeCodeSelect,
 } from './dom.js';
 
 // The fallback behind every choice for its role. Each is the stack the
@@ -76,6 +77,26 @@ export const SIZE_OPTIONS = [
   ['140%', 1.4],
 ];
 const SCALE_KEY = 'localcode.textScale';
+
+// One trim per group of steps. The groups are places, not faces: the mono
+// face is set at UI-group sizes wherever it appears in a row (the session
+// id, the version, usage figures), so no control can promise "everything in
+// this face". Each control promises its steps instead.
+const GROUP_KEY_FOR = {
+  read: 'localcode.textScale.read',
+  ui: 'localcode.textScale.ui',
+  code: 'localcode.textScale.code',
+};
+const GROUP_PROP_FOR = {
+  read: '--t-scale-read',
+  ui: '--t-scale-ui',
+  code: '--t-scale-code',
+};
+const GROUP_SELECT_FOR = {
+  read: () => typoSizeReadSelect,
+  ui: () => typoSizeUiSelect,
+  code: () => typoSizeCodeSelect,
+};
 
 // quoteName keeps a typed name one family: a bare word stays bare, and
 // anything with spaces or punctuation is quoted, so the fallback stack
@@ -141,6 +162,14 @@ export function applyTypography() {
   } else {
     root.style.setProperty('--t-scale', String(scale));
   }
+  for (const group of Object.keys(GROUP_KEY_FOR)) {
+    const trim = readScale(readStored(GROUP_KEY_FOR[group]));
+    if (trim === 1) {
+      if (root.style.removeProperty) root.style.removeProperty(GROUP_PROP_FOR[group]);
+    } else {
+      root.style.setProperty(GROUP_PROP_FOR[group], String(trim));
+    }
+  }
 }
 
 export function setFace(role, value) {
@@ -153,18 +182,30 @@ export function setFace(role, value) {
   }
 }
 
-export function setTextScale(scale) {
+// writeScale stores one multiplier and publishes it, or clears both when
+// it is the default: a default that left a property or a key behind would
+// be indistinguishable from a choice, and would survive as one.
+function writeScale(key, prop, scale) {
   const s = readScale(scale);
-  writeStored(SCALE_KEY, s === 1 ? '' : String(s));
+  writeStored(key, s === 1 ? '' : String(s));
   const root = rootEl();
   if (root && root.style) {
     if (s === 1) {
-      if (root.style.removeProperty) root.style.removeProperty('--t-scale');
+      if (root.style.removeProperty) root.style.removeProperty(prop);
     } else {
-      root.style.setProperty('--t-scale', String(s));
+      root.style.setProperty(prop, String(s));
     }
   }
   return s;
+}
+
+export function setTextScale(scale) {
+  return writeScale(SCALE_KEY, '--t-scale', scale);
+}
+
+export function setGroupScale(group, scale) {
+  if (!GROUP_KEY_FOR[group]) return 1;
+  return writeScale(GROUP_KEY_FOR[group], GROUP_PROP_FOR[group], scale);
 }
 
 // currentChoice maps a stored value back onto a select: the stack it
@@ -201,21 +242,24 @@ function fillFaceControl(role) {
   }
 }
 
-function fillSizeControl() {
-  if (!typoSizeSelect) return;
-  typoSizeSelect.innerHTML = '';
+function fillSizeControl(select, key) {
+  if (!select) return;
+  select.innerHTML = '';
   for (const [label, scale] of SIZE_OPTIONS) {
     const opt = document.createElement('option');
     opt.value = String(scale);
     opt.textContent = label;
-    typoSizeSelect.appendChild(opt);
+    select.appendChild(opt);
   }
-  typoSizeSelect.value = String(readScale(readStored(SCALE_KEY)));
+  select.value = String(readScale(readStored(key)));
 }
 
 export function renderTypography() {
   for (const role of ['doc', 'ui', 'mono']) fillFaceControl(role);
-  fillSizeControl();
+  fillSizeControl(typoSizeSelect, SCALE_KEY);
+  for (const group of Object.keys(GROUP_KEY_FOR)) {
+    fillSizeControl(GROUP_SELECT_FOR[group](), GROUP_KEY_FOR[group]);
+  }
 }
 
 export function wireTypography() {
@@ -248,6 +292,15 @@ export function wireTypography() {
       setTextScale(parseFloat(typoSizeSelect.value));
       typoSizeSelect.value = String(readScale(readStored(SCALE_KEY)));
     });
+  }
+  for (const group of Object.keys(GROUP_KEY_FOR)) {
+    const select = GROUP_SELECT_FOR[group]();
+    if (select) {
+      select.addEventListener('change', () => {
+        setGroupScale(group, parseFloat(select.value));
+        select.value = String(readScale(readStored(GROUP_KEY_FOR[group])));
+      });
+    }
   }
 }
 

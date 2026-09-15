@@ -73,22 +73,32 @@
   --f-mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", Consolas, Menlo, monospace;
 
   /* The scale, and it is the whole scale: every font-size below is one of
-     these nine. */
-  /* The text size, owned by this browser (see js/typography.js). A
-     multiplier, never a rewrite of the steps: each one is its own pixel
-     value times this factor, so at 1 every computed size is exactly what
-     it has always been. Type only: spacing never reads this, which is
-     what separates it from --zoom above. */
+     these nine. Six are used; --t-ui-l, --t-sub and --t-head are reserved:
+     defined and scaled, read by no rule yet, so wiring one later changes
+     nothing already on the page. */
+  /* The text size, owned by this browser (see js/typography.js). A master
+     multiplier times one group trim, never a rewrite of the steps: each
+     one is its own pixel value times both factors, so at 1 and 1 every
+     computed size is exactly what it has always been. A trim cannot follow
+     the face an element inherited — font-size cannot depend on
+     font-family — so each trims the steps used in its place: reading (the
+     transcript and anything set as a document), interface (controls,
+     panels, rows, and the ids shown in them), code (code set as code).
+     Type only: spacing never reads these, which is what separates them
+     from --zoom above. */
   --t-scale: 1;
-  --t-cap: calc(10.5px * var(--t-scale, 1));    /* letterspaced caps: the name of a region */
-  --t-fine: calc(11.5px * var(--t-scale, 1));   /* meta, notes, marginal apparatus */
-  --t-ui: calc(12.5px * var(--t-scale, 1));     /* the interface default, and the voice of controls */
-  --t-code: calc(13px * var(--t-scale, 1));     /* mono, wherever it is set as code */
-  --t-ui-l: calc(13.5px * var(--t-scale, 1));   /* inputs and panel rows */
-  --t-read-s: calc(15px * var(--t-scale, 1));   /* the second reading size: thinking, review, tables */
-  --t-sub: calc(16.5px * var(--t-scale, 1));
-  --t-read: calc(17px * var(--t-scale, 1));     /* the document body, and what you type into it */
-  --t-head: calc(18.5px * var(--t-scale, 1));   /* a heading inside an answer, and a window's title */
+  --t-scale-read: 1;
+  --t-scale-ui: 1;
+  --t-scale-code: 1;
+  --t-cap: calc(10.5px * var(--t-scale, 1) * var(--t-scale-ui, 1));    /* letterspaced caps: the name of a region */
+  --t-fine: calc(11.5px * var(--t-scale, 1) * var(--t-scale-ui, 1));   /* meta, notes, marginal apparatus */
+  --t-ui: calc(12.5px * var(--t-scale, 1) * var(--t-scale-ui, 1));     /* the interface default, and the voice of controls */
+  --t-code: calc(13px * var(--t-scale, 1) * var(--t-scale-code, 1));   /* mono, wherever it is set as code */
+  --t-ui-l: calc(13.5px * var(--t-scale, 1) * var(--t-scale-ui, 1));   /* inputs and panel rows */
+  --t-read-s: calc(15px * var(--t-scale, 1) * var(--t-scale-read, 1)); /* the second reading size: thinking, review, tables */
+  --t-sub: calc(16.5px * var(--t-scale, 1) * var(--t-scale-read, 1));  /* between the reading sizes: a sub-heading */
+  --t-read: calc(17px * var(--t-scale, 1) * var(--t-scale-read, 1));   /* the document body, and what you type into it */
+  --t-head: calc(18.5px * var(--t-scale, 1) * var(--t-scale-read, 1)); /* a heading inside an answer, and a window's title */
 
   /* The space the page keeps clear at the window's left and right edges.
      One value for the transcript, the composer and the status strip, so
