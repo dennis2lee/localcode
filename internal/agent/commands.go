@@ -298,7 +298,12 @@ func looksLikeSkillPath(name string) bool {
 // when it takes a relative path.
 func resolveSkillPathArg(raw, workspace string) string {
 	goos := runtime.GOOS
-	return resolveSkillPathFor(goos, raw, workspace, skillHomeDir(goos))
+	resolved := resolveSkillPathFor(goos, raw, workspace, skillHomeDir(goos))
+	// Normalised on the way out rather than inside the resolver: cleaning
+	// is the host's job, since the host is where the path is about to be
+	// opened, and keeping it out of the resolver is what lets the resolver
+	// answer for a platform this machine is not.
+	return filepath.Clean(resolved)
 }
 
 // skillHomeDir is os.UserHomeDir with the platform handed to it: the
@@ -339,19 +344,44 @@ func resolveSkillPathFor(goos, raw, workspace, home string) string {
 	p := strings.TrimSpace(raw)
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		if home != "" {
-			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+			p = joinSkillPath(goos, home, strings.TrimPrefix(p, "~"))
 		}
 	}
 	if isAbsSkillPath(goos, p) {
-		return filepath.Clean(p)
+		return p
 	}
 	if workspace != "" {
-		return filepath.Join(workspace, p)
-	}
-	if abs, err := filepath.Abs(p); err == nil {
-		return abs
+		return joinSkillPath(goos, workspace, p)
 	}
 	return p
+}
+
+// skillSeparator is the path separator of the platform being answered
+// for. Handed in rather than read from the host for the same reason the
+// rest of this is: a separator taken from runtime.GOOS spells every
+// answer in the running machine's alphabet, so a test driving the
+// Windows branch from a Mac gets slashes back and proves nothing.
+func skillSeparator(goos string) string {
+	if goos == "windows" {
+		return `\`
+	}
+	return "/"
+}
+
+// joinSkillPath joins two path pieces in the spelling of goos. Only the
+// separator differs, which is all this needs: the caller has already
+// decided which piece is a base and which is a remainder.
+func joinSkillPath(goos, base, rest string) string {
+	sep := skillSeparator(goos)
+	base = strings.TrimRight(base, `/\`)
+	rest = strings.TrimLeft(rest, `/\`)
+	switch {
+	case base == "":
+		return rest
+	case rest == "":
+		return base
+	}
+	return base + sep + rest
 }
 
 // runSkillPath reads the file name points at, parses it as a skill, and

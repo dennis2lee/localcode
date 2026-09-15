@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -80,20 +78,23 @@ func TestSkillHomeDirReadsThePlatformsVariable(t *testing.T) {
 }
 
 // A relative path is a claim about the session's workspace, the way a
-// tool's relative path is; ~ expands to home. Both decisions take the
-// platform as a parameter, so every row below runs on any machine —
-// including the Windows rows, which is what the old version of this test
-// could not do: it built its "absolute" path with filepath.Join, which
-// spells a merely rooted \work\... on Windows, and stated the POSIX
-// reading of that string as if it were universal.
+// tool's relative path is; ~ expands to home. Every decision here takes
+// the platform as a parameter — which variable names home, what counts
+// as absolute, and which separator joins — so every row runs on any
+// machine, Windows rows included.
+//
+// Expectations are typed out rather than built with filepath.Join. Join
+// spells its answer in the running machine's alphabet, so an expectation
+// built with it agrees with the code for the wrong reason on one OS and
+// disagrees on the other: that is how "/work/... stays untouched" passed
+// on macOS and failed on Windows, and then how the Windows rows failed
+// the other way round once they were added.
+//
+// The interior of a joined path is left as the caller spelled it. On
+// Windows both separators open the same file, and the host wrapper
+// cleans the result before anything is opened; re-spelling it here would
+// be this function inventing a normalisation nobody asked it for.
 func TestSkillPathsResolveAgainstTheSessionWorkspace(t *testing.T) {
-	// Real paths from the running OS go through the same helper, with
-	// runtime.GOOS passed in at the call site rather than read inside
-	// the assertion.
-	hostWS := t.TempDir()
-	hostHome := t.TempDir()
-	hostAbs := filepath.Join(hostWS, "scratch.md")
-
 	for _, tc := range []struct {
 		name      string
 		goos      string
@@ -102,32 +103,32 @@ func TestSkillPathsResolveAgainstTheSessionWorkspace(t *testing.T) {
 		home      string
 		want      string
 	}{
-		{"host relative joins workspace", runtime.GOOS, "notes/scratch.md", hostWS, hostHome,
-			filepath.Join(hostWS, "notes/scratch.md")},
-		{"host absolute stays untouched", runtime.GOOS, hostAbs, filepath.Join(hostWS, "elsewhere"), hostHome,
-			hostAbs},
-		{"host tilde expands to home", runtime.GOOS, "~/fromhome.md", hostWS, hostHome,
-			filepath.Join(hostHome, "fromhome.md")},
 		{"windows drive absolute stays untouched", "windows", `C:\work\project\scratch.md`, `C:\elsewhere`, `C:\Users\alice`,
 			`C:\work\project\scratch.md`},
 		{"windows UNC absolute stays untouched", "windows", `\\host\share\scratch.md`, `C:\elsewhere`, `C:\Users\alice`,
 			`\\host\share\scratch.md`},
 		{"windows rooted joins workspace", "windows", `\work\project\scratch.md`, `C:\elsewhere`, `C:\Users\alice`,
-			filepath.Join(`C:\elsewhere`, `\work\project\scratch.md`)},
+			`C:\elsewhere\work\project\scratch.md`},
 		{"windows slash-rooted joins workspace", "windows", "/work/project/scratch.md", `C:\elsewhere`, `C:\Users\alice`,
-			filepath.Join(`C:\elsewhere`, "/work/project/scratch.md")},
+			`C:\elsewhere\work/project/scratch.md`},
 		{"windows relative joins workspace", "windows", "notes/scratch.md", `C:\work\project`, `C:\Users\alice`,
-			filepath.Join(`C:\work\project`, "notes/scratch.md")},
+			`C:\work\project\notes/scratch.md`},
 		{"windows tilde expands to home", "windows", "~/fromhome.md", `C:\work\project`, `C:\Users\alice`,
-			filepath.Join(`C:\Users\alice`, "fromhome.md")},
+			`C:\Users\alice\fromhome.md`},
 		{"windows bare tilde is home", "windows", "~", `C:\work\project`, `C:\Users\alice`,
 			`C:\Users\alice`},
-		{"tilde without a home stays relative", "linux", "~/fromhome.md", "/work/project", "",
-			filepath.Join("/work/project", "~/fromhome.md")},
 		{"linux absolute stays untouched", "linux", "/work/project/scratch.md", "/elsewhere", "/home/alice",
 			"/work/project/scratch.md"},
+		{"linux relative joins workspace", "linux", "notes/scratch.md", "/work/project", "/home/alice",
+			"/work/project/notes/scratch.md"},
 		{"linux tilde expands to home", "linux", "~/fromhome.md", "/work/project", "/home/alice",
-			filepath.Join("/home/alice", "fromhome.md")},
+			"/home/alice/fromhome.md"},
+		{"darwin tilde expands to home", "darwin", "~/fromhome.md", "/work/project", "/Users/alice",
+			"/Users/alice/fromhome.md"},
+		{"tilde without a home stays relative", "linux", "~/fromhome.md", "/work/project", "",
+			"/work/project/~/fromhome.md"},
+		{"no workspace leaves a relative path alone", "linux", "notes/scratch.md", "", "/home/alice",
+			"notes/scratch.md"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := resolveSkillPathFor(tc.goos, tc.raw, tc.workspace, tc.home); got != tc.want {
