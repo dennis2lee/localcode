@@ -9,6 +9,8 @@
 
 **Fixed**
 
+* A skill path was resolved with POSIX assumptions. `filepath.IsAbs("/work")` is false on Windows, where that string is rooted but has no volume, and the home directory is named by `USERPROFILE` rather than `HOME`. Both decisions take the platform as an argument now, the way `splitDoubleStarSep` does, so the Windows branch fails on a Mac instead of waiting for CI — which is the fourth time this repository has paid for the same lesson. A directory pointed at with `/skill` also answered with whatever the OS said about reading it, since the permission gate reads before the check does; it says the same sentence on both platforms now, and still answers "denied" rather than confirming what a refused path is.
+
 * A symlinked skill directory was skipped in silence. `DirEntry.IsDir` does not follow symlinks, so `ln -s ~/skills/thing .localcode/skills/thing` produced a skill that was never loaded and never complained about. A symlink is followed now; one pointing nowhere, or at a file, is skipped the way a malformed skill already is rather than failing startup.
 
 ## v0.123.0
