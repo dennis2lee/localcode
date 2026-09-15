@@ -160,6 +160,17 @@ func childStructOf(ft reflect.Type) (child reflect.Type, isMap bool) {
 	return nil, false
 }
 
+// exemptTopLevelKeys names top-level Config JSON keys that genuinely do
+// not belong in the "Top level fields" reference table in docs/USAGE.md,
+// with the reason beside each. A mention in passing elsewhere in that
+// file does not count: six keys once sat in the struct with no row at
+// all (keep_going, repeat_limit, orchestrate, auto_update,
+// verify_command, network) because the name check below was satisfied by
+// prose. An exemption nobody wrote down is the same hole again, so a key
+// leaves this table only by being named here, and a name here for a key
+// that has a row again fails until it is removed.
+var exemptTopLevelKeys = map[string]string{}
+
 // USAGE.md is the reference a setting has to be named in to be found.
 // The keys this task covers each reached the build without reaching that
 // file's config reference: show_thinking and show_timestamps are
@@ -192,4 +203,85 @@ func TestTheDocumentedConfigurationKeysAreNamedInUSAGE(t *testing.T) {
 			t.Errorf("docs/USAGE.md never names `%s`, so it is a setting nobody can find", key)
 		}
 	}
+}
+
+// TestEveryTopLevelConfigFieldHasARowInTheReferenceTable requires every
+// top-level field of the Config struct to have a row in the "Top level
+// fields" table in docs/USAGE.md, not merely a mention somewhere in that
+// file. The name check above is satisfied by prose, which is how six keys
+// went undocumented; this one parses the table out of the document and
+// compares it against the struct's JSON tags by reflection.
+func TestEveryTopLevelConfigFieldHasARowInTheReferenceTable(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "USAGE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := topLevelFieldRows(t, string(raw))
+
+	typ := reflect.TypeOf(Config{})
+	var missing []string
+	for i := 0; i < typ.NumField(); i++ {
+		tagName, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+		if tagName == "" || tagName == "-" {
+			continue
+		}
+		if _, exempt := exemptTopLevelKeys[tagName]; exempt {
+			continue
+		}
+		if !rows[tagName] {
+			missing = append(missing, tagName)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("docs/USAGE.md \"Top level fields\" table has no row for %q, so each is a setting the reference does not describe", missing)
+	}
+
+	for name, reason := range exemptTopLevelKeys {
+		if _, found := fieldByJSONName(typ, name); !found {
+			t.Errorf("exemptTopLevelKeys names %q, which is no field of Config: %s", name, reason)
+			continue
+		}
+		if rows[name] {
+			t.Errorf("exemptTopLevelKeys names %q, which now has a row in the \"Top level fields\" table: remove the exemption (%s)", name, reason)
+		}
+	}
+}
+
+// topLevelFieldRows parses the "Top level fields" reference table out of
+// the document and returns the set of backticked field names in its first
+// column. It reads only that one table: the per-profile table below it
+// documents a different keep_going, and a mention there must not satisfy
+// the top-level requirement.
+func topLevelFieldRows(t *testing.T, doc string) map[string]bool {
+	t.Helper()
+	rows := map[string]bool{}
+	lines := strings.Split(doc, "\n")
+	inTable := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !inTable {
+			if trimmed == "#### Top level fields" {
+				inTable = true
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			break
+		}
+		if !strings.HasPrefix(trimmed, "|") {
+			continue
+		}
+		cells := strings.Split(trimmed, "|")
+		if len(cells) < 3 {
+			continue
+		}
+		name := strings.TrimSpace(cells[1])
+		if len(name) >= 2 && strings.HasPrefix(name, "`") && strings.HasSuffix(name, "`") {
+			rows[strings.Trim(name, "`")] = true
+		}
+	}
+	if len(rows) == 0 {
+		t.Fatal("docs/USAGE.md \"Top level fields\" table parsed to zero rows, so this test is checking nothing")
+	}
+	return rows
 }
