@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.126.1
+
+Documentation only. No behaviour changes.
+
+**Fixed**
+
+* The configuration reference had drifted from the code it describes. An audit read USAGE.md against the source through five lenses; 42 findings survived an adversarial pass and 39 are corrected here, the five skips recorded with the line that settled each.
+* `keep_going` is two different keys and had one row, which described the per-profile int — so a reader who followed the reference and wrote `"keep_going": 3` at the top level got a config that would not unmarshal at all. Both now have a row, and each names the other as the different setting it is.
+* Five more top-level keys had no row anywhere in the reference table: `repeat_limit`, `orchestrate`, `auto_update`, `verify_command`, `network`. The last of those also never said that a project's `network` block replaces the global one wholesale rather than merging with it.
+* The `Debate` tool was listed as needing no permission. `RequiresPermission` returns true unconditionally and that prompt is the feature's whole confirmation step, so a reader who believed the table thought rounds of model calls ran unasked.
+* A background task was named as a turn with nobody to ask, in two places. `WithUnattended` has exactly two call sites — a scheduled run and `localcode run` — and neither is a task. Both passages now say what a task does instead: its question is mirrored into the conversation that started it and waits there.
+* `model_invocable` was written as a session setting and is daemon-wide. `show_thinking` and `show_timestamps` were described as making two clients draw the same thing, when only the Web UI and the desktop window draw either.
+* The Contents sent `/usage` to the top of the document, because the title takes that slug first; and it listed a subset of five parts' sections with no marker saying so, hiding the only place nine commands are documented. A blank line split a permission table so four of its five rows rendered as raw pipe text.
+
+**Now stated**
+
+* A permission `decision` that is not exactly `allow`, `ask` or `deny` refuses the config at load and the daemon does not start. Before v0.123.0 an unrecognised value fell through to execution with no prompt at all, which is the hole that closed.
+* An answer to a background task's mirrored permission question belongs to the task that asked, not to the conversation it was answered in.
+
+**Guards**
+
+* Every top-level field of the `Config` struct must have a row in the top-level reference table, checked by parsing that one table and comparing it against the struct by reflection. The existing guard is satisfied by a mention anywhere in 2778 lines, which is how six keys sat in the struct with no row. The exemption list is empty and checked in both directions: a name there for a key that has a row again fails until the exemption is removed.
+
 ## v0.125.0
 
 **New**
