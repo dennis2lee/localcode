@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.127.0
+
+**New**
+
+* A text size per place, not one size for the whole page. Typography had three faces and a single size that moved all nine steps together, so bringing code down a notch brought the transcript down with it. There are now three trims beside the overall size — reading, interface, code — and each step is its pixel value times the overall size times its trim. At 1 and 1 every computed size is exactly what it was, and a size stored before this change still sizes everything the way it did.
+* A trim reaches steps, not faces, and it cannot be otherwise: CSS `font-size` cannot depend on the `font-family` an element inherited. That leaves a seam worth naming rather than hiding — an id set in monospace inside an interface row, like the session id in the header, follows the interface trim rather than the code one. The control labels, the stylesheet's own comment and USAGE all say so.
+
+**Records**
+
+* Three of the nine scale steps — `--t-ui-l`, `--t-sub`, `--t-head` — are defined and scaled and read by no rule anywhere, and have been since the scale was written. They stay that way: wiring one now would change sizes nobody asked to change, and deleting them would shrink the nine-step contract for nothing. The comment claiming every size is one of these nine now says which six are used, which is the half of it that was misleading.
+
 ## v0.126.1
 
 Documentation only. No behaviour changes.
