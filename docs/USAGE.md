@@ -1678,11 +1678,11 @@ The **settings** pill opens the settings window, grouped into one tab per subjec
 | Agents | [Smart Agent](#smart-agent), [Orchestration](#orchestration), and whether the model may run opted-in commands itself |
 | Turns | The carry-on nudge for muse models, and the repeat guard that ends a turn which only repeats earlier tool calls |
 | Updates | Check for updates, and download and install. See [Checking for updates](#checking-for-updates) |
-| Typography | The reading, interface and monospace faces, and the text size. See below |
+| Typography | The reading, interface and monospace faces, and the text sizes. See below |
 
 Typography is per person, not per daemon. The faces and the size live in this browser's storage, survive a reload, and apply immediately with no reload. They are not in `config.json`, and a daemon reached over `--server` from another machine never decides which font this screen uses. Each face offers the stacks that fit its role plus a field for a font name you have installed; whatever is chosen keeps a fallback stack behind it, so a name that resolves to nothing degrades to something readable.
 
-Text size is the type only, from 87.5% to 140% of the nine-step scale. [Zoom](#zoom-and-what-a-reload-keeps) is separate: ctrl+wheel scales the whole page, spacing included. The two compose: zoom multiplies everything, text size multiplies only the type.
+Text size is the type only: one overall size from 87.5% to 140% of the nine-step scale, plus a trim per group over the same range. Reading trims the transcript, thinking and review blocks, and headings. Interface trims controls, panels, status, notes, and the ids shown in those rows. Code trims code set in monospace. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. The trims compose with the overall size: each step is its pixel value times the overall size times its trim, so making everything bigger and then bringing the code down a notch is two choices. [Zoom](#zoom-and-what-a-reload-keeps) is separate: ctrl+wheel scales the whole page, spacing included. The two compose: zoom multiplies everything, text size multiplies only the type.
 
 ### Switching agents with Tab
 

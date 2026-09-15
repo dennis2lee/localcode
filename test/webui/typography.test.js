@@ -1,13 +1,13 @@
 'use strict';
 
-// Typography: the faces and the text size, applied immediately.
+// Typography: the faces and the text sizes, applied immediately.
 //
-// The three faces and the size multiplier are written as custom
+// The three faces and the four size multipliers are written as custom
 // properties on the root element, so they take effect on the next frame
 // with no reload. They belong to the person and their screen, so they
 // live in this browser's localStorage (like the ctrl+wheel zoom) and
 // never in config.json. The nine-step scale itself is never rewritten:
-// each step is its own pixel value times one factor.
+// each step is its own pixel value times the master times its group trim.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -78,25 +78,50 @@ test('setting a size writes the scale without touching the zoom', async () => {
   assert.equal(app.document.documentElement.style.zoom, '1.5');
 });
 
-test('at scale 1 every step is exactly what it is today', () => {
+// Each step's group trim. The groups are places, not faces: the mono face
+// is set at UI-group sizes wherever it appears in a row, so the interface
+// trim reaches those too. Shared with typography_groups.test.js, which
+// owns the trim behaviour; this file owns the master and the scale-1
+// identity both compose onto.
+const GROUP_FOR_STEP = {
+  '--t-cap': 'ui',
+  '--t-fine': 'ui',
+  '--t-ui': 'ui',
+  '--t-ui-l': 'ui',
+  '--t-code': 'code',
+  '--t-read-s': 'read',
+  '--t-sub': 'read',
+  '--t-read': 'read',
+  '--t-head': 'read',
+};
+
+test('at every multiplier of 1 every step is exactly what it is today', () => {
   const text = css();
   for (const [step, px] of Object.entries(NINE_STEPS)) {
-    const re = new RegExp(`${step}:\\s*calc\\(${px.replace('.', '\\.')} \\* var\\(--t-scale, 1\\)\\)`);
-    assert.ok(re.test(text), `${step} is not calc(${px} * var(--t-scale, 1)): the scale-1 sizes moved`);
+    const group = GROUP_FOR_STEP[step];
+    const re = new RegExp(`${step}:\\s*calc\\(${px.replace('.', '\\.')} \\* var\\(--t-scale, 1\\) \\* var\\(--t-scale-${group}, 1\\)\\)`);
+    assert.ok(re.test(text), `${step} is not calc(${px} * var(--t-scale, 1) * var(--t-scale-${group}, 1)): the all-1 sizes moved`);
   }
 });
 
-test('a different scale moves all nine steps together, through the one factor', () => {
+test('the master still multiplies all nine steps, composed with one group trim', () => {
   const text = css();
   const scaled = [...text.matchAll(/(--t-[a-z-]+):\s*calc\([^;]*var\(--t-scale, 1\)[^;]*;/g)]
     .map((m) => m[1])
     .filter((name) => name !== '--t-scale');
   assert.deepEqual([...new Set(scaled)].sort(), Object.keys(NINE_STEPS).sort(),
-    'a step is not driven by --t-scale, so one size does not move all nine');
-  // And no step smuggles a second knob in: each calc mentions the factor once.
+    'a step is not driven by --t-scale, so the master no longer moves all nine');
+  // And each step composes the master with exactly its own trim: one
+  // master read, one group read, and no other group's.
   for (const m of text.matchAll(/(--t-[a-z-]+):\s*calc\(([^;]*)\);/g)) {
     if (!NINE_STEPS[m[1]]) continue;
-    assert.equal((m[2].match(/--t-scale/g) || []).length, 1, `${m[1]} reads the factor more than once`);
+    const body = m[2];
+    assert.equal((body.match(/var\(--t-scale,/g) || []).length, 1, `${m[1]} does not read the master exactly once`);
+    for (const group of ['read', 'ui', 'code']) {
+      const want = group === GROUP_FOR_STEP[m[1]] ? 1 : 0;
+      assert.equal((body.match(new RegExp(`var\\(--t-scale-${group},`, 'g')) || []).length, want,
+        `${m[1]} reads the ${group} trim ${want === 1 ? 'never' : 'although it belongs to ' + GROUP_FOR_STEP[m[1]]}`);
+    }
   }
 });
 

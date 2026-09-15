@@ -27,8 +27,16 @@
       var v = localStorage.getItem(faces[role]);
       if (v) root.style.setProperty('--f-' + role, v);
     }
-    var s = parseFloat(localStorage.getItem('localcode.textScale'));
-    if (isFinite(s) && s > 0) root.style.setProperty('--t-scale', String(s));
+    var scales = {
+      'localcode.textScale': '--t-scale',
+      'localcode.textScale.read': '--t-scale-read',
+      'localcode.textScale.ui': '--t-scale-ui',
+      'localcode.textScale.code': '--t-scale-code'
+    };
+    for (var key in scales) {
+      var s = parseFloat(localStorage.getItem(key));
+      if (isFinite(s) && s > 0) root.style.setProperty(scales[key], String(s));
+    }
   } catch (e) { /* storage refused: the defaults stand */ }
 })();
 </script>
@@ -617,9 +625,21 @@
 
     <h4 class="settings-section">Text size</h4>
     <div class="settings-field">
-      <label class="field-label" for="typo-size-select">Type only, from 87.5% to 140% of the nine-step scale</label>
+      <label class="field-label" for="typo-size-select">Overall, from 87.5% to 140% of the nine-step scale</label>
       <select id="typo-size-select"></select>
-      <p class="note" id="typo-note">Stored in this browser, restored on reload. Ctrl+wheel zoom is separate: it scales the whole page, spacing included.</p>
+    </div>
+    <div class="settings-field">
+      <label class="field-label" for="typo-size-read-select">Reading: the transcript, thinking and review blocks, and headings</label>
+      <select id="typo-size-read-select"></select>
+    </div>
+    <div class="settings-field">
+      <label class="field-label" for="typo-size-ui-select">Interface: controls, panels, status, notes, and the ids shown in those rows</label>
+      <select id="typo-size-ui-select"></select>
+    </div>
+    <div class="settings-field">
+      <label class="field-label" for="typo-size-code-select">Code: code set in monospace</label>
+      <select id="typo-size-code-select"></select>
+      <p class="note" id="typo-note">Each trim multiplies the overall size, from 87.5% to 140%. A trim reaches steps, not faces: an id set in monospace inside an interface row, like the session id, follows the interface trim. Stored in this browser, restored on reload. Ctrl+wheel zoom is separate: it scales the whole page, spacing included.</p>
     </div>
     </section>
 

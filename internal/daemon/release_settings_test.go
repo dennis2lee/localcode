@@ -68,7 +68,13 @@ func TestSettingsTypographyControlsAreServed(t *testing.T) {
 		`id="typo-ui-select"`,
 		`id="typo-mono-select"`,
 		`id="typo-size-select"`,
+		`id="typo-size-read-select"`,
+		`id="typo-size-ui-select"`,
+		`id="typo-size-code-select"`,
 		`localcode.textScale`,
+		`localcode.textScale.read`,
+		`localcode.textScale.ui`,
+		`localcode.textScale.code`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("served page has no %s: the typography controls are missing", want)
