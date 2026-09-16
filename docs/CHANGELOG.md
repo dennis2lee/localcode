@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.130.0
+
+**Fixed**
+
+* `update_url` takes http at any host. The rule shipped a day earlier accepted http only to an address that could not be on the public internet, and it was wrong in the way inferred rules usually are: a closed network does not have to use the private ranges, and the deployment it was written for serves its mirror on publicly-allocated space, which no address check can tell from the internet. It refused the exact case it existed to allow. The address is no longer inspected and no name is resolved to decide it. The panel goes on marking an http source as unverified on every check and every install offer — stated rather than enforced, because it is the mirror's operator who knows what their network is.
+* A Bitbucket Server `raw` directory reads as a listing. An internal Bitbucket publishes the installers in a repository, where the `browse` path is a file browser that draws its listing from JavaScript and links each name to another page rather than to the file. The `raw` path answers with git's own tree listing — mode, type, object id, name — which is not a page at all and is read the same way. It carries the ref as a query, and `ResolveReference` dropped it, so every download asked for a path on whatever the default branch happened to be. A listing's query now comes along to the files beside it when the name carried none, which changes nothing for a plain directory index.
+
 ## v0.129.0
 
 **New**
