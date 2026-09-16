@@ -214,8 +214,9 @@ type Config struct {
 	AutoUpdate *bool `json:"auto_update,omitempty"`
 
 	// UpdateURL, when set, is where the update button looks instead of
-	// GitHub: one https address at which the current installers are
-	// published, side by side, named the way localcode names them.
+	// GitHub: one https address, or http to a host on a private network,
+	// at which the current installers are published, side by side, named
+	// the way localcode names them.
 	//
 	// It exists for a machine that cannot reach github.com, or an
 	// organisation that would rather its own build were the one installed

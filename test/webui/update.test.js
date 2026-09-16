@@ -170,6 +170,89 @@ test('a restart is reported and no second install is offered', async () => {
 // A daemon reached from another machine replaces its own binary and stays
 // running, because restarting it is not a browser's to order. The sentence
 // is then the whole of what the user gets, so it has to arrive intact.
+// An http mirror authenticates nothing, so the panel says so beside the
+// address, on the offer itself rather than once somewhere else. The https
+// mirror next to it names its source with no such mark.
+test('a check against an http mirror marks the source unverified', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...AVAILABLE, source: 'http://mirror.internal/dl/', source_unverified: true,
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  assert.match(app.el('update-note').textContent, /from http:\/\/mirror\.internal\/dl\//);
+  assert.match(app.el('update-note').textContent, /unverified/);
+  assert.match(app.el('update-note').textContent, /plain http/);
+});
+
+test('a check against an https mirror names the source with no unverified mark', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...AVAILABLE, source: 'https://mirror.internal/dl/',
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  assert.match(app.el('update-note').textContent, /from https:\/\/mirror\.internal\/dl\//);
+  assert.doesNotMatch(app.el('update-note').textContent, /unverified/);
+});
+
+// The install reply is read on its own, after the check has scrolled by,
+// so it states the http source again rather than relying on the offer.
+test('installing from an http mirror states the unverified source', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...AVAILABLE, source: 'http://mirror.internal/dl/', source_unverified: true,
+      },
+      'POST /api/update/install': {
+        version: '0.46.0', verified: false, source_unverified: true,
+        detail: 'installed over /home/u/.local/bin/localcode',
+      },
+    },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.match(app.el('update-note').textContent, /unverified/);
+  assert.match(app.el('update-note').textContent, /could not be verified/);
+});
+
+test('installing from an https mirror states no unverified source', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': AVAILABLE,
+      'POST /api/update/install': {
+        version: '0.46.0', verified: true,
+        detail: 'installed over /home/u/.local/bin/localcode',
+      },
+    },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.doesNotMatch(app.el('update-note').textContent, /unverified/);
+});
+
 test('an install with no restart tells the user to restart', async () => {
   const app = await load({
     routes: {

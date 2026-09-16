@@ -331,8 +331,15 @@ async function checkForUpdate() {
     // Where it looked, when that is not the public releases page. An
     // internal build reported as "0.65.0 is available" reads as a public
     // release, and nobody notices it came from somewhere else.
-    const from = res.source && !res.source.startsWith('https://github.com/')
-      ? ` (from ${res.source})` : '';
+    //
+    // An http source is marked unverified beside the address, on every
+    // offer rather than once: the URL alone does not say that nothing
+    // authenticated the host, and the offer is read on its own each time.
+    const rawSource = res.source && !res.source.startsWith('https://github.com/')
+      ? res.source : '';
+    const unverified = rawSource && res.source_unverified
+      ? ', unverified: plain http, the host was not authenticated' : '';
+    const from = rawSource ? ` (from ${rawSource}${unverified})` : '';
     if (res.can_install) {
       showUpdate(`localcode ${res.latest} is available${from}. This will download ${res.asset}${size} and run the installer.`);
       updateInstallBtn.textContent = `Download and install ${res.latest}`;
@@ -363,10 +370,16 @@ async function installUpdate() {
     // share publishes the installer and usually nothing else, so there
     // was no checksum to check it against, and that is a true thing
     // about a file that has just been run.
+    //
+    // An http source is stated here too, not only on the check: the
+    // install reply is read on its own, after the check has scrolled by.
+    const unverifiedSource = res.source_unverified
+      ? ' The source is unverified: plain http, so the host was not authenticated.'
+      : '';
     const unverified = res.verified === false
       ? ' The download could not be verified: no checksum was published beside it.'
       : '';
-    showUpdate((res.detail || `localcode ${res.version} downloaded.`) + unverified);
+    showUpdate((res.detail || `localcode ${res.version} downloaded.`) + unverifiedSource + unverified);
     // The daemon is about to replace itself with the version it just
     // installed, which takes this page's connection with it. Nothing to
     // do but say so and let the browser reconnect — the new daemon binds

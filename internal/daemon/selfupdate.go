@@ -115,8 +115,12 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 		// Said together with the startup half, because otherwise the two
 		// look like a contradiction — this daemon does update itself, just
 		// not when asked to from somewhere that might not be here.
+		src := d.updateSource()
+		if d.updateSourceUnverified() {
+			src += ". " + httpSourceNote
+		}
 		return "", fmt.Errorf("this daemon can be reached from another machine, so a client cannot replace the program it runs. "+
-			"It still installs updates at startup unless auto_update is off; otherwise get it from %s", d.updateSource())
+			"It still installs updates at startup unless auto_update is off; otherwise get it from %s", src)
 	}
 
 	// What is running decides how the update lands, not whether. With a
@@ -158,6 +162,11 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "localcode %s installed from %s.\n", rel.Version, d.updateSource())
+	if d.updateSourceUnverified() {
+		// The TUI names the source here, so it says the rest here too:
+		// the address alone reads as authenticated, and it was not.
+		b.WriteString(httpSourceNote + "\n")
+	}
 	if !verified {
 		// Said rather than left unsaid: it is a true thing about a file
 		// that has just been run as an installer.

@@ -300,7 +300,7 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 | `max_concurrent_tasks` | Maximum concurrent background tasks. Default: 1. Synchronous `Task` calls do not consume slots. Provider-specific limits are acquired first so waiting on one endpoint does not occupy a daemon-wide slot. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
-| `update_url` | Where the update button looks instead of GitHub: an https address at which the current installers are published. Unset means GitHub. See [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
+| `update_url` | Where the update button looks instead of GitHub: an https address, or an http address on a private network, at which the current installers are published. Unset means GitHub. See [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
 | `skip_permissions` | The daemon default for `skip_all`: turns every "ask" into "allow", the workspace boundary included. Off unless set; explicit deny rules still deny. See [The four switches](#the-four-switches). |
 | `skip_tool_permissions` | The daemon default for `skip_tools`: every tool prompt allowed, and a path that leaves the workspace still asked about. |
 | `read_outside_workspace` | The daemon default for `read_outside`: reading outside the session's workspace without being asked. |
@@ -2729,7 +2729,7 @@ The MSI uses basic UI so Windows Installer can offer its built-in files-in-use d
 
 #### Updating from somewhere other than GitHub
 
-`update_url` in config.json replaces GitHub entirely: one **https** address at which the current installers are published, side by side, named the way localcode names them.
+`update_url` in config.json replaces GitHub entirely: one address at which the current installers are published, side by side, named the way localcode names them. It is https, or http to a host on a private network: loopback, the private ranges (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), link-local, carrier-grade NAT (`100.64/10`), single-label names (`mirror`), the internal suffixes (`.local`, `.internal`, `.intranet`, `.home.arpa`), and any name that resolves entirely to such addresses. An http address anywhere else is refused, as is a name that will not resolve.
 
 ```json
 { "update_url": "https://bitbucket.org/acme/localcode-builds/downloads/" }
@@ -2744,13 +2744,15 @@ Versions are parsed from standard asset names, including `localcode-1.2.3-darwin
 | The URL cannot be reached | `could not reach update_url <url>: ...`, naming the address |
 | It answers 404, 403, ... | `update_url <url> answered 404 Not Found` |
 | Nothing there looks like an installer | A message saying so, with an example filename |
-| It is not https | Refused, with the reason |
+| It is neither https nor private http | Refused, with the reason |
+| It is http to a public address | Refused: the connection is the only thing saying the installer came from the host you meant |
+| Its host will not resolve | Refused as unresolvable, so a DNS problem is not reported as a scheme problem |
 
-`update_url` requires HTTPS. HTTP URLs are refused.
+Plain http is accepted only on a private network, and the cost sits in the same paragraph as the permission: nothing authenticates the host, so anyone already on that network could substitute the installer, and the `.sha256` sibling travels the same connection, so it catches a truncated or corrupted download but not a substituted one. A config pasted onto a laptop outside that network must not silently download installers in the clear, which is why a public http address is refused rather than warned about.
 
 GitHub assets are checked against their published SHA-256. Other sources may provide a sibling `<filename>.sha256` in `sha256sum` format. Without a checksum, installation continues with a **could not be verified** warning.
 
-The panel names the source when it is not the public releases page, so an internal build is never reported as though it came from GitHub.
+The panel names the source when it is not the public releases page, so an internal build is never reported as though it came from GitHub. An http source is additionally marked unverified on every check and every install offer, and the TUI's `/update` reply says the same where it names the source.
 
 Installation is offered for the desktop window and a daemon listening on loopback. Remote connections and non-loopback listeners support checks only and link to the release page.
 

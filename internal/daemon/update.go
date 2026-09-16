@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -36,6 +37,34 @@ func (d *Daemon) updateSource() string {
 	return "https://github.com/" + update.DefaultRepo + "/releases"
 }
 
+// updateSourceUnverified reports whether the configured source is fetched
+// over plain http. The URL alone does not tell a reader that nothing
+// authenticated the host, so handlers report this beside "source" and
+// every client says it wherever the source is named, on every check and
+// every install offer, not once.
+//
+// A field beside the source rather than text inside it: the source stays
+// the address (something to link, something to compare), and the marker
+// stays a decision the panel renders. Folding them together would make
+// every client parse the address back out.
+func (d *Daemon) updateSourceUnverified() bool {
+	raw := strings.TrimSpace(d.Loop.Config.UpdateURL)
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Scheme, "http")
+}
+
+// httpSourceNote is the sentence said wherever an http update source is
+// named in prose: the TUI's /update reply, and the refusals that point at
+// the source. It states the bound honestly: the network is trusted, the
+// host is not authenticated.
+const httpSourceNote = "The source uses plain http, so the host was not authenticated: anyone on that network could have substituted the file."
+
 func (d *Daemon) updateChecker() update.Checker {
 	// config.json's update_url wins when it is set, which is the whole of
 	// how an internal build gets installed instead of a public one.
@@ -66,13 +95,17 @@ func (d *Daemon) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		// internal address should say so on the panel: otherwise "0.65.0
 		// is available" reads as a public release and nobody notices the
 		// build is coming from somewhere else entirely.
-		"source":      d.updateSource(),
-		"latest":      rel.Version,
-		"tag":         rel.Tag,
-		"page_url":    rel.PageURL,
-		"notes":       rel.Notes,
-		"available":   update.Newer(d.Version, rel.Version),
-		"can_install": d.AllowUpdateInstall,
+		"source": d.updateSource(),
+		// Beside the source, not inside it: an http address alone does
+		// not say the host was never authenticated, and the panel has to
+		// say it on every offer. See updateSourceUnverified.
+		"source_unverified": d.updateSourceUnverified(),
+		"latest":            rel.Version,
+		"tag":               rel.Tag,
+		"page_url":          rel.PageURL,
+		"notes":             rel.Notes,
+		"available":         update.Newer(d.Version, rel.Version),
+		"can_install":       d.AllowUpdateInstall,
 	}
 	if !update.Newer(d.Version, rel.Version) {
 		// "dev" is not a version, so nothing is ever newer than it. Saying
@@ -118,8 +151,12 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	// program for every conversation, including the ones nobody is
 	// watching. See Daemon.SelfUpdate.
 	if !d.AllowUpdateInstall {
+		src := d.updateSource()
+		if d.updateSourceUnverified() {
+			src += ". " + httpSourceNote
+		}
 		writeError(w, http.StatusForbidden, fmt.Errorf(
-			"this localcode cannot install updates for you; download it from %s", d.updateSource()))
+			"this localcode cannot install updates for you; download it from %s", src))
 		return
 	}
 	rel, path, verified, err := d.fetchLatest(r.Context(), false)
@@ -145,6 +182,9 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": rel.Version,
 		"source":  d.updateSource(),
+		// Said here too, not only on the check: the install reply is its
+		// own offer, read on its own.
+		"source_unverified": d.updateSourceUnverified(),
 		// Whether what was downloaded could be checked against a
 		// published checksum. False is not a failure and is not hidden:
 		// it is a true thing about a file that has just been run as an
