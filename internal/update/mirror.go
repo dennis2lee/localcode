@@ -86,49 +86,31 @@ func (c Checker) LatestFromURL(ctx context.Context, u string) (Release, error) {
 }
 
 // checkedURL parses update_url and refuses the ones that cannot be used
-// safely.
+// at all: an unparseable address, one that names no host, and a scheme
+// that is neither http nor https.
 //
-// https always. http only off the public internet: loopback, the private
-// and link-local ranges, carrier-grade NAT, and names that can only be
-// internal, including names that merely resolve to such addresses. What
-// this URL names is a file that is about to be run as an installer, and
-// over plain http anything between here and there can choose which file
-// that is. There is no checksum to fall back on either: a file share
-// publishes the installer and, usually, nothing else. So on the open
-// internet the transport is the only thing standing between a typo'd
-// config and arbitrary code, and it has to be the one that authenticates
-// the host.
+// http is accepted anywhere. It was once https-only, and then https plus
+// http to an address that could not be on the public internet — and that
+// second rule was wrong in the way inferred rules usually are. A closed
+// network does not have to use the private ranges: the one this was
+// reported from serves its mirror on publicly-allocated space, which is
+// indistinguishable from the internet by address alone. The rule refused
+// the exact deployment it was written for.
 //
-// Accepting http inside a closed network only bounds that exposure, it
-// does not remove it: anyone already on that network can still substitute
-// the file, and the checksum beside it travels the same connection. The
-// user running the mirror has made that trade knowingly, and a config
-// pasted onto a laptop in a cafe must not make it by accident, which is
-// why a name that looks public is refused rather than warned about.
+// What this URL names is still a file localcode will run as an installer,
+// and over plain http anything on the path can choose which file that is.
+// The sibling ".sha256" is no answer either, since it travels the same
+// connection. So the decision belongs to whoever configured the mirror,
+// and the panel says on every check and every install offer that an http
+// source was not authenticated. It is stated rather than enforced.
 func checkedURL(raw string) (*url.URL, error) {
-	return checkedURLWithLookup(raw, systemLookupIP)
-}
-
-// systemLookupIP resolves a hostname through the system resolver. It is
-// the production argument to checkedURLWithLookup, which takes the
-// resolver as a parameter so the decision table is a table and not a
-// network test.
-func systemLookupIP(host string) ([]net.IP, error) {
-	addrs, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
-	if err != nil {
-		return nil, err
-	}
-	ips := make([]net.IP, 0, len(addrs))
-	for _, a := range addrs {
-		ips = append(ips, a.IP)
-	}
-	return ips, nil
+	return checkedURLWithLookup(raw, nil)
 }
 
 // checkedURLWithLookup is checkedURL with its DNS answers supplied by the
 // caller. https returns before any lookup, exactly as it always has: no
 // resolution, no new message, nothing.
-func checkedURLWithLookup(raw string, lookup func(string) ([]net.IP, error)) (*url.URL, error) {
+func checkedURLWithLookup(raw string, _ func(string) ([]net.IP, error)) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return nil, fmt.Errorf("update_url is not a URL: %w", err)
@@ -137,87 +119,22 @@ func checkedURLWithLookup(raw string, lookup func(string) ([]net.IP, error)) (*u
 		return nil, fmt.Errorf("update_url %q names no host", raw)
 	}
 	switch u.Scheme {
-	case "https":
+	case "https", "http":
 		return u, nil
-	case "http":
-		// Decided below, from the host.
 	default:
 		return nil, fmt.Errorf(
-			"update_url must be https, or http to a host on a private network (it is %q). This URL names a file localcode will run as an installer, "+
-				"and there is no checksum published beside it to fall back on, so the connection is the only "+
-				"thing that says the file came from the host you meant", u.Scheme)
+			"update_url must be http or https (it is %q)", u.Scheme)
 	}
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	// The literal before the name rules: a bare IPv6 address has no dots,
-	// so the single-label rule below would claim it as a local name.
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIP(ip) {
-			return u, nil
-		}
-		return nil, fmt.Errorf(
-			"update_url host %q is on the public internet, so plain http is refused. This URL names a file localcode will run as an installer, "+
-				"and there is no checksum published beside it to fall back on, so the connection is the only "+
-				"thing that says the file came from the host you meant. Serve it over https instead", host)
-	}
-	if isPrivateHostname(host) {
-		return u, nil
-	}
-	// A name that looks public but resolves privately is exactly the user
-	// this is for (mirror.corp.example.com pointing at 10.0.0.5), so
-	// the addresses decide, and every one of them has to be private. One
-	// public answer means DNS is splitting the name across networks, and
-	// refusing is the only reading that keeps the typo'd-config promise.
-	ips, err := lookup(host)
-	if err != nil || len(ips) == 0 {
-		return nil, fmt.Errorf(
-			"update_url host %q could not be resolved (%v), so localcode cannot tell it is a private mirror: plain http is refused. "+
-				"This URL names a file localcode will run as an installer, and there is no checksum published beside it to fall back on. "+
-				"Fix the name, or serve it over https", host, err)
-	}
-	for _, ip := range ips {
-		if !isPrivateIP(ip) {
-			return nil, fmt.Errorf(
-				"update_url host %q resolves to %s, which is on the public internet, so plain http is refused. This URL names a file localcode will run as an installer, "+
-					"and there is no checksum published beside it to fall back on, so the connection is the only "+
-					"thing that says the file came from the host you meant. Serve it over https instead", host, ip)
-		}
-	}
-	return u, nil
 }
 
 // cgnatNet is 100.64/10, carrier-grade NAT: an internal network may well
 // use it, and it is not covered by IsPrivate.
 var cgnatNet = net.IPNet{IP: net.ParseIP("100.64.0.0"), Mask: net.CIDRMask(10, 32)}
 
-// isPrivateIP reports whether an address is off the public internet:
-// loopback, the v4 and v6 private ranges, link-local, and carrier-grade
-// NAT. Deliberately not IsPrivate alone, which leaves out three of those.
-func isPrivateIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || cgnatNet.Contains(ip)
-}
-
 // internalSuffixes are the endings an internal network's names use. Each
 // matches with its dot, so "notinternal" is not one; the bare suffix
 // itself ("home.arpa") counts too.
 var internalSuffixes = []string{".local", ".internal", ".intranet", ".home.arpa"}
-
-// isPrivateHostname reports whether a name is private without asking DNS:
-// localhost, a single label with no dots, and the internal suffixes. The
-// host arrives lowercased with any trailing dot removed.
-func isPrivateHostname(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	if !strings.Contains(host, ".") {
-		return true
-	}
-	for _, s := range internalSuffixes {
-		if strings.HasSuffix(host, s) || host == s[1:] {
-			return true
-		}
-	}
-	return false
-}
 
 // releaseFromListing turns a page into a Release: every installer name it
 // mentions, at the highest version it mentions.
@@ -306,12 +223,26 @@ func isAbsolute(href string) bool {
 // resolve turns whatever was written next to a filename into an address.
 // A full URL is taken as it is, an absolute path is resolved against the
 // host, and a bare name against the directory the listing was read from.
+//
+// The listing's own query string comes along when the name carried none.
+// ResolveReference drops it, which is right for a link that means a
+// different page and wrong for a directory whose query says which version
+// of it you are looking at. A Bitbucket Server raw path is the case that
+// forced this: the listing at
+// ".../raw/LocalCode/?at=refs/heads/master" names its files bare, and the
+// same "at" has to reach each file or the request means a different ref.
+// Where the listing has no query this changes nothing, which is every
+// plain directory index.
 func resolve(base *url.URL, href string) (string, error) {
 	ref, err := url.Parse(href)
 	if err != nil {
 		return "", err
 	}
-	return base.ResolveReference(ref).String(), nil
+	out := base.ResolveReference(ref)
+	if out.RawQuery == "" && base.RawQuery != "" && out.Host == base.Host {
+		out.RawQuery = base.RawQuery
+	}
+	return out.String(), nil
 }
 
 // DigestFor looks for a checksum published beside an asset, and reports

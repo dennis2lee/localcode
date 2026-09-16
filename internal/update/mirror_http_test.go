@@ -1,189 +1,172 @@
 package update
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
 
-// http to a private host is accepted, http to the public internet is
-// refused. The resolver is a stub, so this table runs with no network:
-// the names that resolve are answered below, and anything else does not
-// exist.
-func stubLookupIP(host string) ([]net.IP, error) {
-	switch host {
-	case "mirror.corp.example.com":
-		return []net.IP{net.ParseIP("10.0.0.5")}, nil
-	case "v6mirror.example.com":
-		return []net.IP{net.ParseIP("fd00::5")}, nil
-	case "downloads.example.com":
-		return []net.IP{net.ParseIP("93.184.216.34")}, nil
-	case "split.example.com":
-		return []net.IP{net.ParseIP("10.0.0.5"), net.ParseIP("93.184.216.34")}, nil
-	default:
-		return nil, fmt.Errorf("lookup %s: no such host", host)
-	}
-}
-
-func TestHTTPIsAcceptedOnlyOffThePublicInternet(t *testing.T) {
-	accept := []string{
-		// https is untouched by all of this.
-		"https://example.com/dl/",
-		"https://10.0.0.5/dl/",
-		// Loopback, in its spellings.
-		"http://localhost/dl/",
-		"http://LOCALHOST/dl/",
-		"http://localhost.:8080/dl/",
+// update_url takes http anywhere, and the address has nothing to do with it.
+//
+// It was https-only once, and then https plus http to an address that could
+// not be on the public internet. That second rule was wrong in the way
+// inferred rules usually are: a closed network does not have to use the
+// private ranges, and the deployment this was written for serves its mirror
+// on publicly-allocated space, which no address check can tell from the
+// internet. The rule refused the exact case it existed to allow.
+//
+// So the rows below are every shape of address the old rule cared about, and
+// every one of them is accepted. Written out rather than reduced to "http is
+// fine", because the point is that the distinction is gone.
+func TestHTTPIsAcceptedWhateverTheAddress(t *testing.T) {
+	for _, raw := range []string{
+		"http://localhost:7990/dl/",
 		"http://127.0.0.1/dl/",
-		"http://127.0.0.99:8080/dl/",
 		"http://[::1]/dl/",
-		// The private ranges, v4 and v6.
-		"http://10.1.2.3/dl/",
+		"http://10.0.0.5/dl/",
+		"http://192.168.1.10/dl/",
 		"http://172.16.0.1/dl/",
-		"http://172.31.255.254/dl/",
-		"http://192.168.1.1/dl/",
-		"http://[fd00::5]/dl/",
-		"http://[fc00::1]/dl/",
-		// Carrier-grade NAT, which an internal network may well use.
 		"http://100.64.0.1/dl/",
-		"http://100.127.255.254/dl/",
-		// Link-local, v4 and v6.
-		"http://169.254.10.20/dl/",
-		"http://[fe80::1]/dl/",
-		// Names that cannot be public.
+		"http://169.254.1.1/dl/",
 		"http://mirror/dl/",
-		"http://buildserver:8080/dl/",
-		"http://print.local/dl/",
-		"http://nas.internal/dl/",
-		"http://wiki.intranet/dl/",
-		"http://router.home.arpa/dl/",
-		"http://home.arpa/dl/",
-		"http://notinternal/dl/",
-		// A public-looking name that resolves privately.
-		"http://mirror.corp.example.com/dl/",
-		"http://v6mirror.example.com/dl/",
-		// Surrounding whitespace is the config typed by hand.
-		"  http://mirror/dl/  ",
-	}
-	for _, raw := range accept {
-		t.Run("accept "+raw, func(t *testing.T) {
-			if _, err := checkedURLWithLookup(raw, stubLookupIP); err != nil {
-				t.Errorf("checkedURLWithLookup(%q) refused: %v", raw, err)
-			}
-		})
-	}
-
-	refuse := []struct{ url, want string }{
-		// A public literal, v4 and v6.
-		{"http://93.184.216.34/dl/", "public internet"},
-		{"http://[2606:2800:220:1:248:1893:25c8:1946]/dl/", "public internet"},
-		// The addresses just outside each private range stay refused.
-		{"http://11.0.0.1/dl/", "public internet"},
-		{"http://172.15.255.255/dl/", "public internet"},
-		{"http://172.32.0.1/dl/", "public internet"},
-		{"http://192.167.1.1/dl/", "public internet"},
-		{"http://100.128.0.1/dl/", "public internet"},
-		{"http://169.253.1.1/dl/", "public internet"},
-		// A suffix that merely ends like an internal one is not one.
-		{"http://notinternal.example.com/dl/", "could not be resolved"},
-		// A public name resolving publicly.
-		{"http://downloads.example.com/dl/", "public internet"},
-		// A name mixing private and public answers. One public address
-		// means DNS splits the name across networks, and accepting would
-		// let the public answer serve the installer half the time.
-		{"http://split.example.com/dl/", "public internet"},
-		// A name that will not resolve.
-		{"http://no-such-host.invalid/dl/", "could not be resolved"},
-		// A scheme that is neither http nor https.
-		{"ftp://mirror/dl/", "must be https"},
-		{"file:///dl/", "names no host"},
-		// No host at all.
-		{"http:///dl/", "names no host"},
-		{"   ", "names no host"},
-	}
-	for _, tt := range refuse {
-		t.Run("refuse "+tt.url, func(t *testing.T) {
-			_, err := checkedURLWithLookup(tt.url, stubLookupIP)
-			if err == nil {
-				t.Fatalf("checkedURLWithLookup(%q) accepted; it should refuse", tt.url)
-			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Errorf("error = %q, want it to mention %q", err, tt.want)
-			}
-		})
-	}
-}
-
-// The three refusals have to read differently: a public host, a name that
-// will not resolve, and a scheme that is neither are three different
-// problems, and "must be https" for all three would send somebody fixing
-// DNS to check their scheme instead.
-func TestHTTPRefusalsSayWhichProblemTheyAre(t *testing.T) {
-	errs := map[string]error{}
-	for name, raw := range map[string]string{
-		"public http":       "http://93.184.216.34/dl/",
-		"unresolvable host": "http://no-such-host.invalid/dl/",
-		"other scheme":      "ftp://mirror/dl/",
+		"http://mirror.internal/dl/",
+		// Publicly-allocated space, used inside a closed network. The
+		// reported case: a Bitbucket mirror on 105.128.44.10:7990.
+		"http://105.128.44.10:7990/projects/TCAT/repos/ted-mirror/browse/LocalCode",
+		"http://93.184.216.34/dl/",
+		"http://downloads.example.com/dl/",
+		"https://example.com/dl/",
 	} {
-		u, err := checkedURLWithLookup(raw, stubLookupIP)
-		if err == nil {
-			t.Fatalf("checkedURLWithLookup(%q) accepted into %v", raw, u)
-		}
-		errs[name] = err
-	}
-	markers := map[string]string{
-		"public http":       "public internet",
-		"unresolvable host": "could not be resolved",
-		"other scheme":      "must be https",
-	}
-	for name, marker := range markers {
-		if !strings.Contains(errs[name].Error(), marker) {
-			t.Errorf("%s refusal = %q, want it to say %q", name, errs[name], marker)
-		}
-		for other, otherMarker := range markers {
-			if other != name && strings.Contains(errs[name].Error(), otherMarker) {
-				t.Errorf("%s refusal = %q, which also says %q (the %s problem)", name, errs[name], otherMarker, other)
+		t.Run(raw, func(t *testing.T) {
+			if _, err := checkedURL(raw); err != nil {
+				t.Errorf("checkedURL(%q) refused it: %v", raw, err)
 			}
-		}
+		})
 	}
 }
 
-// https never reaches the resolver: no lookup, no new message, nothing.
-// The lookup below fails the test if it is called at all.
-func TestHTTPSNeverTouchesTheResolver(t *testing.T) {
-	lookup := func(host string) ([]net.IP, error) {
-		t.Errorf("resolver asked about %q for an https URL", host)
-		return nil, fmt.Errorf("must not be called")
-	}
-	for _, raw := range []string{"https://example.com/dl/", "https://10.0.0.5/dl/"} {
-		u, err := checkedURLWithLookup(raw, lookup)
-		if err != nil {
-			t.Errorf("checkedURLWithLookup(%q): %v", raw, err)
-			continue
-		}
-		if u.String() != raw {
-			t.Errorf("https URL came back changed: %q, want %q", u, raw)
-		}
+// What is still refused is what cannot be fetched at all, and each says
+// which of the two it is rather than one message for both.
+func TestAnUnusableUpdateURLSaysWhichProblemItIs(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"a scheme nothing can fetch", "ftp://mirror.internal/dl/", "must be http or https"},
+		{"no host at all", "http:///dl/", "names no host"},
+		{"not a URL", "http://%zz/dl/", "is not a URL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := checkedURL(tc.raw)
+			if err == nil {
+				t.Fatalf("checkedURL(%q) accepted it", tc.raw)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("checkedURL(%q) said %q, which does not say %q", tc.raw, err, tc.want)
+			}
+		})
 	}
 }
 
-// The user-observable end of the rule: a plain http mirror on loopback
-// serves a release through the same entry point config.json uses.
-func TestLatestFromURLAcceptsLoopbackHTTP(t *testing.T) {
+// No name is resolved to decide any of this. A resolver that fails the test
+// when called pins that: the decision is the scheme and nothing else, so a
+// mirror on a network with no DNS for its own name still works.
+func TestNothingIsResolvedToDecideTheScheme(t *testing.T) {
+	called := false
+	lookup := func(string) ([]net.IP, error) {
+		called = true
+		return nil, fmt.Errorf("the resolver was consulted")
+	}
+	for _, raw := range []string{"http://downloads.example.com/dl/", "https://example.com/dl/"} {
+		if _, err := checkedURLWithLookup(raw, lookup); err != nil {
+			t.Errorf("checkedURLWithLookup(%q) refused it: %v", raw, err)
+		}
+	}
+	if called {
+		t.Error("a name was resolved to decide whether the URL is usable; the scheme is the whole decision")
+	}
+}
+
+// End to end over plain http: a listing is read and the release comes back,
+// with no address rule in the way.
+func TestLatestFromURLReadsAnHTTPMirror(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "localcode-9.9.9-linux-amd64.tar.gz\n")
+		fmt.Fprint(w, `<a href="localcode-0.129.0-windows-amd64.msi">msi</a>
+<a href="localcode-0.129.0-linux-amd64.tar.gz">tgz</a>`)
 	}))
 	defer srv.Close()
 
-	rel, err := Checker{}.LatestFromURL(context.Background(), srv.URL+"/dl/")
+	rel, err := Checker{}.LatestFromURL(t.Context(), srv.URL+"/")
 	if err != nil {
-		t.Fatalf("LatestFromURL over loopback http: %v", err)
+		t.Fatalf("LatestFromURL over http: %v", err)
 	}
-	if rel.Version != "9.9.9" {
-		t.Errorf("version = %q, want %q", rel.Version, "9.9.9")
+	if rel.Version != "0.129.0" {
+		t.Errorf("version = %q, want 0.129.0", rel.Version)
+	}
+	if len(rel.Assets) != 2 {
+		t.Errorf("assets = %d, want the two published", len(rel.Assets))
+	}
+}
+
+// A Bitbucket Server raw directory, which is what a mirror on an internal
+// Bitbucket actually looks like.
+//
+// The listing is git's own tree output — mode, type, object id, then the
+// name — with no links at all, and the directory carries the ref it is
+// being read at. Both halves matter: the names have to be found in text
+// that was never meant as a page, and the "at" has to reach each file, or
+// the download asks for a path on whatever the default branch happens to
+// be.
+func TestABitbucketRawDirectoryIsReadAndItsRefIsKept(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.String())
+		fmt.Fprint(w, "100644 blob 83dbdeaeb2deada3fcc18e5119ada299756e5e0f\tlocalcode-0.129.0-linux-amd64.tar.gz\n"+
+			"100644 blob 4c887c00c5f7a5e654add8bb8f5e2ecf7445e1a7\tlocalcode-0.129.0-windows-amd64.msi\n")
+	}))
+	defer srv.Close()
+
+	rel, err := Checker{}.LatestFromURL(t.Context(), srv.URL+"/projects/TCAT/repos/ted-mirror/raw/LocalCode/?at=refs/heads/master")
+	if err != nil {
+		t.Fatalf("LatestFromURL against a raw directory: %v", err)
+	}
+	if rel.Version != "0.129.0" {
+		t.Fatalf("version = %q, want 0.129.0", rel.Version)
+	}
+	if len(rel.Assets) != 2 {
+		t.Fatalf("assets = %d, want 2: the tree listing is not a page and its names still have to be found", len(rel.Assets))
+	}
+	for _, a := range rel.Assets {
+		u, err := url.Parse(a.URL)
+		if err != nil {
+			t.Fatalf("asset %s has an unparseable URL %q: %v", a.Name, a.URL, err)
+		}
+		if !strings.HasSuffix(u.Path, "/raw/LocalCode/"+a.Name) {
+			t.Errorf("asset %s downloads from %q, which is not the file beside the listing", a.Name, u.Path)
+		}
+		if got := u.Query().Get("at"); got != "refs/heads/master" {
+			t.Errorf("asset %s downloads at %q, want refs/heads/master: the listing's ref did not reach the file", a.Name, got)
+		}
+	}
+}
+
+// And a listing with no query of its own is untouched, which is every
+// plain directory index.
+func TestAPlainDirectoryGainsNoQuery(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="localcode-0.129.0-windows-amd64.msi">msi</a>`)
+	}))
+	defer srv.Close()
+
+	rel, err := Checker{}.LatestFromURL(t.Context(), srv.URL+"/dl/")
+	if err != nil {
+		t.Fatalf("LatestFromURL: %v", err)
+	}
+	if len(rel.Assets) != 1 {
+		t.Fatalf("assets = %d, want 1", len(rel.Assets))
+	}
+	if strings.Contains(rel.Assets[0].URL, "?") {
+		t.Errorf("asset URL %q gained a query the listing never had", rel.Assets[0].URL)
 	}
 }
