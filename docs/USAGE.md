@@ -300,7 +300,7 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 | `max_concurrent_tasks` | Maximum concurrent background tasks. Default: 1. Synchronous `Task` calls do not consume slots. Provider-specific limits are acquired first so waiting on one endpoint does not occupy a daemon-wide slot. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
-| `update_url` | Where the update button looks instead of GitHub: an https address, or an http address on a private network, at which the current installers are published. Unset means GitHub. See [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
+| `update_url` | Where the update button looks instead of GitHub: an http or https address at which the current installers are published. Unset means GitHub. Over http nothing authenticates the host, and the panel says so on every check; see [Updating from somewhere other than GitHub](#updating-from-somewhere-other-than-github). |
 | `skip_permissions` | The daemon default for `skip_all`: turns every "ask" into "allow", the workspace boundary included. Off unless set; explicit deny rules still deny. See [The four switches](#the-four-switches). |
 | `skip_tool_permissions` | The daemon default for `skip_tools`: every tool prompt allowed, and a path that leaves the workspace still asked about. |
 | `read_outside_workspace` | The daemon default for `read_outside`: reading outside the session's workspace without being asked. |
@@ -2729,7 +2729,7 @@ The MSI uses basic UI so Windows Installer can offer its built-in files-in-use d
 
 #### Updating from somewhere other than GitHub
 
-`update_url` in config.json replaces GitHub entirely: one address at which the current installers are published, side by side, named the way localcode names them. It is https, or http to a host on a private network: loopback, the private ranges (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), link-local, carrier-grade NAT (`100.64/10`), single-label names (`mirror`), the internal suffixes (`.local`, `.internal`, `.intranet`, `.home.arpa`), and any name that resolves entirely to such addresses. An http address anywhere else is refused, as is a name that will not resolve.
+`update_url` in config.json replaces GitHub entirely: one address at which the current installers are published, side by side, named the way localcode names them. Either http or https, at any host — the address is not inspected and no name is resolved to decide it.
 
 ```json
 { "update_url": "https://bitbucket.org/acme/localcode-builds/downloads/" }
@@ -2739,16 +2739,24 @@ Use an internal source when GitHub is unavailable or when distributing an organi
 
 Versions are parsed from standard asset names, including `localcode-1.2.3-darwin-universal.tar.gz`, `localcode-1.2.3-windows-amd64.msi`, and `localcode-1.2.3-linux-amd64.deb`. Supported source formats include directory indexes, Bitbucket download listings, artifact-server JSON, and direct file URLs. When multiple versions exist, the highest version is selected.
 
+**A repository on an internal Bitbucket Server.** Point at the `raw` path of the directory holding the installers, not the `browse` path:
+
+```json
+{ "update_url": "http://bitbucket.internal:7990/projects/TCAT/repos/ted-mirror/raw/LocalCode/?at=refs/heads/master" }
+```
+
+`browse` serves the file browser, which draws its listing from JavaScript and links each name back to another page rather than to the file. `raw` on a directory answers with git's own tree listing — mode, type, object id, name — which is not a page at all and is read the same way. The `at` query says which ref the directory is being read at, and it is carried onto each file, so the download asks for the same ref rather than for whatever the default branch happens to be.
+
 | Situation | What you get |
 |---|---|
 | The URL cannot be reached | `could not reach update_url <url>: ...`, naming the address |
 | It answers 404, 403, ... | `update_url <url> answered 404 Not Found` |
 | Nothing there looks like an installer | A message saying so, with an example filename |
-| It is neither https nor private http | Refused, with the reason |
-| It is http to a public address | Refused: the connection is the only thing saying the installer came from the host you meant |
-| Its host will not resolve | Refused as unresolvable, so a DNS problem is not reported as a scheme problem |
+| It is neither http nor https | Refused, naming the scheme |
 
-Plain http is accepted only on a private network, and the cost sits in the same paragraph as the permission: nothing authenticates the host, so anyone already on that network could substitute the installer, and the `.sha256` sibling travels the same connection, so it catches a truncated or corrupted download but not a substituted one. A config pasted onto a laptop outside that network must not silently download installers in the clear, which is why a public http address is refused rather than warned about.
+Over plain http nothing authenticates the host: anyone on the path can choose which file is downloaded and run as an installer, and the `.sha256` sibling travels the same connection, so it catches a truncated or corrupted download but not a substituted one. That is stated rather than enforced — the panel marks an http source as unverified on every check and every install offer — because it is the mirror's operator who knows what their network is.
+
+localcode briefly inferred this instead, accepting http only to addresses that could not be on the public internet. The inference was wrong: a closed network does not have to use the private ranges, and the deployment it was written for serves its mirror on publicly-allocated space, which no address check can tell from the internet. It refused the exact case it existed to allow.
 
 GitHub assets are checked against their published SHA-256. Other sources may provide a sibling `<filename>.sha256` in `sha256sum` format. Without a checksum, installation continues with a **could not be verified** warning.
 

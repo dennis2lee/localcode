@@ -136,7 +136,6 @@ func TestABadUpdateURLSaysWhatIsWrongWithIt(t *testing.T) {
 	for _, tt := range []struct{ name, url, want string }{
 		{"not a url at all", "://nope", "not a URL"},
 		{"no host", "https:///dl/", "names no host"},
-		{"plain http to a public address", "http://192.0.2.1/dl/", "public internet"},
 		{"answers an error", reachable.URL + "/missing", "404"},
 		{"nothing that looks like an installer", reachable.URL + "/dl/", "looks like a localcode installer"},
 	} {
@@ -149,22 +148,6 @@ func TestABadUpdateURLSaysWhatIsWrongWithIt(t *testing.T) {
 				t.Errorf("error = %q, want it to mention %q", err, tt.want)
 			}
 		})
-	}
-}
-
-// http to the public internet is refused rather than allowed with a
-// warning. What this URL names is a file about to be run as an
-// installer, and there is usually no checksum beside it, so the
-// connection is the only thing that says the file came from the host
-// somebody meant. (http to a private host is accepted; that table lives
-// in mirror_http_test.go.)
-func TestPlainHTTPToAPublicAddressIsRefusedAndSaysWhy(t *testing.T) {
-	_, err := Checker{}.LatestFromURL(context.Background(), "http://192.0.2.1/dl/")
-	if err == nil {
-		t.Fatal("plain http to a public address was accepted")
-	}
-	if !strings.Contains(err.Error(), "installer") {
-		t.Errorf("the refusal does not say what is at stake: %v", err)
 	}
 }
 
