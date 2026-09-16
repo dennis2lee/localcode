@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -87,6 +88,83 @@ func (p *Bedrock) clientFor(ctx context.Context) (bedrockClient, error) {
 	}
 	p.client = client
 	return client, nil
+}
+
+// dropClient forgets the cached client after a failure that means it can
+// no longer authenticate, so the next request builds a new one.
+//
+// Only the client that failed is dropped: requests run concurrently, and
+// one of them may already have rebuilt since this one was sent. Identity
+// comparison is safe here because every stored client is a comparable
+// value — the SDK hands back a pointer, and so do the test fakes.
+func (p *Bedrock) dropClient(failed bedrockClient) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.client == failed {
+		p.client = nil
+	}
+}
+
+// bedrockDeadClientSubstrings are fragments of the AWS SDK's own error
+// text that mean the credentials behind the cached client are gone: the
+// SSO session expired, the token cache was removed, or the chain that
+// resolved at load time resolves to nothing now. Each is quoted from the
+// pinned modules rather than remembered:
+//
+//   - "failed to refresh cached credentials":
+//     aws-sdk-go-v2/aws/credential_cache.go, wrapping every failed refresh.
+//   - "refresh cached sso token failed" and "cached sso token is expired":
+//     credentials/ssocreds/sso_token_provider.go, the SSO refresh path.
+//   - "no ec2 imds role found": credentials/ec2rolecreds/provider.go.
+//   - "get credentials": the SDK's own wrapper around every failed
+//     credential resolution (internal/auth/smithy/credentials_adapter.go),
+//     produced nowhere else.
+//   - "expired token", "expiredtoken", and "security token": the
+//     service-side answer when cached credentials reached the endpoint
+//     after their time, in prose ("the security token ... is expired")
+//     or as a code ("ExpiredTokenException").
+//
+// Deliberately absent: throttling ("ThrottlingException", "rate exceeded",
+// "too many requests"), model refusals ("ValidationException", "access
+// denied" for a model the account may not call), and anything carrying a
+// cancellation. Those say nothing about the client, and dropping the cache
+// on them would rebuild the SDK client on every rate limit.
+var bedrockDeadClientSubstrings = []string{
+	"failed to refresh cached credentials",
+	"refresh cached sso token failed",
+	"cached sso token is expired",
+	"no ec2 imds role found",
+	"get credentials",
+	"expired token",
+	"expiredtoken",
+	"security token",
+}
+
+// bedrockCredentialsDead reports whether err means the cached client can no
+// longer authenticate, and the next request should build a new one.
+//
+// A function of the error alone — no client, no credentials, no network —
+// so a test can call it with any error value anywhere. Cancellation is
+// excluded first: a request the caller abandoned reads as an error from the
+// SDK too, and it says nothing about the client.
+func bedrockCredentialsDead(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var canceled interface{ CanceledError() bool }
+	if errors.As(err, &canceled) && canceled.CanceledError() {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	for _, s := range bedrockDeadClientSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // credentialHintSubstrings are fragments the AWS SDK's error text contains
@@ -515,6 +593,15 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	}
 	resp, err := client.ConverseStream(ctx, input)
 	if err != nil {
+		// The cached client authenticated when it was built and cannot
+		// now: an expired SSO session reads exactly like this. Drop it
+		// so the next request builds a new one — re-running the login is
+		// then enough, and no restart is needed. The request that failed
+		// still fails. Anything else (a rate limit, a model error) says
+		// nothing about the client and leaves the cache alone.
+		if bedrockCredentialsDead(err) {
+			p.dropClient(client)
+		}
 		return nil, reasoningRejected(wrapCredentialError(fmt.Errorf("bedrock ConverseStream: %w", err)), req.Effort)
 	}
 

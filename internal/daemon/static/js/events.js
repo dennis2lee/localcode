@@ -23,6 +23,7 @@ import { refreshTaskViewStatus } from './taskview.js';
 // evaluation time, so the cycle is safe — see MDN's notes on circular ES
 // module imports.
 import { loadSessions, renderSessionList, loadArchived, selectSession } from './sessions.js';
+import { loadAgents } from './loaders.js';
 
 let eventSource = null;
 
@@ -339,6 +340,10 @@ const handlers = {
     appendTool(`[system] conversation compacted to save context (summary: ${d.summary_length || 0} chars).`);
   },
   'config.changed': (d) => {
+    // Turning Smart Agent on or off changes which agents exist, so a
+    // flip here means the dropdown is stale. Compared before applying,
+    // because the snapshot carries every switch on every change.
+    const rosterMayHaveChanged = typeof d.smart_agent === 'boolean' && d.smart_agent !== app.smartAgent;
     if (typeof d.auto_compact_enabled === 'boolean') app.autoCompactEnabled = d.auto_compact_enabled;
     if (typeof d.show_tps === 'boolean') app.showTPS = d.show_tps;
     if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
@@ -360,6 +365,7 @@ const handlers = {
       refreshSmartAgentIfOpen();
       refreshOrchestrateIfOpen();
     }
+    if (rosterMayHaveChanged) loadAgents();
   },
   // Daemon-wide, and the live half of every switch: a toggle typed at
   // any prompt, the settings window in this tab or another one. It
@@ -371,6 +377,9 @@ const handlers = {
   // harmless. This one is the only half that reaches a window looking at
   // another session, which is where the old state used to sit.
   'settings.changed': (d) => {
+    // Same roster rule as config.changed above: the snapshot always
+    // carries smart_agent, so only an actual flip refetches.
+    const rosterMayHaveChanged = typeof d.smart_agent === 'boolean' && d.smart_agent !== app.smartAgent;
     if (typeof d.auto_compact_enabled === 'boolean') app.autoCompactEnabled = d.auto_compact_enabled;
     if (typeof d.show_tps === 'boolean') app.showTPS = d.show_tps;
     if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
@@ -404,6 +413,7 @@ const handlers = {
       // permissions.changed, which is the event that carries it.
       app.skipPermissions = d.skip_permissions;
     }
+    if (rosterMayHaveChanged) loadAgents();
     renderStatusBar();
   },
   // A fork is a verbatim copy of a conversation, so its transcript is
@@ -627,6 +637,13 @@ async function resyncAfterReconnect() {
     } catch { /* nothing else to try */ }
     return;
   }
+  // The roster this page shows is the roster the daemon had when the
+  // stream dropped: an update handoff or a restart under an open window
+  // can change which agents exist and which models their labels name, so
+  // the dropdown is refetched on every reconnect rather than trusted.
+  // Unconditional on the turn state below: staleness does not depend on
+  // whether a turn was running when the stream went away.
+  await loadAgents();
   if (!session.waiting || !session.sessionID) return;
   await loadSessions();
   const mine = (app.sessions || []).find(s => s.id === session.sessionID);

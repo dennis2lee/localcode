@@ -275,6 +275,15 @@ type Config struct {
 	// runtime.go.
 	delegateMu sync.RWMutex
 
+	// mcpMu guards MCPServers against "/reset-mcp" replacing the map
+	// while another goroutine reads it. Its own lock rather than permMu,
+	// because it protects different state with a different lifetime: the
+	// permission switches move from settings endpoints, this map moves
+	// from a config re-read, and sharing one mutex would serialize
+	// unrelated operations for no reason. See MCPServersSnapshot and
+	// SetMCPServersRuntime in runtime.go.
+	mcpMu sync.RWMutex
+
 	// permMu guards SkipPermissions and Permissions against the daemon's
 	// permission-settings endpoints changing them at runtime (a client
 	// toggling skip_permissions, or adding/removing a rule) while a tool
