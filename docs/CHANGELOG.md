@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.129.0
+
+**New**
+
+* `update_url` may be `http`, to a host that cannot be on the public internet. A closed network mirroring the installers had to run an internal CA and get it into every client's trust store, because the setting was https only. The decision is made from the host, with no key to set: loopback, the private and link-local ranges, carrier-grade NAT, names that can only be internal, and names that merely resolve to such addresses — which is the case this exists for, a `mirror.corp.example.com` pointing at `10.0.0.5`. A name whose addresses are split across both is refused.
+* A public host over http stays refused, because that is the guarantee still worth having: a config pasted out of a wiki onto a laptop in a café must not fetch an installer in plaintext from the open internet. Inside a closed network the person running the mirror is accepting that anyone already on it can substitute the file, and that the checksum beside it travels the same connection. The trade is theirs to make and must not be made by accident.
+* The panel says so, on every check and every install offer, in a field of its own beside the source rather than folded into the address. The `.sha256` sibling is still read over http and still catches a truncated download, and the documentation says plainly that it authenticates nothing there.
+
+**Fixed**
+
+* The three ways `update_url` can be wrong now read differently: a public host over http, a name that will not resolve, and a scheme that is neither. All three used to say "must be https".
+
 ## v0.128.0
 
 Three findings from an audit of process-global state, each with a test that runs at release.
