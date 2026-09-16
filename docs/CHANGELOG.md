@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.128.0
+
+Three findings from an audit of process-global state, each with a test that runs at release.
+
+**Fixed**
+
+* A Bedrock client outlived the credentials it was built with. The comment at `clientFor` says a failed load is deliberately not cached, so a wrong AWS profile can be fixed without a restart — and the code delivered only that half. A load that succeeded was cached forever, so when the SSO session behind it expired, every later request failed with `failed to refresh cached credentials` and re-running `aws sso login` did nothing: the process still held the client built with the dead session, and only a restart cleared it. The client is dropped now when the failure means it can no longer authenticate, and only that client — requests run concurrently and another may have rebuilt already. The decision is a function of the error alone, so a test calls it with any error value and no AWS, no network and no credentials. It spares throttling, validation, model errors and cancellation, because rebuilding the SDK client on every rate limit would be worse than the bug it fixes.
+* Both clients read the agent roster once and never again. That is not only a label going stale across an update handoff: the roster is not static, and turning Smart Agent on or off changes which agents exist, so the dropdown could offer an agent the daemon now refuses or omit one it would accept. Refetched on reconnect and on a switch that actually flipped, rather than polled.
+* `/reset-mcp` replaced `Config.MCPServers` with no lock, from two places. Benign only because nothing reads that field on another goroutine today; one reader on a turn or handler goroutine would have made it a data race, and a map race in Go is undefined behaviour rather than a stale read. It goes through a setter and a snapshot now, the way the other runtime state does.
+
+**Records**
+
+* The audit that found these could not explain the incident that prompted it: a turn on an on-prem Muse profile that reached Bedrock once, with the agent dropdown correct, no fallback line, no delegation prefix, and a restart curing it. Every mechanism that can put a turn on a different provider than the clients show either persists across a restart or moves the display with it. The one that fits — a custom command's `agent:` pin against a command file edited mid-process — requires the prompt to have begun with a slash, and it did not. Recorded as unexplained rather than closed.
+
 ## v0.127.0
 
 **New**
