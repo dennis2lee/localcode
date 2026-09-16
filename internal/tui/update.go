@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"localcode/internal/client"
+	"localcode/internal/events"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -243,6 +244,15 @@ func (m Model) handleServerEvent(msg eventMsg) (tea.Model, tea.Cmd) {
 	}
 	m.applyEvent(msg.ev)
 	cmds := []tea.Cmd{listenForEvent(m.events, m.streamGen)}
+	// The roster moves when Smart Agent flips, from any client, and the
+	// daemon announces the flip on this broadcast. Re-request it here
+	// rather than trusting the startup fetch: offering an agent the daemon
+	// now refuses, or omitting one it would accept, is a roster the page
+	// no longer has. Broadcasts are human-frequency, so this is one small
+	// request per change, not a poll.
+	if msg.ev.Type == events.TypeSettingsChanged {
+		cmds = append(cmds, m.fetchAgents())
+	}
 	if cmd := m.dequeue(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -436,10 +446,14 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	}
 
 	if msg.reattach {
-		// The same session, a fresh stream. Only the plumbing changes.
+		// The same session, a fresh stream. Only the plumbing changes —
+		// plus the roster: a re-attach means the daemon may be a new
+		// process since, and its agents may not be the ones cached at
+		// startup. The transcript is still this session's and is left
+		// alone.
 		m.events = msg.events
 		m.streamCancel = msg.cancel
-		return m, listenForEvent(m.events, m.streamGen)
+		return m, tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents())
 	}
 
 	// Everything below belonged to the conversation being left.
@@ -487,7 +501,9 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	// being left. Without the reset a conversation that never chose
 	// went on naming the previous conversation's model in its footer.
 	m.model = client.ModelView{}
-	return m, tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchEffort(false), m.fetchModel(false))
+	// The roster with them: opening a conversation (re)attaches to a
+	// daemon that may have restarted since startup, under this window.
+	return m, tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchEffort(false), m.fetchModel(false), m.fetchAgents())
 }
 
 // reopenCurrent re-attaches to the session this client is already in,

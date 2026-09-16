@@ -393,7 +393,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		if len(fresh.MCPServers) == 0 {
 			currentMCP = nil
 			d.SwapMCP(nil)
-			loop.Config.MCPServers = fresh.MCPServers
+			loop.Config.SetMCPServersRuntime(fresh.MCPServers)
 			return "MCP reset: no servers configured", nil
 		}
 		manager, mcpTools, warnings := mcpclient.Connect(ctx, fresh.MCPServers,
@@ -409,7 +409,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		}
 		currentMCP = manager
 		d.SwapMCP(manager)
-		loop.Config.MCPServers = fresh.MCPServers
+		loop.Config.SetMCPServersRuntime(fresh.MCPServers)
 		fmt.Fprintf(&report, "MCP reset: %d server(s) connected, %d tool(s) registered", len(fresh.MCPServers), len(mcpTools))
 		return report.String(), nil
 	}

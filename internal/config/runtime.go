@@ -156,6 +156,37 @@ func (c *Config) SetOrchestrateRuntime(v bool) {
 	c.Orchestrate = &v
 }
 
+// MCPServersSnapshot returns a copy of the MCP server map, so a reader on
+// one goroutine never shares the map "/reset-mcp" replaces on another. A
+// copy rather than the live map because a Go map race is undefined
+// behaviour rather than a stale read: sharing it would make a future
+// reader a data race the moment it arrived.
+func (c *Config) MCPServersSnapshot() map[string]MCPServerConfig {
+	c.mcpMu.RLock()
+	defer c.mcpMu.RUnlock()
+	out := make(map[string]MCPServerConfig, len(c.MCPServers))
+	for name, server := range c.MCPServers {
+		out[name] = server
+	}
+	return out
+}
+
+// SetMCPServersRuntime replaces the live MCP server map after "/reset-mcp"
+// re-reads the configuration from disk. The single write path, the way the
+// other runtime setters are: every replacement goes through this lock, so
+// no reader can ever observe a half-written map header. Copied on the way
+// in, the way SetAutoDelegateRuntime copies its slice: the re-read config
+// is discarded after the reset, and nothing else may hold the live map.
+func (c *Config) SetMCPServersRuntime(servers map[string]MCPServerConfig) {
+	c.mcpMu.Lock()
+	defer c.mcpMu.Unlock()
+	out := make(map[string]MCPServerConfig, len(servers))
+	for name, server := range servers {
+		out[name] = server
+	}
+	c.MCPServers = out
+}
+
 // ModelCommandNames is the built-in commands the model may run, each with
 // its leading slash and normalised to carry exactly one.
 //
