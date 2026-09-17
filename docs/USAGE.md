@@ -2735,6 +2735,8 @@ Update behavior depends on the install format:
 
 Windows MSI updates do not restart LocalCode in the original terminal. Start it again after installation.
 
+An older MSI installs over a newer one. Windows Installer would otherwise refuse with "a newer version is already installed", which only ever sent people to Add/Remove Programs first — the same outcome with an extra step. The permission lives in the package being installed, so it holds for every version from 0.133.0 on: any of those can be installed over anything newer, and nothing before 0.133.0 can be.
+
 The MSI uses basic UI so Windows Installer can offer its built-in files-in-use dialog. Full UI requires a package-authored dialog that this package does not contain.
 
 #### Updating from somewhere other than GitHub
@@ -2755,13 +2757,14 @@ Versions are parsed from standard asset names, including `localcode-1.2.3-darwin
 { "update_url": "http://bitbucket.internal:7990/projects/TCAT/repos/ted-mirror/raw/LocalCode/?at=refs/heads/master" }
 ```
 
-`browse` serves the file browser, which draws its listing from JavaScript and links each name back to another page rather than to the file. `raw` on a directory answers with git's own tree listing — mode, type, object id, name — which is not a page at all and is read the same way. The `at` query says which ref the directory is being read at, and it is carried onto each file, so the download asks for the same ref rather than for whatever the default branch happens to be.
+`browse` serves the file browser, which draws its listing from JavaScript and links each name back to another page rather than to the file. Pointing `update_url` at a browse path downloads a page under an installer name, which is refused before it is renamed into place rather than handed to the installer. `raw` on a directory answers with git's own tree listing — mode, type, object id, name — which is not a page at all and is read the same way. The `at` query says which ref the directory is being read at, and it is carried onto each file, so the download asks for the same ref rather than for whatever the default branch happens to be.
 
 | Situation | What you get |
 |---|---|
 | The URL cannot be reached | `could not reach update_url <url>: ...`, naming the address |
 | It answers 404, 403, ... | `update_url <url> answered 404 Not Found` |
 | Nothing there looks like an installer | A message saying so, with an example filename |
+| The download is a page, not an installer | Refused with the asset name, the byte count, the content type, and the first bytes, pointing at an `update_url` that names a page rather than the directory |
 | It is neither http nor https | Refused, naming the scheme |
 
 Over plain http nothing authenticates the host: anyone on the path can choose which file is downloaded and run as an installer, and the `.sha256` sibling travels the same connection, so it catches a truncated or corrupted download but not a substituted one. That is stated rather than enforced — the panel marks an http source as unverified on every check and every install offer — because it is the mirror's operator who knows what their network is.
@@ -2785,7 +2788,7 @@ Installation is offered for the desktop window and a daemon listening on loopbac
 | Linux, installed from the `.deb` (`/usr/bin/localcode`) | `localcode-x.y.z-linux-<arch>.deb`, with the `apt install` line to run |
 | Linux, installed under your home directory (`~/.local/bin`, or any tarball copy) | `localcode-x.y.z-linux-<arch>.tar.gz`, installed for you |
 
-Downloads are rejected if their published checksum or expected size does not match. Files are stored in the user cache directory, including `%LOCALAPPDATA%\localcode\updates` on Windows.
+Downloads are rejected when their first bytes are not the container the file name promises, or when their published checksum or expected size does not match. Files are stored in the user cache directory, including `%LOCALAPPDATA%\localcode\updates` on Windows.
 
 Writable standalone binaries are replaced directly. Package-managed installs require the corresponding installer or package manager.
 
