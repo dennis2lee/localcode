@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.133.0
+
+**Fixed**
+
+* A download that is not an installer no longer reaches the installer. A mirror's `update_url` named a Bitbucket browse page rather than its raw directory; the page embeds the file names, so the listing scan found the MSI, resolved it against the browse path, and downloaded the file's browse view — 38 KB of HTML. With no `.sha256` beside it, the page was saved as `.msi` under a "could not be verified" warning and handed to Windows Installer, which was the first thing to notice. The mirror was fine; the raw URL serves the exact bytes under every request shape. Each of the four containers localcode ships begins with fixed bytes, and a downloaded asset is now checked against the one its name promises, beside the checksum, before it is renamed into place. `Content-Type` goes into the refusal as evidence — `text/html` is what the operator needs to see — and is not the verdict, since a file server that labels an `.msi` as `text/plain` is ordinary and the bytes are still fine. The refusal names the size, the type, the visible `<!DOCTYPE`, and the browse-versus-raw cause.
+* An older MSI installs over a newer one. Windows Installer refused with "a newer version is already installed", which only ever sent people to Add/Remove Programs first — the same outcome with an extra step — and somebody who has to go back a version has a reason. The Upgrade table now removes a newer product the way it removes an older one, and the launch condition that blocked is gone. The permission lives in the package being installed, so it reaches every version from this one on and none before it.
+
 ## v0.132.0
 
 **Fixed**
