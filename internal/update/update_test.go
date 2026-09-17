@@ -151,7 +151,8 @@ func assetServer(t *testing.T, body []byte) *httptest.Server {
 }
 
 func TestDownloadVerifiesWhatArrived(t *testing.T) {
-	body := []byte("this is an installer, honestly")
+	// An MSI body starts with the OLE compound document magic.
+	body := append([]byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}, []byte("this is an installer, honestly")...)
 	sum := sha256.Sum256(body)
 	srv := assetServer(t, body)
 
@@ -182,7 +183,9 @@ func TestDownloadVerifiesWhatArrived(t *testing.T) {
 // A connection dropped at 90% is the likely failure, and it produces an
 // installer that opens, fails halfway, and leaves a broken install.
 func TestDownloadRefusesAFileThatDoesNotMatch(t *testing.T) {
-	body := []byte("truncated")
+	// MSI magic up front, so the refusal below is the checksum and the
+	// size, not the signature.
+	body := append([]byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}, []byte("truncated")...)
 	srv := assetServer(t, body)
 	dir := t.TempDir()
 
@@ -209,7 +212,9 @@ func TestDownloadRefusesAFileThatDoesNotMatch(t *testing.T) {
 // A checksum in an algorithm localcode does not know is not the same as no
 // checksum: the file is about to be run.
 func TestDownloadRefusesAChecksumItCannotCheck(t *testing.T) {
-	body := []byte("hello")
+	// MSI magic up front, so the refusal below is the unknown algorithm,
+	// not the signature.
+	body := append([]byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}, []byte("hello")...)
 	srv := assetServer(t, body)
 	a := Asset{Name: "x.msi", URL: srv.URL, Size: int64(len(body)), Digest: "sha512:beef"}
 	if _, err := Download(context.Background(), srv.Client(), a, t.TempDir()); err == nil {

@@ -13,6 +13,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -302,6 +303,71 @@ func (r Release) AssetFor(goos, goarch string, packaged bool) (Asset, error) {
 	return Asset{}, fmt.Errorf("release %s has nothing for %s/%s — install it from %s", r.Tag, goos, goarch, r.PageURL)
 }
 
+// expectedSignature returns the leading bytes a downloaded asset must
+// start with, from the container its name promises. A function of the
+// name alone (no network, no platform, no file), so a test can call it
+// with any name anywhere.
+//
+// A name that matches none of the four containers localcode ships is not
+// refused on signature: there is nothing to check it against. Every
+// container below is identified by fixed magic bytes at offset zero, the
+// same ones `make dist` produces, so the table is asserted directly rather
+// than through fixtures.
+func expectedSignature(name string) (label string, sig []byte, ok bool) {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".msi"):
+		return "MSI", []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}, true
+	case strings.HasSuffix(lower, ".zip"):
+		return "zip", []byte{'P', 'K', 0x03, 0x04}, true
+	case strings.HasSuffix(lower, ".tar.gz"):
+		return "gzip", []byte{0x1F, 0x8B}, true
+	case strings.HasSuffix(lower, ".deb"):
+		return "ar", []byte{'!', '<', 'a', 'r', 'c', 'h', '>', '\n'}, true
+	}
+	return "", nil, false
+}
+
+// printableHead renders the first bytes as text when they are text, so a
+// page served as an installer shows its `<!DOCTYPE` rather than its hex.
+// Binary input renders as nothing here; the hex in the message covers it.
+func printableHead(head []byte) string {
+	if len(head) > 64 {
+		head = head[:64]
+	}
+	for _, b := range head {
+		if b != '\n' && b != '\r' && b != '\t' && (b < 0x20 || b > 0x7E) {
+			return ""
+		}
+	}
+	return string(head)
+}
+
+// refuseSignature builds the refusal for bytes that are not the container
+// the asset name promises. It names what was received (size, content
+// type, first bytes) and the likely cause, so the mirror's operator can
+// fix their config without asking anyone. The content type is evidence
+// for this message, not the verdict: the signature above is what decides.
+func refuseSignature(name string, label string, sig, head []byte, n int64, contentType string) error {
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "download %s: got %d bytes", name, n)
+	if contentType != "" {
+		fmt.Fprintf(&msg, " (Content-Type %s)", contentType)
+	}
+	got := head
+	if len(got) > len(sig) {
+		got = got[:len(sig)]
+	}
+	fmt.Fprintf(&msg, " that do not start with the %s signature (expected %x, got %x)",
+		label, sig, got)
+	if text := printableHead(head); text != "" {
+		fmt.Fprintf(&msg, " starting with %q", text)
+	}
+	msg.WriteString(". The update_url probably names a page rather than the directory the files sit in," +
+		" for example a Bitbucket browse page instead of the raw directory.")
+	return fmt.Errorf("%s", msg.String())
+}
+
 // Download fetches an asset into dir and returns the path it was written
 // to, having checked that what arrived is what was advertised.
 //
@@ -310,7 +376,9 @@ func (r Release) AssetFor(goos, goarch string, packaged bool) (Asset, error) {
 // one: a connection dropped at 90% produces an MSI that opens, fails
 // halfway, and leaves a broken install. GitHub publishes a SHA-256 for
 // every asset, so it is verified when there is one and the size is checked
-// either way.
+// either way. Beside that, the first bytes must be the container the name
+// promises, so a page served as an installer is refused here instead of
+// reaching Windows Installer.
 func Download(ctx context.Context, client *http.Client, a Asset, dir string) (string, error) {
 	if client == nil {
 		// No overall timeout: this is tens of megabytes over whatever
@@ -354,6 +422,27 @@ func Download(ctx context.Context, client *http.Client, a Asset, dir string) (st
 	}
 	if a.Size > 0 && n != a.Size {
 		return "", fmt.Errorf("download %s: got %d bytes, the release says %d", a.Name, n, a.Size)
+	}
+	// The bytes must be the container the name promises: a page served as
+	// an installer is refused here, before the rename below, rather than
+	// reaching whatever installs it. The deferred remove drops the temp
+	// file the same way a checksum failure does. A name with no known
+	// container skips this; the checksum below still applies.
+	if label, sig, known := expectedSignature(a.Name); known {
+		f, err := os.Open(tmpName)
+		if err != nil {
+			return "", err
+		}
+		head := make([]byte, 512)
+		m, err := io.ReadFull(f, head)
+		f.Close()
+		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+			return "", fmt.Errorf("download %s: %w", a.Name, err)
+		}
+		head = head[:m]
+		if len(head) < len(sig) || !bytes.Equal(head[:len(sig)], sig) {
+			return "", refuseSignature(a.Name, label, sig, head, n, resp.Header.Get("Content-Type"))
+		}
 	}
 	// Only sha256 is understood. An asset carrying some other algorithm is
 	// not silently accepted as unchecked: it is refused, because "we could
