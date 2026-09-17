@@ -350,7 +350,11 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 		// comparison, and either way the reader should know which they
 		// are getting.
 		loop.WorkspaceRules = workspaceRules(e)
-		skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e)
+		// A one-shot run works in the directory it was started in: there
+		// is no client to name another one later, so the start directory
+		// is both the default workspace and the project the assets come
+		// from.
+		skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e.cwd, e.home)
 		if err != nil {
 			return nil, "", nil, err
 		}

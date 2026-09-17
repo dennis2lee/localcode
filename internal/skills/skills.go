@@ -8,6 +8,7 @@ package skills
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,8 +44,32 @@ type frontmatter struct {
 // directory wins over the same name in a later one — callers should list
 // project-local skill dirs before the global one so a project can
 // override a global skill.
+//
+// A skill that cannot be read or parsed is skipped with one log line
+// naming its path and the reason, rather than failing the load: one bad
+// file must not take down startup, but silence about it has cost people
+// afternoons. See LoadAllWithWarnings for the same load with the warnings
+// returned instead of logged.
 func LoadAll(dirs ...string) ([]Skill, error) {
+	list, warnings, err := LoadAllWithWarnings(dirs...)
+	for _, w := range warnings {
+		log.Printf("skills: skipping %s", w)
+	}
+	return list, err
+}
+
+// LoadAllWithWarnings is LoadAll with the skip reasons returned: one
+// string per skill directory that looked like an attempt at a skill and
+// was not loaded, each naming the path and the reason. An attempt is a
+// directory holding a SKILL.md file that fails to read or parse —
+// frontmatter that does not start with "---" (a BOM, a blank first line)
+// included. A directory with no SKILL.md is not an attempt: it may be
+// something else living beside the skills. Neither is a non-directory
+// entry, a dangling symlink, or a name that loses to an earlier
+// directory, which loaded fine from the winner.
+func LoadAllWithWarnings(dirs ...string) ([]Skill, []string, error) {
 	var out []Skill
+	var warnings []string
 	seen := map[string]bool{}
 
 	for _, dir := range dirs {
@@ -53,7 +78,7 @@ func LoadAll(dirs ...string) ([]Skill, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read skills dir %s: %w", dir, err)
+			return nil, nil, fmt.Errorf("read skills dir %s: %w", dir, err)
 		}
 
 		for _, e := range entries {
@@ -67,7 +92,8 @@ func LoadAll(dirs ...string) ([]Skill, error) {
 
 			sk, err := parseSkillFile(path)
 			if err != nil {
-				continue // skip malformed skills rather than failing startup
+				warnings = append(warnings, err.Error())
+				continue
 			}
 			if sk.Name == "" {
 				sk.Name = e.Name()
@@ -79,7 +105,7 @@ func LoadAll(dirs ...string) ([]Skill, error) {
 			out = append(out, sk)
 		}
 	}
-	return out, nil
+	return out, warnings, nil
 }
 
 // isSkillDir reports whether a skills-directory entry is a directory to
