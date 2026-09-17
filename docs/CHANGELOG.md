@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.131.0
+
+**New**
+
+* A shell escape at the prompt. Typing `!git status` or `!cat ~/abc.txt` runs it in the session's workspace and puts the output in the conversation, without reaching a model on the way in. The model sees the output on the next turn, with the transcript showing the person ran it — somebody runs `!git status` so the next thing they say can be about it. `!!` sends an ordinary message beginning with `!`, a lone `!` says what to run instead, and a failure shows its exit status so a typo never reads as an empty answer.
+* It does not consult the permission rules, a `deny` included. That is what a shell escape is — a person typing in their own window runs what they could have run in their own terminal — and it is the one deliberate hole in an otherwise closed surface, so USAGE says so in the paragraph that introduces the feature rather than in a footnote.
+* A model can never cause one. The route sits inside the guard that already keeps a delegated task's text out of every command path, and the test for it watches for a file the command would have created rather than for a string. The precedent is the repository's own: a custom command whose body splices a `` !`shell command` `` is already refused to `model_invocable`.
+* Execution is the `bash` tool itself rather than a second way to run a command: the same shell, the same timeout, the same handling of Windows having no `/bin/sh`. Output is handed back whole, because neither the tool nor the turn loop trims it and trimming here would make `!` and the tool disagree about the same command.
+* A `!` turn is held until idle rather than injected into a running one, since it appends history outside any turn.
+
 ## v0.130.0
 
 **Fixed**
