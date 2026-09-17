@@ -120,6 +120,14 @@ func (m *Model) applyEvent(ev events.Event) {
 		// and treating the first as end-of-turn is what used to make a
 		// prompt typed during tool execution skip the queue and 409.
 		text, _ := ev.Data["text"].(string)
+		// Command output the person ran is not something the model said,
+		// so it draws as a status line rather than a model message. The
+		// header names the command; the user message above it already
+		// shows the line as typed.
+		if command, _ := ev.Data["shell_command"].(string); command != "" {
+			m.appendTool("$ " + command + "\n" + text)
+			break
+		}
 		m.endModelStream(text)
 	case events.TypeSessionForked:
 		// A fork copies the conversation verbatim, so nothing else in this

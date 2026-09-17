@@ -516,7 +516,17 @@ func (d *Daemon) handleDetachChild(w http.ResponseWriter, r *http.Request) {
 // "/workspace" moves which tree that is, so a relative path resolved
 // either side of it would land in a different project.
 func heldUntilIdle(text string) string {
-	first, rest, _ := strings.Cut(strings.TrimSpace(text), " ")
+	// A shell escape appends history outside any turn, so it must not
+	// ride into one already running as trailing model text. The escaped
+	// form is an ordinary message and injects like any other.
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "!!") {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "!") {
+		return "!"
+	}
+	first, rest, _ := strings.Cut(trimmed, " ")
 	switch first {
 	case "/clear":
 		return "/clear"
