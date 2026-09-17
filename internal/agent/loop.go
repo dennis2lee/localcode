@@ -195,6 +195,19 @@ type Loop struct {
 	// daemon is the thing that has them.
 	OnSettingsChanged func()
 
+	// OnProjectDirChanged, if set, is called after SetProjectDir moves
+	// the default workspace to a different directory. The wiring layer
+	// sets it to reload the project skills and custom commands, which
+	// are read from the default workspace: without it a workspace the
+	// desktop client names after startup would keep serving the
+	// directory the daemon started in until a manual "/reset-skills".
+	//
+	// A hook for the same reason ReloadSkills is one: the skill and
+	// command directories live above this package. It runs without the
+	// loop lock held, so it may call back into the loop, and only when
+	// the directory actually changed.
+	OnProjectDirChanged func()
+
 	// Permissions answers and changes the four per-session permission
 	// switches. Built in New from the same store and config the tool
 	// registry's policy uses, so a command and a tool call cannot
@@ -704,10 +717,29 @@ func (l *Loop) SkillIndex() string {
 // process's working directory: each turn carries its session's directory
 // on the context instead (see SessionDir and tools.WithWorkingDir), which
 // is what lets two sessions work in two different projects at once.
+//
+// When the directory actually changed, OnProjectDirChanged runs after the
+// lock is released, so the hook may call back into the loop. Moving to
+// the same directory is a no-op and runs nothing.
 func (l *Loop) SetProjectDir(dir string) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	changed := l.ProjectDir != dir
 	l.ProjectDir = dir
+	hook := l.OnProjectDirChanged
+	l.mu.Unlock()
+	if changed && hook != nil {
+		hook()
+	}
+}
+
+// SetCommands replaces the loaded custom commands, under the same lock
+// SetSkills uses for the skill list: a workspace switch can swap them
+// while turns are running, and a turn matching "/<name>" must see one
+// list or the other rather than a half-written one.
+func (l *Loop) SetCommands(list []commands.Command) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.Commands = list
 }
 
 // SessionDir is the directory sessionID's tools work in: the workspace

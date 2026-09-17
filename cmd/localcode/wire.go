@@ -122,8 +122,17 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 		return nil, nil, err
 	}
 
+	// The default workspace: the directory this process started in. It is
+	// the only project known this early — no session exists yet and no
+	// workspace switch has named another — and every session created
+	// later inherits it, so it is also what loop.GetProjectDir returns
+	// until the first switch. Passed explicitly rather than re-derived
+	// inside the loaders, so startup and every later reload resolve the
+	// project root the same way.
+	projectDir := e.cwd
+
 	progress("loading skills and commands")
-	skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e)
+	skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, projectDir, e.home)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -174,7 +183,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	loop.MemorySection = memorySection
 	loop.Skills = skillList
 	loop.Commands = cmdList
-	loop.ProjectDir = e.cwd
+	loop.ProjectDir = projectDir
 	loop.ConfigPath = configFilePath
 	loop.MemoryDir = memDir
 	loop.Version = version
@@ -325,34 +334,31 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// rather than the directory the daemon started in, which is itself a
 	// small fix — a workspace switched at runtime used to keep serving
 	// the old project's skills until a restart.
+	//
+	// Custom commands come along: they are read from the same two roots,
+	// so a switch that fixed skills and left commands stale would be the
+	// same bug one directory over.
 	loop.ReloadSkills = func() (string, error) {
 		// The live workspace, not the one the daemon started in, so the
 		// chain is re-run against the project actually being worked on.
-		projectSkills := userdirs.At(loop.GetProjectDir()).Skills
-		globalSkills := userdirs.At(e.home).Skills
-		list, err := skills.LoadAll(projectSkills, globalSkills)
+		return reloadProjectAssets(loop, registry, loop.GetProjectDir(), e.home)
+	}
+
+	// The moment the real project becomes known on the desktop: the
+	// daemon starts in its install directory and the client names the
+	// project afterwards with POST /api/workspace, which lands in
+	// SetProjectDir. Reloading there means the project's skills and
+	// commands are loaded without anyone typing "/reset-skills".
+	//
+	// Never fatal: the switch itself already succeeded, so a reload
+	// failure is a log line rather than an error for anyone to handle.
+	loop.OnProjectDirChanged = func() {
+		report, err := loop.ReloadSkills()
 		if err != nil {
-			return "", err
+			log.Printf("skills and commands: reload after workspace change failed: %v", err)
+			return
 		}
-		section := ""
-		if len(list) > 0 {
-			section = skills.SystemPromptSection(list)
-			registry.Register(tools.NewSkillTool(list))
-		} else {
-			// No skills means no Skill tool: offering the model a tool
-			// with nothing behind it is a call that can only fail.
-			registry.Deregister("Skill")
-		}
-		loop.SetSkills(list, section)
-		if len(list) == 0 {
-			return "skills reloaded: none installed (looked in " + projectSkills + " and " + globalSkills + ")", nil
-		}
-		names := make([]string, len(list))
-		for i, sk := range list {
-			names[i] = sk.Name
-		}
-		return fmt.Sprintf("skills reloaded: %d (%s) from %s and %s",
-			len(list), strings.Join(names, ", "), projectSkills, globalSkills), nil
+		log.Printf("skills and commands: %s", report)
 	}
 
 	// "/reset-mcp": stop the servers, re-read their configuration from
@@ -497,8 +503,13 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker, store *se
 // auto-memory section, registers the Skill tool if any skills were found,
 // and returns the combined text to append to Loop.SystemPrompt alongside
 // the loaded skills/commands/memory-dir Loop needs directly.
-func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (skillsSection, memoryPolicy, memorySection string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
-	project, global := assetsFor(e)
+//
+// projectDir is the project the assets are read for — the daemon's
+// default workspace at startup, the live one on every reload — passed in
+// rather than re-derived from the process, so a daemon started in one
+// directory and working in another reads the project it works in.
+func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, projectDir, home string) (skillsSection, memoryPolicy, memorySection string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
+	project, global := assetsFor(projectDir, home)
 	if project.Chosen != ".localcode" || global.Chosen != ".localcode" {
 		// Worth a line: an empty winner still wins, so "where did my
 		// skills go" is answered by the log rather than by reading this
@@ -507,14 +518,11 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (ski
 			project.Path, global.Path)
 	}
 
-	skillList, err = loadSkills(e)
+	skillList, err = loadSkills(projectDir, home)
 	if err != nil {
 		return "", "", "", nil, nil, "", err
 	}
-	if len(skillList) > 0 {
-		registry.Register(tools.NewSkillTool(skillList))
-		skillsSection = skills.SystemPromptSection(skillList)
-	}
+	skillsSection = setSkillAssets(nil, registry, skillList)
 
 	cmdList, err = commands.LoadAll(project.Commands, global.Commands)
 	if err != nil {
@@ -526,7 +534,7 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (ski
 	// whole daemon — see Loop.WorkspaceRules.
 
 	if cfg.MemoryEnabled() {
-		memDir = memory.Dir(e.cwd, e.home)
+		memDir = memory.Dir(projectDir, home)
 		if err := os.MkdirAll(memDir, 0o755); err != nil {
 			return "", "", "", nil, nil, "", fmt.Errorf("create memory dir: %w", err)
 		}
@@ -540,17 +548,75 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, e env) (ski
 // loadSkills scans the project-local skills dir before the global one, so a
 // project can override a same-named global skill. Which global one that is
 // depends on what is installed: see internal/userdirs.
-func loadSkills(e env) ([]skills.Skill, error) {
-	project, global := assetsFor(e)
+func loadSkills(projectDir, home string) ([]skills.Skill, error) {
+	project, global := assetsFor(projectDir, home)
 	return skills.LoadAll(project.Skills, global.Skills)
 }
 
-// assetsFor is the project root and the home root this environment reads
-// skills and custom commands out of. One place, so the loaders cannot
-// drift, and two chains, because a repo's agent directory and a person's
-// need not be the same one.
-func assetsFor(e env) (project, global userdirs.Root) {
-	return userdirs.At(e.cwd), userdirs.At(e.home)
+// assetsFor is the project root and the home root the assets are read out
+// of. One place, so the loaders cannot drift, and two chains, because a
+// repo's agent directory and a person's need not be the same one. Both
+// roots are inputs: the project is the workspace actually being worked
+// in, which on the desktop is not the directory the daemon started in.
+func assetsFor(projectDir, home string) (project, global userdirs.Root) {
+	return userdirs.At(projectDir), userdirs.At(home)
+}
+
+// reloadProjectAssets re-reads the project skills and custom commands for
+// one project directory plus the global ones, and swaps them into the
+// loop: the one answer both startup (through buildSystemPrompt) and
+// "/reset-skills" use, so the two cannot drift. It reports what it read
+// and where from, the way the startup log names both roots.
+func reloadProjectAssets(loop *agent.Loop, registry *tools.Registry, projectDir, home string) (string, error) {
+	project, global := assetsFor(projectDir, home)
+	skillList, err := skills.LoadAll(project.Skills, global.Skills)
+	if err != nil {
+		return "", err
+	}
+	cmdList, err := commands.LoadAll(project.Commands, global.Commands)
+	if err != nil {
+		return "", err
+	}
+	setSkillAssets(loop, registry, skillList)
+	loop.SetCommands(cmdList)
+	return assetsReport(skillList, cmdList, project, global), nil
+}
+
+// setSkillAssets swaps the loop's skills and the Skill tool behind them.
+// A nil loop means startup, where there is nothing to swap yet — only the
+// registry half applies, and the prompt section is returned for the
+// caller to keep.
+func setSkillAssets(loop *agent.Loop, registry *tools.Registry, skillList []skills.Skill) string {
+	section := ""
+	if len(skillList) > 0 {
+		section = skills.SystemPromptSection(skillList)
+		registry.Register(tools.NewSkillTool(skillList))
+	} else {
+		// No skills means no Skill tool: offering the model a tool
+		// with nothing behind it is a call that can only fail.
+		registry.Deregister("Skill")
+	}
+	if loop != nil {
+		loop.SetSkills(skillList, section)
+	}
+	return section
+}
+
+// assetsReport says what a reload read and where it read it from. Both
+// directories are always named, the way the startup log names both roots.
+func assetsReport(skillList []skills.Skill, cmdList []commands.Command, project, global userdirs.Root) string {
+	skillNames := make([]string, len(skillList))
+	for i, sk := range skillList {
+		skillNames[i] = sk.Name
+	}
+	cmdNames := make([]string, len(cmdList))
+	for i, cmd := range cmdList {
+		cmdNames[i] = cmd.Name
+	}
+	return fmt.Sprintf("skills and commands reloaded: %d skill(s) (%s), %d command(s) (%s) from %s and %s",
+		len(skillList), strings.Join(skillNames, ", "),
+		len(cmdList), strings.Join(cmdNames, ", "),
+		project.Skills+", "+project.Commands, global.Skills+", "+global.Commands)
 }
 
 // resolvedConfigPath is where an "always allow" permission decision gets

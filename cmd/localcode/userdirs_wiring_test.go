@@ -24,7 +24,7 @@ func TestSkillsAndCommandsComeFromTheChosenRoot(t *testing.T) {
 
 	e := env{home: home, cwd: t.TempDir()}
 
-	list, err := loadSkills(e)
+	list, err := loadSkills(e.cwd, e.home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestSkillsAndCommandsComeFromTheChosenRoot(t *testing.T) {
 		t.Errorf("skills = %+v, want only the one under ~/.claude", list)
 	}
 
-	_, global := assetsFor(e)
+	_, global := assetsFor(e.cwd, e.home)
 	cmdList, err := commands.LoadAll(filepath.Join(e.cwd, ".localcode", "commands"), global.Commands)
 	if err != nil {
 		t.Fatal(err)
@@ -56,12 +56,12 @@ func TestTheProjectRunsItsOwnChain(t *testing.T) {
 		"---\nname: global-one\ndescription: the home skill\n---\n\nyes\n")
 
 	e := env{home: home, cwd: cwd}
-	project, global := assetsFor(e)
+	project, global := assetsFor(e.cwd, e.home)
 	if project.Chosen != ".claude" || global.Chosen != ".localcode" {
 		t.Fatalf("project chose %q, home chose %q", project.Chosen, global.Chosen)
 	}
 
-	list, err := loadSkills(e)
+	list, err := loadSkills(e.cwd, e.home)
 	if err != nil {
 		t.Fatal(err)
 	}
