@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.132.0
+
+**Fixed**
+
+* A project's `.claude/skills` went unread, and the root chain was not why — `.claude` wins it outright. The loaders resolved the project root once, at wiring time, from the process's working directory. On the Windows desktop that is almost never the project: the window this was reported from named its workspace `C:\Program Files\LocalCode`, so whatever went into the project's skills directory was never going to load. Custom commands came from the same place and had the same bug.
+* The file already knew the answer two hundred lines up: `/reset-skills` reads the live workspace, and says in its own comment that reading the start directory was a bug. One question with two answers, and the startup one was wrong. There is one answer now, and both paths call it.
+* A workspace named after startup reloads the project's skills and commands rather than serving the start directory until somebody types `/reset-skills`. What the start directory means was worth getting right rather than papering over: before any session exists it is the correct project, because it is the default every session inherits — the defect was capturing that value instead of following it.
+* A skill that cannot be parsed says so once, with its path and the reason: frontmatter that does not begin with `---`, a byte-order mark, a blank first line. It still never stops startup, and a directory that was never trying to be a skill stays silent.
+
+**Records**
+
+* Sessions that move their own workspace still share the daemon-wide skill and command list. Named here rather than left to be found.
+
 ## v0.131.0
 
 **New**
