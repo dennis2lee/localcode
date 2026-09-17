@@ -101,10 +101,20 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	}
 
 	// Tried in order; the first match wins. This order is the precedence
-	// contract: built-in commands, then custom commands, then skills, then
-	// auto-delegation, then an ordinary model turn — nothing user-facing
-	// can be shadowed by a later entry. See commandRoutes.
+	// contract: the "!" shell escape, then built-in commands, then custom
+	// commands, then skills, then auto-delegation, then an ordinary model
+	// turn — nothing user-facing can be shadowed by a later entry. See
+	// commandRoutes.
 	if !delegated {
+		// An escaped message is ordinary text that happens to begin with
+		// "!"; it walks every route below as that text, so "!!/status"
+		// reaches the model rather than running anything. An unescaped
+		// one never reaches the table at all.
+		if escaped, ok := stripBangEscape(text); ok {
+			text = escaped
+		} else if command, ok := parseBang(text); ok {
+			return l.runBangCommand(ctx, sessionID, text, command)
+		}
 		for _, route := range l.commandRoutes(ctx, sessionID, agentName, text) {
 			if handled, err := route(); handled {
 				return err

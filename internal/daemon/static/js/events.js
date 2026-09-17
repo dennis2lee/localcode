@@ -117,6 +117,14 @@ const handlers = {
   // typed during tool execution skip the queue and bounce off the daemon's
   // busy flag with a 409.
   'message.part.end': (d) => {
+    // Command output the person ran is not something the model said, so
+    // it draws as a tool line rather than a model message. The header
+    // names the command; the user message above it already shows the
+    // line as typed.
+    if (typeof d.shell_command === 'string' && d.shell_command) {
+      appendTool('$ ' + d.shell_command + '\n' + (typeof d.text === 'string' ? d.text : ''));
+      return;
+    }
     endModelText(typeof d.text === 'string' ? d.text : '');
   },
   // How hard the model is asked to think, changed here or in another
