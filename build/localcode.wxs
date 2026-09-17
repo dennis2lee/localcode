@@ -28,7 +28,16 @@
              SummaryCodepage='1252'
              InstallScope='perMachine' />
 
-    <MajorUpgrade DowngradeErrorMessage='A newer version of LocalCode is already installed.' />
+    <!-- Downgrades are allowed on purpose. A person who has to go back a
+         version — a release that broke their mirror, a machine that must
+         match a colleague's — should be able to run the older MSI and have
+         it replace the newer one, the same way a newer one replaces an
+         older one. The block Windows Installer would otherwise raise
+         ("a newer version is already installed") only ever sent people to
+         Add/Remove Programs first, which is the same outcome with an extra
+         step. The permission lives in the package being installed, so it
+         reaches every version from this one on and none before it. -->
+    <MajorUpgrade AllowDowngrades='yes' />
 
     <Media Id='1' Cabinet='localcode.cab' EmbedCab='yes' />
 

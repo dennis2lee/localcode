@@ -2735,6 +2735,8 @@ Update behavior depends on the install format:
 
 Windows MSI updates do not restart LocalCode in the original terminal. Start it again after installation.
 
+An older MSI installs over a newer one. Windows Installer would otherwise refuse with "a newer version is already installed", which only ever sent people to Add/Remove Programs first — the same outcome with an extra step. The permission lives in the package being installed, so it holds for every version from 0.133.0 on: any of those can be installed over anything newer, and nothing before 0.133.0 can be.
+
 The MSI uses basic UI so Windows Installer can offer its built-in files-in-use dialog. Full UI requires a package-authored dialog that this package does not contain.
 
 #### Updating from somewhere other than GitHub
