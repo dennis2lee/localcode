@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.134.0
+
+**Fixed**
+
+* A skill written on Windows was rejected as having no frontmatter. The check compared the file against `---\n`; a Windows editor ends that line `---\r\n`, and Notepad puts a byte-order mark before it, so a `SKILL.md` that plainly began with `---` was refused as "missing YAML frontmatter (must start with `---`)" — every skill written on Windows, with the author told the file did not start with the line it started with. The report came through `/skill <path>`, whose `Available:` was empty for the same reason: nothing in that user's skills directory had ever loaded.
+* Custom commands had the subtler half. A command with no frontmatter is not an error — the whole file is the body — so a CRLF command did not fail: it lost its `agent:` pin and its description, and sent its YAML lines to the model as the first lines of the prompt.
+* One normaliser now strips the mark and the carriage returns, and the commands package reads through it rather than keeping a second copy that would drift. The tests feed the Windows bytes in directly, so the case runs on every platform; the byte-order mark that served as a malformed example until now moves to the side of files that load.
+
 ## v0.133.0
 
 **Fixed**
