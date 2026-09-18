@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -30,10 +31,40 @@ func NewOpenAICompat(baseURL, apiKey string) *OpenAICompat {
 // --- wire types (OpenAI chat/completions) ---
 
 type oaMessage struct {
-	Role       string       `json:"role"`
-	Content    string       `json:"content,omitempty"`
-	ToolCalls  []oaToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string       `json:"tool_call_id,omitempty"`
+	Role         string          `json:"role"`
+	Content      string          `json:"content,omitempty"`
+	MultiContent []oaContentPart `json:"-"`
+	ToolCalls    []oaToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID   string          `json:"tool_call_id,omitempty"`
+}
+
+type oaContentPart struct {
+	Type     string      `json:"type"`
+	Text     string      `json:"text,omitempty"`
+	ImageURL *oaImageURL `json:"image_url,omitempty"`
+}
+
+type oaImageURL struct {
+	URL string `json:"url"`
+}
+
+func (m oaMessage) MarshalJSON() ([]byte, error) {
+	if len(m.MultiContent) > 0 {
+		type wireMultiMessage struct {
+			Role       string          `json:"role"`
+			Content    []oaContentPart `json:"content"`
+			ToolCalls  []oaToolCall    `json:"tool_calls,omitempty"`
+			ToolCallID string          `json:"tool_call_id,omitempty"`
+		}
+		return json.Marshal(wireMultiMessage{
+			Role:       m.Role,
+			Content:    m.MultiContent,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+		})
+	}
+	type plain oaMessage
+	return json.Marshal(plain(m))
 }
 
 type oaToolCall struct {
@@ -145,21 +176,66 @@ func toOpenAIMessages(system string, msgs []Message) []oaMessage {
 	for _, m := range msgs {
 		switch m.Role {
 		case RoleUser:
-			var text strings.Builder
+			hasImage := false
 			for _, b := range m.Content {
-				switch b.Type {
-				case BlockText:
-					writeTextBlock(&text, b.Text)
-				case BlockToolResult:
-					out = append(out, oaMessage{
-						Role:       "tool",
-						Content:    b.ToolResultContent,
-						ToolCallID: b.ToolUseID,
-					})
+				if b.Type == BlockImage {
+					hasImage = true
+					break
 				}
 			}
-			if text.Len() > 0 {
-				out = append(out, oaMessage{Role: "user", Content: text.String()})
+			if !hasImage {
+				var text strings.Builder
+				for _, b := range m.Content {
+					switch b.Type {
+					case BlockText:
+						writeTextBlock(&text, b.Text)
+					case BlockToolResult:
+						out = append(out, oaMessage{
+							Role:       "tool",
+							Content:    b.ToolResultContent,
+							ToolCallID: b.ToolUseID,
+						})
+					}
+				}
+				if text.Len() > 0 {
+					out = append(out, oaMessage{Role: "user", Content: text.String()})
+				}
+			} else {
+				var parts []oaContentPart
+				var text strings.Builder
+				for _, b := range m.Content {
+					switch b.Type {
+					case BlockText:
+						if b.Text != "" {
+							writeTextBlock(&text, b.Text)
+							parts = append(parts, oaContentPart{
+								Type: "text",
+								Text: b.Text,
+							})
+						}
+					case BlockImage:
+						dataURI := fmt.Sprintf("data:%s;base64,%s", b.MediaType, base64.StdEncoding.EncodeToString(b.Data))
+						parts = append(parts, oaContentPart{
+							Type: "image_url",
+							ImageURL: &oaImageURL{
+								URL: dataURI,
+							},
+						})
+					case BlockToolResult:
+						out = append(out, oaMessage{
+							Role:       "tool",
+							Content:    b.ToolResultContent,
+							ToolCallID: b.ToolUseID,
+						})
+					}
+				}
+				if len(parts) > 0 {
+					out = append(out, oaMessage{
+						Role:         "user",
+						Content:      text.String(),
+						MultiContent: parts,
+					})
+				}
 			}
 
 		case RoleAssistant:
@@ -250,6 +326,9 @@ func mapFinishReason(r string) string {
 }
 
 func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	if err := ValidateRequestImages(req); err != nil {
+		return nil, err
+	}
 	body := oaRequest{
 		Model:         req.Model,
 		Messages:      toOpenAIMessages(req.System, req.Messages),
@@ -293,7 +372,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		defer resp.Body.Close()
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(resp.Body)
-		return nil, fmt.Errorf("openai-compat endpoint returned %d: %s", resp.StatusCode, buf.String())
+		return nil, wrapVisionRefusal(fmt.Errorf("openai-compat endpoint returned %d: %s", resp.StatusCode, buf.String()), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)
@@ -413,7 +492,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 
 		emitErr := func(err error) {
 			select {
-			case out <- StreamEvent{Type: EventError, Err: err}:
+			case out <- StreamEvent{Type: EventError, Err: wrapVisionRefusal(err, req.Model)}:
 			case <-ctx.Done():
 			}
 		}

@@ -241,6 +241,24 @@ func wrapCredentialError(err error) error {
 	return err
 }
 
+// bedrockImageFormat maps an image MIME media type to Bedrock's ImageFormat
+// enum. Any media type without a Bedrock equivalent returns an error, ensuring
+// an explicit refusal rather than sending an incorrect format.
+func bedrockImageFormat(mediaType string) (types.ImageFormat, error) {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "image/png":
+		return types.ImageFormatPng, nil
+	case "image/jpeg", "image/jpg":
+		return types.ImageFormatJpeg, nil
+	case "image/gif":
+		return types.ImageFormatGif, nil
+	case "image/webp":
+		return types.ImageFormatWebp, nil
+	default:
+		return "", fmt.Errorf("no Bedrock image format equivalent for media type %q", mediaType)
+	}
+}
+
 // toBedrockMessages converts the history, keeping reasoning blocks only
 // where the API needs them.
 //
@@ -319,6 +337,19 @@ func toBedrockMessages(msgs []Message) ([]types.Message, error) {
 						&types.ToolResultContentBlockMemberText{Value: b.ToolResultContent},
 					},
 				}})
+			case BlockImage:
+				format, err := bedrockImageFormat(b.MediaType)
+				if err != nil {
+					return nil, err
+				}
+				blocks = append(blocks, &types.ContentBlockMemberImage{
+					Value: types.ImageBlock{
+						Format: format,
+						Source: &types.ImageSourceMemberBytes{
+							Value: b.Data,
+						},
+					},
+				})
 			}
 		}
 
@@ -528,6 +559,9 @@ func mapBedrockStopReason(r types.StopReason) string {
 }
 
 func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	if err := ValidateRequestImages(req); err != nil {
+		return nil, err
+	}
 	messages, err := toBedrockMessages(req.Messages)
 	if err != nil {
 		return nil, err
@@ -602,7 +636,7 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 		if bedrockCredentialsDead(err) {
 			p.dropClient(client)
 		}
-		return nil, reasoningRejected(wrapCredentialError(fmt.Errorf("bedrock ConverseStream: %w", err)), req.Effort)
+		return nil, wrapVisionRefusal(reasoningRejected(wrapCredentialError(fmt.Errorf("bedrock ConverseStream: %w", err)), req.Effort), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)
@@ -719,7 +753,7 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 		}
 
 		if err := resp.GetStream().Err(); err != nil {
-			send(StreamEvent{Type: EventError, Err: err})
+			send(StreamEvent{Type: EventError, Err: wrapVisionRefusal(err, req.Model)})
 		}
 	}()
 

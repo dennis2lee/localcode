@@ -45,3 +45,11 @@ internal/childproc/childproc_other.go:HideConsole
 # nobody can check from another machine is one that goes wrong quietly, so
 # it lives where TestTheInstallerIsStartedAtBasicUI can read it here.
 internal/update/install.go:installerArgs
+
+# internal/provider.ImageBlock — the constructor a caller uses to put a
+# pasted image into a message. The provider half of image support landed
+# first (the block, the three adapters, the size limit, the refusal
+# classifier); the paste handler that calls this is the next change. Until
+# it lands nothing reaches this from cmd/localcode. Remove this line with
+# that change.
+internal/provider/provider.go:ImageBlock

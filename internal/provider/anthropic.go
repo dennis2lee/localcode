@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -70,6 +71,14 @@ type anthContentBlock struct {
 	// two tags only ever apply to the blocks that are not thinking.
 	Thinking  string `json:"thinking,omitempty"`
 	Signature string `json:"signature,omitempty"`
+
+	Source *anthImageSource `json:"source,omitempty"`
+}
+
+type anthImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 // anthThinkingBlock is the wire shape of a thinking block.
@@ -271,6 +280,15 @@ func toAnthropicMessages(msgs []Message) []anthMessage {
 				blocks = append(blocks, anthContentBlock{Type: "tool_use", ID: b.ToolUseID, Name: b.ToolName, Input: input})
 			case BlockToolResult:
 				blocks = append(blocks, anthContentBlock{Type: "tool_result", ToolUseID: b.ToolUseID, Content: b.ToolResultContent, IsError: b.IsError})
+			case BlockImage:
+				blocks = append(blocks, anthContentBlock{
+					Type: "image",
+					Source: &anthImageSource{
+						Type:      "base64",
+						MediaType: b.MediaType,
+						Data:      base64.StdEncoding.EncodeToString(b.Data),
+					},
+				})
 			}
 		}
 		out = append(out, anthMessage{Role: string(m.Role), Content: blocks})
@@ -460,6 +478,9 @@ func mapAnthropicStopReason(r string) string {
 }
 
 func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	if err := ValidateRequestImages(req); err != nil {
+		return nil, err
+	}
 	tools := toAnthropicTools(req.Tools)
 	// The API takes system as an array of blocks, so the assembly's
 	// source-distinct blocks travel as themselves: one API block per
@@ -551,7 +572,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 		defer resp.Body.Close()
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(resp.Body)
-		return nil, fmt.Errorf("anthropic API returned %d: %s", resp.StatusCode, buf.String())
+		return nil, wrapVisionRefusal(fmt.Errorf("anthropic API returned %d: %s", resp.StatusCode, buf.String()), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)
@@ -709,7 +730,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 				if ev.Error != nil {
 					msg = fmt.Sprintf("anthropic stream error (%s): %s", ev.Error.Type, ev.Error.Message)
 				}
-				send(StreamEvent{Type: EventError, Err: fmt.Errorf("%s", msg)})
+				send(StreamEvent{Type: EventError, Err: wrapVisionRefusal(fmt.Errorf("%s", msg), req.Model)})
 				return
 			}
 		}
