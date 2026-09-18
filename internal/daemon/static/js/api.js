@@ -100,7 +100,8 @@ export const deleteAllSessions = () => api('DELETE', '/api/sessions');
 export const reorderSessions = (ids) => api('POST', '/api/sessions/order', { ids });
 
 export const switchAgent = (sessionID, agent) => api('POST', `/api/sessions/${sessionID}/agent`, { agent });
-export const sendChatMessage = (sessionID, text) => api('POST', `/api/sessions/${sessionID}/messages`, { text });
+export const sendChatMessage = (sessionID, text, images) =>
+  api('POST', `/api/sessions/${sessionID}/messages`, (images && images.length) ? { text, images } : { text });
 export const cancelTask = (taskID) => api('POST', `/api/tasks/${taskID}/cancel`, {});
 export const revealWorkspace = (sessionID) =>
   api('POST', '/api/workspace/reveal' + (sessionID ? `?session=${encodeURIComponent(sessionID)}` : ''), {});

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"localcode/internal/events"
+	"localcode/internal/provider"
 	"strings"
 )
 
@@ -303,14 +304,34 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Text string `json:"text"`
+		Text   string `json:"text"`
+		Images []struct {
+			MediaType string `json:"media_type"`
+			Data      []byte `json:"data"`
+		} `json:"images"`
 	}
 	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if req.Text == "" {
+	if req.Text == "" && len(req.Images) == 0 {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("text is required"))
+		return
+	}
+
+	var imgBlocks []provider.Block
+	var totalImageBytes int
+	for _, img := range req.Images {
+		if !provider.SupportedImageMediaType(img.MediaType) {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("unsupported image media type %q: only PNG, JPEG, GIF, and WEBP are supported", img.MediaType))
+			return
+		}
+		totalImageBytes += len(img.Data)
+		imgBlocks = append(imgBlocks, provider.ImageBlock(img.MediaType, img.Data))
+	}
+	if totalImageBytes > provider.MaxImageBytesPerMessage {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("images in one message total %d bytes, over the 10MB limit (%d bytes)",
+			totalImageBytes, provider.MaxImageBytesPerMessage))
 		return
 	}
 
@@ -369,7 +390,7 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		if d.turns.inject(id, req.Text) {
+		if len(imgBlocks) == 0 && d.turns.inject(id, req.Text) {
 			cancel()
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "injected"})
 			return
@@ -407,6 +428,7 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		text := req.Text
 		agent := sess.Agent
+		images := imgBlocks
 		for {
 			// The agent is read fresh for every turn, not once at
 			// handler entry: a switch can land while a turn is
@@ -418,7 +440,8 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			if fresh, err := d.Loop.Store.Get(id); err == nil {
 				agent = fresh.Agent
 			}
-			err := d.Loop.SendMessage(turnCtx, id, agent, text)
+			err := d.Loop.SendMessage(turnCtx, id, agent, text, images...)
+			images = nil
 
 			// Read the cancellation state BEFORE calling cancel() below —
 			// cancel() makes turnCtx.Err() non-nil unconditionally, so

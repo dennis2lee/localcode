@@ -101,7 +101,7 @@ const handlers = {
     // what rebuilds the list, so recall survives a reload and a switch
     // through another conversation.
     recordHistoryEntry(d.text);
-    appendUser(d.text);
+    appendUser(d.text, d.images);
   },
   // Reasoning, live. Never replayed, so a reload does not bring it back
   // and is not meant to: the answer is what the transcript keeps.

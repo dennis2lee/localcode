@@ -40,7 +40,7 @@ function appendDiv(cls, text) {
 // and CSS cannot draw the first from inside the second's border box.
 // They are created and removed together; see resolvePendingUser, which
 // has to take the pair back out when the real message lands.
-function appendUserBlock(text, pending) {
+function appendUserBlock(text, pending, images = []) {
   const sep = document.createElement('div');
   sep.className = pending ? 'turn-sep pending' : 'turn-sep';
   // A text node, not a ::before content string: this is the only thing
@@ -60,7 +60,21 @@ function appendUserBlock(text, pending) {
 
   const div = document.createElement('div');
   div.className = pending ? 'msg-user pending' : 'msg-user';
-  div.textContent = text;
+  if (text) {
+    div.textContent = text;
+  }
+  if (images && images.length > 0) {
+    const imgContainer = document.createElement('div');
+    imgContainer.className = 'msg-images';
+    for (const img of images) {
+      const el = document.createElement('img');
+      el.className = 'msg-image';
+      el.src = `data:${img.media_type};base64,${img.data}`;
+      el.alt = 'attached image';
+      imgContainer.appendChild(el);
+    }
+    div.appendChild(imgContainer);
+  }
 
   follower.keeping(() => {
     transcriptEl.appendChild(sep);
@@ -69,8 +83,8 @@ function appendUserBlock(text, pending) {
   return { sep, div };
 }
 
-export function appendUser(text) {
-  const { div } = appendUserBlock(text, false);
+export function appendUser(text, images) {
+  const { div } = appendUserBlock(text, false, images);
   scrollToBottom();
   return div;
 }
@@ -92,13 +106,13 @@ export function appendUser(text) {
 // model started work on it.
 const sentPlaceholders = new Map(); // text -> [element]
 
-export function appendPendingUser(text, midTurn = false) {
+export function appendPendingUser(text, midTurn = false, images = []) {
   // A mid-turn send is a note, not a turn: it is one line of explanation
   // about when the model will see this, and giving it a turn separator
   // would announce a boundary that the transcript does not have there.
   const parts = midTurn
     ? { div: appendDiv('msg-tool', `[sent — the model will pick this up at its next step] ${text}`) }
-    : appendUserBlock(text, true);
+    : appendUserBlock(text, true, images);
   const div = parts.div;
   parts.text = text;
   const list = sentPlaceholders.get(text) || [];

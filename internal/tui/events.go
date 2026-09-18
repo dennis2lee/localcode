@@ -103,12 +103,45 @@ func (m *Model) applyEvent(ev events.Event) {
 		if auto, _ := ev.Data["auto"].(bool); auto {
 			break
 		}
-		if text, ok := ev.Data["text"].(string); ok {
+		text, _ := ev.Data["text"].(string)
+		if text != "" {
 			// Every prompt this session has seen goes into Up/Down recall,
 			// whoever typed it and whenever — which is what gives a session
 			// the TUI has just attached to a recall list at all.
 			m.recordHistory(text)
-			m.appendUser(text)
+		}
+		var imgNotes []string
+		if rawImgs, ok := ev.Data["images"].([]any); ok {
+			for _, item := range rawImgs {
+				if imgMap, ok := item.(map[string]any); ok {
+					mt, _ := imgMap["media_type"].(string)
+					if mt != "" {
+						imgNotes = append(imgNotes, fmt.Sprintf("[image: %s]", mt))
+					} else {
+						imgNotes = append(imgNotes, "[image]")
+					}
+				}
+			}
+		} else if typedImgs, ok := ev.Data["images"].([]events.Image); ok {
+			for _, img := range typedImgs {
+				if img.MediaType != "" {
+					imgNotes = append(imgNotes, fmt.Sprintf("[image: %s]", img.MediaType))
+				} else {
+					imgNotes = append(imgNotes, "[image]")
+				}
+			}
+		}
+		displayText := text
+		if len(imgNotes) > 0 {
+			notes := strings.Join(imgNotes, "\n")
+			if displayText != "" {
+				displayText = displayText + "\n" + notes
+			} else {
+				displayText = notes
+			}
+		}
+		if displayText != "" {
+			m.appendUser(text, displayText)
 		}
 	case events.TypeMessagePartDelta:
 		if text, ok := ev.Data["text"].(string); ok {

@@ -1,4 +1,4 @@
-import { inputEl, sendBtn, commDotEl } from './dom.js';
+import { inputEl, centerEl, sendBtn, commDotEl } from './dom.js';
 import { session, turnInFlight, tasksInFlight, historyLimit } from './state.js';
 import * as apiClient from './api.js';
 import { appendTool, appendError, appendPendingUser, resolvePendingUser } from './transcript.js';
@@ -239,8 +239,9 @@ export async function cancelTurn() {
 export function dequeueNext(isRetry = false) {
   if (session.promptQueue.length === 0) return;
   const next = session.promptQueue.shift();
+  const item = typeof next === 'string' ? { text: next, images: [] } : next;
   setWaiting(true);
-  apiClient.sendChatMessage(session.sessionID, next).catch((err) => {
+  apiClient.sendChatMessage(session.sessionID, item.text, item.images).catch((err) => {
     if (apiClient.isBusy(err)) {
       // Still busy — put it back and wait for the next turn.done.
       session.promptQueue.unshift(next);
@@ -306,9 +307,184 @@ export function insertAtCursor(el, text) {
   el.focus();
 }
 
+const SUPPORTED_IMAGE_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
+
+const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function bytesToBase64(bytes) {
+  let result = '';
+  const len = bytes.length;
+  for (let i = 0; i < len; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < len ? bytes[i + 1] : 0;
+    const b2 = i + 2 < len ? bytes[i + 2] : 0;
+    result += B64_CHARS[b0 >> 2];
+    result += B64_CHARS[((b0 & 3) << 4) | (b1 >> 4)];
+    result += i + 1 < len ? B64_CHARS[((b1 & 15) << 2) | (b2 >> 6)] : '=';
+    result += i + 2 < len ? B64_CHARS[b2 & 63] : '=';
+  }
+  return result;
+}
+
+async function readFileBase64(file) {
+  if (typeof file.base64 === 'string') return file.base64;
+  if (typeof file.data === 'string') return file.data;
+  if (typeof file.arrayBuffer === 'function') {
+    const buf = await file.arrayBuffer();
+    return bytesToBase64(new Uint8Array(buf));
+  }
+  if (typeof FileReader !== 'undefined') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = reader.result || '';
+        const comma = res.indexOf(',');
+        resolve(comma >= 0 ? res.slice(comma + 1) : res);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  throw new Error('cannot read file data');
+}
+
+let attachedImages = [];
+let attachmentsEl = null;
+
+export function getAttachedImages() {
+  return [...attachedImages];
+}
+
+export function clearAttachedImages() {
+  attachedImages = [];
+  renderAttachments();
+}
+
+export function removeAttachedImage(index) {
+  if (index >= 0 && index < attachedImages.length) {
+    attachedImages.splice(index, 1);
+    renderAttachments();
+  }
+}
+
+export function getAttachmentsEl() {
+  return attachmentsEl;
+}
+
+function getOrCreateAttachmentsEl() {
+  if (attachmentsEl) return attachmentsEl;
+  attachmentsEl = document.createElement('div');
+  attachmentsEl.className = 'composer-attachments';
+  attachmentsEl.style.display = 'none';
+  const footer = inputEl ? inputEl.parentNode : null;
+  if (footer && footer.parentNode) {
+    footer.parentNode.insertBefore(attachmentsEl, footer);
+  } else if (centerEl) {
+    centerEl.appendChild(attachmentsEl);
+  }
+  return attachmentsEl;
+}
+
+function renderAttachments() {
+  const container = getOrCreateAttachmentsEl();
+  while (container.firstChild) {
+    container.removeChild(container.firstChild);
+  }
+  if (attachedImages.length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'flex';
+  attachedImages.forEach((img, idx) => {
+    const item = document.createElement('div');
+    item.className = 'attachment-item';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'attachment-thumb';
+    thumb.src = `data:${img.mediaType};base64,${img.data}`;
+    thumb.alt = img.name || 'attached image';
+    item.appendChild(thumb);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'attachment-remove';
+    removeBtn.type = 'button';
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remove attachment';
+    removeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      removeAttachedImage(idx);
+    });
+    item.appendChild(removeBtn);
+
+    container.appendChild(item);
+  });
+}
+
+export async function handlePaste(e) {
+  const clipboardData = e.clipboardData;
+  if (!clipboardData || !clipboardData.items) return;
+  const items = clipboardData.items;
+
+  let imageItem = null;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const t = (it.type || '').toLowerCase().trim();
+    if (t.startsWith('image/') || (it.kind === 'file' && t.startsWith('image/'))) {
+      imageItem = it;
+      break;
+    }
+  }
+  if (!imageItem) return;
+
+  e.preventDefault();
+
+  let rawType = (imageItem.type || '').toLowerCase().trim();
+  if (rawType === 'image/jpg') rawType = 'image/jpeg';
+
+  if (!SUPPORTED_IMAGE_TYPES.has(rawType)) {
+    appendError(`unsupported image type "${imageItem.type}": only PNG, JPEG, GIF, and WEBP are supported`);
+    return;
+  }
+
+  const file = typeof imageItem.getAsFile === 'function' ? imageItem.getAsFile() : (imageItem.file || imageItem);
+  if (!file) return;
+
+  const currentTotal = attachedImages.reduce((sum, img) => sum + (img.size || 0), 0);
+  const fileSize = file.size || 0;
+  if (fileSize + currentTotal > MAX_IMAGE_BYTES) {
+    appendError(`image exceeds the 10MB limit (${fileSize} bytes)`);
+    return;
+  }
+
+  try {
+    const b64 = await readFileBase64(file);
+    attachedImages.push({
+      mediaType: rawType,
+      data: b64,
+      size: fileSize || (b64 ? Math.floor(b64.length * 0.75) : 0),
+      name: file.name || 'pasted-image',
+    });
+    renderAttachments();
+  } catch (err) {
+    appendError(`could not read pasted image: ${err}`);
+  }
+}
+
+inputEl.addEventListener('paste', handlePaste);
+
 export async function sendMessage() {
   const text = inputEl.value.trim();
-  if (!text) return;
+  const images = attachedImages.map((img) => ({
+    media_type: img.mediaType,
+    data: img.data,
+  }));
+  if (!text && images.length === 0) return;
 
   // A question the model asked mid-turn takes the box's next message as
   // its answer, in the person's own words. That is the escape hatch that
@@ -336,6 +512,10 @@ export async function sendMessage() {
   // Commands still wait for the turn to end — they don't go through the
   // /messages endpoint, so there is nothing to hand over.
   if (turnInFlight()) {
+    if (images.length > 0) {
+      appendTool("Images cannot be sent while a turn is in progress — wait for it to finish, or press Esc to cancel it.");
+      return;
+    }
     if (isPlainPrompt(text)) {
       rememberPrompt(text);
       inputEl.value = '';
@@ -374,11 +554,12 @@ export async function sendMessage() {
     return;
   }
 
-  rememberPrompt(text);
+  if (text) rememberPrompt(text);
   inputEl.value = '';
   autoResizeInput();
+  clearAttachedImages();
 
-  if (await tryLocalCommand(text)) return;
+  if (text && (await tryLocalCommand(text))) return;
 
   // A dimmed stand-in for the user line, drawn now and replaced by the real
   // one when the daemon's message.user event lands. The authoritative line
@@ -387,17 +568,17 @@ export async function sendMessage() {
   // daemon spends starting a turn (hooks, delegation, the first request),
   // and an Enter that leaves the screen unchanged for seconds reads as an
   // Enter that did not register.
-  appendPendingUser(text);
+  appendPendingUser(text, false, images);
   setWaiting(true);
   try {
-    await apiClient.sendChatMessage(session.sessionID, text);
+    await apiClient.sendChatMessage(session.sessionID, text, images);
   } catch (err) {
     if (apiClient.isBusy(err)) {
       // The daemon already has a turn running (a race window, or a turn
       // another client started). Queue material, not an error: the running
       // turn's turn.done will drain it. waiting stays true so further
       // prompts queue too.
-      session.promptQueue.unshift(text);
+      session.promptQueue.unshift(images.length > 0 ? { text, images } : text);
       renderStatusBar();
       retryQueueSoon();
       return;

@@ -361,7 +361,7 @@ export { diffLines, editDiffForTool } from './diff.js';
 export { jumpToTurn } from './transcript.js';
 export { helpLines, isPlainPrompt, tryLocalCommand } from './commands.js';
 export { applyEvent } from './events.js';
-export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage, autoResizeInput } from './composer.js';
+export { setWaiting, setConnected, rememberPrompt, historyPrev, historyNext, cancelTurn, sendMessage, autoResizeInput, getAttachedImages, clearAttachedImages, removeAttachedImage, getAttachmentsEl, handlePaste } from './composer.js';
 export { renderTasks, renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderMCPServers, setCurrentAgent } from './render.js';
 export { renderSchedules, applyScheduleEvent, loadSchedules, openScheduleDetails } from './schedules.js';
 export { anyModalOpen, permissionRequest, permissionSettings, delegate, workspace } from './modals.js';
