@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"strings"
 
 	"localcode/internal/events"
 	"localcode/internal/provider"
@@ -172,6 +174,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 	// in a log being rebuilt has ended; what this replays is the collapse
 	// that ended it. See collapsedDebate.
 	debateMark, debateTask, inDebate := 0, "", false
+	var droppedImages int
 
 	for _, ev := range evs {
 		switch ev.Type {
@@ -197,6 +200,9 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 
 		case events.TypeCompacted:
 			if summary := dataString(ev.Data, "summary"); summary != "" {
+				if droppedImages > 0 && !strings.Contains(summary, "image was omitted") && !strings.Contains(summary, "images were omitted") {
+					summary += imageDroppedNote(droppedImages)
+				}
 				out = []provider.Message{{
 					Role: provider.RoleUser,
 					// The same header compactHistory writes, so a restart
@@ -215,6 +221,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 				}}
 				resetPending()
 				inDebate = false
+				droppedImages = 0
 			}
 
 		case events.TypeCleared:
@@ -228,6 +235,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			// is the whole difference between the two commands.
 			out = nil
 			resetPending()
+			droppedImages = 0
 			// skipNextReply is deliberately left alone. The "/clear" line
 			// itself is a local user message, which set the flag one event
 			// ago so the command's own confirmation is not replayed as
@@ -267,15 +275,18 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			if text == "" {
 				text = dataString(ev.Data, "text")
 			}
-			// The source tag comes back with the message. Without it a
-			// restarted daemon would send a skill body, a command
-			// expansion or a carry-on notice as if the person had typed
-			// it, and the manifest would say so.
-			out = append(out, provider.Message{Role: provider.RoleUser, Content: []provider.Block{{
-				Type: provider.BlockText, Text: text,
-				Source:  dataString(ev.Data, "source"),
-				Sources: dataSpans(ev.Data, "sources"),
-			}}})
+			imgs := dataImages(ev.Data, "images")
+			droppedImages += len(imgs)
+			var content []provider.Block
+			if text != "" || len(imgs) == 0 {
+				content = append(content, provider.Block{
+					Type: provider.BlockText, Text: text,
+					Source:  dataString(ev.Data, "source"),
+					Sources: dataSpans(ev.Data, "sources"),
+				})
+			}
+			content = append(content, imgs...)
+			out = append(out, provider.Message{Role: provider.RoleUser, Content: content})
 
 		case events.TypeToolStart:
 			id := dataString(ev.Data, "tool_use_id")
@@ -490,4 +501,114 @@ func numberField(m map[string]any, names ...string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// dataImages extracts and decodes image blocks attached to a user message.
+func dataImages(data map[string]any, key string) []provider.Block {
+	raw, ok := data[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []events.Image:
+		var out []provider.Block
+		for _, img := range v {
+			if provider.SupportedImageMediaType(img.MediaType) {
+				out = append(out, provider.Block{Type: provider.BlockImage, MediaType: img.MediaType, Data: img.Data})
+			}
+		}
+		return out
+	case []provider.Block:
+		var out []provider.Block
+		for _, b := range v {
+			if b.Type == provider.BlockImage && provider.SupportedImageMediaType(b.MediaType) {
+				out = append(out, b)
+			}
+		}
+		return out
+	case []map[string]any:
+		var out []provider.Block
+		for _, it := range v {
+			mediaType, _ := it["media_type"].(string)
+			if mediaType == "" {
+				mediaType, _ = it["MediaType"].(string)
+			}
+			if !provider.SupportedImageMediaType(mediaType) {
+				continue
+			}
+			var dataBytes []byte
+			switch rawData := it["data"].(type) {
+			case string:
+				decoded, err := base64.StdEncoding.DecodeString(rawData)
+				if err == nil {
+					dataBytes = decoded
+				}
+			case []byte:
+				dataBytes = rawData
+			}
+			if dataBytes == nil {
+				switch rawData := it["Data"].(type) {
+				case string:
+					decoded, err := base64.StdEncoding.DecodeString(rawData)
+					if err == nil {
+						dataBytes = decoded
+					}
+				case []byte:
+					dataBytes = rawData
+				}
+			}
+			if dataBytes != nil {
+				out = append(out, provider.Block{Type: provider.BlockImage, MediaType: mediaType, Data: dataBytes})
+			}
+		}
+		return out
+	case []any:
+		var out []provider.Block
+		for _, item := range v {
+			switch it := item.(type) {
+			case events.Image:
+				if provider.SupportedImageMediaType(it.MediaType) {
+					out = append(out, provider.Block{Type: provider.BlockImage, MediaType: it.MediaType, Data: it.Data})
+				}
+			case provider.Block:
+				if it.Type == provider.BlockImage && provider.SupportedImageMediaType(it.MediaType) {
+					out = append(out, it)
+				}
+			case map[string]any:
+				mediaType, _ := it["media_type"].(string)
+				if mediaType == "" {
+					mediaType, _ = it["MediaType"].(string)
+				}
+				if !provider.SupportedImageMediaType(mediaType) {
+					continue
+				}
+				var dataBytes []byte
+				switch rawData := it["data"].(type) {
+				case string:
+					decoded, err := base64.StdEncoding.DecodeString(rawData)
+					if err == nil {
+						dataBytes = decoded
+					}
+				case []byte:
+					dataBytes = rawData
+				}
+				if dataBytes == nil {
+					switch rawData := it["Data"].(type) {
+					case string:
+						decoded, err := base64.StdEncoding.DecodeString(rawData)
+						if err == nil {
+							dataBytes = decoded
+						}
+					case []byte:
+						dataBytes = rawData
+					}
+				}
+				if dataBytes != nil {
+					out = append(out, provider.Block{Type: provider.BlockImage, MediaType: mediaType, Data: dataBytes})
+				}
+			}
+		}
+		return out
+	}
+	return nil
 }

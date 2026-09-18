@@ -259,6 +259,9 @@ func conversationEntry(msgs []provider.Message) prompt.Entry {
 		for _, b := range m.Content {
 			blocks++
 			body := b.Text + b.ToolResultContent + string(b.ToolInput)
+			if b.Type == provider.BlockImage {
+				body = b.MediaType + ":" + string(b.Data)
+			}
 			runes += len([]rune(body))
 			fmt.Fprintf(h, "%s|%s|%s|%s\n", m.Role, b.Type, b.ToolName, hashOfText(body))
 		}
@@ -410,7 +413,8 @@ type messageOrigin struct {
 	// because the model was really given it and a restart has to rebuild
 	// the same history, and it does not belong in the transcript as a
 	// typed line or in Up/Down recall. Both clients already honour it.
-	auto bool
+	auto   bool
+	images []provider.Block
 }
 
 // expansionSpans turns a command's expanded segments into the text that

@@ -42,8 +42,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	openingSource := ""
 	var openingSpans []provider.BlockSource
 	openingAuto := false
+	var openingImages []provider.Block
 	if len(origin) > 0 {
-		openingSource, openingSpans, openingAuto = origin[0].source, origin[0].spans, origin[0].auto
+		openingSource, openingSpans, openingAuto, openingImages = origin[0].source, origin[0].spans, origin[0].auto, origin[0].images
 	}
 	// A sub-agent's first message is the task its parent wrote. The
 	// parent's own manifest names it too, from the tool_use block that
@@ -152,17 +153,37 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	if openingAuto {
 		userMsgData["auto"] = true
 	}
+	if len(openingImages) > 0 {
+		imgs := make([]events.Image, 0, len(openingImages))
+		for _, b := range openingImages {
+			if b.Type == provider.BlockImage {
+				imgs = append(imgs, events.Image{
+					MediaType: b.MediaType,
+					Data:      b.Data,
+				})
+			}
+		}
+		if len(imgs) > 0 {
+			userMsgData["images"] = imgs
+		}
+	}
 	l.Store.Append(sessionID, events.TypeUserMessage, userMsgData)
 	// A new turn: forget which files the last one had already copied, so
 	// this one takes its own pre-images. See checkpoint.go.
 	l.beginTurn(sessionID)
 
-	l.appendHistory(sessionID, provider.Message{
-		Role: provider.RoleUser,
-		Content: []provider.Block{{
+	content := make([]provider.Block, 0, 1+len(openingImages))
+	if modelText != "" || len(openingImages) == 0 {
+		content = append(content, provider.Block{
 			Type: provider.BlockText, Text: modelText,
 			Source: openingSource, Sources: openingSpans,
-		}},
+		})
+	}
+	content = append(content, openingImages...)
+
+	l.appendHistory(sessionID, provider.Message{
+		Role:    provider.RoleUser,
+		Content: content,
 	})
 
 	// Rescues come in two kinds, in order.

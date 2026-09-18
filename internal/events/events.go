@@ -7,15 +7,17 @@ import "time"
 type Type string
 
 const (
-	// TypeUserMessage records what the user typed: {"text",
-	// "model_text","local"}. "model_text", if present, is what the model
+	// TypeUserMessage records what the user typed: {"text", "model_text",
+	// "local", "images"}. "model_text", if present, is what the model
 	// actually received when it differs from the displayed "text" (e.g.
 	// "/skill foo" expands to that skill's full body). "local": true
 	// marks a message answered without any model call (/usage, /compact,
-	// /config, /memory, a blocked/unknown command, ...) — its paired
+	// /config, /memory, a blocked/unknown command, ...), its paired
 	// reply is a display-only echo, not something the model ever said,
 	// and both are skipped when reconstructing model history from the
-	// log (see agent.rehydrateHistory).
+	// log (see agent.rehydrateHistory). "images", if present, carries
+	// attached images as [{"media_type", "data"}], where data is base64
+	// encoded in the JSON log.
 	TypeUserMessage        Type = "message.user"
 	TypeMessagePartDelta   Type = "message.part.delta"
 	TypeMessagePartEnd     Type = "message.part.end"
@@ -318,4 +320,11 @@ type Event struct {
 	Type      Type           `json:"type"`
 	Timestamp time.Time      `json:"timestamp"`
 	Data      map[string]any `json:"data,omitempty"`
+}
+
+// Image records one image attached to a user message.
+// In the JSON log, Data is base64 encoded by encoding/json.
+type Image struct {
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
 }
