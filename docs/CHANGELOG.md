@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.135.0
+
+**New**
+
+* Paste a screenshot into the prompt and the model sees it. Not the drop-a-file path and it could not be: a drop uploads bytes and hands the model a filename to read, which works for text and cannot work for a picture. What is pasted is what is sent — no resize, no re-encode — and the desktop window is this same page, so it works there too.
+* PNG, JPEG, GIF and WEBP, and ten megabytes for one message counting every image in it together. Both are checked as you paste, naming the type or the limit, rather than after a turn has started. Only what all three backends accept, because an image localcode takes has to be sendable wherever the conversation goes next: a model switch mid-conversation must not turn history into something its own provider cannot express.
+* **Nothing is declared in `config.json`, because nothing could be.** Which models have vision is not knowable here — a list is wrong the day a new model ships, and what a Bedrock account allows is in neither the SDK nor this repository. So the image is sent and a refusal is read: the turn fails saying that model appears not to accept images and suggesting `/model`. It is the shape `reasoningRejected` already uses for a rejected thinking parameter. A local server without vision often never says "image" at all — it rejects the shape, because a text-only endpoint declares content as a string and an image makes it an array — and that complaint is the refusal in the only words such a server has.
+* A pasted image is stored in the conversation, so it survives a restart, which is also why a session log with images is much larger than one without. Compaction drops them and says how many: an image cannot go into a text summary, and carrying one through would defeat the point, so the model keeps knowing a picture was discussed without still holding it. An image after the compaction point comes back whole.
+* Message content was already a block list, so an image is a kind beside text, thinking, tool_use and tool_result rather than a new shape for messages. The bytes stay decoded in the block: two adapters want base64 on the wire and one wants the bytes, and the session log base64s them on its own, so no hand-rolled encoding sits between the forms.
+
 ## v0.134.0
 
 **Fixed**
