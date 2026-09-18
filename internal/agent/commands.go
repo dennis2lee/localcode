@@ -40,8 +40,23 @@ Write build/lint/test commands, an architecture overview, and the code conventio
 // SendMessage appends a user turn to sessionID's history and drives the
 // agent loop (model call -> optional tool calls -> model call -> ...) until
 // the model produces a final answer. agentName selects which model profile
-// to use, per the config's agents map.
-func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text string) error {
+// to use, per the config's agents map. Optional images are attached to the
+// user turn.
+func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text string, images ...provider.Block) error {
+	if len(images) > 0 {
+		var content []provider.Block
+		if text != "" {
+			content = append(content, provider.TextBlock(text))
+		}
+		content = append(content, images...)
+		if err := provider.ValidateMessageImages(provider.Message{
+			Role:    provider.RoleUser,
+			Content: content,
+		}); err != nil {
+			return err
+		}
+	}
+
 	// The admission boundary for a top-level message, and therefore where
 	// the Smart Agent setting is pinned. Not in sendWithModelText, which
 	// is reached only after command routing and auto-delegation have had
@@ -139,7 +154,7 @@ func (l *Loop) SendMessage(ctx context.Context, sessionID, agentName, text strin
 	// Not for a delegated task: that text was composed by a model, and a
 	// model reaching into other conversations by writing a token into a
 	// sub-agent's prompt is the transitivity this design closes.
-	modelText, origin := text, messageOrigin{}
+	modelText, origin := text, messageOrigin{images: images}
 	if !delegated {
 		if expanded, spans, notices := l.expandSessionRefs(sessionID, text); expanded != text {
 			modelText, origin.spans = expanded, spans

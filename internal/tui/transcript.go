@@ -76,12 +76,17 @@ func (m *Model) appendEntry(kind entryKind, text string) {
 }
 
 // appendUser records a prompt as it comes back from the daemon's event log.
-// The server's message.user event stays the single source of truth for what
+// A prompt arrives twice: echoed locally when it is sent, then again as what
 // the session actually holds, so the local echo this replaces (see
 // appendPendingUser) is removed rather than left above a duplicate.
-func (m *Model) appendUser(text string) {
-	m.resolvePendingUser(text)
-	m.appendEntry(entryUser, text)
+//
+// The two texts are the same string for an ordinary prompt and differ when
+// the transcript shows something the person did not type: a message that
+// carried an image is displayed with a note saying so, while the echo it
+// replaces has to be matched on what was actually typed.
+func (m *Model) appendUser(rawText, displayText string) {
+	m.resolvePendingUser(rawText)
+	m.appendEntry(entryUser, displayText)
 	m.streamOpen = false
 }
 

@@ -9,6 +9,8 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 type Role string
@@ -41,7 +43,18 @@ type Block struct {
 	ToolInput json.RawMessage `json:"tool_input,omitempty"`  // BlockToolUse
 
 	ToolResultContent string `json:"tool_result_content,omitempty"` // BlockToolResult
-	IsError           bool   `json:"is_error,omitempty"`            // BlockToolResult
+
+	// MediaType and Data carry one image. An image is bytes plus the
+	// type that says how to read them, and neither is worth anything
+	// without the other, so they travel together the way a thinking
+	// block's text travels with its signature. Raw bytes rather than
+	// base64 text: two of the three adapters want base64 on the wire and
+	// one wants the bytes, so the decoded form is the one all three can
+	// reach without a round trip, and the session log encodes them once
+	// on its own terms.
+	MediaType string `json:"media_type,omitempty"` // BlockImage
+	Data      []byte `json:"data,omitempty"`       // BlockImage
+	IsError   bool   `json:"is_error,omitempty"`   // BlockToolResult
 
 	// Source is the prompt-entry ID for a block whose author the message
 	// role does not express: a skill body or a command expansion sent as
@@ -75,6 +88,7 @@ const (
 	BlockThinking   BlockType = "thinking"
 	BlockToolUse    BlockType = "tool_use"
 	BlockToolResult BlockType = "tool_result"
+	BlockImage      BlockType = "image"
 )
 
 func TextBlock(text string) Block { return Block{Type: BlockText, Text: text} }
@@ -279,4 +293,130 @@ const (
 // message_stop or error event) and then closes it.
 type Provider interface {
 	Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
+}
+
+// ImageBlock is one image in a message, for a caller that has the bytes
+// and the media type and should not have to know the field names.
+func ImageBlock(mediaType string, data []byte) Block {
+	return Block{Type: BlockImage, MediaType: mediaType, Data: data}
+}
+
+// ImageBytes is the block's image data, empty for every other kind.
+func (b Block) ImageBytes() []byte { return b.Data }
+
+// MaxImageBytesPerMessage caps the images in one message, added together
+// rather than counted one at a time: three images under the limit are
+// still one request, and it is the request a model has to accept.
+const MaxImageBytesPerMessage = 10 * 1024 * 1024
+
+// SupportedImageMediaType reports whether all three adapters can carry
+// this type. A function of the media type alone, so the table below is a
+// table and not three fixtures.
+//
+// The intersection, not the union: an image localcode accepts has to be
+// sendable wherever the conversation goes next, and a model switch
+// mid-conversation must not turn history into something its own provider
+// cannot express.
+func SupportedImageMediaType(mediaType string) bool {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	}
+	return false
+}
+
+// ValidateMessageImages refuses a message whose images cannot be sent:
+// a type no adapter carries, or more bytes than one message may hold.
+func ValidateMessageImages(m Message) error {
+	var total int
+	for _, b := range m.Content {
+		if b.Type != BlockImage {
+			continue
+		}
+		if !SupportedImageMediaType(b.MediaType) {
+			return fmt.Errorf("unsupported image media type %q: only PNG, JPEG, GIF, and WEBP are supported", b.MediaType)
+		}
+		total += len(b.Data)
+	}
+	if total > MaxImageBytesPerMessage {
+		return fmt.Errorf("images in one message total %d bytes, over the 10MB limit (%d bytes)",
+			total, MaxImageBytesPerMessage)
+	}
+	return nil
+}
+
+// ValidateRequestImages checks every message before any adapter builds a
+// wire form, so the refusal names the limit rather than arriving as a
+// provider's own complaint about a body it could not parse.
+func ValidateRequestImages(req ChatRequest) error {
+	for _, m := range req.Messages {
+		if err := ValidateMessageImages(m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// visionRefusalPhrases are fragments an endpoint uses when it will not
+// take an image. Quoted from what the three backends actually answer
+// rather than remembered: an OpenAI-compatible server without vision
+// answers 400 naming the content type it did not expect, Anthropic names
+// the block type, and Bedrock's validation names the field.
+var visionRefusalPhrases = []string{
+	"image", "vision", "multimodal", "image_url", "content type",
+	// A local server without vision often never says "image" at all: it
+	// rejects the shape instead, because a text-only endpoint declares
+	// content as a string and an image turns it into an array of blocks.
+	// That complaint is the refusal, in the only words such a server has.
+	"expected a string", "must be a string", "should be a string", "array of objects",
+}
+
+// notVisionRefusal are the failures that can carry an image-shaped word
+// and mean something else entirely. Checked first, because a rate limit
+// on a request that happened to carry an image is a rate limit.
+var notVisionRefusal = []string{
+	"rate limit", "rate_limit", "too many requests", "throttling",
+	"context length", "context_length", "context window", "maximum context",
+	"token limit exceeded",
+	"canceled", "cancelled", "deadline exceeded",
+	"unauthorized", "access denied", "accessdenied", "expired token",
+	"credentials",
+}
+
+// isVisionRefusal reports whether err means the model would not take an
+// image. A function of the error alone -- no network, no model -- so a
+// test drives it with any error value.
+//
+// Which models have vision is not knowable from here: a list is wrong the
+// day a new model ships, and what a Bedrock account allows is not in the
+// SDK or this repository. So localcode sends the image and reads the
+// refusal, the way reasoningRejected reads a rejected thinking parameter
+// rather than predicting which accounts accept one.
+func isVisionRefusal(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	for _, p := range notVisionRefusal {
+		if strings.Contains(lower, p) {
+			return false
+		}
+	}
+	for _, p := range visionRefusalPhrases {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// wrapVisionRefusal turns an endpoint's refusal into the sentence
+// somebody can act on: which model would not take the image, and what to
+// do instead. Every other error passes through untouched.
+func wrapVisionRefusal(err error, model string) error {
+	if !isVisionRefusal(err) {
+		return err
+	}
+	return fmt.Errorf("%w\n\nhint: %s appears not to accept images. Switch to a model with vision using "+
+		"\"/model\", or send the message without the image", err, model)
 }

@@ -130,14 +130,16 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	// instead of arguing with it.
 	var summary string
 	var usage streamUsage
+	imgCount := countImages(history)
+	cleanHistory := stripImagesForSummary(history)
 	for attempt := 0; ; attempt++ {
-		kept, dropped, ferr := fitHistory(systemPrompt, history, budget)
+		kept, dropped, ferr := fitHistory(systemPrompt, cleanHistory, budget)
 		if ferr != nil {
 			// Dropping whole messages cannot get there: one of them is
 			// too big by itself. forceFit cuts into them, which is worse
 			// than dropping and better than not compacting at all.
-			kept, _ = forceFit(systemPrompt, history, budget)
-			dropped = len(history) - len(kept)
+			kept, _ = forceFit(systemPrompt, cleanHistory, budget)
+			dropped = len(cleanHistory) - len(kept)
 		}
 
 		// Built fresh each attempt: appending to instructions in place
@@ -233,6 +235,9 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	}
 	if summary == "" {
 		return fmt.Errorf("model returned an empty summary")
+	}
+	if imgCount > 0 {
+		summary += imageDroppedNote(imgCount)
 	}
 
 	// The lifecycle notice: the history was replaced. Distinct from the
@@ -399,4 +404,49 @@ func carriedBlockEntry(b provider.SystemBlock) prompt.Entry {
 		"compact.carried."+b.Asset, prompt.KindExternalContent, prompt.FromGeneratedSummary,
 		prompt.TrustGenerated, prompt.PlaceSystem, b.Text,
 		"carried into the summarizing call from an unregistered source")
+}
+
+// countImages counts how many BlockImage blocks appear across msgs.
+func countImages(msgs []provider.Message) int {
+	var count int
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			if b.Type == provider.BlockImage {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// stripImagesForSummary replaces raw BlockImage blocks with text placeholders
+// so the summarization request avoids sending binary image payloads.
+func stripImagesForSummary(msgs []provider.Message) []provider.Message {
+	out := make([]provider.Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = provider.Message{
+			Role:    m.Role,
+			Content: make([]provider.Block, len(m.Content)),
+		}
+		for j, b := range m.Content {
+			if b.Type == provider.BlockImage {
+				out[i].Content[j] = provider.TextBlock(fmt.Sprintf("[image: %s]", b.MediaType))
+			} else {
+				out[i].Content[j] = b
+			}
+		}
+	}
+	return out
+}
+
+// imageDroppedNote formats an explicit notice for the summary stating how
+// many images were omitted from the post-compaction conversation.
+func imageDroppedNote(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	if count == 1 {
+		return "\n\n[1 image was omitted from this summary and is no longer in this conversation.]"
+	}
+	return fmt.Sprintf("\n\n[%d images were omitted from this summary and are no longer in this conversation.]", count)
 }
