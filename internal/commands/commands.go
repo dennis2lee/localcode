@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"localcode/internal/skills"
 	"os"
 	"time"
 
@@ -123,7 +124,10 @@ func parseCommandFile(path string) (Command, error) {
 	if err != nil {
 		return Command{}, err
 	}
-	content := string(data)
+	// Through the same normaliser skills use, so a command written on
+	// Windows keeps its frontmatter instead of sending the YAML to the
+	// model as the first lines of its body.
+	content := skills.NormalizeMarkdown(string(data))
 
 	var fm frontmatter
 	body := content

@@ -140,7 +140,26 @@ func parseSkillFile(path string) (Skill, error) {
 	return parseContent(path, string(data))
 }
 
+// NormalizeMarkdown makes a skill or command file readable regardless of
+// which editor wrote it: a leading UTF-8 byte-order mark is dropped and
+// CRLF line endings become LF.
+//
+// Both are what a Windows editor produces by default, and both made the
+// frontmatter check below fail on a file that plainly begins with "---":
+// the prefix compared was "---\n", a Windows file begins "---\r\n", and a
+// Notepad file begins with three bytes nobody can see. Every SKILL.md
+// written on Windows was rejected as "missing YAML frontmatter", and the
+// author was told the file did not start with the line it started with.
+//
+// Exported so internal/commands reads its files through the same function
+// rather than a second copy that would drift.
+func NormalizeMarkdown(content string) string {
+	content = strings.TrimPrefix(content, "\ufeff")
+	return strings.ReplaceAll(content, "\r\n", "\n")
+}
+
 func parseContent(path, content string) (Skill, error) {
+	content = NormalizeMarkdown(content)
 	if !strings.HasPrefix(content, "---\n") {
 		return Skill{}, fmt.Errorf("%s: missing YAML frontmatter (must start with \"---\")", path)
 	}

@@ -156,8 +156,10 @@ func TestAMalformedSkillProducesAWarningNamingPathAndReason(t *testing.T) {
 		"plain": "just some text",
 		// A blank first line: the cruel case, invisible in an editor.
 		"blank-first-line": "\n---\nname: blank\ndescription: blank\n---\nbody\n",
-		// A byte-order mark before the dashes.
-		"bom": "\xef\xbb\xbf---\nname: bom\ndescription: bom\n---\nbody\n",
+		// Not here: a byte-order mark before the dashes. It was a malformed
+		// case until v0.134.0, when it turned out to be what every Windows
+		// editor writes; NormalizeMarkdown strips it and the skill loads.
+		// See TestASkillWrittenOnWindowsLoads.
 		// An unterminated frontmatter block.
 		"unterminated": "---\nname: unterminated\ndescription: no closing dashes\n",
 		// Frontmatter that is not YAML.
