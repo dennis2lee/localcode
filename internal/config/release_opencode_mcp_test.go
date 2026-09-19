@@ -212,13 +212,13 @@ func TestReleaseOpencodeMCPEmptyCommandArrayRefused(t *testing.T) {
 // transports and verifies Validate checks.
 func TestReleaseOpencodeMCPCwdAndTimeout(t *testing.T) {
 	// Valid stdio server with cwd and timeout.
-	stdioInput := `{"type":"local","command":["npx","server"],"cwd":"/srv/subproject","timeout":3500}`
+	stdioInput := `{"type":"local","command":["npx","server"],"cwd":"C:/srv/subproject","timeout":3500}`
 	var scStdio MCPServerConfig
 	if err := json.Unmarshal([]byte(stdioInput), &scStdio); err != nil {
 		t.Fatalf("Unmarshal stdio failed: %v", err)
 	}
-	if scStdio.Cwd != "/srv/subproject" {
-		t.Errorf("Cwd = %q, want %q", scStdio.Cwd, "/srv/subproject")
+	if scStdio.Cwd != "C:/srv/subproject" {
+		t.Errorf("Cwd = %q, want %q", scStdio.Cwd, "C:/srv/subproject")
 	}
 	if scStdio.Timeout != 3500 {
 		t.Errorf("Timeout = %d, want 3500", scStdio.Timeout)

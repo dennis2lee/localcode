@@ -5,7 +5,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -960,11 +959,9 @@ func instructionsProblem(entry string) string {
 		return "is empty"
 	case strings.HasPrefix(trimmed, "http://"), strings.HasPrefix(trimmed, "https://"):
 		return "names a URL, and localcode does not fetch instructions over the network"
-	case filepath.IsAbs(trimmed):
+	case absolutePath(trimmed):
 		return "is an absolute path; instructions are read relative to the project"
-	}
-	clean := filepath.Clean(trimmed)
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	case escapesUpward(trimmed):
 		return "escapes the project directory"
 	}
 	return ""
