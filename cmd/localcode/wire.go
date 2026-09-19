@@ -524,6 +524,18 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, projectDir,
 		log.Printf("skills and commands: reading %s and %s (config.json is always ~/.localcode/config.json)",
 			project.Path, global.Path)
 	}
+	// And a second line only when something was actually lost. The first
+	// says where the assets came from; this one says where they did not,
+	// which is the half somebody is looking for when a skill they wrote
+	// has stopped appearing. See internal/userdirs: first root wins
+	// whole, and running another agent once in a repository is enough to
+	// change which root that is.
+	for _, r := range []userdirs.Root{project, global} {
+		for _, name := range r.Shadowed {
+			log.Printf("skills and commands: %s has skills or commands and is not read, because %s comes first",
+				filepath.Join(filepath.Dir(r.Path), name), r.Chosen)
+		}
+	}
 
 	skillList, err = loadSkills(projectDir, home)
 	if err != nil {
