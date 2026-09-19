@@ -37,6 +37,21 @@ import (
 // config file — which is the failure this whole feature exists to avoid.
 var envRef = regexp.MustCompile(`\{env:([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}`)
 
+// fileRef is opencode's other placeholder, which localcode does not
+// expand — and which has to be refused rather than left alone.
+//
+// Left alone it becomes the value. "{file:~/.keys/anthropic}" is a
+// perfectly good 24-character string, so a provider is built with that as
+// its api_key and the request comes back 401, or the token goes to an MCP
+// server in a header exactly as written. That is the failure {env:} was
+// added to prevent, arriving through the placeholder next to it.
+//
+// Refused rather than implemented because implementing it faithfully
+// means splicing a file's contents into the document before it is parsed,
+// which is the opposite order from the one this file works in and chose
+// on purpose (see expandEnv). Worth doing later; not worth doing halfway.
+var fileRef = regexp.MustCompile(`\{file:[^}]*\}`)
+
 // expandEnv substitutes every {env:NAME} in the string values of a JSON
 // document, leaving keys, numbers, and structure alone.
 //
@@ -110,6 +125,10 @@ func join(path, key string) string {
 }
 
 func expandString(s, path string, lookup func(string) (string, bool)) (string, error) {
+	if ref := fileRef.FindString(s); ref != "" {
+		return "", fmt.Errorf("%s uses %s, which localcode does not expand — it would be sent as that literal text. "+
+			"Read the file into an environment variable and use {env:NAME}, or write the value in", fieldName(path), ref)
+	}
 	var bad error
 	out := envRef.ReplaceAllStringFunc(s, func(ref string) string {
 		m := envRef.FindStringSubmatch(ref)

@@ -304,7 +304,8 @@ type Config struct {
 func (c *Config) UnmarshalJSON(data []byte) error {
 	type Alias Config
 	aux := struct {
-		Permissions Permissions `json:"permission,omitempty"`
+		Permissions Permissions     `json:"permission,omitempty"`
+		AutoUpdate  json.RawMessage `json:"autoupdate,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(c),
@@ -315,7 +316,42 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	if aux.Permissions != nil {
 		c.Permissions = aux.Permissions
 	}
+	if len(aux.AutoUpdate) > 0 {
+		v, err := readAutoupdate(aux.AutoUpdate)
+		if err != nil {
+			return err
+		}
+		if c.AutoUpdate != nil && *c.AutoUpdate != v {
+			return fmt.Errorf("auto_update is %v and autoupdate is %s, which disagree; keep one of them",
+				*c.AutoUpdate, strings.TrimSpace(string(aux.AutoUpdate)))
+		}
+		c.AutoUpdate = &v
+	}
 	return nil
+}
+
+// readAutoupdate reads opencode's spelling of auto_update.
+//
+// The spelling is worth accepting because of which way it fails when it is
+// not: AutoUpdate is a *bool where nil means on, so an opencode file
+// saying "autoupdate": false left it nil and localcode replaced its own
+// binary at the next start — a file whose entire purpose was to say do not
+// do that. A pinned build or an air-gapped install is exactly where that
+// file gets written.
+//
+// opencode's third value is "notify", which shows a notice and installs
+// nothing. localcode has no notice to show, so the half of it that can be
+// honoured is the half that matters: it does not install.
+func readAutoupdate(raw []byte) (bool, error) {
+	var b bool
+	if err := json.Unmarshal(raw, &b); err == nil {
+		return b, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil && s == "notify" {
+		return false, nil
+	}
+	return false, fmt.Errorf("autoupdate is %s (want true, false, or \"notify\")", strings.TrimSpace(string(raw)))
 }
 
 // AutoDelegateConfig sends small, mechanical prompts to a named agent
@@ -735,6 +771,27 @@ func (c *Config) Validate() error {
 	for name, profile := range c.Profiles {
 		if _, ok := c.Providers[profile.Provider]; !ok {
 			return fmt.Errorf("profile %q references unknown provider %q", name, profile.Provider)
+		}
+		// The provider named twice, which is what an opencode model id
+		// looks like when it is pasted in here. opencode writes one string,
+		// "anthropic/claude-sonnet-4-5", and resolves the left half against
+		// its own catalogue; localcode splits the two, and the model id is
+		// whatever the provider itself calls the model. Left alone the
+		// slashed form loads, validates, and is sent verbatim, so the first
+		// request fails with a provider error that mentions neither the
+		// config file nor the slash.
+		//
+		// Only when the prefix names a provider this config defines. A
+		// slash is ordinary in a model id on an OpenAI-compatible server —
+		// "google/gemma-3n-e4b" and "account/muse-glimmer-30b" are how
+		// those servers name their own models — and refusing every slash
+		// would reject configs that are right.
+		if before, _, found := strings.Cut(profile.Model, "/"); found {
+			if _, isProvider := c.Providers[before]; isProvider {
+				return fmt.Errorf("profile %q: model is %q, which names the provider twice — %q is already provider %q, "+
+					"so model should be just %q (opencode writes them as one string; localcode keeps them apart)",
+					name, profile.Model, before, profile.Provider, strings.TrimPrefix(profile.Model, before+"/"))
+			}
 		}
 		// Bounded at the point it is read rather than wherever it is used.
 		// This number multiplies turns, and a typo in it — a stray zero —
