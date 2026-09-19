@@ -15,7 +15,8 @@ func loadText(t *testing.T, body string) (*Config, error) {
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return Load(p)
+	cfg, _, err := Load(p)
+	return cfg, err
 }
 
 const workingProviders = `"providers":{"anthropic":{"type":"anthropic","api_key":"k"}},` +

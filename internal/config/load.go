@@ -21,26 +21,34 @@ func DefaultGlobalPath() (string, error) {
 // LoadMerged loads the global config, then merges a project-local
 // .localcode/config.json on top (project entries win). Either file may be
 // absent; at least one must exist.
-func LoadMerged(projectDir string) (*Config, error) {
+//
+// The second return is what the files said that localcode accepted and did
+// not act on — opencode's spellings for things it has no equivalent of, in
+// opencode's own dotted paths, so the person can grep their own file for
+// the string. A caller with nowhere to print it writes `_`, and there is
+// deliberately no second function that drops it for them: a wrapper that
+// hides this was the one thing nobody called the moment the daemon started
+// printing it.
+func LoadMerged(projectDir string) (*Config, []string, error) {
 	globalPath, err := DefaultGlobalPath()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	cfg, err := loadOptional(globalPath)
+	cfg, globalNotes, err := loadOptional(globalPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	projectPath := filepath.Join(projectDir, ".localcode", "config.json")
-	projectCfg, err := loadOptional(projectPath)
+	projectCfg, projectNotes, err := loadOptional(projectPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	switch {
 	case cfg == nil && projectCfg == nil:
-		return nil, fmt.Errorf("no config found at %s or %s", globalPath, projectPath)
+		return nil, nil, fmt.Errorf("no config found at %s or %s", globalPath, projectPath)
 	case cfg == nil:
 		cfg = projectCfg
 	case projectCfg != nil:
@@ -48,31 +56,42 @@ func LoadMerged(projectDir string) (*Config, error) {
 	}
 
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid merged config: %w", err)
+		return nil, nil, fmt.Errorf("invalid merged config: %w", err)
 	}
-	return cfg, nil
+
+	var notes []string
+	seen := make(map[string]bool)
+	for _, n := range append(globalNotes, projectNotes...) {
+		if !seen[n] {
+			seen[n] = true
+			notes = append(notes, n)
+		}
+	}
+
+	return cfg, notes, nil
 }
 
-// Load reads and validates a single config file from path.
-func Load(path string) (*Config, error) {
-	cfg, err := loadOptional(path)
+// Load reads and validates a single config file from path. Its second
+// return is LoadMerged's, for the same reason.
+func Load(path string) (*Config, []string, error) {
+	cfg, notes, err := loadOptional(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if cfg == nil {
-		return nil, fmt.Errorf("config file not found: %s", path)
+		return nil, nil, fmt.Errorf("config file not found: %s", path)
 	}
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config %s: %w", path, err)
+		return nil, nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
-	return cfg, nil
+	return cfg, notes, nil
 }
 
 // LoadFile reads a single config file for editing (e.g. by `localcode
 // mcp`). Unlike Load, a missing file is not an error — it returns an
 // empty, unvalidated Config ready to be filled in and saved.
 func LoadFile(path string) (*Config, error) {
-	cfg, err := loadOptional(path)
+	cfg, _, err := loadOptional(path)
 	if err != nil {
 		return nil, err
 	}
@@ -82,13 +101,13 @@ func LoadFile(path string) (*Config, error) {
 	return cfg, nil
 }
 
-func loadOptional(path string) (*Config, error) {
+func loadOptional(path string) (*Config, []string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("read config %s: %w", path, err)
+		return nil, nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	// Comments out first, so everything after this is ordinary JSON and
 	// nothing downstream has to know the file could carry them. Blanked
@@ -100,13 +119,17 @@ func loadOptional(path string) (*Config, error) {
 	// secrets. See env.go.
 	expanded, err := expandEnv(data, osLookup)
 	if err != nil {
-		return nil, fmt.Errorf("config %s: %w", path, err)
+		return nil, nil, fmt.Errorf("config %s: %w", path, err)
+	}
+	norm, err := NormalizeOpencode(expanded)
+	if err != nil {
+		return nil, nil, fmt.Errorf("config %s: %w", path, err)
 	}
 	var cfg Config
-	if err := json.Unmarshal(expanded, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	if err := json.Unmarshal(norm.JSON, &cfg); err != nil {
+		return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	return &cfg, nil
+	return &cfg, norm.Ignored, nil
 }
 
 // mergeMap copies every entry of src into *dst, creating *dst if it was nil.
