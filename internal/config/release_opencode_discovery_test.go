@@ -16,7 +16,14 @@ import (
 // and every writer in this package keeps writing to a file that is above
 // the ones it never writes.
 func TestAnOpencodeFileIsAlwaysUnderTheLocalcodeFileOfItsScope(t *testing.T) {
-	got := configSources("/home/u", "/repo", "")
+	// Compared through ToSlash, and the expectations typed out rather
+	// than built with filepath.Join. These are real paths on this machine
+	// — unlike a path inside a config file, which travels and therefore
+	// has one shape everywhere — so the code is right to join them the
+	// host's way and the test is wrong to insist on one separator. An
+	// expectation built with Join instead would agree with the code for
+	// the wrong reason and stop testing the order at all.
+	got := slashed(configSources("/home/u", "/repo", ""))
 	want := []string{
 		"/home/u/.config/opencode/opencode.json",
 		"/home/u/.localcode/config.json",
@@ -33,8 +40,10 @@ func TestAnOpencodeFileIsAlwaysUnderTheLocalcodeFileOfItsScope(t *testing.T) {
 	}
 
 	// OPENCODE_CONFIG is opencode's own override and sits where opencode
-	// puts it: after the global file and before the project one.
-	withEnv := configSources("/home/u", "/repo", "/custom/oc.json")
+	// puts it: after the global file and before the project one. It is
+	// passed through as the person wrote it, so it is not joined and not
+	// normalised.
+	withEnv := slashed(configSources("/home/u", "/repo", "/custom/oc.json"))
 	if withEnv[1] != "/custom/oc.json" {
 		t.Errorf("OPENCODE_CONFIG landed at %v, want second — between the global and the project files", withEnv)
 	}
@@ -52,6 +61,17 @@ func TestTheProjectFileIsAtTheProjectRoot(t *testing.T) {
 			t.Errorf("looking for the project config in %q, and opencode keeps it at the project root", s)
 		}
 	}
+}
+
+// slashed rewrites a list of host paths with forward slashes, so an
+// expectation about their ORDER is not also an assertion about which
+// platform the test is running on.
+func slashed(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = filepath.ToSlash(p)
+	}
+	return out
 }
 
 func write(t *testing.T, path, body string) {
