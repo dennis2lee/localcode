@@ -43,6 +43,36 @@ if [ "$stamped" != "$VERSION" ]; then
 	fail "$EXE is stamped $stamped, and this release is $VERSION. Dispatch the workflow with -f version=$VERSION and download that run's artifact."
 fi
 
+# 4. -tags=gui is present in the build settings, and -H windowsgui is present
+#    in the ldflags. Without the first the binary has no window at all:
+#    internal/gui/stub.go is compiled in instead of gui.go, so Launch returns
+#    an error and localcode falls back to the terminal interface. Without
+#    the second it is a console-subsystem process that pins the terminal it
+#    is launched from and flashes a console box when launched from Explorer.
+if ! printf '%s\n' "$info" | grep -E -q 'build[[:space:]]+-tags=.*\<gui\>'; then
+	fail "$EXE was built without -tags=gui, so it carries no window. Dispatch the workflow with -f version=$VERSION or compile with: go build -tags gui ..."
+fi
+if ! printf '%s\n' "$info" | grep -E -q -- '-H[[:space:]]+windowsgui'; then
+	fail "$EXE ldflags lack -H windowsgui, so it will pin or flash a console window. Rebuild with: -ldflags \"-H windowsgui ...\""
+fi
+
+# 5. The PE subsystem is 2 (GUI). Read it from the file: the 4-byte offset
+#    of the PE signature is at 0x3C, the COFF header is 20 bytes, and
+#    Subsystem sits at offset 68 of the optional header — so the
+#    little-endian 16-bit value at pe_offset + 24 + 68. 2 is GUI, 3 is
+#    console. This check does not depend on the build settings being recorded
+#    at all: an exe whose build settings were stripped or forged would still
+#    be caught here if it is not a genuine GUI subsystem binary.
+pe_offset="$(od -An -j 60 -N 4 -t u4 "$EXE" 2>/dev/null | tr -d '[:space:]')"
+if [ -z "$pe_offset" ]; then
+	fail "$EXE is not a valid PE binary: cannot read PE signature offset at 0x3C"
+fi
+subsystem_offset=$((pe_offset + 24 + 68))
+subsystem="$(od -An -j "$subsystem_offset" -N 2 -t u2 "$EXE" 2>/dev/null | tr -d '[:space:]')"
+if [ "$subsystem" != "2" ]; then
+	fail "$EXE PE subsystem is ${subsystem:-unknown}, expected 2 (GUI). Rebuild with: -ldflags \"-H windowsgui ...\""
+fi
+
 # 2. Built from the commit being released. This is the half nothing has
 #    ever checked, and the half that goes wrong.
 built_from="$(printf '%s\n' "$info" | sed -n 's/.*vcs.revision=\([0-9a-f]*\).*/\1/p' | head -1)"

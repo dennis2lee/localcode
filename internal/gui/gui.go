@@ -253,5 +253,10 @@ func nudgeScale(w webview.WebView) {
 	}()
 }
 
+// Unavailable reports why this build cannot open a window. It returns the
+// empty string here because a build with the "gui" tag has desktop window
+// support and nothing to explain.
+func Unavailable() string { return "" }
+
 // Available reports whether this build can open a window.
 func Available() bool { return true }

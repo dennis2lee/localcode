@@ -41,5 +41,13 @@ func unavailable(goos string) string {
 		"Without it, run localcode and open the Web UI in a browser (http://127.0.0.1:4096 unless --listen says otherwise)"
 }
 
+// Unavailable explains why this build cannot open a window, naming the
+// platform-appropriate alternative. Callers use this to tell a user why a
+// binary whose name implies a GUI is running in the terminal instead,
+// without having to call Launch.
+func Unavailable() string {
+	return unavailable(runtime.GOOS)
+}
+
 // Available reports whether this build can open a window.
 func Available() bool { return false }

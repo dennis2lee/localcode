@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -113,6 +114,11 @@ func run() error {
 	if *useGUI {
 		return runGUI(*configPath)
 	}
+	if exe, err := os.Executable(); err == nil {
+		if note := guiNameNote(filepath.Base(exe), gui.Unavailable()); note != "" {
+			fmt.Fprintln(os.Stderr, note)
+		}
+	}
 	printBanner()
 	if *server != "" {
 		// No restart hook: this TUI is attached to a daemon somewhere else,
@@ -131,4 +137,30 @@ func run() error {
 		}
 	})
 	return runEmbedded(*configPath, *listen, *agentName, listenExplicit)
+}
+
+// guiNameNote is what a file named for the desktop build says when there
+// is no window inside it.
+//
+// The name is the whole of the reason it is worth saying anything. A build
+// without the tag leaves --gui false and starts the terminal interface
+// without a word, which is right for localcode and bewildering for
+// localcode-gui: somebody opened the desktop program and got a prompt, and
+// nothing on screen connects the two. The explanation already exists in
+// internal/gui, where until now only a person who typed --gui ever saw it.
+//
+// unavailable is that explanation, empty in a build that has a window —
+// which is what keeps this silent in the case where there is nothing
+// wrong. The note carries it whole rather than summarising it, because it
+// is the sentence that names the MSI, the .app and the Web UI.
+func guiNameNote(exeBase, unavailable string) string {
+	if unavailable == "" {
+		return ""
+	}
+	switch strings.ToLower(exeBase) {
+	case "localcode-gui", "localcode-gui.exe":
+	default:
+		return ""
+	}
+	return exeBase + " has no desktop window in it, so this is the terminal interface. " + unavailable
 }
