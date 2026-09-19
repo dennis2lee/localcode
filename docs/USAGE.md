@@ -290,6 +290,24 @@ Rules:
 
 Use placeholders for portable configuration without embedded secrets. [`localcode login`](#authenticating-with-localcode-login) stores Anthropic and Bedrock credentials outside config.json.
 
+#### Reading a config written for opencode
+
+localcode reads [opencode](https://opencode.ai)'s config file where opencode keeps it, and merges it under its own. The files, in the order each is laid over the one before it:
+
+| File | Whose |
+|---|---|
+| `~/.config/opencode/opencode.json` | opencode's global |
+| whatever `OPENCODE_CONFIG` names | opencode's override |
+| `~/.localcode/config.json` | localcode's global |
+| `<project>/opencode.json` | opencode's project file, at the project root |
+| `<project>/.localcode/config.json` | localcode's project file |
+
+An opencode file always sits under the localcode file of the same scope, which is the guarantee worth stating plainly: **nothing read from an opencode file can change what your config.json already said.** Everything localcode writes — "always allow", `/smart-agent`, `localcode mcp add` — still goes to `~/.localcode/config.json`, and opencode's files are only ever read. `opencode.jsonc` is read as well; both spellings in one directory is refused, since one of them would be read by nobody.
+
+opencode's spellings also work written directly into a localcode `config.json`: `mcp` for `mcp_servers`, `tools` for `permission`, `autoupdate` for `auto_update`, `compaction.auto` for `auto_compact_enabled`, `provider` for `providers`, `agent` for `agents`, and `model` as one `provider/model` string. A `model` is split at its first slash, the left half naming a provider the same file defines — localcode never reaches a model catalogue, so a provider it has not been given an endpoint and a credential for is refused by name rather than guessed at.
+
+What localcode cannot honour it refuses at startup, naming the key and saying what will not happen — `lsp`, `formatter`, `plugin`, `server`, `share` and the rest. What changes nothing it accepts and names on stderr. A file that is half obeyed should say which half.
+
 #### Top level fields
 
 | Field | Meaning |

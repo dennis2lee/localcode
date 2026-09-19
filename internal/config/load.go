@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"localcode/internal/hooks"
 )
@@ -30,45 +31,69 @@ func DefaultGlobalPath() (string, error) {
 // hides this was the one thing nobody called the moment the daemon started
 // printing it.
 func LoadMerged(projectDir string) (*Config, []string, error) {
-	globalPath, err := DefaultGlobalPath()
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("resolve home dir: %w", err)
+	}
+	return loadMergedFrom(configSources(home, projectDir, os.Getenv("OPENCODE_CONFIG")))
+}
+
+// loadMergedFrom is LoadMerged with the list of files handed to it, so
+// the order can be exercised without a home directory to arrange.
+func loadMergedFrom(paths []string) (*Config, []string, error) {
+	var cfg *Config
+	var notes []string
+	var read []string
+
+	for _, path := range paths {
+		// opencode writes .jsonc when it wants comments in the file, and
+		// a person who did that should not find it unread.
+		if alt := jsoncAlternative(path); alt != "" {
+			aThere, bThere := exists(path), exists(alt)
+			switch {
+			case aThere && bThere:
+				return nil, nil, bothSpellings(path, alt)
+			case bThere:
+				path = alt
+			}
+		}
+		one, oneNotes, err := loadOptional(path)
+		if err != nil {
+			return nil, nil, err
+		}
+		if one == nil {
+			continue
+		}
+		read = append(read, path)
+		notes = append(notes, oneNotes...)
+		if cfg == nil {
+			cfg = one
+			continue
+		}
+		cfg.merge(one)
 	}
 
-	cfg, globalNotes, err := loadOptional(globalPath)
-	if err != nil {
-		return nil, nil, err
+	if cfg == nil {
+		return nil, nil, fmt.Errorf("no config found at any of: %s", strings.Join(paths, ", "))
 	}
-
-	projectPath := filepath.Join(projectDir, ".localcode", "config.json")
-	projectCfg, projectNotes, err := loadOptional(projectPath)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	switch {
-	case cfg == nil && projectCfg == nil:
-		return nil, nil, fmt.Errorf("no config found at %s or %s", globalPath, projectPath)
-	case cfg == nil:
-		cfg = projectCfg
-	case projectCfg != nil:
-		cfg.merge(projectCfg)
-	}
-
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("invalid merged config: %w", err)
 	}
 
-	var notes []string
 	seen := make(map[string]bool)
-	for _, n := range append(globalNotes, projectNotes...) {
+	out := notes[:0]
+	for _, n := range notes {
 		if !seen[n] {
 			seen[n] = true
-			notes = append(notes, n)
+			out = append(out, n)
 		}
 	}
+	return cfg, out, nil
+}
 
-	return cfg, notes, nil
+func exists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // Load reads and validates a single config file from path. Its second
