@@ -1,17 +1,38 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 )
 
+// reservedProfilePrefix marks a profile localcode wrote for itself out of
+// an opencode key, rather than one a person wrote. Reserved so the
+// synthesis cannot land on a name somebody is already using: a collision
+// there would be silent, and the profile that lost would take a session's
+// model with it.
+const reservedProfilePrefix = "opencode:"
+
 // Normalized is what an opencode-shaped file becomes.
 type Normalized struct {
-	JSON    []byte   // localcode-shaped, ready for json.Unmarshal
-	Ignored []string // opencode dotted paths accepted and not honoured, sorted
+	JSON        []byte   // localcode-shaped, ready for json.Unmarshal
+	Ignored     []string // opencode dotted paths accepted and not honoured, sorted
+	Synthesised []string // profile names synthesised from opencode keys
+	// MadePlaceholders says this function wrote an {env:NAME} of its own —
+	// opencode names the variable holding a key in provider.<n>.env, and
+	// the only way to honour that is to write the placeholder localcode
+	// already understands. The caller expands once more because of it.
+	//
+	// A flag rather than the caller scanning the bytes for "{env:": by
+	// then the document's own placeholders have already been expanded, and
+	// a value that came back from the environment carrying that text would
+	// send the whole file through substitution a second time.
+	MadePlaceholders bool
 }
 
 type refusal struct {
@@ -39,8 +60,39 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 		return Normalized{JSON: raw}, nil
 	}
 
+	// The reserved prefix, checked against what the file itself declares
+	// and before anything is synthesised into the same namespace.
+	//
+	// Here rather than in Validate, and this is the point: Validate sees a
+	// merged Config in which a synthesised profile and a hand-written one
+	// are the same kind of thing, so telling them apart there needs the
+	// loader to have remembered which was which — a fact carried on the
+	// struct, surviving a merge, and read by a rule that then gives two
+	// answers for the same file depending on how it was loaded. The bytes
+	// know already: a profiles block in the file is hand-written by
+	// definition.
+	if profilesRaw, ok := root["profiles"]; ok {
+		var declared map[string]json.RawMessage
+		if json.Unmarshal(profilesRaw, &declared) == nil {
+			var taken []string
+			for name := range declared {
+				if strings.HasPrefix(name, reservedProfilePrefix) {
+					taken = append(taken, name)
+				}
+			}
+			sort.Strings(taken)
+			if len(taken) > 0 {
+				return Normalized{}, fmt.Errorf(
+					"profile %q: a profile whose name begins with %q is reserved for keys read from an opencode file; rename yours",
+					taken[0], reservedProfilePrefix)
+			}
+		}
+	}
+
+	madePlaceholders := false
 	var refusals []refusal
 	var ignored []string
+	var synthesised []string
 	changed := false
 
 	// Step 1: mcp -> mcp_servers
@@ -389,6 +441,922 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 		changed = true
 	}
 
+	// Step 3: provider -> providers, with all provider and model sub-rules,
+	// and enabled_providers / disabled_providers filtering.
+	//
+	// Renaming the provider container without simultaneously handling npm/id
+	// type selection and option translation would produce ProviderConfig{Type: ""}
+	// which fails at wire-time with an opaque runtime error. Likewise, model limits
+	// must be parsed alongside providers because an unrecognised endpoint would
+	// otherwise default to modelinfo's 128k token guess.
+	rawProvider, hasProvider := root["provider"]
+	rawProviders, hasProviders := root["providers"]
+	if hasProvider && hasProviders {
+		var provA, provB any
+		_ = json.Unmarshal(rawProvider, &provA)
+		_ = json.Unmarshal(rawProviders, &provB)
+		if !reflect.DeepEqual(provA, provB) {
+			refusals = append(refusals, refusal{
+				path: "provider",
+				msg:  `provider and providers are two spellings of the same block; keep one of them`,
+			})
+		}
+	} else if hasProvider {
+		root["providers"] = rawProvider
+		delete(root, "provider")
+		changed = true
+	}
+
+	providersChanged := hasProvider
+
+	var providersMap map[string]json.RawMessage
+	if rawP, ok := root["providers"]; ok {
+		_ = json.Unmarshal(rawP, &providersMap)
+	}
+	pNames := sortedKeys(providersMap)
+
+	// disabled_providers: refuse on overlap only. If a listed provider is also defined,
+	// localcode would still load it because localcode has no auto-provider loading to disable.
+	if rawDP, ok := root["disabled_providers"]; ok {
+		delete(root, "disabled_providers")
+		changed = true
+		var dpList []string
+		if err := json.Unmarshal(rawDP, &dpList); err == nil {
+			for _, dName := range dpList {
+				if _, exists := providersMap[dName]; exists {
+					refusals = append(refusals, refusal{
+						path: "disabled_providers." + dName,
+						msg:  fmt.Sprintf(`disabled_providers lists %q, and this file also defines providers.%s — localcode has no automatic provider loading to switch off, so it would load that block and use it. Remove %q from disabled_providers, or remove the providers.%s block.`, dName, dName, dName, dName),
+					})
+				}
+			}
+		}
+	}
+
+	// enabled_providers: refuse on omission only. If a defined provider is omitted,
+	// opencode ignores it but localcode would load and use it.
+	if rawEP, ok := root["enabled_providers"]; ok {
+		delete(root, "enabled_providers")
+		changed = true
+		var epList []string
+		if err := json.Unmarshal(rawEP, &epList); err == nil {
+			epSet := make(map[string]bool, len(epList))
+			for _, e := range epList {
+				epSet[e] = true
+			}
+			for _, pName := range pNames {
+				if !epSet[pName] {
+					refusals = append(refusals, refusal{
+						path: "enabled_providers." + pName,
+						msg:  fmt.Sprintf(`enabled_providers does not list %q, and this file defines providers.%s — enabled_providers means every other provider is ignored, but localcode would still load that block and use it. Add %q to enabled_providers, or remove the providers.%s block.`, pName, pName, pName, pName),
+					})
+				}
+			}
+		}
+	}
+
+	type opencodeModelFacts struct {
+		wireID        string
+		contextWindow int
+		maxTokens     int
+	}
+
+	providerModelFacts := make(map[string]map[string]opencodeModelFacts)
+	providerBlacklists := make(map[string][]string)
+	providerWhitelists := make(map[string][]string)
+
+	for _, pName := range pNames {
+		var provMap map[string]json.RawMessage
+		if err := json.Unmarshal(providersMap[pName], &provMap); err != nil || provMap == nil {
+			continue
+		}
+		provChanged := false
+
+		// provider.<name>.name is INERT (localcode surfaces display map keys).
+		if _, ok := provMap["name"]; ok {
+			ignored = append(ignored, fmt.Sprintf("provider.%s.name", pName))
+			delete(provMap, "name")
+			provChanged = true
+		}
+
+		// provider.<name>.npm and id select ProviderType.
+		var npmVal string
+		hasNPM := false
+		if rawNPM, ok := provMap["npm"]; ok {
+			hasNPM = true
+			_ = json.Unmarshal(rawNPM, &npmVal)
+			delete(provMap, "npm")
+			provChanged = true
+		}
+
+		var idVal string
+		hasID := false
+		if rawID, ok := provMap["id"]; ok {
+			hasID = true
+			_ = json.Unmarshal(rawID, &idVal)
+			delete(provMap, "id")
+			provChanged = true
+		}
+
+		var provType string
+		if rawType, ok := provMap["type"]; ok {
+			_ = json.Unmarshal(rawType, &provType)
+		}
+
+		if hasNPM {
+			switch npmVal {
+			case "@ai-sdk/openai-compatible":
+				provType = "openai-compat"
+			case "@ai-sdk/anthropic":
+				provType = "anthropic"
+			case "@ai-sdk/amazon-bedrock":
+				provType = "bedrock"
+			default:
+				refusals = append(refusals, refusal{
+					path: fmt.Sprintf("provider.%s.npm", pName),
+					msg:  fmt.Sprintf(`provider %q: npm is %q, and localcode has no client for it — localcode speaks three protocols (Anthropic messages, Bedrock Converse, OpenAI chat/completions) and installs nothing at runtime. Use "@ai-sdk/openai-compatible" if the endpoint serves /v1/chat/completions.`, pName, npmVal),
+				})
+			}
+		} else if hasID {
+			switch idVal {
+			case "anthropic":
+				provType = "anthropic"
+			case "amazon-bedrock":
+				provType = "bedrock"
+			default:
+				refusals = append(refusals, refusal{
+					path: fmt.Sprintf("provider.%s.id", pName),
+					msg:  fmt.Sprintf(`provider %q: id is %q and there is no npm, so which client to use is a fact localcode would have to look up in models.dev — it does not. Say npm: "@ai-sdk/openai-compatible" with options.baseURL, or use a provider localcode has a client for.`, pName, idVal),
+				})
+			}
+		}
+
+		if (hasNPM || hasID) && provType != "" {
+			b, _ := json.Marshal(provType)
+			provMap["type"] = b
+			provChanged = true
+		}
+
+		// Options handling
+		var optionsMap map[string]json.RawMessage
+		if rawOpts, ok := provMap["options"]; ok {
+			_ = json.Unmarshal(rawOpts, &optionsMap)
+		}
+
+		// options.baseURL vs api
+		var baseURLVal string
+		hasBaseURL := false
+		if optionsMap != nil {
+			if rawBU, ok := optionsMap["baseURL"]; ok {
+				hasBaseURL = true
+				_ = json.Unmarshal(rawBU, &baseURLVal)
+				delete(optionsMap, "baseURL")
+				provChanged = true
+			}
+		}
+
+		var apiVal string
+		hasAPI := false
+		if rawAPI, ok := provMap["api"]; ok {
+			hasAPI = true
+			_ = json.Unmarshal(rawAPI, &apiVal)
+			delete(provMap, "api")
+			provChanged = true
+		}
+
+		if hasBaseURL && hasAPI && baseURLVal != apiVal {
+			refusals = append(refusals, refusal{
+				path: fmt.Sprintf("provider.%s.options.baseURL", pName),
+				msg:  fmt.Sprintf(`provider %q: api is %q and options.baseURL is %q, which disagree; keep one of them`, pName, apiVal, baseURLVal),
+			})
+		}
+
+		rawURL := baseURLVal
+		usedKey := "options.baseURL"
+		if !hasBaseURL && hasAPI {
+			rawURL = apiVal
+			usedKey = "api"
+		}
+
+		if rawURL != "" {
+			switch provType {
+			case "openai-compat":
+				b, _ := json.Marshal(rawURL)
+				provMap["base_url"] = b
+				provChanged = true
+			case "anthropic":
+				// The /v1 trap: localcode's anthropic client appends /v1/messages to a host root,
+				// while opencode writes https://api.anthropic.com/v1. Strip one trailing /v1.
+				// If a non-v1 path segment is present, refuse because no base_url reaches it.
+				trimmed := strings.TrimRight(rawURL, "/")
+				u, err := url.Parse(trimmed)
+				if err != nil {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("provider.%s.%s", pName, usedKey),
+						msg:  fmt.Sprintf(`provider %q: %s is %q, and localcode's anthropic client always appends /v1/messages, so there is no base_url that reaches the path this names.`, pName, usedKey, rawURL),
+					})
+				} else {
+					path := strings.TrimRight(u.Path, "/")
+					if path == "" {
+						b, _ := json.Marshal(trimmed)
+						provMap["base_url"] = b
+						provChanged = true
+					} else if strings.HasSuffix(path, "/v1") {
+						u.Path = strings.TrimSuffix(path, "/v1")
+						cleaned := strings.TrimRight(u.String(), "/")
+						b, _ := json.Marshal(cleaned)
+						provMap["base_url"] = b
+						provChanged = true
+					} else {
+						refusals = append(refusals, refusal{
+							path: fmt.Sprintf("provider.%s.%s", pName, usedKey),
+							msg:  fmt.Sprintf(`provider %q: %s is %q, and localcode's anthropic client always appends /v1/messages, so there is no base_url that reaches the path this names.`, pName, usedKey, rawURL),
+						})
+					}
+				}
+			}
+		} else if provType == "openai-compat" {
+			if _, hasExistingBU := provMap["base_url"]; !hasExistingBU {
+				refusals = append(refusals, refusal{
+					path: fmt.Sprintf("provider.%s.npm", pName),
+					msg:  fmt.Sprintf(`provider %q: npm is "@ai-sdk/openai-compatible" requires options.baseURL or api`, pName),
+				})
+			}
+		}
+
+		// options.apiKey
+		if optionsMap != nil {
+			if rawAK, ok := optionsMap["apiKey"]; ok {
+				provMap["api_key"] = rawAK
+				delete(optionsMap, "apiKey")
+				provChanged = true
+			}
+		}
+
+		// provider.<name>.env: fallback for API key
+		if rawEnv, ok := provMap["env"]; ok {
+			delete(provMap, "env")
+			provChanged = true
+			var envList []string
+			if json.Unmarshal(rawEnv, &envList) == nil && len(envList) > 0 {
+				if (provType == "anthropic" || provType == "openai-compat") && provMap["api_key"] == nil {
+					madePlaceholders = true
+					b, _ := json.Marshal(fmt.Sprintf("{env:%s}", envList[0]))
+					provMap["api_key"] = b
+				}
+			}
+		}
+
+		// options.region and options.profile (Bedrock)
+		if optionsMap != nil {
+			if rawReg, ok := optionsMap["region"]; ok {
+				if provType == "bedrock" {
+					provMap["region"] = rawReg
+					provChanged = true
+				}
+				delete(optionsMap, "region")
+				provChanged = true
+			}
+			if rawProf, ok := optionsMap["profile"]; ok {
+				provMap["profile"] = rawProf
+				delete(optionsMap, "profile")
+				provChanged = true
+			}
+
+			// Refused provider options
+			if _, ok := optionsMap["endpoint"]; ok {
+				refusals = append(refusals, refusal{
+					path: fmt.Sprintf("provider.%s.options.endpoint", pName),
+					msg:  fmt.Sprintf(`provider %q: options.endpoint names a Bedrock VPC endpoint, and localcode's bedrock provider is built from region and profile alone (there is no endpoint to set), so requests would go to the public regional endpoint instead — remove it, or use a provider type whose base_url localcode can set.`, pName),
+				})
+				delete(optionsMap, "endpoint")
+				provChanged = true
+			}
+			if _, ok := optionsMap["headers"]; ok {
+				refusals = append(refusals, refusal{
+					path: fmt.Sprintf("provider.%s.options.headers", pName),
+					msg:  fmt.Sprintf(`provider %q: options.headers sets headers on every request to this provider, and localcode's clients send only their own — the headers named here would not be sent.`, pName),
+				})
+				delete(optionsMap, "headers")
+				provChanged = true
+			}
+			if _, ok := optionsMap["enterpriseUrl"]; ok {
+				refusals = append(refusals, refusal{
+					path: fmt.Sprintf("provider.%s.options.enterpriseUrl", pName),
+					msg:  fmt.Sprintf(`provider %q: options.enterpriseUrl is GitHub Copilot's enterprise authentication host, and localcode has no Copilot provider — it reaches model endpoints directly rather than through another vendor's client.`, pName),
+				})
+				delete(optionsMap, "enterpriseUrl")
+				provChanged = true
+			}
+			if _, ok := optionsMap["setCacheKey"]; ok {
+				refusals = append(refusals, refusal{
+					path: fmt.Sprintf("provider.%s.options.setCacheKey", pName),
+					msg:  fmt.Sprintf(`provider %q: options.setCacheKey asks for a prompt cache key on every request, and localcode sends none — the caching this turns on would not happen.`, pName),
+				})
+				delete(optionsMap, "setCacheKey")
+				provChanged = true
+			}
+			if rawTO, ok := optionsMap["timeout"]; ok {
+				var b bool
+				if err := json.Unmarshal(rawTO, &b); err == nil && !b {
+					// false is accepted
+				} else {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("provider.%s.options.timeout", pName),
+						msg:  fmt.Sprintf(`provider %q: options.timeout bounds a request at %s ms, and localcode's model requests have no deadline — the bound written here would not be applied.`, pName, string(rawTO)),
+					})
+				}
+				delete(optionsMap, "timeout")
+				provChanged = true
+			}
+			if rawHT, ok := optionsMap["headerTimeout"]; ok {
+				var b bool
+				if err := json.Unmarshal(rawHT, &b); err == nil && !b {
+					// false is accepted
+				} else {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("provider.%s.options.headerTimeout", pName),
+						msg:  fmt.Sprintf(`provider %q: options.headerTimeout waits %s ms for response headers and then aborts, and localcode's model requests have no deadline of any kind — this bound would not be applied.`, pName, string(rawHT)),
+					})
+				}
+				delete(optionsMap, "headerTimeout")
+				provChanged = true
+			}
+			if rawCT, ok := optionsMap["chunkTimeout"]; ok {
+				var b bool
+				if err := json.Unmarshal(rawCT, &b); err == nil && !b {
+					// false is accepted
+				} else {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("provider.%s.options.chunkTimeout", pName),
+						msg:  fmt.Sprintf(`provider %q: options.chunkTimeout aborts a stream when no chunk arrives for %s ms, and localcode does not watch the gap between chunks — a stalled stream would hang until the turn is cancelled.`, pName, string(rawCT)),
+					})
+				}
+				delete(optionsMap, "chunkTimeout")
+				provChanged = true
+			}
+
+			if len(optionsMap) == 0 {
+				delete(provMap, "options")
+				provChanged = true
+			} else {
+				b, _ := json.Marshal(optionsMap)
+				provMap["options"] = b
+				provChanged = true
+			}
+		}
+
+		// Blacklist and whitelist: save for checking after all profiles are synthesised.
+		if rawBL, ok := provMap["blacklist"]; ok {
+			var bl []string
+			if json.Unmarshal(rawBL, &bl) == nil {
+				providerBlacklists[pName] = bl
+			}
+			delete(provMap, "blacklist")
+			provChanged = true
+		}
+		if rawWL, ok := provMap["whitelist"]; ok {
+			var wl []string
+			if json.Unmarshal(rawWL, &wl) == nil {
+				providerWhitelists[pName] = wl
+			}
+			delete(provMap, "whitelist")
+			provChanged = true
+		}
+
+		// provider.<name>.models: not a profile factory. Extracts limits and wire IDs,
+		// ignores inert display metadata, and refuses unsupported model constraints.
+		if rawModels, ok := provMap["models"]; ok {
+			delete(provMap, "models")
+			provChanged = true
+			var modelsMap map[string]json.RawMessage
+			if json.Unmarshal(rawModels, &modelsMap) == nil {
+				mKeys := sortedKeys(modelsMap)
+				for _, mKey := range mKeys {
+					var mEntry map[string]json.RawMessage
+					if json.Unmarshal(modelsMap[mKey], &mEntry) != nil || mEntry == nil {
+						continue
+					}
+					// Inert metadata
+					for _, inKey := range []string{"name", "cost", "release_date", "status", "experimental"} {
+						if _, ok := mEntry[inKey]; ok {
+							ignored = append(ignored, fmt.Sprintf("provider.%s.models.%s.%s", pName, mKey, inKey))
+							delete(mEntry, inKey)
+						}
+					}
+
+					// Refusals
+					if rawFam, ok := mEntry["family"]; ok {
+						var fStr string
+						_ = json.Unmarshal(rawFam, &fStr)
+						refusals = append(refusals, refusal{
+							path: fmt.Sprintf("provider.%s.models.%s.family", pName, mKey),
+							msg:  fmt.Sprintf(`provider %q model %q: family is %q, and localcode classifies a model by its id — context window, per-family system-prompt text, keep-going budget — with nowhere to record a declared family, so the declaration would be silently dropped. Give the model its real id, or pin the window with the profile's context_window.`, pName, mKey, fStr),
+						})
+					}
+					if rawTC, ok := mEntry["tool_call"]; ok {
+						var tc bool
+						if json.Unmarshal(rawTC, &tc) == nil && !tc {
+							refusals = append(refusals, refusal{
+								path: fmt.Sprintf("provider.%s.models.%s.tool_call", pName, mKey),
+								msg:  fmt.Sprintf(`provider %q model %q: tool_call is false, and localcode offers its tools on every turn — this model would be sent the tool schemas the file says it cannot use.`, pName, mKey),
+							})
+						}
+					}
+					if rawAtt, ok := mEntry["attachment"]; ok {
+						var att bool
+						if json.Unmarshal(rawAtt, &att) == nil && !att {
+							refusals = append(refusals, refusal{
+								path: fmt.Sprintf("provider.%s.models.%s.attachment", pName, mKey),
+								msg:  fmt.Sprintf(`provider %q model %q: attachment is false, and localcode sends an attached image to whatever model is in hand — an attachment would be sent to a model the file says cannot take one.`, pName, mKey),
+							})
+						}
+					}
+					if rawMod, ok := mEntry["modalities"]; ok {
+						var modMap map[string][]string
+						if json.Unmarshal(rawMod, &modMap) == nil {
+							if inputList, hasInput := modMap["input"]; hasInput {
+								hasImg := false
+								for _, m := range inputList {
+									if m == "image" {
+										hasImg = true
+										break
+									}
+								}
+								if !hasImg {
+									refusals = append(refusals, refusal{
+										path: fmt.Sprintf("provider.%s.models.%s.modalities", pName, mKey),
+										msg:  fmt.Sprintf(`provider %q model %q: modalities.input does not include "image", and localcode sends an attached image to whatever model is in hand — remove the field, or attach nothing to this model.`, pName, mKey),
+									})
+								}
+							}
+						}
+					}
+					if rawTemp, ok := mEntry["temperature"]; ok {
+						var temp bool
+						if json.Unmarshal(rawTemp, &temp) == nil && !temp {
+							refusals = append(refusals, refusal{
+								path: fmt.Sprintf("provider.%s.models.%s.temperature", pName, mKey),
+								msg:  fmt.Sprintf(`provider %q model %q: temperature is false, and localcode sends a profile's temperature to whatever model is in hand — a profile with a temperature would be refused by this model.`, pName, mKey),
+							})
+						}
+					}
+					if rawReas, ok := mEntry["reasoning"]; ok {
+						var reas bool
+						if json.Unmarshal(rawReas, &reas) == nil && !reas {
+							refusals = append(refusals, refusal{
+								path: fmt.Sprintf("provider.%s.models.%s.reasoning", pName, mKey),
+								msg:  fmt.Sprintf(`provider %q model %q: reasoning is false, and localcode sends a profile's effort as reasoning_effort or as an extended-thinking block — a profile with an effort would ask this model for reasoning the file says it has none of.`, pName, mKey),
+							})
+						}
+					}
+					if rawInt, ok := mEntry["interleaved"]; ok {
+						var intStr string
+						var intObj map[string]string
+						isExempt := false
+						if json.Unmarshal(rawInt, &intStr) == nil {
+							if intStr == "reasoning" || intStr == "reasoning_content" {
+								isExempt = true
+							}
+						} else if json.Unmarshal(rawInt, &intObj) == nil {
+							if fld := intObj["field"]; fld == "reasoning" || fld == "reasoning_content" {
+								isExempt = true
+							}
+						}
+						if !isExempt {
+							nameVal := string(rawInt)
+							if intStr != "" {
+								nameVal = fmt.Sprintf("%q", intStr)
+							} else if fld, ok := intObj["field"]; ok && fld != "" {
+								nameVal = fmt.Sprintf("%q", fld)
+							}
+							refusals = append(refusals, refusal{
+								path: fmt.Sprintf("provider.%s.models.%s.interleaved", pName, mKey),
+								msg:  fmt.Sprintf(`provider %q model %q: interleaved names %s as the field this model's reasoning arrives in, and localcode reads reasoning only from "reasoning_content" and "reasoning" on an openai-compat stream and cannot be told another field name. Remove it.`, pName, mKey, nameVal),
+							})
+						}
+					}
+					if _, ok := mEntry["options"]; ok {
+						refusals = append(refusals, refusal{
+							path: fmt.Sprintf("provider.%s.models.%s.options", pName, mKey),
+							msg:  fmt.Sprintf(`provider %q model %q: options carries request settings for this model, and localcode cannot read them — it sends the parameters its own profile describes (max_tokens, temperature, top_p, top_k, effort) and nothing else. Move what you need into the profile, or remove it.`, pName, mKey),
+						})
+					}
+					if _, ok := mEntry["headers"]; ok {
+						refusals = append(refusals, refusal{
+							path: fmt.Sprintf("provider.%s.models.%s.headers", pName, mKey),
+							msg:  fmt.Sprintf(`provider %q model %q: headers sets headers on requests for this model, and localcode's clients send only their own — the headers named here would not be sent.`, pName, mKey),
+						})
+					}
+					if _, ok := mEntry["variants"]; ok {
+						refusals = append(refusals, refusal{
+							path: fmt.Sprintf("provider.%s.models.%s.variants", pName, mKey),
+							msg:  fmt.Sprintf(`provider %q model %q: variants define alternative settings for this model, and localcode has no variants — one profile is one set of settings. Write the settings you want into the profile (effort, temperature, top_p), or remove the block.`, pName, mKey),
+						})
+					}
+					if _, ok := mEntry["provider"]; ok {
+						refusals = append(refusals, refusal{
+							path: fmt.Sprintf("provider.%s.models.%s.provider", pName, mKey),
+							msg:  fmt.Sprintf(`provider %q model %q: provider.npm names a different client for this one model, and localcode picks a client per provider, not per model — give the model its own provider block with its own npm and baseURL.`, pName, mKey),
+						})
+					}
+
+					wireID := mKey
+					if rawWireID, ok := mEntry["id"]; ok {
+						_ = json.Unmarshal(rawWireID, &wireID)
+					}
+					var cw, mt int
+					if rawLim, ok := mEntry["limit"]; ok {
+						var limMap map[string]int
+						if json.Unmarshal(rawLim, &limMap) == nil {
+							limContext := limMap["context"]
+							limOutput := limMap["output"]
+							limInput, hasInput := limMap["input"]
+							if hasInput {
+								sum := limInput + limOutput
+								if limContext > 0 && sum > 0 {
+									cw = min(limContext, sum)
+								} else if limContext > 0 {
+									cw = limContext
+								} else {
+									cw = sum
+								}
+							} else {
+								cw = limContext
+							}
+							mt = limOutput
+						}
+					}
+					facts := opencodeModelFacts{
+						wireID:        wireID,
+						contextWindow: cw,
+						maxTokens:     mt,
+					}
+					if providerModelFacts[pName] == nil {
+						providerModelFacts[pName] = make(map[string]opencodeModelFacts)
+					}
+					providerModelFacts[pName][mKey] = facts
+					if wireID != mKey {
+						providerModelFacts[pName][wireID] = facts
+					}
+				}
+			}
+		}
+
+		if provChanged {
+			b, _ := json.Marshal(provMap)
+			providersMap[pName] = b
+			providersChanged = true
+			changed = true
+		}
+	}
+
+	if providersChanged && len(providersMap) > 0 {
+		b, _ := json.Marshal(providersMap)
+		root["providers"] = b
+	}
+
+	// Step 4: root model -> opencode:default profile + default_profile.
+	// Depends on Step 3: left half of the model string must resolve to a
+	// provider block defined in this same file.
+	var profilesMap map[string]json.RawMessage
+	if rawProf, ok := root["profiles"]; ok {
+		_ = json.Unmarshal(rawProf, &profilesMap)
+	}
+	if profilesMap == nil {
+		profilesMap = make(map[string]json.RawMessage)
+	}
+
+	var curDefaultProfile string
+	if rawDP, ok := root["default_profile"]; ok {
+		_ = json.Unmarshal(rawDP, &curDefaultProfile)
+	}
+
+	if rawModel, ok := root["model"]; ok {
+		var modelStr string
+		if json.Unmarshal(rawModel, &modelStr) == nil {
+			before, after, found := strings.Cut(modelStr, "/")
+			if !found || providersMap[before] == nil {
+				provName := before
+				if !found {
+					provName = modelStr
+				}
+				refusals = append(refusals, refusal{
+					path: "model",
+					msg:  fmt.Sprintf(`model is %q, and %q is not a provider this config defines. opencode resolves that name against its models.dev catalogue; localcode never reaches a catalogue, so it has no endpoint, no credential and no limits for it. Add a providers.%q block naming its type, base_url and key, or write the model under a provider this file already defines.`, modelStr, provName, provName),
+				})
+			} else {
+				providerKey := before
+				modelKey := after
+				wireModel := modelKey
+				var cw, mt int
+				if facts, ok := providerModelFacts[providerKey][modelKey]; ok {
+					if facts.wireID != "" {
+						wireModel = facts.wireID
+					}
+					cw = facts.contextWindow
+					mt = facts.maxTokens
+				}
+
+				if curDefaultProfile != "" && curDefaultProfile != "opencode:default" {
+					refusals = append(refusals, refusal{
+						path: "model",
+						msg:  fmt.Sprintf(`default_profile is %q and model is %q, which disagree; keep one of them`, curDefaultProfile, modelStr),
+					})
+				}
+				if profilesMap["opencode:default"] != nil {
+					refusals = append(refusals, refusal{
+						path: "model",
+						msg:  `model wants to create profile "opencode:default", but a hand-written profile already holds that name; rename yours`,
+					})
+				}
+
+				prof := Profile{
+					Provider:      providerKey,
+					Model:         wireModel,
+					ContextWindow: cw,
+					MaxTokens:     mt,
+				}
+				profBytes, _ := json.Marshal(prof)
+				profilesMap["opencode:default"] = profBytes
+				synthesised = append(synthesised, "opencode:default")
+				root["default_profile"], _ = json.Marshal("opencode:default")
+				curDefaultProfile = "opencode:default"
+				delete(root, "model")
+				changed = true
+			}
+		}
+	}
+
+	// Step 5: agent -> agents, with mode as deprecated alias.
+	// Depends on Step 4: profile synthesis points to opencode:agent:<name>
+	// or inherits default_profile so Validate's profile reference checks pass.
+	rawAgent, hasAgent := root["agent"]
+	rawMode, hasMode := root["mode"]
+	var agentRawObj json.RawMessage
+	if hasAgent && hasMode {
+		var aMap, mMap map[string]json.RawMessage
+		_ = json.Unmarshal(rawAgent, &aMap)
+		_ = json.Unmarshal(rawMode, &mMap)
+		allKeys := sortedUnion(sortedKeys(aMap), sortedKeys(mMap))
+		for _, k := range allKeys {
+			aVal, aOk := aMap[k]
+			mVal, mOk := mMap[k]
+			if !aOk || !mOk || !bytes.Equal(bytes.TrimSpace(aVal), bytes.TrimSpace(mVal)) {
+				refusals = append(refusals, refusal{
+					path: "agent",
+					msg:  fmt.Sprintf(`agent and mode are two spellings of the same block and they disagree on %q; keep one of them`, k),
+				})
+			}
+		}
+		agentRawObj = rawAgent
+		delete(root, "mode")
+		changed = true
+	} else if hasMode {
+		agentRawObj = rawMode
+		delete(root, "mode")
+		changed = true
+	} else if hasAgent {
+		agentRawObj = rawAgent
+		delete(root, "agent")
+		changed = true
+	}
+
+	rawAgents, hasAgents := root["agents"]
+	if agentRawObj != nil && hasAgents {
+		if !bytes.Equal(bytes.TrimSpace(agentRawObj), bytes.TrimSpace(rawAgents)) {
+			refusals = append(refusals, refusal{
+				path: "agent",
+				msg:  `agent and agents are two spellings of the same block; keep one of them`,
+			})
+		}
+	}
+
+	if agentRawObj != nil {
+		var agentsMap map[string]json.RawMessage
+		if json.Unmarshal(agentRawObj, &agentsMap) == nil {
+			aNames := sortedKeys(agentsMap)
+			for _, aName := range aNames {
+				var aEntry map[string]json.RawMessage
+				if json.Unmarshal(agentsMap[aName], &aEntry) != nil || aEntry == nil {
+					continue
+				}
+
+				// Refusals for agent keys
+				if _, ok := aEntry["tools"]; ok {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("agent.%s.tools", aName),
+						msg:  fmt.Sprintf(`agent %q: tools is a set of per-tool on/off switches, and localcode's per-agent tools is a closed allowlist — the two cannot be converted without changing what this file says. Write the restriction as a top-level "permission" map if it is meant for every agent; localcode has no per-agent permission.`, aName),
+					})
+				}
+				if _, ok := aEntry["permission"]; ok {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("agent.%s.permission", aName),
+						msg:  fmt.Sprintf(`agent %q: permission sets rules for this agent alone, and localcode's permission rules are daemon-wide — folding them in would apply them to every agent. Move them to the top-level "permission", which localcode already reads, if that is what you mean.`, aName),
+					})
+				}
+				if _, ok := aEntry["disable"]; ok {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("agent.%s.disable", aName),
+						msg:  fmt.Sprintf(`agent %q: disable is true, and localcode has no switch that turns an agent off — an agent named here is available to /agent, to Tab, and to delegation. Remove the entry instead.`, aName),
+					})
+				}
+				if rawM, ok := aEntry["mode"]; ok {
+					var mStr string
+					_ = json.Unmarshal(rawM, &mStr)
+					if mStr == "all" {
+						delete(aEntry, "mode")
+					} else {
+						refusals = append(refusals, refusal{
+							path: fmt.Sprintf("agent.%s.mode", aName),
+							msg:  fmt.Sprintf(`agent %q: mode is %q, and localcode makes every agent in this file both switchable (/agent, Tab) and delegatable (the Task tool) — the half this mode excludes would still be available.`, aName, mStr),
+						})
+					}
+				}
+				if _, ok := aEntry["hidden"]; ok {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("agent.%s.hidden", aName),
+						msg:  fmt.Sprintf(`agent %q: hidden asks for this agent to stay out of the menu a person picks from while staying delegatable, and localcode keeps one roster that both the person and the model choose from — /agent, Tab, the /model picker, the Web UI dropdown, the Debate reviewer list. It cannot be hidden from one and not the other. Remove it.`, aName),
+					})
+				}
+				rawSteps, hasSteps := aEntry["steps"]
+				rawMaxSteps, hasMaxSteps := aEntry["maxSteps"]
+				if hasSteps && hasMaxSteps && !bytes.Equal(bytes.TrimSpace(rawSteps), bytes.TrimSpace(rawMaxSteps)) {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("agent.%s.steps", aName),
+						msg:  fmt.Sprintf(`agent %q: steps and maxSteps disagree; keep one of them`, aName),
+					})
+				} else if hasSteps {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("agent.%s.steps", aName),
+						msg:  fmt.Sprintf(`agent %q: steps caps this agent at %s tool-using iterations, and localcode has no per-turn iteration limit — the turn would keep going until the model stops or you interrupt it.`, aName, string(rawSteps)),
+					})
+				} else if hasMaxSteps {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("agent.%s.maxSteps", aName),
+						msg:  fmt.Sprintf(`agent %q: maxSteps caps this agent at %s tool-using iterations (opencode's older spelling of steps), and localcode has no per-turn iteration limit — the turn would keep going until the model stops or you interrupt it.`, aName, string(rawMaxSteps)),
+					})
+				}
+				if rawV, ok := aEntry["variant"]; ok {
+					var vStr string
+					_ = json.Unmarshal(rawV, &vStr)
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("agent.%s.variant", aName),
+						msg:  fmt.Sprintf(`agent %q: variant is %q, and localcode has no variants — what a variant means lives in opencode's built-in table or in a provider's variants block, neither of which localcode reads. Set the profile's effort instead (off, low, medium, high, xhigh).`, aName, vStr),
+					})
+				}
+				if _, ok := aEntry["options"]; ok {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("agent.%s.options", aName),
+						msg:  fmt.Sprintf(`agent %q: options carries settings localcode cannot read — an agent's model settings live in its profile (max_tokens, temperature, top_p, top_k, effort). Move what you need there, or remove it.`, aName),
+					})
+				}
+				if _, ok := aEntry["color"]; ok {
+					ignored = append(ignored, fmt.Sprintf("agent.%s.color", aName))
+					delete(aEntry, "color")
+				}
+
+				// Profile synthesis for agent
+				hasAgentModel := false
+				var agentModelStr string
+				if rawAM, ok := aEntry["model"]; ok {
+					hasAgentModel = true
+					_ = json.Unmarshal(rawAM, &agentModelStr)
+					delete(aEntry, "model")
+				}
+				hasTemp := false
+				var tempVal float64
+				if rawTemp, ok := aEntry["temperature"]; ok {
+					hasTemp = true
+					_ = json.Unmarshal(rawTemp, &tempVal)
+					delete(aEntry, "temperature")
+				}
+				hasTopP := false
+				var topPVal float64
+				if rawTP, ok := aEntry["top_p"]; ok {
+					hasTopP = true
+					_ = json.Unmarshal(rawTP, &topPVal)
+					delete(aEntry, "top_p")
+				}
+
+				if hasAgentModel || hasTemp || hasTopP {
+					profName := "opencode:agent:" + aName
+					if profilesMap[profName] != nil {
+						refusals = append(refusals, refusal{
+							path: fmt.Sprintf("agent.%s.model", aName),
+							msg:  fmt.Sprintf(`agent %q wants to create profile %q, but a hand-written profile already holds that name; rename yours`, aName, profName),
+						})
+					}
+					var provKey, wireModel string
+					var cw, mt int
+					if hasAgentModel {
+						before, after, found := strings.Cut(agentModelStr, "/")
+						if !found {
+							refusals = append(refusals, refusal{
+								path: fmt.Sprintf("agent.%s.model", aName),
+								msg:  fmt.Sprintf(`agent %q: model is %q with no provider in front of it, and localcode does not look models up in a catalogue to find out who serves them.`, aName, agentModelStr),
+							})
+						} else if providersMap[before] == nil {
+							refusals = append(refusals, refusal{
+								path: fmt.Sprintf("agent.%s.model", aName),
+								msg:  fmt.Sprintf(`agent %q: model is %q, and %q is not a provider this config defines.`, aName, agentModelStr, before),
+							})
+						} else {
+							provKey = before
+							wireModel = after
+							if facts, ok := providerModelFacts[provKey][after]; ok {
+								if facts.wireID != "" {
+									wireModel = facts.wireID
+								}
+								cw = facts.contextWindow
+								mt = facts.maxTokens
+							}
+						}
+					} else {
+						// Inherit provider and model from default profile
+						if curDefaultProfile != "" && profilesMap[curDefaultProfile] != nil {
+							var defProf Profile
+							_ = json.Unmarshal(profilesMap[curDefaultProfile], &defProf)
+							provKey = defProf.Provider
+							wireModel = defProf.Model
+							cw = defProf.ContextWindow
+							mt = defProf.MaxTokens
+						}
+					}
+
+					prof := Profile{
+						Provider:      provKey,
+						Model:         wireModel,
+						ContextWindow: cw,
+						MaxTokens:     mt,
+					}
+					if hasTemp {
+						prof.Temperature = tempVal
+					}
+					if hasTopP {
+						prof.TopP = &topPVal
+					}
+					profBytes, _ := json.Marshal(prof)
+					profilesMap[profName] = profBytes
+					synthesised = append(synthesised, profName)
+					aEntry["profile"], _ = json.Marshal(profName)
+				} else {
+					if curDefaultProfile != "" {
+						aEntry["profile"], _ = json.Marshal(curDefaultProfile)
+					}
+				}
+
+				b, _ := json.Marshal(aEntry)
+				agentsMap[aName] = b
+			}
+			root["agents"], _ = json.Marshal(agentsMap)
+			changed = true
+		}
+	}
+
+	// Provider blacklist and whitelist checks against all profiles
+	for _, pName := range pNames {
+		blList := providerBlacklists[pName]
+		if len(blList) > 0 {
+			blSet := make(map[string]bool, len(blList))
+			for _, item := range blList {
+				blSet[item] = true
+			}
+			for _, profName := range sortedKeys(profilesMap) {
+				var p Profile
+				if json.Unmarshal(profilesMap[profName], &p) == nil && p.Provider == pName && blSet[p.Model] {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("provider.%s.blacklist", pName),
+						msg:  fmt.Sprintf(`provider %q.blacklist hides %q, and profile %q is that model on that provider. localcode's /model lists profiles and cannot hide one — remove the profile, or the blacklist entry.`, pName, p.Model, profName),
+					})
+				}
+			}
+		}
+		wlList := providerWhitelists[pName]
+		if len(wlList) > 0 {
+			wlSet := make(map[string]bool, len(wlList))
+			for _, item := range wlList {
+				wlSet[item] = true
+			}
+			for _, profName := range sortedKeys(profilesMap) {
+				var p Profile
+				if json.Unmarshal(profilesMap[profName], &p) == nil && p.Provider == pName && !wlSet[p.Model] {
+					refusals = append(refusals, refusal{
+						path: fmt.Sprintf("provider.%s.whitelist", pName),
+						msg:  fmt.Sprintf(`provider %q.whitelist keeps only the models it lists, and profile %q is %q on that provider, which it does not list. localcode's /model lists profiles and cannot hide one — remove the profile, or add the model.`, pName, profName, p.Model),
+					})
+				}
+			}
+		}
+	}
+
+	// Write back profiles if synthesised profiles were generated
+	if len(synthesised) > 0 {
+		b, _ := json.Marshal(profilesMap)
+		root["profiles"] = b
+		changed = true
+	}
+
 	if len(refusals) > 0 {
 		sort.Slice(refusals, func(i, j int) bool {
 			return refusals[i].path < refusals[j].path
@@ -403,12 +1371,40 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 	sort.Strings(ignored)
 
 	if !changed {
-		return Normalized{JSON: raw, Ignored: ignored}, nil
+		return Normalized{JSON: raw, Ignored: ignored, Synthesised: synthesised, MadePlaceholders: madePlaceholders}, nil
 	}
 
 	out, err := json.Marshal(root)
 	if err != nil {
 		return Normalized{}, err
 	}
-	return Normalized{JSON: out, Ignored: ignored}, nil
+	return Normalized{JSON: out, Ignored: ignored, Synthesised: synthesised, MadePlaceholders: madePlaceholders}, nil
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedUnion(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	var res []string
+	for _, k := range a {
+		if !seen[k] {
+			seen[k] = true
+			res = append(res, k)
+		}
+	}
+	for _, k := range b {
+		if !seen[k] {
+			seen[k] = true
+			res = append(res, k)
+		}
+	}
+	sort.Strings(res)
+	return res
 }

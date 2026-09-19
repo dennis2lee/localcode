@@ -294,9 +294,9 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 
 | Field | Meaning |
 |---|---|
-| `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. Bedrock AWS configuration is loaded lazily on its first request. |
+| `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. Bedrock AWS configuration is loaded lazily on its first request. Opencode spelling `provider` is also accepted. |
 | `profiles` | A named provider and model pairing. `max_tokens`, `temperature`, `context_window` and `keep_going` are optional. |
-| `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
+| `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. Opencode spelling `agent` (and deprecated `mode`) is also accepted. |
 | `default_agent` | Default agent role when `--agent` is omitted. An explicitly passed `--agent` flag overrides it. Must resolve to an entry in `agents`, or `general-purpose`. See [Default agent](#default-agent). |
 | `instructions` | Additional instruction files and glob patterns appended to workspace rules. Relative paths resolve against the project directory and must remain within it. Remote addresses are refused at load. See [Additional instruction files](#additional-instruction-files). |
 | `shell` | The program every bash tool call, hook and custom command runs under. Unset means `sh`, or on a Windows machine with no `sh` installed, `cmd.exe`. Naming a shell localcode does not know to be POSIX turns every bash `allow` rule into a prompt, because the rule is decided by splitting the command at POSIX operators and that split is only the shell's where the shell reads them the POSIX way. See [Naming the shell](#naming-the-shell). |
