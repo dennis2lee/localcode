@@ -57,11 +57,15 @@ func selfInstall(archive, exe string) error {
 	// The archive is opened before anything is written: a file that turns
 	// out not to be a localcode tarball should leave the install
 	// directory exactly as it was, not a stray temp file behind.
-	src, done, err := openBinary(archive)
+	src, entry, done, err := openBinary(archive)
 	if err != nil {
 		return err
 	}
 	defer done()
+
+	if reason := flavorMismatch(exe, entry); reason != "" {
+		return fmt.Errorf("%w: %s", errWrongFlavor, reason)
+	}
 
 	dir := filepath.Dir(exe)
 	tmp, err := os.CreateTemp(dir, ".localcode-update-*")
@@ -146,25 +150,59 @@ func SweepAside(exe string) {
 	}
 }
 
+// errWrongFlavor is returned when the binary in the release archive cannot
+// take the target executable's name because the target is a desktop-window build.
+var errWrongFlavor = errors.New("cannot replace desktop-window build with console payload")
+
+// flavorMismatch says why the binary named entry must not take the
+// name exe, or "" when it may.
+//
+// Release archives only carry the console build. The desktop-window
+// build is produced by CI and ships in the MSI. Allowing an update to
+// unpack a console binary over a desktop-window file leaves a program
+// that runs the TUI instead of opening a window.
+func flavorMismatch(exe, entry string) string {
+	if isWindowBuild(exe) && !isWindowBuild(entry) {
+		exeBase := cleanBase(exe)
+		entryBase := cleanBase(entry)
+		return fmt.Sprintf("%s is the console build and cannot replace desktop-window build %s", entryBase, exeBase)
+	}
+	return ""
+}
+
+func isWindowBuild(name string) bool {
+	base := cleanBase(name)
+	return strings.EqualFold(base, "localcode-gui.exe") || strings.EqualFold(base, "localcode-gui")
+}
+
+func cleanBase(path string) string {
+	path = strings.ReplaceAll(filepath.ToSlash(path), "\\", "/")
+	return filepath.Base(path)
+}
+
 // openBinary finds the localcode binary inside a release tarball and
-// returns a reader positioned at it, along with the close to run when the
-// caller is done with it.
+// returns a reader positioned at it, the name it had in the archive, and
+// the close to run when the caller is done with it.
 //
 // Only a plain file called "localcode" at the root of the archive counts,
 // which is also how the bare-binary tarball is told apart from the macOS
 // .app one: every entry in that one starts with "LocalCode.app/".
-func openBinary(archive string) (io.Reader, func(), error) {
+//
+// The name is returned because the caller has to know what it is about to
+// write before it writes it: the archives carry the console build, and
+// there is a file it must not be given the name of. See flavorMismatch.
+func openBinary(archive string) (io.Reader, string, func(), error) {
 	if strings.EqualFold(filepath.Ext(archive), ".zip") {
 		return openZipBinary(archive)
 	}
 	f, err := os.Open(archive)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", nil, err
 	}
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		f.Close()
-		return nil, nil, fmt.Errorf("%s is not a gzip archive: %w", filepath.Base(archive), err)
+		return nil, "", nil, fmt.Errorf("%s is not a gzip archive: %w", filepath.Base(archive), err)
 	}
 	done := func() { gz.Close(); f.Close() }
 
@@ -176,28 +214,28 @@ func openBinary(archive string) (io.Reader, func(), error) {
 		}
 		if err != nil {
 			done()
-			return nil, nil, err
+			return nil, "", nil, err
 		}
-		if h.Typeflag != tar.TypeReg || filepath.Clean(h.Name) != "localcode" {
+		name := filepath.Clean(h.Name)
+		if h.Typeflag != tar.TypeReg || name != "localcode" {
 			continue
 		}
 		if h.Size > maxBinary {
 			done()
-			return nil, nil, fmt.Errorf("the binary in %s is %d bytes, which is not a localcode", filepath.Base(archive), h.Size)
+			return nil, "", nil, fmt.Errorf("the binary in %s is %d bytes, which is not a localcode", filepath.Base(archive), h.Size)
 		}
-		return io.LimitReader(tr, maxBinary), done, nil
+		return io.LimitReader(tr, maxBinary), name, done, nil
 	}
 	done()
-	return nil, nil, fmt.Errorf("%s contains no localcode binary", filepath.Base(archive))
+	return nil, "", nil, fmt.Errorf("%s contains no localcode binary", filepath.Base(archive))
 }
 
-// runsAtAll checks that the downloaded binary starts on this machine.
 // openZipBinary is openBinary for the Windows archive, which holds one
 // file, localcode.exe, at its root.
-func openZipBinary(archive string) (io.Reader, func(), error) {
+func openZipBinary(archive string) (io.Reader, string, func(), error) {
 	zr, err := zip.OpenReader(archive)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%s is not a zip archive: %w", filepath.Base(archive), err)
+		return nil, "", nil, fmt.Errorf("%s is not a zip archive: %w", filepath.Base(archive), err)
 	}
 	for _, zf := range zr.File {
 		name := filepath.Clean(zf.Name)
@@ -206,19 +244,20 @@ func openZipBinary(archive string) (io.Reader, func(), error) {
 		}
 		if zf.UncompressedSize64 > maxBinary {
 			zr.Close()
-			return nil, nil, fmt.Errorf("the binary in %s is %d bytes, which is not a localcode", filepath.Base(archive), zf.UncompressedSize64)
+			return nil, "", nil, fmt.Errorf("the binary in %s is %d bytes, which is not a localcode", filepath.Base(archive), zf.UncompressedSize64)
 		}
 		rc, err := zf.Open()
 		if err != nil {
 			zr.Close()
-			return nil, nil, err
+			return nil, "", nil, err
 		}
-		return io.LimitReader(rc, maxBinary), func() { rc.Close(); zr.Close() }, nil
+		return io.LimitReader(rc, maxBinary), name, func() { rc.Close(); zr.Close() }, nil
 	}
 	zr.Close()
-	return nil, nil, fmt.Errorf("%s contains no localcode binary", filepath.Base(archive))
+	return nil, "", nil, fmt.Errorf("%s contains no localcode binary", filepath.Base(archive))
 }
 
+// runsAtAll checks that the downloaded binary starts on this machine.
 func runsAtAll(path string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -2,14 +2,16 @@ package update
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"localcode/internal/childproc"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	"localcode/internal/childproc"
 )
 
 // Outcome says what installing did, because it is not the same thing on
@@ -141,25 +143,44 @@ func apply(path string, target func() (string, error)) (Outcome, error) {
 // staging directory of localcode's own. The Program Files copy stays as
 // it was; the settings window's install button, which runs the MSI, is
 // how that copy is brought up to date.
+//
+// Except over the desktop window, which is never replaced however
+// writable its directory is. The zip holds the console build and only
+// ever the console build, so writing it over localcode-gui.exe leaves a
+// file that answers to the window's name and opens no window — the
+// program becomes the terminal interface on the next start and stays
+// that way, which is what happened to somebody. selfInstall refuses
+// that pairing (see flavorMismatch) and the refusal is read here as
+// "stage it instead" rather than as a failure, because a window that
+// cannot replace itself is the ordinary Program Files case with the
+// permission check passing.
 func ApplyForHandoff(path string) (Outcome, error) {
-	if runtime.GOOS != "windows" {
-		return Apply(path)
+	return applyForHandoff(path, runtime.GOOS, currentBinary, dirWritable, os.UserCacheDir)
+}
+
+func applyForHandoff(path, goos string, target func() (string, error),
+	writable func(string) bool, cache func() (string, error)) (Outcome, error) {
+	if goos != "windows" {
+		return apply(path, target)
 	}
-	exe, err := currentBinary()
+	exe, err := target()
 	if err != nil {
 		return Outcome{Path: path}, fmt.Errorf("find this program: %w", err)
 	}
-	if dirWritable(filepath.Dir(exe)) {
-		if err := selfInstall(path, exe); err != nil {
+	if writable(filepath.Dir(exe)) {
+		err := selfInstall(path, exe)
+		if err == nil {
+			return Outcome{Replaced: true, Path: path, Binary: exe, Detail: "installed over " + exe}, nil
+		}
+		if !errors.Is(err, errWrongFlavor) {
 			return Outcome{Path: path}, err
 		}
-		return Outcome{Replaced: true, Path: path, Binary: exe, Detail: "installed over " + exe}, nil
 	}
-	base, err := os.UserCacheDir()
+	base, err := cache()
 	if err != nil {
 		return Outcome{Path: path}, fmt.Errorf("no directory to stage the new localcode in: %w", err)
 	}
-	staged := filepath.Join(base, "localcode", "bin", filepath.Base(exe))
+	staged := filepath.Join(base, "localcode", "bin", stagedName(goos))
 	if err := os.MkdirAll(filepath.Dir(staged), 0o755); err != nil {
 		return Outcome{Path: path}, err
 	}
@@ -167,6 +188,12 @@ func ApplyForHandoff(path string) (Outcome, error) {
 		return Outcome{Path: path}, err
 	}
 	return Outcome{
+		// True, although nothing was written over: Replaced is what says
+		// "there is a new binary on disk and this process can hand off to
+		// it", which is exactly the case here, and the startup handoff
+		// refuses to run the new version without it (see
+		// internal/daemon/selfupdate.go). Binary is where the new version
+		// actually is, which is the other half of the same sentence.
 		Replaced: true,
 		Path:     path,
 		Binary:   staged,
@@ -175,9 +202,26 @@ func ApplyForHandoff(path string) (Outcome, error) {
 	}, nil
 }
 
+// stagedName is what a staged localcode is called: the name the release
+// archive carries, which is the console build on every platform.
+func stagedName(goos string) string {
+	if goos == "windows" {
+		return "localcode.exe"
+	}
+	return "localcode"
+}
+
 // StagedBinary is where ApplyForHandoff puts a new binary when the one
-// this process runs from cannot be replaced: the same file name, under
-// the user's own cache directory. Empty when nothing has been staged.
+// this process runs from cannot be replaced: the name the release
+// archive carries, under the user's own cache directory. Empty when
+// nothing has been staged.
+//
+// The archive's name rather than the running program's, which is what
+// this used to take. Under the desktop window that produced
+// localcode-gui.exe holding the console build — the same untruth the
+// replacement above refuses, written one directory along. A copy staged
+// under the old name by an older version simply stops being found, which
+// is the right end for it; the next update stages the new name.
 //
 // Startup asks for it before asking the network. A Program Files install
 // on Windows is never itself replaced by an update — that copy waits for
@@ -185,15 +229,19 @@ func ApplyForHandoff(path string) (Outcome, error) {
 // start, and comparing the release against only the Program Files
 // version would download the same release again each time.
 func StagedBinary() string {
-	exe, err := currentBinary()
+	return stagedBinary(runtime.GOOS, currentBinary, os.UserCacheDir)
+}
+
+func stagedBinary(goos string, target func() (string, error), cache func() (string, error)) string {
+	exe, err := target()
 	if err != nil {
 		return ""
 	}
-	base, err := os.UserCacheDir()
+	base, err := cache()
 	if err != nil {
 		return ""
 	}
-	staged := filepath.Join(base, "localcode", "bin", filepath.Base(exe))
+	staged := filepath.Join(base, "localcode", "bin", stagedName(goos))
 	if staged == exe {
 		return ""
 	}

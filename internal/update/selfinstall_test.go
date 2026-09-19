@@ -201,7 +201,7 @@ func TestTheAppBundleArchiveIsNotMistakenForABinary(t *testing.T) {
 	archive := tarball(t, dir, "localcode-0.49.0-darwin-universal-app.tar.gz", map[string]string{
 		"LocalCode.app/Contents/MacOS/localcode": "binary",
 	})
-	if _, _, err := openBinary(archive); err == nil {
+	if _, _, _, err := openBinary(archive); err == nil {
 		t.Error("a .app archive was accepted as a bare binary")
 	}
 }
