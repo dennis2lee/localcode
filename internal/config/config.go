@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -292,6 +293,29 @@ type Config struct {
 	// unlocked at load time, before the daemon exists to race with. See
 	// runtime.go.
 	permMu sync.RWMutex
+}
+
+// UnmarshalJSON unmarshals Config from JSON data, delegating the "permission"
+// key to the named Permissions map type. This allows "permission" to accept
+// either an opencode bare decision string (e.g. "ask", expanding to a "*"
+// fallback rule) or a full map of tool rules, while preserving Config.Permissions
+// as map[string]ToolPermission so load.go's generic mergeMap can merge configs
+// without type mismatch.
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type Alias Config
+	aux := struct {
+		Permissions Permissions `json:"permission,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.Permissions != nil {
+		c.Permissions = aux.Permissions
+	}
+	return nil
 }
 
 // AutoDelegateConfig sends small, mechanical prompts to a named agent
@@ -764,7 +788,34 @@ func (c *Config) Validate() error {
 	// fall through the registry's switch to execution, so a typo'd
 	// prohibition ("denied") silently allowed; failing at load says so
 	// where it can still be fixed.
+	//
+	// Permission keys fall into three distinct categories:
+	//
+	// 1. Enforced localcode tools, alias keys, "*", and "mcp__*" patterns:
+	//    tools localcode can actually execute, either directly or mapped
+	//    through the alias table (e.g. "read" -> read_file, "edit" -> edit,
+	//    write_file). Rules for these are resolved on tool calls.
+	//
+	// 2. Known opencode tools localcode does not have (IgnoredOpencodeTools):
+	//    tools like webfetch or doom_loop from opencode. A rule for a tool
+	//    that does not exist and cannot be invoked is vacuous: it cannot
+	//    grant or leak permissions. Rejecting them would prevent valid
+	//    opencode configurations from loading for no security benefit, so
+	//    we accept them at load time and ignore them during resolution.
+	//
+	// 3. Unknown keys (e.g. typos like "bashh" or "editt"):
+	//    a typo in a security rule (like denying "bashh" instead of "bash")
+	//    fails open if ignored silently. Refusing unknown keys with a clear
+	//    message listing what is accepted catches misconfigurations at startup.
+	//
+	// These are three categories rather than two because collapsing (2) into
+	// (3) would break compatibility with real opencode.json configs, while
+	// collapsing (2) into (1) would suggest localcode enforces tools it does
+	// not have.
 	for tool, tp := range c.Permissions {
+		if !ValidPermissionKey(tool) {
+			return fmt.Errorf("permission %q: unknown tool (want one of %s)", tool, AcceptedPermissionKeys())
+		}
 		if tp.Flat != "" && !ValidDecision(tp.Flat) {
 			return fmt.Errorf("permission %q: unknown decision %q (want one of %s)", tool, tp.Flat, DecisionNames())
 		}
