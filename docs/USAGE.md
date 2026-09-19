@@ -297,6 +297,9 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 | `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. Bedrock AWS configuration is loaded lazily on its first request. |
 | `profiles` | A named provider and model pairing. `max_tokens`, `temperature`, `context_window` and `keep_going` are optional. |
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
+| `default_agent` | Default agent role when `--agent` is omitted. An explicitly passed `--agent` flag overrides it. Must resolve to an entry in `agents`, or `general-purpose`. See [Default agent](#default-agent). |
+| `instructions` | Additional instruction files and glob patterns appended to workspace rules. Relative paths resolve against the project directory and must remain within it. Remote addresses are refused at load. See [Additional instruction files](#additional-instruction-files). |
+| `subagent_depth` | Maximum nesting depth for subagent delegation. Unset means 3, which is the limit localcode has always had. 1 lets a session delegate but stops a subagent from delegating again, and 0 turns delegation off. opencode defaults this key to 1, so a file written there that does not set it means something different here. See [Subagent delegation depth](#subagent-delegation-depth). |
 | `max_concurrent_tasks` | Maximum concurrent background tasks. Default: 1. Synchronous `Task` calls do not consume slots. Provider-specific limits are acquired first so waiting on one endpoint does not occupy a daemon-wide slot. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
 | `permission` | Fine grained allow/ask/deny rules per tool. See [Permission rules](#fine-grained-permission-rules). |
@@ -842,6 +845,10 @@ An imported file can import further files, followed up to 4 levels deep. Anythin
 Read @README.md for a project overview.
 Personal workflow: @~/.localcode/my-workflow.md
 ```
+
+### Additional instruction files
+
+`instructions` appends files and glob patterns to workspace rules in the system prompt. LocalCode loads files in the order declared in the array, after project rules and global rules. Relative paths resolve against the project directory and must remain within the project tree. Path traversal sequences such as `..` and absolute paths outside the project directory are refused at configuration load. Network addresses beginning with `http://` or `https://` are refused at configuration load. Patterns matching no files log a notice without failing.
 
 ### Per-model formatting notes
 
@@ -1824,6 +1831,14 @@ An explicit agent definition replaces the built-in specialist with the same name
 3. `explore`'s final answer text is returned as the tool result, and the delegating agent continues from it.
 
 Delegation deeper than 3 levels is refused automatically, so agents cannot recurse into each other forever. The depth travels with the delegation, including into a background task, so no mixture of `Task` and `TaskBackground` gets a fresh allowance.
+
+### Default agent
+
+`default_agent` sets the default agent role when `--agent` is omitted on the command line. An explicit `--agent` flag overrides this setting. The value must resolve to an entry in `agents`, or `general-purpose`. Configuration validation rejects unrecognized agent names at startup.
+
+### Subagent delegation depth
+
+`subagent_depth` bounds the nesting depth for subagent delegation across `Task` and `TaskBackground`. Setting `subagent_depth` to 1 permits top-level delegation, but prevents subagents from launching further subagents. Setting `subagent_depth` to 0 disables subagent delegation entirely. Omitting `subagent_depth` means 3, which is the limit localcode has always enforced, so a config that does not mention it behaves as it did before this key existed. opencode's own default for the same key is 1; a file written for opencode and left unset therefore permits one more level here than it does there, and setting the key says which you mean. Exceeding the configured limit fails the tool call immediately with an error naming the limit.
 
 ### Orchestration
 

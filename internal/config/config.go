@@ -5,6 +5,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -20,8 +21,11 @@ type Config struct {
 	Profiles           map[string]Profile         `json:"profiles,omitempty"`
 	Agents             map[string]AgentConfig     `json:"agents,omitempty"`
 	DefaultProfile     string                     `json:"default_profile,omitempty"`
+	DefaultAgent       string                     `json:"default_agent,omitempty"`
 	MaxConcurrentTasks int                        `json:"max_concurrent_tasks,omitempty"`
+	SubagentDepth      *int                       `json:"subagent_depth,omitempty"`
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	Instructions       []string                   `json:"instructions,omitempty"`
 
 	// AutoMemoryEnabled toggles Claude Code-style auto memory (the model
 	// accumulating its own notes across sessions under a per-project
@@ -291,7 +295,6 @@ type Config struct {
 	// toggling skip_permissions, or adding/removing a rule) while a tool
 	// call on another goroutine is resolving a decision. Both are read
 	// unlocked at load time, before the daemon exists to race with. See
-	// runtime.go.
 	permMu sync.RWMutex
 }
 
@@ -737,6 +740,22 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.DefaultAgent != "" && c.DefaultAgent != "general-purpose" {
+		if _, ok := c.Agents[c.DefaultAgent]; !ok {
+			return fmt.Errorf("default_agent %q not found in agents", c.DefaultAgent)
+		}
+	}
+
+	if c.SubagentDepth != nil && *c.SubagentDepth < 0 {
+		return fmt.Errorf("subagent_depth is %d, which is negative", *c.SubagentDepth)
+	}
+
+	for _, inst := range c.Instructions {
+		if why := instructionsProblem(inst); why != "" {
+			return fmt.Errorf("instructions entry %q %s", inst, why)
+		}
+	}
+
 	// Bounded where it is read, for the reason keep_going is: a stray
 	// number here is not one anybody meant, and failing at load says so at
 	// the moment it can still be fixed rather than in the middle of a
@@ -901,9 +920,47 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// instructionsProblem says why an instructions entry may not be used, or
+// "" when it may.
+//
+// It takes the entry and nothing else, and that is the point. This started
+// as a check against a project directory the Config carried in an
+// unexported field, which meant the same file validated differently
+// depending on which loader had filled it in — LoadMerged set the project,
+// Load set the config file's own directory, and a Config built in a test
+// set neither and got the weaker of two rules. A rule about what a person
+// may point at is not a rule that should have two readings.
+//
+// Every entry is relative to the project, so an absolute path is refused
+// rather than resolved: it is either inside the project, in which case the
+// relative spelling says the same thing, or outside it, which is the case
+// this exists to refuse. An instruction file is text the model follows,
+// and reading one from anywhere on the disk because a config said so is a
+// decision nobody made.
+func instructionsProblem(entry string) string {
+	trimmed := strings.TrimSpace(entry)
+	switch {
+	case trimmed == "":
+		return "is empty"
+	case strings.HasPrefix(trimmed, "http://"), strings.HasPrefix(trimmed, "https://"):
+		return "names a URL, and localcode does not fetch instructions over the network"
+	case filepath.IsAbs(trimmed):
+		return "is an absolute path; instructions are read relative to the project"
+	}
+	clean := filepath.Clean(trimmed)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "escapes the project directory"
+	}
+	return ""
+}
+
 // ResolveProfile returns the profile to use for a given agent/task type,
 // falling back to DefaultProfile when the agent has no explicit mapping.
+// If agentName is empty, DefaultAgent is resolved first.
 func (c *Config) ResolveProfile(agentName string) (Profile, error) {
+	if agentName == "" && c.DefaultAgent != "" {
+		agentName = c.DefaultAgent
+	}
 	if agent, ok := c.Agents[agentName]; ok {
 		if p, ok := c.Profiles[agent.Profile]; ok {
 			return p, nil
@@ -913,6 +970,21 @@ func (c *Config) ResolveProfile(agentName string) (Profile, error) {
 		return Profile{}, fmt.Errorf("no profile for agent %q and no default_profile set", agentName)
 	}
 	return c.Profiles[c.DefaultProfile], nil
+}
+
+// DefaultSubagentDepth is the built-in delegation limit when subagent_depth
+// is unset, preserving existing behavior where delegated agents can delegate.
+const DefaultSubagentDepth = 3
+
+// SubagentDepthLimit returns the effective maximum subagent delegation depth.
+func (c *Config) SubagentDepthLimit() int {
+	if c == nil || c.SubagentDepth == nil {
+		return DefaultSubagentDepth
+	}
+	if *c.SubagentDepth < 0 {
+		return 0
+	}
+	return *c.SubagentDepth
 }
 
 // ResolveProvider returns the provider config backing a profile.

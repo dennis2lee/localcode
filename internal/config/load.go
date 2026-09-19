@@ -143,8 +143,17 @@ func (c *Config) merge(other *Config) {
 	if other.DefaultProfile != "" {
 		c.DefaultProfile = other.DefaultProfile
 	}
+	if other.DefaultAgent != "" {
+		c.DefaultAgent = other.DefaultAgent
+	}
 	if other.MaxConcurrentTasks != 0 {
 		c.MaxConcurrentTasks = other.MaxConcurrentTasks
+	}
+	if other.SubagentDepth != nil {
+		c.SubagentDepth = other.SubagentDepth
+	}
+	if other.Instructions != nil {
+		c.Instructions = other.Instructions
 	}
 	if other.AutoMemoryEnabled != nil {
 		c.AutoMemoryEnabled = other.AutoMemoryEnabled

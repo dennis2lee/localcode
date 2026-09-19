@@ -221,7 +221,7 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	}
 	// Per turn, for the directory that turn is working in — see
 	// Loop.WorkspaceRules. e.home is the only thing fixed at startup here.
-	loop.WorkspaceRules = workspaceRules(e)
+	loop.WorkspaceRules = workspaceRules(e, cfg)
 	// Ask the server how big a window it is serving, rather than guessing
 	// from the model's name. Only the openai-compatible clients implement
 	// it: a hosted model's name identifies it exactly, while a local
@@ -692,11 +692,72 @@ func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]
 	return out, nil
 }
 
-// workspaceRules is the AGENTS.md/CLAUDE.md loader a Loop is given.
+// workspaceRules is the AGENTS.md/CLAUDE.md and instructions loader a Loop is given.
 //
 // Named rather than written inline at each call site, because there are
 // two of them now — the daemon and "localcode run" — and "what the
 // project's rules are" must not be able to differ between them.
-func workspaceRules(e env) func(string) string {
-	return func(dir string) string { return rules.Load(dir, e.home) }
+//
+// cfg is a parameter rather than something this reads for itself, for the
+// same reason. The config carries the instructions list, and a version of
+// this that re-read the file when it was not handed one would give the two
+// call sites two answers — which is the one thing the paragraph above says
+// must not happen — and would re-parse the config on every turn besides.
+func workspaceRules(e env, cfg *config.Config) func(string) string {
+	return func(dir string) string { return loadWorkspaceRules(dir, e.home, cfg) }
+}
+
+// loadWorkspaceRules reads base project/user rules via rules.Load and appends
+// any configured instruction files or patterns in order.
+func loadWorkspaceRules(dir, home string, cfg *config.Config) string {
+	baseRules := rules.Load(dir, home)
+	if cfg == nil || len(cfg.Instructions) == 0 {
+		return baseRules
+	}
+
+	var contents []string
+	for _, entry := range cfg.Instructions {
+		pattern := entry
+		if !filepath.IsAbs(pattern) {
+			pattern = filepath.Join(dir, pattern)
+		}
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			log.Printf("instructions: pattern %q: %v", entry, err)
+			continue
+		}
+		if len(matches) == 0 {
+			// Literal file path without glob magic might still exist
+			if info, serr := os.Stat(pattern); serr == nil && !info.IsDir() {
+				matches = []string{pattern}
+			} else {
+				log.Printf("instructions: pattern %q matched no files in %s", entry, dir)
+				continue
+			}
+		}
+		for _, m := range matches {
+			info, err := os.Stat(m)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			data, err := os.ReadFile(m)
+			if err != nil {
+				log.Printf("instructions: read %s: %v", m, err)
+				continue
+			}
+			text := strings.TrimSpace(string(data))
+			if text != "" {
+				contents = append(contents, text)
+			}
+		}
+	}
+
+	if len(contents) == 0 {
+		return baseRules
+	}
+	instructionsBlock := strings.Join(contents, "\n\n")
+	if baseRules == "" {
+		return "Project/user rules:\n\n" + instructionsBlock + "\n"
+	}
+	return strings.TrimRight(baseRules, "\n") + "\n\n" + instructionsBlock + "\n"
 }

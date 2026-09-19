@@ -349,7 +349,7 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 		// are real context in ordinary use and an unfair advantage in a
 		// comparison, and either way the reader should know which they
 		// are getting.
-		loop.WorkspaceRules = workspaceRules(e)
+		loop.WorkspaceRules = workspaceRules(e, cfg)
 		// A one-shot run works in the directory it was started in: there
 		// is no client to name another one later, so the start directory
 		// is both the default workspace and the project the assets come

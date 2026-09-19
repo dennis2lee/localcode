@@ -395,6 +395,13 @@ func taskDepthFromContext(ctx context.Context) int {
 	return d
 }
 
+func (tm *TaskManager) subagentDepthLimit() int {
+	if tm == nil || tm.loop == nil || tm.loop.Config == nil {
+		return maxTaskDepth
+	}
+	return tm.loop.Config.SubagentDepthLimit()
+}
+
 // SpawnSync runs agentName synchronously in a new child session under
 // parentSessionID and returns its final answer text once the turn
 // completes. Unlike Spawn (fire-and-forget, polled via task.status

@@ -277,6 +277,11 @@ func TestMergeFieldsGuard(t *testing.T) {
 		// The TUI's scrollbar: a project that says nothing keeps the
 		// global answer, and one that answers turns it either way.
 		"Mouse": true,
+		// opencode-compatible free keys: default role, prompt instruction
+		// files/patterns, and maximum delegation depth.
+		"DefaultAgent":  true,
+		"Instructions":  true,
+		"SubagentDepth": true,
 	}
 	intentionallyNotMerged := map[string]bool{}
 
