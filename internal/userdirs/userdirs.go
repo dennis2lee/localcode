@@ -70,6 +70,19 @@ type Root struct {
 	// Chosen is the bare name of the root (".claude"), for saying where
 	// things came from.
 	Chosen string
+	// Shadowed names the roots further down Order that exist and hold
+	// something — a skills or a commands directory — and lost anyway.
+	//
+	// Empty almost always, and the exception is the arrangement this
+	// project has just started encouraging. Reading a config written for
+	// opencode makes a repository carrying both .opencode and .localcode
+	// ordinary rather than odd, and .opencode wins: a person who ran
+	// opencode once in a repository of their own then finds their
+	// .localcode/skills silently unread, with nothing on screen tying the
+	// two together. First-wins is still the rule — two half-loaded sets
+	// of same-named commands would be worse — but losing is worth saying
+	// out loud when there was something there to lose.
+	Shadowed []string
 }
 
 // At resolves the root for skills and custom commands under dir, which is
@@ -80,22 +93,43 @@ type Root struct {
 // all — the answer is .localcode, so the paths point where a person
 // following the documentation would put their first skill.
 func At(dir string) Root {
-	for _, name := range Order {
+	for i, name := range Order {
 		root := filepath.Join(dir, name)
 		if isDir(root) {
-			return rootAt(root, name)
+			return rootAt(root, name, shadowedBy(dir, Order[i+1:]))
 		}
 	}
 	last := Order[len(Order)-1]
-	return rootAt(filepath.Join(dir, last), last)
+	return rootAt(filepath.Join(dir, last), last, nil)
 }
 
-func rootAt(path, name string) Root {
+// shadowedBy is the roots among rest that exist and have assets in them.
+//
+// Existing is not enough to be worth a word: a bare .localcode holding
+// only a config.json loses nothing by losing, and saying so on every
+// start would teach people to ignore the line. Having a skills or a
+// commands directory in it is the case where something went unread.
+func shadowedBy(dir string, rest []string) []string {
+	var out []string
+	for _, name := range rest {
+		root := filepath.Join(dir, name)
+		if !isDir(root) {
+			continue
+		}
+		if isDir(filepath.Join(root, "skills")) || isDir(commandsDir(root)) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func rootAt(path, name string, shadowed []string) Root {
 	return Root{
 		Path:     path,
 		Skills:   filepath.Join(path, "skills"),
 		Commands: commandsDir(path),
 		Chosen:   name,
+		Shadowed: shadowed,
 	}
 }
 
