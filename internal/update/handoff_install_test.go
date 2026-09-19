@@ -40,7 +40,7 @@ func TestOpenBinaryReadsTheWindowsZip(t *testing.T) {
 	body := []byte("MZ this stands in for an exe")
 	path := zipWith(t, "localcode.exe", body)
 
-	r, done, err := openBinary(path)
+	r, _, done, err := openBinary(path)
 	if err != nil {
 		t.Fatalf("openBinary: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestOpenBinaryReadsTheWindowsZip(t *testing.T) {
 
 func TestOpenBinaryRefusesAZipWithoutTheBinary(t *testing.T) {
 	path := zipWith(t, "README.txt", []byte("not it"))
-	if _, _, err := openBinary(path); err == nil || !strings.Contains(err.Error(), "no localcode binary") {
+	if _, _, _, err := openBinary(path); err == nil || !strings.Contains(err.Error(), "no localcode binary") {
 		t.Errorf("a zip without localcode.exe was opened: %v", err)
 	}
 }
