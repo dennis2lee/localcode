@@ -60,6 +60,8 @@
   "//default_profile": "The profile your own turns run on: the model that talks to you and, with smart_agent on, decides what to delegate. An agent with no profile of its own falls back to this one.",
   "default_profile": "smart-deep",
   "//default_agent": "Default agent role to answer as when --agent is omitted on the command line. An explicitly typed --agent always takes precedence. Must name an entry in agents, or general-purpose. See docs/USAGE.md.",
+  "//shell": "The program bash tool calls run under. Default: sh, or cmd.exe on a Windows box with no sh. Naming a non-POSIX shell turns bash allow rules into prompts.",
+  "shell": "/bin/bash",
   "default_agent": "general-purpose",
   "//smart_agent": "The orchestration switch, and the one setting in this file that is not at its shipped default: it is off in localcode and on here, because this file is also a worked setup. On, the session's own model becomes an orchestrator with six built-in specialist sub-agents (explore, librarian, oracle, plan, implement, verify), each routed to whichever profile above suits it, and it also turns on the fallback chains above, the turn log in ~/.localcode/trace/, the prompt-cache markers and the credential and workspace guards. It costs what the ordinary single-agent path does not: every delegation is a second model call against a second context. Set it to false for the shipped behaviour. \"/smart-agent\" toggles it and writes the change back here, as does the settings window and \"/config smart_agent on|off\". See docs/USAGE.md.",
   "smart_agent": true,

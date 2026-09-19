@@ -279,6 +279,9 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"Mouse": true,
 		// opencode-compatible free keys: default role, prompt instruction
 		// files/patterns, and maximum delegation depth.
+		// The shell a command runs under: a project that names one means
+		// its own, and one that says nothing keeps the global answer.
+		"Shell":         true,
 		"DefaultAgent":  true,
 		"Instructions":  true,
 		"SubagentDepth": true,

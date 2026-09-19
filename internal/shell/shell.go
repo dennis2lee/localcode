@@ -47,20 +47,68 @@ type resolved struct {
 }
 
 var (
-	once   sync.Once
-	active resolved
+	mu         sync.Mutex
+	active     resolved
+	resolvedOK bool
+	configured string
 )
 
+// Configure names the shell every command runs under, which is what the
+// config's "shell" key says and "" when it says nothing.
+//
+// Called at startup before anything runs a command, and again when the
+// config is reloaded. It clears what was resolved rather than resolving
+// now, so a process that never runs a shell command never looks one up.
+//
+// The value travels no further than this package. What it changes outside
+// it is one question — whether the shell speaks POSIX — and IsPOSIX is how
+// that is asked, because the answer decides whether a bash permission rule
+// means what it appears to mean. See internal/config's resolveShellCommand.
+func Configure(path string) {
+	mu.Lock()
+	defer mu.Unlock()
+	if path == configured && resolvedOK {
+		return
+	}
+	configured = path
+	resolvedOK = false
+}
+
 func current() resolved {
-	once.Do(func() {
-		active = resolve(runtime.GOOS, exec.LookPath, os.Getenv, fileExists)
-	})
+	mu.Lock()
+	defer mu.Unlock()
+	if !resolvedOK {
+		active = resolve(runtime.GOOS, configured, exec.LookPath, os.Getenv, fileExists)
+		resolvedOK = true
+	}
 	return active
 }
 
+// IsPOSIX reports whether the shell commands run under speaks POSIX
+// syntax. False for cmd.exe, and for anything named by the config that is
+// not a shell this knows to be POSIX.
+//
+// Exported because a permission rule for the bash tool is decided by
+// splitting a command at POSIX operators, and that split is only sound for
+// a shell that reads them the POSIX way. The caller that asks is the one
+// that would otherwise allow a second command nobody looked at.
+func IsPOSIX() bool { return current().posix }
+
 // resolve picks the shell for goos. Its collaborators are parameters so
 // the Windows paths are testable from any OS.
-func resolve(goos string, lookPath func(string) (string, error), getenv func(string) string, exists func(string) bool) resolved {
+func resolve(goos, configured string, lookPath func(string) (string, error), getenv func(string) string, exists func(string) bool) resolved {
+	// What the config named, when it named one. Taken as given rather than
+	// searched for: an absolute path means that file, and a bare name means
+	// whatever PATH finds, which is what exec resolves anyway.
+	//
+	// Whether it is POSIX is decided by its name, from a list, and anything
+	// not on the list is treated as not POSIX. That is the safe direction:
+	// a shell wrongly called POSIX makes a bash permission rule mean less
+	// than it appears to, and a shell wrongly called non-POSIX only makes
+	// localcode ask more often.
+	if configured != "" {
+		return resolved{path: configured, args: shellRunArgs(configured), posix: posixShellName(configured)}
+	}
 	if goos != "windows" {
 		return resolved{path: "sh", args: []string{"-c"}, posix: true}
 	}
@@ -102,6 +150,57 @@ func fileExists(p string) bool {
 // enough for a process that is dying to finish dying, and short enough
 // that Esc feels like it did something.
 const killGrace = time.Second
+
+// posixShellNames are the shells whose command line this repository knows
+// to read the POSIX way: one string after -c, with ; && || | & separating
+// commands and \\ escaping the next character.
+//
+// A list rather than a guess, because the consequence of being wrong runs
+// one way. internal/config splits a bash command at those operators and
+// requires every piece to be permitted; under a shell that separates
+// commands differently — cmd.exe, where \\ is not an escape and ^ is —
+// the split is not the shell's, and a piece nobody looked at can run.
+var posixShellNames = []string{"sh", "bash", "dash", "ash", "ksh", "mksh", "zsh", "busybox"}
+
+// shellBase is the program name out of a configured shell path: the part
+// after the last separator, lower-cased, with any .exe removed.
+//
+// Both separators, not the host's. A config file is written on one machine
+// and read on another — a repository's .localcode/config.json is committed
+// and checked out on Windows and on Linux alike — so "C:\Program
+// Files\Git\bin\bash.exe" has to answer "bash" wherever it is read.
+// filepath.Base answers that only on Windows, and on Linux returns the
+// whole string, which would make the shell unrecognised and every bash
+// allow rule a prompt. Deciding it here rather than asking the host is the
+// same lesson this repository has paid for in splitDoubleStarSep and
+// skillSeparator.
+func shellBase(path string) string {
+	if i := strings.LastIndexAny(path, `/\`); i >= 0 {
+		path = path[i+1:]
+	}
+	return strings.TrimSuffix(strings.ToLower(path), ".exe")
+}
+
+// posixShellName reports whether a shell path names one of them.
+func posixShellName(path string) bool {
+	base := shellBase(path)
+	for _, name := range posixShellNames {
+		if base == name {
+			return true
+		}
+	}
+	return false
+}
+
+// shellRunArgs is the flag that makes a named shell run one command
+// string. Every shell in use takes -c except the two Windows ones.
+func shellRunArgs(path string) []string {
+	base := shellBase(path)
+	if base == "cmd" || base == "command" {
+		return []string{"/c"}
+	}
+	return []string{"-c"}
+}
 
 // Command builds an exec.Cmd that runs script under the resolved shell,
 // arranged so that cancelling ctx actually ends the command.

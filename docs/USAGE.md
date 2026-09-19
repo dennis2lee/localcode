@@ -299,6 +299,7 @@ Use placeholders for portable configuration without embedded secrets. [`localcod
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. |
 | `default_agent` | Default agent role when `--agent` is omitted. An explicitly passed `--agent` flag overrides it. Must resolve to an entry in `agents`, or `general-purpose`. See [Default agent](#default-agent). |
 | `instructions` | Additional instruction files and glob patterns appended to workspace rules. Relative paths resolve against the project directory and must remain within it. Remote addresses are refused at load. See [Additional instruction files](#additional-instruction-files). |
+| `shell` | The program every bash tool call, hook and custom command runs under. Unset means `sh`, or on a Windows machine with no `sh` installed, `cmd.exe`. Naming a shell localcode does not know to be POSIX turns every bash `allow` rule into a prompt, because the rule is decided by splitting the command at POSIX operators and that split is only the shell's where the shell reads them the POSIX way. See [Naming the shell](#naming-the-shell). |
 | `subagent_depth` | Maximum nesting depth for subagent delegation. Unset means 3, which is the limit localcode has always had. 1 lets a session delegate but stops a subagent from delegating again, and 0 turns delegation off. opencode defaults this key to 1, so a file written there that does not set it means something different here. See [Subagent delegation depth](#subagent-delegation-depth). |
 | `max_concurrent_tasks` | Maximum concurrent background tasks. Default: 1. Synchronous `Task` calls do not consume slots. Provider-specific limits are acquired first so waiting on one endpoint does not occupy a daemon-wide slot. |
 | `mcp_servers` | Same shape as Claude Code's `.mcp.json`, so existing entries copy over directly |
@@ -1835,6 +1836,15 @@ Delegation deeper than 3 levels is refused automatically, so agents cannot recur
 ### Default agent
 
 `default_agent` sets the default agent role when `--agent` is omitted on the command line. An explicit `--agent` flag overrides this setting. The value must resolve to an entry in `agents`, or `general-purpose`. Configuration validation rejects unrecognized agent names at startup.
+
+
+#### Naming the shell
+
+`shell` names the program that runs every bash tool call, every hook and every custom command. Leave it out and localcode uses `sh`, which is what it has always used; on Windows it looks for a POSIX `sh` first, then Git for Windows' bash, and falls back to `cmd.exe` only when neither is installed.
+
+Naming a shell changes how a bash permission rule is read, and this is the part worth knowing before setting it. A rule for the `bash` tool is decided by splitting the command line at `;`, `&&`, `||`, `|` and `&`, and requiring every piece to be permitted on its own. That is what keeps an `allow` rule for `git *` from also allowing `git status && rm -rf ~`. The split reads the command the way a POSIX shell does, including a backslash escaping whatever follows it.
+
+Under a shell that reads the line differently the pieces are not the shell's pieces. In `cmd.exe` a backslash escapes nothing and `&` still separates commands, so `git status \& rm -rf /` is one piece here and two commands there. localcode therefore turns an `allow` into an `ask` whenever the shell is not one it knows to be POSIX — `sh`, `bash`, `dash`, `ash`, `ksh`, `mksh`, `zsh` or `busybox`. A `deny` is unaffected: it needs one piece to match rather than all of them. This applies to the `cmd.exe` fallback on Windows as well, whether or not `shell` is set.
 
 ### Subagent delegation depth
 

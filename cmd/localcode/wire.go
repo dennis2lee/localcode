@@ -19,6 +19,7 @@ import (
 	"localcode/internal/provider"
 	"localcode/internal/rules"
 	"localcode/internal/session"
+	"localcode/internal/shell"
 	"localcode/internal/skills"
 	"localcode/internal/tools"
 	"localcode/internal/trace"
@@ -85,6 +86,12 @@ func buildDaemon(ctx context.Context, configPath string, progress func(string)) 
 	// transport a second time, and egress.Install is idempotent for that
 	// reason.
 	egress.Install(cfg.EgressPolicy())
+
+	// Before anything runs a command, and before the first permission is
+	// decided: whether the shell is POSIX is what decides whether a bash
+	// allow rule can be trusted, and a rule resolved against the wrong
+	// answer is the failure this exists to prevent.
+	shell.Configure(cfg.Shell)
 
 	progress("opening model providers")
 	providers, err := buildProviders(ctx, cfg, e)

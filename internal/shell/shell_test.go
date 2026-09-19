@@ -27,7 +27,7 @@ func winEnv(name string) string {
 }
 
 func TestResolveUnixIsShUnchanged(t *testing.T) {
-	got := resolve("linux", noLookPath, noEnv, noFile)
+	got := resolve("linux", "", noLookPath, noEnv, noFile)
 	if got.path != "sh" || len(got.args) != 1 || got.args[0] != "-c" || !got.posix {
 		t.Errorf("resolve(linux) = %+v, want plain sh -c — non-Windows behavior must not change", got)
 	}
@@ -42,7 +42,7 @@ func TestResolveWindowsPrefersShOnPath(t *testing.T) {
 		}
 		return "", errors.New("not found")
 	}
-	got := resolve("windows", look, winEnv, noFile)
+	got := resolve("windows", "", look, winEnv, noFile)
 	if !strings.HasSuffix(got.path, "sh.exe") || !got.posix {
 		t.Errorf("resolve(windows, sh on PATH) = %+v, want the PATH sh.exe", got)
 	}
@@ -53,7 +53,7 @@ func TestResolveWindowsPrefersShOnPath(t *testing.T) {
 func TestResolveWindowsFindsGitBashOffPath(t *testing.T) {
 	bash := filepath.Join(`C:\Program Files`, "Git", "bin", "bash.exe")
 	exists := func(p string) bool { return p == bash }
-	got := resolve("windows", noLookPath, winEnv, exists)
+	got := resolve("windows", "", noLookPath, winEnv, exists)
 	if got.path != bash || !got.posix {
 		t.Errorf("resolve(windows, git bash off PATH) = %+v, want %s", got, bash)
 	}
@@ -64,7 +64,7 @@ func TestResolveWindowsFindsGitBashOffPath(t *testing.T) {
 // cases (git, go, simple pipes) and Notice() warns the model about the
 // rest.
 func TestResolveWindowsFallsBackToCmd(t *testing.T) {
-	got := resolve("windows", noLookPath, winEnv, noFile)
+	got := resolve("windows", "", noLookPath, winEnv, noFile)
 	if got.path != `C:\Windows\System32\cmd.exe` || len(got.args) != 1 || got.args[0] != "/c" {
 		t.Errorf("resolve(windows, nothing found) = %+v, want ComSpec /c", got)
 	}
@@ -74,7 +74,7 @@ func TestResolveWindowsFallsBackToCmd(t *testing.T) {
 }
 
 func TestResolveWindowsCmdWithoutComSpec(t *testing.T) {
-	got := resolve("windows", noLookPath, noEnv, noFile)
+	got := resolve("windows", "", noLookPath, noEnv, noFile)
 	if got.path != "cmd" {
 		t.Errorf("resolve(windows, empty env) = %+v, want bare \"cmd\"", got)
 	}
