@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.136.0
+
+**Fixed**
+
+* **The desktop window on Windows could update itself into the terminal interface, permanently.** A release archive carries the console `localcode.exe` and only ever that — the window is CGo, built by CI, and ships in the MSI alone — and a startup update wrote that file over whatever binary the process was started from. Under the window that is `localcode-gui.exe`. Nothing compared the two, so the file answering to the window's name stopped opening a window: it reported the new version correctly and started the terminal interface, every time, with nothing on screen connecting the two. It needed the install folder to be writable, which is an elevated shell or a relaxed ACL; the staged copy carried the same untruth one directory along, since it was named after the running program rather than after what was inside it.
+* The install folder's permissions were never the question. What the file is, is. A window is staged beside rather than replaced now — the Program Files case, arrived at without the permission check — and a console payload is refused any path whose name says it is the window build, which catches the staged copy too.
+* **A binary named `localcode-gui` with no window in it says so.** The explanation was already written and only somebody who typed `--gui` ever saw it; the person who double-clicked the desktop program and got a prompt saw nothing. It goes to stderr, never to stdout, because `<path> version` is parsed whole by the update check.
+* **The release check now reads the thing the file exists for.** It took three facts out of `go version -m` — the version stamp, the commit, a clean tree — and not the build tag, so a console build passed as `GUI_EXE` would have shipped a desktop install with no desktop and passed every check. It reads the tag and the subsystem flag from that same output now, and the subsystem out of the PE header itself, which is the answer that survives the build settings being stripped.
+
 ## v0.135.0
 
 **New**

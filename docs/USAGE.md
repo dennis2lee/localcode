@@ -2688,8 +2688,11 @@ On Windows the same thing happens by a different route, because a Windows proces
 |---|---|---|
 | Portable (the zip, in a folder you can write) | Over the running one, which is moved aside as `.old` | The new binary directly |
 | Under Program Files (the MSI) | Staged in `%LocalAppData%\localcode\bin`, since Program Files needs elevation to write | The installed binary starts, finds the staged copy newer than itself, and hands off to it without asking the network again |
+| The desktop window (`localcode-gui.exe`), wherever it sits | Staged, whatever the folder's permissions allow | The window starts, hands the daemon behind it to the staged copy, and keeps its own shell |
 
-The Program Files copy is brought up to date by the settings window's install button, which runs the MSI with a UAC prompt; nothing runs `msiexec` unasked.
+The window is never written over, and a folder it could write to does not change that. The zip holds the console `localcode.exe` and only ever that, so under the window's name it leaves a file that opens no window: it reports the new version correctly and starts the terminal interface instead, every time, until the MSI puts the real one back. A build named `localcode-gui` that has no window in it now says so on its first line rather than quietly becoming the terminal interface.
+
+The Program Files copy, and the window shell, are brought up to date by the settings window's install button, which runs the MSI with a UAC prompt; nothing runs `msiexec` unasked.
 
 #### `/update`
 
@@ -2714,7 +2717,7 @@ What stays old until you next start localcode is the TUI's own code. It is a thi
 
 Two daemons never write one session at the same time: that is what step 4 is for, and it is why the manifest names a process id — a manifest left by a daemon that died mid-drain is ignored and removed.
 
-On Windows too, with two differences that follow from the platform. A socket crosses to the new process as an inherited handle rather than a descriptor number, which the Go runtime has supported since its `net` package's file support became "unix or windows". And a running `.exe` cannot be written over, but it can be renamed: a portable install (the zip) moves the running binary aside and puts the new one under its name. An install under Program Files cannot be written by this user without elevation, and a handoff must not wait on a dialog, so the new binary is staged under the user's own cache directory (`%LocalAppData%\localcode\bin`) and the successor runs from there; the copy under Program Files stays as it was until the settings window's install button, which runs the MSI, brings it up to date. `/update` on Windows always installs from the zip, for this reason.
+On Windows too, with two differences that follow from the platform. A socket crosses to the new process as an inherited handle rather than a descriptor number, which the Go runtime has supported since its `net` package's file support became "unix or windows". And a running `.exe` cannot be written over, but it can be renamed: a portable install (the zip) moves the running binary aside and puts the new one under its name — the console one, and only over the console one, since the archive has no window build in it to put under `localcode-gui.exe`. An install under Program Files cannot be written by this user without elevation, and a handoff must not wait on a dialog, so the new binary is staged under the user's own cache directory (`%LocalAppData%\localcode\bin`) and the successor runs from there; the copy under Program Files stays as it was until the settings window's install button, which runs the MSI, brings it up to date. `/update` on Windows always installs from the zip, for this reason.
 
 What Windows still cannot do is bring a console program back into the terminal it was started from after a restart. That is exactly why a handoff, where nothing restarts, is worth more there than anywhere: the terminal keeps running through `/update`.
 
