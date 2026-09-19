@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,7 +113,11 @@ func TestInstructionsAbsoluteOutsideProjectRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected absolute path outside project to be rejected, got nil error")
 	}
-	if !strings.Contains(err.Error(), outsideFile) {
+	// Quoted with %%q in the message, so a Windows path arrives with its
+	// separators escaped and the raw string is not a substring of it.
+	// What the refusal has to do is name the entry; this is how it reads
+	// the same on both platforms.
+	if !strings.Contains(err.Error(), fmt.Sprintf("%q", outsideFile)) {
 		t.Errorf("error %q does not name escaping entry %q", err.Error(), outsideFile)
 	}
 }

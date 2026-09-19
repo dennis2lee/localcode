@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"path/filepath"
 )
 
 // MCP transport names. They match the "type" field Claude Code writes in
@@ -232,7 +231,7 @@ func (c MCPServerConfig) Validate() error {
 		// running. Silently resolving against that would start the server
 		// in a directory the file never named, so the file is asked to say
 		// which one it means.
-		if c.Cwd != "" && !filepath.IsAbs(c.Cwd) {
+		if c.Cwd != "" && !absolutePath(c.Cwd) {
 			return fmt.Errorf(`"cwd" %q must be an absolute path`, c.Cwd)
 		}
 		if c.Command == "" {
