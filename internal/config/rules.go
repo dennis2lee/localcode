@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -58,22 +59,75 @@ func ValidDecision(d Decision) bool {
 
 // PermissionRule pattern-matches a call's "subject" (a bash command, a
 // file path — whatever a tool exposes as pattern-matchable; see
-// tools.PermissionSubject) against Match, an opencode-style glob ("*"
-// matches any run of characters, "?" matches exactly one).
+// tools.PermissionSubject) against Match using localcode's globMatch.
+// Note that Match is NOT an opencode-style or standard doublestar glob:
+// here, "*" matches any run of characters INCLUDING the path separator "/",
+// while "?" matches exactly one character. Localcode's secret guard
+// (secretPatterns) strictly depends on "*" crossing path separators (e.g.,
+// "*.env" catching "config/.env", "*.ssh/*" catching nested ssh keys);
+// changing this to doublestar semantics would disable shipped secret guards.
 type PermissionRule struct {
 	Match    string   `json:"match"`
 	Decision Decision `json:"decision"`
 }
 
 // ToolPermission is the value of one entry in Config.Permissions. Its JSON
-// form is either a bare decision string (applies to every call of that
-// tool regardless of subject) or an array of PermissionRule, matched in
-// array order with the last match winning — ordered explicitly (rather
-// than opencode's object-of-patterns, whose key order Go's JSON decoder
-// doesn't preserve into a map) so "last match wins" is unambiguous.
+// form can be a bare decision string (applies to every call of that tool),
+// an array of PermissionRule matched in array order with last match winning,
+// or an opencode-style object of pattern:decision rules (e.g.
+// {"src/*.go": "allow", "*": "deny"}).
 type ToolPermission struct {
 	Flat  Decision
 	Rules []PermissionRule
+}
+
+// decodePatternObject walks raw JSON bytes of an object-of-patterns using
+// json.Decoder to preserve source file order rather than decoding into a
+// Go map (which randomizes key order). OpenCode's own documentation establishes
+// that pattern rules are evaluated with last-matching-rule-winning precedence,
+// matching localcode's array semantics; preserving file order therefore maintains
+// exact semantic equivalence.
+func decodePatternObject(data []byte) ([]PermissionRule, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return nil, fmt.Errorf("expected '{'")
+	}
+	var rules []PermissionRule
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		pattern, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("expected string pattern key")
+		}
+		var decision string
+		if err := dec.Decode(&decision); err != nil {
+			return nil, err
+		}
+		rules = append(rules, PermissionRule{
+			Match:    pattern,
+			Decision: Decision(decision),
+		})
+	}
+	tok, err = dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok = tok.(json.Delim)
+	if !ok || delim != '}' {
+		return nil, fmt.Errorf("expected '}'")
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("unexpected trailing data")
+	}
+	return rules, nil
 }
 
 func (t *ToolPermission) UnmarshalJSON(data []byte) error {
@@ -83,10 +137,36 @@ func (t *ToolPermission) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	var rules []PermissionRule
-	if err := json.Unmarshal(data, &rules); err != nil {
-		return fmt.Errorf("permission rule must be a decision string or an array of {\"match\",\"decision\"}: %w", err)
+	if err := json.Unmarshal(data, &rules); err == nil {
+		t.Rules = rules
+		return nil
 	}
-	t.Rules = rules
+	if objRules, err := decodePatternObject(data); err == nil {
+		t.Rules = objRules
+		return nil
+	}
+	return fmt.Errorf("permission rule must be a decision string or an array of {\"match\",\"decision\"}: invalid permission %s", string(data))
+}
+
+// Permissions is the named map type for Config.Permissions. It accepts
+// either a full object mapping tool names (or aliases, "*", or "mcp__*" glob)
+// to ToolPermission, or a bare decision string ("ask", "allow", "deny") which
+// localcode expands into a single "*" fallback entry. Any other shape errors.
+type Permissions map[string]ToolPermission
+
+func (p *Permissions) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*p = Permissions{
+			"*": ToolPermission{Flat: Decision(s)},
+		}
+		return nil
+	}
+	var m map[string]ToolPermission
+	if err := json.Unmarshal(data, &m); err != nil {
+		return fmt.Errorf("permission must be a decision string or an object of tool rules: %w", err)
+	}
+	*p = Permissions(m)
 	return nil
 }
 
@@ -204,6 +284,146 @@ func encodePermissions(block map[string]json.RawMessage, perms map[string]ToolPe
 	return nil
 }
 
+// RegisteredToolNames lists localcode's registered tool names exactly, so
+// Validate can tell a permission rule for a tool from a typo.
+//
+// A copy, and it has to be one: the tools live in internal/tools and
+// internal/agent, and both of those import this package, so reading the
+// real registry from here is a cycle. What keeps a copy honest is a test
+// in the one package that imports both — see
+// cmd/localcode/release_permission_roster_test.go, which builds the
+// daemon's registry and fails when a tool it registers is not a
+// permission key this package accepts. Without that, adding a tool
+// tomorrow makes a correct rule for it a startup error.
+var RegisteredToolNames = []string{
+	"bash",
+	"check",
+	"edit",
+	"glob",
+	"grep",
+	"read_file",
+	"write_file",
+	"Skill",
+	"Task",
+	"TaskBackground",
+	"TaskCollect",
+	"Schedule",
+	"Orchestrate",
+	"Answer",
+	"session_read",
+	"Command",
+	"Verdict",
+	"Debate",
+	"update_plan",
+	"ask_user",
+}
+
+// IgnoredOpencodeTools lists opencode tools that localcode does not
+// implement. A rule for one of these is vacuous in localcode because
+// the tool cannot be called; accepting them allows an opencode.json
+// configuration to load without error.
+var IgnoredOpencodeTools = []string{
+	"webfetch",
+	"websearch",
+	"todowrite",
+	"question",
+	"lsp",
+	"doom_loop",
+	"external_directory",
+	"list",
+}
+
+// ToolAliases maps an opencode permission key to the localcode tool names
+// it covers. Opencode groups permissions broadly (e.g. "edit" covers all
+// file modifications, which in localcode are split between "edit" and
+// "write_file").
+var ToolAliases = map[string][]string{
+	"edit":  {"edit", "write_file"},
+	"read":  {"read_file"},
+	"task":  {"Task", "TaskBackground", "TaskCollect"},
+	"skill": {"Skill"},
+	"bash":  {"bash"},
+	"glob":  {"glob"},
+	"grep":  {"grep"},
+}
+
+// aliasesFor returns all opencode permission keys in ToolAliases that cover
+// localcode's toolName.
+func aliasesFor(toolName string) []string {
+	var aliases []string
+	for alias, tools := range ToolAliases {
+		for _, t := range tools {
+			if t == toolName {
+				aliases = append(aliases, alias)
+				break
+			}
+		}
+	}
+	return aliases
+}
+
+// stricterDecision returns the stricter of two decisions:
+// deny > ask > allow.
+func stricterDecision(a, b Decision) Decision {
+	if a == DecisionDeny || b == DecisionDeny {
+		return DecisionDeny
+	}
+	if a == DecisionAsk || b == DecisionAsk {
+		return DecisionAsk
+	}
+	return DecisionAllow
+}
+
+// ValidPermissionKey reports whether name is an accepted permission key:
+// a registered localcode tool name, an alias table key, "*", an "mcp__*"
+// pattern, or a known-but-unimplemented opencode tool.
+func ValidPermissionKey(name string) bool {
+	if name == "*" || strings.HasPrefix(name, "mcp__") {
+		return true
+	}
+	for _, tool := range RegisteredToolNames {
+		if name == tool {
+			return true
+		}
+	}
+	if _, ok := ToolAliases[name]; ok {
+		return true
+	}
+	for _, ignored := range IgnoredOpencodeTools {
+		if name == ignored {
+			return true
+		}
+	}
+	return false
+}
+
+// AcceptedPermissionKeys returns a comma-separated list of all accepted
+// permission keys for error messages.
+func AcceptedPermissionKeys() string {
+	seen := make(map[string]bool)
+	var list []string
+	for _, name := range RegisteredToolNames {
+		if !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	for name := range ToolAliases {
+		if !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	for _, name := range IgnoredOpencodeTools {
+		if !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	list = append(list, "*", "mcp__*")
+	return strings.Join(list, ", ")
+}
+
 // BashToolName is the one tool whose subject is a shell command rather
 // than a plain string, so its permission subject needs to be taken apart
 // before matching. See ResolvePermission.
@@ -213,9 +433,11 @@ const BashToolName = "bash"
 // automatically, must ask the user, or is denied outright. subject is
 // whatever pattern-matchable string the tool exposes for this call (e.g.
 // the bash command, or a file path) — "" if the tool has none. Precedence:
-// an exact rule for toolName, then a "*" fallback rule, then
-// staticRequiresPermission (the tool's own hardcoded default), preserving
-// exactly today's behavior for anyone with no "permission" config at all.
+// an exact rule for toolName, then any opencode aliases covering toolName
+// (strictest decision wins), then a "*" fallback rule, then Smart Agent's
+// secretGuard, then builtinDefault, then staticRequiresPermission (the tool's
+// own hardcoded default), preserving exactly today's behavior for anyone with
+// no "permission" config at all.
 //
 // The bash tool is special-cased: its subject is a shell command, so one
 // "subject" can actually be several commands glued together, and matching
@@ -256,11 +478,43 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 	c.permMu.RLock()
 	tp, ok := c.Permissions[toolName]
 	fallback, hasFallback := c.Permissions["*"]
+	// Gathered under the same lock as the two above, and used below only
+	// if the tool's own rule had nothing to say about this subject.
+	var (
+		aliasDecision Decision
+		hasAliasMatch bool
+	)
+	for _, alias := range aliasesFor(toolName) {
+		if atp, hasAlias := c.Permissions[alias]; hasAlias {
+			if d, matched := atp.resolve(subject); matched {
+				if !hasAliasMatch {
+					aliasDecision, hasAliasMatch = d, true
+				} else {
+					aliasDecision = stricterDecision(aliasDecision, d)
+				}
+			}
+		}
+	}
 	c.permMu.RUnlock()
+
+	// The tool's own name first, and it wins outright when it matches:
+	// somebody who wrote "write_file" meant write_file, whatever an
+	// opencode key covering it also says.
+	//
+	// Only when it matches, though. A rule that exists and does not match
+	// this subject has expressed no opinion about it, and treating that as
+	// "the explicit rule has spoken" would drop the alias — which is how
+	// {"write_file": [{"match":"*.tmp","decision":"allow"}], "edit": "deny"}
+	// would come to allow writing everything that is not a .tmp. An alias
+	// can only ever narrow (see stricterDecision), so consulting it here
+	// cannot widen anything.
 	if ok {
 		if d, matched := tp.resolve(subject); matched {
 			return d
 		}
+	}
+	if hasAliasMatch {
+		return aliasDecision
 	}
 	if hasFallback {
 		if d, matched := fallback.resolve(subject); matched {
