@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.137.0
+
+Reading a config file written for opencode, which is the first half of that work: where the two tools mean the same thing, localcode now accepts opencode's spelling, and where they mean different things it says so rather than guessing. Nothing an existing config.json says changes meaning.
+
+**Fixed**
+
+* **`"permission": {"edit": "deny"}` left `write_file` wide open.** opencode's `edit` covers every file modification; localcode's is one tool of two. The file said the agent could not modify files and the model overwrote anything it liked, with nothing on screen or in a log to connect the two. opencode's names reach localcode's tools through a table now, and the table can only narrow — where more than one entry covers a tool the strictest wins, and a rule written under localcode's own name beats any of them when it matches.
+* **A bash `allow` rule was trusted under a shell that does not split commands the way it was decided.** The rule is resolved by cutting the command line at POSIX operators and requiring every piece to be permitted, which is what keeps `git *` from also allowing `git status && rm -rf ~`. Under `cmd.exe` a backslash escapes nothing and `&` still separates, so `git status \& rm -rf /` is one piece to the splitter and two commands to the shell, and the second ran unread. This needed no configuration to reach: it is any Windows machine with no `sh` installed. An allow is now trusted only where the split is the shell's, and becomes an ask everywhere else. Deny is untouched, and `skip_permissions` does not reach it.
+* **`{file:...}` became the value.** It is opencode's placeholder and localcode does not expand it, so `"api_key": "{file:~/.keys/anthropic}"` was used as an API key exactly as written, and the same text in an MCP header was sent to that server. Refused by name now, with the working spelling in the message. `{env:NAME}` is unchanged and is already the same on both sides.
+* **A server switched off with `"enabled": false` started anyway**, and `cwd`, `timeout` and `environment` were parsed and dropped. An MCP entry written for opencode now starts the server it describes, and an unrecognised `type` is refused rather than guessed at from whether a URL is present.
+* **`"autoupdate": false` was heard as saying nothing**, and saying nothing means on — so a file whose whole purpose was to stop the binary replacing itself did not. Air-gapped and pinned installs are exactly where that file gets written.
+* **A model id with the provider on the front of it** — `"anthropic/claude-sonnet-4-5"`, which is how opencode names a model — loaded, validated, and was sent with the prefix still attached. Refused where the prefix names a provider the config defines; a slash in an ordinary model id, which is how OpenAI-compatible servers name their own, is left alone.
+
+**New**
+
+* **Both of opencode's other spellings of `permission` are accepted**: a bare `"ask"` at the root, and an object of patterns per tool. Both used to stop localcode starting, and the object is most of what opencode's own documentation shows. The object keeps its file order by being walked rather than decoded into a map, which was the objection the array form was chosen over.
+* **A permission key that names nothing is refused**, with the list of what is accepted — so a typo in a security rule is a message at startup rather than a rule that quietly matches nothing. Keys naming opencode tools localcode has no equivalent of are listed by name and accepted as the vacuous rules they are.
+* **`shell`, `default_agent`, `instructions` and `subagent_depth`**, with opencode's spellings, because each is a thing worth having and the name was free. `instructions` refuses an entry that leaves the project or names a URL: instruction files are text the model follows. `subagent_depth` unset is 3, the limit that has always been enforced; opencode's own default is 1, which is written down where somebody moving a file between the two will read it.
+
 ## v0.136.0
 
 **Fixed**
