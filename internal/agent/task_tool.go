@@ -34,6 +34,13 @@ func NewTaskTool(manager *TaskManager, agents func(context.Context) map[string]c
 	return TaskTool{manager: manager, agents: agents}
 }
 
+func (t TaskTool) depthLimit() int {
+	if t.manager == nil {
+		return maxTaskDepth
+	}
+	return t.manager.subagentDepthLimit()
+}
+
 func (t TaskTool) Name() string { return "Task" }
 
 // Both halves of the schema name the agents this tool may be pointed at,
@@ -78,9 +85,10 @@ func (t TaskTool) Execute(ctx context.Context, input json.RawMessage) tools.Resu
 	}
 
 	depth := taskDepthFromContext(ctx)
-	if depth >= maxTaskDepth {
+	limit := t.depthLimit()
+	if depth >= limit {
 		return tools.Result{
-			Content: fmt.Sprintf("max sub-agent delegation depth (%d) reached; refusing to delegate further", maxTaskDepth),
+			Content: fmt.Sprintf("max sub-agent delegation depth (%d) reached; refusing to delegate further", limit),
 			IsError: true,
 		}
 	}

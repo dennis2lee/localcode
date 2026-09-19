@@ -126,17 +126,42 @@ func run() error {
 		tuiLocalConfigPath = *configPath
 		return runTUIClient(*server, *agentName, nil)
 	}
-	// Whether --listen was typed, not just what it holds. An address
-	// somebody asked for by name is a request; the default is a
-	// convention, and a convention can move out of the way when
-	// something else already has the port.
+	agentExplicit := false
 	listenExplicit := false
 	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "agent" {
+			agentExplicit = true
+		}
 		if f.Name == "listen" {
 			listenExplicit = true
 		}
 	})
+	*agentName = determineActiveAgent(*configPath, *agentName, agentExplicit)
 	return runEmbedded(*configPath, *listen, *agentName, listenExplicit)
+}
+
+// determineActiveAgent decides the active agent based on whether --agent was
+// explicitly passed on the CLI, falling back to default_agent from config,
+// and finally the flag's default value.
+func determineActiveAgent(configPath string, agentFlag string, agentExplicit bool) string {
+	if agentExplicit {
+		return agentFlag
+	}
+	return resolveDefaultAgent(configPath, agentFlag)
+}
+
+// resolveDefaultAgent returns default_agent from config when configured,
+// falling back to the flag declaration's default ("general-purpose").
+func resolveDefaultAgent(configPath, fallback string) string {
+	e, err := resolveEnv()
+	if err != nil {
+		return fallback
+	}
+	cfg, err := loadConfig(configPath, e)
+	if err != nil || cfg == nil || cfg.DefaultAgent == "" {
+		return fallback
+	}
+	return cfg.DefaultAgent
 }
 
 // guiNameNote is what a file named for the desktop build says when there

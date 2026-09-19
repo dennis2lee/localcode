@@ -340,6 +340,13 @@ func (t TaskBackgroundTool) InputSchemaFor(ctx context.Context) json.RawMessage 
 	return delegationSchema(agentNamesOf(t.agents(ctx)))
 }
 
+func (t TaskBackgroundTool) depthLimit() int {
+	if t.manager == nil {
+		return maxTaskDepth
+	}
+	return t.manager.subagentDepthLimit()
+}
+
 // RequiresPermission is false for the same reason Task's is: starting a
 // sub-agent has no effect of its own, and every tool it goes on to call
 // is gated by that sub-agent's own permission checks.
@@ -364,9 +371,10 @@ func (t TaskBackgroundTool) Execute(ctx context.Context, input json.RawMessage) 
 	// background delegation would be the way around it: a sub-agent that
 	// cannot call Task could still launch one and never collect it, and
 	// nothing would be waiting to notice.
-	if depth := taskDepthFromContext(ctx); depth >= maxTaskDepth {
+	limit := t.depthLimit()
+	if depth := taskDepthFromContext(ctx); depth >= limit {
 		return tools.Result{
-			Content: fmt.Sprintf("max sub-agent delegation depth (%d) reached; refusing to delegate further", maxTaskDepth),
+			Content: fmt.Sprintf("max sub-agent delegation depth (%d) reached; refusing to delegate further", limit),
 			IsError: true,
 		}
 	}
