@@ -302,6 +302,14 @@ func Connect(ctx context.Context, servers map[string]config.MCPServerConfig, pin
 	sort.Strings(names)
 
 	for _, name := range names {
+		// A server the config switched off is not started, and is not
+		// recorded either: States reports what localcode is running, and
+		// a server nobody asked for belongs in neither that list nor the
+		// warnings. `localcode mcp list` reads the config, so it is still
+		// visible where it should be.
+		if !servers[name].IsEnabled() {
+			continue
+		}
 		if progress != nil {
 			progress(name)
 		}
@@ -445,6 +453,12 @@ func transportFor(sc config.MCPServerConfig) (mcpsdk.Transport, string, error) {
 	switch t := sc.Transport(); t {
 	case config.MCPTransportStdio:
 		cmd := exec.Command(sc.Command, sc.Args...)
+		// Where the server is started, for one that cares — a language
+		// server reading a project's own settings, a script with relative
+		// paths of its own. Absolute by then: config.Validate refuses a
+		// relative one rather than resolve it against whichever directory
+		// this daemon happens to be in.
+		cmd.Dir = sc.Cwd
 		// Several stdio servers at startup means several console windows on
 		// the Windows desktop build without this. See internal/childproc.
 		childproc.Hide(cmd)
@@ -564,6 +578,18 @@ func (t headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // session returns the currently live session for server, if any.
+// timeoutFor is the deadline this server's config asks for on one
+// request, and zero for none — which is every server that has not asked.
+// See config.MCPServerConfig.TimeoutMS for why there is no default.
+func (m *Manager) timeoutFor(server string) time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.servers[server]; ok {
+		return time.Duration(e.config.TimeoutMS()) * time.Millisecond
+	}
+	return 0
+}
+
 func (m *Manager) session(server string) *mcpsdk.ClientSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -692,6 +718,15 @@ func (t mcpTool) Execute(ctx context.Context, input json.RawMessage) tools.Resul
 	session := t.manager.session(t.server)
 	if session == nil {
 		return tools.Result{Content: fmt.Sprintf("mcp server %q is not connected", t.server), IsError: true}
+	}
+
+	// The deadline covers the reconnect-and-retry below as well as the
+	// first attempt, because it is a deadline on the call the model made
+	// rather than on one of the two tries it may take.
+	if d := t.manager.timeoutFor(t.server); d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
 	}
 
 	result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: t.name, Arguments: args})
