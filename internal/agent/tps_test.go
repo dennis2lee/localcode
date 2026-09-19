@@ -74,7 +74,7 @@ func (p paced) writeTo(w http.ResponseWriter) {
 // though the model had been generating the whole time.
 func TestTPSMeasuresGenerationNotWaiting(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paced{prefill: 400 * time.Millisecond, deltas: 10, gap: 20 * time.Millisecond, usageTokens: 200}.writeTo(w)
+		paced{prefill: 1200 * time.Millisecond, deltas: 10, gap: 20 * time.Millisecond, usageTokens: 200}.writeTo(w)
 	}))
 	defer srv.Close()
 
@@ -89,9 +89,18 @@ func TestTPSMeasuresGenerationNotWaiting(t *testing.T) {
 	tps := usageTPS(t, store, "s1")
 
 	// ~200ms of generation for 200 tokens is about 1000/s. Measured over
-	// the whole 600ms request it would be about 333/s. The threshold sits
+	// the whole 1.4s request it would be about 143/s. The threshold sits
 	// between the two, well clear of both.
-	if tps < 600 {
+	//
+	// Well clear because of where this runs. Windows times sleeps against
+	// a ~15.6ms tick, so each 20ms gap can take twice that and the
+	// generation phase arrives at 300-400ms rather than 200ms — which is
+	// the right answer measured coarsely, not the wrong answer. With the
+	// gap alone between the two candidates the margin was seven per cent
+	// and a loaded runner spent it: the rate came out at 445 against a
+	// threshold of 600, and the failure was the clock rather than the
+	// code. The prefill is what separates them, so it carries the margin.
+	if tps < 300 {
 		t.Errorf("tps %.1f: the wait before the first token is still being counted as generation time", tps)
 	}
 }

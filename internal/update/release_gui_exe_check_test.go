@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,16 @@ import (
 // ensure the shipped artifact is genuinely a GUI build: it must reject any
 // binary missing the "gui" tag or windowsgui subsystem flag.
 func TestCheckGUIExeRejectsConsoleBuild(t *testing.T) {
+	// Not on Windows, and the reason is what the script is for rather
+	// than what will not run: check-gui-exe.sh is preflight on the machine
+	// a release is cut from, and that machine builds the MSI with wixl,
+	// which is macOS and Linux only. Windows never runs it. It is also
+	// written for a shell that is not the one a Windows Go test can
+	// assume, which is the same fact from the other side.
+	if runtime.GOOS == "windows" {
+		t.Skip("check-gui-exe.sh runs where a release is packaged, which is never Windows")
+	}
+
 	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "check-gui-exe.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +54,7 @@ func TestCheckGUIExeRejectsConsoleBuild(t *testing.T) {
 		t.Skipf("cannot cross-compile windows/amd64 console build: %v\n%s", err, string(out))
 	}
 
-	checkCmd := exec.Command("/bin/bash", script, version, exe)
+	checkCmd := exec.Command(script, version, exe)
 	checkCmd.Dir = repoRoot
 	var stderr bytes.Buffer
 	checkCmd.Stderr = &stderr
