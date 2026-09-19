@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.138.0
+
+A config file written for [opencode](https://opencode.ai) is read where opencode keeps it, and its spellings work written into a localcode `config.json` too. Nothing an existing config.json says changes meaning: an opencode file is always merged *under* the localcode file of the same scope, and localcode still writes only its own.
+
+**New**
+
+* **The files, in the order each is laid over the one before it:** `~/.config/opencode/opencode.json`, whatever `OPENCODE_CONFIG` names, `~/.localcode/config.json`, `<project>/opencode.json`, `<project>/.localcode/config.json`. Both programs' own precedence survives that interleaving, and it makes the guarantee structural rather than careful. `opencode.jsonc` is found as well; both spellings in one directory is refused, since ordering them would leave one file read by nobody. opencode walks up from the current directory to the nearest git directory to find its project file and this does not — localcode has already decided which directory is the project, and a second opinion would be a way for the two to disagree about which repository is open.
+* **`provider`, `agent` and `model` arrive together, because they only make sense together.** opencode writes a provider as an npm package and a base URL, a model as one `provider/model` string resolved against a catalogue, and an agent as a model plus a prompt; localcode writes a provider as a type and an endpoint it was given, a profile as a provider and that provider's own model id, and an agent as a pointer to a profile. The translation invents nothing: the client comes from the package name, the endpoint from `options.baseURL`, the key from the variable the file names for it, the limits from the `models` block. A `model` whose left half names no provider the file defines is refused, because the only way to answer it would be a catalogue lookup, and localcode reaches models directly. The split is at the first slash and only the first, so `muse/account/muse-glimmer-30b` keeps its own.
+* **`mcp`, `tools`, `compaction.auto`, and the rest of the spellings that mean the same thing.** `mcp` is `mcp_servers`; `tools` with booleans is `permission` with decisions; `compaction.auto` is `auto_compact_enabled`.
+* **What localcode cannot honour is refused at startup, naming the key and saying what will not happen** — `lsp`, `formatter`, `plugin`, `server`, `share`, `snapshot`, `tool_output` and the others. What changes nothing is accepted and named on stderr. A file that is half obeyed should say which half, and "accepted and quietly ignored" is how a safety setting comes to be written down and not enforced.
+
+**Fixed**
+
+* **`{"mcp": …}` loaded with no servers at all.** The MCP entry rules shipped in v0.137.0 and no real opencode.json could reach them, because the block is called `mcp` there and `mcp_servers` here.
+* **`{"tools": {"bash": false}}` loaded and bash ran without asking.** That is how opencode takes a tool away, and it was accepted and ignored — the fail-open direction, in the one key somebody writes when they mean to take something away.
+* **A root that lost with skills in it now says so.** The first of `.claude`, `.opencode`, `.localcode` that exists wins whole and nothing is merged across them, which stays. But reading an opencode config makes a repository carrying both `.opencode` and `.localcode` an ordinary arrangement, and `.opencode` comes first — so running opencode once in your own repository left your `.localcode/skills` unread with only the winner named. The loser is named too now, and only when it had skills or commands in it.
+* **A profile synthesised for one agent no longer becomes a Smart Agent lane.** `bestMatch` classifies by model id and takes the first by name, so an `agent.quick.model` line would have made that model the quick specialist for every grep and build in the roster, and flipped `Solo` with it — which changes what the main model is told. The profile synthesised from the root `model` is not excluded: that one is the file's model.
+* **opencode's `options.baseURL` always carries the version segment**, and localcode's `anthropic` `base_url` is a host root while its `openai-compat` one must end in `/v1`. Copied verbatim into an anthropic provider that was `/v1/v1/messages` — a 404 anybody would read as a dead key or a wrong model name.
+
 ## v0.137.0
 
 Reading a config file written for opencode, which is the first half of that work: where the two tools mean the same thing, localcode now accepts opencode's spelling, and where they mean different things it says so rather than guessing. Nothing an existing config.json says changes meaning.
