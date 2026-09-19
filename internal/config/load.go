@@ -143,6 +143,9 @@ func (c *Config) merge(other *Config) {
 	if other.DefaultProfile != "" {
 		c.DefaultProfile = other.DefaultProfile
 	}
+	if other.Shell != "" {
+		c.Shell = other.Shell
+	}
 	if other.DefaultAgent != "" {
 		c.DefaultAgent = other.DefaultAgent
 	}

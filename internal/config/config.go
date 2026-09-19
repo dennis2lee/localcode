@@ -27,6 +27,18 @@ type Config struct {
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Instructions       []string                   `json:"instructions,omitempty"`
 
+	// Shell is the program every bash tool call, hook and custom command
+	// runs under. Empty is the default: sh on macOS and Linux, and on
+	// Windows whichever POSIX sh is installed, falling back to cmd.exe.
+	//
+	// Naming one that is not a POSIX shell changes more than the syntax
+	// the model has to write. A bash permission rule is decided by
+	// splitting the command at POSIX operators and requiring every piece
+	// to be permitted, and that split is only the shell's where the shell
+	// reads them the POSIX way — so under any other shell an "allow"
+	// becomes an "ask". See resolveShellCommandUnder.
+	Shell string `json:"shell,omitempty"`
+
 	// AutoMemoryEnabled toggles Claude Code-style auto memory (the model
 	// accumulating its own notes across sessions under a per-project
 	// memory directory — see internal/memory). A nil pointer means
@@ -744,6 +756,10 @@ func (c *Config) Validate() error {
 		if _, ok := c.Agents[c.DefaultAgent]; !ok {
 			return fmt.Errorf("default_agent %q not found in agents", c.DefaultAgent)
 		}
+	}
+
+	if c.Shell != "" && strings.TrimSpace(c.Shell) == "" {
+		return fmt.Errorf("shell is blank; leave it out to use the default")
 	}
 
 	if c.SubagentDepth != nil && *c.SubagentDepth < 0 {

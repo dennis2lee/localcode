@@ -18,6 +18,7 @@ import (
 	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/session"
+	"localcode/internal/shell"
 )
 
 // One prompt, one answer, no window.
@@ -256,6 +257,11 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 	if err != nil {
 		return nil, "", nil, err
 	}
+	// The same first move the daemon makes, for the same reason: a bash
+	// permission is decided against whether the shell is POSIX, and a run
+	// that never said which shell it uses would decide it against the
+	// wrong one. See buildDaemon.
+	shell.Configure(cfg.Shell)
 	agentName, err := applyModelChoice(cfg, o)
 	if err != nil {
 		return nil, "", nil, err

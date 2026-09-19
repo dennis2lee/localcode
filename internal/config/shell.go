@@ -3,6 +3,8 @@ package config
 import (
 	"context"
 	"strings"
+
+	"localcode/internal/shell"
 )
 
 // resolveShellCommand resolves a whole bash command line by resolving
@@ -21,6 +23,26 @@ import (
 // ask. A deny still wins over them, so an explicit deny rule cannot be
 // escaped by adding a redirect.
 func (c *Config) resolveShellCommand(ctx context.Context, command string, staticRequiresPermission bool) Decision {
+	return c.resolveShellCommandUnder(ctx, command, staticRequiresPermission, shell.IsPOSIX())
+}
+
+// resolveShellCommandUnder is resolveShellCommand with the one fact about
+// the shell it depends on handed to it, so the non-POSIX case can be run
+// on a machine whose own shell is sh.
+//
+// posix is what makes the splitting below sound. splitShellSegments reads
+// a command the way a POSIX shell does — ; && || | & separate, and a
+// backslash escapes whatever follows — and requires every piece to be
+// permitted. Under a shell that reads it differently the pieces are not
+// the shell's pieces: in cmd.exe a backslash escapes nothing and & still
+// separates, so "git status \& rm -rf /" is one segment here, matches a
+// "git *" rule, and runs as two commands there.
+//
+// So an allow decided by splitting is only trusted where the split is the
+// shell's. Everywhere else it becomes ask — the person sees the command
+// and answers for it. Deny is untouched, because a deny does not depend on
+// the split being right: it needs one piece to match, not all of them.
+func (c *Config) resolveShellCommandUnder(ctx context.Context, command string, staticRequiresPermission, posix bool) Decision {
 	worst := DecisionAllow
 	for _, segment := range splitShellSegments(command) {
 		if segment == "" {
@@ -32,6 +54,14 @@ func (c *Config) resolveShellCommand(ctx context.Context, command string, static
 		case DecisionAsk:
 			worst = DecisionAsk
 		}
+	}
+	if worst == DecisionAllow && !posix {
+		// Not subject to skip_permissions, unlike the construct check
+		// below. That one downgrades a prompt somebody found noisy; this
+		// one is the difference between having read the command and not,
+		// and "run everything without asking" is not an answer to a
+		// question nobody was in a position to ask.
+		return DecisionAsk
 	}
 	if worst == DecisionAllow && hasUnsafeShellConstruct(command) {
 		// skip_permissions reaches this ask too.
