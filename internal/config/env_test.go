@@ -227,7 +227,7 @@ func TestLoadReadsAKeyOutOfTheEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestLoadSaysWhichVariableIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Load(path)
+	_, _, err := Load(path)
 	if err == nil {
 		t.Fatal("a config asking for a variable that is not set loaded anyway")
 	}

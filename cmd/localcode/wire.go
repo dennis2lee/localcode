@@ -640,10 +640,21 @@ func resolvedConfigPath(explicitPath string) (string, error) {
 }
 
 func loadConfig(explicitPath string, e env) (*config.Config, error) {
+	var cfg *config.Config
+	var notes []string
+	var err error
 	if explicitPath != "" {
-		return config.Load(explicitPath)
+		cfg, notes, err = config.Load(explicitPath)
+	} else {
+		cfg, notes, err = config.LoadMerged(e.cwd)
 	}
-	return config.LoadMerged(e.cwd)
+	if err != nil {
+		return nil, err
+	}
+	if len(notes) > 0 {
+		fmt.Fprintf(os.Stderr, "config: ignored keys: %s\n", strings.Join(notes, ", "))
+	}
+	return cfg, nil
 }
 
 // localMouseEnabled reports whether the TUI on this machine takes the

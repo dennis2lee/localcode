@@ -123,13 +123,13 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 	cfg.DefaultProfile = "ghost"
 	writeConfig(t, path, &cfg)
 
-	if _, err := Load(path); err == nil {
+	if _, _, err := Load(path); err == nil {
 		t.Error("expected Load to reject an invalid config")
 	}
 }
 
 func TestLoadMissingFile(t *testing.T) {
-	if _, err := Load("/nonexistent/config.json"); err == nil {
+	if _, _, err := Load("/nonexistent/config.json"); err == nil {
 		t.Error("expected an error loading a nonexistent config file")
 	}
 }
@@ -168,7 +168,7 @@ func TestLoadMergedProjectOverridesGlobal(t *testing.T) {
 	}
 	writeConfig(t, filepath.Join(project, ".localcode", "config.json"), &projectCfg)
 
-	merged, err := LoadMerged(project)
+	merged, _, err := LoadMerged(project)
 	if err != nil {
 		t.Fatalf("LoadMerged: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestLoadMergedOnlyGlobalExists(t *testing.T) {
 	global := validConfig()
 	writeConfig(t, filepath.Join(home, ".localcode", "config.json"), &global)
 
-	merged, err := LoadMerged(project)
+	merged, _, err := LoadMerged(project)
 	if err != nil {
 		t.Fatalf("LoadMerged: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestLoadMergedNeitherExists(t *testing.T) {
 	// alone leaves the test reading the real home there.
 	t.Setenv("USERPROFILE", home)
 
-	if _, err := LoadMerged(project); err == nil {
+	if _, _, err := LoadMerged(project); err == nil {
 		t.Error("expected an error when neither global nor project config exists")
 	}
 }
@@ -329,7 +329,7 @@ func TestLoadMergedCarriesMCPServersPermissionsAutoDelegateAndSkipPermissions(t 
 	}
 	writeConfig(t, filepath.Join(project, ".localcode", "config.json"), &projectCfg)
 
-	merged, err := LoadMerged(project)
+	merged, _, err := LoadMerged(project)
 	if err != nil {
 		t.Fatalf("LoadMerged: %v", err)
 	}

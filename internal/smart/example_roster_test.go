@@ -23,7 +23,7 @@ func TestTheExampleMatchesTheBuiltInRoster(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("config.example.json is missing: %v", err)
 	}
-	cfg, err := config.Load(path)
+	cfg, _, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("config.example.json does not load: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestTheExampleMatchesTheBuiltInRoster(t *testing.T) {
 // And the profiles the example names have to be the ones the roster is
 // routed to, or the file explains a mapping it does not produce.
 func TestTheExampleProfilesRouteAsItSays(t *testing.T) {
-	cfg, err := config.Load(filepath.Join("..", "..", "config.example.json"))
+	cfg, _, err := config.Load(filepath.Join("..", "..", "config.example.json"))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

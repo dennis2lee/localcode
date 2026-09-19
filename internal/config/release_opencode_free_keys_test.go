@@ -202,7 +202,7 @@ func TestLoadMergedOverridesFreeKeys(t *testing.T) {
 	}
 	writeConfig(t, filepath.Join(proj, ".localcode", "config.json"), &projectCfg)
 
-	merged, err := LoadMerged(proj)
+	merged, _, err := LoadMerged(proj)
 	if err != nil {
 		t.Fatalf("LoadMerged: %v", err)
 	}
