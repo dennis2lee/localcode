@@ -97,27 +97,45 @@ func ProfileFor(cfg *config.Config, category string) string {
 		return ""
 	}
 
+	// Filter out synthesised per-agent profiles (opencode:agent:*).
+	// A profile synthesised from one agent's own model belongs to that agent alone.
+	// Letting bestMatch or firstByName consider it would allow a quick-agent
+	// model line to become the quick specialist lane for every grep and build
+	// across the roster, flipping Solo(cfg) and altering what the main model is
+	// told in OrchestrationPrompt and PlanPolicy. opencode:default is not excluded:
+	// it is the file's main model and its default_profile, so treating it like any
+	// other profile is correct.
+	profiles := make(map[string]config.Profile, len(cfg.Profiles))
+	for k, v := range cfg.Profiles {
+		if !strings.HasPrefix(k, "opencode:agent:") {
+			profiles[k] = v
+		}
+	}
+	if len(profiles) == 0 {
+		return ""
+	}
+
 	// The escape hatch, and the documented way to pin this. A profile
 	// named "smart-deep" is somebody saying which model they want the
 	// deep specialists on, and no heuristic should get a vote after that.
-	if _, ok := cfg.Profiles["smart-"+category]; ok {
+	if _, ok := profiles["smart-"+category]; ok {
 		return "smart-" + category
 	}
 
-	if name := bestMatch(cfg.Profiles, category); name != "" {
+	if name := bestMatch(profiles, category); name != "" {
 		return name
 	}
 	for _, next := range fallbacks[category] {
-		if name := bestMatch(cfg.Profiles, next); name != "" {
+		if name := bestMatch(profiles, next); name != "" {
 			return name
 		}
 	}
 	if cfg.DefaultProfile != "" {
-		if _, ok := cfg.Profiles[cfg.DefaultProfile]; ok {
+		if _, ok := profiles[cfg.DefaultProfile]; ok {
 			return cfg.DefaultProfile
 		}
 	}
-	return firstByName(cfg.Profiles)
+	return firstByName(profiles)
 }
 
 // bestMatch returns the first profile, by name, whose model belongs to

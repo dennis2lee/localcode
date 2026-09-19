@@ -125,8 +125,19 @@ func loadOptional(path string) (*Config, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("config %s: %w", path, err)
 	}
+	// Once more, and only for what the normaliser wrote itself: opencode
+	// names the variable holding a key rather than the key, and the
+	// placeholder that turns into is written after the first pass has
+	// already run. See Normalized.MadePlaceholders.
+	finalJSON := norm.JSON
+	if norm.MadePlaceholders {
+		finalJSON, err = expandEnv(finalJSON, osLookup)
+		if err != nil {
+			return nil, nil, fmt.Errorf("config %s: %w", path, err)
+		}
+	}
 	var cfg Config
-	if err := json.Unmarshal(norm.JSON, &cfg); err != nil {
+	if err := json.Unmarshal(finalJSON, &cfg); err != nil {
 		return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	return &cfg, norm.Ignored, nil
