@@ -256,8 +256,12 @@ func TestAFailedMetaWriteLeavesTheSessionExactlyAsItWas(t *testing.T) {
 			}
 
 			failMetaWrites(s)
-			if err := tc.invoke(s); err != errInjectedWrite {
-				t.Fatalf("%s under a failing write returned err = %v, want the write error itself", tc.method, err)
+			// errors.Is, not ==: a method may wrap the write error to say
+			// which record it was writing, which is the useful half when
+			// one call writes several. What must not happen is the error
+			// being swallowed or replaced.
+			if err := tc.invoke(s); !errors.Is(err, errInjectedWrite) {
+				t.Fatalf("%s under a failing write returned err = %v, want it to carry the write error", tc.method, err)
 			}
 
 			for _, id := range tc.ids {

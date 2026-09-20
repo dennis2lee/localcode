@@ -1514,7 +1514,7 @@ The Archive count refreshes on initial load and after every archive or retrieval
 
 Archiving preserves the title, workspace, permissions, effort, list rank, and event log. `GET /api/sessions/{id}` and its event stream remain readable.
 
-Group membership is the exception: archiving takes the session out of its group. Groups organize the panel, and an archived session is not in the panel. Retrieving it puts it back ungrouped.
+Group membership is kept too, though an archived session shows in no group while it is away — it is not in the panel. Retrieving it puts it back where it was.
 
 The log continues accepting completion and missed-schedule events. Archived sessions cannot start new work.
 
@@ -1533,7 +1533,7 @@ Work booked for later is not rebuilt at startup either, for the same reason. On 
 | Switch its agent | 403 |
 | Upload a file to it | 403 |
 | Name it in a reorder | 400 |
-| Set its group | 400 |
+| Set its group | 400 (the group it had is kept and comes back with it) |
 
 Archived-session work requests return 403. Clients reserve 409 for a running turn and would otherwise queue a request that cannot run.
 
@@ -1693,15 +1693,19 @@ Sessions can be put into named groups. Which groups exist, what order they are d
 | Take it out again | Drag the card up among the ungrouped rows above the first group | `POST /api/sessions/{id}/group` with `{"group": ""}` |
 | Rename a group | **rename** on the group's header | `POST /api/sessions/groups` with the new list *and* `{"rename": {"from", "to"}}` |
 | Delete a group | **delete** on the group's header | `POST /api/sessions/groups` with the list minus that name |
-| Fold one shut | The chevron on the group's header | Browser-local; nothing is sent |
+| Fold one shut | Click the group's header | Browser-local; nothing is sent |
 
 Ungrouped sessions are drawn first, above every group and with no header of their own, so a person who has made no groups sees the panel exactly as it was before groups existed.
 
 Renaming has to say so. A group records its members by name, so a rename carries them across — and the only trace a wholesale list submission leaves is that one name went and another arrived, which is equally what deleting one group and making another looks like. The daemon does not guess between them: an old name that simply disappears is a group that was deleted, and the sessions that were in it are left ungrouped, keeping their order and everything else.
 
-A group name is refused, by name, if it is empty, starts or ends with a space, is longer than 100 characters, carries a control character or newline, or is already in the list. The limit counts characters, not bytes.
+A group name is refused, by name, if it is empty, starts or ends with a space, is longer than 100 characters, carries a control character or newline, or is already in the list. The limit counts characters, not bytes. Naming a group that does not exist is refused the same way, rather than tidied into anything else: only the empty string means ungrouped.
 
-Filtering narrows the rows as before, and a group whose sessions are all hidden loses its header too. The count beside a group's name stays the real number in the group, so a group showing one row of two tells you the filter is hiding the other. Dragging is off while a filter is on, for the same reason it always was.
+`POST /api/sessions/groups` needs the `names` field. It takes the whole list, so a body without it would otherwise read as an empty list and take every group down with it; `{"names": []}` is how you say that on purpose.
+
+A folded group still carries the light of what it is hiding: if a session inside it is waiting for a permission answer, running a turn, or holding a reply you have not read, the header shows that session's light. Folding a group is a way to make it quiet, not a way to lose track of it.
+
+Filtering narrows the rows as before, and a group whose sessions are all hidden loses its header too. A filter also opens any group it matched, since a fold that hid the row you just searched for would be the panel refusing to show what it found; clicking a header does nothing while a filter is on, for the same reason dragging is off. The count beside a group's name stays the real number in the group, so a group showing one row of two tells you the filter is hiding the other. Dragging is off while a filter is on, for the same reason it always was.
 
 Switching sessions restores the selected session's workspace. See [Switching the workspace directory](#switching-the-workspace-directory).
 
