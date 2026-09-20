@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.140.0
+
+Named groups for the session panel, and four rounds of review of them.
+
+**New**
+
+* **Sessions can be put into named groups.** Which groups exist, what order they are drawn in and which session is in which live on the daemon, so the browser and the desktop window show the same panel and all of it survives a restart. Whether a group is folded shut is the one thing kept in the browser instead: that is about the panel in front of you, not about the group, and a second window folding one should not fold it in the first.
+* **Ungrouped sessions are drawn first, above every group, with no header of their own.** Somebody who has made no groups sees exactly the panel they saw before this existed, which is the test of whether it was safe to add.
+* **Drag a card onto a group's header or among its rows to put it in that group**, and up among the ungrouped rows to take it out again. A folded group's header is still a drop target, and carries the light of whatever it is hiding — a session waiting for a permission answer inside a folded group is not a session you have lost.
+* **`GET`/`POST /api/sessions/groups` and `POST /api/sessions/{id}/group`.** The list is submitted whole, the way the panel order already was. A rename must say so: a group records its members by name, and the only trace a whole-list submission leaves is that one name went and another arrived — which is equally what deleting one group and making another looks like. Guessing between them empties a group silently, so the caller says which it did.
+
+**Fixed**
+
+* **A card dragged downward across a group boundary landed above the row it was dropped on.** The panel draws ungrouped rows first and then group by group, so once any group existed the order the list was in and the order the rows appeared in were two different lists — and every drag picks a side by comparing two positions. The list is kept in the order it is drawn in now, which is also the order that goes to the daemon.
+* **A drop that was refused left the card in the group that had just refused it.** The rollback snapshot was aliased by the reorder it was taken for, so putting the list back put back the very object the drop had written through.
+* **A drop whose group move was saved and whose order was not put the panel back to a state the daemon had already contradicted.** It asks the daemon what it holds instead.
+* **A group named `constructor`, `__proto__` or `toString` drew folded shut on the day it was made and never opened.** The folds were looked up on a plain object, which answers for names every object already has.
+* **Archiving a conversation cleared which group it was in.** Nothing else archiving touches is destroyed — the title, the workspace, the list rank all come back — so this comes back too.
+* **The same session read differently through different accessors.** A stale group was corrected on the way out of four readers and not the others; it is corrected once at load instead, and nothing is patched on the way out.
+* **A body with no `names` field deleted every group**, because the route takes the whole list and a missing field read as an empty one.
+* **A group name of spaces was trimmed, and the empty result read as "take it out of its group".** A typo answered with a silent unfiling. Names are matched exactly.
+* **A failed disk write was answered `400`,** telling the browser to correct a request that was never wrong. Which kind of refusal it was cannot be read off an error's shape, so the store marks its own.
+* **A `groups.json` that was missing was read as "there are no groups", and every session was taken out of its group and the file rewritten to say so.** A file that is absent is not a statement about what was in it. At startup the list is now the file's names plus every name a session is still in — so a half-written change heals, a lost list is rebuilt from the memberships, and the only thing that cannot be put back is a name the store would refuse to create.
+* **Deleting or renaming a group left its fold behind,** to fold a later group of that name shut for a reason nobody could see.
+
 ## v0.139.0
 
 Three things an agent can be told that only opencode could say, and the review of them.
