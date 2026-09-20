@@ -138,6 +138,10 @@ type Normalized struct {
 	JSON        []byte   // localcode-shaped, ready for json.Unmarshal
 	Ignored     []string // opencode dotted paths accepted and not honoured, sorted
 	Synthesised []string // profile names synthesised from opencode keys
+	// EnvKeys says which environment variable holds each provider's API
+	// key, for the providers whose file named one instead of the key.
+	// Applied by the caller: see loadOptional.
+	EnvKeys map[string]string
 }
 
 type refusal struct {
@@ -146,9 +150,8 @@ type refusal struct {
 }
 
 // NormalizeOpencode rewrites opencode's spellings into localcode's own.
-// raw is the file's bytes with its comments already blanked, and with its
-// {env:NAME} placeholders still in it: substitution runs after this, so
-// one pass covers both the file's placeholders and the ones written here.
+// raw is the file's bytes after comments and {env:} have been handled, so
+// every value this reads is the value it will have.
 // An error is the refusal, and it names every key that caused one.
 //
 // Pure function: no file system, no network, no OS or environment queries,
@@ -200,6 +203,7 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 		}
 	}
 
+	var envKeys map[string]string
 	refusals := reserved
 	var ignored []string
 	var synthesised []string
@@ -849,8 +853,24 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 			var envList []string
 			if json.Unmarshal(rawEnv, &envList) == nil && len(envList) > 0 {
 				if (provType == "anthropic" || provType == "openai-compat") && provMap["api_key"] == nil {
-					b, _ := json.Marshal(fmt.Sprintf("{env:%s}", envList[0]))
-					provMap["api_key"] = b
+					// Reported rather than written. opencode names the
+					// variable that holds a key, and the obvious way to
+					// honour that — write {env:NAME} and expand again —
+					// costs a second pass over the whole document, which
+					// substitutes values that came back from the first.
+					// Normalising before substitution instead costs the
+					// opposite: this function then reads every value
+					// unexpanded, so a model, an npm name or a baseURL
+					// kept in a variable stops being recognisable.
+					//
+					// So neither. The instruction goes back to the caller,
+					// which applies it to exactly that field after the
+					// document is decoded, and this function keeps its
+					// hands off the environment.
+					if envKeys == nil {
+						envKeys = map[string]string{}
+					}
+					envKeys[pName] = envList[0]
 				}
 			}
 		}
@@ -1184,16 +1204,27 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 		var modelStr string
 		if json.Unmarshal(rawModel, &modelStr) == nil {
 			before, after, found := strings.Cut(modelStr, "/")
-			if !found || providersMap[before] == nil {
-				provName := before
-				if !found {
-					provName = modelStr
-				}
+			if !found {
 				refusals = append(refusals, refusal{
 					path: "model",
-					msg:  fmt.Sprintf(`model is %q, and %q is not a provider this config defines. opencode resolves that name against its models.dev catalogue; localcode never reaches a catalogue, so it has no endpoint, no credential and no limits for it. Add a providers.%q block naming its type, base_url and key, or write the model under a provider this file already defines.`, modelStr, provName, provName),
+					msg: fmt.Sprintf(`model is %q with no provider in front of it, and localcode does not look models up in a catalogue to find out who serves them. `+
+						`Write it as "<provider>/%s", naming a provider this configuration defines.`, modelStr, modelStr),
 				})
 			} else {
+				// Whether that provider exists is not this file's question.
+				//
+				// It was, and it made the ordinary opencode layout
+				// unreadable: credentials and providers go in the global
+				// file, and a repository's own opencode.json carries just
+				// "model": "anthropic/...". Each file is normalised on its
+				// own, so the provider is not in front of this one, and
+				// refusing here set the project file aside for naming a
+				// provider that was defined two files up.
+				//
+				// The merged config answers it instead. Validate already
+				// refuses a profile whose provider is not there, in those
+				// words, after everything has been merged — which is the
+				// only place the question has a true answer.
 				providerKey := before
 				modelKey := after
 				wireModel := modelKey
@@ -1413,11 +1444,6 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 								path: fmt.Sprintf("agent.%s.model", aName),
 								msg:  fmt.Sprintf(`agent %q: model is %q with no provider in front of it, and localcode does not look models up in a catalogue to find out who serves them.`, aName, agentModelStr),
 							})
-						} else if providersMap[before] == nil {
-							refusals = append(refusals, refusal{
-								path: fmt.Sprintf("agent.%s.model", aName),
-								msg:  fmt.Sprintf(`agent %q: model is %q, and %q is not a provider this config defines.`, aName, agentModelStr, before),
-							})
 						} else {
 							provKey = before
 							wireModel = after
@@ -1554,14 +1580,14 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 	sort.Strings(ignored)
 
 	if !changed {
-		return Normalized{JSON: raw, Ignored: ignored, Synthesised: synthesised}, nil
+		return Normalized{JSON: raw, Ignored: ignored, Synthesised: synthesised, EnvKeys: envKeys}, nil
 	}
 
 	out, err := json.Marshal(root)
 	if err != nil {
 		return Normalized{}, err
 	}
-	return Normalized{JSON: out, Ignored: ignored, Synthesised: synthesised}, nil
+	return Normalized{JSON: out, Ignored: ignored, Synthesised: synthesised, EnvKeys: envKeys}, nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

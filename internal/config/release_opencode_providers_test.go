@@ -114,20 +114,29 @@ func TestOpencodeRealisticConfigLoadsAndResolvesDialableBaseURL(t *testing.T) {
 }
 
 // TestOpencodeModelUndefinedProviderRefusedWithTableSentence verifies that a root model
-// whose left half names an undefined provider is refused with the exact sentence from the table.
-func TestOpencodeModelUndefinedProviderRefusedWithTableSentence(t *testing.T) {
-	_, err := loadText(t, `{"model":"openai/gpt-5.1-codex"}`)
+// A model naming a provider nothing defines is refused — after the merge,
+// which is the only place the question has a true answer.
+//
+// Not per file. Each file is normalised on its own, and the ordinary
+// opencode layout puts credentials and providers in the global file while
+// a repository's opencode.json carries just the model; refusing here set
+// that project file aside for naming a provider defined two files up.
+func TestAModelNamingNoProviderAnywhereIsRefused(t *testing.T) {
+	_, err := loadText(t, `{"provider":{"local":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"http://127.0.0.1:1234/v1"}}},`+
+		`"model":"openai/gpt-5.1-codex"}`)
 	if err == nil {
-		t.Fatal("model naming undefined provider loaded without error, want refusal")
+		t.Fatal("a model naming a provider nothing defines was accepted")
 	}
-	wantSentence := `model is "openai/gpt-5.1-codex", and "openai" is not a provider this config defines. opencode resolves that name against its models.dev catalogue; localcode never reaches a catalogue, so it has no endpoint, no credential and no limits for it. Add a providers."openai" block naming its type, base_url and key, or write the model under a provider this file already defines.`
-	if !strings.Contains(err.Error(), wantSentence) {
-		t.Errorf("error = %q\nwant containing sentence:\n%q", err.Error(), wantSentence)
+	for _, want := range []string{"openai", "gpt-5.1-codex"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "providers") {
+		t.Errorf("the refusal does not say what to write instead: %v", err)
 	}
 }
 
-// TestOpencodeNpmUnknownRefusedWithTableSentence verifies that an unknown npm package
-// is refused with the exact sentence from the table.
 func TestOpencodeNpmUnknownRefusedWithTableSentence(t *testing.T) {
 	_, err := loadText(t, `{"provider":{"openai":{"npm":"@ai-sdk/openai"}}}`)
 	if err == nil {

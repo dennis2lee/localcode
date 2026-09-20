@@ -256,3 +256,104 @@ func TestTheAgentRefusalNamesTheSpellingTheFileUses(t *testing.T) {
 		t.Errorf("refusal = %v, want it to name mode, which is the key in the file", err)
 	}
 }
+
+// Round two: what the fix above broke, or left leaking.
+
+// A value the normaliser READS — a model string, an npm name, a base URL
+// — may be kept in an environment variable, and normalising before
+// substitution made every one of them unrecognisable.
+func TestAnEnvironmentVariableWorksInAValueTheNormaliserReads(t *testing.T) {
+	t.Setenv("ZZ_MODEL", "anthropic/claude-sonnet-4-5")
+	t.Setenv("ZZ_NPM", "@ai-sdk/anthropic")
+	t.Setenv("ZZ_URL", "https://api.anthropic.com/v1")
+	cfg, _, err := Load(writeAt(t, t.TempDir(), "config.json", `{
+	  "provider": {"anthropic": {"npm":"{env:ZZ_NPM}","options":{"baseURL":"{env:ZZ_URL}","apiKey":"k"}}},
+	  "model": "{env:ZZ_MODEL}"
+	}`))
+	if err != nil {
+		t.Fatalf("a file keeping its model and endpoint in variables was refused: %v", err)
+	}
+	if got := cfg.Providers["anthropic"].Type; got != "anthropic" {
+		t.Errorf("provider type = %q, so the npm name was not read", got)
+	}
+	if got := cfg.Providers["anthropic"].BaseURL; got != "https://api.anthropic.com" {
+		t.Errorf("base_url = %q, so the URL was not read (and its /v1 not stripped)", got)
+	}
+	if got := cfg.Profiles["opencode:default"].Model; got != "claude-sonnet-4-5" {
+		t.Errorf("model = %q, so the model string was not split", got)
+	}
+}
+
+// Two spellings of the file in somebody's opencode directory is theirs to
+// sort out, not a reason localcode cannot start.
+func TestTwoSpellingsInTheirDirectoryDoNotStopLocalcodeStarting(t *testing.T) {
+	home, repo := homeAndRepo(t)
+	dir := filepath.Join(home, ".config", "opencode")
+	writeAt(t, dir, "opencode.json", `{"model":"a/m"}`)
+	writeAt(t, dir, "opencode.jsonc", `{"model":"a/m"}`)
+	writeAt(t, filepath.Join(home, ".localcode"), "config.json", workingLocalcode)
+
+	cfg, notes, err := loadMergedFrom(configSources(home, repo, ""))
+	if err != nil {
+		t.Fatalf("localcode would not start because their directory has two spellings: %v", err)
+	}
+	if cfg.DefaultProfile != "main" {
+		t.Errorf("default_profile = %q, want the localcode file's", cfg.DefaultProfile)
+	}
+	if !strings.Contains(strings.Join(notes, " "), "set aside") {
+		t.Errorf("nothing said about the pair that was set aside: %v", notes)
+	}
+}
+
+// The ordinary opencode layout: providers and credentials in the global
+// file, and a repository carrying only the model it wants.
+func TestAProjectFileMayNameAProviderDefinedInAnotherFile(t *testing.T) {
+	home, repo := homeAndRepo(t)
+	writeAt(t, filepath.Join(home, ".config", "opencode"), "opencode.json",
+		`{"provider":{"anthropic":{"npm":"@ai-sdk/anthropic","options":{"apiKey":"k"}}}}`)
+	writeAt(t, repo, "opencode.json", `{"model":"anthropic/claude-sonnet-4-5"}`)
+
+	cfg, notes, err := loadMergedFrom(configSources(home, repo, ""))
+	if err != nil {
+		t.Fatalf("a project file naming a provider from the global file was refused: %v", err)
+	}
+	if strings.Contains(strings.Join(notes, " "), "set aside") {
+		t.Errorf("the project file was set aside: %v", notes)
+	}
+	if got := cfg.Profiles["opencode:default"].Model; got != "claude-sonnet-4-5" {
+		t.Errorf("the project file's model did not arrive: %+v", cfg.Profiles)
+	}
+
+	// A provider nothing defines is still refused, after the merge.
+	home2, repo2 := homeAndRepo(t)
+	writeAt(t, filepath.Join(home2, ".localcode"), "config.json", workingLocalcode)
+	writeAt(t, repo2, "opencode.json", `{"model":"nowhere/some-model"}`)
+	if _, notes, err := loadMergedFrom(configSources(home2, repo2, "")); err == nil &&
+		!strings.Contains(strings.Join(notes, " "), "set aside") {
+		t.Error("a model naming a provider nothing defines was accepted everywhere")
+	}
+}
+
+// A file that was set aside is a line about a file, not about a key.
+func TestASetAsideFileIsNotReportedAsAnIgnoredKey(t *testing.T) {
+	home, repo := homeAndRepo(t)
+	writeAt(t, filepath.Join(home, ".config", "opencode"), "opencode.json", `{"lsp":{"go":{}}}`)
+	writeAt(t, filepath.Join(home, ".localcode"), "config.json", workingLocalcode)
+
+	_, notes, err := loadMergedFrom(configSources(home, repo, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, n := range notes {
+		if strings.Contains(n, "lsp") {
+			found = true
+			if !strings.HasPrefix(n, "set aside") {
+				t.Errorf("note reads %q, which says a key was ignored while the whole file was", n)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("nothing said about the file at all: %v", notes)
+	}
+}
