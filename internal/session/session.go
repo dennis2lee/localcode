@@ -570,21 +570,24 @@ func writeGroupsFile(dir string, groups []string) error {
 	return nil
 }
 
-func readGroupsFile(dir string) ([]string, error) {
+// readGroupsFile answers with the names, and with whether there was a file
+// to read at all. The difference matters: a file saying there are no
+// groups is a statement, and no file is the absence of one.
+func readGroupsFile(dir string) (names []string, present bool, err error) {
 	data, err := os.ReadFile(filepath.Join(dir, "groups.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, fmt.Errorf("read groups: %w", err)
+		return nil, false, fmt.Errorf("read groups: %w", err)
 	}
 	var payload struct {
 		Names []string `json:"names"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, fmt.Errorf("parse groups: %w", err)
+		return nil, true, fmt.Errorf("parse groups: %w", err)
 	}
-	return payload.Names, nil
+	return payload.Names, true, nil
 }
 
 // maxGroupNameRunes is the longest a group name may be, counted in
@@ -669,6 +672,25 @@ func (s *Store) reconcileGroupsLocked() []string {
 // groupsInUseLocked is every group name some session is in, sorted. It is
 // what the group list can be rebuilt from when the file holding it cannot
 // be read.
+// adoptGroupsInUseLocked adds to the list every group a session is in that
+// the list does not already have, and answers with the names it added. A
+// name the store would refuse to create is not adopted: it cannot have
+// come from this store, and reconcileGroupsLocked clears it instead.
+func (s *Store) adoptGroupsInUseLocked() []string {
+	var adopted []string
+	for _, name := range s.groupsInUseLocked() {
+		if s.hasGroupLocked(name) {
+			continue
+		}
+		if _, err := validateGroups(append(append([]string(nil), s.groups...), name)); err != nil {
+			continue
+		}
+		s.groups = append(s.groups, name)
+		adopted = append(adopted, name)
+	}
+	return adopted
+}
+
 func (s *Store) groupsInUseLocked() []string {
 	seen := map[string]bool{}
 	var names []string
@@ -1564,48 +1586,40 @@ func LoadAllFromDisk(dir string) (*Store, []error, error) {
 	// The group list, and then the one reconciliation that keeps every
 	// later read honest.
 	//
-	// A session records its group by name, so a name that is not in the
-	// list names nothing. That can only come from a file somebody edited,
-	// or from a write that failed halfway through SetGroups — rare, but
-	// the alternative to fixing it here is fixing it on every read, and a
-	// record that reads differently depending on which accessor returned
-	// it is the bug that costs a day to find. So it is corrected once,
-	// against the file, before anything can read it.
+	// A session records its group by name, so the list and the sessions
+	// are two records of the same thing and either can be behind. The list
+	// read here is therefore the file's names *plus* any name a session is
+	// still in — because the only ways those differ are a call that was
+	// half written and a file that was lost or edited, and in every one of
+	// them the memberships are the better evidence. Adding to the list
+	// costs a group that should have gone still being there, which anyone
+	// can delete again; the other direction costs an arrangement somebody
+	// made by hand, which nothing can give back.
 	//
-	// Only when the list was actually read. A groups.json that could not
-	// be opened or parsed is not evidence that there are no groups, and
-	// clearing every membership on the strength of it would turn one
-	// unreadable file into a panel the person has to arrange again.
-	savedGroups, readErr := readGroupsFile(dir)
-	var listErr error
-	if readErr != nil {
-		listErr = readErr
-	} else if validGroups, err := validateGroups(savedGroups); err != nil {
-		listErr = err
-	} else {
-		s.groups = validGroups
-		s.reconcileGroupsLocked()
-	}
-	if listErr != nil {
-		// The file is there and unusable, which is not the same as there
-		// being no groups. Clearing every membership on the strength of an
-		// unreadable file would turn one bad file into a panel the person
-		// has to arrange again, and saying the list is empty while the
-		// sessions still name groups would leave the store contradicting
-		// itself — reporting a session as being in "work" and refusing, in
-		// the same breath, to put anything into "work".
-		//
-		// So the groups are recovered from the only other record of them:
-		// the sessions that are in them. What is lost is the order they
-		// were drawn in, and any group that was empty. Alphabetical until
-		// somebody arranges them again, and a warning that says so.
-		recovered := s.groupsInUseLocked()
-		s.groups = recovered
-		if len(recovered) > 0 {
-			warnings = append(warnings, fmt.Errorf("groups: %w; recovered %d group(s) from the sessions that are in them, in alphabetical order: the order they were drawn in is lost", listErr, len(recovered)))
+	// What is still corrected, once, before anything can read it, is a
+	// session naming something that could never be a group — a name a
+	// hand-edited file put there that the store would refuse to create.
+	// That cannot be adopted, so it is cleared.
+	savedGroups, listPresent, readErr := readGroupsFile(dir)
+	listErr := readErr
+	if listErr == nil {
+		if validGroups, err := validateGroups(savedGroups); err != nil {
+			listErr = err
 		} else {
-			warnings = append(warnings, fmt.Errorf("groups: %w", listErr))
+			s.groups = validGroups
 		}
+	}
+	adopted := s.adoptGroupsInUseLocked()
+	s.reconcileGroupsLocked()
+	switch {
+	case listErr != nil && len(adopted) > 0:
+		warnings = append(warnings, fmt.Errorf("groups: %w; rebuilt the list from the %d group(s) the sessions are in: the order they were drawn in is lost, and any group that was empty is gone", listErr, len(adopted)))
+	case listErr != nil:
+		warnings = append(warnings, fmt.Errorf("groups: %w", listErr))
+	case !listPresent && len(adopted) > 0:
+		warnings = append(warnings, fmt.Errorf("groups: there is no groups.json, but %d group(s) are still named by sessions (%s); the list was rebuilt from them, so the order they were drawn in is lost", len(adopted), strings.Join(adopted, ", ")))
+	case len(adopted) > 0:
+		warnings = append(warnings, fmt.Errorf("groups: %d group(s) named by sessions were missing from groups.json (%s) and have been put back; a group change was probably interrupted partway", len(adopted), strings.Join(adopted, ", ")))
 	}
 	shelved := s.ShelvedIDs()
 	s.mu.Lock()
@@ -2164,9 +2178,13 @@ func (s *Store) SetGroups(names []string, rename *GroupRename) error {
 				}
 			}
 		}
-		if err := s.writeGroupsLocked(final); err == nil {
-			s.groups = final
-		}
+		s.groups = final
+		// The file may refuse the rewrite, and then it is behind — but not
+		// wrong in a way that survives, because the next start reads the
+		// file and adds back every group a session is in, which is exactly
+		// this list. Memory holding it now is memory holding the answer
+		// the directory will give.
+		_ = s.writeGroupsLocked(final)
 		// Only now, and only for anything the list still cannot account
 		// for. Whatever it moves is named too: a session that was moved
 		// and then unmoved by a failure somewhere else is exactly the one

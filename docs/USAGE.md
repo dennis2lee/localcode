@@ -1697,7 +1697,7 @@ Sessions can be put into named groups. Which groups exist, what order they are d
 
 Ungrouped sessions are drawn first, above every group and with no header of their own, so a person who has made no groups sees the panel exactly as it was before groups existed.
 
-If the group list file is ever unreadable, the groups are recovered from the sessions that are in them: nothing is unfiled, but the order they were drawn in is lost and a group that was empty is gone. localcode says so at startup.
+The list of groups and the sessions in them are two records of the same thing, and at startup the second one wins where they disagree: a group some session is still in is put back into the list even if the file has lost it. So a `groups.json` that goes missing or cannot be read costs you the order the groups were drawn in and any group that was empty, and nothing else — localcode says at startup when it has had to do this. The one thing it will not put back is a name it would refuse to create, which can only have been written by hand; that session is taken out of the group instead.
 
 Renaming has to say so. A group records its members by name, so a rename carries them across — and the only trace a wholesale list submission leaves is that one name went and another arrived, which is equally what deleting one group and making another looks like. The daemon does not guess between them: an old name that simply disappears is a group that was deleted, and the sessions that were in it are left ungrouped, keeping their order and everything else.
 

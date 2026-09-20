@@ -400,36 +400,93 @@ func TestArchivingKeepsTheGroupAndRetrieveBringsItBack(t *testing.T) {
 	}
 }
 
-// TestNonexistentGroupReadsAsUngrouped verifies that if session metadata records
-// a group that does not exist in the store's group list, read operations report
-// the session as ungrouped.
-func TestNonexistentGroupReadsAsUngrouped(t *testing.T) {
+// A group list that has gone missing must not take the arrangement with
+// it. The list and the sessions are two records of the same thing, and
+// when they disagree the memberships are the better evidence: they are
+// what somebody actually made. Putting the group back costs a group that
+// should have gone still being there, which anyone can delete again; the
+// other way costs an arrangement nothing can give back.
+func TestAMissingGroupListIsRebuiltFromTheSessions(t *testing.T) {
 	dir := t.TempDir()
 
 	s, err := NewStore(dir)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	t.Cleanup(s.Close)
-
 	if err := s.SetGroups([]string{"alpha"}, nil); err != nil {
 		t.Fatalf("SetGroups: %v", err)
 	}
-
 	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
 		t.Fatalf("CreateSession s1: %v", err)
 	}
 	if _, err := s.SetSessionGroup("s1", "alpha"); err != nil {
 		t.Fatalf("SetSessionGroup s1: %v", err)
 	}
+	s.Close()
 
-	// Remove groups.json on disk to simulate missing/desynchronized group list.
-	groupsFile := filepath.Join(dir, "groups.json")
-	if err := os.Remove(groupsFile); err != nil {
+	if err := os.Remove(filepath.Join(dir, "groups.json")); err != nil {
 		t.Fatalf("Remove groups.json: %v", err)
 	}
 
+	s2, warnings, err := LoadAllFromDisk(dir)
+	if err != nil {
+		t.Fatalf("LoadAllFromDisk: %v", err)
+	}
+	t.Cleanup(s2.Close)
+
+	if got := s2.GetGroups(); len(got) != 1 || got[0] != "alpha" {
+		t.Errorf("GetGroups = %v, want [alpha] put back from the session that is in it", got)
+	}
+	sess1, err := s2.Get("s1")
+	if err != nil {
+		t.Fatalf("Get s1: %v", err)
+	}
+	if sess1.Group != "alpha" {
+		t.Errorf("s1.Group = %q, want it kept as %q", sess1.Group, "alpha")
+	}
+	said := false
+	for _, w := range warnings {
+		if strings.Contains(w.Error(), "groups") {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("warnings %v say nothing about the list having been rebuilt", warnings)
+	}
+}
+
+// A name the store would never create — one a hand-edited file put there.
+// It cannot be put back into the list, because the list would then hold a
+// name the store refuses; so the session is corrected instead, once, and
+// the correction is written.
+func TestAGroupNameTheStoreWouldRefuseIsClearedNotAdopted(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
 	s.Close()
+
+	path := filepath.Join(dir, "s1.meta.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	var meta Session
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatalf("parse meta: %v", err)
+	}
+	meta.Group = " padded "
+	edited, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal meta: %v", err)
+	}
+	if err := os.WriteFile(path, edited, 0o600); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
 
 	s2, _, err := LoadAllFromDisk(dir)
 	if err != nil {
@@ -437,23 +494,22 @@ func TestNonexistentGroupReadsAsUngrouped(t *testing.T) {
 	}
 	t.Cleanup(s2.Close)
 
-	// Store has no groups loaded.
-	if len(s2.GetGroups()) != 0 {
-		t.Fatalf("GetGroups = %v, want empty", s2.GetGroups())
+	if got := s2.GetGroups(); len(got) != 0 {
+		t.Errorf("GetGroups = %v, want none: %q is not a name this store would create", got, " padded ")
 	}
-
-	// s1 must read as ungrouped.
-	sess1, err := s2.Get("s1")
+	got, err := s2.Get("s1")
 	if err != nil {
-		t.Fatalf("Get s1: %v", err)
+		t.Fatalf("Get: %v", err)
 	}
-	if sess1.Group != "" {
-		t.Errorf("s1.Group = %q, want empty string for nonexistent group", sess1.Group)
+	if got.Group != "" {
+		t.Errorf("s1.Group = %q, want it cleared", got.Group)
 	}
-
-	visible := s2.ListVisible()
-	if len(visible) != 1 || visible[0].Group != "" {
-		t.Errorf("ListVisible()[0].Group = %q, want empty string", visible[0].Group)
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read meta after: %v", err)
+	}
+	if strings.Contains(string(after), "padded") {
+		t.Errorf("the correction was not written back: %s", after)
 	}
 }
 
@@ -853,7 +909,9 @@ func TestEveryReaderAgreesAboutTheGroup(t *testing.T) {
 	s.Close()
 
 	// Take the group list away behind the store's back, the way a file
-	// somebody edited or a half-written call would.
+	// somebody edited or a half-written call would. The group is put back
+	// from the session that is in it; what this test is about is that
+	// every reader then says the same thing about that session.
 	if err := os.Remove(filepath.Join(dir, "groups.json")); err != nil {
 		t.Fatalf("remove groups.json: %v", err)
 	}
@@ -901,18 +959,15 @@ func TestEveryReaderAgreesAboutTheGroup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if got != "" {
-			t.Errorf("%s reports group %q; the group list does not have it, and every reader must say so", name, got)
+		if got != "work" {
+			t.Errorf("%s reports group %q, want %q — every reader must say the same thing", name, got, "work")
 		}
 	}
 
-	// And the correction was written, so it does not have to be made again.
-	data, err := os.ReadFile(filepath.Join(dir, "s1.meta.json"))
-	if err != nil {
-		t.Fatalf("read meta: %v", err)
-	}
-	if strings.Contains(string(data), `"group"`) {
-		t.Errorf("the meta file still records a group: %s", data)
+	// And the list agrees with them, so a group the store reports is a
+	// group the store will accept.
+	if _, err := s2.SetSessionGroup("s1", "work"); err != nil {
+		t.Errorf("re-joining the group every reader just reported was refused: %v", err)
 	}
 }
 
