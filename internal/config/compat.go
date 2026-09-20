@@ -298,14 +298,19 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 			// "write" there is the write tool, and mapping it to edit —
 			// which is what this did — denied editing as well, refusing
 			// more than the file asked for.
+			//
+			// Every name it covers, not the first. "task" is three tools
+			// here, and taking switched[0] wrote a rule for Task alone
+			// while TaskBackground and TaskCollect stayed allowed: the
+			// file switched delegation off and delegation ran.
 			switched := ToolsSwitchedBy(k)
-			targetTool := switched[0]
 
 			decision := "allow"
 			if !val {
 				decision = "deny"
 			}
 
+			targetTool := switched[0]
 			if other := collidingPermissionKey(existingPerms, targetTool); other != "" {
 				// Overlap, not the same spelling. "tools": {"write": false}
 				// becomes edit, which covers write_file as well, so a
@@ -325,15 +330,23 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				continue
 			}
 
-			if prevDecision, seen := mappedPerms[targetTool]; seen && prevDecision != decision {
-				refusals = append(refusals, refusal{
-					path: "tools." + k,
-					msg:  fmt.Sprintf(`tools %q conflicts with another entry for %q; keep one of them`, k, targetTool),
-				})
+			conflict := false
+			for _, name := range switched {
+				if prev, seen := mappedPerms[name]; seen && prev != decision {
+					refusals = append(refusals, refusal{
+						path: "tools." + k,
+						msg:  fmt.Sprintf(`tools %q conflicts with another entry for %q; keep one of them`, k, name),
+					})
+					conflict = true
+					break
+				}
+			}
+			if conflict {
 				continue
 			}
-
-			mappedPerms[targetTool] = decision
+			for _, name := range switched {
+				mappedPerms[name] = decision
+			}
 		}
 
 		if len(mappedPerms) > 0 {

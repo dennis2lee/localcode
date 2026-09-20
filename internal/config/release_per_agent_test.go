@@ -344,3 +344,57 @@ func TestTheTwoOpencodeToolVocabulariesStayApart(t *testing.T) {
 		}
 	}
 }
+
+// What the review of this work found.
+
+// A tools switch names every tool it covers, not the first one.
+//
+// "task" is three tools here, and writing a rule for the first left
+// TaskBackground and TaskCollect allowed: the file switched delegation
+// off and delegation ran.
+func TestAToolSwitchCoversEveryToolItNames(t *testing.T) {
+	cfg, _, err := Load(writeAt(t, t.TempDir(), "config.json",
+		`{"providers":{"a":{"type":"anthropic","api_key":"k"}},`+
+			`"profiles":{"m":{"provider":"a","model":"x"}},"default_profile":"m",`+
+			`"tools":{"task":false}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Task", "TaskBackground", "TaskCollect"} {
+		if got := cfg.ResolvePermissionFor(context.Background(), name, "", true); got != DecisionDeny {
+			t.Errorf("%s = %q, want deny: the file switched task off", name, got)
+		}
+	}
+}
+
+// A permission decision asked for outside a turn is answered by the
+// top-level rules alone.
+//
+// It used to be answered by default_agent's, which is an override
+// somebody wrote for one persona applied to everything that has no
+// persona — and it cut both ways: a default agent allowing bash made a
+// pin-less check allow it over a global deny.
+func TestAPinlessDecisionUsesTheGlobalRulesAlone(t *testing.T) {
+	cfg := &Config{
+		DefaultAgent: "runner",
+		Permissions:  Permissions{"bash": {Flat: DecisionDeny}},
+		Agents: map[string]AgentConfig{
+			"runner": {Profile: "m", Permission: Permissions{"bash": {Flat: DecisionAllow}}},
+		},
+		Profiles:  map[string]Profile{"m": {Provider: "a", Model: "x"}},
+		Providers: map[string]ProviderConfig{"a": {Type: "anthropic", APIKey: "k"}},
+	}
+	if got := cfg.ResolvePermissionFor(context.Background(), "bash", "ls", true); got != DecisionDeny {
+		t.Errorf("a decision with no agent pinned = %q, want the global deny", got)
+	}
+	// And pinned to that agent, its own rule applies.
+	ctx := WithAgent(context.Background(), "runner")
+	if got := cfg.ResolvePermissionFor(ctx, "bash", "ls", true); got != DecisionAllow {
+		t.Errorf("pinned to runner = %q, want its own allow", got)
+	}
+	// Pinned to an agent with no rules of its own: the global one again.
+	ctx = WithAgent(context.Background(), "someone-else")
+	if got := cfg.ResolvePermissionFor(ctx, "bash", "ls", true); got != DecisionDeny {
+		t.Errorf("pinned to an agent with no rules = %q, want the global deny", got)
+	}
+}

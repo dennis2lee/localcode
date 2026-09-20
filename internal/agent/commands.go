@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"localcode/internal/commands"
+	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/hooks"
 	"localcode/internal/memory"
@@ -439,7 +440,17 @@ func (l *Loop) runSkillPath(ctx context.Context, sessionID, agentName, displayTe
 	available := func() string { return l.skillNames() }
 
 	if l.Tools != nil {
-		gate := tools.WithWorkingDir(WithSessionID(ctx, sessionID), l.SessionDir(sessionID))
+		// The agent this is being run for, pinned the way a turn pins it,
+		// because the read below is a permission decision and a decision
+		// taken without it is taken against the top-level rules alone.
+		// A skill run under an agent whose own permission block denies
+		// read_file has to be denied here too, and one whose block allows
+		// it has to be allowed — neither happened while this call was the
+		// only permission path in the program that did not say whose work
+		// it was.
+		gate := tools.WithWorkingDir(
+			config.WithAgent(WithSessionID(ctx, sessionID), agentName),
+			l.SessionDir(sessionID))
 		input, _ := json.Marshal(map[string]string{"path": resolved})
 		res := l.Tools.Call(gate, "read_file", input,
 			fmt.Sprintf("run skill file %q: its contents will be given to the model as instructions for this turn", resolved))
