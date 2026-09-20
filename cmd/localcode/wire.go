@@ -664,7 +664,13 @@ func loadConfig(explicitPath string, e env) (*config.Config, error) {
 		return nil, err
 	}
 	if len(notes) > 0 {
-		fmt.Fprintf(os.Stderr, "config: ignored keys: %s\n", strings.Join(notes, ", "))
+		// One per line. They are sentences — a key that was accepted and
+		// not acted on, or a whole file that was set aside — and joining
+		// sentences with commas reads as a list of key names, which is
+		// what it used to say it was.
+		for _, note := range notes {
+			fmt.Fprintf(os.Stderr, "config: %s\n", note)
+		}
 	}
 	return cfg, nil
 }

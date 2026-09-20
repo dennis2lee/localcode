@@ -41,6 +41,23 @@ func LoadMerged(projectDir string) (*Config, []string, error) {
 // loadMergedFrom is LoadMerged with the list of files handed to it, so
 // the order can be exercised without a home directory to arrange.
 func loadMergedFrom(sources []source) (*Config, []string, error) {
+	cfg, notes, setAside, err := loadMergedDetail(sources)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Two different things, joined here because the caller has one place
+	// to print them and the distinction is in the words. A key that was
+	// accepted and not acted on is a line about a key; a file that was set
+	// aside is a line about a file, and saying "ignored keys: <a whole
+	// refusal>" told somebody localcode had read the rest of the file when
+	// it had read none of it.
+	for _, s := range setAside {
+		notes = append(notes, "set aside and not read: "+s)
+	}
+	return cfg, notes, nil
+}
+
+func loadMergedDetail(sources []source) (*Config, []string, []string, error) {
 	var cfg *Config
 	var notes []string
 	var setAside []string
@@ -53,7 +70,17 @@ func loadMergedFrom(sources []source) (*Config, []string, error) {
 			aThere, bThere := exists(path), exists(alt)
 			switch {
 			case aThere && bThere:
-				return nil, nil, bothSpellings(path, alt)
+				// Their directory, so the same rule as any other refusal
+				// from it: said out loud, and set aside. Returning here
+				// was the one place claim 1 leaked — two spellings in
+				// somebody's opencode directory stopped localcode
+				// starting with a working config of its own.
+				err := bothSpellings(path, alt)
+				if !src.opencode {
+					return nil, nil, nil, err
+				}
+				setAside = append(setAside, err.Error())
+				continue
 			case bThere:
 				path = alt
 			}
@@ -61,7 +88,7 @@ func loadMergedFrom(sources []source) (*Config, []string, error) {
 		one, oneNotes, err := loadOptional(path)
 		if err != nil {
 			if !src.opencode {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			// Theirs. Say what it was and carry on without it: another
 			// program's config is not a reason this one cannot start.
@@ -79,23 +106,18 @@ func loadMergedFrom(sources []source) (*Config, []string, error) {
 		cfg.merge(one)
 	}
 
-	// Set aside, not swallowed: it goes back with the notes, which the
-	// caller prints. A file localcode went looking for and could not use
-	// is worth a line every start until somebody fixes it or removes it.
-	notes = append(notes, setAside...)
-
 	if cfg == nil {
 		var names []string
 		for _, src := range sources {
 			names = append(names, src.path)
 		}
 		if len(setAside) > 0 {
-			return nil, nil, fmt.Errorf("no usable config found. %s", strings.Join(setAside, " "))
+			return nil, nil, nil, fmt.Errorf("no usable config found. %s", strings.Join(setAside, " "))
 		}
-		return nil, nil, fmt.Errorf("no config found at any of: %s", strings.Join(names, ", "))
+		return nil, nil, nil, fmt.Errorf("no config found at any of: %s", strings.Join(names, ", "))
 	}
 	if err := cfg.Validate(); err != nil {
-		return nil, nil, fmt.Errorf("invalid merged config: %w", err)
+		return nil, nil, nil, fmt.Errorf("invalid merged config: %w", err)
 	}
 
 	seen := make(map[string]bool)
@@ -106,7 +128,7 @@ func loadMergedFrom(sources []source) (*Config, []string, error) {
 			out = append(out, n)
 		}
 	}
-	return cfg, out, nil
+	return cfg, out, setAside, nil
 }
 
 func exists(path string) bool {
@@ -157,37 +179,39 @@ func loadOptional(path string) (*Config, []string, error) {
 	// rather than deleted, so a parse error's offset still points at the
 	// line it came from. See jsonc.go.
 	data = stripComments(data)
-	// opencode's spellings next, while the placeholders are still
-	// placeholders.
-	//
-	// This used to run the other way round, and the order is the whole of
-	// a bug it had. opencode names the variable that holds a key rather
-	// than the key, so the normaliser writes an {env:NAME} of its own —
-	// which, after substitution had already happened, needed a second
-	// pass to resolve. A second pass over the document is a second pass
-	// over everything in it, so a value that came back from the
-	// environment carrying that text was substituted again, and a value
-	// carrying "{file:" was refused as if the file had written it.
-	// Normalising first leaves one pass and nothing to re-scan.
-	//
-	// What the normaliser sees in exchange is the file as written, which
-	// is the better half of the trade: a refusal quotes what the person
-	// typed rather than what an environment variable turned it into.
-	norm, err := NormalizeOpencode(data)
+	// {env:NAME} next, so every field of every version of this struct
+	// gets it without anything here having to know which fields are
+	// secrets. See env.go.
+	expanded, err := expandEnv(data, osLookup)
 	if err != nil {
 		return nil, nil, fmt.Errorf("config %s: %w", path, err)
 	}
-	// {env:NAME} last, so every field of every version of this struct
-	// gets it without anything here having to know which fields are
-	// secrets, and so does every placeholder the normaliser just wrote.
-	// See env.go.
-	expanded, err := expandEnv(norm.JSON, osLookup)
+	// opencode's spellings after that, on values that are already what
+	// they will be: this reads a model string, an npm name and a base
+	// URL to decide what they mean, and a placeholder in any of them
+	// would read as literal text.
+	norm, err := NormalizeOpencode(expanded)
 	if err != nil {
 		return nil, nil, fmt.Errorf("config %s: %w", path, err)
 	}
 	var cfg Config
-	if err := json.Unmarshal(expanded, &cfg); err != nil {
+	if err := json.Unmarshal(norm.JSON, &cfg); err != nil {
 		return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	// And the one thing the substitution above could not do, because the
+	// file did not ask for it in localcode's spelling: opencode names the
+	// variable holding a provider's key rather than the key. Applied here,
+	// to that field, rather than by writing a placeholder into the
+	// document and expanding the whole of it a second time.
+	for provider, envVar := range norm.EnvKeys {
+		pc, ok := cfg.Providers[provider]
+		if !ok || pc.APIKey != "" {
+			continue
+		}
+		if v, found := osLookup(envVar); found {
+			pc.APIKey = v
+			cfg.Providers[provider] = pc
+		}
 	}
 	return &cfg, norm.Ignored, nil
 }

@@ -804,6 +804,15 @@ func (c *Config) Validate() error {
 
 	for name, profile := range c.Profiles {
 		if _, ok := c.Providers[profile.Provider]; !ok {
+			if strings.HasPrefix(name, reservedProfilePrefix) {
+				// The profile localcode wrote for itself out of a model
+				// string, so the person is looking at "openai/gpt-5" in
+				// their file rather than at a profile they named.
+				return fmt.Errorf("model %q names provider %q, which no configuration file defines. "+
+					"opencode resolves that name against its own catalogue; localcode never reaches one, so it has no "+
+					"endpoint, no credential and no limits for it — write a providers.%q block giving its type, base_url and key",
+					profile.Provider+"/"+profile.Model, profile.Provider, profile.Provider)
+			}
 			return fmt.Errorf("profile %q references unknown provider %q", name, profile.Provider)
 		}
 		// The provider named twice, which is what an opencode model id

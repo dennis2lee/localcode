@@ -126,19 +126,38 @@ func TestTheFilesOwnModelServesWhenThereIsNothingElse(t *testing.T) {
 	}
 }
 
-// An explicit default_profile is a person naming a model, and it is
-// theirs whatever the name begins with. Passing over it and answering
-// with whatever sorts first is worse than either honouring or refusing.
-func TestAnExplicitDefaultProfileIsHonouredEvenWhenHeldBack(t *testing.T) {
+// A default_profile is consulted among the profiles that may take a lane,
+// not among all of them.
+//
+// Both readings have a case against them, and this is the one with the
+// smaller. Against every profile, a config file read from opencode — which
+// sets default_profile to opencode:default itself — hands its model back
+// through that line for every lane whose markers match nothing, which is
+// every lane when somebody's own profiles are local models the heuristic
+// cannot classify. The person had chosen nothing. The cost of the reading
+// taken here is the opposite corner: somebody who deliberately points
+// default_profile at a synthesised profile is passed over for whichever
+// hand-written one the scan picks. That is rarer, and it is visible in
+// /model rather than silent in what the specialists run on.
+func TestTheDefaultProfileIsConsultedAmongTheProfilesThatMayTakeALane(t *testing.T) {
 	cfg := &config.Config{
 		Providers:      map[string]config.ProviderConfig{"a": {Type: "anthropic", APIKey: "k"}},
-		DefaultProfile: "opencode:agent:own",
+		DefaultProfile: "opencode:default",
 		Profiles: map[string]config.Profile{
-			"aaa":                {Provider: "a", Model: "some-unclassifiable-model"},
-			"opencode:agent:own": {Provider: "a", Model: "another-unclassifiable-model"},
+			"my-local":         {Provider: "a", Model: "some-unclassifiable-model"},
+			"opencode:default": {Provider: "a", Model: "another-unclassifiable-model"},
 		},
 	}
-	if got := ProfileFor(cfg, CategoryQuick); got != "opencode:agent:own" {
-		t.Errorf("ProfileFor(quick) = %q, want the configured default_profile", got)
+	for _, category := range Categories {
+		if got := ProfileFor(cfg, category); got != "my-local" {
+			t.Errorf("ProfileFor(%q) = %q, want the hand-written profile", category, got)
+		}
+	}
+
+	// And with nothing hand-written, the same default is the answer,
+	// because then it is the only thing there is.
+	delete(cfg.Profiles, "my-local")
+	if got := ProfileFor(cfg, CategoryQuick); got != "opencode:default" {
+		t.Errorf("ProfileFor(quick) = %q, want the file's own model", got)
 	}
 }

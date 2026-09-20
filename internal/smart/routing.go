@@ -141,13 +141,18 @@ func ProfileFor(cfg *config.Config, category string) string {
 			return name
 		}
 	}
-	// Against every profile, including the held-back ones. A
-	// default_profile is a person saying which model, and a name they
-	// typed is theirs whatever it begins with — silently passing over it
-	// and answering with whatever sorts first is the one thing worse than
-	// either honouring or refusing it.
+	// Among the ones that may take a lane, and not against every profile.
+	//
+	// Against every profile was the obvious reading — a default_profile is
+	// a person naming a model — and it defeated the hold-back in the case
+	// that matters most. A config file read from opencode sets
+	// default_profile to opencode:default itself, so somebody whose own
+	// config named no default got the file's model back through this line
+	// for every lane whose markers matched nothing, which is every lane
+	// when the profiles are local models the heuristic cannot classify.
+	// The person had not chosen it; the file had.
 	if cfg.DefaultProfile != "" {
-		if _, ok := cfg.Profiles[cfg.DefaultProfile]; ok {
+		if _, ok := profiles[cfg.DefaultProfile]; ok {
 			return cfg.DefaultProfile
 		}
 	}
