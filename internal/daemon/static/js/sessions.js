@@ -17,6 +17,15 @@ export async function loadSessions() {
   } catch (err) {
     app.sessions = [];
   }
+  try {
+    const res = await apiClient.getGroups();
+    if (res && Array.isArray(res.names)) app.sessionGroups = res.names;
+  } catch {
+    // A daemon that does not know about groups, or a request that failed:
+    // leave whatever we had. An empty list is the flat panel, which is the
+    // right thing to show when we cannot find out.
+    if (!app.sessionGroups) app.sessionGroups = [];
+  }
   renderSessionList();
   // The listing carries each session's busy flag, which is also what the
   // light under the prompt reports for the one on screen — so a refresh
@@ -58,6 +67,149 @@ export function sessionMatchesFilter(s, q) {
     (s.workspace || '').toLowerCase().includes(query);
 }
 
+// Which groups are folded shut is the one piece of group state that stays
+// in the browser. Everything else about a group — that it exists, what it
+// is called, what is in it, what order they are drawn in — is the same for
+// the window and the desktop build and has to survive a restart, so it
+// lives on the daemon. Whether a group is folded is not about the group,
+// it is about the panel in front of you, and a second window folding one
+// shut should not fold it in the first. localStorage is per browser
+// profile, which is exactly that scope.
+//
+// Every read and write is wrapped: a private window, cleared site data or
+// a storage quota all throw here, and none of them is a reason for the
+// session panel not to draw.
+const GROUP_COLLAPSE_KEY = 'localcode.collapsedGroups';
+
+export function readCollapsedGroups() {
+  try {
+    const raw = localStorage.getItem(GROUP_COLLAPSE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeCollapsedGroups(collapsed) {
+  try {
+    localStorage.setItem(GROUP_COLLAPSE_KEY, JSON.stringify(collapsed));
+  } catch {
+    /* a private window, or storage turned off: the panel still draws */
+  }
+}
+
+function renderSessionCard(s, filtering) {
+  const div = document.createElement('div');
+  div.className = 'session-item' + (s.id === session.sessionID ? ' active' : '');
+  // The whole card switches to the session — the old dedicated "switch"
+  // button made the single most common action the smallest target on
+  // the row. The rename/delete buttons below stop propagation so they
+  // don't switch as a side effect of being clicked.
+  div.title = filtering
+    ? `${s.id}\nclick to switch to this session`
+    : `${s.id}\nclick to switch to this session, drag to move it up or down`;
+  div.addEventListener('click', () => {
+    if (s.id !== session.sessionID) selectSession(s.id, s.agent, s.workspace);
+  });
+  if (filtering) {
+    div.draggable = false;
+  } else {
+    makeDraggable(div, s.id);
+  }
+
+  const title = document.createElement('div');
+  title.className = 'title';
+  // A dot on every working session, not just the one on screen. The
+  // status line under the prompt only ever spoke for the current
+  // conversation, so a turn left running in another one was invisible
+  // — including a turn stuck waiting on a permission request, which
+  // blocks workspace switching for every session until it is answered.
+  // Four states, one dot, and every session has one:
+  //   waiting        amber, steady    — stopped, and only you can restart it
+  //   running        green, blinking  — the model is working
+  //   answer unread  green, steady    — it finished while you were elsewhere
+  //   idle           grey, steady     — nothing is happening here
+  //
+  // Waiting is tested first because it is almost always true *alongside*
+  // running: a permission request is raised from inside a turn, and the
+  // turn stays open while the question sits there. Drawing the turn
+  // would be drawing the less useful of two true things — "busy" is
+  // something to wait out, "waiting for you" is something to do.
+  //
+  // Amber is reserved for it. Every other light in the product is green
+  // when something is happening and grey when nothing is, so amber
+  // means one thing everywhere: this one is yours.
+  //
+  // The idle dot is drawn rather than omitted. A row with no light and a
+  // row whose light has not been noticed look the same, so an absent dot
+  // could mean "idle" or "this panel does not draw lights" — and the two
+  // green states only mean something against a light that is reliably
+  // there when nothing is going on.
+  const unread = app.unreadSessions.has(s.id);
+  const state = s.asking ? 'asking' : s.busy ? 'running' : unread ? 'unread' : 'idle';
+  const led = document.createElement('span');
+  led.className = 'session-led ' + state;
+  led.title = {
+    asking: 'this session is waiting for you to answer a permission request',
+    running: 'a turn is running in this session',
+    unread: 'this session has a reply you have not looked at',
+    idle: 'nothing is running in this session',
+  }[state];
+  title.appendChild(led);
+  title.appendChild(document.createTextNode(s.title ? s.title : s.id));
+  div.appendChild(title);
+
+  // Which project a conversation belongs to is the thing that
+  // distinguishes otherwise identical sessions, so it's shown here
+  // instead of the agent name (which the header dropdown and the
+  // status line under the prompt both already carry).
+  const workspace = document.createElement('div');
+  workspace.className = 'workspace';
+  workspace.textContent = s.workspace ? shortenPath(s.workspace) : '(workspace not recorded)';
+  workspace.title = s.workspace || 'this session predates workspace tracking';
+  div.appendChild(workspace);
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = formatTime(s.created_at);
+  div.appendChild(meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const forkBtn = document.createElement('button');
+  forkBtn.textContent = 'fork';
+  forkBtn.title = 'start a new session carrying a copy of this conversation';
+  forkBtn.addEventListener('click', (e) => { e.stopPropagation(); forkSession(s); });
+  actions.appendChild(forkBtn);
+
+  const renameBtn = document.createElement('button');
+  renameBtn.textContent = 'rename';
+  renameBtn.addEventListener('click', (e) => { e.stopPropagation(); renameSessionPrompt(s); });
+  actions.appendChild(renameBtn);
+
+  const archiveBtn = document.createElement('button');
+  archiveBtn.textContent = 'archive';
+  archiveBtn.title = 'put this conversation away; it keeps everything and can be retrieved';
+  // Not a danger-btn. The outlined red is reserved for the one action
+  // that cannot be undone, and using it here would say the opposite of
+  // what this does. No confirm either, for the same reason: a confirm on
+  // a reversible action teaches people to click through confirms.
+  archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); archiveSessionNow(s); });
+  actions.appendChild(archiveBtn);
+
+  const delBtn = document.createElement('button');
+  delBtn.textContent = 'delete';
+  delBtn.className = 'danger-btn';
+  delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteSessionConfirm(s); });
+  actions.appendChild(delBtn);
+
+  div.appendChild(actions);
+  return div;
+}
+
 export function renderSessionList() {
   sessionListEl.innerHTML = '';
   if (!app.sessions || app.sessions.length === 0) {
@@ -80,115 +232,164 @@ export function renderSessionList() {
   // same reason: offering a move that will not happen is worse than not
   // offering it.
   const filtering = query !== '';
-  for (const s of visible) {
-    const div = document.createElement('div');
-    div.className = 'session-item' + (s.id === session.sessionID ? ' active' : '');
-    // The whole card switches to the session — the old dedicated "switch"
-    // button made the single most common action the smallest target on
-    // the row. The rename/delete buttons below stop propagation so they
-    // don't switch as a side effect of being clicked.
-    div.title = filtering
-      ? `${s.id}\nclick to switch to this session`
-      : `${s.id}\nclick to switch to this session, drag to move it up or down`;
-    div.addEventListener('click', () => {
-      if (s.id !== session.sessionID) selectSession(s.id, s.agent, s.workspace);
+  const groups = app.sessionGroups || [];
+
+  // When no groups have been created, render flat rows exactly as today.
+  // This is the regression guard: a person with no groups sees the existing panel.
+  if (groups.length === 0) {
+    for (const s of visible) {
+      sessionListEl.appendChild(renderSessionCard(s, filtering));
+    }
+    return;
+  }
+
+  const collapsed = readCollapsedGroups();
+  const groupSet = new Set(groups);
+
+  // 1. Ungrouped sessions render first, with no header, above every group.
+  const ungrouped = visible.filter(s => !s.group || !groupSet.has(s.group));
+  for (const s of ungrouped) {
+    sessionListEl.appendChild(renderSessionCard(s, filtering));
+  }
+
+  // If there are no ungrouped sessions shown, render a drop target at the top
+  // so dragging a session to the top takes it out of its group.
+  if (ungrouped.length === 0 && !filtering) {
+    const topDrop = document.createElement('div');
+    topDrop.className = 'session-group-ungrouped-drop';
+    topDrop.title = 'drag here to remove from group';
+    topDrop.addEventListener('dragover', (e) => {
+      if (!draggingID) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      topDrop.classList.add('drop-target');
     });
-    if (filtering) {
-      div.draggable = false;
-    } else {
-      makeDraggable(div, s.id);
+    topDrop.addEventListener('dragleave', () => topDrop.classList.remove('drop-target'));
+    topDrop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      topDrop.classList.remove('drop-target');
+      const from = draggingID;
+      draggingID = null;
+      clearDropMarkers();
+      if (from) dropSessionToUngroupedTop(from);
+    });
+    sessionListEl.appendChild(topDrop);
+  }
+
+  // 2. Groups render in list order, each with a header showing the name and how many sessions are in it.
+  for (const groupName of groups) {
+    // The count is how many sessions are in the group, not how many of
+    // them the filter left on screen. A group that says (2) while showing
+    // one row is telling you the filter is hiding something, which is the
+    // useful half; a count that shrank to match the rows on screen would
+    // only repeat what you can already see.
+    const inGroupAll = app.sessions.filter(s => s.group === groupName);
+    const inGroupVisible = visible.filter(s => s.group === groupName);
+
+    // If filtering and this group has no visible rows, hide its header too rather than showing an empty group.
+    if (filtering && inGroupVisible.length === 0) {
+      continue;
     }
 
-    const title = document.createElement('div');
-    title.className = 'title';
-    // A dot on every working session, not just the one on screen. The
-    // status line under the prompt only ever spoke for the current
-    // conversation, so a turn left running in another one was invisible
-    // — including a turn stuck waiting on a permission request, which
-    // blocks workspace switching for every session until it is answered.
-    // Four states, one dot, and every session has one:
-    //   waiting        amber, steady    — stopped, and only you can restart it
-    //   running        green, blinking  — the model is working
-    //   answer unread  green, steady    — it finished while you were elsewhere
-    //   idle           grey, steady     — nothing is happening here
-    //
-    // Waiting is tested first because it is almost always true *alongside*
-    // running: a permission request is raised from inside a turn, and the
-    // turn stays open while the question sits there. Drawing the turn
-    // would be drawing the less useful of two true things — "busy" is
-    // something to wait out, "waiting for you" is something to do.
-    //
-    // Amber is reserved for it. Every other light in the product is green
-    // when something is happening and grey when nothing is, so amber
-    // means one thing everywhere: this one is yours.
-    //
-    // The idle dot is drawn rather than omitted. A row with no light and a
-    // row whose light has not been noticed look the same, so an absent dot
-    // could mean "idle" or "this panel does not draw lights" — and the two
-    // green states only mean something against a light that is reliably
-    // there when nothing is going on.
-    const unread = app.unreadSessions.has(s.id);
-    const state = s.asking ? 'asking' : s.busy ? 'running' : unread ? 'unread' : 'idle';
-    const led = document.createElement('span');
-    led.className = 'session-led ' + state;
-    led.title = {
-      asking: 'this session is waiting for you to answer a permission request',
-      running: 'a turn is running in this session',
-      unread: 'this session has a reply you have not looked at',
-      idle: 'nothing is running in this session',
-    }[state];
-    title.appendChild(led);
-    title.appendChild(document.createTextNode(s.title ? s.title : s.id));
-    div.appendChild(title);
+    // A filter opens every group it matched. Folding a group shut says
+    // "not now"; typing into the filter says "find this", and answering
+    // that with a shut group holding the only row that matched would be
+    // the panel refusing to show what it just found. The fold is not
+    // forgotten, only overruled — clearing the filter shuts it again.
+    const isCollapsed = !!collapsed[groupName] && !filtering;
+    const header = document.createElement('div');
+    header.className = 'session-group-header' + (isCollapsed ? ' collapsed' : '');
 
-    // Which project a conversation belongs to is the thing that
-    // distinguishes otherwise identical sessions, so it's shown here
-    // instead of the agent name (which the header dropdown and the
-    // status line under the prompt both already carry).
-    const workspace = document.createElement('div');
-    workspace.className = 'workspace';
-    workspace.textContent = s.workspace ? shortenPath(s.workspace) : '(workspace not recorded)';
-    workspace.title = s.workspace || 'this session predates workspace tracking';
-    div.appendChild(workspace);
+    const toggle = document.createElement('span');
+    toggle.className = 'group-toggle';
+    toggle.textContent = isCollapsed ? '▸' : '▾';
+    header.appendChild(toggle);
 
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = formatTime(s.created_at);
-    div.appendChild(meta);
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'group-name';
+    nameSpan.textContent = groupName;
+    header.appendChild(nameSpan);
 
-    const actions = document.createElement('div');
-    actions.className = 'actions';
+    const countSpan = document.createElement('span');
+    countSpan.className = 'group-count';
+    countSpan.textContent = ` (${inGroupAll.length})`;
+    header.appendChild(countSpan);
 
-    const forkBtn = document.createElement('button');
-    forkBtn.textContent = 'fork';
-    forkBtn.title = 'start a new session carrying a copy of this conversation';
-    forkBtn.addEventListener('click', (e) => { e.stopPropagation(); forkSession(s); });
-    actions.appendChild(forkBtn);
+    const actions = document.createElement('span');
+    actions.className = 'group-actions';
 
     const renameBtn = document.createElement('button');
+    renameBtn.className = 'icon-btn group-rename-btn';
     renameBtn.textContent = 'rename';
-    renameBtn.addEventListener('click', (e) => { e.stopPropagation(); renameSessionPrompt(s); });
+    renameBtn.title = 'rename group';
+    renameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      promptRenameGroup(groupName);
+    });
     actions.appendChild(renameBtn);
 
-    const archiveBtn = document.createElement('button');
-    archiveBtn.textContent = 'archive';
-    archiveBtn.title = 'put this conversation away; it keeps everything and can be retrieved';
-    // Not a danger-btn. The outlined red is reserved for the one action
-    // that cannot be undone, and using it here would say the opposite of
-    // what this does. No confirm either, for the same reason: a confirm on
-    // a reversible action teaches people to click through confirms.
-    archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); archiveSessionNow(s); });
-    actions.appendChild(archiveBtn);
+    // A danger-btn, unlike the archive button on a session card. Archiving
+    // keeps everything and hands it back; deleting a group does not — the
+    // sessions survive, but how they were arranged is gone, and no click
+    // puts it back. That is what the outlined red is for.
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'icon-btn danger-btn group-delete-btn';
+    deleteBtn.textContent = 'delete';
+    deleteBtn.title = 'delete group';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      promptDeleteGroup(groupName);
+    });
+    actions.appendChild(deleteBtn);
 
-    const delBtn = document.createElement('button');
-    delBtn.textContent = 'delete';
-    delBtn.className = 'danger-btn';
-    delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteSessionConfirm(s); });
-    actions.appendChild(delBtn);
+    header.appendChild(actions);
 
-    div.appendChild(actions);
-    sessionListEl.appendChild(div);
+    header.addEventListener('click', () => {
+      const cur = readCollapsedGroups();
+      if (cur[groupName]) delete cur[groupName];
+      else cur[groupName] = true;
+      // Only the groups that are shut are kept, and only the ones that
+      // still exist. A group that was folded and then renamed or deleted
+      // would otherwise leave its name here for good, and the entry would
+      // fold the group shut again if that name ever came back.
+      writeCollapsedGroups(Object.fromEntries(
+        Object.keys(cur).filter(name => cur[name] && groupSet.has(name)).map(name => [name, true]),
+      ));
+      renderSessionList();
+    });
+
+    if (!filtering) {
+      wireGroupHeaderDrop(header, groupName);
+    }
+
+    sessionListEl.appendChild(header);
+
+    if (!isCollapsed) {
+      for (const s of inGroupVisible) {
+        sessionListEl.appendChild(renderSessionCard(s, filtering));
+      }
+    }
   }
+}
+
+function wireGroupHeaderDrop(header, groupName) {
+  header.addEventListener('dragover', (e) => {
+    if (!draggingID) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    header.classList.add('drop-target');
+  });
+  header.addEventListener('dragleave', () => header.classList.remove('drop-target'));
+  header.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    header.classList.remove('drop-target');
+    const from = draggingID;
+    draggingID = null;
+    clearDropMarkers();
+    if (from) dropSessionOnGroupHeader(from, groupName);
+  });
 }
 
 // Dragging a session card up or down the panel.
@@ -271,17 +472,145 @@ export function reorderList(sessions, fromID, toID) {
 // concerned; waiting a round trip to redraw would show the card snap back
 // to where it was and then move again.
 export async function dropSessionOn(fromID, toID) {
-  const before = app.sessions;
-  app.sessions = reorderList(before, fromID, toID);
+  const fromIndex = app.sessions.findIndex(s => s.id === fromID);
+  const toIndex = app.sessions.findIndex(s => s.id === toID);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+  const targetSession = app.sessions[toIndex];
+  const targetGroup = targetSession.group || '';
+  const fromSession = app.sessions[fromIndex];
+  const oldGroup = fromSession.group || '';
+
+  const beforeSessions = app.sessions.map(s => ({ ...s }));
+  const groupChanged = oldGroup !== targetGroup;
+
+  app.sessions = reorderList(beforeSessions, fromID, toID);
+  const moved = app.sessions.find(s => s.id === fromID);
+  if (moved) {
+    moved.group = targetGroup;
+  }
   renderSessionList();
+
   try {
+    if (groupChanged) {
+      await apiClient.setSessionGroup(fromID, targetGroup);
+    }
     await apiClient.reorderSessions(app.sessions.map(s => s.id));
   } catch (err) {
     appendError(`could not save the session order: ${err}`);
-    // Back to what the daemon actually has, rather than leaving an order
-    // on screen that will not survive the next reload.
-    app.sessions = before;
+    app.sessions = beforeSessions;
     renderSessionList();
+  }
+}
+
+// Dropping a card on a group's header puts it in that group, at the top.
+// The header is the one drop target a collapsed group still offers, and
+// "the top" is the only position it can mean — the rows it would be placed
+// among are not on screen.
+export async function dropSessionOnGroupHeader(fromID, groupName) {
+  const fromIndex = app.sessions.findIndex(s => s.id === fromID);
+  if (fromIndex < 0) return;
+  const fromSession = app.sessions[fromIndex];
+
+  const beforeSessions = app.sessions.map(s => ({ ...s }));
+  fromSession.group = groupName;
+
+  const firstInGroup = app.sessions.findIndex(s => s.id !== fromID && s.group === groupName);
+  if (firstInGroup >= 0) {
+    app.sessions = reorderList(app.sessions, fromID, app.sessions[firstInGroup].id);
+  }
+  renderSessionList();
+
+  try {
+    await apiClient.setSessionGroup(fromID, groupName);
+    await apiClient.reorderSessions(app.sessions.map(s => s.id));
+  } catch (err) {
+    appendError(`could not move session into group: ${err}`);
+    app.sessions = beforeSessions;
+    renderSessionList();
+  }
+}
+
+// Dropping a card on the strip above the first group takes it out of
+// whatever group it was in. The strip is only drawn when every session is
+// in a group: with ungrouped rows on screen there is already somewhere to
+// drop a card to ungroup it, and an empty target above them would be a
+// second way to do the same thing.
+export async function dropSessionToUngroupedTop(fromID) {
+  const fromIndex = app.sessions.findIndex(s => s.id === fromID);
+  if (fromIndex < 0) return;
+  const fromSession = app.sessions[fromIndex];
+  const oldGroup = fromSession.group || '';
+
+  const beforeSessions = app.sessions.map(s => ({ ...s }));
+  const [moved] = app.sessions.splice(fromIndex, 1);
+  moved.group = '';
+  app.sessions.unshift(moved);
+  renderSessionList();
+
+  try {
+    if (oldGroup !== '') {
+      await apiClient.setSessionGroup(fromID, '');
+    }
+    await apiClient.reorderSessions(app.sessions.map(s => s.id));
+  } catch (err) {
+    appendError(`could not remove session from group: ${err}`);
+    app.sessions = beforeSessions;
+    renderSessionList();
+  }
+}
+
+export async function promptCreateGroup() {
+  const name = window.prompt('New group name:');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) {
+    appendError('group name cannot be empty');
+    return;
+  }
+  if ((app.sessionGroups || []).includes(trimmed)) {
+    appendError(`duplicate group name "${trimmed}"`);
+    return;
+  }
+  const next = [...(app.sessionGroups || []), trimmed];
+  try {
+    await apiClient.setGroups(next);
+    app.sessionGroups = next;
+    renderSessionList();
+  } catch (err) {
+    appendError(`could not create group: ${err}`);
+  }
+}
+
+export async function promptRenameGroup(oldName) {
+  const newName = window.prompt('Rename group:', oldName);
+  if (newName === null || newName === oldName) return;
+  const trimmed = newName.trim();
+  if (!trimmed) {
+    appendError('group name cannot be empty');
+    return;
+  }
+  const next = (app.sessionGroups || []).map(g => g === oldName ? trimmed : g);
+  try {
+    // Say that this is a rename. The daemon will not work it out from the
+    // two lists, because the same difference is produced by deleting one
+    // group and making another — and it has to know which, to decide
+    // whether the sessions come along.
+    await apiClient.setGroups(next, { from: oldName, to: trimmed });
+    await loadSessions();
+  } catch (err) {
+    appendError(`could not rename group: ${err}`);
+  }
+}
+
+export async function promptDeleteGroup(groupName) {
+  if (!window.confirm(`Delete group "${groupName}"? Sessions in this group will become ungrouped.`)) return;
+  const next = (app.sessionGroups || []).filter(g => g !== groupName);
+  try {
+    await apiClient.setGroups(next);
+    await loadSessions();
+  } catch (err) {
+    appendError(`could not delete group: ${err}`);
   }
 }
 

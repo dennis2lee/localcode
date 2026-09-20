@@ -953,6 +953,75 @@ aside h2 {
 }
 #delete-all-sessions-btn:hover { color: var(--err); border-color: var(--err); }
 
+.side-header-buttons { display: flex; gap: 4px; }
+
+/* Session groups in the left panel. Headers are drop targets and collapse toggles. */
+.session-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px;
+  margin-top: 10px;
+  margin-bottom: 4px;
+  font-size: var(--t-ui);
+  font-weight: 500;
+  color: var(--faint);
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--r-ctl);
+  border: 1px solid transparent;
+}
+.session-group-header:hover {
+  color: var(--text);
+}
+.session-group-header.drop-target {
+  border: 1px dashed var(--select);
+  color: var(--text);
+  background: var(--panel);
+}
+.session-group-header .group-toggle {
+  font-size: var(--t-fine);
+  color: var(--muted);
+  width: 1em;
+  text-align: center;
+}
+.session-group-header .group-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-group-header .group-count {
+  font-size: var(--t-fine);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.session-group-header .group-actions {
+  display: flex;
+  gap: 4px;
+  visibility: hidden;
+}
+.session-group-header:hover .group-actions,
+.session-group-header:focus-within .group-actions {
+  visibility: visible;
+}
+.session-group-header .group-actions button {
+  padding: 1px 5px;
+  font-size: var(--t-cap);
+  line-height: 1.4;
+}
+.session-group-ungrouped-drop {
+  height: 6px;
+  margin-bottom: 4px;
+  border-radius: var(--r-ctl);
+  border: 1px dashed transparent;
+}
+.session-group-ungrouped-drop.drop-target {
+  height: 24px;
+  border-color: var(--select);
+  background: var(--panel);
+}
+
 .mcp-item {
   border: 1px solid var(--border);
   border-radius: var(--r-ctl);

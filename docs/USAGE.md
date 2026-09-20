@@ -1514,6 +1514,8 @@ The Archive count refreshes on initial load and after every archive or retrieval
 
 Archiving preserves the title, workspace, permissions, effort, list rank, and event log. `GET /api/sessions/{id}` and its event stream remain readable.
 
+Group membership is the exception: archiving takes the session out of its group. Groups organize the panel, and an archived session is not in the panel. Retrieving it puts it back ungrouped.
+
 The log continues accepting completion and missed-schedule events. Archived sessions cannot start new work.
 
 An archived conversation's event log stays on disk, and so do the logs of the background tasks and scheduled runs that happened inside it. The daemon reads none of them at startup and replays none of them into memory; the session list is built from the metadata file beside each log. The first request that needs the events reads them, which is normally the retrieval. On a home with 5 active and 100 archived conversations of 3,000 events each with two background tasks apiece, this is the difference between a daemon that answers in 2.9s holding 1.8 GB and one that answers in 0.18s holding 109 MB.
@@ -1531,6 +1533,7 @@ Work booked for later is not rebuilt at startup either, for the same reason. On 
 | Switch its agent | 403 |
 | Upload a file to it | 403 |
 | Name it in a reorder | 400 |
+| Set its group | 400 |
 
 Archived-session work requests return 403. Clients reserve 409 for a running turn and would otherwise queue a request that cannot run.
 
@@ -1677,6 +1680,28 @@ Click a card to switch its transcript, agent, workspace, and status bar. Rename 
 Drag cards to reorder sessions. The daemon saves order through `POST /api/sessions/order` and session metadata. All clients use the same order. New sessions appear at the top.
 
 Cards show the session's current workspace. Sessions without a recorded workspace show `(workspace not recorded)`.
+
+#### Session groups
+
+Sessions can be put into named groups. Which groups exist, what order they are drawn in, and which sessions are in them live on the daemon, so the browser and the desktop window show the same panel and all of it survives a restart. Whether a group is folded shut is the one exception: that is about the panel in front of you, not about the group, so it is remembered per browser.
+
+| Action | Control | API |
+|---|---|---|
+| Make a group | **+ group** in the panel header | `POST /api/sessions/groups` with the whole list, including the new name |
+| Read the list | — | `GET /api/sessions/groups` |
+| Put a session in a group | Drag the card onto the group's header, or among its rows | `POST /api/sessions/{id}/group` with `{"group": "<name>"}` |
+| Take it out again | Drag the card up among the ungrouped rows above the first group | `POST /api/sessions/{id}/group` with `{"group": ""}` |
+| Rename a group | **rename** on the group's header | `POST /api/sessions/groups` with the new list *and* `{"rename": {"from", "to"}}` |
+| Delete a group | **delete** on the group's header | `POST /api/sessions/groups` with the list minus that name |
+| Fold one shut | The chevron on the group's header | Browser-local; nothing is sent |
+
+Ungrouped sessions are drawn first, above every group and with no header of their own, so a person who has made no groups sees the panel exactly as it was before groups existed.
+
+Renaming has to say so. A group records its members by name, so a rename carries them across — and the only trace a wholesale list submission leaves is that one name went and another arrived, which is equally what deleting one group and making another looks like. The daemon does not guess between them: an old name that simply disappears is a group that was deleted, and the sessions that were in it are left ungrouped, keeping their order and everything else.
+
+A group name is refused, by name, if it is empty, starts or ends with a space, is longer than 100 characters, carries a control character or newline, or is already in the list. The limit counts characters, not bytes.
+
+Filtering narrows the rows as before, and a group whose sessions are all hidden loses its header too. The count beside a group's name stays the real number in the group, so a group showing one row of two tells you the filter is hiding the other. Dragging is off while a filter is on, for the same reason it always was.
 
 Switching sessions restores the selected session's workspace. See [Switching the workspace directory](#switching-the-workspace-directory).
 

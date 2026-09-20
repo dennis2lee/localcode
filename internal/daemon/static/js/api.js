@@ -98,6 +98,9 @@ export const forkSession = (id) => api('POST', `/api/sessions/${id}/fork`);
 export const deleteSession = (id) => api('DELETE', `/api/sessions/${id}`);
 export const deleteAllSessions = () => api('DELETE', '/api/sessions');
 export const reorderSessions = (ids) => api('POST', '/api/sessions/order', { ids });
+export const getGroups = () => api('GET', '/api/sessions/groups');
+export const setGroups = (names, rename) => api('POST', '/api/sessions/groups', rename ? { names, rename } : { names });
+export const setSessionGroup = (id, group) => api('POST', `/api/sessions/${id}/group`, { group });
 
 export const switchAgent = (sessionID, agent) => api('POST', `/api/sessions/${sessionID}/agent`, { agent });
 export const sendChatMessage = (sessionID, text, images) =>

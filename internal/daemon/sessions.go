@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -648,6 +649,68 @@ func (d *Daemon) handleReorderSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGetGroups returns the ordered list of group names. The order is
+// the order they are drawn in, so the list is the answer on its own.
+func (d *Daemon) handleGetGroups(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"names": d.groupNames()})
+}
+
+// handleSetGroups replaces the ordered list of group names wholesale, the
+// way /api/sessions/order replaces the order. Creating, deleting and
+// reordering are all just a different list; renaming is the one change
+// that has to say so, because it carries the group's sessions with it.
+func (d *Daemon) handleSetGroups(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Names  []string             `json:"names"`
+		Rename *session.GroupRename `json:"rename"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := d.Loop.Store.SetGroups(req.Names, req.Rename); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"names": d.groupNames()})
+}
+
+// groupNames answers with an empty array rather than null, so the browser
+// can hold the reply without checking which of the two it got.
+func (d *Daemon) groupNames() []string {
+	names := d.Loop.Store.GetGroups()
+	if names == nil {
+		return []string{}
+	}
+	return names
+}
+
+// handleSetSessionGroup puts one session in a group by name, or takes it
+// out of every group when the name is empty. The group has to be one that
+// exists: a session may not name a group into being, because the list is
+// what decides the order groups are drawn in and a name arriving this way
+// would have no place in it.
+func (d *Daemon) handleSetSessionGroup(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Group string `json:"group"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	sess, err := d.Loop.Store.SetSessionGroup(id, req.Group)
+	if err != nil {
+		if errors.Is(err, session.ErrSessionNotFound) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
 }
 
 // handleSwitchAgent changes which agent a session sends future messages

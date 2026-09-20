@@ -16,6 +16,7 @@ export const app = {
   showThinking: true,
   showTimestamps: false,
   sessions: [],          // cached list rendered in the aside
+  sessionGroups: [],     // ordered list of group names
   // The session panel's filter text, typed into the box above the list.
   // App-scoped rather than per session: it describes which rows are
   // shown, not what any conversation contains, so switching sessions
