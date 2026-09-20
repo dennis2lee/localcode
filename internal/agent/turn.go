@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/hooks"
 	"localcode/internal/prompt"
@@ -80,6 +81,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// Safe to set early: every reader either wants it or ignores its
 	// absence, and runTools setting it again is the same value.
 	ctx = WithSessionID(ctx, sessionID)
+	ctx = config.WithAgent(ctx, resolveAgent)
 
 	profileName, profile, err := l.profileFor(ctx, sessionID, resolveAgent)
 	if err != nil {
@@ -237,6 +239,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// Consecutive steps that asked for nothing this turn had not already
 	// asked for. See the ceiling at the bottom of the loop.
 	repeats := 0
+	// Tool-using iterations taken by this turn. When it reaches agentCfg.Steps,
+	// tools are withheld on the next request to force a text-only response.
+	toolSteps := 0
+	forceTextOnly := false
 
 	for {
 		history := l.history(sessionID)
@@ -273,6 +279,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			Effort: run.effort,
 		}
 		if askingVerdict {
+			req.ToolChoice = provider.ToolChoiceNone
+		}
+		if forceTextOnly {
+			req.Tools = nil
 			req.ToolChoice = provider.ToolChoiceNone
 		}
 
@@ -637,7 +647,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 						verdictSummary(text), run.profile.Model),
 					"recovered": true,
 				})
-			} else if ctx.Err() == nil && l.keepGoing(sessionID, run.profile, stopReason, assistantBlocks, ranTools, lastRefused, nudgedSinceWork, nudges) {
+			} else if ctx.Err() == nil && !forceTextOnly && l.keepGoing(sessionID, run.profile, stopReason, assistantBlocks, ranTools, lastRefused, nudgedSinceWork, nudges) {
 				askingVerdict = true
 				l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{
 					"text": keepGoingVerdictPrompt, "auto": true, "source": "reminder.keep_going",
@@ -730,6 +740,17 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// three times" by someone watching a model alternate two reads,
 		// and the rule is about steps that add nothing, not about one
 		// call.
+		toolSteps++
+		if agentCfg.Steps > 0 && toolSteps >= agentCfg.Steps {
+			l.Store.Append(sessionID, events.TypeError, map[string]any{
+				"error": fmt.Sprintf(
+					"reached the limit of %d tool-using iterations for agent %q; requesting a text-only response",
+					agentCfg.Steps, resolveAgent),
+				"recovered": true,
+			})
+			forceTextOnly = true
+		}
+
 		if limit := l.RepeatLimit(); limit > 0 && repeats >= limit {
 			l.Store.Append(sessionID, events.TypeError, map[string]any{
 				"error": fmt.Sprintf(

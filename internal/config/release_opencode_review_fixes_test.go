@@ -154,9 +154,9 @@ func TestOverlappingToolsAndPermissionAreRefused(t *testing.T) {
 func TestTheSameBytesGiveTheSameRefusal(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 200; i++ {
-		_, err := NormalizeOpencode([]byte(`{"tools":{"write":true,"apply_patch":false}}`))
+		_, err := NormalizeOpencode([]byte(`{"tools":{"edit":true,"apply_patch":false}}`))
 		if err == nil {
-			t.Fatal("two entries mapping to edit with different decisions were accepted")
+			t.Fatal("two entries that are both the edit tool, with different decisions, were accepted")
 		}
 		seen[err.Error()] = true
 	}

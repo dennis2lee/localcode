@@ -94,18 +94,6 @@ func jsonText(raw json.RawMessage) string {
 	return strings.TrimSpace(string(raw))
 }
 
-// toolsCoveredBy is the localcode tool names a permission key stands
-// for: itself, plus whatever the opencode alias table adds. Sorted, so a
-// message built from it reads the same every time.
-func toolsCoveredBy(key string) []string {
-	if covered, ok := ToolAliases[key]; ok {
-		out := append([]string(nil), covered...)
-		sort.Strings(out)
-		return out
-	}
-	return []string{key}
-}
-
 // collidingPermissionKey is the key in an existing permission block that
 // stands for any of the same tools as target, or "" when none does.
 func collidingPermissionKey(perms map[string]json.RawMessage, target string) string {
@@ -113,11 +101,11 @@ func collidingPermissionKey(perms map[string]json.RawMessage, target string) str
 		return ""
 	}
 	want := make(map[string]bool)
-	for _, t := range toolsCoveredBy(target) {
+	for _, t := range ToolsCoveredBy(target) {
 		want[t] = true
 	}
 	for _, key := range sortedKeys(perms) {
-		for _, t := range toolsCoveredBy(key) {
+		for _, t := range ToolsCoveredBy(key) {
 			if want[t] {
 				return key
 			}
@@ -306,10 +294,12 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				continue
 			}
 
-			targetTool := k
-			if k == "write" || k == "apply_patch" {
-				targetTool = "edit"
-			}
+			// Through the tools-block vocabulary, not the permission one.
+			// "write" there is the write tool, and mapping it to edit —
+			// which is what this did — denied editing as well, refusing
+			// more than the file asked for.
+			switched := ToolsSwitchedBy(k)
+			targetTool := switched[0]
 
 			decision := "allow"
 			if !val {
@@ -330,7 +320,7 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				refusals = append(refusals, refusal{
 					path: "tools." + k,
 					msg: fmt.Sprintf(`tools %q and permission %q are the same tools (%s); keep one of them`,
-						k, other, strings.Join(toolsCoveredBy(targetTool), ", ")),
+						k, other, strings.Join(ToolsCoveredBy(targetTool), ", ")),
 				})
 				continue
 			}
@@ -1331,18 +1321,6 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				}
 
 				// Refusals for agent keys
-				if _, ok := aEntry["tools"]; ok {
-					refusals = append(refusals, refusal{
-						path: fmt.Sprintf("agent.%s.tools", aName),
-						msg:  fmt.Sprintf(`agent %q: tools is a set of per-tool on/off switches, and localcode's per-agent tools is a closed allowlist — the two cannot be converted without changing what this file says. Write the restriction as a top-level "permission" map if it is meant for every agent; localcode has no per-agent permission.`, aName),
-					})
-				}
-				if _, ok := aEntry["permission"]; ok {
-					refusals = append(refusals, refusal{
-						path: fmt.Sprintf("agent.%s.permission", aName),
-						msg:  fmt.Sprintf(`agent %q: permission sets rules for this agent alone, and localcode's permission rules are daemon-wide — folding them in would apply them to every agent. Move them to the top-level "permission", which localcode already reads, if that is what you mean.`, aName),
-					})
-				}
 				if _, ok := aEntry["disable"]; ok {
 					refusals = append(refusals, refusal{
 						path: fmt.Sprintf("agent.%s.disable", aName),
@@ -1374,16 +1352,9 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 						path: fmt.Sprintf("agent.%s.steps", aName),
 						msg:  fmt.Sprintf(`agent %q: steps and maxSteps disagree; keep one of them`, aName),
 					})
-				} else if hasSteps {
-					refusals = append(refusals, refusal{
-						path: fmt.Sprintf("agent.%s.steps", aName),
-						msg:  fmt.Sprintf(`agent %q: steps caps this agent at %s tool-using iterations, and localcode has no per-turn iteration limit — the turn would keep going until the model stops or you interrupt it.`, aName, string(rawSteps)),
-					})
-				} else if hasMaxSteps {
-					refusals = append(refusals, refusal{
-						path: fmt.Sprintf("agent.%s.maxSteps", aName),
-						msg:  fmt.Sprintf(`agent %q: maxSteps caps this agent at %s tool-using iterations (opencode's older spelling of steps), and localcode has no per-turn iteration limit — the turn would keep going until the model stops or you interrupt it.`, aName, string(rawMaxSteps)),
-					})
+				} else if hasMaxSteps && !hasSteps {
+					aEntry["steps"] = rawMaxSteps
+					delete(aEntry, "maxSteps")
 				}
 				if rawV, ok := aEntry["variant"]; ok {
 					var vStr string

@@ -60,36 +60,35 @@ func TestOpencodeToolsBashTrueAllows(t *testing.T) {
 }
 
 // TestOpencodeToolsWriteMapsToEdit verifies that write and apply_patch map to edit
-// and therefore govern both edit and write_file tools.
-func TestOpencodeToolsWriteMapsToEdit(t *testing.T) {
+// opencode's tools block and its permission block are two vocabularies.
+// "write" there is the write tool, not the file-modification permission —
+// its own docs switch "write" and "edit" off together to make a
+// review-only agent — so write becomes write_file and edit becomes edit.
+// Mapping write to edit denied more than the file asked for.
+func TestAToolsBlockNameMeansTheToolItNames(t *testing.T) {
 	cfg, err := loadText(t, `{`+workingProviders+`,"tools":{"write":false}}`)
 	if err != nil {
-		t.Fatalf("config with tools.write failed to load: %v", err)
+		t.Fatalf("load: %v", err)
 	}
-	if got := cfg.ResolvePermissionFor(context.Background(), "edit", "file.go", true); got != DecisionDeny {
-		t.Errorf("edit decision = %v, want %v", got, DecisionDeny)
+	ctx := context.Background()
+	if got := cfg.ResolvePermissionFor(ctx, "write_file", "f.go", true); got != DecisionDeny {
+		t.Errorf("write_file = %q, want deny", got)
 	}
-	if got := cfg.ResolvePermissionFor(context.Background(), "write_file", "file.go", true); got != DecisionDeny {
-		t.Errorf("write_file decision = %v, want %v", got, DecisionDeny)
+	if got := cfg.ResolvePermissionFor(ctx, "edit", "f.go", true); got == DecisionDeny {
+		t.Error(`edit was denied by "write": false, and opencode's tools block calls those two different tools`)
 	}
 
-	cfgPatch, err := loadText(t, `{`+workingProviders+`,"tools":{"apply_patch":false}}`)
-	if err != nil {
-		t.Fatalf("config with tools.apply_patch failed to load: %v", err)
-	}
-	if got := cfgPatch.ResolvePermissionFor(context.Background(), "edit", "file.go", true); got != DecisionDeny {
-		t.Errorf("edit decision under apply_patch = %v, want %v", got, DecisionDeny)
+	// The patch tool is an edit, under either spelling.
+	for _, name := range []string{"patch", "apply_patch"} {
+		cfg, err := loadText(t, `{`+workingProviders+`,"tools":{"`+name+`":false}}`)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := cfg.ResolvePermissionFor(ctx, "edit", "f.go", true); got != DecisionDeny {
+			t.Errorf("%s: edit = %q, want deny", name, got)
+		}
 	}
 }
-
-// Two spellings of the MCP block hold lists, not values, so they are
-// joined — and only a server named in both is refused.
-//
-// This used to refuse the pair outright, which was fail-closed and
-// therefore harmless, but wrong: "mcp" naming one server and
-// "mcp_servers" naming another is two halves of one list, and a file
-// that arrived that way (a localcode config with an opencode block
-// pasted into it) had nothing contradictory in it.
 func TestTheTwoMCPSpellingsAreJoinedUnlessTheyNameTheSameServer(t *testing.T) {
 	cfg, err := loadText(t, `{`+workingProviders+`,`+
 		`"mcp":{"s1":{"type":"stdio","command":"c1"}},`+

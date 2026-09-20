@@ -2,6 +2,10 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
 
 	"localcode/internal/config"
 	"localcode/internal/smart"
@@ -209,10 +213,62 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 		return agentCfg.Tools
 	}
 	hidden := l.hiddenTools(ctx)
-	if len(hidden) == 0 || l.Tools == nil {
+	if l.Tools == nil {
 		return nil
 	}
 	names := l.Tools.Names()
+	if len(agentCfg.ToolSwitches) > 0 {
+		matchedSwitches := make(map[string]bool)
+		disabled := make(map[string]bool)
+		for _, name := range names {
+			for sw, val := range agentCfg.ToolSwitches {
+				if matchToolSwitch(sw, name) {
+					matchedSwitches[sw] = true
+					if !val {
+						disabled[name] = true
+					}
+				}
+			}
+		}
+
+		// A switch naming a tool that does not exist is not an error — it
+		// is opencode's file naming opencode's tool — but it is worth
+		// saying, because a person who switched something off is entitled
+		// to know nothing was switched.
+		//
+		// Once each, not once a turn. This runs on every turn of every
+		// session, and a line repeated on each of them is one people stop
+		// reading, which is the same as not printing it.
+		var unknown []string
+		for sw := range agentCfg.ToolSwitches {
+			if !matchedSwitches[sw] {
+				unknown = append(unknown, sw)
+			}
+		}
+		sort.Strings(unknown)
+		agentName, _ := config.AgentPinned(ctx)
+		for _, sw := range unknown {
+			where := "agent." + sw
+			if agentName != "" {
+				where = "agent." + agentName + ".tools." + sw
+			}
+			if l.sayOnce(where) {
+				fmt.Fprintf(os.Stderr, "config: %s names no tool localcode has, so nothing was switched off by it\n", where)
+			}
+		}
+
+		out := make([]string, 0, len(names))
+		for _, name := range names {
+			if !hidden[name] && !disabled[name] {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+
+	if len(hidden) == 0 {
+		return nil
+	}
 	out := make([]string, 0, len(names))
 	for _, name := range names {
 		if !hidden[name] {
@@ -220,6 +276,45 @@ func (l *Loop) toolsForTurn(ctx context.Context, agentCfg config.AgentConfig) []
 		}
 	}
 	return out
+}
+
+// matchToolSwitch checks whether switchName applies to registeredTool.
+// In opencode, tool names match case-insensitively, and opencode's "write"
+// matches localcode's "write_file", "read" matches "read_file", and "task"
+// matches Task / TaskBackground / TaskCollect.
+// sayOnce reports whether this is the first time the loop has been asked
+// about key, so a line about a static fact of the configuration is
+// printed once rather than on every turn that reads it.
+func (l *Loop) sayOnce(key string) bool {
+	l.saidMu.Lock()
+	defer l.saidMu.Unlock()
+	if l.said[key] {
+		return false
+	}
+	if l.said == nil {
+		l.said = map[string]bool{}
+	}
+	l.said[key] = true
+	return true
+}
+
+// matchToolSwitch reports whether an opencode tool switch covers one of
+// localcode's registered tools.
+//
+// Through config.ToolSwitchNames, which is the tools-block vocabulary —
+// not the permission one, where "edit" means every file modification and
+// there is no "write" at all. This used to be a third copy, written by
+// hand here; it happened to agree, and nothing made it keep agreeing.
+func matchToolSwitch(switchName, registeredTool string) bool {
+	if strings.EqualFold(switchName, registeredTool) {
+		return true
+	}
+	for _, covered := range config.ToolsSwitchedBy(switchName) {
+		if covered == registeredTool {
+			return true
+		}
+	}
+	return false
 }
 
 // hiddenTools names the tools that should not be offered on this turn.

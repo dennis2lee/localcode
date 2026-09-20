@@ -84,7 +84,7 @@ func checkDocKeys(t *testing.T, typ reflect.Type, data any, path string, checked
 		// as parseable keys, and ship as empty objects in the file. The
 		// sibling test exempts them from descent for the same reason;
 		// there is nothing inside to check against.
-		if fieldPath == "mcp_servers" || fieldPath == "hooks" || fieldPath == "permission" {
+		if fieldPath == "mcp_servers" || fieldPath == "hooks" || fieldPath == "permission" || strings.HasSuffix(fieldPath, ".permission") {
 			continue
 		}
 

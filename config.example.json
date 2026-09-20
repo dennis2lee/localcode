@@ -109,7 +109,11 @@
         "glob",
         "grep",
         "Skill"
-      ]
+      ],
+      "permission": {
+        "edit": "deny"
+      },
+      "steps": 10
     },
     "implement": {
       "profile": "smart-balanced",
