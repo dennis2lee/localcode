@@ -57,8 +57,8 @@ func TestAnOpencodeFileIsAlwaysUnderTheLocalcodeFileOfItsScope(t *testing.T) {
 // for in there would never be found.
 func TestTheProjectFileIsAtTheProjectRoot(t *testing.T) {
 	for _, s := range configSources("/home/u", "/repo", "") {
-		if strings.Contains(s, filepath.Join(".opencode", "opencode.json")) {
-			t.Errorf("looking for the project config in %q, and opencode keeps it at the project root", s)
+		if strings.Contains(s.path, filepath.Join(".opencode", "opencode.json")) {
+			t.Errorf("looking for the project config in %q, and opencode keeps it at the project root", s.path)
 		}
 	}
 }
@@ -66,10 +66,10 @@ func TestTheProjectFileIsAtTheProjectRoot(t *testing.T) {
 // slashed rewrites a list of host paths with forward slashes, so an
 // expectation about their ORDER is not also an assertion about which
 // platform the test is running on.
-func slashed(paths []string) []string {
-	out := make([]string, len(paths))
-	for i, p := range paths {
-		out[i] = filepath.ToSlash(p)
+func slashed(srcs []source) []string {
+	out := make([]string, len(srcs))
+	for i, s := range srcs {
+		out[i] = filepath.ToSlash(s.path)
 	}
 	return out
 }
@@ -173,5 +173,31 @@ func TestLocalcodeConfigHasNoJsoncAlternative(t *testing.T) {
 	}
 	if alt := jsoncAlternative("/repo/opencode.json"); alt != "/repo/opencode.jsonc" {
 		t.Errorf("opencode.json alternative = %q", alt)
+	}
+}
+
+// Whose a file is decides whether a key localcode cannot honour stops it
+// starting. opencode's own configs routinely carry lsp, formatter and
+// share; refusing those must not take localcode down on a machine that
+// merely has opencode installed.
+func TestEveryOpencodeSourceIsMarkedAsTheirs(t *testing.T) {
+	got := configSources("/home/u", "/repo", "/custom/oc.json")
+	want := map[string]bool{
+		"/home/u/.config/opencode/opencode.json": true,
+		"/custom/oc.json":                        true,
+		"/home/u/.localcode/config.json":         false,
+		"/repo/opencode.json":                    true,
+		"/repo/.localcode/config.json":           false,
+	}
+	for _, s := range got {
+		key := filepath.ToSlash(s.path)
+		theirs, known := want[key]
+		if !known {
+			t.Errorf("unexpected source %q", key)
+			continue
+		}
+		if s.opencode != theirs {
+			t.Errorf("source %q: opencode=%v, want %v", key, s.opencode, theirs)
+		}
 	}
 }

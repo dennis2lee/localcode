@@ -864,6 +864,22 @@ func (c *Config) Validate() error {
 	}
 
 	for name, agent := range c.Agents {
+		// An agent that names no profile takes the default, which is what
+		// ResolveProfile already does for it at every call site — the
+		// fallback there is not conditional on this check passing.
+		//
+		// Said no profile, rather than said one that is not there. A typo
+		// is a name, and a name that resolves to nothing stays a refusal;
+		// this is the agent that only carried a prompt, which is most of
+		// them in an opencode file. Refusing those meant an ordinary
+		// opencode repository could not be read at all, with a message
+		// about an empty profile name nobody had written.
+		if agent.Profile == "" {
+			if c.DefaultProfile == "" {
+				return fmt.Errorf("agent %q names no profile and there is no default_profile to fall back to", name)
+			}
+			continue
+		}
 		if _, ok := c.Profiles[agent.Profile]; !ok {
 			return fmt.Errorf("agent %q references unknown profile %q", name, agent.Profile)
 		}

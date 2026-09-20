@@ -306,7 +306,11 @@ An opencode file always sits under the localcode file of the same scope, which i
 
 opencode's spellings also work written directly into a localcode `config.json`: `mcp` for `mcp_servers`, `tools` for `permission`, `autoupdate` for `auto_update`, `compaction.auto` for `auto_compact_enabled`, `provider` for `providers`, `agent` for `agents`, and `model` as one `provider/model` string. A `model` is split at its first slash, the left half naming a provider the same file defines — localcode never reaches a model catalogue, so a provider it has not been given an endpoint and a credential for is refused by name rather than guessed at.
 
-What localcode cannot honour it refuses at startup, naming the key and saying what will not happen — `lsp`, `formatter`, `plugin`, `server`, `share` and the rest. What changes nothing it accepts and names on stderr. A file that is half obeyed should say which half.
+What localcode cannot honour it refuses, naming the key and saying what will not happen — `lsp`, `formatter`, `plugin`, `server`, `share` and the rest. What changes nothing it accepts and names on stderr. A file that is half obeyed should say which half.
+
+Whose file it is decides what a refusal does. A key localcode cannot honour in **your own** `config.json`, or in a file you named with `--config`, stops it starting: you wrote that for localcode, and finding out at startup beats finding out from behaviour. The same key in an **opencode** file is said out loud and that file is set aside — localcode went looking for it, it was written for another program, and another program's config is not a reason this one cannot start.
+
+Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_providers` / `disabled_providers`, are checked against the profiles in the same file: a profile added by a *different* file is not checked against them, because by then the lists are gone. And an agent that carries a `temperature` or `top_p` but no `model` has nothing to attach them to, since each file is read on its own and the default it would inherit may be in another one; the agent still runs on the default profile, and the settings that could not be applied are named on stderr.
 
 #### Top level fields
 
