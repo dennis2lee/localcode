@@ -11,6 +11,121 @@ import (
 	"strings"
 )
 
+// opencodeModelFacts is what a provider's models block says about one
+// model: the id it is served under, and its limits.
+type opencodeModelFacts struct {
+	wireID        string
+	contextWindow int
+	maxTokens     int
+}
+
+// listedModels is the names a whitelist or blacklist entry can match: the
+// key as the file wrote it, and the wire id that key maps to.
+//
+// Both, because a profile carries the wire id. A models block may rename
+// what it serves — {"fast": {"id": "deepseek-ai/DeepSeek-V3"}} — and the
+// synthesised profile takes the id, since that is what goes on the wire.
+// Matching only the key meant a whitelist rejected the very model it
+// listed, and a blacklist let through the one it forbade: the wrong
+// answer in both directions, and the blacklist's was the open one.
+func listedModels(list []string, facts map[string]opencodeModelFacts) map[string]bool {
+	out := make(map[string]bool, len(list)*2)
+	for _, item := range list {
+		out[item] = true
+		if f, ok := facts[item]; ok && f.wireID != "" {
+			out[f.wireID] = true
+		}
+	}
+	return out
+}
+
+// namedAs is how a message should refer to a model the file listed: the
+// entry the person typed, and the id it resolves to when those differ.
+//
+// A models block may rename what it serves, and the profile carries the
+// served id — so a refusal about a blacklist entry that quoted only the
+// id sent somebody looking through their own list for a string that is
+// not in it.
+func namedAs(list []string, facts map[string]opencodeModelFacts, model string) string {
+	for _, item := range list {
+		if item == model {
+			return fmt.Sprintf("%q", item)
+		}
+		if f, ok := facts[item]; ok && f.wireID == model {
+			return fmt.Sprintf("%q (served as %q)", item, model)
+		}
+	}
+	return fmt.Sprintf("%q", model)
+}
+
+// mergeServerBlocks joins two objects of MCP servers, reporting the first
+// name they share. ok is false when either is not an object at all.
+func mergeServerBlocks(a, b json.RawMessage) (merged json.RawMessage, clash string, ok bool) {
+	var am, bm map[string]json.RawMessage
+	if json.Unmarshal(a, &am) != nil || json.Unmarshal(b, &bm) != nil {
+		return nil, "", false
+	}
+	out := make(map[string]json.RawMessage, len(am)+len(bm))
+	for k, v := range bm {
+		out[k] = v
+	}
+	for _, k := range sortedKeys(am) {
+		if _, both := bm[k]; both {
+			return nil, k, true
+		}
+		out[k] = am[k]
+	}
+	b2, err := json.Marshal(out)
+	if err != nil {
+		return nil, "", false
+	}
+	return b2, "", true
+}
+
+// jsonText is a value as the file wrote it, for a message about it.
+//
+// Refusals used to interpolate a Go variable, which is the value only
+// when the unmarshal into it succeeded: `share: {"mode":"auto"}` came
+// back as `share: ""` because the string stayed zero, and `snapshot:
+// true` was refused with a sentence that said `snapshot: false`. A
+// message that names a value the file does not contain sends somebody
+// looking for text that is not there.
+func jsonText(raw json.RawMessage) string {
+	return strings.TrimSpace(string(raw))
+}
+
+// toolsCoveredBy is the localcode tool names a permission key stands
+// for: itself, plus whatever the opencode alias table adds. Sorted, so a
+// message built from it reads the same every time.
+func toolsCoveredBy(key string) []string {
+	if covered, ok := ToolAliases[key]; ok {
+		out := append([]string(nil), covered...)
+		sort.Strings(out)
+		return out
+	}
+	return []string{key}
+}
+
+// collidingPermissionKey is the key in an existing permission block that
+// stands for any of the same tools as target, or "" when none does.
+func collidingPermissionKey(perms map[string]json.RawMessage, target string) string {
+	if len(perms) == 0 {
+		return ""
+	}
+	want := make(map[string]bool)
+	for _, t := range toolsCoveredBy(target) {
+		want[t] = true
+	}
+	for _, key := range sortedKeys(perms) {
+		for _, t := range toolsCoveredBy(key) {
+			if want[t] {
+				return key
+			}
+		}
+	}
+	return ""
+}
+
 // reservedProfilePrefix marks a profile localcode wrote for itself out of
 // an opencode key, rather than one a person wrote. Reserved so the
 // synthesis cannot land on a name somebody is already using: a collision
@@ -23,16 +138,6 @@ type Normalized struct {
 	JSON        []byte   // localcode-shaped, ready for json.Unmarshal
 	Ignored     []string // opencode dotted paths accepted and not honoured, sorted
 	Synthesised []string // profile names synthesised from opencode keys
-	// MadePlaceholders says this function wrote an {env:NAME} of its own —
-	// opencode names the variable holding a key in provider.<n>.env, and
-	// the only way to honour that is to write the placeholder localcode
-	// already understands. The caller expands once more because of it.
-	//
-	// A flag rather than the caller scanning the bytes for "{env:": by
-	// then the document's own placeholders have already been expanded, and
-	// a value that came back from the environment carrying that text would
-	// send the whole file through substitution a second time.
-	MadePlaceholders bool
 }
 
 type refusal struct {
@@ -41,7 +146,9 @@ type refusal struct {
 }
 
 // NormalizeOpencode rewrites opencode's spellings into localcode's own.
-// raw is the file's bytes after comments and {env:} have been handled.
+// raw is the file's bytes with its comments already blanked, and with its
+// {env:NAME} placeholders still in it: substitution runs after this, so
+// one pass covers both the file's placeholders and the ones written here.
 // An error is the refusal, and it names every key that caused one.
 //
 // Pure function: no file system, no network, no OS or environment queries,
@@ -60,6 +167,7 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 		return Normalized{JSON: raw}, nil
 	}
 
+	var reserved []refusal
 	// The reserved prefix, checked against what the file itself declares
 	// and before anything is synthesised into the same namespace.
 	//
@@ -81,16 +189,18 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				}
 			}
 			sort.Strings(taken)
-			if len(taken) > 0 {
-				return Normalized{}, fmt.Errorf(
-					"profile %q: a profile whose name begins with %q is reserved for keys read from an opencode file; rename yours",
-					taken[0], reservedProfilePrefix)
+			for _, name := range taken {
+				reserved = append(reserved, refusal{
+					path: "profiles." + name,
+					msg: fmt.Sprintf(
+						"profile %q: a profile whose name begins with %q is reserved for keys read from an opencode file; rename yours",
+						name, reservedProfilePrefix),
+				})
 			}
 		}
 	}
 
-	madePlaceholders := false
-	var refusals []refusal
+	refusals := reserved
 	var ignored []string
 	var synthesised []string
 	changed := false
@@ -98,13 +208,33 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 	// Step 1: mcp -> mcp_servers
 	// Both present -> refuse naming both.
 	// Only mcp present -> rename to mcp_servers.
-	_, hasMCP := root["mcp"]
-	_, hasMCPServers := root["mcp_servers"]
+	rawMCP, hasMCP := root["mcp"]
+	rawMCPServers, hasMCPServers := root["mcp_servers"]
 	if hasMCP && hasMCPServers {
-		refusals = append(refusals, refusal{
-			path: "mcp",
-			msg:  `mcp and mcp_servers are two spellings of the same block; keep one of them`,
-		})
+		// Two spellings of one block, and unlike a scalar key they can
+		// hold different things: "mcp" naming one server and
+		// "mcp_servers" another is two halves of one list rather than a
+		// contradiction, so they are joined. What is not joinable is a
+		// server named in both — that is the file saying two things about
+		// one server, and picking a winner would leave the other read by
+		// nobody.
+		merged, clash, ok := mergeServerBlocks(rawMCP, rawMCPServers)
+		switch {
+		case !ok:
+			refusals = append(refusals, refusal{
+				path: "mcp",
+				msg:  `mcp and mcp_servers are both there and at least one of them is not an object of servers; keep one of them`,
+			})
+		case clash != "":
+			refusals = append(refusals, refusal{
+				path: "mcp." + clash,
+				msg:  fmt.Sprintf(`server %q is in both "mcp" and "mcp_servers"; keep one of them`, clash),
+			})
+		default:
+			root["mcp_servers"] = merged
+			delete(root, "mcp")
+			changed = true
+		}
 	} else if hasMCP {
 		root["mcp_servers"] = root["mcp"]
 		delete(root, "mcp")
@@ -121,7 +251,11 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 
 		var toolsMap map[string]json.RawMessage
 		if err := json.Unmarshal(toolsRaw, &toolsMap); err != nil {
-			return Normalized{}, fmt.Errorf(`"tools" must be an object of tool booleans: %w`, err)
+			refusals = append(refusals, refusal{
+				path: "tools",
+				msg:  fmt.Sprintf(`"tools" must be an object of tool booleans, and it is %s`, jsonText(toolsRaw)),
+			})
+			toolsMap = nil
 		}
 
 		var existingPerms map[string]json.RawMessage
@@ -141,19 +275,31 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				// came back allow.
 				var bare string
 				if json.Unmarshal(permRaw, &bare) == nil {
-					return Normalized{}, fmt.Errorf(
-						`permission is %q, which is every tool, and "tools" names tools inside it; `+
-							`write them as one permission block`, bare)
+					refusals = append(refusals, refusal{
+						path: "permission",
+						msg: fmt.Sprintf(`permission is %q, which is every tool, and "tools" names tools inside it; `+
+							`write them as one permission block`, bare),
+					})
+				} else {
+					refusals = append(refusals, refusal{
+						path: "permission",
+						msg:  fmt.Sprintf(`permission must be a decision string or an object of tool rules, and it is %s`, jsonText(permRaw)),
+					})
 				}
-				return Normalized{}, fmt.Errorf(`permission must be a decision string or an object of tool rules: %w`, err)
+				toolsMap = nil
 			}
 		}
 
 		mappedPerms := make(map[string]string)
-		for k, rawVal := range toolsMap {
+		for _, k := range sortedKeys(toolsMap) {
+			rawVal := toolsMap[k]
 			var val bool
 			if err := json.Unmarshal(rawVal, &val); err != nil {
-				return Normalized{}, fmt.Errorf(`tools %q: expected boolean, got %s`, k, string(rawVal))
+				refusals = append(refusals, refusal{
+					path: "tools." + k,
+					msg:  fmt.Sprintf(`tools %q is %s, and every entry there is true or false`, k, jsonText(rawVal)),
+				})
+				continue
 			}
 
 			targetTool := k
@@ -166,23 +312,23 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				decision = "deny"
 			}
 
-			if existingPerms != nil {
-				if _, collides := existingPerms[k]; collides {
-					refusals = append(refusals, refusal{
-						path: "tools." + k,
-						msg:  fmt.Sprintf(`tool %q is configured in both "tools" and "permission"; keep one of them`, k),
-					})
-					continue
-				}
-				if targetTool != k {
-					if _, collides := existingPerms[targetTool]; collides {
-						refusals = append(refusals, refusal{
-							path: "tools." + k,
-							msg:  fmt.Sprintf(`tool %q is configured in both "tools" and "permission"; keep one of them`, targetTool),
-						})
-						continue
-					}
-				}
+			if other := collidingPermissionKey(existingPerms, targetTool); other != "" {
+				// Overlap, not the same spelling. "tools": {"write": false}
+				// becomes edit, which covers write_file as well, so a
+				// permission block naming write_file is talking about the
+				// same call — and resolution prefers the exact name over
+				// the alias, so the file denied edits in one spelling and
+				// allowed them in the other, with nothing said. Comparing
+				// literal keys missed it because the two strings differ.
+				//
+				// The message names what the person wrote on both sides,
+				// since that is what they will look for in their file.
+				refusals = append(refusals, refusal{
+					path: "tools." + k,
+					msg: fmt.Sprintf(`tools %q and permission %q are the same tools (%s); keep one of them`,
+						k, other, strings.Join(toolsCoveredBy(targetTool), ", ")),
+				})
+				continue
 			}
 
 			if prevDecision, seen := mappedPerms[targetTool]; seen && prevDecision != decision {
@@ -285,11 +431,20 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 		})
 	}
 
-	if _, ok := root["snapshot"]; ok {
-		refusals = append(refusals, refusal{
-			path: "snapshot",
-			msg:  `snapshot: false asks localcode not to record file snapshots, and localcode copies every file a turn edits before changing it so /rewind can put it back. There is no setting to turn that off. Remove the key, or accept that the copies are made.`,
-		})
+	if raw, ok := root["snapshot"]; ok {
+		// opencode's default is true, and localcode always records them,
+		// so "snapshot": true asks for what already happens.
+		var want bool
+		if json.Unmarshal(raw, &want) == nil && want {
+			delete(root, "snapshot")
+			changed = true
+		} else {
+			refusals = append(refusals, refusal{
+				path: "snapshot",
+				msg: fmt.Sprintf(`snapshot: %s asks localcode not to record file snapshots, and localcode copies every file a turn edits before changing it so /rewind can put it back. `+
+					`There is no setting to turn that off. Remove the key, or accept that the copies are made.`, jsonText(raw)),
+			})
+		}
 	}
 
 	if _, ok := root["plugin"]; ok {
@@ -367,8 +522,8 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 		} else {
 			refusals = append(refusals, refusal{
 				path: "share",
-				msg: fmt.Sprintf(`share: %q asks for a session to be publishable to a share URL, and localcode has no sharing — nothing is ever published, `+
-					`and nothing here will publish it for you. Remove the key, or set it to "disabled", which is what localcode does.`, mode),
+				msg: fmt.Sprintf(`share: %s asks for a session to be publishable to a share URL, and localcode has no sharing — nothing is ever published, `+
+					`and nothing here will publish it for you. Remove the key, or set it to "disabled", which is what localcode does.`, jsonText(shareRaw)),
 			})
 		}
 	}
@@ -513,12 +668,6 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				}
 			}
 		}
-	}
-
-	type opencodeModelFacts struct {
-		wireID        string
-		contextWindow int
-		maxTokens     int
 	}
 
 	providerModelFacts := make(map[string]map[string]opencodeModelFacts)
@@ -700,7 +849,6 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 			var envList []string
 			if json.Unmarshal(rawEnv, &envList) == nil && len(envList) > 0 {
 				if (provType == "anthropic" || provType == "openai-compat") && provMap["api_key"] == nil {
-					madePlaceholders = true
 					b, _ := json.Marshal(fmt.Sprintf("{env:%s}", envList[0]))
 					provMap["api_key"] = b
 				}
@@ -1094,6 +1242,11 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 	rawAgent, hasAgent := root["agent"]
 	rawMode, hasMode := root["mode"]
 	var agentRawObj json.RawMessage
+	// Which of the two names the block arrived under, for the messages
+	// below: opencode's older spelling is "mode", and a refusal naming
+	// "agent" to somebody whose file says "mode" is a refusal about a key
+	// they do not have.
+	agentSpelling := "agent"
 	if hasAgent && hasMode {
 		var aMap, mMap map[string]json.RawMessage
 		_ = json.Unmarshal(rawAgent, &aMap)
@@ -1109,15 +1262,15 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 				})
 			}
 		}
-		agentRawObj = rawAgent
+		agentRawObj, agentSpelling = rawAgent, "agent"
 		delete(root, "mode")
 		changed = true
 	} else if hasMode {
-		agentRawObj = rawMode
+		agentRawObj, agentSpelling = rawMode, "mode"
 		delete(root, "mode")
 		changed = true
 	} else if hasAgent {
-		agentRawObj = rawAgent
+		agentRawObj, agentSpelling = rawAgent, "agent"
 		delete(root, "agent")
 		changed = true
 	}
@@ -1125,9 +1278,13 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 	rawAgents, hasAgents := root["agents"]
 	if agentRawObj != nil && hasAgents {
 		if !bytes.Equal(bytes.TrimSpace(agentRawObj), bytes.TrimSpace(rawAgents)) {
+			// agentSpelling, not "agent": the block may have arrived under
+			// opencode's older name, and a refusal naming a key the file
+			// does not contain sends somebody looking for text that is not
+			// there.
 			refusals = append(refusals, refusal{
-				path: "agent",
-				msg:  `agent and agents are two spellings of the same block; keep one of them`,
+				path: agentSpelling,
+				msg:  fmt.Sprintf(`%s and agents are two spellings of the same block; keep one of them`, agentSpelling),
 			})
 		}
 	}
@@ -1284,6 +1441,34 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 						}
 					}
 
+					// Nothing to attach the agent's settings to. That is
+					// the ordinary shape of a project opencode.json whose
+					// model comes from the global file: this function sees
+					// one file at a time, so the default it would inherit
+					// from is not in front of it.
+					//
+					// So the agent keeps working — it takes the merged
+					// default, the way an agent that named no profile
+					// always has — and what could not be applied is said
+					// rather than synthesised into a profile with no
+					// provider in it, which is what used to happen and
+					// what came back as `profile "opencode:agent:writer"
+					// references unknown provider ""`.
+					if provKey == "" {
+						if hasTemp {
+							ignored = append(ignored, fmt.Sprintf("agent.%s.temperature", aName))
+						}
+						if hasTopP {
+							ignored = append(ignored, fmt.Sprintf("agent.%s.top_p", aName))
+						}
+						if curDefaultProfile != "" {
+							aEntry["profile"], _ = json.Marshal(curDefaultProfile)
+						}
+						b, _ := json.Marshal(aEntry)
+						agentsMap[aName] = b
+						continue
+					}
+
 					prof := Profile{
 						Provider:      provKey,
 						Model:         wireModel,
@@ -1318,32 +1503,30 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 	for _, pName := range pNames {
 		blList := providerBlacklists[pName]
 		if len(blList) > 0 {
-			blSet := make(map[string]bool, len(blList))
-			for _, item := range blList {
-				blSet[item] = true
-			}
+			blSet := listedModels(blList, providerModelFacts[pName])
 			for _, profName := range sortedKeys(profilesMap) {
 				var p Profile
 				if json.Unmarshal(profilesMap[profName], &p) == nil && p.Provider == pName && blSet[p.Model] {
 					refusals = append(refusals, refusal{
 						path: fmt.Sprintf("provider.%s.blacklist", pName),
-						msg:  fmt.Sprintf(`provider %q.blacklist hides %q, and profile %q is that model on that provider. localcode's /model lists profiles and cannot hide one — remove the profile, or the blacklist entry.`, pName, p.Model, profName),
+						msg: fmt.Sprintf(`provider %q.blacklist hides %s, and profile %q is that model on that provider. `+
+							`localcode's /model lists profiles and cannot hide one — remove the profile, or the blacklist entry.`,
+							pName, namedAs(blList, providerModelFacts[pName], p.Model), profName),
 					})
 				}
 			}
 		}
 		wlList := providerWhitelists[pName]
 		if len(wlList) > 0 {
-			wlSet := make(map[string]bool, len(wlList))
-			for _, item := range wlList {
-				wlSet[item] = true
-			}
+			wlSet := listedModels(wlList, providerModelFacts[pName])
 			for _, profName := range sortedKeys(profilesMap) {
 				var p Profile
 				if json.Unmarshal(profilesMap[profName], &p) == nil && p.Provider == pName && !wlSet[p.Model] {
 					refusals = append(refusals, refusal{
 						path: fmt.Sprintf("provider.%s.whitelist", pName),
-						msg:  fmt.Sprintf(`provider %q.whitelist keeps only the models it lists, and profile %q is %q on that provider, which it does not list. localcode's /model lists profiles and cannot hide one — remove the profile, or add the model.`, pName, profName, p.Model),
+						msg: fmt.Sprintf(`provider %q.whitelist keeps only the models it lists, and profile %q is %q on that provider, which it does not list. `+
+							`localcode's /model lists profiles and cannot hide one — remove the profile, or add the model.`,
+							pName, profName, p.Model),
 					})
 				}
 			}
@@ -1371,14 +1554,14 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 	sort.Strings(ignored)
 
 	if !changed {
-		return Normalized{JSON: raw, Ignored: ignored, Synthesised: synthesised, MadePlaceholders: madePlaceholders}, nil
+		return Normalized{JSON: raw, Ignored: ignored, Synthesised: synthesised}, nil
 	}
 
 	out, err := json.Marshal(root)
 	if err != nil {
 		return Normalized{}, err
 	}
-	return Normalized{JSON: out, Ignored: ignored, Synthesised: synthesised, MadePlaceholders: madePlaceholders}, nil
+	return Normalized{JSON: out, Ignored: ignored, Synthesised: synthesised}, nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

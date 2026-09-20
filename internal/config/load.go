@@ -40,12 +40,13 @@ func LoadMerged(projectDir string) (*Config, []string, error) {
 
 // loadMergedFrom is LoadMerged with the list of files handed to it, so
 // the order can be exercised without a home directory to arrange.
-func loadMergedFrom(paths []string) (*Config, []string, error) {
+func loadMergedFrom(sources []source) (*Config, []string, error) {
 	var cfg *Config
 	var notes []string
-	var read []string
+	var setAside []string
 
-	for _, path := range paths {
+	for _, src := range sources {
+		path := src.path
 		// opencode writes .jsonc when it wants comments in the file, and
 		// a person who did that should not find it unread.
 		if alt := jsoncAlternative(path); alt != "" {
@@ -59,12 +60,17 @@ func loadMergedFrom(paths []string) (*Config, []string, error) {
 		}
 		one, oneNotes, err := loadOptional(path)
 		if err != nil {
-			return nil, nil, err
+			if !src.opencode {
+				return nil, nil, err
+			}
+			// Theirs. Say what it was and carry on without it: another
+			// program's config is not a reason this one cannot start.
+			setAside = append(setAside, err.Error())
+			continue
 		}
 		if one == nil {
 			continue
 		}
-		read = append(read, path)
 		notes = append(notes, oneNotes...)
 		if cfg == nil {
 			cfg = one
@@ -73,8 +79,20 @@ func loadMergedFrom(paths []string) (*Config, []string, error) {
 		cfg.merge(one)
 	}
 
+	// Set aside, not swallowed: it goes back with the notes, which the
+	// caller prints. A file localcode went looking for and could not use
+	// is worth a line every start until somebody fixes it or removes it.
+	notes = append(notes, setAside...)
+
 	if cfg == nil {
-		return nil, nil, fmt.Errorf("no config found at any of: %s", strings.Join(paths, ", "))
+		var names []string
+		for _, src := range sources {
+			names = append(names, src.path)
+		}
+		if len(setAside) > 0 {
+			return nil, nil, fmt.Errorf("no usable config found. %s", strings.Join(setAside, " "))
+		}
+		return nil, nil, fmt.Errorf("no config found at any of: %s", strings.Join(names, ", "))
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("invalid merged config: %w", err)
@@ -139,30 +157,36 @@ func loadOptional(path string) (*Config, []string, error) {
 	// rather than deleted, so a parse error's offset still points at the
 	// line it came from. See jsonc.go.
 	data = stripComments(data)
-	// {env:NAME} next, so every field of every version of this struct
+	// opencode's spellings next, while the placeholders are still
+	// placeholders.
+	//
+	// This used to run the other way round, and the order is the whole of
+	// a bug it had. opencode names the variable that holds a key rather
+	// than the key, so the normaliser writes an {env:NAME} of its own —
+	// which, after substitution had already happened, needed a second
+	// pass to resolve. A second pass over the document is a second pass
+	// over everything in it, so a value that came back from the
+	// environment carrying that text was substituted again, and a value
+	// carrying "{file:" was refused as if the file had written it.
+	// Normalising first leaves one pass and nothing to re-scan.
+	//
+	// What the normaliser sees in exchange is the file as written, which
+	// is the better half of the trade: a refusal quotes what the person
+	// typed rather than what an environment variable turned it into.
+	norm, err := NormalizeOpencode(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("config %s: %w", path, err)
+	}
+	// {env:NAME} last, so every field of every version of this struct
 	// gets it without anything here having to know which fields are
-	// secrets. See env.go.
-	expanded, err := expandEnv(data, osLookup)
+	// secrets, and so does every placeholder the normaliser just wrote.
+	// See env.go.
+	expanded, err := expandEnv(norm.JSON, osLookup)
 	if err != nil {
 		return nil, nil, fmt.Errorf("config %s: %w", path, err)
-	}
-	norm, err := NormalizeOpencode(expanded)
-	if err != nil {
-		return nil, nil, fmt.Errorf("config %s: %w", path, err)
-	}
-	// Once more, and only for what the normaliser wrote itself: opencode
-	// names the variable holding a key rather than the key, and the
-	// placeholder that turns into is written after the first pass has
-	// already run. See Normalized.MadePlaceholders.
-	finalJSON := norm.JSON
-	if norm.MadePlaceholders {
-		finalJSON, err = expandEnv(finalJSON, osLookup)
-		if err != nil {
-			return nil, nil, fmt.Errorf("config %s: %w", path, err)
-		}
 	}
 	var cfg Config
-	if err := json.Unmarshal(finalJSON, &cfg); err != nil {
+	if err := json.Unmarshal(expanded, &cfg); err != nil {
 		return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	return &cfg, norm.Ignored, nil

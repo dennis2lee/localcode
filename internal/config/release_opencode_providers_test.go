@@ -208,10 +208,10 @@ func TestOpencodeAgentToolsAndPermissionRefused(t *testing.T) {
 	}
 }
 
-// TestOpencodeHandwrittenOpencodeProfileRefusedByValidate verifies that Validate
+// TestOpencodeHandwrittenOpencodeProfileRefusedOnLoad verifies that Validate
 // refuses a hand-written profile whose name begins with "opencode:", preventing
 // silent collisions with synthesised profile names.
-func TestOpencodeHandwrittenOpencodeProfileRefusedByValidate(t *testing.T) {
+func TestOpencodeHandwrittenOpencodeProfileRefusedOnLoad(t *testing.T) {
 	_, err := loadText(t, `{
 		"providers": {"anthropic": {"type": "anthropic", "api_key": "k"}},
 		"profiles": {

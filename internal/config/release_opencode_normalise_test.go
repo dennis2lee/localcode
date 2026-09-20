@@ -82,18 +82,37 @@ func TestOpencodeToolsWriteMapsToEdit(t *testing.T) {
 	}
 }
 
-// TestOpencodeBothMCPSettingsRefused verifies that having both mcp and mcp_servers
-// is refused, naming both.
-func TestOpencodeBothMCPSettingsRefused(t *testing.T) {
-	_, err := loadText(t, `{`+workingProviders+`,`+
+// Two spellings of the MCP block hold lists, not values, so they are
+// joined — and only a server named in both is refused.
+//
+// This used to refuse the pair outright, which was fail-closed and
+// therefore harmless, but wrong: "mcp" naming one server and
+// "mcp_servers" naming another is two halves of one list, and a file
+// that arrived that way (a localcode config with an opencode block
+// pasted into it) had nothing contradictory in it.
+func TestTheTwoMCPSpellingsAreJoinedUnlessTheyNameTheSameServer(t *testing.T) {
+	cfg, err := loadText(t, `{`+workingProviders+`,`+
 		`"mcp":{"s1":{"type":"stdio","command":"c1"}},`+
 		`"mcp_servers":{"s2":{"type":"stdio","command":"c2"}}}`)
-	if err == nil {
-		t.Fatal("both mcp and mcp_servers loaded without error, want refusal")
+	if err != nil {
+		t.Fatalf("two disjoint halves of one server list were refused: %v", err)
 	}
-	errStr := err.Error()
-	if !strings.Contains(errStr, "mcp") || !strings.Contains(errStr, "mcp_servers") {
-		t.Errorf("error %q does not name both mcp and mcp_servers", errStr)
+	for _, name := range []string{"s1", "s2"} {
+		if _, ok := cfg.MCPServers[name]; !ok {
+			t.Errorf("server %q did not arrive; servers = %v", name, cfg.MCPServers)
+		}
+	}
+
+	// The same name in both is the file saying two things about one
+	// server, and picking a winner would leave the other read by nobody.
+	_, err = loadText(t, `{`+workingProviders+`,`+
+		`"mcp":{"s1":{"type":"stdio","command":"c1"}},`+
+		`"mcp_servers":{"s1":{"type":"stdio","command":"c2"}}}`)
+	if err == nil {
+		t.Fatal("a server named in both spellings was accepted, so one of the two was read by nobody")
+	}
+	if !strings.Contains(err.Error(), `"s1"`) {
+		t.Errorf("the refusal does not name the server: %v", err)
 	}
 }
 

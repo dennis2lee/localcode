@@ -97,22 +97,33 @@ func ProfileFor(cfg *config.Config, category string) string {
 		return ""
 	}
 
-	// Filter out synthesised per-agent profiles (opencode:agent:*).
-	// A profile synthesised from one agent's own model belongs to that agent alone.
-	// Letting bestMatch or firstByName consider it would allow a quick-agent
-	// model line to become the quick specialist lane for every grep and build
-	// across the roster, flipping Solo(cfg) and altering what the main model is
-	// told in OrchestrationPrompt and PlanPolicy. opencode:default is not excluded:
-	// it is the file's main model and its default_profile, so treating it like any
-	// other profile is correct.
-	profiles := make(map[string]config.Profile, len(cfg.Profiles))
-	for k, v := range cfg.Profiles {
-		if !strings.HasPrefix(k, "opencode:agent:") {
-			profiles[k] = v
-		}
-	}
+	// The lanes are chosen from the profiles a person wrote, not from the
+	// ones localcode wrote for itself out of an opencode file.
+	//
+	// Every "opencode:" profile is held back, not just the per-agent
+	// ones. The narrower rule was wrong in the case that matters: a
+	// machine with both an opencode config and a localcode config gets an
+	// opencode:default alongside the profiles it already had, and
+	// bestMatch classifies by model id and takes the first by name — so
+	// that one model could become the quick, balanced and deep lane at
+	// once, over a default_profile the person had set, and flip Solo with
+	// it. Reading someone's opencode file must not change how their own
+	// config routes.
+	//
+	// Unless there is nothing else, which is the opencode-only install: a
+	// configuration made entirely of synthesised profiles still has to
+	// route. Then the file's own model may serve — but a per-agent one
+	// still may not, at any point. That exclusion is absolute because it
+	// is about what the profile IS: opencode:agent:review is the model
+	// for the review agent, and nothing about it says the roster's
+	// specialists should run on it.
+	profiles := pick(cfg.Profiles, func(name string) bool {
+		return !strings.HasPrefix(name, opencodePrefix)
+	})
 	if len(profiles) == 0 {
-		return ""
+		profiles = pick(cfg.Profiles, func(name string) bool {
+			return !strings.HasPrefix(name, opencodeAgentPrefix)
+		})
 	}
 
 	// The escape hatch, and the documented way to pin this. A profile
@@ -130,8 +141,13 @@ func ProfileFor(cfg *config.Config, category string) string {
 			return name
 		}
 	}
+	// Against every profile, including the held-back ones. A
+	// default_profile is a person saying which model, and a name they
+	// typed is theirs whatever it begins with — silently passing over it
+	// and answering with whatever sorts first is the one thing worse than
+	// either honouring or refusing it.
 	if cfg.DefaultProfile != "" {
-		if _, ok := profiles[cfg.DefaultProfile]; ok {
+		if _, ok := cfg.Profiles[cfg.DefaultProfile]; ok {
 			return cfg.DefaultProfile
 		}
 	}
@@ -176,6 +192,26 @@ func Solo(cfg *config.Config) bool {
 		}
 	}
 	return first != ""
+}
+
+// opencodePrefix and opencodeAgentPrefix name the profiles localcode
+// wrote for itself out of an opencode file, rather than ones a person
+// wrote. See internal/config's reservedProfilePrefix, which is where they
+// are created.
+const (
+	opencodePrefix      = "opencode:"
+	opencodeAgentPrefix = "opencode:agent:"
+)
+
+// pick is the profiles whose names keep.
+func pick(profiles map[string]config.Profile, keep func(string) bool) map[string]config.Profile {
+	out := make(map[string]config.Profile, len(profiles))
+	for name, p := range profiles {
+		if keep(name) {
+			out[name] = p
+		}
+	}
+	return out
 }
 
 func bestMatch(profiles map[string]config.Profile, category string) string {

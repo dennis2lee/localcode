@@ -31,22 +31,42 @@ import (
 // has already decided which directory is the project, and a second
 // opinion about that would be a way for the two to disagree about which
 // repository is open.
-func configSources(home, projectDir, opencodeConfigEnv string) []string {
-	var out []string
-	add := func(parts ...string) { out = append(out, filepath.Join(parts...)) }
+func configSources(home, projectDir, opencodeConfigEnv string) []source {
+	var out []source
+	theirs := func(parts ...string) { out = append(out, source{path: filepath.Join(parts...), opencode: true}) }
+	ours := func(parts ...string) { out = append(out, source{path: filepath.Join(parts...)}) }
 
 	// opencode's global, which it keeps under XDG rather than beside its
 	// own dot-directory.
-	add(home, ".config", "opencode", "opencode.json")
+	theirs(home, ".config", "opencode", "opencode.json")
 	if opencodeConfigEnv != "" {
-		out = append(out, opencodeConfigEnv)
+		out = append(out, source{path: opencodeConfigEnv, opencode: true})
 	}
-	add(home, ".localcode", "config.json")
+	ours(home, ".localcode", "config.json")
 	// opencode's project file is at the root of the project, not inside
 	// .opencode — that directory holds agents, commands and skills.
-	add(projectDir, "opencode.json")
-	add(projectDir, ".localcode", "config.json")
+	theirs(projectDir, "opencode.json")
+	ours(projectDir, ".localcode", "config.json")
 	return out
+}
+
+// source is one file the configuration is built from, and whose it is.
+//
+// Whose matters for exactly one thing, and it is the difference between
+// localcode starting and not. A key localcode cannot honour is refused,
+// which is right for a file somebody wrote for localcode: they said
+// something localcode will not do, and finding out at startup beats
+// finding out from behaviour. It is wrong for a file they wrote for
+// another program. opencode's own configs routinely carry lsp, formatter
+// and share; refusing those stopped localcode starting on any machine
+// that also had opencode installed, with a working localcode config two
+// directories away and nothing wrong with it.
+//
+// So a refusal from their file is said out loud and the file is set
+// aside; a refusal from ours still stops everything.
+type source struct {
+	path     string
+	opencode bool
 }
 
 // jsoncAlternative is the same path with a .jsonc extension, which is
