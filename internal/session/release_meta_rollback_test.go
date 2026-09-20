@@ -39,6 +39,12 @@ type metaRollbackCase struct {
 	setup  func(t *testing.T, s *Store)
 	invoke func(s *Store) error
 	ids    []string
+	// wrapsWriteError is for the two methods that put something around the
+	// write error on the way out — the group setters, which write several
+	// records and have to say which of them did not go. Every other method
+	// must return the write error exactly as it came, and this flag is
+	// what stops that from quietly becoming optional.
+	wrapsWriteError bool
 }
 
 var metaRollbackCases = []metaRollbackCase{
@@ -200,7 +206,8 @@ var metaRollbackCases = []metaRollbackCase{
 		ids:    []string{"s1", "s2"},
 	},
 	{
-		method: "SetGroups",
+		method:          "SetGroups",
+		wrapsWriteError: true,
 		setup: func(t *testing.T, s *Store) {
 			mustCreateRollbackSession(t, s, "s1", "", "general-purpose", true)
 			if err := s.SetGroups([]string{"work"}, nil); err != nil {
@@ -216,7 +223,8 @@ var metaRollbackCases = []metaRollbackCase{
 		ids: []string{"s1"},
 	},
 	{
-		method: "SetSessionGroup",
+		method:          "SetSessionGroup",
+		wrapsWriteError: true,
 		setup: func(t *testing.T, s *Store) {
 			mustCreateRollbackSession(t, s, "s1", "", "general-purpose", true)
 			if err := s.SetGroups([]string{"work"}, nil); err != nil {
@@ -256,8 +264,20 @@ func TestAFailedMetaWriteLeavesTheSessionExactlyAsItWas(t *testing.T) {
 			}
 
 			failMetaWrites(s)
-			if err := tc.invoke(s); err != errInjectedWrite {
-				t.Fatalf("%s under a failing write returned err = %v, want the write error itself", tc.method, err)
+			invokeErr := tc.invoke(s)
+			if !errors.Is(invokeErr, errInjectedWrite) {
+				t.Fatalf("%s under a failing write returned err = %v, want it to carry the write error", tc.method, invokeErr)
+			}
+			// Only the methods that say they wrap may wrap. Letting every
+			// method off with errors.Is would mean a method could start
+			// dressing the write error up — or swallowing it and returning
+			// something of its own that happens to wrap it — and this test
+			// would go on passing.
+			if !tc.wrapsWriteError && invokeErr != errInjectedWrite {
+				t.Fatalf("%s returned err = %v, want the write error itself and nothing around it", tc.method, invokeErr)
+			}
+			if tc.wrapsWriteError && !errors.Is(invokeErr, ErrPersist) {
+				t.Fatalf("%s wraps its write error but does not mark it as a persistence failure: %v", tc.method, invokeErr)
 			}
 
 			for _, id := range tc.ids {

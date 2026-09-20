@@ -17,15 +17,30 @@ export async function loadSessions() {
   } catch (err) {
     app.sessions = [];
   }
+  let groupsAreCurrent = false;
   try {
     const res = await apiClient.getGroups();
-    if (res && Array.isArray(res.names)) app.sessionGroups = res.names;
+    if (res && Array.isArray(res.names)) {
+      app.sessionGroups = res.names;
+      groupsAreCurrent = true;
+    }
   } catch {
     // A daemon that does not know about groups, or a request that failed:
     // leave whatever we had. An empty list is the flat panel, which is the
     // right thing to show when we cannot find out.
     if (!app.sessionGroups) app.sessionGroups = [];
   }
+  // Both halves are in hand here and nowhere else, so this is where the
+  // list is put into the order it will be drawn in, and where folds for
+  // groups that are gone are dropped.
+  //
+  // Only when the daemon actually answered. A group can be deleted from
+  // the other window or the desktop build, and this is the only place
+  // this window would hear about it — but pruning against a list that
+  // failed to arrive would throw away every fold in the browser on one
+  // bad request.
+  app.sessions = panelOrder(app.sessions, app.sessionGroups);
+  if (groupsAreCurrent) forgetCollapsedGroups(app.sessionGroups);
   renderSessionList();
   // The listing carries each session's busy flag, which is also what the
   // light under the prompt reports for the one on screen — so a refresh
@@ -81,23 +96,47 @@ export function sessionMatchesFilter(s, q) {
 // session panel not to draw.
 const GROUP_COLLAPSE_KEY = 'localcode.collapsedGroups';
 
+// A Set, not an object keyed by name. A group is called whatever somebody
+// typed, and an object answers `collapsed['constructor']` with a function
+// it inherited — so a group named constructor, __proto__, toString or
+// valueOf would draw folded shut on the day it was made and never open
+// again, with its sessions unreachable from the panel. A Set has no
+// inherited members to collide with.
 export function readCollapsedGroups() {
   try {
     const raw = localStorage.getItem(GROUP_COLLAPSE_KEY);
-    if (!raw) return {};
+    if (!raw) return new Set();
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    return new Set(Array.isArray(parsed) ? parsed.filter(n => typeof n === 'string') : []);
   } catch {
-    return {};
+    return new Set();
   }
 }
 
 export function writeCollapsedGroups(collapsed) {
   try {
-    localStorage.setItem(GROUP_COLLAPSE_KEY, JSON.stringify(collapsed));
+    localStorage.setItem(GROUP_COLLAPSE_KEY, JSON.stringify([...collapsed]));
   } catch {
     /* a private window, or storage turned off: the panel still draws */
   }
+}
+
+// forgetCollapsedGroups drops folds for groups that are gone. Nothing on
+// the server prunes this, so a group that was folded and then deleted
+// would leave its name here for good — and fold a brand-new group of the
+// same name shut on the day it was made.
+export function forgetCollapsedGroups(groups) {
+  const live = new Set(groups || []);
+  const collapsed = readCollapsedGroups();
+  let dropped = false;
+  for (const name of [...collapsed]) {
+    if (!live.has(name)) {
+      collapsed.delete(name);
+      dropped = true;
+    }
+  }
+  if (dropped) writeCollapsedGroups(collapsed);
+  return collapsed;
 }
 
 function renderSessionCard(s, filtering) {
@@ -297,7 +336,7 @@ export function renderSessionList() {
     // that with a shut group holding the only row that matched would be
     // the panel refusing to show what it just found. The fold is not
     // forgotten, only overruled — clearing the filter shuts it again.
-    const isCollapsed = !!collapsed[groupName] && !filtering;
+    const isCollapsed = collapsed.has(groupName) && !filtering;
     const header = document.createElement('div');
     header.className = 'session-group-header' + (isCollapsed ? ' collapsed' : '');
 
@@ -315,6 +354,29 @@ export function renderSessionList() {
     countSpan.className = 'group-count';
     countSpan.textContent = ` (${inGroupAll.length})`;
     header.appendChild(countSpan);
+
+    // A folded group hides its rows, and with them every session's light.
+    // The whole point of that light is that a turn left running in another
+    // conversation — or worse, one stopped waiting for a permission answer
+    // — is visible without going and looking. Folding a group must not be
+    // a way to lose that, so the header carries the strongest state of
+    // anything it is covering, by the same order of urgency as a row.
+    if (isCollapsed) {
+      const hidden = inGroupAll.some(g => g.asking) ? 'asking'
+        : inGroupAll.some(g => g.busy) ? 'running'
+          : inGroupAll.some(g => app.unreadSessions.has(g.id)) ? 'unread'
+            : '';
+      if (hidden) {
+        const led = document.createElement('span');
+        led.className = 'session-led ' + hidden;
+        led.title = {
+          asking: 'a session in this group is waiting for you to answer a permission request',
+          running: 'a turn is running in a session in this group',
+          unread: 'a session in this group has a reply you have not looked at',
+        }[hidden];
+        header.appendChild(led);
+      }
+    }
 
     const actions = document.createElement('span');
     actions.className = 'group-actions';
@@ -346,16 +408,17 @@ export function renderSessionList() {
     header.appendChild(actions);
 
     header.addEventListener('click', () => {
-      const cur = readCollapsedGroups();
-      if (cur[groupName]) delete cur[groupName];
-      else cur[groupName] = true;
-      // Only the groups that are shut are kept, and only the ones that
-      // still exist. A group that was folded and then renamed or deleted
-      // would otherwise leave its name here for good, and the entry would
-      // fold the group shut again if that name ever came back.
-      writeCollapsedGroups(Object.fromEntries(
-        Object.keys(cur).filter(name => cur[name] && groupSet.has(name)).map(name => [name, true]),
-      ));
+      // Nothing to fold while a filter is on. The filter already overrides
+      // the fold, so the click would change the panel not at all and yet
+      // change what the panel looks like the moment the filter is cleared
+      // — a control that does nothing now and something later is worse
+      // than one that does nothing. Dragging is off while filtering for
+      // the same reason.
+      if (filtering) return;
+      const cur = forgetCollapsedGroups(groups);
+      if (cur.has(groupName)) cur.delete(groupName);
+      else cur.add(groupName);
+      writeCollapsedGroups(cur);
       renderSessionList();
     });
 
@@ -471,34 +534,80 @@ export function reorderList(sessions, fromID, toID) {
 // after. The drop already happened as far as the person doing it is
 // concerned; waiting a round trip to redraw would show the card snap back
 // to where it was and then move again.
+// panelOrder puts a session list into the order the panel draws it:
+// ungrouped first, then group by group, each keeping the order it already
+// had. Everything that moves a card decides which side of the target to
+// land on by comparing two positions, and once any group exists the order
+// app.sessions is in and the order the rows appear in stop being the same
+// list — so a card dragged downward across a group boundary lands above
+// the row it was dropped on. Sorting the array into the order it is drawn
+// in makes that one comparison honest again, and it is also the order that
+// then goes to the daemon, so a reload draws what the drag left behind.
+export function panelOrder(sessions, groups) {
+  const lane = new Map((groups || []).map((name, i) => [name, i]));
+  const laneOf = (s) => (s.group && lane.has(s.group) ? lane.get(s.group) : -1);
+  // Array.prototype.sort is stable, so rows inside one lane keep the order
+  // they arrived in and only the lanes move.
+  return sessions.slice().sort((a, b) => laneOf(a) - laneOf(b));
+}
+
+// snapshot copies the list deeply enough to put it back. The rows are
+// copied because a drop rewrites the group on one of them; a shallow
+// slice would hand the rollback the very object the drop mutated.
+function snapshot(sessions) {
+  return sessions.map(s => ({ ...s }));
+}
+
+// resyncAfterPartialSave is what a drop does when part of it was saved and
+// part of it was refused. The panel cannot be put back, because putting it
+// back would show a state the daemon has already contradicted; and it
+// cannot be left as it is, because the half that was refused never
+// happened. So it asks. One request, and the panel shows what is true.
+async function resyncAfterPartialSave(err, what) {
+  appendError(`${what}: ${err}`);
+  try {
+    await loadSessions();
+  } catch (reloadErr) {
+    appendError(`could not read the session list back: ${reloadErr}`);
+  }
+}
+
 export async function dropSessionOn(fromID, toID) {
   const fromIndex = app.sessions.findIndex(s => s.id === fromID);
   const toIndex = app.sessions.findIndex(s => s.id === toID);
   if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
 
-  const targetSession = app.sessions[toIndex];
-  const targetGroup = targetSession.group || '';
-  const fromSession = app.sessions[fromIndex];
-  const oldGroup = fromSession.group || '';
-
-  const beforeSessions = app.sessions.map(s => ({ ...s }));
+  const targetGroup = app.sessions[toIndex].group || '';
+  const oldGroup = app.sessions[fromIndex].group || '';
   const groupChanged = oldGroup !== targetGroup;
 
-  app.sessions = reorderList(beforeSessions, fromID, toID);
-  const moved = app.sessions.find(s => s.id === fromID);
-  if (moved) {
-    moved.group = targetGroup;
-  }
+  const before = snapshot(app.sessions);
+  const next = reorderList(snapshot(app.sessions), fromID, toID);
+  const moved = next.find(s => s.id === fromID);
+  if (moved) moved.group = targetGroup;
+  app.sessions = panelOrder(next, app.sessionGroups);
   renderSessionList();
 
   try {
     if (groupChanged) {
       await apiClient.setSessionGroup(fromID, targetGroup);
     }
+  } catch (err) {
+    // Nothing was saved, so the panel goes back exactly as it was.
+    appendError(`could not move the session into that group: ${err}`);
+    app.sessions = before;
+    renderSessionList();
+    return;
+  }
+  try {
     await apiClient.reorderSessions(app.sessions.map(s => s.id));
   } catch (err) {
+    if (groupChanged) {
+      await resyncAfterPartialSave(err, 'the session moved group but its place could not be saved');
+      return;
+    }
     appendError(`could not save the session order: ${err}`);
-    app.sessions = beforeSessions;
+    app.sessions = before;
     renderSessionList();
   }
 }
@@ -510,24 +619,32 @@ export async function dropSessionOn(fromID, toID) {
 export async function dropSessionOnGroupHeader(fromID, groupName) {
   const fromIndex = app.sessions.findIndex(s => s.id === fromID);
   if (fromIndex < 0) return;
-  const fromSession = app.sessions[fromIndex];
 
-  const beforeSessions = app.sessions.map(s => ({ ...s }));
-  fromSession.group = groupName;
-
-  const firstInGroup = app.sessions.findIndex(s => s.id !== fromID && s.group === groupName);
-  if (firstInGroup >= 0) {
-    app.sessions = reorderList(app.sessions, fromID, app.sessions[firstInGroup].id);
-  }
+  const before = snapshot(app.sessions);
+  const next = snapshot(app.sessions);
+  const [moved] = next.splice(next.findIndex(s => s.id === fromID), 1);
+  moved.group = groupName;
+  // In front of everything already in the group, wherever the group sits.
+  // Splicing it in beside the group's first row and then sorting by lane
+  // would work too, but only while the sort is stable; putting it at the
+  // head of the array and letting panelOrder carry it into its lane says
+  // "first in this group" without depending on that.
+  next.unshift(moved);
+  app.sessions = panelOrder(next, app.sessionGroups);
   renderSessionList();
 
   try {
     await apiClient.setSessionGroup(fromID, groupName);
+  } catch (err) {
+    appendError(`could not move the session into that group: ${err}`);
+    app.sessions = before;
+    renderSessionList();
+    return;
+  }
+  try {
     await apiClient.reorderSessions(app.sessions.map(s => s.id));
   } catch (err) {
-    appendError(`could not move session into group: ${err}`);
-    app.sessions = beforeSessions;
-    renderSessionList();
+    await resyncAfterPartialSave(err, 'the session moved group but its place could not be saved');
   }
 }
 
@@ -539,23 +656,35 @@ export async function dropSessionOnGroupHeader(fromID, groupName) {
 export async function dropSessionToUngroupedTop(fromID) {
   const fromIndex = app.sessions.findIndex(s => s.id === fromID);
   if (fromIndex < 0) return;
-  const fromSession = app.sessions[fromIndex];
-  const oldGroup = fromSession.group || '';
+  const oldGroup = app.sessions[fromIndex].group || '';
 
-  const beforeSessions = app.sessions.map(s => ({ ...s }));
-  const [moved] = app.sessions.splice(fromIndex, 1);
+  const before = snapshot(app.sessions);
+  const next = snapshot(app.sessions);
+  const [moved] = next.splice(fromIndex, 1);
   moved.group = '';
-  app.sessions.unshift(moved);
+  next.unshift(moved);
+  app.sessions = panelOrder(next, app.sessionGroups);
   renderSessionList();
 
   try {
     if (oldGroup !== '') {
       await apiClient.setSessionGroup(fromID, '');
     }
+  } catch (err) {
+    appendError(`could not take the session out of its group: ${err}`);
+    app.sessions = before;
+    renderSessionList();
+    return;
+  }
+  try {
     await apiClient.reorderSessions(app.sessions.map(s => s.id));
   } catch (err) {
-    appendError(`could not remove session from group: ${err}`);
-    app.sessions = beforeSessions;
+    if (oldGroup !== '') {
+      await resyncAfterPartialSave(err, 'the session left its group but its place could not be saved');
+      return;
+    }
+    appendError(`could not save the session order: ${err}`);
+    app.sessions = before;
     renderSessionList();
   }
 }
@@ -597,6 +726,16 @@ export async function promptRenameGroup(oldName) {
     // group and making another — and it has to know which, to decide
     // whether the sessions come along.
     await apiClient.setGroups(next, { from: oldName, to: trimmed });
+    // The fold belongs to the group, not to the name it had. Carrying it
+    // across means renaming a folded group leaves it folded, and the old
+    // name does not stay behind to fold a future group of that name.
+    const collapsed = readCollapsedGroups();
+    if (collapsed.has(oldName)) {
+      collapsed.delete(oldName);
+      collapsed.add(trimmed);
+      writeCollapsedGroups(collapsed);
+    }
+    app.sessionGroups = next;
     await loadSessions();
   } catch (err) {
     appendError(`could not rename group: ${err}`);
@@ -608,6 +747,9 @@ export async function promptDeleteGroup(groupName) {
   const next = (app.sessionGroups || []).filter(g => g !== groupName);
   try {
     await apiClient.setGroups(next);
+    app.sessionGroups = next;
+    // The daemon has taken the deletion, so the fold goes with it.
+    forgetCollapsedGroups(next);
     await loadSessions();
   } catch (err) {
     appendError(`could not delete group: ${err}`);
