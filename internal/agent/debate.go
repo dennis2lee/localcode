@@ -739,6 +739,21 @@ func reviewerToolNames(cfg config.AgentConfig) []string {
 				allowed = append(allowed, name)
 			}
 		}
+	} else if len(cfg.ToolSwitches) > 0 {
+		var filtered []string
+		for _, name := range readOnlyTools {
+			disabled := false
+			for sw, val := range cfg.ToolSwitches {
+				if matchToolSwitch(sw, name) && !val {
+					disabled = true
+					break
+				}
+			}
+			if !disabled {
+				filtered = append(filtered, name)
+			}
+		}
+		allowed = filtered
 	}
 	return append(append([]string(nil), allowed...), verdictToolName)
 }

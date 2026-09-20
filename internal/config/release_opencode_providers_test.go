@@ -179,41 +179,37 @@ func TestOpencodeModelFirstSlashSplitPreservesSlashes(t *testing.T) {
 	}
 }
 
-// TestOpencodeAgentToolsAndPermissionRefused verifies that agent.tools and agent.permission
-// are refused with their exact respective table sentences.
-// Rationale: localcode permissions are daemon-wide, and per-agent tools is a closed allowlist
-// rather than per-tool on/off switches; neither can be translated without changing config semantics.
-func TestOpencodeAgentToolsAndPermissionRefused(t *testing.T) {
+// TestOpencodeAgentToolsAndPermissionAccepted verifies that agent.tools and agent.permission
+// are now accepted and populate the agent's ToolSwitches and Permission fields.
+func TestOpencodeAgentToolsAndPermissionAccepted(t *testing.T) {
 	// agent.tools
-	_, errTools := loadText(t, `{
+	cfgTools, errTools := loadText(t, `{
 		"provider":{"anthropic":{"npm":"@ai-sdk/anthropic"}},
 		"model":"anthropic/claude-sonnet-4-5",
 		"agent":{
 			"readonly":{"tools":{"edit":false}}
 		}
 	}`)
-	if errTools == nil {
-		t.Fatal("agent.tools loaded without error, want refusal")
+	if errTools != nil {
+		t.Fatalf("agent.tools load error: %v", errTools)
 	}
-	wantToolsSentence := `agent "readonly": tools is a set of per-tool on/off switches, and localcode's per-agent tools is a closed allowlist — the two cannot be converted without changing what this file says. Write the restriction as a top-level "permission" map if it is meant for every agent; localcode has no per-agent permission.`
-	if !strings.Contains(errTools.Error(), wantToolsSentence) {
-		t.Errorf("error = %q\nwant sentence:\n%q", errTools.Error(), wantToolsSentence)
+	if cfgTools.Agents["readonly"].ToolSwitches == nil || cfgTools.Agents["readonly"].ToolSwitches["edit"] != false {
+		t.Errorf("readonly ToolSwitches = %v, want edit: false", cfgTools.Agents["readonly"].ToolSwitches)
 	}
 
 	// agent.permission
-	_, errPerm := loadText(t, `{
+	cfgPerm, errPerm := loadText(t, `{
 		"provider":{"anthropic":{"npm":"@ai-sdk/anthropic"}},
 		"model":"anthropic/claude-sonnet-4-5",
 		"agent":{
 			"build":{"permission":{"bash":"allow"}}
 		}
 	}`)
-	if errPerm == nil {
-		t.Fatal("agent.permission loaded without error, want refusal")
+	if errPerm != nil {
+		t.Fatalf("agent.permission load error: %v", errPerm)
 	}
-	wantPermSentence := `agent "build": permission sets rules for this agent alone, and localcode's permission rules are daemon-wide — folding them in would apply them to every agent. Move them to the top-level "permission", which localcode already reads, if that is what you mean.`
-	if !strings.Contains(errPerm.Error(), wantPermSentence) {
-		t.Errorf("error = %q\nwant sentence:\n%q", errPerm.Error(), wantPermSentence)
+	if cfgPerm.Agents["build"].Permission == nil || cfgPerm.Agents["build"].Permission["bash"].Flat != DecisionAllow {
+		t.Errorf("build Permission = %v, want bash: allow", cfgPerm.Agents["build"].Permission)
 	}
 }
 

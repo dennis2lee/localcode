@@ -160,6 +160,13 @@ func (s *liveSettings) SetAutoDelegate(v bool) {
 // model providers together. One Loop instance is shared across sessions;
 // per-session conversation history is kept in memory.
 type Loop struct {
+	// said remembers the one-off lines already printed about this
+	// configuration — a tool switch naming nothing, and whatever joins
+	// it — so a fact that does not change is not reported on every turn
+	// that reads it. See sayOnce.
+	saidMu sync.Mutex
+	said   map[string]bool
+
 	Store *session.Store
 	// Input carries a mid-turn question to whoever is watching a session
 	// and blocks until they answer. Nil in a run with nobody at the

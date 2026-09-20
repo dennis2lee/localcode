@@ -1818,7 +1818,7 @@ Unambiguous tool-name variants such as `bash.command`, `functions.bash`, or `rea
 
 ### Combining agents
 
-Agents map names to profiles. Add `description`, `prompt`, and `tools` to define specialized delegation roles.
+Agents map names to profiles. Add `description`, `prompt`, `tools`, `permission`, and `steps` to define specialized delegation roles.
 
 The profile names below are the ones `config.example.json` ships, so this block can be pasted onto a copy of it. A profile an agent names has to exist, or the daemon refuses to start.
 
@@ -1845,7 +1845,9 @@ An explicit agent definition replaces the built-in specialist with the same name
 | `profile` | Which provider and model. Required. |
 | `description` | The one line another agent reads when picking a delegate |
 | `prompt` | Appended after the base system prompt when running as this agent. Use it to narrow the role, such as "do not modify files" or "be fast and terse". |
-| `tools` | The only tools this agent may use. Leave it out for everything, including `Task`. When set, the model sees only those tools, and a call to anything outside the list is refused before it runs. |
+| `tools` | Tool availability for this agent. An array of tool names acts as an allowlist. An object mapping tool names to booleans selectively enables or disables specific tools. Leave unset to permit all registered tools. |
+| `permission` | Per-agent permission overrides. Maps tool names or glob patterns to `allow`, `ask`, or `deny`. Agent rules take precedence over global permissions. |
+| `steps` | Turn iteration cap. Limits the number of tool execution rounds for this agent in a single turn. When reached, localcode logs a notice and requests a final text response without tools. Accepts `maxSteps` as an alias. Negative values are rejected. |
 
 **The `Task` tool** registers automatically once `agents` has 2 or more entries. When the model calls `Task({"agent":"explore","prompt":"..."})`:
 

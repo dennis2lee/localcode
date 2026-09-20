@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -684,11 +685,8 @@ const maxKeepGoing = 10
 const maxProviderConcurrency = 64
 
 // AgentConfig defines one named agent role: which model profile it runs
-// on, and optionally a scoped system prompt and a restricted tool set —
-// the same idea as oh-my-opencode's per-agent model/prompt matching (a
-// cheap/fast model for a grep-only "explore" agent, a strong model for
-// planning, etc.), and what lets Task-tool delegation between agents mean
-// something beyond just picking a model.
+// on, and optionally a scoped system prompt, restricted tool set, permission
+// rules, and iteration cap — matching opencode's per-agent configuration.
 type AgentConfig struct {
 	Profile string `json:"profile"` // key into Config.Profiles
 
@@ -706,6 +704,113 @@ type AgentConfig struct {
 	// can actually call). Empty/absent means no restriction — every
 	// registered tool is available, matching prior behavior.
 	Tools []string `json:"tools,omitempty"`
+
+	// ToolSwitches holds opencode-style per-tool boolean switches:
+	// {"write": false, "skill": false}. Unnamed tools remain enabled.
+	// Parsed from the "tools" JSON key when it is an object rather than
+	// an array.
+	ToolSwitches map[string]bool `json:"-"`
+
+	// Permission holds opencode-style fine-grained allow/ask/deny rules
+	// scoped to this agent alone. See ResolvePermissionFor.
+	Permission Permissions `json:"permission,omitempty"`
+
+	// Steps caps the number of agentic tool-using iterations for this agent
+	// before forcing a text-only response. Zero means unset (unlimited).
+	Steps int `json:"steps,omitempty"`
+}
+
+// UnmarshalJSON unmarshals an AgentConfig from JSON data.
+// It decides whether "tools" is an allowlist or an object of switches by
+// inspecting its JSON shape: an array is the allowlist localcode has always
+// had, while an object is opencode's switches. Both in one agent is refused.
+// It also accepts "maxSteps" as an alias for "steps", refusing if both are
+// present and disagree.
+func (a *AgentConfig) UnmarshalJSON(data []byte) error {
+	type Alias AgentConfig
+	aux := struct {
+		ToolsRaw json.RawMessage `json:"tools,omitempty"`
+		StepsRaw json.RawMessage `json:"steps,omitempty"`
+		MaxSteps json.RawMessage `json:"maxSteps,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(a),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Scan top-level keys of data to detect duplicate "tools" keys.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err == nil {
+		if delim, ok := tok.(json.Delim); ok && delim == '{' {
+			toolsCount := 0
+			for dec.More() {
+				keyTok, err := dec.Token()
+				if err != nil {
+					break
+				}
+				if keyStr, ok := keyTok.(string); ok && keyStr == "tools" {
+					toolsCount++
+				}
+				var discard json.RawMessage
+				if err := dec.Decode(&discard); err != nil {
+					break
+				}
+			}
+			if toolsCount > 1 {
+				return fmt.Errorf("tools specified multiple times; keep one of array allowlist or boolean switches")
+			}
+		}
+	}
+
+	if len(aux.ToolsRaw) > 0 {
+		trimmed := bytes.TrimSpace(aux.ToolsRaw)
+		switch {
+		case len(trimmed) > 0 && trimmed[0] == '[':
+			var list []string
+			if err := json.Unmarshal(trimmed, &list); err != nil {
+				return fmt.Errorf("agent tools allowlist must be an array of tool names: %w", err)
+			}
+			a.Tools = list
+		case len(trimmed) > 0 && trimmed[0] == '{':
+			var switches map[string]bool
+			if err := json.Unmarshal(trimmed, &switches); err != nil {
+				return fmt.Errorf("agent tools switches must be an object of booleans: %w", err)
+			}
+			a.ToolSwitches = switches
+		default:
+			return fmt.Errorf("agent tools must be an array of tool names or an object of booleans")
+		}
+	}
+
+	var stepsVal *int
+	if len(aux.StepsRaw) > 0 {
+		var n int
+		if err := json.Unmarshal(aux.StepsRaw, &n); err != nil {
+			return fmt.Errorf("steps must be an integer: %w", err)
+		}
+		stepsVal = &n
+	}
+	var maxStepsVal *int
+	if len(aux.MaxSteps) > 0 {
+		var n int
+		if err := json.Unmarshal(aux.MaxSteps, &n); err != nil {
+			return fmt.Errorf("maxSteps must be an integer: %w", err)
+		}
+		maxStepsVal = &n
+	}
+	if stepsVal != nil && maxStepsVal != nil && *stepsVal != *maxStepsVal {
+		return fmt.Errorf("steps is %d and maxSteps is %d, which disagree; keep one of them", *stepsVal, *maxStepsVal)
+	}
+	if stepsVal != nil {
+		a.Steps = *stepsVal
+	} else if maxStepsVal != nil {
+		a.Steps = *maxStepsVal
+	}
+
+	return nil
 }
 
 // NetworkConfig is the egress half of "which tool, on which path" — the
@@ -873,6 +978,26 @@ func (c *Config) Validate() error {
 	}
 
 	for name, agent := range c.Agents {
+		if len(agent.Tools) > 0 && len(agent.ToolSwitches) > 0 {
+			return fmt.Errorf("agent %q has both tools allowlist and tool switches; specify only one", name)
+		}
+		if agent.Steps < 0 {
+			return fmt.Errorf("agent %q: steps is %d, which is negative", name, agent.Steps)
+		}
+		for tool, tp := range agent.Permission {
+			if !ValidPermissionKey(tool) {
+				return fmt.Errorf("agent %q permission %q: unknown tool (want one of %s)", name, tool, AcceptedPermissionKeys())
+			}
+			if tp.Flat != "" && !ValidDecision(tp.Flat) {
+				return fmt.Errorf("agent %q permission %q: unknown decision %q (want one of %s)", name, tool, tp.Flat, DecisionNames())
+			}
+			for _, r := range tp.Rules {
+				if !ValidDecision(r.Decision) {
+					return fmt.Errorf("agent %q permission %q match %q: unknown decision %q (want one of %s)", name, tool, r.Match, r.Decision, DecisionNames())
+				}
+			}
+		}
+
 		// An agent that names no profile takes the default, which is what
 		// ResolveProfile already does for it at every call site — the
 		// fallback there is not conditional on this check passing.

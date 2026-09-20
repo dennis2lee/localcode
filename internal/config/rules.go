@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -347,6 +348,67 @@ var ToolAliases = map[string][]string{
 	"grep":  {"grep"},
 }
 
+// ToolSwitchNames is the OTHER opencode vocabulary: the names in a "tools"
+// block, mapped to the localcode tools each one is.
+//
+// Two tables because opencode has two vocabularies, which is a fact about
+// opencode rather than a shortcut here. In a permission block "edit" is
+// the file-modification permission and there is no "write" key at all; in
+// a tools block "write" and "edit" are separate tools, and its own
+// documentation switches both off together to make a review-only agent,
+// with the comment "Disable file modification tools". Folding them into
+// one table makes a tools block deny more than the file asked, and
+// folding the other way makes a permission rule allow more.
+//
+// Beside ToolAliases so that the day they are made one by accident, the
+// two paragraphs are in the same screen.
+var ToolSwitchNames = map[string][]string{
+	"write": {"write_file"},
+	"edit":  {"edit"},
+	// opencode's patch tool edits an existing file, which is localcode's
+	// edit. Its older spelling is apply_patch.
+	"patch":       {"edit"},
+	"apply_patch": {"edit"},
+	"read":        {"read_file"},
+	"task":        {"Task", "TaskBackground", "TaskCollect"},
+	"skill":       {"Skill"},
+	"bash":        {"bash"},
+	"glob":        {"glob"},
+	"grep":        {"grep"},
+}
+
+// ToolsSwitchedBy is the localcode tools an opencode tools-block name
+// stands for. Sorted; the name itself when the table has no entry, since
+// a name localcode already knows is its own.
+func ToolsSwitchedBy(name string) []string {
+	if covered, ok := ToolSwitchNames[strings.ToLower(name)]; ok {
+		out := append([]string(nil), covered...)
+		sort.Strings(out)
+		return out
+	}
+	return []string{name}
+}
+
+// ToolsCoveredBy is the localcode tool names a permission key stands for:
+// itself, plus whatever the opencode alias table adds. Sorted, so a
+// message built from it reads the same every time.
+//
+// Exported because two places decide what an opencode name covers — a
+// permission rule here, and a per-agent tool switch in internal/agent —
+// and they were not allowed to be two tables. The second one was written
+// by hand and disagreed: it read opencode's "edit" as localcode's edit
+// alone, leaving write_file offered to an agent whose file had switched
+// editing off. That is the same failure the alias table exists to
+// prevent, one package over.
+func ToolsCoveredBy(key string) []string {
+	if covered, ok := ToolAliases[key]; ok {
+		out := append([]string(nil), covered...)
+		sort.Strings(out)
+		return out
+	}
+	return []string{key}
+}
+
 // aliasesFor returns all opencode permission keys in ToolAliases that cover
 // localcode's toolName.
 func aliasesFor(toolName string) []string {
@@ -474,18 +536,29 @@ func (c *Config) resolveOne(ctx context.Context, toolName, subject string, stati
 	return d
 }
 
-func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
-	c.permMu.RLock()
-	tp, ok := c.Permissions[toolName]
-	fallback, hasFallback := c.Permissions["*"]
-	// Gathered under the same lock as the two above, and used below only
-	// if the tool's own rule had nothing to say about this subject.
+// resolveRules resolves toolName and subject against a permissions map,
+// following the exact precedence: an exact rule for toolName first, then
+// any aliases covering toolName (strictest decision wins), then a "*"
+// fallback rule. It reports whether any rule matched; if none did, the caller
+// moves to the next precedence tier.
+func resolveRules(perms map[string]ToolPermission, toolName, subject string) (Decision, bool) {
+	if len(perms) == 0 {
+		return "", false
+	}
+	// The tool's own name first, and it wins outright when it matches:
+	// somebody who wrote "write_file" meant write_file, whatever an
+	// opencode key covering it also says.
+	if tp, ok := perms[toolName]; ok {
+		if d, matched := tp.resolve(subject); matched {
+			return d, true
+		}
+	}
 	var (
 		aliasDecision Decision
 		hasAliasMatch bool
 	)
 	for _, alias := range aliasesFor(toolName) {
-		if atp, hasAlias := c.Permissions[alias]; hasAlias {
+		if atp, hasAlias := perms[alias]; hasAlias {
 			if d, matched := atp.resolve(subject); matched {
 				if !hasAliasMatch {
 					aliasDecision, hasAliasMatch = d, true
@@ -495,32 +568,45 @@ func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string,
 			}
 		}
 	}
-	c.permMu.RUnlock()
-
-	// The tool's own name first, and it wins outright when it matches:
-	// somebody who wrote "write_file" meant write_file, whatever an
-	// opencode key covering it also says.
-	//
-	// Only when it matches, though. A rule that exists and does not match
-	// this subject has expressed no opinion about it, and treating that as
-	// "the explicit rule has spoken" would drop the alias — which is how
-	// {"write_file": [{"match":"*.tmp","decision":"allow"}], "edit": "deny"}
-	// would come to allow writing everything that is not a .tmp. An alias
-	// can only ever narrow (see stricterDecision), so consulting it here
-	// cannot widen anything.
-	if ok {
-		if d, matched := tp.resolve(subject); matched {
-			return d
-		}
-	}
 	if hasAliasMatch {
-		return aliasDecision
+		return aliasDecision, true
 	}
-	if hasFallback {
+	if fallback, hasFallback := perms["*"]; hasFallback {
 		if d, matched := fallback.resolve(subject); matched {
-			return d
+			return d, true
 		}
 	}
+	return "", false
+}
+
+func (c *Config) resolveOneStrict(ctx context.Context, toolName, subject string, staticRequiresPermission bool) Decision {
+	c.permMu.RLock()
+	defer c.permMu.RUnlock()
+
+	// 1. The running agent's own rule, when it matches — including through
+	// the alias table and "*".
+	//
+	// The agent's rule wins even over a global deny. That is opencode's
+	// documented rule ("Agent permissions are merged with the global config,
+	// and agent rules take precedence") and it is the only reading that makes
+	// a restricted persona possible: a global deny with a per-agent allow
+	// is how somebody gives one agent a key the others do not have.
+	agentName := c.AgentFor(ctx)
+	if agentName != "" && c.Agents != nil {
+		if agentCfg, ok := c.Agents[agentName]; ok && len(agentCfg.Permission) > 0 {
+			if d, matched := resolveRules(agentCfg.Permission, toolName, subject); matched {
+				return d
+			}
+		}
+	}
+
+	// 2. Then everything the top-level block does today, unchanged and in
+	// its current definition order: exact tool match, aliases (strictest),
+	// and "*" fallback.
+	if d, matched := resolveRules(c.Permissions, toolName, subject); matched {
+		return d
+	}
+
 	// Smart Agent's shipped guards, after the user's own rules so any of
 	// them can be turned off by writing a rule for the same tool, and
 	// before the ordinary builtins because they are the stricter answer.
