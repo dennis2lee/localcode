@@ -199,6 +199,33 @@ var metaRollbackCases = []metaRollbackCase{
 		invoke: func(s *Store) error { return s.SetOrder([]string{"s1", "s2"}) },
 		ids:    []string{"s1", "s2"},
 	},
+	{
+		method: "SetGroups",
+		setup: func(t *testing.T, s *Store) {
+			mustCreateRollbackSession(t, s, "s1", "", "general-purpose", true)
+			if err := s.SetGroups([]string{"work"}, nil); err != nil {
+				t.Fatalf("baseline SetGroups: %v", err)
+			}
+			if _, err := s.SetSessionGroup("s1", "work"); err != nil {
+				t.Fatalf("baseline SetSessionGroup: %v", err)
+			}
+		},
+		invoke: func(s *Store) error {
+			return s.SetGroups([]string{"work-renamed"}, &GroupRename{From: "work", To: "work-renamed"})
+		},
+		ids: []string{"s1"},
+	},
+	{
+		method: "SetSessionGroup",
+		setup: func(t *testing.T, s *Store) {
+			mustCreateRollbackSession(t, s, "s1", "", "general-purpose", true)
+			if err := s.SetGroups([]string{"work"}, nil); err != nil {
+				t.Fatalf("baseline SetGroups: %v", err)
+			}
+		},
+		invoke: func(s *Store) error { _, err := s.SetSessionGroup("s1", "work"); return err },
+		ids:    []string{"s1"},
+	},
 }
 
 // A failed metadata write leaves the session exactly as it was.

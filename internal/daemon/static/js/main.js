@@ -1,5 +1,5 @@
 import {
-  inputEl, sendBtn, agentSelectEl, newSessionBtn, deleteAllSessionsBtn, sessionFilterEl, mcpResetBtn,
+  inputEl, sendBtn, agentSelectEl, newSessionBtn, newGroupBtn, deleteAllSessionsBtn, sessionFilterEl, mcpResetBtn,
   permissionAllowBtn, permissionAllowSessionBtn, permissionAllowAlwaysBtn, permissionDenyBtn,
   permissionAllowDirBtn, permissionAllowOutsideBtn,
   autoDelegateBtn, delegateCloseBtn, delegateEnabledCheckbox, delegateAgentSelect,
@@ -23,7 +23,7 @@ import {
   navigatingHistory, endHistoryNavigation,
 } from './composer.js';
 import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent, resetMCPServers } from './loaders.js';
-import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, loadArchived, rememberedOpenSession, renderSessionList } from './sessions.js';
+import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, loadArchived, rememberedOpenSession, renderSessionList, promptCreateGroup } from './sessions.js';
 import { wireZoom, applyZoom } from './zoom.js';
 import {
   openScheduleDialog, closeScheduleDialog, saveSchedule, previewWhen,
@@ -60,6 +60,7 @@ agentSelectEl.addEventListener('change', async () => {
 });
 
 newSessionBtn.addEventListener('click', createNewSession);
+newGroupBtn.addEventListener('click', promptCreateGroup);
 deleteAllSessionsBtn.addEventListener('click', deleteAllSessions);
 // The panel filter is client-side only: typing narrows the rows already
 // held in app.sessions, and clearing it shows them all again. No fetch,
@@ -370,6 +371,6 @@ export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
-export { renderSessionList, selectSession, deleteSessionConfirm, reorderList, dropSessionOn, sessionMatchesFilter } from './sessions.js';
+export { renderSessionList, selectSession, deleteSessionConfirm, reorderList, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
 export { resetMCPServers, mcpResetConfirmText } from './loaders.js';
 export { wireZoom, applyZoom } from './zoom.js';

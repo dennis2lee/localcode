@@ -55,6 +55,7 @@ export const debateCancelBtn = document.getElementById('debate-cancel');
 export const sessionListEl = document.getElementById('session-list');
 export const sessionFilterEl = document.getElementById('session-filter');
 export const newSessionBtn = document.getElementById('new-session-btn');
+export const newGroupBtn = document.getElementById('new-group-btn');
 export const deleteAllSessionsBtn = document.getElementById('delete-all-sessions-btn');
 export const agentSelectEl = document.getElementById('agent-select');
 export const mcpServersEl = document.getElementById('mcp-servers');
