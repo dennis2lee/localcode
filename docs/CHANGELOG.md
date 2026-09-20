@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.139.0
+
+Three things an agent can be told that only opencode could say, and the review of them.
+
+**New**
+
+* **An agent can be given its own tools, its own permission rules and a cap on how long it may go round.** `AgentConfig` had four fields — profile, description, prompt, tools — and none of those three, so opencode's most documented workflow could not be expressed here at all: a `plan` agent that may look and not touch, beside a `build` agent that may do anything. The only choice was global read-only or global read-write.
+* **`agent.<name>.tools`** is an object of switches there and a closed allowlist here, which are mirror images — read one as the other and `{"write": true}` says "write and nothing else". The non-inverting reading is every registered tool minus the false ones, computed where the turn's allowlist is already decided, since the config package never sees the tool registry. A switch naming a tool localcode does not have is said once rather than on every turn.
+* **`agent.<name>.permission`** takes the same shape as the top-level block and the same parser. The agent's name reaches the decision pinned to the turn's context, beside the Smart Agent pin that exists for the same reason: one answer for the whole turn even if the config is edited while it runs. An agent's rule wins over the global one when it matches, including over a `deny` — that is what makes a key one agent has and the others do not — and an agent rule that does not match this call falls through to the global one rather than suppressing it.
+* **`agent.<name>.steps`** (and `maxSteps`) caps agentic iterations. At the cap the next request carries no tools, so the model answers in text rather than the turn failing, and anything a non-compliant server sends back anyway is dropped rather than run.
+
+**Fixed**
+
+* **opencode has two vocabularies for tool names, and this shipped with three hand-written copies of one of them.** In a `permission` block `edit` means every file modification and there is no `write` key; in a `tools` block `write` and `edit` are separate tools, which opencode's own docs switch off together to make a reviewer. There are two tables now, named for the block each belongs to and sitting next to each other, and the top-level `tools` translation stops folding `write` into `edit` — which had been refusing more than the file asked for.
+* **`"tools": {"task": false}` denied one of the three delegation tools.** A switch wrote a rule for the first tool it named instead of all of them, so the file switched delegation off and delegation ran.
+* **A permission decision asked for outside a turn was answered with `default_agent`'s rules.** Nothing that has no persona should be judged by one persona's overrides, and it cut both ways: a default agent allowing bash made a pin-less check allow it over a global deny, and one denying bash refused work the global rules permitted. Such a decision is now the top-level rules alone.
+* **Running a skill by path did not say whose work it was** — the one permission path in the program that did not — so an agent whose own block denied `read_file` read the file anyway.
+
 ## v0.138.1
 
 Two independent reviews of v0.138.0 and seventeen fixes. The first of them is why this is a patch release rather than a note in the next one.
