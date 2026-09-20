@@ -561,6 +561,18 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// max_tokens is the one exception: the reply was cut off mid-write,
 		// so a tool call at the end of it has arguments that stop partway
 		// through and running them means acting on a truncated instruction.
+		// And once the cap has been reached, nothing the model asks for
+		// is run. The request that follows the cap carries no tools, so a
+		// server that honours the request returns none; one that does not
+		// — a local model that keeps emitting tool_use out of habit, or a
+		// gateway that ignores tool_choice — used to have every one of
+		// them executed, which is the cap announced and not applied. The
+		// calls are dropped here rather than refused one by one, because
+		// the turn is over: the next thing that happens is the text-only
+		// answer.
+		if forceTextOnly && len(toolUses) > 0 {
+			toolUses = nil
+		}
 		wantsTools := len(toolUses) > 0 && stopReason != "max_tokens"
 		if askingVerdict && wantsTools {
 			// The question went out with tool_choice "none" and the model

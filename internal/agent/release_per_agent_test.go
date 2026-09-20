@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -337,5 +338,66 @@ func TestAnUnknownToolSwitchIsSaidOnce(t *testing.T) {
 
 	if n := strings.Count(string(out), "no_such_tool"); n != 1 {
 		t.Errorf("the line was printed %d times across five turns, want once:\n%s", n, out)
+	}
+}
+
+// A skill run through /skill is one agent's work, and the read it does is
+// a permission decision. It was the only permission path in the program
+// that did not say whose work it was, so it was answered against the
+// top-level rules while the agent's own block said otherwise.
+func TestASkillRunIsDecidedUnderTheAgentThatRunsIt(t *testing.T) {
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	dir := t.TempDir()
+	skill := filepath.Join(dir, "myskill.md")
+	if err := os.WriteFile(skill, []byte("---\nname: myskill\ndescription: d\n---\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := tools.NewRegistry(NewPermissionBroker(store).Func())
+	registry.Register(tools.ReadFile{})
+	var cfg *config.Config
+	// The same resolver the daemon wires in, so the config's rules are
+	// the ones consulted. See cmd/localcode/wire.go.
+	registry.Resolver = tools.ComposeResolver(
+		func(ctx context.Context, toolName, subject string, static bool) tools.Decision {
+			return tools.Decision(cfg.ResolvePermissionFor(ctx, toolName, subject, static))
+		},
+		NewPermissionPolicy(store, nil).ToolsPolicy(),
+	)
+	cfg = &config.Config{
+		Profiles:    map[string]config.Profile{"p": {Provider: "local", Model: "m"}},
+		Permissions: config.Permissions{"read_file": {Flat: config.DecisionAllow}},
+		Agents: map[string]config.AgentConfig{
+			"locked": {Profile: "p", Permission: config.Permissions{"read_file": {Flat: config.DecisionDeny}}},
+		},
+	}
+	loop := New(store, registry, map[string]provider.Provider{}, cfg)
+	if _, err := store.CreateSession("s", "", "locked", true); err != nil {
+		t.Fatal(err)
+	}
+
+	err = loop.runSkillPath(context.Background(), "s", "locked", "/skill "+skill, skill, "")
+	if err != nil {
+		t.Fatalf("runSkillPath: %v", err)
+	}
+	evs, err := store.Events("s", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawDenial bool
+	for _, ev := range evs {
+		if ev.Type == events.TypeError {
+			if msg, _ := ev.Data["error"].(string); strings.Contains(msg, "denied") {
+				sawDenial = true
+			}
+		}
+	}
+	if !sawDenial {
+		t.Error("the agent's own permission block denied read_file and the skill was read anyway")
 	}
 }
