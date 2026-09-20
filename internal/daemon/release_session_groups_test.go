@@ -3,10 +3,16 @@ package daemon
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
+
+	"localcode/internal/session"
 )
 
 func TestDaemonSessionGroupsAPI(t *testing.T) {
@@ -335,5 +341,29 @@ func TestGroupsReplyIsAnArrayEvenWhenEmpty(t *testing.T) {
 	}
 	if got := string(raw["names"]); got != "[]" {
 		t.Errorf("names = %s, want []", got)
+	}
+}
+
+// A disk that will not take the change is not a bad request. Answering it
+// with 400 tells the browser to correct something that was never wrong, so
+// it retries nothing and the person is told their group name is bad when
+// the disk is full.
+func TestGroupRefusalStatusSeparatesTheDiskFromTheRequest(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"a bad group name", errors.New(`invalid group name " x ": a group name cannot start or end with a space`), http.StatusBadRequest},
+		{"a marshalling failure, which carries no fs shape", fmt.Errorf("the group list %w: %w", session.ErrPersist, errors.New("json: unsupported value")), http.StatusInternalServerError},
+		{"a full disk", fmt.Errorf("the group list %w: %w", session.ErrPersist, &fs.PathError{Op: "write", Path: "groups.json", Err: syscall.ENOSPC}), http.StatusInternalServerError},
+		{"a session's metadata", fmt.Errorf("session metadata %w: %w", session.ErrPersist, errors.New("whatever")), http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := groupRefusalStatus(tc.err); got != tc.want {
+				t.Errorf("groupRefusalStatus(%v) = %d, want %d", tc.err, got, tc.want)
+			}
+		})
 	}
 }

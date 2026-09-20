@@ -17,9 +17,13 @@ export async function loadSessions() {
   } catch (err) {
     app.sessions = [];
   }
+  let groupsAreCurrent = false;
   try {
     const res = await apiClient.getGroups();
-    if (res && Array.isArray(res.names)) app.sessionGroups = res.names;
+    if (res && Array.isArray(res.names)) {
+      app.sessionGroups = res.names;
+      groupsAreCurrent = true;
+    }
   } catch {
     // A daemon that does not know about groups, or a request that failed:
     // leave whatever we had. An empty list is the flat panel, which is the
@@ -27,12 +31,16 @@ export async function loadSessions() {
     if (!app.sessionGroups) app.sessionGroups = [];
   }
   // Both halves are in hand here and nowhere else, so this is where the
-  // list is put into the order it will be drawn in. Folds are not pruned
-  // here: this list is whatever the daemon last said, and pruning against
-  // it would drop a fold the person set a moment ago if the reply were
-  // stale or the request failed. Folds are dropped where a group is
-  // actually removed, by the call that removed it.
+  // list is put into the order it will be drawn in, and where folds for
+  // groups that are gone are dropped.
+  //
+  // Only when the daemon actually answered. A group can be deleted from
+  // the other window or the desktop build, and this is the only place
+  // this window would hear about it — but pruning against a list that
+  // failed to arrive would throw away every fold in the browser on one
+  // bad request.
   app.sessions = panelOrder(app.sessions, app.sessionGroups);
+  if (groupsAreCurrent) forgetCollapsedGroups(app.sessionGroups);
   renderSessionList();
   // The listing carries each session's busy flag, which is also what the
   // light under the prompt reports for the one on screen — so a refresh

@@ -371,6 +371,6 @@ export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
-export { renderSessionList, selectSession, deleteSessionConfirm, reorderList, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
+export { loadSessions, renderSessionList, selectSession, deleteSessionConfirm, reorderList, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
 export { resetMCPServers, mcpResetConfirmText } from './loaders.js';
 export { wireZoom, applyZoom } from './zoom.js';

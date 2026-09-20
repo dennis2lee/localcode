@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"localcode/internal/agent"
@@ -689,16 +687,16 @@ func (d *Daemon) handleSetGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 // groupRefusalStatus separates "you asked for something invalid" from "the
-// disk would not take it". Both come back from the store as a plain error,
-// and answering a failed write with 400 tells the browser to correct a
-// request that was never wrong — so it retries nothing, and the person is
-// told their group name is bad when the disk is full.
+// disk would not take it". Answering a failed write with 400 tells the
+// browser to correct a request that was never wrong, so it retries
+// nothing and the person is told their group name is bad when the disk is
+// full.
+//
+// The store says which it was. Guessing from the error's shape does not
+// work: a full disk arrives as a *fs.PathError and a marshalling failure
+// arrives as a plain error, and both are the machine's fault.
 func groupRefusalStatus(err error) int {
-	if errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOSPC) {
-		return http.StatusInternalServerError
-	}
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) {
+	if errors.Is(err, session.ErrPersist) {
 		return http.StatusInternalServerError
 	}
 	return http.StatusBadRequest

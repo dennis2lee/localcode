@@ -915,3 +915,206 @@ func TestEveryReaderAgreesAboutTheGroup(t *testing.T) {
 		t.Errorf("the meta file still records a group: %s", data)
 	}
 }
+
+// Half a rename. One session's file takes the new name and another's will
+// not, so the two sessions end up in groups with different names — and the
+// list has to hold both, or whichever session the list forgot is quietly
+// unfiled by the next reconcile. A failure that never touched that session
+// must not be what takes it out of its group.
+func TestPartialRenameKeepsBothNamesSoNobodyIsUnfiled(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(s.Close)
+
+	if err := s.SetGroups([]string{"work"}, nil); err != nil {
+		t.Fatalf("SetGroups: %v", err)
+	}
+	for _, id := range []string{"a", "b"} {
+		if _, err := s.CreateSession(id, "", "general-purpose", true); err != nil {
+			t.Fatalf("CreateSession(%s): %v", id, err)
+		}
+		if _, err := s.SetSessionGroup(id, "work"); err != nil {
+			t.Fatalf("SetSessionGroup(%s): %v", id, err)
+		}
+	}
+
+	injected := errors.New("injected rename-partial failure")
+	s.writeMeta = func(d string, m Session) error {
+		if m.ID == "b" {
+			return injected
+		}
+		return writeSessionMeta(d, m)
+	}
+	err = s.SetGroups([]string{"job"}, &GroupRename{From: "work", To: "job"})
+	s.writeMeta = nil
+	if !errors.Is(err, injected) {
+		t.Fatalf("SetGroups err = %v, want it to carry %v", err, injected)
+	}
+	if !strings.Contains(err.Error(), "b") {
+		t.Errorf("error %q does not name the session that did not move", err.Error())
+	}
+
+	// a took the new name, b kept the old one, and neither was unfiled.
+	for id, want := range map[string]string{"a": "job", "b": "work"} {
+		got, err := s.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", id, err)
+		}
+		if got.Group != want {
+			t.Errorf("session %s is in %q, want %q", id, got.Group, want)
+		}
+	}
+	// So the list must have both names in it, or b is pointing at nothing.
+	groups := s.GetGroups()
+	for _, want := range []string{"job", "work"} {
+		found := false
+		for _, g := range groups {
+			if g == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("group list %v does not have %q, which a session is still in", groups, want)
+		}
+	}
+
+	// Repeating the call finishes it, which is the whole reason for
+	// leaving the half-done state visible rather than tidying it away.
+	if err := s.SetGroups([]string{"job"}, &GroupRename{From: "work", To: "job"}); err != nil {
+		t.Fatalf("second SetGroups: %v", err)
+	}
+	for _, id := range []string{"a", "b"} {
+		got, err := s.Get(id)
+		if err != nil {
+			t.Fatalf("Get(%s): %v", id, err)
+		}
+		if got.Group != "job" {
+			t.Errorf("after retrying the rename, session %s is in %q, want %q", id, got.Group, "job")
+		}
+	}
+}
+
+// A groups.json that cannot be read or cannot be trusted. Saying "there
+// are no groups" would make the store contradict itself — reporting a
+// session as being in "work" while refusing, in the same breath, to put
+// anything into "work" — and clearing the memberships instead would turn
+// one bad file into a panel somebody has to arrange again. So the groups
+// are recovered from the sessions that are in them.
+func TestAnUnreadableGroupListIsRecoveredFromTheSessionsInIt(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		contents string
+	}{
+		{"malformed json", "{not json"},
+		{"names that do not validate", `{"names":[" work"]}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := NewStore(dir)
+			if err != nil {
+				t.Fatalf("NewStore: %v", err)
+			}
+			if err := s.SetGroups([]string{"work", "empty"}, nil); err != nil {
+				t.Fatalf("SetGroups: %v", err)
+			}
+			if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+			if _, err := s.SetSessionGroup("s1", "work"); err != nil {
+				t.Fatalf("SetSessionGroup: %v", err)
+			}
+			s.Close()
+
+			if err := os.WriteFile(filepath.Join(dir, "groups.json"), []byte(tt.contents), 0o600); err != nil {
+				t.Fatalf("write groups.json: %v", err)
+			}
+
+			s2, warnings, err := LoadAllFromDisk(dir)
+			if err != nil {
+				t.Fatalf("LoadAllFromDisk: %v", err)
+			}
+			t.Cleanup(s2.Close)
+
+			// It says so, because the order is lost and only the person
+			// can put it back.
+			said := false
+			for _, w := range warnings {
+				if strings.Contains(w.Error(), "groups") {
+					said = true
+				}
+			}
+			if !said {
+				t.Errorf("warnings %v say nothing about the group list", warnings)
+			}
+
+			got, err := s2.Get("s1")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got.Group != "work" {
+				t.Errorf("s1.Group = %q, want it kept as %q: an unreadable list is not evidence of no groups", got.Group, "work")
+			}
+			if groups := s2.GetGroups(); len(groups) != 1 || groups[0] != "work" {
+				t.Errorf("GetGroups = %v, want [work] recovered from the session that is in it", groups)
+			}
+			// And the store agrees with itself: a group it reports is a
+			// group it will accept.
+			if _, err := s2.SetSessionGroup("s1", "work"); err != nil {
+				t.Errorf("re-joining the group the store just reported was refused: %v", err)
+			}
+		})
+	}
+}
+
+// A refusal from the disk is marked as one. Which it was decides whether
+// the caller is told to fix what it sent or told the machine is in
+// trouble, and it cannot be told from the error's shape.
+func TestGroupWriteFailuresAreMarkedAsPersistenceFailures(t *testing.T) {
+	newStore := func(t *testing.T) *Store {
+		t.Helper()
+		s, _, err := LoadAllFromDisk(t.TempDir())
+		if err != nil {
+			t.Fatalf("LoadAllFromDisk: %v", err)
+		}
+		t.Cleanup(s.Close)
+		return s
+	}
+	injected := errors.New("disk said no")
+
+	t.Run("the group list", func(t *testing.T) {
+		s := newStore(t)
+		s.writeGroups = func(string, []string) error { return injected }
+		err := s.SetGroups([]string{"work"}, nil)
+		if !errors.Is(err, ErrPersist) {
+			t.Errorf("SetGroups under a failing write returned %v, want it marked with ErrPersist", err)
+		}
+		if !errors.Is(err, injected) {
+			t.Errorf("SetGroups error %v no longer carries the write error", err)
+		}
+	})
+
+	t.Run("a session's metadata", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.SetGroups([]string{"work"}, nil); err != nil {
+			t.Fatalf("SetGroups: %v", err)
+		}
+		if _, err := s.CreateSession("s1", "", "general-purpose", true); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		s.writeMeta = func(string, Session) error { return injected }
+		_, err := s.SetSessionGroup("s1", "work")
+		if !errors.Is(err, ErrPersist) {
+			t.Errorf("SetSessionGroup under a failing write returned %v, want it marked with ErrPersist", err)
+		}
+	})
+
+	t.Run("a refusal that is the caller's fault is not marked", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.SetGroups([]string{" padded "}, nil); errors.Is(err, ErrPersist) {
+			t.Errorf("a bad group name was marked as a persistence failure: %v", err)
+		}
+	})
+}

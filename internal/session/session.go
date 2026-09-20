@@ -546,6 +546,14 @@ func writeSessionMeta(dir string, meta Session) error {
 // time a group is called something like "session".
 var ErrSessionNotFound = errors.New("no such session")
 
+// ErrPersist marks a refusal that came from the disk rather than from the
+// request. The difference decides whether a caller is told to fix what it
+// sent or told that the machine is in trouble, and it cannot be recovered
+// from the error's shape: a marshalling failure and a full disk both come
+// back as a plain error, and answering either with "bad request" sends
+// somebody to check a group name that was never wrong.
+var ErrPersist = errors.New("could not be written")
+
 func writeGroupsFile(dir string, groups []string) error {
 	payload := struct {
 		Names []string `json:"names"`
@@ -620,32 +628,58 @@ func validateGroups(names []string) ([]string, error) {
 }
 
 func (s *Store) writeGroupsLocked(groups []string) error {
+	var err error
 	if s.writeGroups != nil {
-		return s.writeGroups(s.dir, groups)
+		err = s.writeGroups(s.dir, groups)
+	} else {
+		err = writeGroupsFile(s.dir, groups)
 	}
-	return writeGroupsFile(s.dir, groups)
+	if err != nil {
+		return fmt.Errorf("the group list %w: %w", ErrPersist, err)
+	}
+	return nil
 }
 
 // reconcileGroupsLocked clears any session group that names a group the
 // list does not have, and writes the correction back. Called once, from
 // LoadAllFromDisk, while nothing else can be holding the store.
-func (s *Store) reconcileGroupsLocked() []error {
-	var problems []error
+func (s *Store) reconcileGroupsLocked() []string {
+	var moved []string
 	for id, st := range s.sessions {
 		if st.meta.Group == "" || s.hasGroupLocked(st.meta.Group) {
 			continue
 		}
 		was := st.meta.Group
 		st.meta.Group = ""
-		if s.dir == "" {
-			continue
+		if s.dir != "" {
+			if err := s.writeMetaLocked(detach(st.meta)); err != nil {
+				// It keeps the name it had: the file still says so, and
+				// claiming otherwise would be the store contradicting the
+				// directory. The next start tries again.
+				st.meta.Group = was
+				continue
+			}
 		}
-		if err := s.writeMetaLocked(detach(st.meta)); err != nil {
-			st.meta.Group = was
-			problems = append(problems, fmt.Errorf("session %s: was in group %q, which no longer exists, and the correction could not be written: %w", id, was, err))
+		moved = append(moved, id)
+	}
+	sort.Strings(moved)
+	return moved
+}
+
+// groupsInUseLocked is every group name some session is in, sorted. It is
+// what the group list can be rebuilt from when the file holding it cannot
+// be read.
+func (s *Store) groupsInUseLocked() []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, st := range s.sessions {
+		if st.meta.Group != "" && !seen[st.meta.Group] {
+			seen[st.meta.Group] = true
+			names = append(names, st.meta.Group)
 		}
 	}
-	return problems
+	sort.Strings(names)
+	return names
 }
 
 func (s *Store) hasGroupLocked(name string) bool {
@@ -1542,18 +1576,35 @@ func LoadAllFromDisk(dir string) (*Store, []error, error) {
 	// be opened or parsed is not evidence that there are no groups, and
 	// clearing every membership on the strength of it would turn one
 	// unreadable file into a panel the person has to arrange again.
-	savedGroups, err := readGroupsFile(dir)
-	if err != nil {
-		warnings = append(warnings, fmt.Errorf("groups: %w", err))
+	savedGroups, readErr := readGroupsFile(dir)
+	var listErr error
+	if readErr != nil {
+		listErr = readErr
+	} else if validGroups, err := validateGroups(savedGroups); err != nil {
+		listErr = err
 	} else {
-		validGroups, err := validateGroups(savedGroups)
-		if err != nil {
-			warnings = append(warnings, fmt.Errorf("groups: %w", err))
+		s.groups = validGroups
+		s.reconcileGroupsLocked()
+	}
+	if listErr != nil {
+		// The file is there and unusable, which is not the same as there
+		// being no groups. Clearing every membership on the strength of an
+		// unreadable file would turn one bad file into a panel the person
+		// has to arrange again, and saying the list is empty while the
+		// sessions still name groups would leave the store contradicting
+		// itself — reporting a session as being in "work" and refusing, in
+		// the same breath, to put anything into "work".
+		//
+		// So the groups are recovered from the only other record of them:
+		// the sessions that are in them. What is lost is the order they
+		// were drawn in, and any group that was empty. Alphabetical until
+		// somebody arranges them again, and a warning that says so.
+		recovered := s.groupsInUseLocked()
+		s.groups = recovered
+		if len(recovered) > 0 {
+			warnings = append(warnings, fmt.Errorf("groups: %w; recovered %d group(s) from the sessions that are in them, in alphabetical order: the order they were drawn in is lost", listErr, len(recovered)))
 		} else {
-			s.groups = validGroups
-			if notes := s.reconcileGroupsLocked(); len(notes) > 0 {
-				warnings = append(warnings, notes...)
-			}
+			warnings = append(warnings, fmt.Errorf("groups: %w", listErr))
 		}
 	}
 	shelved := s.ShelvedIDs()
@@ -2069,25 +2120,64 @@ func (s *Store) SetGroups(names []string, rename *GroupRename) error {
 			s.sessions[id].meta.Group = moved[id]
 			refused = append(refused, id)
 			if firstErr == nil {
-				firstErr = err
+				firstErr = fmt.Errorf("session metadata %w: %w", ErrPersist, err)
 			}
 		}
 	}
 	if firstErr != nil {
-		// The list is one file, so unlike the metadata it can be put back
-		// and checked. If it goes back, memory goes back with it and the
-		// call leaves no trace but the sessions whose files were already
-		// rewritten; if it will not go back, memory keeps the new list,
-		// because that is what the directory holds.
-		if err := s.writeGroupsLocked(prevGroups); err == nil {
-			s.groups = prevGroups
+		// The list is one file, so unlike the metadata it can be rewritten
+		// to describe whatever the directory ended up holding.
+		//
+		// What it must describe is every group a session is still in. Half
+		// of a rename is the case that shows why: one session's file now
+		// says "job" and another's still says "work", and a list holding
+		// only one of those names would leave the other session pointing
+		// at nothing — to be quietly unfiled by the next reconcile, which
+		// is a membership destroyed by a failure that never touched it.
+		// So the list keeps both: the names that were asked for, plus any
+		// name a session still carries. The half that happened is visible
+		// as two groups rather than one, which is what happened, and
+		// repeating the call finishes the job.
+		// Unless nothing moved at all, in which case the call simply did
+		// not happen and the list goes back to what it was. Leaving the
+		// requested names behind would hand back an empty group nobody
+		// asked to keep, as the visible result of a failure.
+		final := prevGroups
+		if len(refused) < len(moved) || len(moved) == 0 {
+			final = append([]string(nil), validated...)
 		}
-		// A session left naming a group that is not in the list either way
-		// is corrected here if it can be, and at the next start if it
-		// cannot.
-		_ = s.reconcileGroupsLocked()
+		inFinal := make(map[string]bool, len(final))
+		for _, g := range final {
+			inFinal[g] = true
+		}
+		// In the order they had before, so a list that is briefly longer
+		// than intended is not also shuffled.
+		for _, g := range prevGroups {
+			if inFinal[g] {
+				continue
+			}
+			for _, st := range s.sessions {
+				if st.meta.Group == g {
+					final = append(final, g)
+					inFinal[g] = true
+					break
+				}
+			}
+		}
+		if err := s.writeGroupsLocked(final); err == nil {
+			s.groups = final
+		}
+		// Only now, and only for anything the list still cannot account
+		// for. Whatever it moves is named too: a session that was moved
+		// and then unmoved by a failure somewhere else is exactly the one
+		// the caller would never think to look at.
+		stranded := s.reconcileGroupsLocked()
 		sort.Strings(refused)
-		return fmt.Errorf("%d session(s) could not be moved (%s): %w", len(refused), strings.Join(refused, ", "), firstErr)
+		msg := fmt.Sprintf("%d session(s) could not be moved (%s)", len(refused), strings.Join(refused, ", "))
+		if len(stranded) > 0 {
+			msg += fmt.Sprintf("; %d more were left ungrouped (%s)", len(stranded), strings.Join(stranded, ", "))
+		}
+		return fmt.Errorf("%s: %w", msg, firstErr)
 	}
 	return nil
 }
@@ -2135,7 +2225,15 @@ func (s *Store) SetSessionGroup(sessionID, group string) (*Session, error) {
 		return nil, fmt.Errorf("group %q not found", group)
 	}
 
-	return s.updateMetaLocked(st, func(m *Session) {
+	sess, err := s.updateMetaLocked(st, func(m *Session) {
 		m.Group = group
 	})
+	if err != nil {
+		// Marked, so the caller can tell a group that does not exist from
+		// a disk that would not take the change. Only this method and
+		// SetGroups do it: the rest of the store returns the write error
+		// as it came, and the shared rollback test holds them to that.
+		return nil, fmt.Errorf("session metadata %w: %w", ErrPersist, err)
+	}
+	return sess, nil
 }

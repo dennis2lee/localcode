@@ -1697,6 +1697,8 @@ Sessions can be put into named groups. Which groups exist, what order they are d
 
 Ungrouped sessions are drawn first, above every group and with no header of their own, so a person who has made no groups sees the panel exactly as it was before groups existed.
 
+If the group list file is ever unreadable, the groups are recovered from the sessions that are in them: nothing is unfiled, but the order they were drawn in is lost and a group that was empty is gone. localcode says so at startup.
+
 Renaming has to say so. A group records its members by name, so a rename carries them across — and the only trace a wholesale list submission leaves is that one name went and another arrived, which is equally what deleting one group and making another looks like. The daemon does not guess between them: an old name that simply disappears is a group that was deleted, and the sessions that were in it are left ungrouped, keeping their order and everything else.
 
 A group name is refused, by name, if it is empty, starts or ends with a space, is longer than 100 characters, carries a control character or newline, or is already in the list. The limit counts characters, not bytes. Naming a group that does not exist is refused the same way, rather than tidied into anything else: only the empty string means ungrouped.

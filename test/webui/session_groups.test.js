@@ -338,6 +338,8 @@ test('deleting a group forgets that it was folded', async () => {
     confirm: true,
   });
 
+  // A daemon that took the delete answers the next read with the new list.
+  app.routes['GET /api/sessions/groups'] = { names: ['personal'] };
   await app.internals.promptDeleteGroup('work');
   await app.settle();
 
@@ -361,6 +363,7 @@ test('renaming a group keeps it folded, under the new name', async () => {
     prompt: 'job',
   });
 
+  app.routes['GET /api/sessions/groups'] = { names: ['job', 'personal'] };
   await app.internals.promptRenameGroup('work');
   await app.settle();
 
@@ -545,4 +548,62 @@ test('a card dropped on a group header lands first in that group', async () => {
 
   const rows = [...app.el('session-list').querySelectorAll('.session-item')].map(e => e.title.split('\n')[0]);
   assert.deepEqual(rows, ['x', 'p', 'q'], 'x is first in the group, not second');
+});
+
+// A group deleted from the other window, or the desktop build. This panel
+// only hears about it on the next read, and if the fold is not dropped
+// then, a group later made with that name draws shut for a reason nobody
+// can see.
+test('a group deleted elsewhere loses its fold on the next read', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/sessions': SESSIONS,
+      'GET /api/sessions/groups': { names: ['work', 'personal'] },
+    },
+    localStorage: { 'localcode.collapsedGroups': JSON.stringify(['work', 'personal']) },
+  });
+
+  // Somewhere else, "work" is deleted. Nothing in this window did it.
+  app.routes['GET /api/sessions/groups'] = { names: ['personal'] };
+  await app.internals.loadSessions();
+  await app.settle();
+
+  assert.deepEqual(
+    JSON.parse(app.storage.get('localcode.collapsedGroups')),
+    ['personal'],
+    'the fold of the group that is gone went with it',
+  );
+});
+
+// But a read that did not arrive is not news that every group is gone.
+// Pruning against a list that failed to come back would throw away every
+// fold in this browser on one bad request.
+test('a failed read of the group list does not throw the folds away', async () => {
+  // The daemon is not answering, so this window never learns what groups
+  // there are. Pruning against the nothing it knows would empty the fold
+  // list — and then the folds would be gone for good, even though every
+  // group is still there.
+  const app = await load({
+    routes: {
+      'GET /api/sessions': SESSIONS,
+      'GET /api/sessions/groups': { status: 500 },
+    },
+    localStorage: { 'localcode.collapsedGroups': JSON.stringify(['work', 'personal']) },
+  });
+
+  assert.deepEqual(
+    JSON.parse(app.storage.get('localcode.collapsedGroups')).sort(),
+    ['personal', 'work'],
+    'both folds are still there',
+  );
+
+  // And when the daemon comes back, they still do their job.
+  app.routes['GET /api/sessions/groups'] = { names: ['work', 'personal'] };
+  await app.internals.loadSessions();
+  await app.settle();
+  const headers = app.el('session-list').querySelectorAll('.session-group-header');
+  assert.equal(headers.length, 2, 'both groups draw');
+  for (const h of headers) {
+    assert.equal(h.querySelector('.group-toggle').textContent, '▸', 'and both are still folded');
+  }
 });
