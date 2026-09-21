@@ -526,8 +526,24 @@ func TestATaskCancelledWhileQueuedStillWakesItsCollector(t *testing.T) {
 	ctx := WithSessionID(context.Background(), sid)
 
 	// Fill the slot with something slow, then queue behind it.
+	//
+	// "Then" has to be made true: launch returns once the task's goroutine
+	// exists, not once it holds the slot, so two launches in a row are two
+	// goroutines racing for one slot with nothing to say which wins. On a
+	// loaded runner under -race the slow one lost, the fast one took the
+	// slot and finished in a millisecond, and by the time Cancel was
+	// called there was nothing left to cancel — the failure this test
+	// then reported was its own setup, not the bug it guards. So the
+	// second launch waits until the first is actually in the slot.
 	if res := launch(t, loop.Tools, ctx, "explore", "say first-slow"); res.IsError {
 		t.Fatalf("launch: %s", res.Content)
+	}
+	slotHeld := func() bool { return len(tasks.sem) == 1 }
+	for deadline := time.Now().Add(5 * time.Second); !slotHeld(); {
+		if time.Now().After(deadline) {
+			t.Fatal("the slow task never took the slot")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	queued := launch(t, loop.Tools, ctx, "explore", "say second")
 	if queued.IsError {
@@ -535,6 +551,13 @@ func TestATaskCancelledWhileQueuedStillWakesItsCollector(t *testing.T) {
 	}
 	queuedID := taskIDFrom(t, queued.Content)
 
+	// And it must still be queued when cancelled: this test is about the
+	// exit taken by a cancellation that arrives before a slot does. If the
+	// slow task has already let go, the cancel below reaches a running
+	// task instead and the test passes without exercising that exit.
+	if !slotHeld() {
+		t.Fatal("the slow task finished before the queued one could be cancelled; the mock server's -slow delay is too short for this machine")
+	}
 	if !tasks.Cancel(queuedID) {
 		t.Fatal("the queued task could not be cancelled")
 	}
