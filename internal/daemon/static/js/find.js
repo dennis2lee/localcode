@@ -179,7 +179,37 @@ export function findIsOpen() {
   return !findBar.hidden;
 }
 
+// What the transcript looked like when the search last ran: how many
+// blocks, and how many characters in them. Two numbers rather than a list
+// of anything, because the question is only whether to search again.
+let searchedShape = '';
+
+function transcriptShape() {
+  const blocks = searchableBlocks();
+  let chars = 0;
+  for (const el of blocks) chars += el.textContent.length;
+  return `${blocks.length}:${chars}`;
+}
+
+// Whether the list of hits still describes the transcript.
+//
+// Two ways it stops describing it, and the second is the one that is easy
+// to miss. A mark can leave the tree — a reply redrawn as it streams
+// takes its marks with it — and that is caught by looking for it. Or text
+// can be *added*, which takes nothing away: every mark is still where it
+// was, and the new text has no marks because it was not there to be
+// marked. Nothing about the old hits is wrong, they are just no longer
+// all of them.
+//
+// So the shape is remembered instead of the writers being enumerated.
+// Anything that appends to the transcript — a rewound line, a cleared
+// one, a compaction notice, a fork, a kind added next year — heals on the
+// next move without a list here that has to be kept in step with them.
+// The alternative was a findRefresh() call in every handler that writes,
+// and the last round's blocker was one of two such calls being in the
+// wrong place.
 function staleHits() {
+  if (transcriptShape() !== searchedShape) return true;
   for (const marks of hits) {
     for (const mark of marks) if (!blockOf(mark)) return true;
   }
@@ -211,12 +241,14 @@ export function runFind(keepPosition = false) {
   lastQuery = query;
   if (String(query).trim() === '') {
     say('');
+    searchedShape = transcriptShape();
     return;
   }
   const blocks = searchableBlocks();
   const found = findMatches(blocks.map((el) => el.textContent), query);
   if (found.length === 0) {
     say('no matches');
+    searchedShape = transcriptShape();
     return;
   }
   for (const m of found) {
@@ -225,6 +257,7 @@ export function runFind(keepPosition = false) {
   // Staying put is for a redraw under the reader's feet; a new query
   // starts at the newest match, which is the first of the list.
   current = keepPosition && wasAt >= 0 ? Math.min(wasAt, hits.length - 1) : 0;
+  searchedShape = transcriptShape();
   land();
 }
 
@@ -318,17 +351,35 @@ export function closeFind() {
 // finished, a session was switched. The marks are gone or stale either
 // way, so the search runs again and tries to keep the reader where they
 // were.
+// findRefresh says the transcript has changed under an open bar.
+//
+// Coalesced, and that is what makes it safe to call from the place the
+// transcript writes rather than from a list of handlers that write. A
+// burst of appends — a cancelled turn rewrites its abandoned prompts and
+// then adds its own line — costs one search at the end of the task
+// instead of one per line, and the search cannot run before the writes it
+// was called about, because it runs after all of them.
+//
+// A list of callers was the alternative and it was tried: three turn-end
+// handlers, one of which had the call in the wrong place, and every
+// one-off writer missed.
+let refreshQueued = false;
+
 export function findRefresh() {
-  if (!findIsOpen()) return;
-  if (String(findInput.value).trim() === '') return;
-  // Straight to runFind, which unmarks what is there before marking
-  // again. Emptying the list here first — which this did — takes the
-  // marks out of reach of that unmarking without taking them out of the
-  // transcript, so the next pass marks over them: one more layer of
-  // nested <mark> per turn, two of them claiming to be the current
-  // match, and the whole stack orphaned in the transcript when the bar
-  // closes.
-  runFind(true);
+  if (refreshQueued) return;
+  refreshQueued = true;
+  Promise.resolve().then(() => {
+    refreshQueued = false;
+    if (!findIsOpen()) return;
+    if (String(findInput.value).trim() === '') return;
+    // Straight to runFind, which unmarks what is there before marking
+    // again. Emptying the list here first — which this did — takes the
+    // marks out of reach of that unmarking without taking them out of
+    // the transcript, so the next pass marks over them: one more layer
+    // of nested <mark> per turn, two of them claiming to be the current
+    // match, and the whole stack orphaned when the bar closes.
+    runFind(true);
+  });
 }
 
 export function wireFind() {

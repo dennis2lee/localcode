@@ -414,3 +414,54 @@ test('switching conversation with the bar closed leaves the focus alone', async 
     'a bar that was never open did not reach for the focus',
   );
 });
+
+// A line the transcript draws outside a turn — a rewind, a clear, a
+// compaction, a fork — is searched without anything having to name it.
+//
+// The refresh is asked for by the thing that draws the line rather than
+// by a list of the handlers that draw them. That list existed and was
+// wrong twice: three turn ends, one of which had the call before its own
+// writes, and every one-off writer missed.
+test('a line drawn outside a turn is searched without being named anywhere', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+  assert.equal(app.el('find-count').textContent, '1 of 4', 'setup: four matches');
+
+  app.sse.emit({ type: 'rewound', data: { turn_text: 'handoff in the undone turn' } });
+  await app.settle();
+
+  assert.ok(
+    app.el('transcript').textContent.includes('handoff in the undone turn'),
+    'setup: the rewind drew its line',
+  );
+  assert.equal(app.el('find-count').textContent, '1 of 5', 'and the bar counted it');
+});
+
+// The backstop for the paths that draw nothing: a tool row built
+// mid-turn, the banner inserted above everything. Nothing announces
+// those, so the next move checks the transcript against the shape it had
+// when the search ran — how many blocks, how many characters — and
+// searches again when it differs. A mark leaving the tree is the other
+// half of the same check; text arriving takes nothing away.
+test('a step repairs a search the transcript has outgrown', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+  assert.equal(app.el('find-count').textContent, '1 of 4');
+
+  // A tool row: built by appendToolCall, which draws no notice line.
+  app.sse.emit({ seq: 5, type: 'tool.start', data: { tool_use_id: 't1', name: 'bash', input: '{"command":"cat handoff.go"}' } });
+  await app.settle();
+  assert.equal(app.el('find-count').textContent, '1 of 4', 'nothing announced it, so the count has not moved yet');
+
+  app.el('find-older').fire('click');
+  // Six: the row carries the command twice, beside the tool name and in
+  // the arguments that fold open, the same way a short result is carried
+  // twice. Both are on screen, so both count.
+  assert.equal(app.el('find-count').textContent, '1 of 6', 'the step found the transcript had grown and searched again');
+});

@@ -142,14 +142,15 @@ const handlers = {
   'turn.done': () => {
     session.runningTool = '';
     setWaiting(false);
-    // A reply's element is rewritten on every fragment, so an open find
-    // bar has been losing marks inside it for the length of the turn.
-    // This is the first moment it is worth searching again — and the only
-    // cheap one, since doing it per fragment would re-scan the whole
-    // conversation per token. Every way a turn can end says so; a turn
-    // that was cancelled or failed has added just as much text as one
-    // that finished, and leaving those two out left the count wrong with
-    // nothing coming to correct it.
+    // The one refresh the transcript cannot ask for itself.
+    //
+    // Every line it *draws* asks — see appendDiv — but a reply is not
+    // drawn, it is written into an element that is rewritten on every
+    // fragment, and asking per fragment would re-search the whole
+    // conversation per token. So a finished reply is announced here, at
+    // the turn's end, which is the first moment it is worth searching
+    // again. A cancelled or failed turn needs no announcement of its own:
+    // both of them draw a line, and drawing it is what asks.
     findRefresh();
   },
   // Tool activity gets a transcript line of its own, not just the status
@@ -544,12 +545,6 @@ const handlers = {
     abandonPendingUsers();
     appendTool('[cancelled]');
     renderCommDot();
-    // Last, after everything above has written what it writes. A refresh
-    // is a search of the transcript as it stands, so running it first
-    // searches the transcript this handler is about to change — and the
-    // abandoned prompts and the [cancelled] line are exactly the text a
-    // reader would be looking for.
-    findRefresh();
   },
   error: (d) => {
     // "recovered" means the loop already handled it and the turn is still
@@ -563,7 +558,6 @@ const handlers = {
     session.runningTool = '';
     setWaiting(false);
     appendError(d.error || '');
-    findRefresh();
   },
 };
 
