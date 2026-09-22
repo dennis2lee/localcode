@@ -440,6 +440,15 @@ func reasoningDelta(d types.ReasoningContentBlockDelta) (text, signature string)
 	return "", ""
 }
 
+// toBedrockTools lowers the tool list into Converse's form.
+//
+// A tool with no description is sent with its name as one. Converse
+// rejects the whole request when any toolSpec.description is shorter than
+// one character, and MCP servers are free to advertise tools without a
+// description, so one such tool among hundreds made every Bedrock turn
+// fail with a 400 while the Anthropic API, which accepts an empty string,
+// kept working. The name is the only thing known about such a tool, and
+// it is what the model would otherwise have gone on anyway.
 func toBedrockTools(tools []Tool, cachePrefix bool) (*types.ToolConfiguration, error) {
 	if len(tools) == 0 {
 		return nil, nil
@@ -456,7 +465,7 @@ func toBedrockTools(tools []Tool, cachePrefix bool) (*types.ToolConfiguration, e
 		}
 		specs = append(specs, &types.ToolMemberToolSpec{Value: types.ToolSpecification{
 			Name:        aws.String(t.Name),
-			Description: aws.String(t.Description),
+			Description: aws.String(bedrockToolDescription(t)),
 			InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(schema)},
 		}})
 	}
@@ -467,6 +476,16 @@ func toBedrockTools(tools []Tool, cachePrefix bool) (*types.ToolConfiguration, e
 		specs = append(specs, &types.ToolMemberCachePoint{Value: types.CachePointBlock{Type: types.CachePointTypeDefault}})
 	}
 	return &types.ToolConfiguration{Tools: specs}, nil
+}
+
+// bedrockToolDescription is the description Converse will accept for t.
+// Whitespace counts as missing: it passes the length check, but it tells
+// the model nothing the name does not.
+func bedrockToolDescription(t Tool) string {
+	if strings.TrimSpace(t.Description) == "" {
+		return t.Name
+	}
+	return t.Description
 }
 
 // oneMillionContextBeta is the Anthropic beta flag that unlocks the

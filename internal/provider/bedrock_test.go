@@ -262,6 +262,39 @@ func TestToBedrockTools(t *testing.T) {
 	}
 }
 
+// Converse rejects the whole request when any tool's description is
+// empty, and an MCP server may advertise a tool without one. One such tool
+// at index 256 of 258 took every Opus turn down with a 400, so each tool
+// here must come out with a description Converse accepts, and a tool that
+// has one must keep it unchanged.
+func TestToBedrockToolsNeverSendsAnEmptyDescription(t *testing.T) {
+	tools := []Tool{
+		{Name: "glob", Description: "list files"},
+		{Name: "mcp__jira__get_issue", Description: ""},
+		{Name: "mcp__jira__list_boards", Description: " \n\t"},
+	}
+	cfg, err := toBedrockTools(tools, true)
+	if err != nil {
+		t.Fatalf("toBedrockTools: %v", err)
+	}
+	want := []string{"list files", "mcp__jira__get_issue", "mcp__jira__list_boards"}
+	specs := 0
+	for _, tool := range cfg.Tools {
+		spec, ok := tool.(*types.ToolMemberToolSpec)
+		if !ok {
+			continue
+		}
+		got := aws.ToString(spec.Value.Description)
+		if got != want[specs] {
+			t.Errorf("tool %s: description %q, want %q", aws.ToString(spec.Value.Name), got, want[specs])
+		}
+		specs++
+	}
+	if specs != len(tools) {
+		t.Fatalf("got %d tool specs, want %d", specs, len(tools))
+	}
+}
+
 func TestToBedrockToolsEmpty(t *testing.T) {
 	cfg, err := toBedrockTools(nil, false)
 	if err != nil {
