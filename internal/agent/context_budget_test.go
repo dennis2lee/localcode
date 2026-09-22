@@ -887,6 +887,45 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		}
 	})
 
+	// Each case below is checked against what the advice would do: the
+	// request clampMaxTokens builds after following it must be larger
+	// than the one that was cut off.
+	advice := []struct {
+		name          string
+		wanted, input int
+		raiseHelps    bool
+		compactHelps  bool
+		wantInNotice  string
+		notInNotice   string
+	}{
+		{"the profile at the floor, on a full window", 1024, 31000, false, false, "needs both /compact and a higher max_tokens", "for longer answers"},
+		{"a window with exactly the profile's figure left", 4096, 32768 - contextHeadroom - 4096, false, false, "needs both /compact and a higher max_tokens", "for longer answers"},
+		{"a profile below the floor, room between it and the floor", 512, 32768 - contextHeadroom - 800, true, false, "at most 1024 until /compact", "needs both"},
+		{"a profile below the floor, on a full window", 512, 31000, true, false, "at most 1024 until /compact", "needs both"},
+		{"a profile with room to spare", 4096, 1000, true, false, "raise max_tokens on that profile", "nearly full"},
+		{"a window that shrank the request", 4096, 28000, false, true, "Raising max_tokens will not help", "raise max_tokens on that profile"},
+	}
+	for _, c := range advice {
+		t.Run(c.name, func(t *testing.T) {
+			const window = 32768
+			s := requestSizing{wanted: c.wanted, input: c.input, window: window, source: windowFromConfig,
+				sent: clampMaxTokens(c.wanted, window, c.input)}
+			if raised := clampMaxTokens(c.wanted*4, window, c.input); (raised > s.sent) != c.raiseHelps {
+				t.Fatalf("precondition: raising max_tokens sends %d after %d, want helps=%v", raised, s.sent, c.raiseHelps)
+			}
+			if compacted := clampMaxTokens(c.wanted, window, 0); (compacted > s.sent) != c.compactHelps {
+				t.Fatalf("precondition: /compact sends %d after %d, want helps=%v", compacted, s.sent, c.compactHelps)
+			}
+			got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
+			if !strings.Contains(got, c.wantInNotice) {
+				t.Errorf("does not say %q:\n%s", c.wantInNotice, got)
+			}
+			if strings.Contains(got, c.notInNotice) {
+				t.Errorf("says %q:\n%s", c.notInNotice, got)
+			}
+		})
+	}
+
 	t.Run("the profile is named as it appears in config.json", func(t *testing.T) {
 		loop := probeTestLoop(t, &probeCounter{found: false}, profile)
 		run := modelRun{profileName: "itg-flash", profile: profile, maxTokens: 4096}

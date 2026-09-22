@@ -530,17 +530,30 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 		}
 		return msg
 	}
-	msg := fmt.Sprintf(
-		"the reply hit the %q profile's max_tokens limit of %d and was cut off — raise max_tokens on that profile in config.json for longer answers",
-		name, s.sent)
-	// A limit below the floor is the one case where both apply: the
-	// profile's figure is what was sent, and the window could not have
-	// given more than the floor anyway. Raising max_tokens helps, but
-	// only that far.
-	if room := s.window - s.input - contextHeadroom; s.window > 0 && room < s.wanted {
-		msg += fmt.Sprintf(
-			"; the context window is nearly full as well (about %d of %d tokens in use), so a raised max_tokens gets at most %d until /compact makes room",
-			s.input, s.window, minOutputTokens)
+	// The profile's figure is what was sent. Whether raising it helps
+	// depends on how much the window would grant a larger request, which
+	// is what clampMaxTokens would send for one: the room, but never less
+	// than the floor.
+	raise := fmt.Sprintf("the reply hit the %q profile's max_tokens limit of %d and was cut off", name, s.sent)
+	if s.window <= 0 {
+		return raise + " — raise max_tokens on that profile in config.json for longer answers"
 	}
-	return msg
+	room := s.window - s.input - contextHeadroom
+	switch granted := max(room, minOutputTokens); {
+	case granted <= s.sent:
+		// Neither move works alone. A raised max_tokens is shrunk back to
+		// what was sent, and /compact makes room the profile's own figure
+		// then caps. This is a profile at the floor on a full window, or
+		// a window with exactly the profile's figure left.
+		return raise + fmt.Sprintf(
+			", and the context window had no room for more: about %d of %d tokens were in use. A longer answer needs both /compact and a higher max_tokens on that profile in config.json",
+			s.input, s.window)
+	case room < minOutputTokens:
+		// A limit below the floor on a nearly full window: raising helps,
+		// up to the floor and no further.
+		return raise + fmt.Sprintf(
+			" — raise max_tokens on that profile in config.json for longer answers; the context window is nearly full as well (about %d of %d tokens in use), so a raised max_tokens gets at most %d until /compact makes room",
+			s.input, s.window, granted)
+	}
+	return raise + " — raise max_tokens on that profile in config.json for longer answers"
 }
