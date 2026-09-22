@@ -298,3 +298,63 @@ func TestSystemPromptSection(t *testing.T) {
 		t.Errorf("section missing expected content: %q", got)
 	}
 }
+
+// Running localcode in a home directory makes the project root and the
+// person's root one directory, and both are handed to the loader. A skill
+// that cannot be read was then blamed twice for the same thing: seven
+// unreadable skills produced fourteen lines, which reads as fourteen
+// problems.
+func TestOneDirectoryGivenTwiceIsReadOnce(t *testing.T) {
+	root := t.TempDir()
+	skillsDir := filepath.Join(root, "skills")
+	write := func(name, body string) {
+		t.Helper()
+		dir := filepath.Join(skillsDir, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("good", "---\nname: good\ndescription: fine\n---\nbody\n")
+	write("bad", "# no frontmatter at all\n")
+
+	list, warnings, err := LoadAllWithWarnings(skillsDir, skillsDir)
+	if err != nil {
+		t.Fatalf("LoadAllWithWarnings: %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Errorf("one unreadable skill produced %d warnings: %v", len(warnings), warnings)
+	}
+	if len(list) != 1 || list[0].Name != "good" {
+		t.Errorf("loaded %d skill(s), want the one that reads", len(list))
+	}
+}
+
+// And a Windows editor's file reads, which is the other half of the same
+// complaint: a SKILL.md written in Notepad begins with three bytes nobody
+// can see and ends its lines with CRLF.
+func TestASkillWrittenInNotepadReads(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "skills", "del-comment")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bom := string([]byte{0xEF, 0xBB, 0xBF})
+	body := bom + "---\r\nname: del-comment\r\ndescription: Delete What-Comments\r\n---\r\n# Comment delete skill\r\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	list, warnings, err := LoadAllWithWarnings(filepath.Join(root, "skills"))
+	if err != nil {
+		t.Fatalf("LoadAllWithWarnings: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("a Notepad-written skill was refused: %v", warnings)
+	}
+	if len(list) != 1 || list[0].Name != "del-comment" || list[0].Description != "Delete What-Comments" {
+		t.Errorf("loaded %+v, want the skill with its name and description", list)
+	}
+}

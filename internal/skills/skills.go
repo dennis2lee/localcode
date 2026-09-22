@@ -71,8 +71,23 @@ func LoadAllWithWarnings(dirs ...string) ([]Skill, []string, error) {
 	var out []Skill
 	var warnings []string
 	seen := map[string]bool{}
+	// The same directory, given twice, is read once.
+	//
+	// The two roots are the project's and the person's, and they are the
+	// same directory whenever somebody runs localcode in their home — which
+	// is where a Windows shell opens. Loading twice cost nothing, because
+	// a skill already seen is skipped by name, but the *refusals* are
+	// gathered before that check and so were reported twice: seven skills
+	// that could not be read became fourteen lines, each one blaming the
+	// same file for the same thing.
+	readDirs := map[string]bool{}
 
 	for _, dir := range dirs {
+		if key := filepath.Clean(dir); readDirs[key] {
+			continue
+		} else {
+			readDirs[key] = true
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {

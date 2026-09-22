@@ -87,8 +87,17 @@ func checkModelInvocable(fm frontmatter, body string) (bool, string) {
 func LoadAll(dirs ...string) ([]Command, error) {
 	var out []Command
 	seen := map[string]bool{}
+	// The same directory, given twice, is read once: the project root and
+	// the home root are one directory whenever localcode is run in a home
+	// directory. See internal/skills for the whole of it.
+	readDirs := map[string]bool{}
 
 	for _, dir := range dirs {
+		if key := filepath.Clean(dir); readDirs[key] {
+			continue
+		} else {
+			readDirs[key] = true
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {

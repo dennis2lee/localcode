@@ -521,8 +521,17 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, projectDir,
 		// Worth a line: an empty winner still wins, so "where did my
 		// skills go" is answered by the log rather than by reading this
 		// package's source.
-		log.Printf("skills and commands: reading %s and %s (config.json is always ~/.localcode/config.json)",
-			project.Path, global.Path)
+		//
+		// One path when the two roots are one directory, which they are
+		// whenever localcode is run in a home directory. "reading X and X"
+		// reads as a bug in the line rather than as the fact it is.
+		if project.Path == global.Path {
+			log.Printf("skills and commands: reading %s, which is both the project root and yours (config.json is always ~/.localcode/config.json)",
+				project.Path)
+		} else {
+			log.Printf("skills and commands: reading %s and %s (config.json is always ~/.localcode/config.json)",
+				project.Path, global.Path)
+		}
 	}
 	// And a second line only when something was actually lost. The first
 	// says where the assets came from; this one says where they did not,
