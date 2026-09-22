@@ -13,7 +13,7 @@
 // arrow in a find bar means "down the document" everywhere else and this
 // is the opposite of that.
 import {
-  transcriptEl, findBar, findInput, findCount, findOlderBtn, findNewerBtn, findCloseBtn,
+  transcriptEl, inputEl, findBar, findInput, findCount, findOlderBtn, findNewerBtn, findCloseBtn,
 } from './dom.js';
 
 // A node holding characters. Portable between the browser and the test
@@ -25,19 +25,24 @@ function isTextNode(node) {
   return node != null && typeof node.data === 'string' && node.nodeName !== '#comment';
 }
 
-// The searchable blocks: every element child of the transcript except the
-// separators, which carry no message of their own.
+// The transcript's own furniture: blocks it draws to talk to the reader
+// rather than to carry a message. Searching them matches text nobody
+// wrote — "you" on every turn of every conversation, "conversation" on
+// any transcript opened at its end — and buries the real hits under it.
+const NOT_A_MESSAGE = ['turn-sep', 'msg-earlier'];
+
+// The searchable blocks: every element child of the transcript except
+// that furniture.
 //
-// The transcript's children rather than a list of class names. Everything
-// appended to it is one message-shaped thing — a prompt, a reply, a tool
-// row, a thinking block, a review, an error — and a kind added later is
-// searchable here without anybody remembering to come back and add it.
-// The separator is the exception because it is a label for the boundary
-// below it ("YOU"), and matching the word "you" on every turn of every
-// conversation would bury every real hit.
+// The transcript's children rather than a list of class names to include.
+// Everything appended to it is one message-shaped thing — a prompt, a
+// reply, a tool row, a thinking block, a review, an error — and a kind
+// added later is searchable here without anybody remembering to come back
+// and add it. The exclusions are the short list because they are the
+// exception, and a new one of those is a line here.
 export function searchableBlocks() {
   return Array.from(transcriptEl.children || []).filter(
-    (el) => !(el.classList && el.classList.contains('turn-sep')),
+    (el) => !(el.classList && NOT_A_MESSAGE.some((cls) => el.classList.contains(cls))),
   );
 }
 
@@ -297,6 +302,11 @@ export function closeFind() {
   lastQuery = '';
   say('');
   findBar.hidden = true;
+  // Back to the prompt box. Leaving it in the input that has just been
+  // hidden leaves the page with nowhere for a keystroke to go: typing
+  // does nothing, and Escape — which is how the bar was closed — has
+  // nothing to act on either.
+  inputEl.focus();
 }
 
 // The transcript changed under an open bar: a fragment arrived, a turn
@@ -306,8 +316,13 @@ export function closeFind() {
 export function findRefresh() {
   if (!findIsOpen()) return;
   if (String(findInput.value).trim() === '') return;
-  hits = [];
-  current = -1;
+  // Straight to runFind, which unmarks what is there before marking
+  // again. Emptying the list here first — which this did — takes the
+  // marks out of reach of that unmarking without taking them out of the
+  // transcript, so the next pass marks over them: one more layer of
+  // nested <mark> per turn, two of them claiming to be the current
+  // match, and the whole stack orphaned in the transcript when the bar
+  // closes.
   runFind(true);
 }
 

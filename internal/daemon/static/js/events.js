@@ -146,7 +146,10 @@ const handlers = {
     // bar has been losing marks inside it for the length of the turn.
     // This is the first moment it is worth searching again — and the only
     // cheap one, since doing it per fragment would re-scan the whole
-    // conversation per token.
+    // conversation per token. Every way a turn can end says so; a turn
+    // that was cancelled or failed has added just as much text as one
+    // that finished, and leaving those two out left the count wrong with
+    // nothing coming to correct it.
     findRefresh();
   },
   // Tool activity gets a transcript line of its own, not just the status
@@ -523,6 +526,7 @@ const handlers = {
   'turn.cancelled': () => {
     session.promptQueue = [];
     session.runningTool = '';
+    findRefresh();
     // A cancelled turn is not waiting on an answer. The daemon does send
     // permission.resolved for the question it was holding, and that is
     // the event that clears this; saying it here too costs nothing and
@@ -554,6 +558,7 @@ const handlers = {
     session.runningTool = '';
     setWaiting(false);
     appendError(d.error || '');
+    findRefresh();
   },
 };
 

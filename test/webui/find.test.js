@@ -280,3 +280,94 @@ test('a match inside a folded tool result opens what it is folded into', async (
     assert.equal(p.hidden, false, 'nothing between the match and the transcript is still folded');
   }
 });
+
+// A turn ending under an open bar has to search again — the reply was
+// rewritten on every fragment, so the marks inside it are gone — and
+// searching again has to unmark what is there first.
+//
+// It did not. The refresh emptied the hit list and then called the
+// search, which unmarks by walking that list: the marks stayed in the
+// transcript out of reach of the only thing that removes them, and the
+// next pass marked over them. One more nested layer per turn, two of
+// them claiming to be the current match, and the whole stack left behind
+// when the bar closed.
+test('a turn ending re-searches without marking over the old marks', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+  assert.equal(marks(app).length, 4, 'setup: four occurrences');
+
+  app.el('find-older').fire('click');
+  assert.equal(app.el('find-count').textContent, '2 of 4');
+
+  app.sse.emit({ type: 'turn.done' });
+  await app.settle();
+
+  assert.equal(marks(app).length, 4, 'still four marks, not a second layer over the first');
+  assert.equal(
+    Array.from(marks(app)).filter((m) => m.className.includes('current')).length,
+    1,
+    'and one current match, not one per layer',
+  );
+  assert.equal(app.el('find-count').textContent, '2 of 4', 'the reader is left where they were');
+
+  app.el('find-close').fire('click');
+  assert.equal(marks(app).length, 0, 'and closing takes every mark with it');
+});
+
+// Every way a turn can end, not just the tidy one. A cancelled turn has
+// added as much text as a finished one.
+test('a cancelled turn refreshes the count too', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+  assert.equal(app.el('find-count').textContent, '1 of 4', 'setup: four matches');
+
+  app.sse.emit({ seq: 5, type: 'tool.start', data: { tool_use_id: 't1', name: 'bash', input: '{"command":"ls"}' } });
+  app.sse.emit({ seq: 6, type: 'tool.end', data: { tool_use_id: 't1', content: 'handoff in the output' } });
+  await app.settle();
+  app.sse.emit({ type: 'turn.cancelled' });
+  await app.settle();
+
+  // Six, not five: a tool result short enough to read is shown twice —
+  // once as the row's own summary beside the tool name, and once in the
+  // block that folds open. Both are on screen, so both are matches; a
+  // find that showed one of them would be hiding the other.
+  assert.equal(app.el('find-count').textContent, '1 of 6', 'the tool output is counted after the cancel');
+});
+
+// The banner the transcript draws when it has opened a long conversation
+// at its end is furniture, like the turn separator. Searching it matches
+// text nobody wrote.
+test('the earlier-messages banner is not searched', async () => {
+  const app = await load();
+  // The banner appears when the first event of a connection carries a
+  // sequence number past the first: there is history above this.
+  app.sse.emit({ seq: 5, type: 'message.user', data: { text: 'read handoff.go' } });
+  await app.settle();
+  assert.ok(app.el('transcript').querySelectorAll('.msg-earlier')[0], 'setup: the banner is showing');
+
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'conversation';
+  app.el('find-input').fire('input');
+  await app.settle();
+
+  assert.equal(app.el('find-count').textContent, 'no matches', "the banner's own words are not a match");
+  assert.equal(marks(app).length, 0);
+});
+
+test('closing the bar puts the focus back in the prompt box', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  assert.equal(app.document.activeElement.id, 'find-input', 'opening it moves the focus into it');
+
+  app.el('find-close').fire('click');
+  assert.equal(
+    app.document.activeElement.id, 'input',
+    'closing it hands the focus back, not to a field that is now hidden',
+  );
+});
