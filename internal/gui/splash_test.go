@@ -76,10 +76,28 @@ func TestSplashCarriesTheLogoAndTheProgressHooks(t *testing.T) {
 	// this green while the Eval that reaches for it found nothing — and
 	// a webview Eval that finds nothing says nothing.
 	for _, hook := range []string{"lcStatus", "lcFailed"} {
-		if !strings.Contains(html, "window."+hook+" = ") {
+		if !strings.Contains(live(html), "window."+hook+" = ") {
 			t.Errorf("splash defines no %s, so the Go side's jsCall(%q, ...) reaches nothing", hook, hook)
 		}
 	}
+}
+
+// live is the splash with its commented-out lines removed.
+//
+// Searching the raw page for a definition finds one that has been
+// commented out, which is a definition the browser never makes: the hook
+// is dead, every Eval reaching for it finds nothing, and nothing says so.
+// That is the same silence these tests exist to break, arrived at by a
+// different edit.
+func live(html string) string {
+	var kept []string
+	for _, line := range strings.Split(html, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // And what Go calls is what the page defines.
@@ -105,7 +123,7 @@ func TestEveryHookGoCallsIsDefinedOnTheSplash(t *testing.T) {
 			continue
 		}
 		seen[hook] = true
-		if !strings.Contains(html, "window."+hook+" = ") {
+		if !strings.Contains(live(html), "window."+hook+" = ") {
 			t.Errorf("gui.go calls %s and the splash does not define it", hook)
 		}
 	}
@@ -141,7 +159,7 @@ func TestTheSplashVersionCanBeCorrected(t *testing.T) {
 	}
 	// With the assignment, so that a hook renamed to lcVersionX fails
 	// here rather than passing on the shared prefix.
-	if !strings.Contains(html, "window.lcVersion = ") {
+	if !strings.Contains(live(html), "window.lcVersion = ") {
 		t.Error("the splash defines no lcVersion, so a handoff cannot say which version is coming up")
 	}
 	// And the call Go makes has to name that function.

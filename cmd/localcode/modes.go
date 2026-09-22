@@ -118,12 +118,13 @@ func runDaemon(configPath, listen string) error {
 // handoffComing is what the splash says while a newer localcode starts
 // behind it.
 //
-// Both lines, not just the status one. The version at the top of the
-// splash is this shell's own, fixed when the window opened, and after an
-// update the shell is the copy the shortcut points at rather than the one
-// about to serve — so the window read "LocalCode v0.108.1" over a status
-// line reading "starting localcode 0.109.0", and the version is what
-// anybody looks at to decide whether the update took.
+// Both lines, not just the status one. The splash opens with no version
+// at all, because until this moment nothing knows which build will
+// serve: it used to open with this shell's own, and after an update the
+// shell is the copy the shortcut points at rather than the one about to
+// serve — so the window read "LocalCode v0.108.1" over a status line
+// reading "starting localcode 0.109.0". This is where the number becomes
+// knowable, so this is where it is written.
 func handoffComing(coming string, progress, setVersion func(string)) {
 	progress("starting localcode " + coming)
 	setVersion(coming)
