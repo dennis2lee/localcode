@@ -49,6 +49,11 @@ func TestClampMaxTokensStopsAtTheFloor(t *testing.T) {
 	if got := clampMaxTokens(4096, 8192, 8000); got != minOutputTokens {
 		t.Errorf("clamped to %d, want the floor %d", got, minOutputTokens)
 	}
+	// The floor stops a request shrinking. It is not a reason to send
+	// more than the profile asked for.
+	if got := clampMaxTokens(512, 8192, 8000); got != 512 {
+		t.Errorf("a profile asking for 512 sent %d on a full window, want 512", got)
+	}
 }
 
 func TestIsContextOverflowRecognizesTheProviders(t *testing.T) {
@@ -843,6 +848,42 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		}
 		if !strings.Contains(got, "4096") {
 			t.Errorf("does not name the profile's actual limit:\n%s", got)
+		}
+	})
+
+	t.Run("a profile limit below the floor, on a full window", func(t *testing.T) {
+		// Both limits apply. What was sent is the profile's 512, and a
+		// raised max_tokens would get the floor and no more.
+		small := profile
+		small.MaxTokens = 512
+		loop := probeTestLoop(t, &probeCounter{found: false}, small)
+		run := modelRun{profileName: "itg-flash", profile: small, maxTokens: 512}
+		big := strings.Repeat("x", 4*31000)
+		msgs := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(big)}}}
+
+		sizing := loop.sizeRequest(context.Background(), "s1", run, msgs)
+		if sizing.sent != 512 {
+			t.Errorf("the request asked for %d, want the profile's 512", sizing.sent)
+		}
+		got := cutOffNotice(sizing, run.profileName, run.profile.Model)
+		if !strings.Contains(got, "max_tokens limit of 512") {
+			t.Errorf("does not name the profile's own limit:\n%s", got)
+		}
+		if !strings.Contains(got, fmt.Sprintf("at most %d until /compact", minOutputTokens)) {
+			t.Errorf("does not say how far raising max_tokens can go on a full window:\n%s", got)
+		}
+	})
+
+	t.Run("a profile limit below the floor, with room to spare", func(t *testing.T) {
+		small := profile
+		small.MaxTokens = 512
+		loop := probeTestLoop(t, &probeCounter{found: false}, small)
+		run := modelRun{profileName: "itg-flash", profile: small, maxTokens: 512}
+		msgs := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("short")}}}
+
+		got := cutOffNotice(loop.sizeRequest(context.Background(), "s1", run, msgs), run.profileName, run.profile.Model)
+		if strings.Contains(got, "nearly full") {
+			t.Errorf("mentions the window when it had room:\n%s", got)
 		}
 	})
 

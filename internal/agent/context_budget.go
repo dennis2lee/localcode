@@ -47,6 +47,9 @@ const contextHeadroom = 2048
 // has genuinely no room left should be compacted rather than answered in
 // fragments — so the floor is deliberately high enough that hitting it
 // means "compact", not "carry on".
+//
+// It is a floor on shrinking, never a reason to grow: a profile that asks
+// for less than this gets what it asked for.
 const minOutputTokens = 1024
 
 // contextWindow is the model's total input+output budget: what the config
@@ -156,7 +159,9 @@ func (l *Loop) resolveContextWindow(ctx context.Context, profile config.Profile)
 //
 // Returns want unchanged when it already fits, or when there is no usable
 // window figure — this must never be the reason a request gets *smaller*
-// than what was configured for no reason.
+// than what was configured for no reason. Nor larger: the floor used to
+// be returned as it was, so a profile asking for 512 sent 1024 whenever
+// the window was nearly full.
 func clampMaxTokens(want, window, inputTokens int) int {
 	if window <= 0 || want <= 0 {
 		return want
@@ -166,7 +171,7 @@ func clampMaxTokens(want, window, inputTokens int) int {
 		return want
 	}
 	if room < minOutputTokens {
-		return minOutputTokens
+		return min(want, minOutputTokens)
 	}
 	return room
 }
@@ -525,7 +530,17 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 		}
 		return msg
 	}
-	return fmt.Sprintf(
+	msg := fmt.Sprintf(
 		"the reply hit the %q profile's max_tokens limit of %d and was cut off — raise max_tokens on that profile in config.json for longer answers",
 		name, s.sent)
+	// A limit below the floor is the one case where both apply: the
+	// profile's figure is what was sent, and the window could not have
+	// given more than the floor anyway. Raising max_tokens helps, but
+	// only that far.
+	if room := s.window - s.input - contextHeadroom; s.window > 0 && room < s.wanted {
+		msg += fmt.Sprintf(
+			"; the context window is nearly full as well (about %d of %d tokens in use), so a raised max_tokens gets at most %d until /compact makes room",
+			s.input, s.window, minOutputTokens)
+	}
+	return msg
 }
