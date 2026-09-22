@@ -818,12 +818,12 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		big := strings.Repeat("x", 4*31000)
 		msgs := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(big)}}}
 
-		got := loop.cutOffNotice(context.Background(), "s1", run, msgs)
+		got := cutOffNotice(loop.sizeRequest(context.Background(), "s1", run, msgs), run.profileName, run.profile.Model)
 
 		if strings.Contains(got, "raise max_tokens on") {
 			t.Errorf("told to raise max_tokens when the window was the limit:\n%s", got)
 		}
-		if !strings.Contains(got, "context window is nearly full") {
+		if !strings.Contains(got, "context window was nearly full") {
 			t.Errorf("does not say the window was the limit:\n%s", got)
 		}
 		if !strings.Contains(got, "will not help") {
@@ -836,7 +836,7 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		run := modelRun{profileName: "itg-flash", profile: profile, maxTokens: 4096}
 		msgs := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("short")}}}
 
-		got := loop.cutOffNotice(context.Background(), "s1", run, msgs)
+		got := cutOffNotice(loop.sizeRequest(context.Background(), "s1", run, msgs), run.profileName, run.profile.Model)
 
 		if !strings.Contains(got, "raise max_tokens") {
 			t.Errorf("a profile cap does not say to raise max_tokens:\n%s", got)
@@ -851,7 +851,7 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		run := modelRun{profileName: "itg-flash", profile: profile, maxTokens: 4096}
 		msgs := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("short")}}}
 
-		got := loop.cutOffNotice(context.Background(), "s1", run, msgs)
+		got := cutOffNotice(loop.sizeRequest(context.Background(), "s1", run, msgs), run.profileName, run.profile.Model)
 
 		if !strings.Contains(got, `"itg-flash"`) {
 			t.Errorf("does not name the profile the person would look for:\n%s", got)
@@ -860,4 +860,94 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 			t.Errorf("names the model id as though it were a profile:\n%s", got)
 		}
 	})
+}
+
+// The notice must describe the request that produced the reply, not one
+// worked out again afterwards. The reply's usage is recorded before the
+// notice is written, and the input it reports includes what the reply
+// itself added — so a request that went out with the profile's whole
+// reservation and filled it re-read as one the window had shrunk, and the
+// notice said raising max_tokens would not help about the one case where
+// it is the fix.
+//
+// The request here is small and gets the full 4096. The server then
+// reports 26600 tokens of input and 4096 of output, which recomputed
+// against a 32768 window leaves room for only the 1024 floor.
+func TestACutOffReplyIsJudgedByTheRequestThatWasSent(t *testing.T) {
+	var (
+		mu            sync.Mutex
+		sentMaxTokens int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			MaxTokens int `json:"max_tokens"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		sentMaxTokens = body.MaxTokens
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, c := range []string{
+			`{"choices":[{"delta":{"content":"the first part of a long answer"}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"length"}]}`,
+			`{"choices":[],"usage":{"prompt_tokens":26600,"completion_tokens":4096}}`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	defer srv.Close()
+
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(store.Close)
+	cfg := &config.Config{
+		Providers:      map[string]config.ProviderConfig{"itg": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL}},
+		Profiles:       map[string]config.Profile{"itg-flash": {Provider: "itg", Model: "DSA-Flash-CODE", MaxTokens: 4096, ContextWindow: 32768}},
+		Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "itg-flash"}},
+		DefaultProfile: "itg-flash",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("invalid config: %v", err)
+	}
+	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{
+		"itg": provider.NewOpenAICompat(srv.URL, ""),
+	}, cfg)
+
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "write me a long program"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	mu.Lock()
+	sent := sentMaxTokens
+	mu.Unlock()
+	if sent != 4096 {
+		t.Fatalf("precondition: the request asked for %d tokens, want the profile's full 4096", sent)
+	}
+	if u, ok := loop.getUsage(sid); !ok || u.InputTokens != 26600 {
+		t.Fatalf("precondition: recorded usage %+v, want the server's 26600 input tokens", u)
+	}
+
+	all, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	said := ""
+	for _, ev := range all {
+		if msg, _ := ev.Data["error"].(string); ev.Type == "error" && strings.Contains(msg, "cut off") {
+			said = msg
+		}
+	}
+	if said == "" {
+		t.Fatal("the reply was cut off and nothing said so")
+	}
+	if !strings.Contains(said, `raise max_tokens on that profile`) || !strings.Contains(said, "4096") {
+		t.Errorf("a reply that filled the profile's own max_tokens was blamed on something else:\n%s", said)
+	}
 }

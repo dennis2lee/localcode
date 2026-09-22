@@ -456,6 +456,38 @@ func startsWithToolResult(m provider.Message) bool {
 	return false
 }
 
+// requestSizing is what one request was sized against.
+//
+// Kept, rather than worked out again afterwards, so that what is said about
+// a reply describes the request that produced it. The reply itself changes
+// the answer: its usage is recorded before anything reads it, so the input
+// a notice recomputes after the reply already includes the reply. A request
+// that went out with the profile's full reservation and filled it would
+// then re-read as one the window had shrunk — and the notice would say
+// raising max_tokens cannot help, about the one case where it is exactly
+// the fix.
+type requestSizing struct {
+	wanted int // the profile's max_tokens, or the default
+	sent   int // what the request actually asked for
+	input  int // the input estimate the request was sized against
+	window int
+	source windowSource
+}
+
+// sizeRequest works out how much output one request may ask for, and
+// keeps the figures it used.
+func (l *Loop) sizeRequest(ctx context.Context, sessionID string, run modelRun, messages []provider.Message) requestSizing {
+	window, source := l.resolveContextWindow(ctx, run.profile)
+	input := l.inputEstimate(sessionID, run.system, messages)
+	return requestSizing{
+		wanted: run.maxTokens,
+		sent:   clampMaxTokens(run.maxTokens, window, input),
+		input:  input,
+		window: window,
+		source: source,
+	}
+}
+
 // cutOffNotice says why a reply stopped at its length cap, and what would
 // let it run longer.
 //
@@ -473,27 +505,27 @@ func startsWithToolResult(m provider.Message) bool {
 // also named the profile by its model id, which is not a key anyone can
 // find in their config.json.
 //
+// Which limit it was is read off the request that was sent, not worked
+// out again — see requestSizing for why that is not the same thing.
+//
 // And when the window is the cause, it says where the window figure came
 // from, because a figure guessed from a model name is the likeliest
 // reason a window looks full when it is not.
-func (l *Loop) cutOffNotice(ctx context.Context, sessionID string, run modelRun, messages []provider.Message) string {
-	window, source := l.resolveContextWindow(ctx, run.profile)
-	input := l.inputEstimate(sessionID, run.system, messages)
-	sent := clampMaxTokens(run.maxTokens, window, input)
-	name := run.profileName
+func cutOffNotice(s requestSizing, profileName, model string) string {
+	name := profileName
 	if name == "" {
-		name = run.profile.Model
+		name = model
 	}
-	if sent < run.maxTokens {
+	if s.sent < s.wanted {
 		msg := fmt.Sprintf(
-			"the reply was cut off at %d tokens because the context window is nearly full: about %d of %d tokens are already in use, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. /compact makes room now",
-			sent, input, window, source)
-		if source != windowFromConfig {
-			msg += fmt.Sprintf("; if the model's real window is larger than %d, set context_window on the %q profile in config.json", window, name)
+			"the reply was cut off at %d tokens because the context window was nearly full: about %d of %d tokens were already in use, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. /compact makes room now",
+			s.sent, s.input, s.window, s.source)
+		if s.source != windowFromConfig {
+			msg += fmt.Sprintf("; if the model's real window is larger than %d, set context_window on the %q profile in config.json", s.window, name)
 		}
 		return msg
 	}
 	return fmt.Sprintf(
 		"the reply hit the %q profile's max_tokens limit of %d and was cut off — raise max_tokens on that profile in config.json for longer answers",
-		name, sent)
+		name, s.sent)
 }

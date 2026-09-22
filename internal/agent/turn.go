@@ -247,6 +247,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	for {
 		history := l.history(sessionID)
 		messages := sendableHistory(history)
+		// Sized once, and kept: a notice about how this reply ended has to
+		// describe this request, and recomputing it after the reply would
+		// count the reply as input. See requestSizing.
+		sizing := l.sizeRequest(ctx, sessionID, run, messages)
 
 		req := provider.ChatRequest{
 			Model:        run.profile.Model,
@@ -259,7 +263,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// remaining is refused by the server as one total that does
 			// not fit — see context_budget.go for the arithmetic and the
 			// error it produces.
-			MaxTokens:   clampMaxTokens(run.maxTokens, l.contextWindow(ctx, run.profile), l.inputEstimate(sessionID, run.system, messages)),
+			MaxTokens:   sizing.sent,
 			Temperature: run.profile.Temperature,
 			TopP:        run.profile.TopP,
 			TopK:        run.profile.TopK,
@@ -600,7 +604,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// model is broken rather than that a number needs raising.
 			if stopReason == "max_tokens" {
 				l.Store.Append(sessionID, events.TypeError, map[string]any{
-					"error":     l.cutOffNotice(ctx, sessionID, run, messages),
+					"error":     cutOffNotice(sizing, run.profileName, run.profile.Model),
 					"recovered": true,
 				})
 			}
