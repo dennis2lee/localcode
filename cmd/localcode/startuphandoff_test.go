@@ -139,19 +139,28 @@ func TestAnUnstampedBuildDoesNotRunTheStagedCopy(t *testing.T) {
 	if _, ok := stagedHandoffBinary("dev", cfg, false); ok {
 		t.Error("a dev build handed off, although no release is newer than a build that is not a version")
 	}
+
+	// And the helper both handoffs ask, directly. The refusal lives here,
+	// so this is where not running the staged copy has to be shown: an
+	// assertion reached only through stagedHandoffBinary pins the
+	// property on that caller rather than on the thing that has it, and
+	// the late path — where taking the staged copy's version as a
+	// baseline is how an unstamped build would install over itself —
+	// would be held by nothing.
+	if p, v := stagedNewerThan("dev"); p != "" || v != "" {
+		t.Errorf("stagedNewerThan(dev) = %q, %q; an unstamped build has no newer release", p, v)
+	}
 	if b, err := os.ReadFile(ranLog); err == nil && strings.Contains(string(b), "ran") {
 		t.Error("the staged copy was run to answer a question parsing had already settled")
 	}
 
-	// And the same refusal for the other handoff, which is where it
-	// matters most: taking the staged copy's version as its own baseline
-	// is how a build that is not a version would come to install over
-	// itself at startup. Both paths ask through stagedNewerThan, so this
-	// is the one place it can be asked.
-	if p, v := stagedNewerThan("dev"); p != "" || v != "" {
-		t.Errorf("stagedNewerThan(dev) = %q, %q; an unstamped build has no newer release", p, v)
-	}
+	// A version that can be superseded does run it, which is what makes
+	// the silence above mean something: a log that records nothing
+	// whatever happens would have passed that check too.
 	if p, v := stagedNewerThan("0.1.0"); p == "" || v != "9.9.9" {
 		t.Errorf("stagedNewerThan(0.1.0) = %q, %q; want the staged copy and its version", p, v)
+	}
+	if b, err := os.ReadFile(ranLog); err != nil || !strings.Contains(string(b), "ran") {
+		t.Error("the staged copy was never run even for a version it could supersede, so the check above proves nothing")
 	}
 }
