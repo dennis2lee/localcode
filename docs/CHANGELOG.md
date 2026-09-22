@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.142.0
+
+A Windows report: skills refused every start, on a version that reads them.
+
+**Fixed**
+
+* **A start that is going to hand over no longer builds a daemon first.** On Windows the MSI installs `localcode.exe` into Program Files and puts Program Files on PATH, so that copy cannot be written without elevation and every update goes to a staged copy under the user's cache directory instead. Every start from then on runs the old binary, and what it did first was read the config, connect to every MCP server (spawning each as a subprocess), load the skills and custom commands and open the session store — then throw all of it away and hand over. It now looks for the staged copy before any of that, and a machine with nothing staged pays one extra `stat`.
+* **A build that is not a version no longer runs the staged copy to ask what it is.** An unstamped build calls itself `dev`, and no release is newer than a thing that is not a version, so the answer was already no. On the other handoff the same missing check was a hole rather than waste: a `dev` build would take the staged copy's version as its own baseline and install over itself at startup. Both handoffs now ask one shared refusal.
+* **One directory read twice said everything twice.** A Windows shell opens in the home directory, so localcode started there has a project root and a person's root that are the same directory, and both were handed to the skill and command loaders. Loading twice cost nothing, but refusals are gathered before the duplicate check, so seven skills that could not be read reported fourteen lines. The line above them named the same path twice as well.
+* **A `SKILL.md` written in Notepad is read**, which was fixed in v0.134.0 and is now covered by a test in the words of the report: the file begins with a byte-order mark and ends its lines with CRLF. The report came from a machine running v0.141.0 and seeing v0.133.0's refusal, because the launcher on PATH is the one that prints it.
+
 ## v0.141.0
 
 Finding a word in the conversation, and four rounds of review of it.
