@@ -181,25 +181,49 @@ func TestASearchIsStoppedInFlight(t *testing.T) {
 			// TestAStoppedSearchDoesNotFinishOneHugeFile greps 40MB,
 			// where stopping when asked and finishing first are seconds
 			// apart rather than microseconds.
+			// Tried until it lands, because whether it lands is not ours
+			// to decide.
+			//
+			// The third version of this, and the first two failed the
+			// same way for a reason neither of them named: the thing
+			// being raced is not the search's speed against the sleep,
+			// it is whether the goroutine holding the cancel is given a
+			// processor again while the search is still going. This
+			// walk takes about 35ms and the wait is 2ms, a margin of
+			// more than ten times — and it still lost on a CI runner,
+			// where a sleeping goroutine can wait far longer than it
+			// asked to.
+			//
+			// So the attempt is repeated. A search that checks its
+			// context as it goes answers "cancelled" the first time the
+			// cancel lands mid-walk, and eight tries is far more than
+			// enough for one of them to. A search that checks once at
+			// the top — the regression this test exists to catch —
+			// answers the file list every time, and fails all eight.
 			base := WithWorkingDir(context.Background(), root)
-			ctx, cancel := context.WithCancel(base)
-			started := make(chan struct{})
-			done := make(chan Result, 1)
-			go func() {
-				close(started)
-				done <- c.tool.Execute(ctx, json.RawMessage(c.input))
-			}()
-			<-started
-			time.Sleep(2 * time.Millisecond)
-			cancel()
-			select {
-			case res := <-done:
-				if !strings.Contains(res.Content, "cancelled") {
-					t.Errorf("a %s stopped in flight answered %.60q", c.name, res.Content)
+			var last string
+			for attempt := 0; attempt < 8; attempt++ {
+				ctx, cancel := context.WithCancel(base)
+				started := make(chan struct{})
+				done := make(chan Result, 1)
+				go func() {
+					close(started)
+					done <- c.tool.Execute(ctx, json.RawMessage(c.input))
+				}()
+				<-started
+				time.Sleep(2 * time.Millisecond)
+				cancel()
+				select {
+				case res := <-done:
+					if strings.Contains(res.Content, "cancelled") {
+						return
+					}
+					last = res.Content
+				case <-time.After(10 * time.Second):
+					t.Fatalf("a %s stopped in flight never returned", c.name)
 				}
-			case <-time.After(10 * time.Second):
-				t.Fatalf("a %s stopped in flight never returned", c.name)
 			}
+			t.Errorf("a %s was never stopped in flight, in eight tries; the last answered %.60q", c.name, last)
 		})
 	}
 }
