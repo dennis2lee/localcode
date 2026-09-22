@@ -91,6 +91,62 @@ func TestConnectAndCallTool(t *testing.T) {
 	}
 }
 
+// A tool whose input schema is not an object is skipped when its server
+// lists it, and the warning names the server and the tool. MCP requires
+// an object there, and Bedrock refuses the whole request, every turn,
+// when one tool in the list has anything else; skipping it keeps the
+// server's other tools and every other server usable.
+func TestAToolWhoseInputIsNotAnObjectIsSkipped(t *testing.T) {
+	bin := buildEchoServer(t)
+	servers := map[string]config.MCPServerConfig{
+		"echo": {Command: bin, Args: []string{"--array-schema-tool"}},
+	}
+
+	m, tools, warnings := Connect(context.Background(), servers, "", nil)
+	defer m.Close()
+
+	var names []string
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	if len(names) != 1 || names[0] != "mcp__echo__echo" {
+		t.Errorf("tools = %v, want only mcp__echo__echo", names)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one naming the skipped tool", warnings)
+	}
+	for _, want := range []string{`"echo"`, `"listed_as_array"`, `type "array"`, "skipping"} {
+		if !strings.Contains(warnings[0].Error(), want) {
+			t.Errorf("warning %q does not say %s", warnings[0], want)
+		}
+	}
+}
+
+func TestObjectSchema(t *testing.T) {
+	cases := []struct {
+		schema string
+		ok     bool
+		says   string
+	}{
+		{`{"type":"object","properties":{"q":{"type":"string"}}}`, true, ""},
+		{`{"properties":{"q":{"type":"string"}}}`, true, ""},
+		{`{}`, true, ""},
+		{`null`, true, ""},
+		{`{"type":"array","items":{"type":"string"}}`, false, `type "array"`},
+		{`{"type":["object","null"]}`, false, `type ["object","null"]`},
+		{`[{"type":"object"}]`, false, "an array"},
+		{`"object"`, false, "a string"},
+		{`3`, false, "a number"},
+		{`true`, false, "a boolean"},
+	}
+	for _, c := range cases {
+		says, ok := objectSchema(json.RawMessage(c.schema))
+		if ok != c.ok || says != c.says {
+			t.Errorf("objectSchema(%s) = %q, %v; want %q, %v", c.schema, says, ok, c.says, c.ok)
+		}
+	}
+}
+
 // TestServersListsConnectedNames confirms Manager.Servers() reports
 // exactly the servers that came up successfully — sorted, and excluding
 // ones that failed to connect (those only show up in Connect's warnings).

@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"log"
+	"os"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -35,6 +37,26 @@ func main() {
 			Content: []mcp.Content{&mcp.TextContent{Text: "echo: " + args.Text}},
 		}, nil, nil
 	})
+
+	// --array-schema-tool also lists a tool whose input schema is an
+	// array, which MCP forbids and the SDK will not register. It is added
+	// to the listing on the way out, the only place a broken server's
+	// answer can be imitated with this SDK.
+	if slices.Contains(os.Args[1:], "--array-schema-tool") {
+		server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				res, err := next(ctx, method, req)
+				if list, ok := res.(*mcp.ListToolsResult); ok && err == nil {
+					list.Tools = append(list.Tools, &mcp.Tool{
+						Name:        "listed_as_array",
+						Description: "a tool whose input is not an object",
+						InputSchema: map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					})
+				}
+				return res, err
+			}
+		})
+	}
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatal(err)

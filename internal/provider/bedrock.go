@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -321,7 +323,7 @@ func toBedrockMessages(msgs []Message) ([]types.Message, error) {
 				}
 				blocks = append(blocks, &types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{
 					ToolUseId: aws.String(b.ToolUseID),
-					Name:      aws.String(b.ToolName),
+					Name:      aws.String(bedrockToolName(b.ToolName)),
 					Input:     document.NewLazyDocument(input),
 				}})
 
@@ -442,29 +444,42 @@ func reasoningDelta(d types.ReasoningContentBlockDelta) (text, signature string)
 
 // toBedrockTools lowers the tool list into Converse's form.
 //
-// A tool with no description is sent with its name as one. Converse
-// rejects the whole request when any toolSpec.description is shorter than
-// one character, and MCP servers are free to advertise tools without a
-// description, so one such tool among hundreds made every Bedrock turn
-// fail with a 400 while the Anthropic API, which accepts an empty string,
-// kept working. The name is the only thing known about such a tool, and
-// it is what the model would otherwise have gone on anyway.
+// Converse rejects the whole request when any one tool spec breaks its
+// rules, and the tools most likely to break them come from MCP servers,
+// which are free to advertise things Converse will not take. One such
+// tool among hundreds made every Bedrock turn fail with a 400 while the
+// Anthropic API kept working, so each rule is met here rather than
+// passed on:
+//
+//   - a tool with no description is sent with its name as one; the name
+//     is the only thing known about it, and what the model would have
+//     gone on anyway;
+//   - a name Converse will not accept is sent under bedrockToolName, and
+//     Chat maps it back when the model calls it;
+//   - a schema that is missing, null, or an object with no "type" is
+//     sent as an object, which is what a tool's input always is.
+//
+// A schema whose top level is some other type is left alone. The MCP
+// client refuses those when a server lists them, because MCP requires an
+// object there too; see internal/mcp.
 func toBedrockTools(tools []Tool, cachePrefix bool) (*types.ToolConfiguration, error) {
 	if len(tools) == 0 {
 		return nil, nil
 	}
 	specs := make([]types.Tool, 0, len(tools))
+	sentAs := make(map[string]string, len(tools))
 	for _, t := range tools {
-		var schema any
-		if len(t.InputSchema) > 0 {
-			if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
-				return nil, fmt.Errorf("unmarshal schema for tool %s: %w", t.Name, err)
-			}
-		} else {
-			schema = map[string]any{"type": "object", "properties": map[string]any{}}
+		schema, err := bedrockToolSchema(t)
+		if err != nil {
+			return nil, err
 		}
+		name := bedrockToolName(t.Name)
+		if other, taken := sentAs[name]; taken {
+			return nil, fmt.Errorf("tools %s and %s would both be sent to Bedrock as %s", other, t.Name, name)
+		}
+		sentAs[name] = t.Name
 		specs = append(specs, &types.ToolMemberToolSpec{Value: types.ToolSpecification{
-			Name:        aws.String(t.Name),
+			Name:        aws.String(name),
 			Description: aws.String(bedrockToolDescription(t)),
 			InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(schema)},
 		}})
@@ -486,6 +501,78 @@ func bedrockToolDescription(t Tool) string {
 		return t.Name
 	}
 	return t.Description
+}
+
+// bedrockToolNameMax is the longest tool name Converse accepts.
+const bedrockToolNameMax = 64
+
+// bedrockToolName is the name t is sent to Converse under: the name
+// itself when Converse accepts it, which is almost always.
+//
+// Converse takes 1 to 64 characters from [a-zA-Z0-9_-]. MCP tools are
+// named mcp__<server>__<tool>, so the prefix alone can push a name the
+// server advertised legitimately over 64, and a server's name is
+// whatever its key in config.json says, dots and spaces included. Such a
+// name is sent with each character Converse refuses replaced by "_",
+// cut short enough to fit, and ended with a hash of the whole original,
+// so two names that differ only in the part that was cut or replaced
+// still arrive as two names. The hash makes it the same answer on every
+// turn, which is what lets a tool call from earlier in the conversation
+// keep naming the tool it called.
+func bedrockToolName(name string) string {
+	if bedrockToolNameOK(name) {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	suffix := "_" + hex.EncodeToString(sum[:4])
+	var b strings.Builder
+	for _, r := range name {
+		if bedrockToolNameRune(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	safe := b.String() // ASCII only, so cutting by bytes is cutting by characters
+	if limit := bedrockToolNameMax - len(suffix); len(safe) > limit {
+		safe = safe[:limit]
+	}
+	return safe + suffix
+}
+
+func bedrockToolNameOK(name string) bool {
+	if name == "" || len(name) > bedrockToolNameMax {
+		return false
+	}
+	for _, r := range name {
+		if !bedrockToolNameRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func bedrockToolNameRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-'
+}
+
+// bedrockToolSchema is t's input schema in a form Converse accepts.
+func bedrockToolSchema(t Tool) (any, error) {
+	var schema any
+	if len(t.InputSchema) > 0 {
+		if err := json.Unmarshal(t.InputSchema, &schema); err != nil {
+			return nil, fmt.Errorf("unmarshal schema for tool %s: %w", t.Name, err)
+		}
+	}
+	switch s := schema.(type) {
+	case nil:
+		return map[string]any{"type": "object", "properties": map[string]any{}}, nil
+	case map[string]any:
+		if _, ok := s["type"]; !ok {
+			s["type"] = "object"
+		}
+	}
+	return schema, nil
 }
 
 // oneMillionContextBeta is the Anthropic beta flag that unlocks the
@@ -659,122 +746,144 @@ func (p *Bedrock) Chat(ctx context.Context, req ChatRequest) (<-chan StreamEvent
 	}
 
 	out := make(chan StreamEvent, 16)
+	go streamBedrock(ctx, resp.GetStream(), req, out)
+	return out, nil
+}
 
-	go func() {
-		defer close(out)
-		defer resp.GetStream().Close()
+// bedrockEventStream is the part of the SDK's event stream streamBedrock
+// reads, so a test can hand it events the SDK has no way to fake.
+type bedrockEventStream interface {
+	Events() <-chan types.ConverseStreamOutput
+	Close() error
+	Err() error
+}
 
-		// Content block index -> in-progress tool_use id/name, since
-		// Bedrock's delta events key off index rather than tool id.
-		type pending struct {
-			id, name string
-			args     strings.Builder
+// streamBedrock turns Converse's events into the stream Chat returns,
+// and closes out when the events end.
+func streamBedrock(ctx context.Context, stream bedrockEventStream, req ChatRequest, out chan<- StreamEvent) {
+	defer close(out)
+	defer stream.Close()
+
+	// The names a tool call comes back under, for the tools that could
+	// not be sent under their own. See bedrockToolName.
+	calledAs := map[string]string{}
+	for _, t := range req.Tools {
+		if sent := bedrockToolName(t.Name); sent != t.Name {
+			calledAs[sent] = t.Name
 		}
-		toolByIndex := map[int32]*pending{}
+	}
 
-		// Reasoning accumulates per content-block index, the same way,
-		// because a stream can carry several blocks at once and the
-		// signature arrives separately from the text it signs.
-		type pendingThinking struct {
-			text      strings.Builder
-			signature strings.Builder
+	// Content block index -> in-progress tool_use id/name, since
+	// Bedrock's delta events key off index rather than tool id.
+	type pending struct {
+		id, name string
+		args     strings.Builder
+	}
+	toolByIndex := map[int32]*pending{}
+
+	// Reasoning accumulates per content-block index, the same way,
+	// because a stream can carry several blocks at once and the
+	// signature arrives separately from the text it signs.
+	type pendingThinking struct {
+		text      strings.Builder
+		signature strings.Builder
+	}
+	thinkingByIndex := map[int32]*pendingThinking{}
+
+	send := func(ev StreamEvent) bool {
+		select {
+		case out <- ev:
+			return true
+		case <-ctx.Done():
+			return false
 		}
-		thinkingByIndex := map[int32]*pendingThinking{}
+	}
 
-		send := func(ev StreamEvent) bool {
-			select {
-			case out <- ev:
-				return true
-			case <-ctx.Done():
-				return false
+	for streamEvent := range stream.Events() {
+		switch e := streamEvent.(type) {
+		case *types.ConverseStreamOutputMemberContentBlockStart:
+			if tu, ok := e.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
+				idx := aws.ToInt32(e.Value.ContentBlockIndex)
+				p := &pending{
+					id:   aws.ToString(tu.Value.ToolUseId),
+					name: aws.ToString(tu.Value.Name),
+				}
+				if original, ok := calledAs[p.name]; ok {
+					p.name = original
+				}
+				toolByIndex[idx] = p
+				if !send(StreamEvent{Type: EventToolUseStart, ToolUseID: p.id, ToolName: p.name}) {
+					return
+				}
 			}
-		}
 
-		for streamEvent := range resp.GetStream().Events() {
-			switch e := streamEvent.(type) {
-			case *types.ConverseStreamOutputMemberContentBlockStart:
-				if tu, ok := e.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
-					idx := aws.ToInt32(e.Value.ContentBlockIndex)
-					p := &pending{
-						id:   aws.ToString(tu.Value.ToolUseId),
-						name: aws.ToString(tu.Value.Name),
-					}
-					toolByIndex[idx] = p
-					if !send(StreamEvent{Type: EventToolUseStart, ToolUseID: p.id, ToolName: p.name}) {
-						return
-					}
+		case *types.ConverseStreamOutputMemberContentBlockDelta:
+			idx := aws.ToInt32(e.Value.ContentBlockIndex)
+			switch d := e.Value.Delta.(type) {
+			case *types.ContentBlockDeltaMemberText:
+				if !send(StreamEvent{Type: EventTextDelta, TextDelta: d.Value}) {
+					return
 				}
-
-			case *types.ConverseStreamOutputMemberContentBlockDelta:
-				idx := aws.ToInt32(e.Value.ContentBlockIndex)
-				switch d := e.Value.Delta.(type) {
-				case *types.ContentBlockDeltaMemberText:
-					if !send(StreamEvent{Type: EventTextDelta, TextDelta: d.Value}) {
-						return
-					}
-				case *types.ContentBlockDeltaMemberReasoningContent:
-					text, signature := reasoningDelta(d.Value)
-					p := thinkingByIndex[idx]
-					if p == nil {
-						p = &pendingThinking{}
-						thinkingByIndex[idx] = p
-					}
-					p.text.WriteString(text)
-					p.signature.WriteString(signature)
-					if text != "" && !send(StreamEvent{Type: EventThinkingDelta, ThinkingDelta: text}) {
-						return
-					}
-
-				case *types.ContentBlockDeltaMemberToolUse:
-					if p, ok := toolByIndex[idx]; ok {
-						frag := aws.ToString(d.Value.Input)
-						p.args.WriteString(frag)
-						if !send(StreamEvent{Type: EventToolUseInputDelta, ToolUseID: p.id, InputDelta: frag}) {
-							return
-						}
-					}
+			case *types.ContentBlockDeltaMemberReasoningContent:
+				text, signature := reasoningDelta(d.Value)
+				p := thinkingByIndex[idx]
+				if p == nil {
+					p = &pendingThinking{}
+					thinkingByIndex[idx] = p
 				}
-
-			case *types.ConverseStreamOutputMemberContentBlockStop:
-				idx := aws.ToInt32(e.Value.ContentBlockIndex)
-				if p, ok := thinkingByIndex[idx]; ok {
-					if !send(StreamEvent{
-						Type: EventThinkingEnd, ThinkingDelta: p.text.String(), Signature: p.signature.String(),
-					}) {
-						return
-					}
-					delete(thinkingByIndex, idx)
-				}
-				if p, ok := toolByIndex[idx]; ok {
-					if !send(StreamEvent{Type: EventToolUseEnd, ToolUseID: p.id, ToolInput: json.RawMessage(p.args.String())}) {
-						return
-					}
-				}
-
-			case *types.ConverseStreamOutputMemberMessageStop:
-				if !send(StreamEvent{Type: EventMessageStop, StopReason: mapBedrockStopReason(e.Value.StopReason)}) {
+				p.text.WriteString(text)
+				p.signature.WriteString(signature)
+				if text != "" && !send(StreamEvent{Type: EventThinkingDelta, ThinkingDelta: text}) {
 					return
 				}
 
-			case *types.ConverseStreamOutputMemberMetadata:
-				if u := e.Value.Usage; u != nil {
-					if !send(StreamEvent{
-						Type:             EventUsage,
-						InputTokens:      int(aws.ToInt32(u.InputTokens)),
-						OutputTokens:     int(aws.ToInt32(u.OutputTokens)),
-						CacheReadTokens:  int(aws.ToInt32(u.CacheReadInputTokens)),
-						CacheWriteTokens: int(aws.ToInt32(u.CacheWriteInputTokens)),
-					}) {
+			case *types.ContentBlockDeltaMemberToolUse:
+				if p, ok := toolByIndex[idx]; ok {
+					frag := aws.ToString(d.Value.Input)
+					p.args.WriteString(frag)
+					if !send(StreamEvent{Type: EventToolUseInputDelta, ToolUseID: p.id, InputDelta: frag}) {
 						return
 					}
 				}
 			}
-		}
 
-		if err := resp.GetStream().Err(); err != nil {
-			send(StreamEvent{Type: EventError, Err: wrapVisionRefusal(err, req.Model)})
-		}
-	}()
+		case *types.ConverseStreamOutputMemberContentBlockStop:
+			idx := aws.ToInt32(e.Value.ContentBlockIndex)
+			if p, ok := thinkingByIndex[idx]; ok {
+				if !send(StreamEvent{
+					Type: EventThinkingEnd, ThinkingDelta: p.text.String(), Signature: p.signature.String(),
+				}) {
+					return
+				}
+				delete(thinkingByIndex, idx)
+			}
+			if p, ok := toolByIndex[idx]; ok {
+				if !send(StreamEvent{Type: EventToolUseEnd, ToolUseID: p.id, ToolInput: json.RawMessage(p.args.String())}) {
+					return
+				}
+			}
 
-	return out, nil
+		case *types.ConverseStreamOutputMemberMessageStop:
+			if !send(StreamEvent{Type: EventMessageStop, StopReason: mapBedrockStopReason(e.Value.StopReason)}) {
+				return
+			}
+
+		case *types.ConverseStreamOutputMemberMetadata:
+			if u := e.Value.Usage; u != nil {
+				if !send(StreamEvent{
+					Type:             EventUsage,
+					InputTokens:      int(aws.ToInt32(u.InputTokens)),
+					OutputTokens:     int(aws.ToInt32(u.OutputTokens)),
+					CacheReadTokens:  int(aws.ToInt32(u.CacheReadInputTokens)),
+					CacheWriteTokens: int(aws.ToInt32(u.CacheWriteInputTokens)),
+				}) {
+					return
+				}
+			}
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		send(StreamEvent{Type: EventError, Err: wrapVisionRefusal(err, req.Model)})
+	}
 }
