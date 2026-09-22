@@ -116,6 +116,15 @@ func TestTheCheapHandoffRunsBeforeTheDaemonIsBuilt(t *testing.T) {
 		}
 		if staged > built {
 			t.Errorf("%s builds the daemon before looking for a staged copy, which is the cost this check exists to avoid", mode)
+			continue
+		}
+		// And the answer is acted on. Checking only that the call is
+		// there, and there first, is a test a caller passes while
+		// throwing the result away and building anyway — which is
+		// exactly the state this change was made to leave behind.
+		between := body[staged:built]
+		if !strings.Contains(between, "return supervise") && !strings.Contains(between, "return runTUIBehindSuccessor") {
+			t.Errorf("%s asks for a staged copy and builds the daemon anyway; nothing between the two hands over:\n%s", mode, between)
 		}
 	}
 }

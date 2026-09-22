@@ -87,6 +87,16 @@ func stagedHandoffBinary(running, configPath string, canExec bool) (string, bool
 	if canExec {
 		return "", false
 	}
+	// Before the stat and long before the exec: an unstamped build calls
+	// itself "dev", which is not a version, and Newer refuses to call
+	// anything newer than a thing that is not a version. So the answer is
+	// already no, and finding out what the staged copy calls itself would
+	// mean running it — a process, and up to VersionOf's thirty-second
+	// timeout if that copy hangs — to learn something that cannot change
+	// it.
+	if !update.IsVersion(running) {
+		return "", false
+	}
 	staged := update.StagedBinary()
 	if staged == "" {
 		return "", false
@@ -134,7 +144,10 @@ func startupHandoffBinary(d *daemon.Daemon, out io.Writer, canExec bool) (string
 		return "", false
 	}
 	running, staged := d.Version, ""
-	if s := update.StagedBinary(); s != "" {
+	// The same refusal as stagedHandoffBinary's, for the same reason: a
+	// build that is not a version cannot be superseded, so there is
+	// nothing to learn by running the staged copy.
+	if s := update.StagedBinary(); s != "" && update.IsVersion(running) {
 		if v, err := update.VersionOf(s); err == nil && update.Newer(running, v) {
 			running, staged = v, s
 		}
