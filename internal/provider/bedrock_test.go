@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -259,6 +261,191 @@ func TestToBedrockTools(t *testing.T) {
 	decoded := unmarshalDocument(t, schemaMember.Value)
 	if decoded["type"] != "object" {
 		t.Errorf("decoded schema type = %v, want %q", decoded["type"], "object")
+	}
+}
+
+// Converse rejects the whole request when any tool's description is
+// empty, and an MCP server may advertise a tool without one. One such tool
+// at index 256 of 258 took every Opus turn down with a 400, so each tool
+// here must come out with a description Converse accepts, and a tool that
+// has one must keep it unchanged.
+func TestToBedrockToolsNeverSendsAnEmptyDescription(t *testing.T) {
+	tools := []Tool{
+		{Name: "glob", Description: "list files"},
+		{Name: "mcp__jira__get_issue", Description: ""},
+		{Name: "mcp__jira__list_boards", Description: " \n\t"},
+	}
+	cfg, err := toBedrockTools(tools, true)
+	if err != nil {
+		t.Fatalf("toBedrockTools: %v", err)
+	}
+	want := []string{"list files", "mcp__jira__get_issue", "mcp__jira__list_boards"}
+	specs := 0
+	for _, tool := range cfg.Tools {
+		spec, ok := tool.(*types.ToolMemberToolSpec)
+		if !ok {
+			continue
+		}
+		got := aws.ToString(spec.Value.Description)
+		if got != want[specs] {
+			t.Errorf("tool %s: description %q, want %q", aws.ToString(spec.Value.Name), got, want[specs])
+		}
+		specs++
+	}
+	if specs != len(tools) {
+		t.Fatalf("got %d tool specs, want %d", specs, len(tools))
+	}
+}
+
+// Converse takes tool names of 1 to 64 characters from [a-zA-Z0-9_-], and
+// refuses the whole request over one that is not. MCP tools are named
+// mcp__<server>__<tool>, so the prefix alone can push a name the server
+// advertised legitimately over 64, and a server's name is its key in
+// config.json, dots and spaces included. Every name must arrive in a form
+// Converse takes, a name it already takes must arrive unchanged, and no
+// two tools may arrive under one name.
+func TestEveryToolNameBedrockIsSentFitsConverse(t *testing.T) {
+	tools := []Tool{
+		{Name: "glob", Description: "d"},
+		{Name: "mcp__x__" + strings.Repeat("a", 60), Description: "d"},
+		{Name: "mcp__x__" + strings.Repeat("a", 59) + "b", Description: "d"},
+		{Name: "mcp__my.server__search", Description: "d"},
+		{Name: "mcp__my server__search", Description: "d"},
+		{Name: "mcp__my_server__search", Description: "d"},
+	}
+	cfg, err := toBedrockTools(tools, false)
+	if err != nil {
+		t.Fatalf("toBedrockTools: %v", err)
+	}
+	if len(cfg.Tools) != len(tools) {
+		t.Fatalf("got %d tool specs, want %d", len(cfg.Tools), len(tools))
+	}
+	converse := regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+	seen := map[string]string{}
+	for i, tool := range cfg.Tools {
+		name := aws.ToString(tool.(*types.ToolMemberToolSpec).Value.Name)
+		if !converse.MatchString(name) {
+			t.Errorf("%s was sent as %q, which Converse refuses", tools[i].Name, name)
+		}
+		if other, dup := seen[name]; dup {
+			t.Errorf("%s and %s were both sent as %q", other, tools[i].Name, name)
+		}
+		seen[name] = tools[i].Name
+	}
+	for _, i := range []int{0, 5} {
+		if got := aws.ToString(cfg.Tools[i].(*types.ToolMemberToolSpec).Value.Name); got != tools[i].Name {
+			t.Errorf("%s was renamed to %q, though Converse takes it as it is", tools[i].Name, got)
+		}
+	}
+}
+
+// Two tools that would arrive under one name are refused rather than sent:
+// the model could call only one of them, and which one would be an
+// accident of order. The registry never holds two tools of one name, so a
+// repeated name stands in here for the collision a hash would need.
+func TestTwoToolsArrivingUnderOneNameAreRefused(t *testing.T) {
+	_, err := toBedrockTools([]Tool{{Name: "glob", Description: "d"}, {Name: "glob", Description: "d"}}, false)
+	if err == nil || !strings.Contains(err.Error(), "would both be sent to Bedrock as glob") {
+		t.Errorf("two tools sent as one name: err = %v", err)
+	}
+}
+
+// A tool sent under a substitute name is called by that name, and the
+// call has to come back under the tool's own: that is the name the agent
+// looks the tool up by. And a call from earlier in the conversation must
+// be sent under the same substitute as the tool list, or the model reads
+// its own history as calls to a tool it was never offered.
+func TestAToolSentUnderASubstituteNameIsCalledUnderItsOwn(t *testing.T) {
+	long := "mcp__jira__" + strings.Repeat("get_issue_with_every_field_", 3)
+	req := minimalBedrockRequest()
+	req.Tools = []Tool{{Name: long, Description: "d"}, {Name: "glob", Description: "d"}}
+	req.Messages = []Message{
+		{Role: RoleUser, Content: []Block{TextBlock("look it up")}},
+		{Role: RoleAssistant, Content: []Block{{Type: BlockToolUse, ToolUseID: "t1", ToolName: long, ToolInput: json.RawMessage(`{}`)}}},
+		{Role: RoleUser, Content: []Block{ToolResultBlock("t1", "found", false)}},
+	}
+
+	sent := captureBedrockRequest(t, req)
+	offered := aws.ToString(sent.ToolConfig.Tools[0].(*types.ToolMemberToolSpec).Value.Name)
+	if offered == long {
+		t.Fatalf("precondition: %s (%d characters) was sent unchanged", long, len(long))
+	}
+	var inHistory string
+	for _, m := range sent.Messages {
+		for _, c := range m.Content {
+			if tu, ok := c.(*types.ContentBlockMemberToolUse); ok {
+				inHistory = aws.ToString(tu.Value.Name)
+			}
+		}
+	}
+	if inHistory != offered {
+		t.Errorf("the earlier call is sent as %q, the tool is offered as %q", inHistory, offered)
+	}
+
+	events := make(chan types.ConverseStreamOutput, 2)
+	for i, name := range []string{offered, "glob"} {
+		events <- &types.ConverseStreamOutputMemberContentBlockStart{Value: types.ContentBlockStartEvent{
+			ContentBlockIndex: aws.Int32(int32(i)),
+			Start: &types.ContentBlockStartMemberToolUse{Value: types.ToolUseBlockStart{
+				ToolUseId: aws.String(fmt.Sprintf("call%d", i)),
+				Name:      aws.String(name),
+			}},
+		}}
+	}
+	close(events)
+	out := make(chan StreamEvent, 8)
+	streamBedrock(context.Background(), fakeBedrockStream{events}, req, out)
+	var called []string
+	for ev := range out {
+		if ev.Type == EventToolUseStart {
+			called = append(called, ev.ToolName)
+		}
+	}
+	if len(called) != 2 || called[0] != long || called[1] != "glob" {
+		t.Errorf("tool calls came back as %q, want [%q \"glob\"]", called, long)
+	}
+}
+
+// fakeBedrockStream hands streamBedrock events the SDK has no way to fake:
+// its output type keeps the stream in an unexported field.
+type fakeBedrockStream struct {
+	events chan types.ConverseStreamOutput
+}
+
+func (f fakeBedrockStream) Events() <-chan types.ConverseStreamOutput { return f.events }
+func (fakeBedrockStream) Close() error                                { return nil }
+func (fakeBedrockStream) Err() error                                  { return nil }
+
+// Converse requires a tool's schema to be an object at the top level. A
+// tool with no schema, a null one, or an object that does not say "type"
+// all describe an object with no stated fields, and must arrive saying
+// so; a schema that already says it must arrive as it was.
+func TestEveryToolSchemaBedrockIsSentIsAnObject(t *testing.T) {
+	tools := []Tool{
+		{Name: "none", Description: "d"},
+		{Name: "null", Description: "d", InputSchema: json.RawMessage(`null`)},
+		{Name: "untyped", Description: "d", InputSchema: json.RawMessage(`{"properties":{"q":{"type":"string"}}}`)},
+		{Name: "typed", Description: "d", InputSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)},
+	}
+	cfg, err := toBedrockTools(tools, false)
+	if err != nil {
+		t.Fatalf("toBedrockTools: %v", err)
+	}
+	schemas := map[string]map[string]any{}
+	for _, tool := range cfg.Tools {
+		spec := tool.(*types.ToolMemberToolSpec).Value
+		schemas[aws.ToString(spec.Name)] = unmarshalDocument(t, spec.InputSchema.(*types.ToolInputSchemaMemberJson).Value)
+	}
+	for _, tool := range tools {
+		if got := schemas[tool.Name]["type"]; got != "object" {
+			t.Errorf("%s: schema type %v, want object", tool.Name, got)
+		}
+	}
+	if _, ok := schemas["untyped"]["properties"].(map[string]any)["q"]; !ok {
+		t.Errorf("untyped: the stated fields were lost: %v", schemas["untyped"])
+	}
+	if req, _ := schemas["typed"]["required"].([]any); len(req) != 1 || req[0] != "q" {
+		t.Errorf("typed: the schema was changed: %v", schemas["typed"])
 	}
 }
 

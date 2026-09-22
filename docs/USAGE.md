@@ -471,6 +471,8 @@ Supported transports: `stdio` for a local child process, `http` for streamable H
 * Permission: every MCP tool call requires confirmation, regardless of server annotations.
 * Connection failure: only the affected server is skipped. The daemon starts and logs a warning.
 * If a connected server's session dies, the next call retries the connection once.
+* Input schema: MCP requires an object. A tool listed with any other top-level schema is skipped with a warning that names the server and the tool. The server's other tools stay available.
+* Bedrock: Converse accepts tool names of 1 to 64 characters from `[a-zA-Z0-9_-]` and refuses an empty description. A name outside that rule is sent with other characters replaced by `_`, cut to fit, and ended with a hash of the full name. A tool with no description is sent with its name as the description. Permission rules, hooks, and the transcript still use the original name.
 
 Invalid configuration, including a profile with a missing provider, stops startup with an error.
 
