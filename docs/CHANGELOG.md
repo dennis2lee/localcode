@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.141.0
+
+Finding a word in the conversation, and four rounds of review of it.
+
+**New**
+
+* **Ctrl+F, or Cmd+F, finds a word in this conversation.** A bar above the transcript marks every occurrence and moves to one of them. The desktop window had no find at all — there is no browser around it to provide one — and the binding is taken in the browser too, over the browser's own.
+* **It searches backwards.** The first match is the newest — the last place the word came up — and inside one message its last occurrence comes first, so the matches walk up the screen. **older** goes further back, **newer** comes forward, both wrap; Enter is older, Shift+Enter is newer, Esc closes and puts the focus back in the prompt box. The buttons say older and newer rather than carrying arrows, which mean "further down the document" in every other find bar.
+* **Everything a message holds is searched**, prompts and replies and thinking blocks and tool calls and their results and reviews and errors, case ignored. A tool result that is folded shut is searched too, and landing on a match inside one opens it: a path or a stack trace in there is exactly what a find is for. The furniture the transcript draws for itself — the turn separator, the banner that says a long conversation was opened at its end — is not searched, or every turn would match the word "you".
+
+**Fixed, in the four rounds before it shipped**
+
+* **A turn ending under an open bar marked the transcript a second time.** The refresh emptied its list of marks before the search that unmarks by walking that list, so the marks stayed in the transcript out of its reach and the next pass marked over them: one more nested layer per turn, two of them claiming to be the current match, and the whole stack orphaned when the bar closed.
+* **A cancelled turn searched the transcript it was about to write**, so somebody looking for the word "cancelled" was told there were no matches at the moment one appeared.
+* **Closing the bar took the focus even when there was no bar to close**, which pulled it out of the session filter on every conversation switch.
+* **A line drawn outside a turn was never searched.** Three handlers named the refresh by hand and every one-off writer was missed. The list is gone: the transcript asks for the refresh itself when it draws a line, the refresh is coalesced so it cannot run before the writes it was called about, and a step that finds the transcript a different shape than the search remembers searches again.
+
 ## v0.140.0
 
 Named groups for the session panel, and four rounds of review of them.
