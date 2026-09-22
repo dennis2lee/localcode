@@ -6,6 +6,7 @@ import {
   appendReview, appendThinking, endThinking, clearTranscript, showEarlierBanner,
   abandonPendingUsers,
 } from './transcript.js';
+import { findRefresh } from './find.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
 import {
@@ -141,6 +142,12 @@ const handlers = {
   'turn.done': () => {
     session.runningTool = '';
     setWaiting(false);
+    // A reply's element is rewritten on every fragment, so an open find
+    // bar has been losing marks inside it for the length of the turn.
+    // This is the first moment it is worth searching again — and the only
+    // cheap one, since doing it per fragment would re-scan the whole
+    // conversation per token.
+    findRefresh();
   },
   // Tool activity gets a transcript line of its own, not just the status
   // bar: the status bar only says what is running now and clears when it

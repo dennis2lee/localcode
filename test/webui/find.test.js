@@ -1,0 +1,282 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { load } = require('./harness');
+
+// A note on what these can and cannot see.
+//
+// The test DOM has no HTML parser, so a model reply — which the page draws
+// by assigning rendered markdown to innerHTML — arrives as one opaque node
+// with no text nodes inside it. Marking splits text nodes, so a reply
+// cannot be marked here, and the text a reply reports includes its own
+// markup. Every assertion about matched characters therefore uses the
+// blocks the page builds out of text nodes (prompts, tool rows, errors),
+// which is also where markRange's real work is: a range crossing several
+// text nodes. The multi-node case is built explicitly below rather than
+// waited for.
+
+function keys(app) {
+  return {
+    ctrlF: () => app.fireWindow
+      ? app.fire('keydown', { key: 'f', ctrlKey: true })
+      : null,
+  };
+}
+
+test('findMatches walks the newest message first, and the last occurrence within it', async () => {
+  const app = await load({});
+  const { findMatches } = app.internals;
+
+  // Three messages, drawn oldest first, as the transcript holds them.
+  const texts = ['alpha one', 'beta alpha', 'alpha alpha'];
+  const got = findMatches(texts, 'alpha');
+
+  // Compared as text: findMatches runs inside the page's own module
+  // realm, so the arrays it returns do not share this file's Array
+  // prototype and a strict deep-equal fails on that alone.
+  assert.equal(
+    got.map((m) => `${m.block}:${m.start}-${m.end}`).join(' '),
+    '2:6-11 2:0-5 1:5-10 0:0-5',
+    'newest block first; inside a block the last occurrence first',
+  );
+});
+
+test('findMatches is case-insensitive and counts non-overlapping matches', async () => {
+  const app = await load({});
+  const { findMatches } = app.internals;
+
+  assert.equal(findMatches(['Alpha ALPHA alpha'], 'alpha').length, 3, 'case is ignored');
+  assert.equal(findMatches(['aaaa'], 'aa').length, 2, 'aa in aaaa is two matches, not three');
+  assert.equal(findMatches(['anything'], '').length, 0, 'an empty query matches nothing');
+  assert.equal(findMatches([], 'x').length, 0, 'no messages, no matches');
+  assert.equal(findMatches([null, undefined], 'x').length, 0, 'a block with no text is not an error');
+});
+
+test('markRange wraps a match that crosses several text nodes, and unmark puts it back', async () => {
+  const app = await load({});
+  const { markRange, unmark } = app.internals;
+  const doc = app.document;
+
+  // `a **b** c` once rendered: three text nodes with an element between
+  // them. The word "bc" spans the element boundary.
+  const block = doc.createElement('div');
+  block.appendChild(doc.createTextNode('ab'));
+  const strong = doc.createElement('strong');
+  strong.appendChild(doc.createTextNode('cd'));
+  block.appendChild(strong);
+  block.appendChild(doc.createTextNode('ef'));
+  assert.equal(block.textContent, 'abcdef');
+
+  // "bcde" starts in the first node, covers the element's whole text and
+  // ends in the last.
+  const marks = markRange(block, 1, 5, 'find-hit');
+  assert.equal(marks.length, 3, 'one mark per node the range covers');
+  assert.equal(marks.map((m) => m.textContent).join(''), 'bcde', 'together they are the match');
+  assert.equal(block.textContent, 'abcdef', 'and the text is unchanged by being marked');
+
+  for (const m of marks) unmark(m);
+  assert.equal(block.textContent, 'abcdef', 'unmarking leaves the text as it was');
+  assert.equal(
+    block.innerHTML.includes('mark'), false,
+    'and leaves no mark elements behind',
+  );
+});
+
+test('markRange builds elements rather than HTML, so a match inside markup-looking text stays text', async () => {
+  const app = await load({});
+  const { markRange } = app.internals;
+  const doc = app.document;
+
+  const block = doc.createElement('div');
+  block.textContent = 'run <script>alert(1)</script> now';
+  markRange(block, 4, 12, 'find-hit');
+
+  assert.equal(block.textContent, 'run <script>alert(1)</script> now', 'the characters are the same');
+  assert.ok(
+    block.innerHTML.includes('&lt;script&gt;'),
+    'and they are still escaped in the output: ' + block.innerHTML,
+  );
+});
+
+// --- the bar, driven the way a person drives it ---
+
+// Four prompts, so the transcript has blocks built from text nodes. Each
+// is one searchable block; the separators above them are not.
+async function conversation() {
+  const app = await load();
+  app.sse.emit({ seq: 1, type: 'message.user', data: { text: 'read handoff.go' } });
+  app.sse.emit({ seq: 2, type: 'message.user', data: { text: 'the handoff again' } });
+  app.sse.emit({ seq: 3, type: 'message.user', data: { text: 'nothing here' } });
+  app.sse.emit({ seq: 4, type: 'message.user', data: { text: 'handoff, handoff' } });
+  await app.settle();
+  return app;
+}
+
+function marks(app) {
+  return app.el('transcript').querySelectorAll('.find-hit');
+}
+
+function currentMark(app) {
+  return Array.from(marks(app)).find((m) => m.className.includes('current'));
+}
+
+test('Ctrl+F opens the bar and the first match is the newest one', async () => {
+  const app = await conversation();
+
+  assert.equal(app.el('find-bar').hidden, true, 'the bar is away until it is asked for');
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  assert.equal(app.el('find-bar').hidden, false, 'Ctrl+F opened it');
+
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+
+  // Four occurrences: two in the last prompt, one in the second, one in
+  // the first.
+  assert.equal(marks(app).length, 4, 'every occurrence is marked');
+  assert.equal(app.el('find-count').textContent, '1 of 4');
+
+  // The newest block is the last prompt, and within it the later of its
+  // two occurrences. The whole transcript's text after that match is
+  // nothing, which is what makes it the newest.
+  const block = currentMark(app).parentNode;
+  assert.equal(block.textContent, 'handoff, handoff', 'the current match is in the newest prompt');
+  assert.equal(
+    block.textContent.slice(block.textContent.lastIndexOf('handoff')),
+    'handoff',
+    'and it is that prompt\'s last occurrence',
+  );
+});
+
+test('older walks back in time, newer comes forward, and both wrap', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+
+  const where = () => currentMark(app).parentNode.textContent;
+
+  assert.equal(app.el('find-count').textContent, '1 of 4');
+  assert.equal(where(), 'handoff, handoff');
+
+  app.el('find-older').fire('click');
+  assert.equal(app.el('find-count').textContent, '2 of 4');
+  assert.equal(where(), 'handoff, handoff', 'still the newest prompt, its earlier occurrence');
+
+  app.el('find-older').fire('click');
+  assert.equal(app.el('find-count').textContent, '3 of 4');
+  assert.equal(where(), 'the handoff again', 'then the prompt before it');
+
+  app.el('find-older').fire('click');
+  assert.equal(app.el('find-count').textContent, '4 of 4');
+  assert.equal(where(), 'read handoff.go', 'then the oldest');
+
+  // Wrapping rather than stopping: a find that goes dead at the end of a
+  // long conversation reads as broken.
+  app.el('find-older').fire('click');
+  assert.equal(app.el('find-count').textContent, '1 of 4', 'past the oldest comes back to the newest');
+
+  app.el('find-newer').fire('click');
+  assert.equal(app.el('find-count').textContent, '4 of 4', 'and newer from the newest wraps the other way');
+});
+
+test('Enter is older, Shift+Enter is newer', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  const input = app.el('find-input');
+  input.value = 'handoff';
+  input.fire('input');
+  await app.settle();
+
+  input.fire('keydown', { key: 'Enter', target: input });
+  assert.equal(app.el('find-count').textContent, '2 of 4');
+  input.fire('keydown', { key: 'Enter', shiftKey: true, target: input });
+  assert.equal(app.el('find-count').textContent, '1 of 4');
+});
+
+test('a word that is not there says so, and marks nothing', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'kubernetes';
+  app.el('find-input').fire('input');
+  await app.settle();
+
+  assert.equal(app.el('find-count').textContent, 'no matches');
+  assert.equal(marks(app).length, 0);
+});
+
+test('closing the bar puts every character back', async () => {
+  const app = await conversation();
+  const before = app.el('transcript').textContent;
+
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+  assert.equal(marks(app).length, 4);
+
+  app.el('find-close').fire('click');
+  assert.equal(app.el('find-bar').hidden, true);
+  assert.equal(marks(app).length, 0, 'no marks left behind');
+  assert.equal(app.el('transcript').textContent, before, 'and the transcript reads as it did');
+});
+
+// Escape has three claimants: the prompt box clears itself, a running turn
+// is cancelled, and now the bar closes. The bar wins while it is open,
+// except in the box.
+test('Escape closes the bar instead of cancelling the turn', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+
+  const cancels = () => app.callsTo('POST', '/api/sessions/s1/cancel').length;
+  const before = cancels();
+  app.doc.fire('keydown', { key: 'Escape', target: app.el('find-input') });
+  await app.settle();
+
+  assert.equal(app.el('find-bar').hidden, true, 'Escape closed the bar');
+  assert.equal(cancels(), before, 'and did not cancel anything');
+});
+
+test('switching conversation closes the bar, because the matches were in the other one', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+  assert.equal(app.el('find-bar').hidden, false);
+
+  app.selectSession('s2', 'general-purpose', '');
+  await app.settle();
+  assert.equal(app.el('find-bar').hidden, true, 'the bar went with the conversation');
+  assert.equal(app.el('find-count').textContent, '', 'and left no count from it');
+});
+
+test('a match inside a folded tool result opens what it is folded into', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 1, type: 'tool.start', data: { tool_use_id: 't1', name: 'bash', input: '{"command":"ls"}' } });
+  app.sse.emit({ seq: 2, type: 'tool.end', data: { tool_use_id: 't1', content: 'handoff.go\nother.go' } });
+  await app.settle();
+
+  // The detail block a tool row keeps its output in starts folded.
+  const row = app.el('transcript').querySelectorAll('.msg-toolcall')[0];
+  const detail = row.querySelectorAll('.detail')[0];
+  assert.ok(detail, 'the row has a detail block');
+  assert.equal(detail.hidden, true, 'the output is folded to begin with');
+
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff.go';
+  app.el('find-input').fire('input');
+  await app.settle();
+
+  const mark = currentMark(app);
+  assert.ok(mark, 'the folded output was searched');
+  for (let p = mark.parentNode; p && p !== app.el('transcript'); p = p.parentNode) {
+    assert.equal(p.hidden, false, 'nothing between the match and the transcript is still folded');
+  }
+});

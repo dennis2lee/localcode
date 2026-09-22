@@ -16,6 +16,7 @@ import {
 import { app, session } from './state.js';
 import { uploadFile, switchAgent } from './api.js';
 import { appendError, jumpToTurn } from './transcript.js';
+import { openFind, closeFind, findIsOpen, wireFind } from './find.js';
 import { renderTasks, renderStatusBar } from './render.js';
 import {
   sendMessage, cancelTurn, detachChild, autoResizeInput, insertAtCursor,
@@ -59,6 +60,7 @@ agentSelectEl.addEventListener('change', async () => {
   }
 });
 
+wireFind();
 newSessionBtn.addEventListener('click', createNewSession);
 newGroupBtn.addEventListener('click', promptCreateGroup);
 deleteAllSessionsBtn.addEventListener('click', deleteAllSessions);
@@ -153,6 +155,26 @@ inputEl.addEventListener('keydown', (e) => {
 // modal and in the modals' own fields, where moving between inputs is
 // the only thing it could reasonably mean.
 document.addEventListener('keydown', (e) => {
+  // Ctrl+F, or Cmd+F, over the browser's own find.
+  //
+  // Taken rather than left alone, and in the browser as well as the
+  // desktop window. The window has no find at all without this; the
+  // browser has one that searches a page, and what is on the page is a
+  // conversation whose newest end is the interesting one. See find.js.
+  if ((e.key === 'f' || e.key === 'F') && (e.ctrlKey || e.metaKey)
+    && !e.altKey && !e.shiftKey && !anyModalOpen()) {
+    e.preventDefault();
+    openFind();
+    return;
+  }
+  // An open find bar owns Escape, on the same terms as a window: putting
+  // the bar away is what Escape means while it is up. Except in the
+  // prompt box, whose own Escape is older than this and means the box.
+  if (e.key === 'Escape' && findIsOpen() && e.target !== inputEl) {
+    e.preventDefault();
+    closeFind();
+    return;
+  }
   // An open window owns Escape. The permission request has always said
   // so; the settings window says it now for the same reason, and it is
   // the stronger case: somebody who opened settings mid-turn, changed
@@ -372,5 +394,9 @@ export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
 export { loadSessions, renderSessionList, selectSession, deleteSessionConfirm, reorderList, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
+export {
+  openFind, closeFind, findIsOpen, stepFind, runFind, findRefresh,
+  findMatches, markRange, unmark, searchableBlocks,
+} from './find.js';
 export { resetMCPServers, mcpResetConfirmText } from './loaders.js';
 export { wireZoom, applyZoom } from './zoom.js';

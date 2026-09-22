@@ -3,6 +3,7 @@ import { renderMarkdown } from './markdown.js';
 import { createFollower } from './scroll.js';
 import { app, session } from './state.js';
 import { editDiffForTool, diffMaxRenderLines } from './diff.js';
+import { closeFind } from './find.js';
 
 // The transcript follows the newest output only while the reader is at
 // the bottom of it. See scroll.js: this is the module that owns
@@ -546,6 +547,9 @@ export function endThinking() {
 export function clearTranscript() {
   thinkingEl = null;
   thinkingBuffer = '';
+  // The find bar's matches were in the conversation being replaced, and
+  // a bar left open over a different one counts hits nobody searched for.
+  closeFind();
   transcriptEl.innerHTML = '';
   // A different conversation, drawn from the bottom up. Carrying the
   // previous one's scrolled-up state over would open a session showing

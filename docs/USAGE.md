@@ -935,6 +935,7 @@ Common to the TUI and Web UI:
 | Cancel the running turn | **Esc**, in either client |
 | Recall a previous prompt | **Up** and **Down**, in either client |
 | Jump between your own prompts | **Alt+Up** and **Alt+Down**, Web UI only. Moves the view to the previous or next turn of yours and marks where it landed; it does not touch what is in the prompt box, which is what plain Up and Down are for. The TUI marks turns the same way but has no key for this. |
+| Find a word in the conversation | **Ctrl+F**, or **Cmd+F**, Web UI and desktop window. See [Finding a word in the conversation](#finding-a-word-in-the-conversation) |
 | Switch agent | **Tab** for the next, **Shift+Tab** for the previous, in either client |
 | Quit the TUI | **Ctrl+C** on an empty prompt, or type `exit`, `quit`, `:q`, `/exit`, `/quit` or `/q`. With something typed, the first Ctrl+C clears the line the way a shell prompt does and the second leaves, so the key that stops things does not also throw away a half-written message. |
 | Let go of a sub-agent | **Ctrl+B**, TUI only, while a turn is waiting on one. The turn carries on without its answer and the sub-agent keeps working; **Esc** is the other answer to the same moment and throws the work away. |
@@ -1776,6 +1777,22 @@ The header dropdown does the same thing and lists each agent with the model it r
 In the TUI, `/model` opens a picker listing every profile and agent with the model each resolves to. Use arrows to select, Enter to choose, and Esc to cancel. Choosing a profile changes the model for this conversation while this agent is current and leaves the agent alone; switching agents falls back to the new agent's own model, with your choice waiting when you switch back. Choosing an agent switches the agent as `/agent` does. `/model default` goes back to whatever the agent resolves to.
 
 Which model answers and which agent is answering are separate: before v0.117.0 the only way to change model was to switch agent, which also changed the prompt, the tools and the permissions.
+
+### Finding a word in the conversation
+
+**Ctrl+F**, or **Cmd+F**, opens a find bar above the transcript. Type a word and every occurrence in this conversation is marked; the one you are on is marked differently again.
+
+It searches backwards. The first match is the newest one — the last place the word came up — and **older** goes further back from there, through the conversation and then round to the newest again. **newer** goes the other way. **Enter** is older, **Shift+Enter** is newer, and **Esc** puts the bar away and takes the marks with it.
+
+Backwards because that is what a find in a conversation is usually for: where a path, an error or a name *last* came up, not where it first did. A browser's own find walks a page from the top, which is why this takes Ctrl+F from it. The desktop window has no find of its own at all — there is no browser around it — and this is the whole of one there.
+
+| | |
+|---|---|
+| What is searched | Every message: your prompts, replies, thinking blocks, tool calls and their results, reviews, and errors. Case is ignored. The separator that says a turn starts here is not searched, or every turn would match the word "you". |
+| Folded tool results | Searched, and landing on a match inside one opens it. A path or a stack trace in a tool result is exactly what a find is for, and scrolling to a match nothing on screen shows would not be finding it. |
+| While a turn is running | A reply is redrawn as it arrives, which takes the marks inside it with it. The count is made right again when the turn ends, and by moving to the next match. |
+| Switching conversation | Closes the bar. The matches were in the conversation you left. |
+| This conversation only | Not across sessions. |
 
 ### Model output renders as markdown
 

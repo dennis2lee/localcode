@@ -241,6 +241,28 @@
     was a padding that had to be recomputed every time one of them moved.
   -->
   <div id="center">
+    <!--
+      Finding a word in the conversation. Ctrl+F, or Cmd+F.
+
+      The desktop window has no find of its own — there is no browser
+      around it to provide one — and this is the replacement. It is bound
+      in the browser too, over the browser's own: what somebody wants from
+      a find in a conversation is nearly always the newest mention rather
+      than the first one down the page, and only a find that knows the
+      transcript is a stack of messages can walk it that way.
+
+      "older" and "newer" rather than arrows, because a down arrow in a
+      find bar means "further down the document" in every other one, and
+      here next goes backwards in time.
+    -->
+    <div id="find-bar" hidden>
+      <input type="text" id="find-input" placeholder="find in this conversation"
+             autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off">
+      <span id="find-count" aria-live="polite"></span>
+      <button class="icon-btn" id="find-older" title="the next match further back in the conversation (Enter)">older</button>
+      <button class="icon-btn" id="find-newer" title="back towards the newest match (Shift+Enter)">newer</button>
+      <button class="icon-btn" id="find-close" title="close the find bar (Esc)"><svg class="ico ico-12"><use href="#i-cross"/></svg></button>
+    </div>
     <div id="transcript-pane">
       <div id="transcript"></div>
       <!-- Shown only while the view is away from the bottom, so a turn that
