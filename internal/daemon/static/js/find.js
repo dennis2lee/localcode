@@ -298,6 +298,11 @@ export function openFind() {
 }
 
 export function closeFind() {
+  // Closing a bar that is already closed does nothing at all. It is
+  // called from clearTranscript on every session switch, and taking the
+  // focus there would pull it out of whatever the person was using — the
+  // session filter they were typing into to find that session.
+  if (!findIsOpen()) return;
   clearMarks();
   lastQuery = '';
   say('');

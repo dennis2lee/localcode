@@ -526,7 +526,6 @@ const handlers = {
   'turn.cancelled': () => {
     session.promptQueue = [];
     session.runningTool = '';
-    findRefresh();
     // A cancelled turn is not waiting on an answer. The daemon does send
     // permission.resolved for the question it was holding, and that is
     // the event that clears this; saying it here too costs nothing and
@@ -545,6 +544,12 @@ const handlers = {
     abandonPendingUsers();
     appendTool('[cancelled]');
     renderCommDot();
+    // Last, after everything above has written what it writes. A refresh
+    // is a search of the transcript as it stands, so running it first
+    // searches the transcript this handler is about to change — and the
+    // abandoned prompts and the [cancelled] line are exactly the text a
+    // reader would be looking for.
+    findRefresh();
   },
   error: (d) => {
     // "recovered" means the loop already handled it and the turn is still

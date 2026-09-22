@@ -371,3 +371,46 @@ test('closing the bar puts the focus back in the prompt box', async () => {
     'closing it hands the focus back, not to a field that is now hidden',
   );
 });
+
+// A refresh is a search of the transcript as it stands, so it has to run
+// after whatever changed it. Calling it at the top of the cancelled-turn
+// handler searched the transcript that handler was about to write — and
+// the abandoned prompts and the [cancelled] line are exactly what a
+// reader would be looking for.
+test('the cancelled-turn refresh runs after the cancel has written its lines', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 1, type: 'message.user', data: { text: 'run the tests' } });
+  await app.settle();
+
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'cancelled';
+  app.el('find-input').fire('input');
+  await app.settle();
+  assert.equal(app.el('find-count').textContent, 'no matches', 'setup: nothing says cancelled yet');
+
+  app.sse.emit({ type: 'turn.cancelled' });
+  await app.settle();
+
+  assert.ok(
+    app.el('transcript').textContent.includes('[cancelled]'),
+    'setup: the cancel wrote its line',
+  );
+  assert.equal(app.el('find-count').textContent, '1 of 1', 'and the refresh saw it');
+});
+
+// closeFind is called on every session switch, whether or not the bar was
+// ever opened. Taking the focus there pulls it out of whatever the person
+// was using to switch with.
+test('switching conversation with the bar closed leaves the focus alone', async () => {
+  const app = await conversation();
+  app.el('session-filter').focus();
+  assert.equal(app.document.activeElement.id, 'session-filter', 'setup: typing in the filter');
+
+  app.selectSession('s2', 'general-purpose', '');
+  await app.settle();
+
+  assert.equal(
+    app.document.activeElement.id, 'session-filter',
+    'a bar that was never open did not reach for the focus',
+  );
+});
