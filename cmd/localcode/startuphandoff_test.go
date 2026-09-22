@@ -142,4 +142,16 @@ func TestAnUnstampedBuildDoesNotRunTheStagedCopy(t *testing.T) {
 	if b, err := os.ReadFile(ranLog); err == nil && strings.Contains(string(b), "ran") {
 		t.Error("the staged copy was run to answer a question parsing had already settled")
 	}
+
+	// And the same refusal for the other handoff, which is where it
+	// matters most: taking the staged copy's version as its own baseline
+	// is how a build that is not a version would come to install over
+	// itself at startup. Both paths ask through stagedNewerThan, so this
+	// is the one place it can be asked.
+	if p, v := stagedNewerThan("dev"); p != "" || v != "" {
+		t.Errorf("stagedNewerThan(dev) = %q, %q; an unstamped build has no newer release", p, v)
+	}
+	if p, v := stagedNewerThan("0.1.0"); p == "" || v != "9.9.9" {
+		t.Errorf("stagedNewerThan(0.1.0) = %q, %q; want the staged copy and its version", p, v)
+	}
 }

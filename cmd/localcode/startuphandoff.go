@@ -87,28 +87,48 @@ func stagedHandoffBinary(running, configPath string, canExec bool) (string, bool
 	if canExec {
 		return "", false
 	}
-	// Before the stat and long before the exec: an unstamped build calls
-	// itself "dev", which is not a version, and Newer refuses to call
-	// anything newer than a thing that is not a version. So the answer is
-	// already no, and finding out what the staged copy calls itself would
-	// mean running it — a process, and up to VersionOf's thirty-second
-	// timeout if that copy hangs — to learn something that cannot change
-	// it.
-	if !update.IsVersion(running) {
-		return "", false
-	}
-	staged := update.StagedBinary()
-	if staged == "" {
+	// The stat first, so a machine with nothing staged — which is most of
+	// them — pays that and nothing else, and in particular does not read
+	// the config to answer a question that is already no.
+	if update.StagedBinary() == "" {
 		return "", false
 	}
 	if !autoUpdateWanted(configPath) {
 		return "", false
 	}
+	path, _ := stagedNewerThan(running)
+	return path, path != ""
+}
+
+// stagedNewerThan is the staged copy when there is one and it is newer
+// than running, and "" otherwise.
+//
+// Shared by both handoffs so that the refusal below cannot be in one and
+// missing from the other. It was: the early path grew the check and the
+// late path did not, and the late path was the one where it mattered —
+// a build calling itself "dev" would take the staged copy's version as
+// its own baseline and then install over itself at startup, which is the
+// opposite of what an unstamped build is promised.
+//
+// That refusal is the first thing here, before the stat and long before
+// the exec. An unstamped build is not a version, Newer will not call
+// anything newer than a thing that is not a version, so the answer is
+// settled — and asking the staged copy what it calls itself means
+// running it, a process and up to VersionOf's thirty-second timeout if
+// that copy hangs, to learn something that cannot change it.
+func stagedNewerThan(running string) (path, version string) {
+	if !update.IsVersion(running) {
+		return "", ""
+	}
+	staged := update.StagedBinary()
+	if staged == "" {
+		return "", ""
+	}
 	v, err := update.VersionOf(staged)
 	if err != nil || !update.Newer(running, v) {
-		return "", false
+		return "", ""
 	}
-	return staged, true
+	return staged, v
 }
 
 // autoUpdateWanted reads the one config flag this decision turns on,
@@ -144,13 +164,8 @@ func startupHandoffBinary(d *daemon.Daemon, out io.Writer, canExec bool) (string
 		return "", false
 	}
 	running, staged := d.Version, ""
-	// The same refusal as stagedHandoffBinary's, for the same reason: a
-	// build that is not a version cannot be superseded, so there is
-	// nothing to learn by running the staged copy.
-	if s := update.StagedBinary(); s != "" && update.IsVersion(running) {
-		if v, err := update.VersionOf(s); err == nil && update.Newer(running, v) {
-			running, staged = v, s
-		}
+	if p, v := stagedNewerThan(running); p != "" {
+		running, staged = v, p
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), startupCheckTimeout)
