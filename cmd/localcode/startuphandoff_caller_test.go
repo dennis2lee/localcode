@@ -85,3 +85,54 @@ func TestTheWindowNeverExecsAtStartup(t *testing.T) {
 		t.Error("runGUI calls autoUpdateAtStartup, which ends in exec while this process holds a native window")
 	}
 }
+
+// The handoff that happens before anything is built.
+//
+// Two callers, and the third is deliberately not one. A staged copy is a
+// newer localcode already on the machine, so a start that is going to run
+// it has no reason to read the config, connect to every MCP server and
+// open the session store first — all of which used to happen, and be
+// thrown away, on every start of every Windows MSI install.
+func TestTheCheapHandoffRunsBeforeTheDaemonIsBuilt(t *testing.T) {
+	src := modesSource(t)
+	if n := strings.Count(src, "stagedHandoffBinary(version, configPath, selfRestartAvailable)"); n != 2 {
+		t.Errorf("%d callers check for a staged copy before building, want the headless daemon and the terminal", n)
+	}
+	// Before, not after: the point of it is what does not happen.
+	for _, mode := range []string{"func runDaemon(", "func runEmbedded("} {
+		start := strings.Index(src, mode)
+		if start < 0 {
+			t.Fatalf("%s is gone", mode)
+		}
+		body := src[start:]
+		if end := strings.Index(body[1:], "\nfunc "); end >= 0 {
+			body = body[:end]
+		}
+		staged := strings.Index(body, "stagedHandoffBinary(")
+		built := strings.Index(body, "buildDaemon(")
+		if staged < 0 || built < 0 {
+			t.Errorf("%s no longer both checks and builds", mode)
+			continue
+		}
+		if staged > built {
+			t.Errorf("%s builds the daemon before looking for a staged copy, which is the cost this check exists to avoid", mode)
+		}
+	}
+}
+
+// And the window still builds one, because its handoff keeps it: the
+// proxy serves the native-dialog routes from this process's own daemon.
+func TestTheWindowStillBuildsADaemonEvenWhenItHandsOver(t *testing.T) {
+	src := modesSource(t)
+	start := strings.Index(src, "func runGUI(")
+	if start < 0 {
+		t.Fatal("runGUI is gone")
+	}
+	body := src[start:]
+	if end := strings.Index(body[1:], "\nfunc "); end >= 0 {
+		body = body[:end]
+	}
+	if strings.Contains(body, "stagedHandoffBinary(") {
+		t.Error("runGUI skips building a daemon, but successorProxy serves its dialog routes from one")
+	}
+}

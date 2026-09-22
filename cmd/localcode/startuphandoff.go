@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"localcode/internal/config"
 	"localcode/internal/daemon"
 	"localcode/internal/update"
 )
@@ -54,6 +55,80 @@ import (
 // can already run. On a Program Files install that is the staged copy
 // from the last update, not this binary — comparing against this binary
 // alone would download the same release on every start.
+// stagedHandoffBinary is the handoff decided before anything is built.
+//
+// StagedBinary is a newer localcode this machine already has, left by an
+// update that could not replace the file it was running from. On Windows
+// with the MSI that is every update: the installer puts localcode.exe in
+// Program Files and puts Program Files on PATH, so the copy PATH finds
+// cannot be written without elevation and the new version goes to the
+// user's cache directory instead. Every start after that runs the old
+// binary, which hands over to the staged one.
+//
+// The question this answers is what the old binary does first. It used to
+// build the whole daemon: read the config, connect to every MCP server —
+// spawning each one as a subprocess — load the skills and the custom
+// commands, open the session store. All of it thrown away a moment later,
+// and some of it wrong, because a version old enough to have been
+// superseded is old enough to have bugs the successor does not: a report
+// that arrived on v0.141.0 was a v0.133.0 launcher complaining about a
+// skill file that v0.141.0 reads without a word, printed every start
+// under a banner naming a version the person was not running.
+//
+// So the staged copy is looked for first, and found, nothing else is
+// built. No network here either: whether something newer still exists is
+// the successor's question, and it asks it on its own start.
+//
+// Ordered cheapest first. Most machines have no staged copy, and for them
+// this is one stat.
+func stagedHandoffBinary(running, configPath string, canExec bool) (string, bool) {
+	// Where a process can exec it replaces itself through
+	// autoUpdateAtStartup instead, and never reads a staged copy.
+	if canExec {
+		return "", false
+	}
+	staged := update.StagedBinary()
+	if staged == "" {
+		return "", false
+	}
+	if !autoUpdateWanted(configPath) {
+		return "", false
+	}
+	v, err := update.VersionOf(staged)
+	if err != nil || !update.Newer(running, v) {
+		return "", false
+	}
+	return staged, true
+}
+
+// autoUpdateWanted reads the one config flag this decision turns on,
+// without building anything and without repeating the config's own
+// notes — buildDaemon prints those, and a start that hands off never
+// reaches it, so the successor is what says them.
+//
+// A config that cannot be read answers no. The reason is not that the
+// flag defaults to off, it does not: it is that handing off is the
+// unusual action, and taking it on the strength of a file this process
+// could not read would be deciding from nothing. buildDaemon reads the
+// same file a moment later and reports the real error.
+func autoUpdateWanted(explicitPath string) bool {
+	var cfg *config.Config
+	var err error
+	if explicitPath != "" {
+		cfg, _, err = config.Load(explicitPath)
+	} else {
+		e, eerr := resolveEnv()
+		if eerr != nil {
+			return false
+		}
+		cfg, _, err = config.LoadMerged(e.cwd)
+	}
+	if err != nil {
+		return false
+	}
+	return cfg.AutoUpdateEnabled()
+}
+
 func startupHandoffBinary(d *daemon.Daemon, out io.Writer, canExec bool) (string, bool) {
 	if canExec || !d.Loop.Config.AutoUpdateEnabled() {
 		return "", false

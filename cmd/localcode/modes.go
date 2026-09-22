@@ -31,6 +31,13 @@ func runDaemon(configPath, listen string) error {
 		return fmt.Errorf("daemon failed to start: %w", err)
 	}
 
+	// Before the daemon is built, not after: a start that is going to
+	// hand over has no reason to connect to every MCP server first. See
+	// stagedHandoffBinary.
+	if binary, ok := stagedHandoffBinary(version, configPath, selfRestartAvailable); ok {
+		return superviseSuccessor(binary, ln)
+	}
+
 	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
 	if err != nil {
 		ln.Close()
@@ -153,6 +160,11 @@ func runGUI(configPath string) error {
 	// command you type. The binary, the package and the CLI stay
 	// lower-case.
 	return gui.Launch("LocalCode", version, func(progress func(string), setVersion func(string), reload func()) (http.Handler, error) {
+		// No stagedHandoffBinary here, unlike the other two modes, and
+		// not an oversight: the window's handoff keeps this process's own
+		// daemon and serves the two native-dialog routes from it, so it
+		// needs one built whether or not it hands over. See
+		// successorProxy below.
 		d, done, err := buildDaemon(context.Background(), configPath, progress)
 		if err != nil {
 			return nil, err
@@ -303,6 +315,13 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 	listen = got.ln.Addr().String()
 	if got.moved {
 		fmt.Printf("the Web UI for this one is at http://%s\n", listen)
+	}
+
+	// Same as the headless path, and for the same reason the address was
+	// taken before the daemon: building one to throw away starts MCP
+	// servers for a process that is about to be a client of another.
+	if binary, ok := stagedHandoffBinary(version, configPath, selfRestartAvailable); ok {
+		return runTUIBehindSuccessor(binary, got.ln, listen, agentName)
 	}
 
 	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
