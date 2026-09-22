@@ -36,7 +36,7 @@ func TestJSCallQuotesItsArgument(t *testing.T) {
 // has to survive being a URL. An unencoded '#' would truncate the
 // document at that point, and the icon's own markup is full of them.
 func TestSplashDataURLRoundTrips(t *testing.T) {
-	html := splashHTML("0.32.3")
+	html := splashHTML()
 	// A '#', not a particular one. This asked for #58a6ff, a colour the
 	// icon was redrawn out of, so the test failed on its own premise and
 	// the package it lives in reported FAIL whatever else was true —
@@ -65,16 +65,29 @@ func TestSplashDataURLRoundTrips(t *testing.T) {
 // so the window is recognisably what was clicked, and the hooks Go calls
 // to report progress into it.
 func TestSplashCarriesTheLogoAndTheProgressHooks(t *testing.T) {
-	html := splashHTML("0.32.3")
-	for _, want := range []string{"<svg", "lcStatus", "lcFailed", "v0.32.3"} {
+	html := splashHTML()
+	for _, want := range []string{"<svg", "lcStatus", "lcFailed"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("splash is missing %q", want)
 		}
 	}
-	// An unstamped build should show no version rather than the literal
-	// string "vdev", which reads as a version and is not one.
-	if strings.Contains(splashHTML("dev"), "vdev") {
-		t.Error(`an unstamped build shows "vdev"`)
+}
+
+// The first screen names no version.
+//
+// It used to name this shell's own, which is the wrong one whenever this
+// shell is not what will run: where it cannot replace itself it hands
+// over to a newer copy, and until that happened the window named the
+// version it was about to stop being. The label stays, empty, for the
+// handoff to fill in — see the test below, which is the only moment a
+// number here is worth anything.
+func TestTheFirstScreenNamesNoVersion(t *testing.T) {
+	html := splashHTML()
+	if strings.Contains(html, `id="version">v`) {
+		t.Error("the splash renders a version before anything has said which one will run")
+	}
+	if !strings.Contains(html, `id="version"></span>`) {
+		t.Error("the version label is not empty, or is no longer an element a handoff can write into")
 	}
 }
 
@@ -84,7 +97,7 @@ func TestSplashCarriesTheLogoAndTheProgressHooks(t *testing.T) {
 // and the version is what anybody looks at to see whether the update
 // took. So the label has an id and a function that writes to it.
 func TestTheSplashVersionCanBeCorrected(t *testing.T) {
-	html := splashHTML("0.108.1")
+	html := splashHTML()
 	if !strings.Contains(html, `id="version"`) {
 		t.Error("the version label has no id, so nothing can correct it")
 	}

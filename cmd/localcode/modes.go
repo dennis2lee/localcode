@@ -159,7 +159,7 @@ func runGUI(configPath string) error {
 	// the taskbar label, where it is the product's name rather than the
 	// command you type. The binary, the package and the CLI stay
 	// lower-case.
-	return gui.Launch("LocalCode", version, func(progress func(string), setVersion func(string), reload func()) (http.Handler, error) {
+	return gui.Launch("LocalCode", func(progress func(string), setVersion func(string), reload func()) (http.Handler, error) {
 		// No stagedHandoffBinary here, unlike the other two modes, and
 		// not an oversight: the window's handoff keeps this process's own
 		// daemon and serves the two native-dialog routes from it, so it
@@ -324,7 +324,10 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 		return runTUIBehindSuccessor(binary, got.ln, listen, agentName)
 	}
 
-	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
+	// Said out loud, because this is the wait somebody is looking at: the
+	// banner is up, the prompt is not, and what happens in between can be
+	// a second or most of a minute depending on what this config asks for.
+	d, cleanup, err := buildDaemon(context.Background(), configPath, printStartupStep)
 	if err != nil {
 		got.ln.Close()
 		return err

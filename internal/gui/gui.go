@@ -56,11 +56,11 @@ import (
 // Blocks until the window is closed. If start fails, the error is shown
 // in the window (this binary has no console to print it to) and returned
 // once the user closes it.
-func Launch(title, version string, start func(progress func(string), setVersion func(string), reload func()) (http.Handler, error)) error {
+func Launch(title string, start func(progress func(string), setVersion func(string), reload func()) (http.Handler, error)) error {
 	w := webview.New(false)
 	defer w.Destroy()
 	w.SetTitle(title)
-	w.Navigate(dataURL(splashHTML(version)))
+	w.Navigate(dataURL(splashHTML()))
 	setWindowIcon(uintptr(w.Window()))
 	hideTitleBar(uintptr(w.Window()))
 	// Told to Windows before anything else, so an installer that closes
