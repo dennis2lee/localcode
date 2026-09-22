@@ -339,6 +339,17 @@ func TestEveryToolNameBedrockIsSentFitsConverse(t *testing.T) {
 	}
 }
 
+// Two tools that would arrive under one name are refused rather than sent:
+// the model could call only one of them, and which one would be an
+// accident of order. The registry never holds two tools of one name, so a
+// repeated name stands in here for the collision a hash would need.
+func TestTwoToolsArrivingUnderOneNameAreRefused(t *testing.T) {
+	_, err := toBedrockTools([]Tool{{Name: "glob", Description: "d"}, {Name: "glob", Description: "d"}}, false)
+	if err == nil || !strings.Contains(err.Error(), "would both be sent to Bedrock as glob") {
+		t.Errorf("two tools sent as one name: err = %v", err)
+	}
+}
+
 // A tool sent under a substitute name is called by that name, and the
 // call has to come back under the tool's own: that is the name the agent
 // looks the tool up by. And a call from earlier in the conversation must
