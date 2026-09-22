@@ -887,41 +887,55 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		}
 	})
 
-	// Each case below is checked against what the advice would do: the
-	// request clampMaxTokens builds after following it must be larger
-	// than the one that was cut off.
+	// Each case is checked against what following the advice would do
+	// to the next request, as clampMaxTokens would size it, before the
+	// words are: raising max_tokens a long way, compacting to an empty
+	// conversation (the most /compact could free), and both. Advice to
+	// make a move is only true when that move sends more.
 	advice := []struct {
-		name          string
-		wanted, input int
-		raiseHelps    bool
-		compactHelps  bool
-		wantInNotice  string
-		notInNotice   string
+		name                  string
+		window, wanted, input int
+		raise, compact, both  bool
+		says, doesNotSay      string
 	}{
-		{"the profile at the floor, on a full window", 1024, 31000, false, false, "needs both /compact and a higher max_tokens", "for longer answers"},
-		{"a window with exactly the profile's figure left", 4096, 32768 - contextHeadroom - 4096, false, false, "needs both /compact and a higher max_tokens", "for longer answers"},
-		{"a profile below the floor, room between it and the floor", 512, 32768 - contextHeadroom - 800, true, false, "at most 1024 until /compact", "needs both"},
-		{"a profile below the floor, on a full window", 512, 31000, true, false, "at most 1024 until /compact", "needs both"},
-		{"a profile with room to spare", 4096, 1000, true, false, "raise max_tokens on that profile", "nearly full"},
-		{"a window that shrank the request", 4096, 28000, false, true, "Raising max_tokens will not help", "raise max_tokens on that profile"},
+		{"a profile with room to spare", 32768, 4096, 1000, true, false, true, "raise max_tokens on that profile", "nearly full"},
+		{"a window that shrank the request", 32768, 4096, 28000, false, true, true, "/compact makes room now", "raise max_tokens on that profile"},
+		{"the profile at the floor, on a full window", 32768, 1024, 31000, false, false, true, "needs both /compact and a higher max_tokens", "for longer answers"},
+		{"a window with exactly the profile's figure left", 32768, 4096, 32768 - contextHeadroom - 4096, false, false, true, "needs both /compact and a higher max_tokens", "for longer answers"},
+		{"a profile below the floor, room between it and the floor", 32768, 512, 32768 - contextHeadroom - 800, true, false, true, "at most 1024 until /compact", "needs both"},
+		{"a profile below the floor, room exactly at the floor", 32768, 512, 32768 - contextHeadroom - minOutputTokens, true, false, true, "at most 1024 until /compact", "needs both"},
+		{"a profile below the floor, on a full window", 32768, 512, 31000, true, false, true, "at most 1024 until /compact", "needs both"},
+		{"a window no request can grow in, shrunk", 3072, 4096, 500, false, false, false, "cannot give a reply more", "/compact"},
+		{"a window no request can grow in, at the floor", 3072, 1024, 500, false, false, false, "cannot give a reply more", "needs both"},
+		// Both sends more than was sent here, but no more than raising
+		// alone: /compact adds nothing, and must not be offered.
+		{"a window no request can grow in, below the floor", 3072, 512, 500, true, false, true, "gets at most 1024", "/compact"},
+		{"a 2048-token window", 2048, 4096, 300, false, false, false, "cannot give a reply more", "/compact"},
+		{"no window figure", 0, 4096, 1000, true, false, true, "raise max_tokens on that profile", "nearly full"},
 	}
 	for _, c := range advice {
 		t.Run(c.name, func(t *testing.T) {
-			const window = 32768
-			s := requestSizing{wanted: c.wanted, input: c.input, window: window, source: windowFromConfig,
-				sent: clampMaxTokens(c.wanted, window, c.input)}
-			if raised := clampMaxTokens(c.wanted*4, window, c.input); (raised > s.sent) != c.raiseHelps {
-				t.Fatalf("precondition: raising max_tokens sends %d after %d, want helps=%v", raised, s.sent, c.raiseHelps)
-			}
-			if compacted := clampMaxTokens(c.wanted, window, 0); (compacted > s.sent) != c.compactHelps {
-				t.Fatalf("precondition: /compact sends %d after %d, want helps=%v", compacted, s.sent, c.compactHelps)
+			s := requestSizing{wanted: c.wanted, input: c.input, window: c.window, source: windowFromConfig,
+				sent: clampMaxTokens(c.wanted, c.window, c.input)}
+			for _, move := range []struct {
+				name      string
+				sends     int
+				wantHelps bool
+			}{
+				{"raising max_tokens", clampMaxTokens(c.wanted*64, c.window, c.input), c.raise},
+				{"/compact", clampMaxTokens(c.wanted, c.window, 0), c.compact},
+				{"both", clampMaxTokens(c.wanted*64, c.window, 0), c.both},
+			} {
+				if helps := move.sends > s.sent; helps != move.wantHelps {
+					t.Fatalf("precondition: %s sends %d after %d, want helps=%v", move.name, move.sends, s.sent, move.wantHelps)
+				}
 			}
 			got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
-			if !strings.Contains(got, c.wantInNotice) {
-				t.Errorf("does not say %q:\n%s", c.wantInNotice, got)
+			if !strings.Contains(got, c.says) {
+				t.Errorf("does not say %q:\n%s", c.says, got)
 			}
-			if strings.Contains(got, c.notInNotice) {
-				t.Errorf("says %q:\n%s", c.notInNotice, got)
+			if strings.Contains(got, c.doesNotSay) {
+				t.Errorf("says %q:\n%s", c.doesNotSay, got)
 			}
 		})
 	}

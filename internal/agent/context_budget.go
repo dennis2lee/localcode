@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -521,39 +522,60 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 	if name == "" {
 		name = model
 	}
-	if s.sent < s.wanted {
+	raiseIt := "raise max_tokens on that profile in config.json for longer answers"
+	hit := fmt.Sprintf("the reply hit the %q profile's max_tokens limit of %d and was cut off", name, s.sent)
+	// What each move would send, worked out by the function that sizes
+	// the next request, so the advice cannot promise what the request
+	// will not do. Compacting is modelled as an empty conversation, the
+	// most it could ever free: a move that does not help even then does
+	// not help. With no window figure clampMaxTokens has no opinion, so
+	// raising is all that is left, which is what the arithmetic says.
+	raised := clampMaxTokens(math.MaxInt, s.window, s.input)
+	both := clampMaxTokens(math.MaxInt, s.window, 0)
+	inUse := fmt.Sprintf("about %d of %d tokens were in use", s.input, s.window)
+
+	switch {
+	case both <= s.sent:
+		// A window too small to give more to any request: most of it is
+		// the margin held back for estimation error. Only a larger
+		// window helps, and a small figure is as likely to be wrong as
+		// the model's.
 		msg := fmt.Sprintf(
-			"the reply was cut off at %d tokens because the context window was nearly full: about %d of %d tokens were already in use, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. /compact makes room now",
-			s.sent, s.input, s.window, s.source)
+			"the reply was cut off at %d tokens, and a %d-token context window cannot give a reply more: after the %d tokens held back as a margin, even an empty conversation leaves room for %d. The window figure was %s",
+			s.sent, s.window, contextHeadroom, both, s.source)
+		if s.source == windowFromConfig {
+			return msg + fmt.Sprintf("; if the model's real window is larger, raise context_window on the %q profile", name)
+		}
+		return msg + fmt.Sprintf("; if the model's real window is larger, set context_window on the %q profile in config.json", name)
+
+	case s.sent < s.wanted:
+		// The window shrank it, and a smaller conversation lets it grow.
+		msg := fmt.Sprintf(
+			"the reply was cut off at %d tokens because the context window was nearly full: %s, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. /compact makes room now",
+			s.sent, inUse, s.source)
 		if s.source != windowFromConfig {
 			msg += fmt.Sprintf("; if the model's real window is larger than %d, set context_window on the %q profile in config.json", s.window, name)
 		}
 		return msg
+
+	case raised <= s.sent:
+		// The profile's figure was sent, and the window would give a
+		// larger one no more. Neither move works alone: a raised
+		// max_tokens is shrunk back, and /compact makes room the
+		// profile's figure then caps.
+		return hit + fmt.Sprintf(
+			", and the context window had no room for more: %s. A longer answer needs both /compact and a higher max_tokens on that profile in config.json",
+			inUse)
+
+	case raised <= minOutputTokens:
+		// Raising helps, as far as the floor. Past that only a smaller
+		// conversation helps, if even an empty one would give more.
+		msg := hit + " — " + raiseIt + fmt.Sprintf(
+			"; the context window is nearly full as well (%s), so a raised max_tokens gets at most %d", inUse, raised)
+		if both > raised {
+			msg += " until /compact makes room"
+		}
+		return msg
 	}
-	// The profile's figure is what was sent. Whether raising it helps
-	// depends on how much the window would grant a larger request, which
-	// is what clampMaxTokens would send for one: the room, but never less
-	// than the floor.
-	raise := fmt.Sprintf("the reply hit the %q profile's max_tokens limit of %d and was cut off", name, s.sent)
-	if s.window <= 0 {
-		return raise + " — raise max_tokens on that profile in config.json for longer answers"
-	}
-	room := s.window - s.input - contextHeadroom
-	switch granted := max(room, minOutputTokens); {
-	case granted <= s.sent:
-		// Neither move works alone. A raised max_tokens is shrunk back to
-		// what was sent, and /compact makes room the profile's own figure
-		// then caps. This is a profile at the floor on a full window, or
-		// a window with exactly the profile's figure left.
-		return raise + fmt.Sprintf(
-			", and the context window had no room for more: about %d of %d tokens were in use. A longer answer needs both /compact and a higher max_tokens on that profile in config.json",
-			s.input, s.window)
-	case room < minOutputTokens:
-		// A limit below the floor on a nearly full window: raising helps,
-		// up to the floor and no further.
-		return raise + fmt.Sprintf(
-			" — raise max_tokens on that profile in config.json for longer answers; the context window is nearly full as well (about %d of %d tokens in use), so a raised max_tokens gets at most %d until /compact makes room",
-			s.input, s.window, granted)
-	}
-	return raise + " — raise max_tokens on that profile in config.json for longer answers"
+	return hit + " — " + raiseIt
 }
