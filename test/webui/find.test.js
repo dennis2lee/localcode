@@ -440,13 +440,34 @@ test('a line drawn outside a turn is searched without being named anywhere', asy
   assert.equal(app.el('find-count').textContent, '1 of 5', 'and the bar counted it');
 });
 
-// The backstop for the paths that draw nothing: a tool row built
-// mid-turn, the banner inserted above everything. Nothing announces
-// those, so the next move checks the transcript against the shape it had
-// when the search ran — how many blocks, how many characters — and
-// searches again when it differs. A mark leaving the tree is the other
-// half of the same check; text arriving takes nothing away.
-test('a step repairs a search the transcript has outgrown', async () => {
+// A tool row is drawn the ordinary way, so it is announced the ordinary
+// way — no handler names it anywhere.
+test('a tool row is counted as soon as it is drawn', async () => {
+  const app = await conversation();
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = 'handoff';
+  app.el('find-input').fire('input');
+  await app.settle();
+  assert.equal(app.el('find-count').textContent, '1 of 4', 'setup: four matches');
+
+  app.sse.emit({ seq: 5, type: 'tool.start', data: { tool_use_id: 't1', name: 'bash', input: '{"command":"cat handoff.go"}' } });
+  await app.settle();
+
+  // Six: the row carries the command twice, beside the tool name and in
+  // the arguments that fold open, the same way a short result is. Both
+  // are on screen, so both count.
+  assert.equal(app.el('find-count').textContent, '1 of 6', 'the row was counted without being named anywhere');
+});
+
+// The backstop, for the two writers that are deliberately silent: a reply
+// and its thinking, each rewritten once per fragment. Searching the whole
+// conversation per token is the one cost worth avoiding, so those say
+// nothing — and a step that finds the transcript a different shape than
+// the search remembers searches again.
+//
+// A mark leaving the tree is the other half of the same check. Text
+// arriving takes nothing away, which is why it needed its own answer.
+test('a step repairs a search the streamed reply has outgrown', async () => {
   const app = await conversation();
   app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
   app.el('find-input').value = 'handoff';
@@ -454,14 +475,10 @@ test('a step repairs a search the transcript has outgrown', async () => {
   await app.settle();
   assert.equal(app.el('find-count').textContent, '1 of 4');
 
-  // A tool row: built by appendToolCall, which draws no notice line.
-  app.sse.emit({ seq: 5, type: 'tool.start', data: { tool_use_id: 't1', name: 'bash', input: '{"command":"cat handoff.go"}' } });
+  app.sse.emit({ seq: 5, type: 'message.part.delta', data: { text: 'the handoff again, ' } });
   await app.settle();
-  assert.equal(app.el('find-count').textContent, '1 of 4', 'nothing announced it, so the count has not moved yet');
+  assert.equal(app.el('find-count').textContent, '1 of 4', 'a fragment says nothing, by design');
 
   app.el('find-older').fire('click');
-  // Six: the row carries the command twice, beside the tool name and in
-  // the arguments that fold open, the same way a short result is carried
-  // twice. Both are on screen, so both count.
-  assert.equal(app.el('find-count').textContent, '1 of 6', 'the step found the transcript had grown and searched again');
+  assert.equal(app.el('find-count').textContent, '1 of 5', 'the step found the transcript had grown and searched again');
 });

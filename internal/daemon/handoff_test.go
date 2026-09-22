@@ -19,6 +19,21 @@ import (
 	"localcode/internal/tools"
 )
 
+// How long to wait for something that has to happen.
+//
+// Long, because the only thing this number separates is hung from slow.
+// Retire finishing after its turn ends is not a race with anything — it
+// is going to happen or the code is broken — so a deadline that is too
+// short does not catch a bug, it reports the machine. This was three
+// seconds and it failed a Windows gate that passed on a re-run of the
+// same commit; a runner that oversubscribed can lose seconds to
+// scheduling alone. A hang waits forever, so there is nothing to lose by
+// being generous and a green build to lose by being tight.
+//
+// The negative wait further down is deliberately not this constant: see
+// the comment there.
+const mustHappen = 30 * time.Second
+
 // A daemon over a persisting store, the way a real one is built, with
 // nothing served. Enough for the ownership rules, which are about the
 // store and the manifest and not about any handler.
@@ -223,7 +238,7 @@ func TestRetireWaitsForTheTurnAndTellsTheStreams(t *testing.T) {
 		if v, _ := ev.Data["version"].(string); v != "9.9.9" {
 			t.Errorf("daemon.replaced names version %q, want 9.9.9", v)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(mustHappen):
 		t.Fatal("no daemon.replaced on the stream")
 	}
 	data, err := os.ReadFile(filepath.Join(dir, handoffFile))
@@ -236,6 +251,11 @@ func TestRetireWaitsForTheTurnAndTellsTheStreams(t *testing.T) {
 	select {
 	case <-done:
 		t.Fatal("Retire returned while a turn was still in flight")
+	// The other kind of wait, and the reason the two are not one number.
+	// This one is waiting to be sure something does NOT happen, so a
+	// longer wait is a stronger claim and a slow machine only makes it
+	// stronger. Being generous here costs test time rather than
+	// correctness, which is the opposite trade to the deadlines above.
 	case <-time.After(300 * time.Millisecond):
 	}
 
@@ -248,7 +268,7 @@ func TestRetireWaitsForTheTurnAndTellsTheStreams(t *testing.T) {
 		if !finished {
 			t.Error("Retire reported not finishing although the turn ended")
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(mustHappen):
 		t.Fatal("Retire did not return after the turn ended")
 	}
 	if _, err := os.Stat(filepath.Join(dir, handoffFile)); !os.IsNotExist(err) {
@@ -256,7 +276,7 @@ func TestRetireWaitsForTheTurnAndTellsTheStreams(t *testing.T) {
 	}
 	select {
 	case <-lost:
-	case <-time.After(time.Second):
+	case <-time.After(mustHappen):
 		t.Error("the session stream was not ended")
 	}
 	_ = live

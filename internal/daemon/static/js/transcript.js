@@ -8,7 +8,7 @@ import { closeFind, findRefresh } from './find.js';
 // The transcript follows the newest output only while the reader is at
 // the bottom of it. See scroll.js: this is the module that owns
 // transcriptEl, so it owns the following too, and every change to the
-// content below goes through follower.keeping() rather than writing
+// content below goes through change() rather than writing
 // scrollTop itself.
 const follower = createFollower(transcriptEl, (following) => {
   jumpBottomBtn.hidden = following;
@@ -20,6 +20,31 @@ jumpBottomBtn.addEventListener('click', () => follower.force());
 // or not they had scrolled away.
 export function scrollToBottom() { follower.force(); }
 
+// Every change to the transcript goes through one of these two, and the
+// difference between them is whether an open find bar is told about it.
+//
+// change tells it. changeQuietly does not, and there are exactly two
+// callers: the model's reply and its thinking, both of which rewrite
+// their element once per fragment. Searching the whole conversation per
+// token is the one cost worth avoiding, and turn.done tells the bar when
+// those two have stopped.
+//
+// The default is to tell. It was the other way round first — one caller
+// announced, the rest silent — and what that produced was three handlers
+// naming the refresh by hand with one of them in the wrong place, and
+// every writer that was not thought of drawing text nobody could find.
+// A kind of message added later is searchable by being written the
+// ordinary way.
+function change(mutate) {
+  const out = follower.keeping(mutate);
+  findRefresh();
+  return out;
+}
+
+function changeQuietly(mutate) {
+  return follower.keeping(mutate);
+}
+
 // The only module allowed to touch transcriptEl. Everything goes through
 // createElement/textContent — no call site anywhere else builds an HTML
 // string for the transcript, which is what closes the escape-a-string class
@@ -28,16 +53,7 @@ function appendDiv(cls, text) {
   const div = document.createElement('div');
   div.className = cls;
   div.textContent = text;
-  follower.keeping(() => transcriptEl.appendChild(div));
-  // Every one-line notice the transcript draws comes through here — a
-  // rewind, a clear, a compaction, a fork, an error, a delegation — and
-  // an open find bar wants searching again after any of them.
-  //
-  // Here rather than in each of those handlers: the notice is the thing
-  // that changed the transcript, so the thing that draws it is what knows.
-  // A streaming reply does not come through here (appendModelText writes
-  // its own element), which is what keeps this off the per-token path.
-  findRefresh();
+  change(() => transcriptEl.appendChild(div));
   return div;
 }
 
@@ -86,7 +102,7 @@ function appendUserBlock(text, pending, images = []) {
     div.appendChild(imgContainer);
   }
 
-  follower.keeping(() => {
+  change(() => {
     transcriptEl.appendChild(sep);
     transcriptEl.appendChild(div);
   });
@@ -274,7 +290,7 @@ export function appendToolLines(lines) {
     if (i > 0) div.appendChild(document.createElement('br'));
     div.appendChild(document.createTextNode(line));
   });
-  follower.keeping(() => transcriptEl.appendChild(div));
+  change(() => transcriptEl.appendChild(div));
   return div;
 }
 
@@ -358,7 +374,7 @@ export function appendToolCall(toolUseID, name, inputJSON) {
 
   row.appendChild(head);
   row.appendChild(detail);
-  follower.keeping(() => transcriptEl.appendChild(row));
+  change(() => transcriptEl.appendChild(row));
   // name and inputJSON stay on the entry so finishToolCall can build
   // the diff then: tool.end carries the same input, but keying the
   // diff on what the call started with keeps one source — the row —
@@ -409,7 +425,7 @@ export function finishToolCall(toolUseID, content, isError) {
   // call whose input is gone or unparseable gets no diff rather than a
   // wrong one.
   const rows = !isError ? editDiffForTool(name, inputJSON, text) : null;
-  follower.keeping(() => {
+  change(() => {
     stateEl.textContent = isError ? 'failed' : resultSize(text);
     detail.textContent = `${detail.textContent}\n\n${text}`;
     if (rows && rows.length > 0) appendDiff(row, rows);
@@ -453,7 +469,7 @@ export function appendModelText(text) {
     transcriptEl.appendChild(session.currentModelEl);
     session.currentModelBuffer = '';
   }
-  follower.keeping(() => {
+  changeQuietly(() => {
     session.currentModelBuffer += text;
     session.currentModelEl.innerHTML = renderMarkdown(session.currentModelBuffer);
   });
@@ -480,7 +496,7 @@ export function appendModelText(text) {
 export function endModelText(text) {
   if (text && session.currentModelEl) {
     const el = session.currentModelEl;
-    follower.keeping(() => {
+    change(() => {
       session.currentModelBuffer = text;
       el.innerHTML = renderMarkdown(text);
     });
@@ -516,7 +532,7 @@ export function appendReview(d) {
   body.innerHTML = renderMarkdown(String(d.text || ''));
   wrap.appendChild(body);
 
-  follower.keeping(() => transcriptEl.appendChild(wrap));
+  change(() => transcriptEl.appendChild(wrap));
   return wrap;
 }
 
@@ -540,9 +556,9 @@ export function appendThinking(text) {
     thinkingEl = document.createElement('div');
     thinkingEl.className = 'msg-thinking';
     thinkingBuffer = '';
-    follower.keeping(() => transcriptEl.appendChild(thinkingEl));
+    change(() => transcriptEl.appendChild(thinkingEl));
   }
-  follower.keeping(() => {
+  changeQuietly(() => {
     thinkingBuffer += text;
     thinkingEl.textContent = thinkingBuffer;
   });
