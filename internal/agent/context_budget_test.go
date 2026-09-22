@@ -746,3 +746,118 @@ func TestAnUnhelpfulServerFallsBackToTheNameGuess(t *testing.T) {
 		t.Errorf("window = %d, want the name-based 1000000", got)
 	}
 }
+
+// Where the window figure came from, which is what nobody could see.
+//
+// A reply cut off at an absurd length on an on-prem model prompted the
+// question "did it actually ask the server?" — and nothing localcode
+// printed could answer it. A server that reports nothing and a server
+// that reports its real window produce the same number of the same size;
+// only the source says whether 128000 was measured or made up.
+func TestTheWindowSaysWhereItCameFrom(t *testing.T) {
+	cases := []struct {
+		name    string
+		probe   *probeCounter
+		profile config.Profile
+		want    windowSource
+	}{
+		{
+			name:    "stated in config",
+			probe:   &probeCounter{window: 8192, found: true},
+			profile: config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: 32768},
+			want:    windowFromConfig,
+		},
+		{
+			name:    "reported by the server",
+			probe:   &probeCounter{window: 8192, found: true},
+			profile: config.Profile{Provider: "local", Model: "DSA-Flash-CODE"},
+			want:    windowFromServer,
+		},
+		{
+			// The case the report was about: a proxy on :4000 whose
+			// /v1/models names three models and says nothing about any
+			// window, so the figure is the name's guess.
+			name:    "guessed, because the server said nothing",
+			probe:   &probeCounter{found: false},
+			profile: config.Profile{Provider: "local", Model: "DSA-Flash-CODE"},
+			want:    windowGuessed,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			loop := probeTestLoop(t, tc.probe, tc.profile)
+			_, got := loop.resolveContextWindow(context.Background(), tc.profile)
+			if got != tc.want {
+				t.Errorf("source = %q, want %q", got, tc.want)
+			}
+			// Asked twice, so the cached answer has to carry its source
+			// too: the second call is the one every later turn makes.
+			_, again := loop.resolveContextWindow(context.Background(), tc.profile)
+			if again != tc.want {
+				t.Errorf("source from the cache = %q, want %q", again, tc.want)
+			}
+		})
+	}
+}
+
+// Two limits end a reply at its length cap, and they want opposite advice.
+//
+// The notice gave the profile's advice to both. A reply shrunk to the
+// 1024-token floor by a nearly full window read as "your max_tokens is
+// 1024" on a profile that set none, and told the person to raise it —
+// which changes nothing, because the next request is shrunk the same way.
+// It also named the profile by its model id, which is not a key anybody
+// can find in their config.json.
+func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
+	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: 32768}
+
+	t.Run("the window squeezed it", func(t *testing.T) {
+		loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+		run := modelRun{profileName: "itg-flash", profile: profile, maxTokens: 4096}
+		// A conversation that has filled the window to within the floor.
+		big := strings.Repeat("x", 4*31000)
+		msgs := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(big)}}}
+
+		got := loop.cutOffNotice(context.Background(), "s1", run, msgs)
+
+		if strings.Contains(got, "raise max_tokens on") {
+			t.Errorf("told to raise max_tokens when the window was the limit:\n%s", got)
+		}
+		if !strings.Contains(got, "context window is nearly full") {
+			t.Errorf("does not say the window was the limit:\n%s", got)
+		}
+		if !strings.Contains(got, "will not help") {
+			t.Errorf("does not warn that raising max_tokens will not help:\n%s", got)
+		}
+	})
+
+	t.Run("the profile's max_tokens capped it", func(t *testing.T) {
+		loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+		run := modelRun{profileName: "itg-flash", profile: profile, maxTokens: 4096}
+		msgs := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("short")}}}
+
+		got := loop.cutOffNotice(context.Background(), "s1", run, msgs)
+
+		if !strings.Contains(got, "raise max_tokens") {
+			t.Errorf("a profile cap does not say to raise max_tokens:\n%s", got)
+		}
+		if !strings.Contains(got, "4096") {
+			t.Errorf("does not name the profile's actual limit:\n%s", got)
+		}
+	})
+
+	t.Run("the profile is named as it appears in config.json", func(t *testing.T) {
+		loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+		run := modelRun{profileName: "itg-flash", profile: profile, maxTokens: 4096}
+		msgs := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("short")}}}
+
+		got := loop.cutOffNotice(context.Background(), "s1", run, msgs)
+
+		if !strings.Contains(got, `"itg-flash"`) {
+			t.Errorf("does not name the profile the person would look for:\n%s", got)
+		}
+		if strings.Contains(got, `"DSA-Flash-CODE" profile`) {
+			t.Errorf("names the model id as though it were a profile:\n%s", got)
+		}
+	})
+}

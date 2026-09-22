@@ -87,12 +87,35 @@ const probeTimeout = 3 * time.Second
 // answer was "I do not say", so a server with no answer is not asked again
 // every turn.
 func (l *Loop) contextWindow(ctx context.Context, profile config.Profile) int {
+	n, _ := l.resolveContextWindow(ctx, profile)
+	return n
+}
+
+// windowSource is where a context window figure came from, which is the
+// half of the answer nobody could see.
+//
+// The number on its own is not enough to trust. A server that reports
+// nothing and a server that reports its real window can produce the same
+// session, and the only difference is whether 128000 was measured or made
+// up — so a person with a reply cut short at an absurd length asked
+// whether localcode had actually asked the server at all, and nothing it
+// printed could say.
+type windowSource string
+
+const (
+	windowFromConfig windowSource = "set by context_window in config.json"
+	windowFromServer windowSource = "reported by the server"
+	windowGuessed    windowSource = "guessed from the model name, because the server did not report one"
+)
+
+// resolveContextWindow is contextWindow with its source.
+func (l *Loop) resolveContextWindow(ctx context.Context, profile config.Profile) (int, windowSource) {
 	if profile.ContextWindow > 0 {
-		return profile.ContextWindow
+		return profile.ContextWindow, windowFromConfig
 	}
 	guess := modelinfo.MaxContextTokens(profile.Model)
 	if l.ProbeContextWindow == nil {
-		return guess
+		return guess, windowGuessed
 	}
 
 	key := profile.Provider + "\x00" + profile.Model
@@ -101,9 +124,9 @@ func (l *Loop) contextWindow(ctx context.Context, profile config.Profile) int {
 	l.mu.Unlock()
 	if seen {
 		if cached > 0 {
-			return cached
+			return cached, windowFromServer
 		}
-		return guess
+		return guess, windowGuessed
 	}
 
 	// Bounded, and still cancelled with the turn: a probe must not outlive
@@ -123,9 +146,9 @@ func (l *Loop) contextWindow(ctx context.Context, profile config.Profile) int {
 	l.mu.Unlock()
 
 	if n > 0 {
-		return n
+		return n, windowFromServer
 	}
-	return guess
+	return guess, windowGuessed
 }
 
 // clampMaxTokens returns how much output to ask for so that the request as
@@ -431,4 +454,46 @@ func startsWithToolResult(m provider.Message) bool {
 		}
 	}
 	return false
+}
+
+// cutOffNotice says why a reply stopped at its length cap, and what would
+// let it run longer.
+//
+// Two different limits end a reply this way and they want opposite
+// advice. One is the profile's own max_tokens, and raising it is the fix.
+// The other is the context window: clampMaxTokens shrinks the request to
+// fit what is left, down to a floor of minOutputTokens, and a reply cut
+// off there was cut off by a full window — raising max_tokens changes
+// nothing, because the next request is shrunk the same way.
+//
+// This used to give the first answer to both. It printed the shrunk
+// figure as though it were the profile's limit, so a reply stopped at
+// 1024 read as "your max_tokens is 1024" on a profile that set none, and
+// told the person to raise a number that was not the one in the way. It
+// also named the profile by its model id, which is not a key anyone can
+// find in their config.json.
+//
+// And when the window is the cause, it says where the window figure came
+// from, because a figure guessed from a model name is the likeliest
+// reason a window looks full when it is not.
+func (l *Loop) cutOffNotice(ctx context.Context, sessionID string, run modelRun, messages []provider.Message) string {
+	window, source := l.resolveContextWindow(ctx, run.profile)
+	input := l.inputEstimate(sessionID, run.system, messages)
+	sent := clampMaxTokens(run.maxTokens, window, input)
+	name := run.profileName
+	if name == "" {
+		name = run.profile.Model
+	}
+	if sent < run.maxTokens {
+		msg := fmt.Sprintf(
+			"the reply was cut off at %d tokens because the context window is nearly full: about %d of %d tokens are already in use, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. /compact makes room now",
+			sent, input, window, source)
+		if source != windowFromConfig {
+			msg += fmt.Sprintf("; if the model's real window is larger than %d, set context_window on the %q profile in config.json", window, name)
+		}
+		return msg
+	}
+	return fmt.Sprintf(
+		"the reply hit the %q profile's max_tokens limit of %d and was cut off — raise max_tokens on that profile in config.json for longer answers",
+		name, sent)
 }

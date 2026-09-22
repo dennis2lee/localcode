@@ -600,10 +600,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// model is broken rather than that a number needs raising.
 			if stopReason == "max_tokens" {
 				l.Store.Append(sessionID, events.TypeError, map[string]any{
-					"error": fmt.Sprintf(
-						"the reply hit this profile's max_tokens limit of %d and was cut off — raise max_tokens on the %q profile in config.json for longer answers",
-						clampMaxTokens(run.maxTokens, l.contextWindow(ctx, run.profile), l.inputEstimate(sessionID, run.system, messages)),
-						run.profile.Model),
+					"error":     l.cutOffNotice(ctx, sessionID, run, messages),
 					"recovered": true,
 				})
 			}

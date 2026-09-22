@@ -100,3 +100,33 @@ func TestContextCommandParsing(t *testing.T) {
 		}
 	}
 }
+
+// /context says where the window figure came from.
+//
+// The question that prompted it was "did it actually ask the server?",
+// about a reply cut off at an absurd length on an on-prem model. The
+// number alone cannot answer that — a guess and a measurement print the
+// same — and /context is where somebody goes to look.
+func TestContextNamesTheSourceOfTheWindow(t *testing.T) {
+	loop := newFallbackLoop(t, "http://127.0.0.1:1")
+	// No server to ask: every figure here is the name's guess.
+	loop.ProbeContextWindow = nil
+
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/context"); err != nil {
+		t.Fatalf("/context: %v", err)
+	}
+
+	out := lastMessagePartEnd(t, loop.Store, sid)
+	if !strings.Contains(out, string(windowGuessed)) {
+		t.Errorf("/context does not say the window was guessed:\n%s", out)
+	}
+	// And what to do about it, since a guess is exactly the case where
+	// the figure may be wrong in the direction that shortens replies.
+	if !strings.Contains(out, "set context_window on this profile") {
+		t.Errorf("/context names a guessed window without saying how to state the real one:\n%s", out)
+	}
+}

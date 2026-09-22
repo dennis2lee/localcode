@@ -166,7 +166,7 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 	if maxTokens == 0 {
 		maxTokens = defaultMaxTokens
 	}
-	window := l.contextWindow(ctx, profile)
+	window, source := l.resolveContextWindow(ctx, profile)
 	fmt.Fprintf(&b, "\nBeyond the prompt assets:\n")
 	fmt.Fprintf(&b, "  %-24s ~%d tokens in %d tools\n", "tool definitions", toolTokens, len(specs))
 	fmt.Fprintf(&b, "    %-22s ~%d tokens in %d\n", "built-in", builtinTokens, builtinCount)
@@ -182,8 +182,23 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 		}
 	}
 	fmt.Fprintf(&b, "  %-24s ~%d tokens\n", "conversation so far", convTokens)
+	// What the answer is asked for, and — when it is less — what it
+	// actually gets. The request is shrunk to fit the window before it is
+	// sent, down to a floor, so the profile's figure alone described a
+	// reservation that was not being made: this said 4096 on a session
+	// whose replies were being cut off at 1024.
 	fmt.Fprintf(&b, "  %-24s %d tokens\n", "reserved for the answer", maxTokens)
+	if got := clampMaxTokens(maxTokens, window, l.inputEstimate(sessionID, env.SystemText(), history)); got < maxTokens {
+		fmt.Fprintf(&b, "  %-24s %d tokens, because the window is nearly full\n", "  but the next reply gets", got)
+	}
 	fmt.Fprintf(&b, "  %-24s %d tokens\n", "context window", window)
+	// Where that number came from. It is the half nobody could see, and
+	// it decides how far the number can be trusted: measured, stated, or
+	// made up from a model name.
+	fmt.Fprintf(&b, "  %-24s %s\n", "", source)
+	if source == windowGuessed {
+		fmt.Fprintf(&b, "  %-24s set context_window on this profile if the model's real window differs\n", "")
+	}
 
 	// The estimate is a floor on Korean and Japanese, and saying so is
 	// the difference between a number somebody can use and one they
