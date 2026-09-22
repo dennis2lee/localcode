@@ -37,11 +37,16 @@ var logoSVG string
 // It is a self-contained document with no external references. There is
 // no server yet — that is the whole point — so there is nothing to fetch
 // a stylesheet or an image from.
-func splashHTML(version string) string {
-	v := ""
-	if version != "" && version != "dev" {
-		v = "v" + version
-	}
+// splashHTML is the first screen, and it carries no version.
+//
+// It used to carry this shell's own, which is the wrong one to show
+// whenever it is not the one that will run: where this process cannot
+// replace itself it hands over to a newer copy, and until that happened
+// the window named the version it was about to stop being. The label is
+// still here and still has its id — a handoff fills it in through
+// lcVersion the moment it knows what is coming up, which is the only
+// moment the number on this screen is worth anything.
+func splashHTML() string {
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -108,7 +113,7 @@ func splashHTML(version string) string {
 </head>
 <body>
   <div class="logo">` + logoSVG + `</div>
-  <div class="row"><h1>LocalCode</h1><span class="version" id="version">` + v + `</span></div>
+  <div class="row"><h1>LocalCode</h1><span class="version" id="version"></span></div>
   <div id="status">starting</div>
   <div class="track"><i></i></div>
 <script>
@@ -120,12 +125,12 @@ func splashHTML(version string) string {
     const el = document.getElementById('status');
     if (el) el.textContent = text;
   };
-  // The version shown at the top is this shell's own, which after an
-  // update is the copy the shortcut points at rather than the one about
-  // to run: the window said v0.108.1 while its status line said
-  // "starting localcode 0.109.0", and the version is what anybody looks
-  // at to see whether the update took. Corrected as soon as the binary
-  // that is starting has been read.
+  // The version label starts empty and is filled only here. It used to
+  // start as this shell's own, which after an update is the copy the
+  // shortcut points at rather than the one about to run: the window said
+  // v0.108.1 while its status line said "starting localcode 0.109.0".
+  // Written as soon as the binary that is starting has been read, and
+  // not before, because until then nothing here knows what will serve.
   window.lcVersion = (text) => {
     const el = document.getElementById('version');
     if (el) el.textContent = text;

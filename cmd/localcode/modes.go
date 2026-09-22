@@ -118,12 +118,13 @@ func runDaemon(configPath, listen string) error {
 // handoffComing is what the splash says while a newer localcode starts
 // behind it.
 //
-// Both lines, not just the status one. The version at the top of the
-// splash is this shell's own, fixed when the window opened, and after an
-// update the shell is the copy the shortcut points at rather than the one
-// about to serve — so the window read "LocalCode v0.108.1" over a status
-// line reading "starting localcode 0.109.0", and the version is what
-// anybody looks at to decide whether the update took.
+// Both lines, not just the status one. The splash opens with no version
+// at all, because until this moment nothing knows which build will
+// serve: it used to open with this shell's own, and after an update the
+// shell is the copy the shortcut points at rather than the one about to
+// serve — so the window read "LocalCode v0.108.1" over a status line
+// reading "starting localcode 0.109.0". This is where the number becomes
+// knowable, so this is where it is written.
 func handoffComing(coming string, progress, setVersion func(string)) {
 	progress("starting localcode " + coming)
 	setVersion(coming)
@@ -159,7 +160,7 @@ func runGUI(configPath string) error {
 	// the taskbar label, where it is the product's name rather than the
 	// command you type. The binary, the package and the CLI stay
 	// lower-case.
-	return gui.Launch("LocalCode", version, func(progress func(string), setVersion func(string), reload func()) (http.Handler, error) {
+	return gui.Launch("LocalCode", func(progress func(string), setVersion func(string), reload func()) (http.Handler, error) {
 		// No stagedHandoffBinary here, unlike the other two modes, and
 		// not an oversight: the window's handoff keeps this process's own
 		// daemon and serves the two native-dialog routes from it, so it
@@ -324,7 +325,10 @@ func runEmbedded(configPath, listen, agentName string, listenExplicit bool) erro
 		return runTUIBehindSuccessor(binary, got.ln, listen, agentName)
 	}
 
-	d, cleanup, err := buildDaemon(context.Background(), configPath, nil)
+	// Said out loud, because this is the wait somebody is looking at: the
+	// banner is up, the prompt is not, and what happens in between can be
+	// a second or most of a minute depending on what this config asks for.
+	d, cleanup, err := buildDaemon(context.Background(), configPath, printStartupStep)
 	if err != nil {
 		got.ln.Close()
 		return err

@@ -4,6 +4,8 @@ package gui
 
 import (
 	"net/url"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -36,7 +38,7 @@ func TestJSCallQuotesItsArgument(t *testing.T) {
 // has to survive being a URL. An unencoded '#' would truncate the
 // document at that point, and the icon's own markup is full of them.
 func TestSplashDataURLRoundTrips(t *testing.T) {
-	html := splashHTML("0.32.3")
+	html := splashHTML()
 	// A '#', not a particular one. This asked for #58a6ff, a colour the
 	// icon was redrawn out of, so the test failed on its own premise and
 	// the package it lives in reported FAIL whatever else was true —
@@ -65,16 +67,83 @@ func TestSplashDataURLRoundTrips(t *testing.T) {
 // so the window is recognisably what was clicked, and the hooks Go calls
 // to report progress into it.
 func TestSplashCarriesTheLogoAndTheProgressHooks(t *testing.T) {
-	html := splashHTML("0.32.3")
-	for _, want := range []string{"<svg", "lcStatus", "lcFailed", "v0.32.3"} {
-		if !strings.Contains(html, want) {
-			t.Errorf("splash is missing %q", want)
+	html := splashHTML()
+	if !strings.Contains(html, "<svg") {
+		t.Error("splash is missing the logo")
+	}
+	// The hooks are named with their definition, not by name alone.
+	// "lcStatus" also appears inside "lcStatusX", so a renamed hook kept
+	// this green while the Eval that reaches for it found nothing — and
+	// a webview Eval that finds nothing says nothing.
+	for _, hook := range []string{"lcStatus", "lcFailed"} {
+		if !strings.Contains(live(html), "window."+hook+" = ") {
+			t.Errorf("splash defines no %s, so the Go side's jsCall(%q, ...) reaches nothing", hook, hook)
 		}
 	}
-	// An unstamped build should show no version rather than the literal
-	// string "vdev", which reads as a version and is not one.
-	if strings.Contains(splashHTML("dev"), "vdev") {
-		t.Error(`an unstamped build shows "vdev"`)
+}
+
+// live is the splash with its commented-out lines removed.
+//
+// Searching the raw page for a definition finds one that has been
+// commented out, which is a definition the browser never makes: the hook
+// is dead, every Eval reaching for it finds nothing, and nothing says so.
+// That is the same silence these tests exist to break, arrived at by a
+// different edit.
+func live(html string) string {
+	var kept []string
+	for _, line := range strings.Split(html, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// And what Go calls is what the page defines.
+//
+// Two lists that have to agree and had nothing making them: the names
+// are string literals in gui.go and text in the page, and the only thing
+// that would notice them drifting apart is a person watching a splash
+// that has quietly stopped updating.
+func TestEveryHookGoCallsIsDefinedOnTheSplash(t *testing.T) {
+	called, err := os.ReadFile("gui.go")
+	if err != nil {
+		t.Fatalf("read gui.go: %v", err)
+	}
+	found := regexp.MustCompile(`jsCall\("(\w+)"`).FindAllStringSubmatch(string(called), -1)
+	if len(found) == 0 {
+		t.Fatal("no jsCall in gui.go; this test no longer reads what it thinks it reads")
+	}
+	html := splashHTML()
+	seen := map[string]bool{}
+	for _, m := range found {
+		hook := m[1]
+		if seen[hook] {
+			continue
+		}
+		seen[hook] = true
+		if !strings.Contains(live(html), "window."+hook+" = ") {
+			t.Errorf("gui.go calls %s and the splash does not define it", hook)
+		}
+	}
+}
+
+// The first screen names no version.
+//
+// It used to name this shell's own, which is the wrong one whenever this
+// shell is not what will run: where it cannot replace itself it hands
+// over to a newer copy, and until that happened the window named the
+// version it was about to stop being. The label stays, empty, for the
+// handoff to fill in — see the test below, which is the only moment a
+// number here is worth anything.
+func TestTheFirstScreenNamesNoVersion(t *testing.T) {
+	html := splashHTML()
+	if strings.Contains(html, `id="version">v`) {
+		t.Error("the splash renders a version before anything has said which one will run")
+	}
+	if !strings.Contains(html, `id="version"></span>`) {
+		t.Error("the version label is not empty, or is no longer an element a handoff can write into")
 	}
 }
 
@@ -84,11 +153,13 @@ func TestSplashCarriesTheLogoAndTheProgressHooks(t *testing.T) {
 // and the version is what anybody looks at to see whether the update
 // took. So the label has an id and a function that writes to it.
 func TestTheSplashVersionCanBeCorrected(t *testing.T) {
-	html := splashHTML("0.108.1")
+	html := splashHTML()
 	if !strings.Contains(html, `id="version"`) {
 		t.Error("the version label has no id, so nothing can correct it")
 	}
-	if !strings.Contains(html, "window.lcVersion") {
+	// With the assignment, so that a hook renamed to lcVersionX fails
+	// here rather than passing on the shared prefix.
+	if !strings.Contains(live(html), "window.lcVersion = ") {
 		t.Error("the splash defines no lcVersion, so a handoff cannot say which version is coming up")
 	}
 	// And the call Go makes has to name that function.
