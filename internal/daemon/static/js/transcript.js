@@ -3,6 +3,7 @@ import { renderMarkdown } from './markdown.js';
 import { createFollower } from './scroll.js';
 import { app, session } from './state.js';
 import { editDiffForTool, diffMaxRenderLines } from './diff.js';
+import { closeFind, findRefresh } from './find.js';
 
 // The transcript follows the newest output only while the reader is at
 // the bottom of it. See scroll.js: this is the module that owns
@@ -28,6 +29,15 @@ function appendDiv(cls, text) {
   div.className = cls;
   div.textContent = text;
   follower.keeping(() => transcriptEl.appendChild(div));
+  // Every one-line notice the transcript draws comes through here — a
+  // rewind, a clear, a compaction, a fork, an error, a delegation — and
+  // an open find bar wants searching again after any of them.
+  //
+  // Here rather than in each of those handlers: the notice is the thing
+  // that changed the transcript, so the thing that draws it is what knows.
+  // A streaming reply does not come through here (appendModelText writes
+  // its own element), which is what keeps this off the per-token path.
+  findRefresh();
   return div;
 }
 
@@ -546,6 +556,9 @@ export function endThinking() {
 export function clearTranscript() {
   thinkingEl = null;
   thinkingBuffer = '';
+  // The find bar's matches were in the conversation being replaced, and
+  // a bar left open over a different one counts hits nobody searched for.
+  closeFind();
   transcriptEl.innerHTML = '';
   // A different conversation, drawn from the bottom up. Carrying the
   // previous one's scrolled-up state over would open a session showing

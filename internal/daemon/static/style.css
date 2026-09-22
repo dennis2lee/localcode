@@ -273,6 +273,59 @@ main {
   display: flex;
   flex-direction: column;
 }
+/* The find bar: a strip above the transcript rather than a floating panel
+   over it. A conversation is read top to bottom and a panel would cover
+   the newest output, which is where the first match is. */
+#find-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+#find-bar[hidden] { display: none; }
+#find-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--r-ctl);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: var(--t-ui);
+}
+#find-input:focus {
+  outline: none;
+  border-color: var(--interactive);
+}
+#find-count {
+  color: var(--muted);
+  font-size: var(--t-ui);
+  /* Room for "12 of 340" so the buttons beside it do not step left and
+     right as the count changes under the reader's hands. */
+  min-width: 7.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* Every match, and then the one the reader is on. Two weights rather than
+   one: a search that lights up forty places equally has told you the word
+   is common and nothing else. */
+mark.find-hit {
+  background: var(--warn);
+  color: var(--on-accent);
+  border-radius: 2px;
+}
+mark.find-hit.current {
+  background: var(--interactive);
+  color: var(--on-accent);
+  /* A ring as well as a colour, for the same reason the LED has a shape:
+     two backgrounds a few degrees apart are not a difference somebody
+     scanning a long reply will catch. */
+  box-shadow: 0 0 0 2px var(--interactive);
+}
 #transcript-pane {
   flex: 1;
   min-width: 0;

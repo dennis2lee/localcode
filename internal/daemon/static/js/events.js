@@ -6,6 +6,7 @@ import {
   appendReview, appendThinking, endThinking, clearTranscript, showEarlierBanner,
   abandonPendingUsers,
 } from './transcript.js';
+import { findRefresh } from './find.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
 import {
@@ -141,6 +142,16 @@ const handlers = {
   'turn.done': () => {
     session.runningTool = '';
     setWaiting(false);
+    // The one refresh the transcript cannot ask for itself.
+    //
+    // Every line it *draws* asks — see appendDiv — but a reply is not
+    // drawn, it is written into an element that is rewritten on every
+    // fragment, and asking per fragment would re-search the whole
+    // conversation per token. So a finished reply is announced here, at
+    // the turn's end, which is the first moment it is worth searching
+    // again. A cancelled or failed turn needs no announcement of its own:
+    // both of them draw a line, and drawing it is what asks.
+    findRefresh();
   },
   // Tool activity gets a transcript line of its own, not just the status
   // bar: the status bar only says what is running now and clears when it
