@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.143.1
+
+Bedrock refused every turn over one MCP tool.
+
+**Fixed**
+
+* **A tool with no description no longer stops every Bedrock turn.** Converse refuses the whole request when any tool's description is empty, and an MCP server may advertise a tool without one. With about 258 tools connected, one such tool made every Opus turn on Bedrock fail with a 400 naming `toolConfig.tools.256`, while the Anthropic API accepted the same list. The tool's name is now sent as its description. The Bedrock adapter has passed descriptions through unchanged since v0.1.0, and MCP tools have reached it since v0.2.0.
+* **A tool name Converse refuses is sent under one it accepts.** Converse accepts 1 to 64 characters from `[a-zA-Z0-9_-]`. An `mcp__<server>__<tool>` name can be longer, or carry a dot or a space from a server's key in config.json. Such a name is sent with other characters replaced by `_`, cut to fit, and ended with a hash of the full name, so two names that differ only in the part that was cut stay distinct. Earlier calls in the history are sent under the same substitute, and a call the model makes under it runs the tool it names. Permission rules, hooks, and the transcript still see the original name.
+* **An MCP tool whose input schema is not an object is skipped, with a warning.** MCP requires an object there, and Converse refuses anything else for the whole request. The warning names the server and the tool, and the server's other tools stay available. A missing or `null` schema, or an object that does not state `"type"`, is still accepted, and Bedrock is sent an object for it.
+
 ## v0.143.0
 
 What a start shows, and what it stops claiming.
