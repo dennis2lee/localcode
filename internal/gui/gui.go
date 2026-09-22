@@ -42,11 +42,13 @@ import (
 // nothing to distinguish "working" from "failed to start". The obvious
 // response is to launch it again, and then two are starting.
 //
-// setVersion corrects the version on the splash. The window shows its own
-// to begin with, because at that moment there is nothing else it could
-// know; after a startup handoff the daemon about to serve is a different
-// build, and the label everybody reads to see whether the update took
-// would otherwise name the copy being replaced.
+// setVersion writes the version onto the splash, which starts without
+// one. The window used to show its own to begin with, and its own is the
+// wrong answer whenever it is not what will serve: after a startup
+// handoff the daemon about to serve is a different build, so the label
+// everybody reads to see whether the update took named the copy being
+// replaced. Nothing is shown until a handoff knows what is coming up,
+// which is the only moment a number there means anything.
 //
 // reload is handed to start as well, for later: after a handoff the
 // daemon behind the window is a newer version and the page it is showing

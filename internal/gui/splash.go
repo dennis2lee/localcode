@@ -125,12 +125,12 @@ func splashHTML() string {
     const el = document.getElementById('status');
     if (el) el.textContent = text;
   };
-  // The version shown at the top is this shell's own, which after an
-  // update is the copy the shortcut points at rather than the one about
-  // to run: the window said v0.108.1 while its status line said
-  // "starting localcode 0.109.0", and the version is what anybody looks
-  // at to see whether the update took. Corrected as soon as the binary
-  // that is starting has been read.
+  // The version label starts empty and is filled only here. It used to
+  // start as this shell's own, which after an update is the copy the
+  // shortcut points at rather than the one about to run: the window said
+  // v0.108.1 while its status line said "starting localcode 0.109.0".
+  // Written as soon as the binary that is starting has been read, and
+  // not before, because until then nothing here knows what will serve.
   window.lcVersion = (text) => {
     const el = document.getElementById('version');
     if (el) el.textContent = text;

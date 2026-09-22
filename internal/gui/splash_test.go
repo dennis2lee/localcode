@@ -4,6 +4,8 @@ package gui
 
 import (
 	"net/url"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -66,9 +68,45 @@ func TestSplashDataURLRoundTrips(t *testing.T) {
 // to report progress into it.
 func TestSplashCarriesTheLogoAndTheProgressHooks(t *testing.T) {
 	html := splashHTML()
-	for _, want := range []string{"<svg", "lcStatus", "lcFailed"} {
-		if !strings.Contains(html, want) {
-			t.Errorf("splash is missing %q", want)
+	if !strings.Contains(html, "<svg") {
+		t.Error("splash is missing the logo")
+	}
+	// The hooks are named with their definition, not by name alone.
+	// "lcStatus" also appears inside "lcStatusX", so a renamed hook kept
+	// this green while the Eval that reaches for it found nothing — and
+	// a webview Eval that finds nothing says nothing.
+	for _, hook := range []string{"lcStatus", "lcFailed"} {
+		if !strings.Contains(html, "window."+hook+" = ") {
+			t.Errorf("splash defines no %s, so the Go side's jsCall(%q, ...) reaches nothing", hook, hook)
+		}
+	}
+}
+
+// And what Go calls is what the page defines.
+//
+// Two lists that have to agree and had nothing making them: the names
+// are string literals in gui.go and text in the page, and the only thing
+// that would notice them drifting apart is a person watching a splash
+// that has quietly stopped updating.
+func TestEveryHookGoCallsIsDefinedOnTheSplash(t *testing.T) {
+	called, err := os.ReadFile("gui.go")
+	if err != nil {
+		t.Fatalf("read gui.go: %v", err)
+	}
+	found := regexp.MustCompile(`jsCall\("(\w+)"`).FindAllStringSubmatch(string(called), -1)
+	if len(found) == 0 {
+		t.Fatal("no jsCall in gui.go; this test no longer reads what it thinks it reads")
+	}
+	html := splashHTML()
+	seen := map[string]bool{}
+	for _, m := range found {
+		hook := m[1]
+		if seen[hook] {
+			continue
+		}
+		seen[hook] = true
+		if !strings.Contains(html, "window."+hook+" = ") {
+			t.Errorf("gui.go calls %s and the splash does not define it", hook)
 		}
 	}
 }
@@ -101,7 +139,9 @@ func TestTheSplashVersionCanBeCorrected(t *testing.T) {
 	if !strings.Contains(html, `id="version"`) {
 		t.Error("the version label has no id, so nothing can correct it")
 	}
-	if !strings.Contains(html, "window.lcVersion") {
+	// With the assignment, so that a hook renamed to lcVersionX fails
+	// here rather than passing on the shared prefix.
+	if !strings.Contains(html, "window.lcVersion = ") {
 		t.Error("the splash defines no lcVersion, so a handoff cannot say which version is coming up")
 	}
 	// And the call Go makes has to name that function.
