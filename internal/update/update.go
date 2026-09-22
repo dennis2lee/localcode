@@ -192,6 +192,19 @@ func Newer(current, latest string) bool {
 	return false
 }
 
+// IsVersion reports whether s is a version at all, which is the question
+// worth asking before doing work whose answer it decides.
+//
+// Newer already refuses anything that is not one — "dev", a branch name,
+// an empty string — so a caller holding an unstamped version can know
+// that no release will ever be newer than it, before spending anything on
+// finding out what a release's version is. That spending is a process:
+// the only way to learn a localcode binary's version is to run it.
+func IsVersion(s string) bool {
+	_, ok := parseVersion(s)
+	return ok
+}
+
 // parseVersion reads "v1.2.3" or "1.2" into three numbers. Anything that
 // is not a version — "dev", a branch name, an empty string — is rejected
 // rather than read as zeroes, since 0.0.0 would make every release newer.
