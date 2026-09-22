@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.143.0
+
+What a start shows, and what it stops claiming.
+
+**Changed**
+
+* **Neither the terminal banner nor the window's splash names a version any more.** The number they printed was the running binary's own, and that is not always the one that ends up serving: where a process cannot replace itself it hands over to a newer staged copy a moment later. For as long as somebody had an MSI install the terminal said `v0.133.0` over a session served by `v0.141.0`, and the window named the version it was about to stop being. Answering "what am I running" is the whole of what a banner version is for, and it was getting it wrong. `/version` asks the daemon, which is the process that answers for what is running; `localcode version` answers for the binary.
+* **The splash's version label is filled in by a handoff instead**, the moment it knows which build is coming up, which is the only moment a number there means anything.
+* **The terminal says what it is doing while the prompt is not there yet.** Building a daemon takes as long as its slowest part, and the parts are not alike: reading a config is instant, and one MCP server that does not answer outlasts everything else put together. It now prints each step — reading configuration, opening model providers, loading sessions, loading skills and commands, restoring conversation history, and each MCP server by name — so a slow start can be told from a stuck one. The window has shown these since v0.88.0. `--headless` still prints none of it, for the reason it skips the banner: it runs unattended into a log file.
+
+**Fixed**
+
+* **The splash's hooks were guarded by name rather than by definition.** `lcVersion` also matched `lcVersionX`, so renaming one kept every test green while the call reaching for it found nothing — and a webview `Eval` that finds nothing says nothing, so the splash would have quietly stopped updating. The names Go calls and the functions the page defines are now checked against each other, with commented-out definitions not counted as definitions.
+
 ## v0.142.0
 
 A Windows report: skills refused every start, on a version that reads them.
