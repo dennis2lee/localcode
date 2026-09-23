@@ -241,6 +241,23 @@ test('a long block\'s time reads the way the TUI says it', async () => {
   assert.equal(block.querySelector('.time').textContent, '1h2m5s');
 });
 
+// A model that reasons after it has started answering: the block goes in
+// front of the answer, as the TUI puts it, and the answer is one element.
+test('reasoning after the answer started goes in front of it', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'message.part.delta', data: { text: 'Part one. ' } });
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'reconsider', fold: true } });
+  app.sse.emit({ type: 'thinking.end', data: { fold: true, elapsed_ms: 1000 } });
+  app.sse.emit({ type: 'message.part.delta', data: { text: 'Part two.' } });
+  app.sse.emit({ type: 'message.part.end', data: { text: 'Part one. Part two.' } });
+  const kids = Array.from(app.el('transcript').children);
+  const block = kids.findIndex((el) => el.classList.contains('fold'));
+  const answers = kids.filter((el) => el.classList.contains('msg-model'));
+  assert.equal(answers.length, 1, 'the answer was split');
+  assert.ok(block >= 0 && block < kids.indexOf(answers[0]), 'the block is not in front of the answer');
+  assert.match(answers[0].textContent, /Part one\. Part two\./);
+});
+
 test('each request\'s reasoning is its own block', async () => {
   const app = await load();
   app.sse.emit({ type: 'thinking.delta', data: { text: 'first', fold: true } });

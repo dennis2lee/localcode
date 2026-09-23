@@ -688,7 +688,14 @@ function startFoldedThinking() {
 
   wrap.appendChild(head);
   wrap.appendChild(body);
-  change(() => transcriptEl.appendChild(wrap));
+  // In front of an answer that has already started, which is where
+  // reasoning sits in the message, and where the TUI puts it: the rest
+  // of that answer goes on writing into the element below the block.
+  const answer = session.currentModelEl;
+  change(() => {
+    if (answer && answer.parentNode === transcriptEl) transcriptEl.insertBefore(wrap, answer);
+    else transcriptEl.appendChild(wrap);
+  });
   return f;
 }
 

@@ -172,6 +172,13 @@ func (m *Model) applyEvent(ev events.Event) {
 		// and treating the first as end-of-turn is what used to make a
 		// prompt typed during tool execution skip the queue and 409.
 		text, _ := ev.Data["text"].(string)
+		// The message is over, so its reasoning is too. After a
+		// reconnect this can be the only sign of the answer: the
+		// daemon replays a finished reply as its end alone, and the
+		// reasoning's own end was never logged. Ahead of the command
+		// output below, which ends a message as well, as the Web UI
+		// has it.
+		m.foldThinking(0)
 		// Command output the person ran is not something the model said,
 		// so it draws as a status line rather than a model message. The
 		// header names the command; the user message above it already
@@ -180,11 +187,6 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.appendTool("$ " + command + "\n" + text)
 			break
 		}
-		// The message is over, so its reasoning is too. After a
-		// reconnect this can be the only sign of the answer: the
-		// daemon replays a finished reply as its end alone, and the
-		// reasoning's own end was never logged.
-		m.foldThinking(0)
 		m.endModelStream(text)
 	case events.TypeSessionForked:
 		// A fork copies the conversation verbatim, so nothing else in this
@@ -417,7 +419,14 @@ func (m *Model) applyEvent(ev events.Event) {
 		// muse block folds to one line once the answer starts. See
 		// thinking.go.
 		m.thinking = true
-		if fold, _ := ev.Data["fold"].(bool); fold && showThinkingOf(ev.Data) {
+		fold, _ := ev.Data["fold"].(bool)
+		if !fold {
+			// Reasoning the fold does not apply to, while a block is
+			// still open: the next request went to another model with
+			// nothing having closed the block. Close it, as the Web UI
+			// does, so the next muse request gets a block of its own.
+			m.foldThinking(0)
+		} else if showThinkingOf(ev.Data) {
 			if text, _ := ev.Data["text"].(string); text != "" {
 				m.appendThinkingDelta(text)
 			}

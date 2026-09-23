@@ -250,6 +250,9 @@ type Model struct {
 	// folded block shows its body. See thinking.go.
 	thinkingSince    time.Time
 	thinkingExpanded bool
+	// thinkingLive says a reasoning block may be streaming; see
+	// liveThinking, which it only lets skip a search.
+	thinkingLive bool
 	// spin/spinning drive the indicator's animation. spinning guards
 	// against starting a second tick loop: one loop keeps rescheduling
 	// itself while the client is busy and dies on its first tick after

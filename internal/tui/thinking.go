@@ -39,12 +39,22 @@ var (
 // -1. Searched from the end rather than remembered, because an entry can
 // leave the middle of the transcript (a prompt's echo resolving) and an
 // index kept across that would point at the wrong line.
+//
+// thinkingLive says whether there may be one, so the search runs only
+// then: it is asked on every answer delta, and on every reasoning delta
+// of a model the fold does not apply to, and a long conversation with no
+// block open should not be walked each time. A search that finds nothing
+// clears it, so a transcript replaced under it costs one walk.
 func (m *Model) liveThinking() int {
+	if !m.thinkingLive {
+		return -1
+	}
 	for i := len(m.transcript) - 1; i >= 0; i-- {
 		if e := m.transcript[i]; e.kind == entryThinking && e.live {
 			return i
 		}
 	}
+	m.thinkingLive = false
 	return -1
 }
 
@@ -64,6 +74,7 @@ func (m *Model) appendThinkingDelta(text string) {
 		return
 	}
 	m.thinkingSince = time.Now()
+	m.thinkingLive = true
 	block := transcriptEntry{kind: entryThinking, text: text, live: true, note: thinkingLiveNote(0)}
 	if last := len(m.transcript) - 1; m.streamOpen && last >= 0 {
 		// The model reasons after it has started answering. The block
@@ -90,6 +101,7 @@ func (m *Model) foldThinking(elapsed time.Duration) {
 	if elapsed <= 0 {
 		elapsed = time.Since(m.thinkingSince)
 	}
+	m.thinkingLive = false
 	e := &m.transcript[i]
 	e.live = false
 	e.note = "Thought for " + formatElapsed(elapsed)

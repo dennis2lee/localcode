@@ -308,3 +308,32 @@ func TestCtrlOWithNothingToOpenLeavesAStreamingAnswerAlone(t *testing.T) {
 		t.Errorf("the answer is drawn %d times:\n%s", n, out)
 	}
 }
+
+// Command output ends a message too, and folds a block left open, as the
+// Web UI has it. (Found by the first external review.)
+func TestShellCommandOutputFoldsALiveBlock(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(thinkingDelta("reasoning under way", true))
+	m.applyEvent(events.Event{Type: events.TypeMessagePartEnd, Data: map[string]any{
+		"text": "out", "shell_command": "ls",
+	}})
+	if got := m.liveThinking(); got >= 0 {
+		t.Fatalf("live block still open after the command's output (index %d)", got)
+	}
+}
+
+// Reasoning the fold does not apply to closes a block still open, so the
+// next muse request's reasoning is not written into it. (Found by the
+// first external review.)
+func TestPlainReasoningClosesALiveBlock(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(thinkingDelta("muse reasoning", true))
+	m.applyEvent(thinkingDelta("other model's reasoning", false))
+	if got := m.liveThinking(); got >= 0 {
+		t.Fatalf("live block still open after plain reasoning (index %d)", got)
+	}
+	m.applyEvent(thinkingDelta("muse again", true))
+	if b := m.thinkingEntries(); len(b) != 2 || b[1].text != "muse again" {
+		t.Errorf("blocks = %#v", b)
+	}
+}
