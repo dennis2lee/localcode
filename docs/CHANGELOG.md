@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.147.0
+
+A muse model's reasoning drawn as a block of its own, in both clients, and a settings tab for the switches that apply to muse models only.
+
+**Changed**
+
+* **A muse model's reasoning is a labelled block that folds when the answer starts.** A muse model reasons at length before every answer, often by restating the question first. The Web UI drew that reasoning as an unlabelled muted block left open above the reply, where it read as the reply's first half, and the TUI drew none of it: a `thinking` word on the busy line, then the answer. For a model ID containing `muse`, both clients now draw a block headed Thinking with its running time, held to its last six lines while it streams, and folded to one line saying how long it took once the answer starts: THOUGHT FOR 12s in the Web UI, "Thought for 12s" in the TUI. Click the line in the Web UI, or press **Ctrl+O** in the TUI, to read it again. On by default. `/fold-thinking off`, the settings window's Muse tab, or `"fold_thinking": false` keeps the plain drawing. Other models are unchanged, and reasoning is still never logged.
+* **The settings window has a Muse tab.** It holds the reasoning block's switch and Keep going, which moved there from Turns, and names the profiles in this config that run a muse model, or says that none does.
+* **`show_thinking` reaches the TUI.** Off hides a muse reasoning block in the terminal, as it hides reasoning in the Web UI.
+
+**Fixed**
+
+* **`/thinking` and `/timestamps` reach every open window at once.** The daemon's settings broadcast carried neither, so a switch flipped in the TUI or in another browser changed an open Web UI only after a reload. The Orchestration switch now reaches a window looking at another conversation too.
+
 ## v0.146.0
 
 A usage report that counts what the prompt cache served and agrees with itself everywhere it is shown, and an automatic compaction that measures what the next request will carry.
