@@ -2,6 +2,7 @@ package gui
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -117,8 +118,21 @@ func TestEveryWindowCommandThePageSendsIsKnown(t *testing.T) {
 	// this test would not have read.
 	js := pageScripts(t)
 	want := map[string]bool{}
-	for _, m := range regexp.MustCompile(`lcWindowCommand\('([a-z:]+)'\)`).FindAllSubmatch(js, -1) {
-		want[string(m[1])] = true
+	// Every call, whatever its argument looks like, and a failure for any
+	// argument this cannot read. Reading only single-quoted lowercase
+	// literals let "quit" in double quotes, or a hyphenated name, pass
+	// unchecked into a handler that ignores what it does not know.
+	for _, m := range windowCommandCall.FindAllSubmatch(js, -1) {
+		arg := string(m[1])
+		if lit := quotedLiteral.FindStringSubmatch(arg); lit != nil {
+			want[lit[1]+lit[2]+lit[3]] = true
+			continue
+		}
+		// The one built argument: a resize edge, from the list read below.
+		if resizeByEdge.MatchString(arg) {
+			continue
+		}
+		t.Errorf("the page calls lcWindowCommand(%s), and this test cannot tell which command that sends", arg)
 	}
 	// The resize commands are built from the edge list rather than written
 	// out, so they are read from the same place the page builds them.
@@ -141,22 +155,44 @@ func TestEveryWindowCommandThePageSendsIsKnown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read chrome_windows.go: %v", err)
 	}
+	// Comments dropped: a case that was removed but whose name survives
+	// in a comment is not one the window handles.
+	handled := live(string(src))
 	for cmd := range want {
-		if !strings.Contains(string(src), `"`+cmd+`"`) {
+		if !strings.Contains(handled, `"`+cmd+`"`) {
 			t.Errorf("the page sends %q and the window does not handle it", cmd)
 		}
 	}
 }
 
-// live is a page or a script with its commented-out lines removed.
+var (
+	// A call to the bound function, and whatever its argument is.
+	windowCommandCall = regexp.MustCompile(`lcWindowCommand\(\s*([^)]*?)\s*\)`)
+	// A string literal in any of JavaScript's three quotes, with no
+	// escape and no interpolation in it.
+	quotedLiteral = regexp.MustCompile("^(?:'([^'\\\\]*)'|\"([^\"\\\\]*)\"|`([^`$\\\\]*)`)$")
+	// The resize call the page builds from its edge list.
+	resizeByEdge = regexp.MustCompile(`^'resize:'\s*\+\s*edge$`)
+
+	blockComment  = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	htmlComment   = regexp.MustCompile(`(?s)<!--.*?-->`)
+	inlineScripts = regexp.MustCompile(`(?s)<script>(.*?)</script>`)
+	bindCall      = regexp.MustCompile(`\.Bind\("(\w+)"`)
+	pageLCCall    = regexp.MustCompile(`window\.(lc[A-Z]\w*)`)
+)
+
+// live is a page or a script with its comments removed.
 //
 // Searching the raw source for a definition or a call finds one that has
 // been commented out, which the browser never makes: the hook is dead,
 // every Eval reaching for it finds nothing, and nothing says so. That is
 // the same silence these tests exist to break, arrived at by a different
-// edit. Here rather than beside the splash tests because this file is
-// built in every lane and those are built only with the gui tag.
+// edit. Block comments go whole, across lines, and then every line that
+// starts a line comment. Here rather than beside the splash tests because
+// this file is built in every lane and those are built only with the gui
+// tag.
 func live(html string) string {
+	html = blockComment.ReplaceAllString(html, "")
 	var kept []string
 	for _, line := range strings.Split(html, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "//") {
@@ -167,24 +203,69 @@ func live(html string) string {
 	return strings.Join(kept, "\n")
 }
 
-// pageScripts is every script the Web UI ships, joined, with commented
-// lines dropped: a call the browser never makes is not one a test here
-// should find.
+// pageScripts is every script the Web UI ships, joined, with comments
+// dropped: a call the browser never makes is not one a test here should
+// find. Every .js file under the static tree the daemon embeds, at any
+// depth, and the inline scripts of every page there: a call moved into a
+// subdirectory or into index.html's own script was outside a scan of the
+// flat js directory.
 func pageScripts(t *testing.T) []byte {
 	t.Helper()
-	files, err := filepath.Glob("../daemon/static/js/*.js")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no page scripts under ../daemon/static/js (%v); this test no longer reads what it thinks it reads", err)
-	}
 	var all []string
+	scripts := 0
+	err := filepath.WalkDir("../daemon/static", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		switch filepath.Ext(path) {
+		case ".js":
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			all = append(all, live(string(b)))
+			scripts++
+		case ".html":
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, m := range inlineScripts.FindAllStringSubmatch(htmlComment.ReplaceAllString(string(b), ""), -1) {
+				all = append(all, live(m[1]))
+			}
+		}
+		return nil
+	})
+	if err != nil || scripts == 0 {
+		t.Fatalf("no page scripts under ../daemon/static (%v); this test no longer reads what it thinks it reads", err)
+	}
+	return []byte(strings.Join(all, "\n"))
+}
+
+// boundNames is every name a non-test Go file of this package binds for
+// the page to call, and the file that binds it. Every file, not gui.go
+// alone: a Bind added beside the platform code that serves it would have
+// been invisible, dead or not.
+func boundNames(t *testing.T) map[string]string {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := map[string]string{}
 	for _, f := range files {
-		b, err := os.ReadFile(f)
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
-		all = append(all, live(string(b)))
+		for _, m := range bindCall.FindAllStringSubmatch(live(string(src)), -1) {
+			bound[m[1]] = f
+		}
 	}
-	return []byte(strings.Join(all, "\n"))
+	return bound
 }
 
 // And the function the page calls is the one Go binds.
@@ -200,41 +281,34 @@ func pageScripts(t *testing.T) []byte {
 //
 // It lives here, beside the command check, because the two are one
 // contract between the page and this package. This file carries no build
-// tag and reads gui.go as text, so it runs in every lane, the Windows CI
-// run included, and not only in the gui lane that compiles gui.go. Both
-// directions: a name Go binds that the page never calls is dead, and one
-// the page calls that Go never binds is the silent failure above.
+// tag and reads the Go files as text, so it runs in every lane, and not
+// only in the gui lane that compiles them. Both directions: a name Go
+// binds that the page never calls is dead, and one the page calls that
+// Go never binds is the silent failure above.
 func TestTheFunctionsThePageCallsAreTheOnesGoBinds(t *testing.T) {
-	src, err := os.ReadFile("gui.go")
-	if err != nil {
-		t.Fatalf("read gui.go: %v", err)
-	}
-	bound := map[string]bool{}
-	for _, m := range regexp.MustCompile(`\.Bind\("(\w+)"`).FindAllStringSubmatch(live(string(src)), -1) {
-		bound[m[1]] = true
-	}
+	bound := boundNames(t)
 	if len(bound) == 0 {
-		t.Fatal("no Bind in gui.go; this test no longer reads what it thinks it reads")
+		t.Fatal("no Bind in this package; this test no longer reads what it thinks it reads")
 	}
 	js := string(pageScripts(t))
-	for name := range bound {
+	for name, file := range bound {
 		if !strings.Contains(js, "window."+name+"(") {
-			t.Errorf("gui.go binds %s and no page script calls window.%s(...)", name, name)
+			t.Errorf("%s binds %s and no page script calls window.%s(...)", file, name, name)
 		}
 	}
 	// Every lc-prefixed window function the page reaches for. The
 	// splash's own hooks (lcStatus, lcVersion) are defined by the splash
 	// and called from Go, and are checked in splash_test.go; the page
 	// scripts never touch them.
-	called := regexp.MustCompile(`window\.(lc[A-Z]\w*)`).FindAllStringSubmatch(js, -1)
+	called := pageLCCall.FindAllStringSubmatch(js, -1)
 	if len(called) == 0 {
 		t.Fatal("no window.lc* in the page scripts; this test no longer reads what it thinks it reads")
 	}
 	reported := map[string]bool{}
 	for _, m := range called {
-		if !bound[m[1]] && !reported[m[1]] {
+		if _, ok := bound[m[1]]; !ok && !reported[m[1]] {
 			reported[m[1]] = true
-			t.Errorf("the page calls window.%s and gui.go does not bind it", m[1])
+			t.Errorf("the page calls window.%s and this package does not bind it", m[1])
 		}
 	}
 }
