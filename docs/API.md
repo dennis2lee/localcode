@@ -113,13 +113,15 @@ A session object in answers is `{"id", "agent", "title", "workspace",
 
 `GET /api/settings` answers the whole snapshot, so a client applies
 state instead of merging events: `auto_compact_enabled`,
-`auto_compact_percent`, `keep_going`, `repeat_limit`, `smart_agent`,
-`orchestrate`, `model_invocable`, `model_commands`, `smart_agent_roster`,
-`show_tps`, `show_thinking`, `show_timestamps`, `auto_delegate`,
-`auto_delegate_agent`, `auto_delegate_match`, `skip_permissions`,
-`permission_rules`, `can_edit_permissions`. Changes are announced on the
-broadcast as `settings.changed`; a client that was not connected re-reads
-this endpoint on load.
+`auto_compact_percent`, `keep_going`, `fold_thinking`, `muse_profiles`,
+`repeat_limit`, `smart_agent`, `orchestrate`, `model_invocable`,
+`model_commands`, `smart_agent_roster`, `show_tps`, `show_thinking`,
+`show_timestamps`, `auto_delegate`, `auto_delegate_agent`,
+`auto_delegate_match`, `skip_permissions`, `permission_rules`,
+`can_edit_permissions`. `muse_profiles` lists the profiles whose model ID
+contains `muse`, sorted, and is `[]` when none does. Changes are announced
+on the broadcast as `settings.changed`; a client that was not connected
+re-reads this endpoint on load.
 
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
@@ -129,6 +131,7 @@ this endpoint on load.
 | `POST /api/settings/orchestrate` | `{"enabled"}` | `200 {"orchestrate", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/model-invocable` | `{"enabled"}` | `200 {"model_invocable", "applied": true, "persisted", "error"?}` | `400` bad body (text error) |
 | `POST /api/settings/keep-going` | `{"enabled"}` | `204` | `400` bad body (text error); `500` applied but not persisted (text error) |
+| `POST /api/settings/fold-thinking` | `{"enabled"}` | `204` | `400` bad body (text error); `500` applied but not persisted (text error) |
 | `POST /api/settings/repeat-limit` | `{"limit"}`; 0 turns the guard off | `204` | `400` outside 0..max (text error); `500` applied but not persisted (text error) |
 
 ### Daemon-wide permission defaults
@@ -276,8 +279,8 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `task.spawned`, `task.status` | the panel rows; a `deleted` status removes one |
 | `task.progress` | `{"task_id", "doing"}`; transient, mirrored into the parent |
 | `agent.switched` | `{"agent"}` |
-| `thinking.delta` | `{"text"}` while reasoning streams; transient, never logged |
-| `thinking.end` | reasoning block ended; transient, empty payload |
+| `thinking.delta` | `{"text", "fold", "show_thinking"}` while reasoning streams; transient, never logged. `fold` is true when the block is drawn labelled and folded once the answer starts: `fold_thinking` is on and the model ID contains `muse`. `show_thinking` carries that switch for a client that keeps no copy of the settings |
+| `thinking.end` | `{"fold", "elapsed_ms"?}` when a reasoning block ends; transient. `elapsed_ms` is the time from the block's first delta to its end |
 | `error` | `{"error", "recovered"?, "history_replaced"?, "fallback"?}` a turn failure; distinct from `turn.cancelled`, which is a person stopping it on purpose. `recovered: true` is a notice from a turn that carries on. `fallback` names the model the turn moved to, on the notice that reports the switch. `history_replaced: true` marks the trim that dropped the oldest messages to fit the window: the context usage count went with them, as after a compaction |
 | `mcp.status` | `{"servers": [{"name", "status", "detail"}]}`; daemon-wide, complete list every time |
 | `session.activity` | `{"session", "busy"}`; daemon-wide turn indicator |

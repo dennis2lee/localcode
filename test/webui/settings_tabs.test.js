@@ -103,7 +103,7 @@ test('switching tabs shows one panel and hides the others', async () => {
   app.el('settings-btn').click();
   await app.settle();
 
-  const visible = () => ['agents', 'turns', 'updates', 'typography']
+  const visible = () => ['agents', 'turns', 'muse', 'updates', 'typography']
     .filter((n) => !app.el(`settings-panel-${n}`).hidden);
   assert.deepEqual(visible(), ['agents'], 'the window does not open on the first tab');
 
@@ -127,7 +127,7 @@ test('the choice of tab does not leak between openings', async () => {
   app.el('settings-btn').click();
   await app.settle();
 
-  const visible = () => ['agents', 'turns', 'updates', 'typography']
+  const visible = () => ['agents', 'turns', 'muse', 'updates', 'typography']
     .filter((n) => !app.el(`settings-panel-${n}`).hidden);
   assert.deepEqual(visible(), ['agents'], 'the window reopened where it was left');
 });

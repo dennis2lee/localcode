@@ -492,7 +492,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return fmt.Errorf("chat request: %w", err)
 		}
 
-		assistantBlocks, toolUses, stopReason, usage, err := l.consumeStream(sessionID, stream)
+		assistantBlocks, toolUses, stopReason, usage, err := l.consumeStream(sessionID, stream, l.foldsThinking(run.profile.Model))
 		l.traceModel(ctx, traceID, sessionID, trRun, usage, stopReason, time.Since(callStarted), err)
 		if len(l.Config.Hooks) > 0 {
 			// Fire and forget: the reply is already here, so there is
@@ -899,7 +899,11 @@ var tpsTickInterval = time.Second
 // tool_use blocks it requested, and whatever token usage the provider
 // reported (see provider.EventUsage — not every provider/request reports
 // it, hence streamUsage.hasUsage).
-func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEvent) (blocks []provider.Block, toolUses []provider.Block, stopReason string, usage streamUsage, err error) {
+//
+// fold says how the clients are to draw this stream's reasoning; see
+// foldsThinking. It is decided once per request, by the caller, because
+// the model is the caller's to know.
+func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEvent, fold bool) (blocks []provider.Block, toolUses []provider.Block, stopReason string, usage streamUsage, err error) {
 	var text strings.Builder
 	toolNames := map[string]string{}
 	toolInputs := map[string]*strings.Builder{}
@@ -907,6 +911,9 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 	// in front of the answer and the tool calls, which is the order the
 	// API requires of a continuation.
 	var thinking []provider.Block
+	// When the reasoning block being streamed began, for the time its
+	// label reports. Zero between blocks.
+	var thinkingSince time.Time
 
 	// Generation timing, and the live rate estimate built on top of it.
 	// deltas counts stream deltas, not tokens — the authoritative token
@@ -952,7 +959,14 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			// the block that does have to go back is carried in memory
 			// for exactly as long as that is true — see EventThinkingEnd
 			// and toAnthropicMessages.
-			l.Store.Broadcast(sessionID, events.TypeThinkingDelta, map[string]any{"text": ev.ThinkingDelta})
+			if thinkingSince.IsZero() {
+				thinkingSince = time.Now()
+			}
+			l.Store.Broadcast(sessionID, events.TypeThinkingDelta, map[string]any{
+				"text":          ev.ThinkingDelta,
+				"fold":          fold,
+				"show_thinking": l.ShowThinking(),
+			})
 			generated()
 
 		case provider.EventThinkingEnd:
@@ -962,7 +976,12 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			thinking = append(thinking, provider.Block{
 				Type: provider.BlockThinking, Text: ev.ThinkingDelta, Signature: ev.Signature,
 			})
-			l.Store.Broadcast(sessionID, events.TypeThinkingEnd, map[string]any{})
+			end := map[string]any{"fold": fold}
+			if !thinkingSince.IsZero() {
+				end["elapsed_ms"] = int(time.Since(thinkingSince).Milliseconds())
+				thinkingSince = time.Time{}
+			}
+			l.Store.Broadcast(sessionID, events.TypeThinkingEnd, end)
 
 		case provider.EventToolUseStart:
 			toolNames[ev.ToolUseID] = ev.ToolName

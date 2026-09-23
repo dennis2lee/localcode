@@ -107,6 +107,18 @@ type Config struct {
 	// hides what is arriving rather than deleting anything.
 	ShowThinking *bool `json:"show_thinking,omitempty"`
 
+	// FoldThinking draws a muse model's reasoning as a block of its own:
+	// labelled, timed, and folded away once the answer starts, in the Web
+	// UI and in the TUI. Nil means unset, defaulting to enabled.
+	//
+	// Muse only, and the scope is the point. A muse model reasons at
+	// length before every answer, often starting by restating the
+	// question, and an unlabelled block of that sitting open above the
+	// reply read as part of it. Other models keep the drawing they had.
+	// show_thinking still decides whether reasoning is drawn at all.
+	// Toggleable via "/fold-thinking" and the settings window.
+	FoldThinking *bool `json:"fold_thinking,omitempty"`
+
 	// ShowTimestamps toggles a time beside each message. Nil means
 	// unset, defaulting to OFF: a transcript is read as a conversation,
 	// and a column of times down the side of one is noise until the
@@ -509,6 +521,13 @@ func (c *Config) TPSEnabled() bool {
 // arrives. Enabled when unset.
 func (c *Config) ShowThinkingEnabled() bool {
 	return c.ShowThinking == nil || *c.ShowThinking
+}
+
+// FoldThinkingEnabled reports whether a muse model's reasoning is drawn
+// as a labelled block that folds once the answer starts. Enabled when
+// unset.
+func (c *Config) FoldThinkingEnabled() bool {
+	return c.FoldThinking == nil || *c.FoldThinking
 }
 
 // ShowTimestampsEnabled reports whether a time is shown beside each

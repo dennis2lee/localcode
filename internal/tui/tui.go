@@ -245,6 +245,11 @@ type Model struct {
 	// worth knowing about live and not worth scrolling past afterwards,
 	// and nothing replays it.
 	thinking bool
+	// thinkingSince is when the reasoning block streaming now began, for
+	// its running time; thinkingExpanded is Ctrl+O's choice, whether a
+	// folded block shows its body. See thinking.go.
+	thinkingSince    time.Time
+	thinkingExpanded bool
 	// spin/spinning drive the indicator's animation. spinning guards
 	// against starting a second tick loop: one loop keeps rescheduling
 	// itself while the client is busy and dies on its first tick after

@@ -231,6 +231,11 @@ func (m Model) handleSpinTick() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.spin++
+	// The live reasoning block's clock, which moves on its own between
+	// deltas: a model can pause mid-thought for longer than a second.
+	if m.tickThinking() {
+		m.refreshViewport()
+	}
 	return m, spinTick()
 }
 

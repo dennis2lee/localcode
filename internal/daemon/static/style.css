@@ -589,6 +589,70 @@ mark.find-hit.current {
   border-left: 1px solid var(--border);
   padding-left: 10px;
 }
+/* A muse model's reasoning, as a block of its own (see appendThinking in
+   js/transcript.js). The plain block above is one hairline down the left
+   of muted text, and for a model that reasons at length before every
+   answer that was too little: the reasoning read as the first half of the
+   reply. So this one is a sheet of its own. It sits on the panel ground
+   behind a full border while the reply below sits on the page itself,
+   and it is headed by apparatus: the interface face at a tool row's size,
+   naming the region in letterspaced caps with how long it took. The text
+   under the header keeps the plain block's quiet reading voice, is held
+   to six lines while it streams, and is hidden once the block folds. */
+#transcript .msg-thinking.fold {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: 0;
+  margin: 8px 0 12px;
+  font-style: normal;
+  white-space: normal;
+}
+#transcript .msg-thinking.fold > .head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 4px 10px;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
+  font-family: var(--f-ui);
+  font-size: var(--t-fine);
+  font-style: normal;
+  line-height: 1.7;
+  text-align: left;
+  cursor: pointer;
+}
+#transcript .msg-thinking.fold > .head:hover { color: var(--text); }
+#transcript .msg-thinking.fold > .head:focus-visible {
+  outline: 1px solid var(--interactive);
+  outline-offset: -1px;
+}
+#transcript .msg-thinking.fold .marker { flex: none; width: 1em; }
+#transcript .msg-thinking.fold .label {
+  font-size: var(--t-cap);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+#transcript .msg-thinking.fold .time { font-variant-numeric: tabular-nums; }
+#transcript .msg-thinking.fold.live .marker { animation: toolpulse 1s ease-in-out infinite; }
+#transcript .msg-thinking.fold > .body {
+  border-top: 1px solid var(--border);
+  padding: 6px 10px 8px;
+  color: var(--muted);
+  font-style: italic;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+#transcript .msg-thinking.fold.live > .body {
+  max-height: calc(6 * 1.62em + 14px);
+  overflow-y: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  #transcript .msg-thinking.fold.live .marker { animation: none; }
+}
 #transcript .msg-toolcall .head:hover { color: var(--text); }
 #transcript .msg-toolcall .marker { flex: none; width: 1em; }
 #transcript .msg-toolcall .name {

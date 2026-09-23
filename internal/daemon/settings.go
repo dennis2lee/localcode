@@ -30,6 +30,8 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
 		"auto_compact_percent": d.Loop.CompactPercent(),
 		"keep_going":           d.Loop.KeepGoingEnabled(),
+		"fold_thinking":        d.Loop.FoldThinkingEnabled(),
+		"muse_profiles":        d.Loop.MuseProfiles(),
 		"repeat_limit":         d.Loop.RepeatLimit(),
 		"smart_agent":          d.Loop.SmartAgentEnabled(),
 		"orchestrate":          d.Loop.OrchestrateEnabled(),
@@ -260,6 +262,30 @@ func (d *Daemon) handleSetKeepGoing(w http.ResponseWriter, r *http.Request) {
 	d.announceSettings()
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetKeepGoingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
+			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSetFoldThinking turns the muse reasoning block on or off live
+// and, when a config.json path is known, persists it. Same shape as
+// keep_going, and for the same reason it does not check whether any
+// profile runs a muse model: GET /api/settings reports muse_profiles,
+// and the panel says it.
+func (d *Daemon) handleSetFoldThinking(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	d.Loop.SetFoldThinkingEnabled(req.Enabled)
+	d.announceSettings()
+	if d.Broker.ConfigPath != "" {
+		if err := config.SetFoldThinkingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
 			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
 			return
 		}

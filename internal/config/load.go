@@ -292,6 +292,9 @@ func (c *Config) merge(other *Config) {
 	if other.ShowThinking != nil {
 		c.ShowThinking = other.ShowThinking
 	}
+	if other.FoldThinking != nil {
+		c.FoldThinking = other.FoldThinking
+	}
 	if other.ShowTimestamps != nil {
 		c.ShowTimestamps = other.ShowTimestamps
 	}

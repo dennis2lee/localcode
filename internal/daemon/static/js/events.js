@@ -3,7 +3,7 @@ import { app, session } from './state.js';
 import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
-  appendReview, appendThinking, endThinking, clearTranscript, showEarlierBanner,
+  appendReview, appendThinking, endThinking, foldThinking, clearTranscript, showEarlierBanner,
   abandonPendingUsers,
 } from './transcript.js';
 import { findRefresh } from './find.js';
@@ -16,7 +16,7 @@ import {
   applyEffort,
 } from './modals.js';
 import { applyScheduleEvent } from './schedules.js';
-import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen } from './settings.js';
+import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen } from './settings.js';
 import { refreshTaskViewStatus } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
@@ -116,12 +116,18 @@ const handlers = {
   },
   // Reasoning, live. Never replayed, so a reload does not bring it back
   // and is not meant to: the answer is what the transcript keeps.
+  // "fold" marks a muse model's stream, which is drawn as a labelled
+  // block that folds when the answer starts; see appendThinking.
   'thinking.delta': (d) => {
-    if (typeof d.text === 'string') appendThinking(d.text);
+    if (typeof d.text === 'string') appendThinking(d.text, d.fold === true);
   },
-  'thinking.end': () => endThinking(),
+  'thinking.end': (d) => endThinking(typeof d.elapsed_ms === 'number' ? d.elapsed_ms : 0),
   'message.part.delta': (d) => {
-    if (typeof d.text === 'string') appendModelText(d.text);
+    if (typeof d.text !== 'string') return;
+    // The answer has started, so the reasoning before it is over
+    // whether or not its end arrived first.
+    foldThinking(0);
+    appendModelText(d.text);
   },
   // One model message ended, NOT the turn — a turn with tool calls streams
   // several of these. Ending the wait here is what used to make a prompt
@@ -152,6 +158,8 @@ const handlers = {
   'turn.done': () => {
     session.runningTool = '';
     setWaiting(false);
+    // A reasoning block still open is one whose end never came.
+    foldThinking(0);
     // A row still running at the turn's end is a call that never ran:
     // the stream died after the model asked for it, and no tool.end is
     // coming. It sat spinning under the error line for the life of the
@@ -174,6 +182,7 @@ const handlers = {
   // during or after. See appendToolCall.
   'tool.start': (d) => {
     session.runningTool = d.name || '';
+    foldThinking(0);
     appendToolCall(d.tool_use_id, d.name || '', d.input || '');
   },
   'tool.end': (d) => {
@@ -444,6 +453,10 @@ const handlers = {
       app.keepGoing = d.keep_going;
       refreshKeepGoingIfOpen();
     }
+    if (typeof d.fold_thinking === 'boolean') app.foldThinking = d.fold_thinking;
+    // Redrawn on either, since the note says when show_thinking is
+    // hiding the reasoning this switch would label.
+    if (typeof d.fold_thinking === 'boolean' || typeof d.show_thinking === 'boolean') refreshFoldThinkingIfOpen();
     if (typeof d.repeat_limit === 'number') {
       app.repeatLimit = d.repeat_limit;
       refreshRepeatLimitIfOpen();
@@ -563,6 +576,7 @@ const handlers = {
     setWaiting(false);
     if (!session.pendingPermissionID) setInputLocked(false);
     abandonRunningToolCalls('stopped');
+    foldThinking(0);
     // The queue went with the turn: the daemon drops it in
     // turnTracker.cancel, so anything still showing as sent was never
     // handed to anybody.
@@ -584,6 +598,7 @@ const handlers = {
     }
     session.runningTool = '';
     setWaiting(false);
+    foldThinking(0);
     appendError(d.error || '');
   },
 };

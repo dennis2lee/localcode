@@ -473,6 +473,7 @@
     <div class="settings-tabs" role="tablist" aria-label="Settings sections">
       <button type="button" role="tab" id="settings-tab-agents" aria-controls="settings-panel-agents" aria-selected="true">Agents</button>
       <button type="button" role="tab" id="settings-tab-turns" aria-controls="settings-panel-turns" aria-selected="false" tabindex="-1">Turns</button>
+      <button type="button" role="tab" id="settings-tab-muse" aria-controls="settings-panel-muse" aria-selected="false" tabindex="-1">Muse</button>
       <button type="button" role="tab" id="settings-tab-updates" aria-controls="settings-panel-updates" aria-selected="false" tabindex="-1">Updates</button>
       <button type="button" role="tab" id="settings-tab-typography" aria-controls="settings-panel-typography" aria-selected="false" tabindex="-1">Typography</button>
     </div>
@@ -551,28 +552,12 @@
     </section>
 
     <!--
-      Turns: how a turn proceeds and when it ends. Keep going and the
-      repeat guard are the two answers to "why did it stop", so they sit
-      together rather than one screen apart.
+      Turns: how a turn proceeds and when it ends. The repeat guard is
+      the answer to "why did it stop" for every model; the muse family's
+      own answer, Keep going, is on the Muse tab with that family's other
+      switches.
     -->
     <section role="tabpanel" id="settings-panel-turns" aria-labelledby="settings-tab-turns" tabindex="0" hidden>
-    <!--
-      Keep going.
-
-      One family's fix with one family's scope. The label says the scope,
-      because the switch is daemon-wide and the feature only ever reaches
-      a muse model: someone whose profiles run something else should read
-      here that flipping it changes nothing for them.
-    -->
-    <h4 class="settings-section">Keep going</h4>
-    <div class="settings-field">
-      <div class="check-row">
-        <input type="checkbox" id="keep-going-checkbox">
-        <label for="keep-going-checkbox">Tell a muse model that stops mid-task to carry on (muse models only)</label>
-      </div>
-      <p class="note warn" id="keep-going-warn" hidden></p>
-    </div>
-
     <!--
       The repeat guard.
 
@@ -589,6 +574,54 @@
         <label for="repeat-limit-checkbox">End a turn after <input type="number" id="repeat-limit-input" min="1" max="50" step="1" style="width:4em"> steps that only repeat earlier tool calls</label>
       </div>
       <p class="note warn" id="repeat-limit-warn" hidden></p>
+    </div>
+    </section>
+
+    <!--
+      Muse: the switches that exist for one model family and reach no
+      other. Grouped by family rather than filed under what each one is
+      about, because the first question somebody on another model has is
+      whether any of this is theirs, and one tab answers it once. The note
+      at the top says which profiles in this config run a muse model, and
+      says it when none do.
+    -->
+    <section role="tabpanel" id="settings-panel-muse" aria-labelledby="settings-tab-muse" tabindex="0" hidden>
+    <p class="note" id="muse-note"></p>
+
+    <!--
+      The reasoning block.
+
+      A muse model reasons at length before every answer, often by
+      restating the question first. Drawn the plain way that read as the
+      start of the reply. On, it is a block of its own with a label and a
+      running time, folded to one line once the answer starts. The note
+      says when show_thinking is hiding reasoning altogether, since this
+      switch then changes nothing on screen.
+    -->
+    <h4 class="settings-section">Reasoning</h4>
+    <div class="settings-field">
+      <div class="check-row">
+        <input type="checkbox" id="fold-thinking-checkbox">
+        <label for="fold-thinking-checkbox">Label the reasoning with its running time, and fold it to one line when the answer starts</label>
+      </div>
+      <p class="note" id="fold-thinking-note"></p>
+      <p class="note warn" id="fold-thinking-warn" hidden></p>
+    </div>
+
+    <!--
+      Keep going.
+
+      The family's habit of stopping mid-task, and the nudge that answers
+      it. The tab carries the scope now: the switch is daemon-wide and
+      only ever reaches a muse model.
+    -->
+    <h4 class="settings-section">Keep going</h4>
+    <div class="settings-field">
+      <div class="check-row">
+        <input type="checkbox" id="keep-going-checkbox">
+        <label for="keep-going-checkbox">Tell a muse model that stops mid-task to carry on</label>
+      </div>
+      <p class="note warn" id="keep-going-warn" hidden></p>
     </div>
     </section>
 

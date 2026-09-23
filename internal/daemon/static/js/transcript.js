@@ -543,15 +543,35 @@ export function appendReview(d) {
 // conclusion. It is never replayed either — the daemon broadcasts these
 // and logs none of them — so what is on screen is what this page watched
 // arrive, which is the only claim it can honestly make.
+//
+// Two drawings. The plain one is the text in a muted block, and is what
+// every model gets. A muse model's stream arrives marked "fold" (the
+// daemon's fold_thinking switch, applied to that family only), and gets
+// a block of its own instead: a header saying Thinking with its running
+// time, the text under it held to a few lines while it streams, and the
+// whole folded to the header once the answer starts. Muse reasons at
+// length before every answer, often by restating the question, and the
+// plain block of that sitting open above the reply read as its first
+// half.
 let thinkingEl = null;
 let thinkingBuffer = '';
+// The fold block streaming now, or null: { wrap, head, marker, label,
+// time, body, since }.
+let thinkingFold = null;
 
-export function appendThinking(text) {
+export function appendThinking(text, fold) {
   // The switch is read here rather than at the event handler, so the
   // deltas still arrive and are simply not painted: turning it back on
   // mid-turn then shows the rest of the reasoning instead of nothing
   // until the next turn.
   if (!app.showThinking) return;
+  if (fold) {
+    appendFoldedThinking(text);
+    return;
+  }
+  // The switch went off mid-block: what streamed so far stays folded,
+  // and the rest is drawn the plain way.
+  foldThinking(0);
   if (!thinkingEl) {
     thinkingEl = document.createElement('div');
     thinkingEl.className = 'msg-thinking';
@@ -564,14 +584,112 @@ export function appendThinking(text) {
   });
 }
 
-export function endThinking() {
+// endThinking closes the block the daemon says has ended. elapsedMs is
+// the daemon's time from the block's first delta to its end.
+export function endThinking(elapsedMs) {
+  foldThinking(elapsedMs);
   thinkingEl = null;
   thinkingBuffer = '';
+}
+
+// foldThinking folds the block streaming now, if there is one. Called
+// with no time when the block ended without saying so — the answer
+// started, a tool ran, the turn stopped — and then this page's own
+// clock is the next best figure.
+export function foldThinking(elapsedMs) {
+  const f = thinkingFold;
+  if (!f) return;
+  thinkingFold = null;
+  const ms = elapsedMs > 0 ? elapsedMs : Date.now() - f.since;
+  change(() => {
+    f.wrap.classList.remove('live');
+    f.label.textContent = 'Thought for';
+    f.time.textContent = formatThinkingTime(ms);
+    setThinkingOpen(f, false);
+  });
+}
+
+function appendFoldedThinking(text) {
+  // A plain block still open is the switch having come on mid-block.
+  thinkingEl = null;
+  if (!thinkingFold) thinkingFold = startFoldedThinking();
+  const f = thinkingFold;
+  changeQuietly(() => {
+    f.buffer += text;
+    f.body.textContent = f.buffer;
+    f.time.textContent = formatThinkingTime(Date.now() - f.since);
+    // The body is held to a few lines while it streams, and follows its
+    // own end the way the transcript follows the reply: unless the
+    // reader has scrolled up inside it to read something.
+    if (f.stick) f.body.scrollTop = f.body.scrollHeight;
+  });
+}
+
+function startFoldedThinking() {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-thinking fold live';
+
+  // A button, so the header is reachable and operable from the keyboard
+  // and says to a screen reader whether the text under it is showing.
+  const head = document.createElement('button');
+  head.type = 'button';
+  head.className = 'head';
+  const marker = document.createElement('span');
+  marker.className = 'marker';
+  const label = document.createElement('span');
+  label.className = 'label';
+  label.textContent = 'Thinking';
+  const time = document.createElement('span');
+  time.className = 'time';
+  time.textContent = formatThinkingTime(0);
+  head.appendChild(marker);
+  head.appendChild(label);
+  head.appendChild(time);
+
+  const body = document.createElement('div');
+  body.className = 'body';
+
+  const f = { wrap, head, marker, label, time, body, since: Date.now(), buffer: '', stick: true };
+  body.addEventListener('scroll', () => {
+    f.stick = body.scrollHeight - body.scrollTop - body.clientHeight < 8;
+  });
+  head.addEventListener('click', () => {
+    change(() => setThinkingOpen(f, body.hidden));
+  });
+  setThinkingOpen(f, true);
+
+  wrap.appendChild(head);
+  wrap.appendChild(body);
+  change(() => transcriptEl.appendChild(wrap));
+  return f;
+}
+
+// setThinkingOpen shows or hides a fold block's text. Read back from the
+// body's own hidden flag on every click rather than kept beside it, so a
+// find that opened the body to land on a match does not leave the next
+// click doing the opposite of what the reader sees.
+function setThinkingOpen(f, open) {
+  f.body.hidden = !open;
+  f.marker.textContent = open ? '▾' : '▸';
+  f.head.setAttribute('aria-expanded', open ? 'true' : 'false');
+  f.head.title = open ? 'click to fold the reasoning' : 'click to show the reasoning';
+}
+
+// formatThinkingTime says a duration the way the TUI's busy line does:
+// whole seconds, then minutes, then hours.
+function formatThinkingTime(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const min = Math.floor(total / 60) % 60;
+  const sec = total % 60;
+  if (h > 0) return `${h}h${min}m${sec}s`;
+  return min > 0 ? `${min}m${sec}s` : `${sec}s`;
 }
 
 export function clearTranscript() {
   thinkingEl = null;
   thinkingBuffer = '';
+  thinkingFold = null;
   // The find bar's matches were in the conversation being replaced, and
   // a bar left open over a different one counts hits nobody searched for.
   closeFind();

@@ -317,6 +317,12 @@ func SetShowThinkingInFile(path string, enabled bool) error {
 	return setBoolInFile(path, "show_thinking", enabled)
 }
 
+// SetFoldThinkingInFile writes "fold_thinking", leaving everything else
+// in the file alone.
+func SetFoldThinkingInFile(path string, enabled bool) error {
+	return setBoolInFile(path, "fold_thinking", enabled)
+}
+
 func SetShowTimestampsInFile(path string, enabled bool) error {
 	return setBoolInFile(path, "show_timestamps", enabled)
 }

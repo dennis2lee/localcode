@@ -47,8 +47,15 @@ const (
 	TypeTaskProgress  Type = "task.progress"
 	TypeAgentSwitched Type = "agent.switched"
 
-	// The model's own reasoning, while it is happening: {"text"} on each
-	// delta, and an empty payload when a block ends.
+	// The model's own reasoning, while it is happening:
+	// {"text","fold","show_thinking"} on each delta, and
+	// {"fold","elapsed_ms"?} when a block ends.
+	//
+	// "fold" is true when the block is to be drawn labelled and folded
+	// once the answer starts: the fold_thinking switch is on and the
+	// model is a muse. "show_thinking" rides along the way show_tps rides
+	// on usage, for a client that keeps no copy of the settings.
+	// "elapsed_ms" is the time from the block's first delta to its end.
 	//
 	// Broadcast, never written to a log, and that is the whole of the
 	// design. Reasoning is worth watching live and is not part of the

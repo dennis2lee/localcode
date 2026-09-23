@@ -218,6 +218,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/settings/orchestrate", d.handleSetOrchestrate)
 	d.mux.HandleFunc("POST /api/settings/model-invocable", d.handleSetModelInvocable)
 	d.mux.HandleFunc("POST /api/settings/keep-going", d.handleSetKeepGoing)
+	d.mux.HandleFunc("POST /api/settings/fold-thinking", d.handleSetFoldThinking)
 	d.mux.HandleFunc("POST /api/settings/repeat-limit", d.handleSetRepeatLimit)
 	d.mux.HandleFunc("POST /api/permissions/skip", d.handleSetSkipPermissions)
 	d.mux.HandleFunc("POST /api/permissions/rules", d.handleAddPermissionRule)
@@ -302,8 +303,16 @@ func (d *Daemon) announceSettings() {
 			"smart_agent":          d.Loop.SmartAgentEnabled(),
 			"skip_permissions":     d.Loop.Config.PermissionsSkipped(),
 			"keep_going":           d.Loop.KeepGoingEnabled(),
+			"fold_thinking":        d.Loop.FoldThinkingEnabled(),
 			"repeat_limit":         d.Loop.RepeatLimit(),
 			"auto_compact_percent": d.Loop.CompactPercent(),
+			// The display and orchestration switches, which the clients
+			// already apply from here and which were never sent: a
+			// "/thinking off" typed in the TUI left an open Web UI
+			// painting reasoning until it was reloaded.
+			"show_thinking":   d.Loop.ShowThinking(),
+			"show_timestamps": d.Loop.ShowTimestamps(),
+			"orchestrate":     d.Loop.OrchestrateEnabled(),
 		},
 	})
 }

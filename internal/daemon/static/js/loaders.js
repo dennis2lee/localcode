@@ -100,6 +100,8 @@ export async function loadSettings() {
     app.smartAgentRoster = s.smart_agent_roster || [];
     app.skipPermissions = !!s.skip_permissions;
     app.keepGoing = s.keep_going !== false;
+    app.foldThinking = s.fold_thinking !== false;
+    app.museProfiles = Array.isArray(s.muse_profiles) ? s.muse_profiles : [];
     if (typeof s.repeat_limit === 'number') app.repeatLimit = s.repeat_limit;
     if (typeof s.auto_compact_percent === 'number') app.autoCompactPercent = s.auto_compact_percent;
     app.permissionRules = s.permission_rules || {};
