@@ -53,14 +53,35 @@ func parseUsageWindow(arg string, now time.Time) (usageWindow, bool) {
 // Archived conversations count. They are conversations that happened, and
 // a total that quietly left them out would be wrong in the direction
 // nobody checks — the same reasoning that keeps a rewound turn's tokens
-// in the per-session total.
+// in the per-session total. So do the sessions no list shows: a
+// sub-agent's, a scheduled run's, a debate reviewer's. Each made its own
+// model calls.
 func (l *Loop) usageAcross(w usageWindow) (totals map[string]modelTotals, sessions int, unread int) {
-	totals = map[string]modelTotals{}
 	if l.Store == nil {
-		return totals, 0, 0
+		return map[string]modelTotals{}, 0, 0
 	}
+	var ids []string
 	for _, sess := range l.Store.AllSessions() {
-		evs, err := l.Store.Events(sess.ID, 0)
+		ids = append(ids, sess.ID)
+	}
+	return l.usageOfSessions(ids, w.since)
+}
+
+// usageOfSessions sums the model calls the given sessions' logs record,
+// from since on (all of them when since is zero).
+//
+// A fork's log opens with a copy of the log it was forked from, and those
+// calls were made once, by the original: counted in both, every fork
+// doubled what its original had spent, and the copy is stamped with the
+// moment of the fork, so "/usage today" counted an old conversation's
+// spend the day it was forked. The session.forked event that opens a
+// fork says how many events follow it as the copy, and those are skipped.
+// A fork of a fork copies its own opening with the rest, inside the
+// count, so the skip covers it.
+func (l *Loop) usageOfSessions(ids []string, since time.Time) (totals map[string]modelTotals, sessions int, unread int) {
+	totals = map[string]modelTotals{}
+	for _, id := range ids {
+		evs, err := l.Store.Events(id, 0)
 		if err != nil {
 			// A log that cannot be read is counted and named rather than
 			// skipped in silence: a total quietly missing a conversation
@@ -69,8 +90,17 @@ func (l *Loop) usageAcross(w usageWindow) (totals map[string]modelTotals, sessio
 			continue
 		}
 		counted := false
+		copied := 0
 		for _, ev := range evs {
-			if !w.since.IsZero() && ev.Timestamp.Before(w.since) {
+			if copied > 0 {
+				copied--
+				continue
+			}
+			if ev.Type == events.TypeSessionForked {
+				copied = dataInt(ev.Data, "copied")
+				continue
+			}
+			if !since.IsZero() && ev.Timestamp.Before(since) {
 				continue
 			}
 			switch ev.Type {
@@ -91,6 +121,115 @@ func (l *Loop) usageAcross(w usageWindow) (totals map[string]modelTotals, sessio
 		}
 	}
 	return totals, sessions, unread
+}
+
+// UsageFigures is one model's spend, or a whole summary's, as the API and
+// "localcode run --format json" report it.
+type UsageFigures struct {
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	CacheReadTokens  int `json:"cache_read_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+	// Cached prompt a log recorded without the read and the write apart.
+	CacheReadOrWriteTokens int `json:"cache_read_or_write_tokens"`
+	Calls                  int `json:"calls"`
+}
+
+// UsageOfEvent is what one logged model call reported, read the way
+// every total here reads it; the zero value for an event that is not a
+// usage or a model-carrying compacted event.
+func UsageOfEvent(ev events.Event) UsageFigures {
+	switch ev.Type {
+	case events.TypeUsage:
+	case events.TypeCompacted:
+		if dataString(ev.Data, "model") == "" {
+			return UsageFigures{}
+		}
+	default:
+		return UsageFigures{}
+	}
+	return figuresOf(modelTotals{}.add(callTokensOf(ev.Data)))
+}
+
+// Add folds g into f.
+func (f *UsageFigures) Add(g UsageFigures) {
+	f.InputTokens += g.InputTokens
+	f.OutputTokens += g.OutputTokens
+	f.CacheReadTokens += g.CacheReadTokens
+	f.CacheWriteTokens += g.CacheWriteTokens
+	f.CacheReadOrWriteTokens += g.CacheReadOrWriteTokens
+	f.Calls += g.Calls
+}
+
+func figuresOf(t modelTotals) UsageFigures {
+	return UsageFigures{
+		InputTokens: t.InputTokens, OutputTokens: t.OutputTokens,
+		CacheReadTokens: t.CacheReadTokens, CacheWriteTokens: t.CacheWriteTokens,
+		CacheReadOrWriteTokens: t.CacheUnsplitTokens, Calls: t.Calls,
+	}
+}
+
+// UsageSummary is what a set of conversations spent, per model: the
+// figures "/usage all" prints, for a client to draw.
+type UsageSummary struct {
+	Scope    string                  `json:"scope"`
+	Models   map[string]UsageFigures `json:"models"`
+	Sessions int                     `json:"sessions"`
+	Unread   int                     `json:"unread"`
+	// Note says what the cache figures are, in the words /usage prints
+	// under its report, when there are any to explain: one text, so a
+	// client drawing the figures cannot explain them differently.
+	Note string `json:"note,omitempty"`
+}
+
+// Total is the summary's figures summed over its models.
+func (s UsageSummary) Total() UsageFigures {
+	var t UsageFigures
+	for _, m := range s.Models {
+		t.Add(m)
+	}
+	return t
+}
+
+func usageSummaryOf(scope string, totals map[string]modelTotals, sessions, unread int) UsageSummary {
+	out := UsageSummary{Scope: scope, Models: map[string]UsageFigures{}, Sessions: sessions, Unread: unread}
+	var grand modelTotals
+	for m, t := range totals {
+		out.Models[m] = figuresOf(t)
+		grand.CacheReadTokens += t.CacheReadTokens
+		grand.CacheWriteTokens += t.CacheWriteTokens
+		grand.CacheUnsplitTokens += t.CacheUnsplitTokens
+	}
+	if grand.cached() {
+		out.Note = cacheNote
+		if grand.CacheUnsplitTokens > 0 {
+			out.Note += " " + cacheUnsplitNote
+		}
+	}
+	return out
+}
+
+// UsageAcross is "/usage all|today|week|month" as data: the same
+// conversations, read from the same logs, so the usage window and the
+// command cannot disagree. ok is false for a word the command does not
+// know.
+func (l *Loop) UsageAcross(word string, now time.Time) (UsageSummary, bool) {
+	w, ok := parseUsageWindow(word, now)
+	if !ok {
+		return UsageSummary{}, false
+	}
+	totals, sessions, unread := l.usageAcross(w)
+	return usageSummaryOf(w.name, totals, sessions, unread), true
+}
+
+// UsageOfTree is what one conversation and every session below it spent:
+// the sub-agents it delegated to, the tasks it spawned and their own. It
+// is what a run cost, since a run's sub-agents make their calls in
+// sessions of their own.
+func (l *Loop) UsageOfTree(sessionID string) UsageSummary {
+	ids := append([]string{sessionID}, l.Store.Descendants(sessionID)...)
+	totals, sessions, unread := l.usageOfSessions(ids, time.Time{})
+	return usageSummaryOf("this conversation and the sessions under it", totals, sessions, unread)
 }
 
 // usageAcrossReport is what "/usage all" and its windows print.

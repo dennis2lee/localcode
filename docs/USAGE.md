@@ -65,7 +65,7 @@ Default execution characteristics:
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--format` | `text` | `text` streams the answer as it arrives; `json` prints one object at the end; `stream-json` prints one event per line, the same events every other client reads. The `json` object's `usage` is the whole run: `input_tokens`, `output_tokens`, `cache_read_tokens` and `cache_write_tokens`, summed over every model call it made, an automatic compaction's included |
+| `--format` | `text` | `text` streams the answer as it arrives; `json` prints one object at the end; `stream-json` prints one event per line, the same events every other client reads. The `json` object's `usage` is the whole run: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cache_read_or_write_tokens` and `calls`, summed over every model call it made, a sub-agent's and an automatic compaction's included |
 | `--agent <name>` | `general-purpose` | Which agent from config answers |
 | `--profile <name>` | the agent's own | Which model profile to use |
 | `--model <id>` | the profile's own | Override the model id inside that profile |
@@ -1258,17 +1258,22 @@ Shows cumulative token counts per model for the current session, with no model c
 
 `/usage` sums every API call since session creation, including repeatedly sent history. The status-bar context percentage describes the latest request instead.
 
-Each model's line counts four kinds of token, because they are billed apart:
+Each model's line counts these kinds of token, because they are billed apart:
 
 | Figure | What it is |
 |---|---|
 | `input` | Prompt the provider counted fresh. |
-| `cache read` | Prompt the provider served from its prompt cache. Under a working cache this is most of the repeatedly sent history. Billed below the input rate. |
-| `cache write` | Prompt the provider wrote to its prompt cache. Billed above the input rate. |
+| `cache read` | Prompt the provider served from its prompt cache. Under a working cache this is most of the repeatedly sent history. Billed at the provider's cache rate, which on Anthropic's models is below the input rate. |
+| `cache write` | Prompt the provider wrote to its prompt cache. Billed at the provider's cache rate, which on Anthropic's models is above the input rate. |
+| `cache read or write` | Cached prompt a conversation logged by v0.145.0 recorded as one figure, without saying which of the two it was. |
 | `output` | What the model wrote. |
-| `total` | All four. |
+| `total` | All of them. |
 
-The two cache figures appear only when a provider reported them. Anthropic and Bedrock report them. OpenAI-compatible servers do not. A conversation logged before the two were recorded apart shows its cached prompt as one `cached` figure.
+A cache figure appears only when a provider reported one. Anthropic and Bedrock report a read and a write. An OpenAI-compatible server reports a read when it sends `prompt_tokens_details.cached_tokens`, as OpenAI does and vLLM does with prefix caching, and never a write.
+
+A fork copies the log of the conversation it was forked from. Its own `/usage` includes the calls in that copy. `/usage all` counts them once, under the conversation that made them.
+
+The Web UI's usage window draws the `/usage all` figures, read from the daemon (`GET /api/usage`), so the two always agree. Sessions no list shows count too: a sub-agent's, a scheduled run's, a debate reviewer's.
 
 With no calls yet, it just says so.
 
@@ -1630,7 +1635,7 @@ Sessions are identified and resumed by ID, so a `title` is purely for display.
 
 Provider token usage is recorded as a `usage` event at turn end. Bedrock, Anthropic, and OpenAI-compatible servers with `stream_options.include_usage` supply these values.
 
-The event includes input and output tokens, context limit, percentage used, and tokens per second. The context limit uses [internal/modelinfo](../internal/modelinfo/modelinfo.go), with a 128000-token default for unknown models. Both clients use this event for their status bars.
+The event includes input and output tokens, the cached prompt and its split into cache read and cache write, context limit, percentage used, and tokens per second. The context limit uses [internal/modelinfo](../internal/modelinfo/modelinfo.go), with a 128000-token default for unknown models. Both clients use this event for their status bars.
 
 The percentage counts the whole prompt the provider read, including the part it served from its prompt cache. Anthropic and Bedrock report that part apart from `input_tokens`, which covers only what was counted fresh, and `input_tokens` stays that figure because it is what was billed at the full rate. The event carries the cached part as `cached_input_tokens`, and `measured`, the daemon's own character-based estimate of the same messages, so a session restored from its log can size its next request the same way a live one does.
 

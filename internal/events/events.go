@@ -295,7 +295,10 @@ const (
 	// TypeSessionRenamed reports a session's title changing: {"title"}.
 	TypeSessionRenamed Type = "session.renamed"
 	// TypeSessionForked opens the log of a session created by forking
-	// another, naming what it was forked from: {"from", "from_title"}.
+	// another, naming what it was forked from: {"from", "from_title",
+	// "copied"}. "copied" is how many events after this one are the copy
+	// of the source's log, so a total across conversations counts the
+	// calls in them once, under the conversation that made them.
 	//
 	// A fork is a copy of a conversation, so the two transcripts are
 	// identical and nothing in either one says which is which. "Is 'fork

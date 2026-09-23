@@ -61,9 +61,7 @@ export const app = {
   // session because it is a fact about the daemon, not about the open
   // conversation — and cleared on every opening, so a viewing never shows
   // the previous one's rows while the new streams are still arriving.
-  usageTotals: {},
-  usageSessions: 0,   // conversations that contributed at least one countable event
-  usageUnread: [],    // session ids whose logs could not be read and are not in the total
+  usageSummary: null, // GET /api/usage's answer while the usage window is open
   // The four switches as they apply to the open conversation, plus where
   // each answer came from ('session' | 'parent' | 'default') and the
   // directories this conversation has approved leaving the project for.

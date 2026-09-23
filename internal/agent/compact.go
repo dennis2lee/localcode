@@ -321,6 +321,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		attemptRecord := trace.Record{
 			Model: profile.Model, Provider: profile.Provider,
 			InputTokens: usage.inputTokens, OutputTokens: usage.outputTokens,
+			CacheReadTokens: usage.cacheRead, CacheWriteTokens: usage.cacheWrite,
 			DurationMS: time.Since(callStarted).Milliseconds(), Attempt: attempt,
 			FinishReason:   finishReason,
 			PromptManifest: am.ID, PromptAssets: am.SelectedIDs(), PromptUntrusted: am.UntrustedIDs(),
@@ -338,13 +339,18 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		}
 		budget = shrinkBudget(budget, systemPrompt, kept)
 	}
-	// The summarization call is billed like any other — fold it into
-	// /usage's totals even though it never appears in the transcript.
-	if usage.hasUsage {
-		l.addCumulativeUsage(sessionID, profile.Model, usage)
-	}
 	if summary == "" {
 		return fmt.Errorf("model returned an empty summary")
+	}
+	// The summarization call is billed like any other — fold it into
+	// /usage's totals even though it never appears in the transcript.
+	// After the empty-summary check, not before: the compacted event
+	// below is the call's only record in the log, and a call counted
+	// live with no record read as spend in this process's /usage that a
+	// restart, /usage all and the usage window all left out. A summary
+	// that came back empty is left out of all four alike.
+	if usage.hasUsage {
+		l.addCumulativeUsage(sessionID, profile.Model, usage)
 	}
 	// Held to the length the notice priced it at, before the notes join
 	// it: the notes are the compaction's own and are priced apart, in
@@ -361,6 +367,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	l.traceSpan(ctx, trace.ID(ctx), sessionID, trace.SpanCompact, trace.Record{
 		Model: profile.Model, Provider: profile.Provider,
 		InputTokens: usage.inputTokens, OutputTokens: usage.outputTokens,
+		CacheReadTokens: usage.cacheRead, CacheWriteTokens: usage.cacheWrite,
 		Detail: "lifecycle: history replaced by the summary, " + string(trigger),
 	})
 

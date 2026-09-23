@@ -211,6 +211,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/update", d.handleUpdateCheck)
 	d.mux.HandleFunc("POST /api/update/install", d.handleUpdateInstall)
 	d.mux.HandleFunc("GET /api/trace", d.handleTrace)
+	d.mux.HandleFunc("GET /api/usage", d.handleUsage)
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)
 	d.mux.HandleFunc("POST /api/settings/auto-delegate", d.handleSetAutoDelegate)
 	d.mux.HandleFunc("POST /api/settings/smart-agent", d.handleSetSmartAgent)
@@ -247,6 +248,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/sessions/{id}/messages", d.handleSendMessage)
 	d.mux.HandleFunc("POST /api/sessions/{id}/uploads", d.handleUploadFile)
 	d.mux.HandleFunc("GET /api/sessions/{id}/events", d.handleEvents)
+	d.mux.HandleFunc("GET /api/sessions/{id}/usage", d.handleSessionUsage)
 	// The four switches, per session. Registered before the pattern that
 	// takes a {permId}, which they cannot collide with (Go's mux matches
 	// the more specific literal), but read together they are two

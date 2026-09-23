@@ -76,6 +76,7 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		{method: "GET", path: "/api/settings", ok: only(200)},
 		{method: "GET", path: "/api/version", ok: only(200)},
 		{method: "GET", path: "/api/mcp-servers", ok: only(200)},
+		{method: "GET", path: "/api/usage?window=all", ok: only(200)},
 		{method: "GET", path: "/api/sessions", ok: only(200)},
 		{method: "GET", path: "/api/sessions?archived=1", ok: only(200)},
 		{method: "GET", path: "/api/sessions/" + sid + "/schedules", ok: only(200)},

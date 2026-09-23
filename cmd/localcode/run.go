@@ -210,6 +210,7 @@ func oneShot(ctx context.Context, o runOptions, prompt string, out io.Writer) er
 	turnCtx := agent.WithUnattended(ctx)
 
 	w := newRunWriter(o.format, out)
+	w.tree = func() (agent.UsageSummary, error) { return loop.UsageOfTree(sid), nil }
 	done := make(chan error, 1)
 	go func() { done <- loop.SendMessage(turnCtx, sid, agentName, prompt) }()
 
@@ -442,9 +443,14 @@ type runWriter struct {
 
 	text    strings.Builder
 	toolLog []map[string]any
-	// usage is the run's token spend, summed over every model call it
-	// made; nil until one reports.
-	usage   map[string]int
+	// usage is the run's token spend as its own event stream reported it,
+	// summed over every model call; nil until one reports. The fallback
+	// for tree, which also counts the calls the run's sub-agents made in
+	// sessions of their own.
+	usage *agent.UsageFigures
+	// tree reads what the run's conversation and every session below it
+	// spent, from their logs, when the run ends.
+	tree    func() (agent.UsageSummary, error)
 	started time.Time
 	errs    []string
 }
@@ -506,14 +512,12 @@ func (w *runWriter) record(ev events.Event) {
 		// model calls or more, each billed for its own request, and the
 		// last call alone was the run's cost only when there was one.
 		if estimated, _ := ev.Data["estimated"].(bool); !estimated {
-			w.addUsage(ev.Data)
+			w.addUsage(ev)
 		}
 	case events.TypeCompacted:
 		// An automatic compaction's summarizing call is billed too, and
 		// names its model when it reported usage, as /usage counts it.
-		if model, _ := ev.Data["model"].(string); model != "" {
-			w.addUsage(ev.Data)
-		}
+		w.addUsage(ev)
 	case events.TypeError:
 		if s, _ := ev.Data["error"].(string); s != "" {
 			w.errs = append(w.errs, s)
@@ -521,26 +525,31 @@ func (w *runWriter) record(ev events.Event) {
 	}
 }
 
-// usageKeys are the figures the json format reports, as the usage event
-// names them. The cache read and write are the prompt the provider served
-// from its cache or wrote to it, billed apart from input_tokens.
-var usageKeys = []string{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"}
-
-// addUsage folds one model call's reported figures into the run's.
-func (w *runWriter) addUsage(data map[string]any) {
+// addUsage folds one model call's reported figures into the run's, read
+// the way /usage reads them.
+func (w *runWriter) addUsage(ev events.Event) {
+	f := agent.UsageOfEvent(ev)
+	if f.Calls == 0 {
+		return
+	}
 	if w.usage == nil {
-		w.usage = map[string]int{}
-		for _, k := range usageKeys {
-			w.usage[k] = 0
+		w.usage = &agent.UsageFigures{}
+	}
+	w.usage.Add(f)
+}
+
+// runUsage is the run's spend: the conversation's and every session's
+// below it, read from their logs, or what the run's own stream reported
+// when the logs cannot be read.
+func (w *runWriter) runUsage() *agent.UsageFigures {
+	if w.tree != nil {
+		if s, err := w.tree(); err == nil && s.Unread == 0 {
+			if t := s.Total(); t.Calls > 0 {
+				return &t
+			}
 		}
 	}
-	for _, k := range usageKeys {
-		if n, ok := data[k].(float64); ok {
-			w.usage[k] += int(n)
-		} else if n, ok := data[k].(int); ok {
-			w.usage[k] += n
-		}
-	}
+	return w.usage
 }
 
 // finish writes whatever the format owes at the end and reports whether
@@ -560,8 +569,8 @@ func (w *runWriter) finish(sessionID string, turnErr error) error {
 		if len(w.toolLog) > 0 {
 			out["tools"] = w.toolLog
 		}
-		if w.usage != nil {
-			out["usage"] = w.usage
+		if u := w.runUsage(); u != nil {
+			out["usage"] = u
 		}
 		if turnErr != nil {
 			out["error"] = turnErr.Error()
@@ -652,6 +661,13 @@ func throughDaemon(ctx context.Context, o runOptions, url, prompt string, out io
 	// the session and sending the prompt is missed.
 	stream := c.StreamEvents(ctx, sess.ID, 0)
 	w := newRunWriter(o.format, out)
+	// Asked with a context of its own: the run's may be spent by the time
+	// the answer is in, and the figure is worth two more seconds.
+	w.tree = func() (agent.UsageSummary, error) {
+		uctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return c.SessionUsage(uctx, sess.ID)
+	}
 	done := make(chan error, 1)
 	go func() { done <- c.SendMessage(ctx, sess.ID, prompt) }()
 

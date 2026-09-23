@@ -92,6 +92,7 @@ export const getMCPServers = () => api('GET', '/api/mcp-servers');
 
 
 export const getSessions = () => api('GET', '/api/sessions');
+export const getUsage = (window) => api('GET', `/api/usage?window=${encodeURIComponent(window)}`);
 export const createSession = (agent) => api('POST', '/api/sessions', { agent });
 export const renameSession = (id, title) => api('POST', `/api/sessions/${id}/rename`, { title });
 export const forkSession = (id) => api('POST', `/api/sessions/${id}/fork`);

@@ -104,6 +104,7 @@ A session object in answers is `{"id", "agent", "title", "workspace",
 | `GET /api/update` (window: local) | nothing | Always `200`. On failure: `{"current", "checked": false, "detail"}`. On success: `{"current", "checked": true, "source", "latest", "tag", "page_url", "notes", "available", "can_install", ...}` plus `"asset"` and `"size"` when an installable asset fits this platform | none (failures are `200` with `checked: false`) |
 | `POST /api/update/install` (window: local) | nothing | `200 {"version", "source", "verified", "started", "replaced", "restarting", "path", "detail"}`. `verified: false` is reported, not hidden | `403` installing is not allowed from here; download/install failures carry their own status |
 | `GET /api/trace` | `?limit=` (1-500, default 100), `?session=`, `?trace=` | `200 {"enabled", "records"}`. `enabled` is false with Smart Agent off, which is a setting, not a failure | none |
+| `GET /api/usage` | `?window=` `all` (default), `today`, `week` or `month` | `200 {"scope", "models", "sessions", "unread"}`: what `/usage all` and its windows print, as data. `models` maps each model to `{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cache_read_or_write_tokens", "calls"}`. Every session counts, archived ones and sub-agents' included, and a fork's copy of another log is not counted twice. The Web UI's usage window draws this | `400` unknown window |
 
 ### Settings (daemon-wide)
 
@@ -172,6 +173,7 @@ implementations.
 | `POST /api/sessions/{id}/group` | `{"group"}`, or `""` for ungrouped; must already be in the group list, and is matched exactly rather than trimmed | `200` the session | `400` no such group or the session is archived; `404` unknown session; `500` the session could not be written |
 | `POST /api/sessions/{id}/agent` | `{"agent"}`; must be one the listing offers | `200` the session; an `agent.switched` event follows | `400` unknown agent or bad body; `403` archived; `404` unknown session |
 | `POST /api/sessions/{id}/rename` | `{"title"}`; display only, resolution stays by id | `200` the session; a `session.renamed` event follows | `400` bad body; `404` unknown session |
+| `GET /api/sessions/{id}/usage` | nothing | `200` the same shape as `GET /api/usage`, for this session and every session below it. `localcode run --format json` reports its total as a run's usage | `404` unknown session |
 | `POST /api/sessions/{id}/fork` | nothing | `201` the new session: a verbatim event-log copy (minus `session.renamed`), same effort levels and model choice, titled `fork of X` | `404` unknown source; `409` a turn is running in the source, or delete-all is |
 | `POST /api/sessions/{id}/archive` | nothing | `200` the session. Refuses rather than stops running work | `404` unknown session; `400` store refusal; `409` a turn is running, background tasks are running (names them), scheduled runs are in progress, or delete-all is |
 | `POST /api/sessions/{id}/retrieve` | nothing | `200` the session, history rebuilt from the log; shelved schedule rows come back, missed ones marked missed | `404` unknown session; `409` busy, or delete-all is |
@@ -279,7 +281,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `session.archived` | `{"session", "archived"}`; either direction, daemon-wide |
 | `session.deleted` | `{"session"}`; daemon-wide, since the log it would ride in is gone |
 | `session.renamed` | `{"title"}` |
-| `session.forked` | `{"from", "from_title"}`; reader note, ignored rebuilding history |
+| `session.forked` | `{"from", "from_title", "copied"}`; reader note, ignored rebuilding history. `copied` is how many events after it are the copy of the source's log; usage totals skip them. Absent in logs written before it existed |
 | `session.scheduled` | `{"schedule", "name", "run", "run_total", "at", "repeat", "from"}`; reader note, ignored rebuilding history |
 | `settings.changed` | every daemon switch as a snapshot, daemon-wide |
 | `config.changed` | `{"auto_compact_enabled", "show_tps"}` from `/config` |

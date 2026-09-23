@@ -4,10 +4,12 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"localcode/internal/events"
 	"localcode/internal/provider"
 	"localcode/internal/tools"
+	"localcode/internal/trace"
 )
 
 // Under a working prompt cache the repeatedly sent history is not in
@@ -63,14 +65,14 @@ func TestUsageCountsWhatTheCacheServed(t *testing.T) {
 	for _, want := range []string{
 		"input 24 · cache read 8192 · cache write 256 · output 60 · total 8532 (2 calls)",
 		"Grand total: input 24 · cache read 8192 · cache write 256 · output 60 · total 8532 (2 calls)",
-		"billed apart from it",
+		"bills them at its own cache rates",
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("/usage does not say %q:\n%s", want, report)
 		}
 	}
-	if strings.Contains(report, "cached ") {
-		t.Errorf("/usage shows an unsplit cached column for calls that reported the split:\n%s", report)
+	if strings.Contains(report, "cache read or write") {
+		t.Errorf("/usage shows an unsplit cache column for calls that reported the split:\n%s", report)
 	}
 
 	evs, err := loop.Store.Events(sid, 0)
@@ -137,17 +139,17 @@ func TestAnUnsplitCachedFigureIsCountedAsItIs(t *testing.T) {
 		"cache_read_tokens": 4096, "cache_write_tokens": 128}))
 	addModelTotals(cum, "plain", callTokensOf(map[string]any{"input_tokens": 150, "output_tokens": 40}))
 
-	if got := cum["old"]; got.CachedTokens != 4224 || got.CacheReadTokens != 0 || got.CacheWriteTokens != 0 {
+	if got := cum["old"]; got.CacheUnsplitTokens != 4224 || got.CacheReadTokens != 0 || got.CacheWriteTokens != 0 {
 		t.Errorf("an unsplit cached figure = %+v, want all of it counted as cached", got)
 	}
-	if got := cum["new"]; got.CachedTokens != 0 || got.CacheReadTokens != 4096 || got.CacheWriteTokens != 128 {
+	if got := cum["new"]; got.CacheUnsplitTokens != 0 || got.CacheReadTokens != 4096 || got.CacheWriteTokens != 128 {
 		t.Errorf("a split cached figure = %+v, want the split and nothing unsplit", got)
 	}
 	report := usageReport("Token usage by model:\n", cum)
 	for _, want := range []string{
-		"- old: input 12 · cached 4224 · output 30 · total 4266 (1 calls)",
-		"- new: input 12 · cache read 4096 · cache write 128 · output 30 · total 4266 (1 calls)",
-		"- plain: input 150 · output 40 · total 190 (1 calls)",
+		"- old: input 12 · cache read or write 4224 · output 30 · total 4266 (1 call)",
+		"- new: input 12 · cache read 4096 · cache write 128 · output 30 · total 4266 (1 call)",
+		"- plain: input 150 · output 40 · total 190 (1 call)",
 		"without saying which of the two it was",
 	} {
 		if !strings.Contains(report, want) {
@@ -156,7 +158,7 @@ func TestAnUnsplitCachedFigureIsCountedAsItIs(t *testing.T) {
 	}
 
 	plain := usageReport("Token usage by model:\n", map[string]modelTotals{"plain": cum["plain"]})
-	if strings.Contains(plain, "cache") || strings.Contains(plain, "billed apart") {
+	if strings.Contains(plain, "cache") || strings.Contains(plain, "cache rates") {
 		t.Errorf("a provider with no cache is told about one:\n%s", plain)
 	}
 }
@@ -170,4 +172,143 @@ func cumulativeOf(l *Loop, sid string) map[string]modelTotals {
 		out[m] = t
 	}
 	return out
+}
+
+// The note under /usage says what the cache columns are whenever any of
+// them appears, whichever one it is, and the line about the unsplit
+// figure only when that one does. A report with no cache says nothing
+// about one.
+func TestTheCacheNoteFollowsEveryCacheColumn(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		t             modelTotals
+		note, unsplit bool
+	}{
+		{"a cache write alone", modelTotals{InputTokens: 12, CacheWriteTokens: 4096, OutputTokens: 30, Calls: 1}, true, false},
+		{"a cache read alone", modelTotals{InputTokens: 12, CacheReadTokens: 4096, OutputTokens: 30, Calls: 1}, true, false},
+		{"an old log's unsplit figure alone", modelTotals{InputTokens: 12, CacheUnsplitTokens: 4224, OutputTokens: 30, Calls: 1}, true, true},
+		{"no cache", modelTotals{InputTokens: 12, OutputTokens: 30, Calls: 1}, false, false},
+	} {
+		report := usageReport("Token usage by model:\n", map[string]modelTotals{"m": c.t})
+		if got := strings.Contains(report, cacheNote); got != c.note {
+			t.Errorf("%s: cache note shown = %v, want %v:\n%s", c.name, got, c.note, report)
+		}
+		if got := strings.Contains(report, cacheUnsplitNote); got != c.unsplit {
+			t.Errorf("%s: unsplit note shown = %v, want %v:\n%s", c.name, got, c.unsplit, report)
+		}
+		summary := usageSummaryOf("x", map[string]modelTotals{"m": c.t}, 1, 0)
+		if got := summary.Note != ""; got != c.note {
+			t.Errorf("%s: the API summary's note = %q, want one = %v", c.name, summary.Note, c.note)
+		}
+		if c.unsplit && !strings.Contains(summary.Note, cacheUnsplitNote) {
+			t.Errorf("%s: the API summary's note leaves out the unsplit line: %q", c.name, summary.Note)
+		}
+	}
+}
+
+// /usage all and the usage window read the same logs, with the cache
+// columns, and agree with the live session.
+func TestUsageAllCountsWhatTheCacheServed(t *testing.T) {
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{cachedCall("one")}}
+	loop, sid := scriptedLoop(t, p, tools.NewRegistry(nil))
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "first"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	live := cumulativeOf(loop, sid)["m"]
+	totals, _, _ := loop.usageAcross(usageWindow{name: "every conversation"})
+	if totals["m"] != live {
+		t.Errorf("/usage all totals %+v, the live session %+v", totals["m"], live)
+	}
+	summary, ok := loop.UsageAcross("all", time.Now())
+	if !ok {
+		t.Fatal("UsageAcross refused all")
+	}
+	if got := summary.Models["m"]; got != figuresOf(live) {
+		t.Errorf("the usage window's summary %+v, the live session %+v", got, figuresOf(live))
+	}
+}
+
+// The compaction's trace records carry the cache figures its call
+// reported, as a turn's model span does, and as /usage counts them.
+func TestTheCompactionsTraceCarriesItsCache(t *testing.T) {
+	p := replayProvider{events: cachedCall("a summary")}
+	loop, _, profile := replayLoop(t, p, 200000)
+	loop.SetSmartAgentEnabled(true)
+	w := withTracing(t, loop)
+	const sid = "s1"
+	loop.setHistory(sid, shortConversation())
+	if err := loop.compactHistory(context.Background(), sid, p, profile, "", nil, "", CompactManual); err != nil {
+		t.Fatalf("compaction: %v", err)
+	}
+	live := cumulativeOf(loop, sid)["m"]
+	var model, lifecycle bool
+	for _, rec := range w.Recent(200, sid, "") {
+		switch {
+		case rec.Span == trace.SpanModel && strings.Contains(rec.Detail, "compaction attempt"):
+			model = true
+		case rec.Span == trace.SpanCompact:
+			lifecycle = true
+		default:
+			continue
+		}
+		if rec.CacheReadTokens != live.CacheReadTokens || rec.CacheWriteTokens != live.CacheWriteTokens {
+			t.Errorf("%s record: cache read %d, write %d; /usage counted read %d, write %d",
+				rec.Span, rec.CacheReadTokens, rec.CacheWriteTokens, live.CacheReadTokens, live.CacheWriteTokens)
+		}
+	}
+	if !model || !lifecycle {
+		t.Fatalf("records found: model span %v, lifecycle %v", model, lifecycle)
+	}
+}
+
+// A summarizing call that came back empty leaves no compacted event, the
+// call's only record in the log. Counted live, it was spend in this
+// process's /usage that a restart and /usage all left out; it is left
+// out of all of them alike.
+func TestAnEmptySummaryIsCountedAlikeEverywhere(t *testing.T) {
+	p := replayProvider{events: cachedCall("")}
+	loop, store, profile := replayLoop(t, p, 200000)
+	const sid = "s1"
+	loop.setHistory(sid, shortConversation())
+	if err := loop.compactHistory(context.Background(), sid, p, profile, "", nil, "", CompactManual); err == nil {
+		t.Fatal("an empty summary was accepted")
+	}
+	live := cumulativeOf(loop, sid)
+	evs, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	_, _, cum := rehydrateUsage(evs)
+	all, _, _ := loop.usageAcross(usageWindow{name: "every conversation"})
+	if live["m"] != cum["m"] || live["m"] != all["m"] {
+		t.Errorf("one summarizing call: live /usage %+v, after a restart %+v, /usage all %+v", live["m"], cum["m"], all["m"])
+	}
+}
+
+// A run's usage is its conversation's and every session's below it: a
+// sub-agent's calls are made in a session of its own.
+func TestTheUsageOfATreeCountsItsSubAgents(t *testing.T) {
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{cachedCall("one")}}
+	loop, sid := scriptedLoop(t, p, tools.NewRegistry(nil))
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "first"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	if _, err := loop.Store.CreateSession("child", sid, "general-purpose", false); err != nil {
+		t.Fatal(err)
+	}
+	loop.Store.Append("child", events.TypeUsage, map[string]any{"model": "sub", "input_tokens": 50, "output_tokens": 7})
+	if _, err := loop.Store.CreateSession("grandchild", "child", "general-purpose", false); err != nil {
+		t.Fatal(err)
+	}
+	loop.Store.Append("grandchild", events.TypeUsage, map[string]any{"model": "sub", "input_tokens": 5, "output_tokens": 1})
+	if _, err := loop.Store.CreateSession("unrelated", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	loop.Store.Append("unrelated", events.TypeUsage, map[string]any{"model": "sub", "input_tokens": 999, "output_tokens": 999})
+
+	total := loop.UsageOfTree(sid).Total()
+	want := UsageFigures{InputTokens: 12 + 50 + 5, OutputTokens: 30 + 7 + 1, CacheReadTokens: 4096, CacheWriteTokens: 128, Calls: 3}
+	if total != want {
+		t.Errorf("the tree's usage = %+v, want %+v (the conversation, its sub-agent and theirs, and nothing else)", total, want)
+	}
 }

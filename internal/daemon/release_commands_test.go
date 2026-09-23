@@ -435,8 +435,8 @@ func TestUsageReportsOneConversationAndEveryOne(t *testing.T) {
 	replyAlone := h.sendCommand(t, "/usage")
 	for _, want := range []string{
 		"Token usage by model:",
-		"test-model: input 150 · output 40 · total 190 (1 calls)",
-		"Grand total: input 150 · output 40 · total 190 (1 calls)",
+		"test-model: input 150 · output 40 · total 190 (1 call)",
+		"Grand total: input 150 · output 40 · total 190 (1 call)",
 	} {
 		if !strings.Contains(replyAlone, want) {
 			t.Errorf("/usage alone missing %q:\n%s", want, replyAlone)
@@ -454,7 +454,7 @@ func TestUsageReportsOneConversationAndEveryOne(t *testing.T) {
 	for _, want := range []string{
 		"Token usage across every conversation (3 conversations):",
 		"test-model: input 400 · output 100 · total 500 (2 calls)",
-		"quick-model: input 80 · output 20 · total 100 (1 calls)",
+		"quick-model: input 80 · output 20 · total 100 (1 call)",
 		"Grand total: input 480 · output 120 · total 600 (3 calls)",
 		"Counted from the conversations' own logs, archived ones included.",
 	} {

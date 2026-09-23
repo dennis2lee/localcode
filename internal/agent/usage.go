@@ -69,13 +69,13 @@ type modelTotals struct {
 	OutputTokens     int
 	CacheReadTokens  int
 	CacheWriteTokens int
-	// CachedTokens is cached prompt a log recorded as one figure, without
-	// saying which part was read from the cache and which was written to
-	// it: usage events carried only cached_input_tokens before the two
-	// were recorded apart. Counted, because it was sent, and shown as
-	// what it is rather than guessed into either column.
-	CachedTokens int
-	Calls        int
+	// CacheUnsplitTokens is cached prompt a log recorded as one figure,
+	// without saying which part was read from the cache and which was
+	// written to it: usage events carried only cached_input_tokens before
+	// the two were recorded apart. Counted, because it was sent, and shown
+	// as "cache read or write" rather than guessed into either column.
+	CacheUnsplitTokens int
+	Calls              int
 }
 
 // callTokens is what one model call reported, in the four kinds
@@ -89,7 +89,7 @@ func (t modelTotals) add(c callTokens) modelTotals {
 	t.OutputTokens += c.output
 	t.CacheReadTokens += c.cacheRead
 	t.CacheWriteTokens += c.cacheWrite
-	t.CachedTokens += c.cached
+	t.CacheUnsplitTokens += c.cached
 	t.Calls++
 	return t
 }
@@ -97,11 +97,11 @@ func (t modelTotals) add(c callTokens) modelTotals {
 // total is every token the calls processed: what they were sent, fresh
 // or from the cache, and what they wrote back.
 func (t modelTotals) total() int {
-	return t.InputTokens + t.CacheReadTokens + t.CacheWriteTokens + t.CachedTokens + t.OutputTokens
+	return t.InputTokens + t.CacheReadTokens + t.CacheWriteTokens + t.CacheUnsplitTokens + t.OutputTokens
 }
 
 func (t modelTotals) cached() bool {
-	return t.CacheReadTokens > 0 || t.CacheWriteTokens > 0 || t.CachedTokens > 0
+	return t.CacheReadTokens > 0 || t.CacheWriteTokens > 0 || t.CacheUnsplitTokens > 0
 }
 
 // measurement is what estimateTokens made of the messages a count
@@ -262,12 +262,27 @@ func usageLine(t modelTotals) string {
 	if t.CacheWriteTokens > 0 {
 		fmt.Fprintf(&b, " · cache write %d", t.CacheWriteTokens)
 	}
-	if t.CachedTokens > 0 {
-		fmt.Fprintf(&b, " · cached %d", t.CachedTokens)
+	if t.CacheUnsplitTokens > 0 {
+		fmt.Fprintf(&b, " · cache read or write %d", t.CacheUnsplitTokens)
 	}
-	fmt.Fprintf(&b, " · output %d · total %d (%d calls)", t.OutputTokens, t.total(), t.Calls)
+	fmt.Fprintf(&b, " · output %d · total %d (%s)", t.OutputTokens, t.total(), calls(t.Calls))
 	return b.String()
 }
+
+func calls(n int) string {
+	if n == 1 {
+		return "1 call"
+	}
+	return fmt.Sprintf("%d calls", n)
+}
+
+// cacheNote says what the cache figures are, wherever they are shown.
+const cacheNote = "Cache read and cache write are prompt the provider served from its prompt cache or wrote to it. " +
+	"They are counted apart from input because the provider bills them at its own cache rates, " +
+	"which on Anthropic's models are below the input rate for a read and above it for a write."
+
+// cacheUnsplitNote says what the figure recorded without its split is.
+const cacheUnsplitNote = "Cache read or write is cached prompt a log recorded as one figure, without saying which of the two it was."
 
 // usageReport is the per-model lines, the grand total, and, where any
 // cache column appeared, what those columns are.
@@ -292,15 +307,14 @@ func usageReport(heading string, totals map[string]modelTotals) string {
 		grand.OutputTokens += t.OutputTokens
 		grand.CacheReadTokens += t.CacheReadTokens
 		grand.CacheWriteTokens += t.CacheWriteTokens
-		grand.CachedTokens += t.CachedTokens
+		grand.CacheUnsplitTokens += t.CacheUnsplitTokens
 		grand.Calls += t.Calls
 	}
 	fmt.Fprintf(&b, "\nGrand total: %s", usageLine(grand))
 	if grand.cached() {
-		b.WriteString("\n\nCache read and cache write are prompt the provider served from its prompt cache or wrote to it. " +
-			"They are counted apart from input because they are billed apart from it, a read below the input rate and a write above it.")
-		if grand.CachedTokens > 0 {
-			b.WriteString(" Cached is prompt a log recorded as one figure, without saying which of the two it was.")
+		b.WriteString("\n\n" + cacheNote)
+		if grand.CacheUnsplitTokens > 0 {
+			b.WriteString(" " + cacheUnsplitNote)
 		}
 	}
 	return b.String()
