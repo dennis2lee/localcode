@@ -55,11 +55,12 @@ const contextHeadroom = 2048
 const minOutputTokens = 1024
 
 // shortestSummary is the least a compaction can leave behind, in tokens.
-// compactHistory rejects an empty summary as a failed compaction, so the
-// shortest one there can be is a token: shorter than any summary a model
-// writes, but the smallest figure this side's estimate can state, and
-// enough to keep the notice from offering a compaction that only an
-// empty summary would satisfy.
+// compactHistory rejects an empty summary as a failed compaction, and a
+// summary that is not empty is at least a token to the tokenizer that
+// will count it, whatever this side's four-bytes-a-token floor reads for
+// three bytes. One token is shorter than any summary a model writes, but
+// it is the smallest figure above nothing, and enough to keep the notice
+// from offering a compaction that only an empty summary would satisfy.
 const shortestSummary = 1
 
 // blockFraming is what estimateTokens charges each block for its role,
@@ -584,13 +585,22 @@ func (l *Loop) sizeRequest(ctx context.Context, sessionID string, run modelRun, 
 // compactionKeeps is what a compaction of msgs would store beside the
 // summary itself, in tokens: the header the summary re-enters behind,
 // the note about the images it dropped, the note about the assets the
-// replaced messages carried (behind Smart Agent, as the note is), and
-// the framing estimateTokens charges the one block they share. What
+// replaced messages carried (behind Smart Agent, as the note is, and
+// read at sizing time: a switch flipped between the notice and the
+// /compact it advised is a change the notice's floor does not cover),
+// and the framing estimateTokens charges the one block they share. What
 // compactHistory writes, priced the way estimateTokens will read it.
 //
 // Rounded up, because this is the floor of the residual the notice
 // reasons from, and a floor a token under what is stored told a person
-// that /compact would make room by exactly the token it did not.
+// that /compact would make room by exactly the token it did not. The
+// stored block is floored once over all of its bytes together, while
+// the residual adds three figures floored apart: the system prompt's,
+// this one, and the summary's, which is up to three bytes more than
+// four times its token figure. Those three bytes are carried here and
+// the whole is rounded up, which puts the residual at or above what
+// estimateTokens reads for the stored block in every byte alignment,
+// and at most two tokens over.
 func compactionKeeps(msgs []provider.Message, smart bool) int {
 	text := summaryHeader
 	if n := countImages(msgs); n > 0 {
@@ -599,7 +609,8 @@ func compactionKeeps(msgs []provider.Message, smart bool) int {
 	if smart {
 		text += carriedAssetNote(droppedCarriedAssets(msgs))
 	}
-	return (len(text) + blockFraming + 3) / 4
+	bytes := len(text) + blockFraming + 3
+	return (bytes + 3) / 4
 }
 
 // grow accounts for text a hook added to the request after it was sized.
@@ -719,8 +730,14 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 	compactRoom := s.summaryRoom(s.wanted, s.sent)
 	bothRoom := s.summaryRoom(math.MaxInt, s.sent)
 	inUse := fmt.Sprintf("about %d of %d tokens were in use", s.input, s.window)
+	// Named as the compaction's, not "its": the clause follows a
+	// sentence with three other nouns in it.
 	ifShort := func(room int) string {
-		return fmt.Sprintf(", if its summary comes out at %d tokens or fewer", room)
+		word := "tokens"
+		if room == 1 {
+			word = "token"
+		}
+		return fmt.Sprintf(", if the compaction's summary comes out at %d %s or fewer", room, word)
 	}
 
 	switch {
@@ -742,9 +759,13 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 		if room < 0 {
 			room = 0
 		}
+		// Every term of the subtraction is named, so the figure at the
+		// end can be checked against the window by the person reading
+		// it: what a compaction keeps was left out, and the arithmetic
+		// printed did not sum.
 		msg := fmt.Sprintf(
-			"the reply was cut off at %d tokens, and a %d-token context window cannot give a reply more: after the %d tokens held back as a margin and the %d the system prompt takes, even the shortest compaction leaves room for %d",
-			s.sent, s.window, contextHeadroom, s.system, room)
+			"the reply was cut off at %d tokens, and a context window of %d tokens cannot give a reply more: after the %d tokens held back as a margin, the %d the system prompt takes and the %d the shortest compaction keeps, it leaves room for %d",
+			s.sent, s.window, contextHeadroom, s.system, s.keeps+shortestSummary, room)
 		if room < minOutputTokens {
 			msg += fmt.Sprintf(", below the %d a request asks for at the least", minOutputTokens)
 		}
@@ -772,7 +793,11 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 		// larger one no more. Neither move works alone: a raised
 		// max_tokens is shrunk back, and /compact makes room the
 		// profile's figure then caps.
+		// The person can only raise a figure that is there.
 		both := "A longer answer needs both /compact and a higher max_tokens on that profile in config.json"
+		if s.defaulted {
+			both = "A longer answer needs both /compact and a max_tokens set on that profile in config.json"
+		}
 		if bothRoom < longestSummary {
 			both += ifShort(bothRoom)
 		}

@@ -199,7 +199,6 @@ var rehydrateIgnoredEventTypes = map[string]string{
 	"agent.switched":       "agent persona switch; system prompt changes are supplied separately from conversation history",
 	"model.changed":        "model selection update; model configuration is supplied per request rather than in message history",
 	"effort.changed":       "thinking effort configuration; supplied as request parameter rather than conversation message",
-	"error":                "turn error event; not an assistant or user message in provider history",
 	"mcp.status":           "daemon-wide MCP server connection status; not part of LLM conversation history",
 	"session.activity":     "daemon-wide session activity indicator; not part of LLM conversation history",
 	"session.archived":     "session archive lifecycle event; not part of LLM conversation history",

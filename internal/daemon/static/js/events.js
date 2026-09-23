@@ -152,6 +152,11 @@ const handlers = {
   'turn.done': () => {
     session.runningTool = '';
     setWaiting(false);
+    // A row still running at the turn's end is a call that never ran:
+    // the stream died after the model asked for it, and no tool.end is
+    // coming. It sat spinning under the error line for the life of the
+    // page, as a cancelled one did before turn.cancelled closed it.
+    abandonRunningToolCalls('not run');
     // The one refresh the transcript cannot ask for itself.
     //
     // Every line it *draws* asks — see appendDiv — but a reply is not

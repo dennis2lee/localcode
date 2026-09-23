@@ -441,34 +441,113 @@ func TestRehydrateHistoryLeavesOutAFailedReply(t *testing.T) {
 		ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t2", "input": `{"path":"a.go"}`, "content": "package a"}),
 		ev(events.TypeMessagePartEnd, map[string]any{"text": "done"}),
 	}
-	hist = rehydrateHistory(evs)
-	var shape []string
+	want := "user: go on\nuser: again\nassistant: reading tool_use t2\nuser: tool_result t2\nassistant: done"
+	if got := historyShape(rehydrateHistory(evs)); got != want {
+		t.Errorf("rebuilt history after a failed tool call:\n%s\nwant:\n%s", got, want)
+	}
+
+	// Cancelled, not failed: kept. So is a reply the mark is present on
+	// and false, which is what the key documents.
+	for _, data := range []map[string]any{
+		{"text": "half an answer"},
+		{"text": "a whole answer", "failed": false},
+	} {
+		evs = []events.Event{
+			ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+			ev(events.TypeMessagePartEnd, data),
+		}
+		hist = rehydrateHistory(evs)
+		if len(hist) != 2 || hist[1].Role != provider.RoleAssistant {
+			t.Errorf("a reply that did not fail (%v) was left out: %d messages", data, len(hist))
+		}
+	}
+}
+
+// historyShape writes a history one line per message, roles and block
+// kinds only, so two histories can be compared as text and a failure
+// shows both.
+func historyShape(hist []provider.Message) string {
+	var lines []string
 	for _, m := range hist {
 		s := string(m.Role) + ":"
 		for _, b := range m.Content {
 			switch b.Type {
 			case provider.BlockText:
-				s += " " + b.Text
+				s += " " + strings.TrimSpace(b.Text)
 			case provider.BlockToolUse:
 				s += " tool_use " + b.ToolUseID
 			case provider.BlockToolResult:
 				s += " tool_result " + b.ToolUseID
 			}
 		}
-		shape = append(shape, s)
+		lines = append(lines, s)
 	}
-	want := []string{"user: go on", "user: again", "assistant: reading tool_use t2", "user: tool_result t2", "assistant: done"}
-	if strings.Join(shape, "\n") != strings.Join(want, "\n") {
-		t.Errorf("rebuilt history after a failed tool call:\n%s\nwant:\n%s", strings.Join(shape, "\n"), strings.Join(want, "\n"))
+	return strings.Join(lines, "\n")
+}
+
+// A log written before a failed reply was closed on the record holds only
+// the call's tool.start and the error. The call never ran, and a replay
+// that kept waiting for its result folded the next turn's iterations
+// into one message: the first iteration's text overwritten, the final
+// answer gone as a message of its own, and the history ending on a
+// tool result. Two shapes: the next turn after the person's next
+// message, and a retry inside the same turn.
+func TestRehydrateHistoryDropsACallAStreamDiedOn(t *testing.T) {
+	nextTurn := []events.Event{
+		ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "echo"}),
+		ev(events.TypeError, map[string]any{"error": "boom: the wire went quiet"}),
+		ev(events.TypeUserMessage, map[string]any{"text": "again"}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t2", "name": "echo"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "reading"}),
+		ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t2", "input": "{}", "content": "ok"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "done"}),
+	}
+	if got, want := historyShape(rehydrateHistory(nextTurn)), "user: go on\nuser: again\nassistant: reading tool_use t2\nuser: tool_result t2\nassistant: done"; got != want {
+		t.Errorf("after a stream died on a call, the next turn rebuilt as:\n%s\nwant:\n%s", got, want)
+	}
+	retried := []events.Event{
+		ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "echo"}),
+		ev(events.TypeError, map[string]any{"error": "503 service unavailable"}),
+		ev(events.TypeError, map[string]any{"error": "m did not answer (503); retrying it in 1s", "recovered": true}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t2", "name": "echo"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "reading"}),
+		ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t2", "input": "{}", "content": "ok"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "done"}),
+	}
+	if got, want := historyShape(rehydrateHistory(retried)), "user: go on\nassistant: reading tool_use t2\nuser: tool_result t2\nassistant: done"; got != want {
+		t.Errorf("after a stream died on a call and the turn retried, it rebuilt as:\n%s\nwant:\n%s", got, want)
 	}
 
-	// Cancelled, not failed: kept.
-	evs = []events.Event{
+	// A daemon that died between the call and the error wrote neither
+	// a part.end nor an error. The person's next message is the only
+	// boundary such a log has, and it is one.
+	crashed := []events.Event{
 		ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
-		ev(events.TypeMessagePartEnd, map[string]any{"text": "half an answer"}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "echo"}),
+		ev(events.TypeUserMessage, map[string]any{"text": "again"}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t2", "name": "echo"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "reading"}),
+		ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t2", "input": "{}", "content": "ok"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "done"}),
 	}
-	hist = rehydrateHistory(evs)
-	if len(hist) != 2 || hist[1].Role != provider.RoleAssistant {
-		t.Errorf("a cancelled reply, which the live history keeps, was left out: %d messages", len(hist))
+	if got, want := historyShape(rehydrateHistory(crashed)), "user: go on\nuser: again\nassistant: reading tool_use t2\nuser: tool_result t2\nassistant: done"; got != want {
+		t.Errorf("after the daemon died on a call, the next turn rebuilt as:\n%s\nwant:\n%s", got, want)
+	}
+
+	// An error the turn recovered from leaves it running, and a call
+	// waiting for its result is still owed one: a notice between the
+	// reply that asked and the result must not drop the call.
+	recovered := []events.Event{
+		ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "echo"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "calling"}),
+		ev(events.TypeError, map[string]any{"error": "the reply hit max_tokens", "recovered": true}),
+		ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t1", "input": "{}", "content": "ok"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "done"}),
+	}
+	if got, want := historyShape(rehydrateHistory(recovered)), "user: go on\nassistant: calling tool_use t1\nuser: tool_result t1\nassistant: done"; got != want {
+		t.Errorf("a recovered error dropped a call that was still owed its result:\n%s\nwant:\n%s", got, want)
 	}
 }

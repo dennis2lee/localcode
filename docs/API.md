@@ -262,7 +262,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 |---|---|
 | `message.user` | `{"text", "model_text"?, "local"?}`. `local: true` was answered without a model call and is skipped rebuilding history |
 | `message.part.delta` | `{"text"}` fragment of a streaming reply |
-| `message.part.end` | `{"text", "failed"?}` the finished reply text; one turn has several when tools ran. `failed: true` closes a reply whose stream died before it finished: the text is on the record and not in the history, which is rebuilt without it. A log written before this key was recorded replays such a reply as finished |
+| `message.part.end` | `{"text", "failed"?, "shell_command"?}` the finished reply text; one turn has several when tools ran. `failed: true` closes a reply whose stream died before it finished: the text is on the record and not in the history, which is rebuilt without it. `text` is empty when the stream died after a tool call and before any text; the calls a failed reply started never ran. A log written before this key existed rebuilds such a reply into the history as finished. `shell_command` names the `!` command whose output `text` is |
 | `tool.start`, `tool.end` | a tool call and its result |
 | `permission.request` | a tool approval question; answered at `POST /api/sessions/{id}/permissions/{permId}` |
 | `permission.resolved` | how it was answered |

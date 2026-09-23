@@ -18,14 +18,17 @@ const (
 	// log (see agent.rehydrateHistory). "images", if present, carries
 	// attached images as [{"media_type", "data"}], where data is base64
 	// encoded in the JSON log.
-	//
-	// A "message.part.end" carries the finished reply as "text".
-	// "failed": true closes a reply whose stream died before it
-	// finished: the text is on the record because the model said it,
-	// and it is not in the history, live or rebuilt from the log,
-	// because a failed response is not a turn.
-	TypeUserMessage        Type = "message.user"
-	TypeMessagePartDelta   Type = "message.part.delta"
+	TypeUserMessage      Type = "message.user"
+	TypeMessagePartDelta Type = "message.part.delta"
+	// "message.part.end" carries the finished reply as "text". "failed":
+	// true closes a reply whose stream died before it finished: the text
+	// is on the record because the model said it, and it is not in the
+	// history, live or rebuilt from the log, because a failed response
+	// is not a turn. Its "text" is empty when the stream died after a
+	// tool call and before any text; the calls a failed reply started
+	// never ran. "shell_command", if present, names the "!" command
+	// whose output "text" is; clients draw it as command output, and it
+	// rebuilds into the history as the reply it stands for.
 	TypeMessagePartEnd     Type = "message.part.end"
 	TypeToolStart          Type = "tool.start"
 	TypeToolEnd            Type = "tool.end"

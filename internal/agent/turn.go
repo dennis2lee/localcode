@@ -1017,8 +1017,16 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			// the history from these events, and a part.end with nothing
 			// to tell it apart from a finished reply was rebuilt as one:
 			// the half answer this turn refused to send back went out on
-			// the next request of every restarted session.
-			if text.Len() > 0 {
+			// the next request of every restarted session whose log held
+			// one.
+			//
+			// Closed whenever anything of the reply reached the record,
+			// not only text: a stream that died after the model's tool
+			// call and before any text has that call's tool.start on the
+			// record already, and with no part.end to close it a replay
+			// kept waiting for the call's result and folded the next
+			// turn's iterations into it.
+			if text.Len() > 0 || len(toolUses) > 0 {
 				l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String(), "failed": true})
 			}
 			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": ev.Err.Error()})

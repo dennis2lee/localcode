@@ -54,10 +54,9 @@ const summaryHeader = "[The conversation so far was summarized by the model. Thi
 //
 // A quarter above the cap, not at it, because the cap is in the
 // server's tokens and this figure is in this side's: four characters a
-// token, which reads English prose from most tokenizers at up to a
-// quarter more than they counted it. The quarter is tolerance for an
-// honest server's summary measured by a different ruler, not room for a
-// dishonest one.
+// token counts English prose at up to a quarter more tokens than most
+// tokenizers do. The quarter is tolerance for an honest server's summary
+// measured by a different ruler, not room for a dishonest one.
 const longestSummary = defaultMaxTokens + defaultMaxTokens/4
 
 // summaryCutNote closes a summary that came back longer than the

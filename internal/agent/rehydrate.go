@@ -203,6 +203,14 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 				if droppedImages > 0 && !strings.Contains(summary, "image was omitted") && !strings.Contains(summary, "images were omitted") {
 					summary += imageDroppedNote(droppedImages)
 				}
+				// The note about what the replaced messages carried is
+				// stored beside the summary live and recorded on the
+				// event by name. Put back from the names, so a rebuilt
+				// history holds what the live one held: without it the
+				// two measured 61 tokens apart over a history that
+				// carried two assets, and the model after a restart was
+				// not told what its summary had replaced.
+				summary += carriedAssetNote(dataStrings(ev.Data, "replaced_assets"))
 				out = []provider.Message{{
 					Role: provider.RoleUser,
 					// The same header compactHistory writes, so a restart
@@ -266,6 +274,14 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 				continue
 			}
 			flush()
+			// A message from the person is a turn boundary, and nothing
+			// started before it is still owed a result. A call the log
+			// shows started and never ended, which a stream that died
+			// between the two leaves behind in a log written before such
+			// replies were closed on the record, would otherwise hold the
+			// next turn's iterations back until they were folded into one
+			// message.
+			resetPending()
 			if isTrue(ev.Data["local"]) {
 				skipNextReply = true
 				continue
@@ -292,6 +308,21 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			id := dataString(ev.Data, "tool_use_id")
 			toolName[id] = dataString(ev.Data, "name")
 			pendingToolOrder = append(pendingToolOrder, id)
+
+		case events.TypeError:
+			// An error the turn did not recover from ended it. Inside a
+			// turn the only such error that can follow a reply's start
+			// is the stream dying; every other one is preceded by the
+			// person's message or a tool's result, with nothing pending.
+			// So a call still waiting here never ran, and it is dropped
+			// as the live turn dropped it. For a log written before a
+			// failed reply was closed on the record, this is the mark.
+			// A recovered error (an overflow that was summarized and
+			// retried, a notice) leaves the turn running, and what is
+			// pending stays pending.
+			if !isTrue(ev.Data["recovered"]) {
+				resetPending()
+			}
 
 		case events.TypeMessagePartEnd:
 			if skipNextReply {
@@ -413,6 +444,18 @@ func addModelTotals(cum map[string]modelTotals, model string, inputTokens, outpu
 func isTrue(v any) bool {
 	b, _ := v.(bool)
 	return b
+}
+
+// dataStrings reads a list of strings the log holds as []any.
+func dataStrings(data map[string]any, key string) []string {
+	items, _ := data[key].([]any)
+	var out []string
+	for _, it := range items {
+		if s, ok := it.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func dataString(data map[string]any, key string) string {

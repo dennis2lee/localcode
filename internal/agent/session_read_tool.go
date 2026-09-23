@@ -174,6 +174,11 @@ func (t *SessionReadTool) summary(s session.Session, evs []events.Event) string 
 				users++
 			}
 		case events.TypeMessagePartEnd:
+			// Closed by a stream that died: on the record, not an answer,
+			// and not the conversation's last one.
+			if isTrue(ev.Data["failed"]) {
+				continue
+			}
 			replies++
 			if txt, ok := ev.Data["text"].(string); ok && strings.TrimSpace(txt) != "" {
 				last = txt
@@ -230,8 +235,12 @@ func (t *SessionReadTool) transcript(s session.Session, evs []events.Event, offs
 				lines = append(lines, line{"them", txt})
 			}
 		case events.TypeMessagePartEnd:
+			who := "model"
+			if isTrue(ev.Data["failed"]) {
+				who = "model (the stream failed here; this was not sent back)"
+			}
 			if txt, ok := ev.Data["text"].(string); ok && strings.TrimSpace(txt) != "" {
-				lines = append(lines, line{"model", txt})
+				lines = append(lines, line{who, txt})
 			}
 		}
 	}
