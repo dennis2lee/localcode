@@ -3,6 +3,7 @@ package gui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -111,10 +112,10 @@ func pxIn(t *testing.T, block, property string) int {
 // shipped a title bar you could not drag, and the kind of failure that
 // cannot be seen from this machine at all.
 func TestEveryWindowCommandThePageSendsIsKnown(t *testing.T) {
-	js, err := os.ReadFile("../daemon/static/js/main.js")
-	if err != nil {
-		t.Fatalf("read main.js: %v", err)
-	}
+	// Every script the page ships, not main.js alone: settings.js closes
+	// the window after an update too, and a command added there was one
+	// this test would not have read.
+	js := pageScripts(t)
 	want := map[string]bool{}
 	for _, m := range regexp.MustCompile(`lcWindowCommand\('([a-z:]+)'\)`).FindAllSubmatch(js, -1) {
 		want[string(m[1])] = true
@@ -143,6 +144,97 @@ func TestEveryWindowCommandThePageSendsIsKnown(t *testing.T) {
 	for cmd := range want {
 		if !strings.Contains(string(src), `"`+cmd+`"`) {
 			t.Errorf("the page sends %q and the window does not handle it", cmd)
+		}
+	}
+}
+
+// live is a page or a script with its commented-out lines removed.
+//
+// Searching the raw source for a definition or a call finds one that has
+// been commented out, which the browser never makes: the hook is dead,
+// every Eval reaching for it finds nothing, and nothing says so. That is
+// the same silence these tests exist to break, arrived at by a different
+// edit. Here rather than beside the splash tests because this file is
+// built in every lane and those are built only with the gui tag.
+func live(html string) string {
+	var kept []string
+	for _, line := range strings.Split(html, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// pageScripts is every script the Web UI ships, joined, with commented
+// lines dropped: a call the browser never makes is not one a test here
+// should find.
+func pageScripts(t *testing.T) []byte {
+	t.Helper()
+	files, err := filepath.Glob("../daemon/static/js/*.js")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no page scripts under ../daemon/static/js (%v); this test no longer reads what it thinks it reads", err)
+	}
+	var all []string
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		all = append(all, live(string(b)))
+	}
+	return []byte(strings.Join(all, "\n"))
+}
+
+// And the function the page calls is the one Go binds.
+//
+// The command strings are checked above; the name they travel through is
+// a third string that had nothing checking it. gui.go binds
+// "lcWindowCommand" and the page tests for window.lcWindowCommand before
+// drawing the title-bar buttons, so a rename on either side leaves a
+// window with no minimise, maximise or close on Windows, where the system
+// frame is taken away, and every test green: a call to a function that
+// was never bound fails silently, and the page's own check hides the
+// buttons rather than erroring.
+//
+// It lives here, beside the command check, because the two are one
+// contract between the page and this package. This file carries no build
+// tag and reads gui.go as text, so it runs in every lane, the Windows CI
+// run included, and not only in the gui lane that compiles gui.go. Both
+// directions: a name Go binds that the page never calls is dead, and one
+// the page calls that Go never binds is the silent failure above.
+func TestTheFunctionsThePageCallsAreTheOnesGoBinds(t *testing.T) {
+	src, err := os.ReadFile("gui.go")
+	if err != nil {
+		t.Fatalf("read gui.go: %v", err)
+	}
+	bound := map[string]bool{}
+	for _, m := range regexp.MustCompile(`\.Bind\("(\w+)"`).FindAllStringSubmatch(live(string(src)), -1) {
+		bound[m[1]] = true
+	}
+	if len(bound) == 0 {
+		t.Fatal("no Bind in gui.go; this test no longer reads what it thinks it reads")
+	}
+	js := string(pageScripts(t))
+	for name := range bound {
+		if !strings.Contains(js, "window."+name+"(") {
+			t.Errorf("gui.go binds %s and no page script calls window.%s(...)", name, name)
+		}
+	}
+	// Every lc-prefixed window function the page reaches for. The
+	// splash's own hooks (lcStatus, lcVersion) are defined by the splash
+	// and called from Go, and are checked in splash_test.go; the page
+	// scripts never touch them.
+	called := regexp.MustCompile(`window\.(lc[A-Z]\w*)`).FindAllStringSubmatch(js, -1)
+	if len(called) == 0 {
+		t.Fatal("no window.lc* in the page scripts; this test no longer reads what it thinks it reads")
+	}
+	reported := map[string]bool{}
+	for _, m := range called {
+		if !bound[m[1]] && !reported[m[1]] {
+			reported[m[1]] = true
+			t.Errorf("the page calls window.%s and gui.go does not bind it", m[1])
 		}
 	}
 }
