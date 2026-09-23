@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,6 +177,89 @@ func TestTheTreeIdentityRefusesAFileItCannotRead(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "locked.txt") {
 		t.Errorf("the refusal does not name the file it could not read:\n%s", stderr)
+	}
+}
+
+// A submodule is recorded by the commit it is pinned to, not refused.
+//
+// It reaches the same branch a stray repository does: git lists it as
+// one directory entry and nothing under it. Refusing it was fail-closed
+// but unfixable, because --exclude-standard does not apply to a tracked
+// path, so the refusal's own advice to ignore it could never work and
+// the tree would never stamp again. The pinned commit is what the index
+// records and what a fresh clone would check out, so that is the thing
+// to hash.
+func TestTheTreeIdentityRecordsASubmoduleByItsPinnedCommit(t *testing.T) {
+	dir := treeIDRepo(t)
+	upstream := t.TempDir()
+	run := func(where string, args ...string) error {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = where
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%s: %w\n%s", strings.Join(args, " "), err, out)
+		}
+		return nil
+	}
+	for _, args := range [][]string{
+		{"git", "init", "-q", "."},
+		{"git", "config", "user.email", "t@example.invalid"},
+		{"git", "config", "user.name", "t"},
+	} {
+		if err := run(upstream, args...); err != nil {
+			t.Fatalf("set up the upstream: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(upstream, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := run(upstream, "git", "add", "-A"); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if err := run(upstream, "git", "commit", "-qm", "v1"); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	// Adding a submodule from a local path is refused by default on
+	// newer git, and the override is itself version-dependent.
+	if err := run(dir, "git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream, "sub"); err != nil {
+		t.Skipf("this git will not add a submodule from a local path: %v", err)
+	}
+	if err := run(dir, "git", "commit", "-qm", "add the submodule"); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	pinned, stderr, ok := treeID(t, dir)
+	if !ok {
+		t.Fatalf("a tracked submodule was refused, and no .gitignore can remove a tracked path:\n%s", stderr)
+	}
+
+	// Bumping it must move the identity: it is a different tree to build.
+	if err := os.WriteFile(filepath.Join(upstream, "b.txt"), []byte("two\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	for _, args := range [][]string{{"git", "add", "-A"}, {"git", "commit", "-qm", "v2"}} {
+		if err := run(upstream, args...); err != nil {
+			t.Fatalf("%v", err)
+		}
+	}
+	sub := filepath.Join(dir, "sub")
+	if err := run(sub, "git", "fetch", "-q", "origin"); err != nil {
+		t.Skipf("cannot fetch into the submodule here: %v", err)
+	}
+	if err := run(sub, "git", "-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if err := run(dir, "git", "add", "sub"); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	bumped, stderr, ok := treeID(t, dir)
+	if !ok {
+		t.Fatalf("the script refused after the submodule was bumped:\n%s", stderr)
+	}
+	if bumped == pinned {
+		t.Error("bumping the submodule did not move the tree identity, so a release could be built from a submodule the gate never saw")
 	}
 }
 
