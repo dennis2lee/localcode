@@ -10,11 +10,11 @@ import (
 // A hang has to end by itself, and it has to say what hung.
 //
 // On 2026-09-22 the "Test the Windows code paths" step of gui-windows.yml,
-// which takes about 75 seconds, ran for 38 minutes. The job carried no
+// which takes about 75 seconds, ran for 44 minutes. The job carried no
 // timeout-minutes and GitHub's default is six hours, so nothing was going
-// to stop it; it was force-cancelled by hand, and a force-cancelled
-// attempt keeps no log, so which test hung is still unknown. The re-run
-// passed in two minutes.
+// to stop it; it was force-cancelled by hand, and the re-run replaced the
+// log, so which step stalled is still unknown. The re-run passed in two
+// minutes.
 //
 // Two rules come out of that, and this file holds both. Every job gets a
 // timeout-minutes, so a wedged runner ends in minutes rather than hours.
@@ -24,23 +24,43 @@ import (
 // stack, which names the test. Go's default of ten minutes per package is
 // both looser than anything here needs and silent about being a default,
 // which is how a step with no opinion about hanging came to have one.
+//
+// Neither rule covers everything. `go test -timeout` bounds the test
+// binary's own run, not the download, compile and link around it, and a
+// stall there is the likeliest explanation of the incident above. That
+// one needs a bound on the step, which the workflows carry and which is
+// not checked here: a step is where a judgement about its own duration
+// belongs, and a rule saying every step must guess at one would be
+// noise.
 
 // ciFiles are the files that run this repo's tests unattended.
+//
+// The workflows are found rather than listed. A list would cover the two
+// that exist and say nothing about the third somebody adds, which is the
+// same defect these tests exist to catch one level down: a rule that
+// holds only where you remembered to apply it.
 func ciFiles(t *testing.T) map[string]string {
 	t.Helper()
 	root := filepath.Join("..", "..")
 	out := map[string]string{}
-	for _, rel := range []string{
-		filepath.Join(".github", "workflows", "gate.yml"),
-		filepath.Join(".github", "workflows", "gui-windows.yml"),
-		filepath.Join("scripts", "check.sh"),
-	} {
+	read := func(rel string) {
 		raw, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}
 		out[rel] = string(raw)
 	}
+	workflows, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.y*ml"))
+	if err != nil {
+		t.Fatalf("list workflows: %v", err)
+	}
+	if len(workflows) == 0 {
+		t.Fatal("no workflows found, so this test is checking nothing")
+	}
+	for _, abs := range workflows {
+		read(filepath.Join(".github", "workflows", filepath.Base(abs)))
+	}
+	read(filepath.Join("scripts", "check.sh"))
 	return out
 }
 
@@ -86,13 +106,16 @@ func hasTimeoutFlag(invocation string) bool {
 // would tell us here.
 func TestEveryWorkflowJobCarriesATimeout(t *testing.T) {
 	for rel, body := range ciFiles(t) {
-		if !strings.HasSuffix(rel, ".yml") {
+		if !strings.HasSuffix(rel, ".yml") && !strings.HasSuffix(rel, ".yaml") {
 			continue
 		}
 		lines := strings.Split(body, "\n")
 		inJobs := false
 		job, jobLine := "", 0
 		bounded := false
+		// Counted so a parser that stopped recognising jobs fails loudly
+		// rather than passing every file by finding nothing to check.
+		found := 0
 		// finish closes the job being read, if any.
 		finish := func() {
 			if job != "" && !bounded {
@@ -116,6 +139,7 @@ func TestEveryWorkflowJobCarriesATimeout(t *testing.T) {
 			if name, ok := strings.CutPrefix(line, "  "); ok && !strings.HasPrefix(name, " ") && strings.HasSuffix(strings.TrimSpace(name), ":") {
 				finish()
 				job, jobLine, bounded = strings.TrimSuffix(strings.TrimSpace(name), ":"), i+1, false
+				found++
 				continue
 			}
 			if job != "" && strings.HasPrefix(line, "    timeout-minutes:") {
@@ -123,8 +147,8 @@ func TestEveryWorkflowJobCarriesATimeout(t *testing.T) {
 			}
 		}
 		finish()
-		if job == "" && !strings.Contains(body, "timeout-minutes:") {
-			t.Errorf("%s: no job was read, so this test is checking nothing", rel)
+		if found == 0 {
+			t.Errorf("%s: no job was read out of this workflow, so this test is checking nothing in it", rel)
 		}
 	}
 }
