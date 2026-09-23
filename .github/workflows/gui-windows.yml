@@ -46,7 +46,7 @@ jobs:
     # which test hung is not known. Normal is about two minutes end to
     # end, so this is roughly seven times that: long enough never to
     # fire on a slow runner, short enough to be a bound.
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -161,11 +161,17 @@ jobs:
       # package, which is both looser and silent about being a default.
       - name: Test the Windows code paths
         shell: bash
+        # The step bound is the one that would have caught the incident.
+        # `go test -timeout` bounds the test binary's own run and nothing
+        # else, so a stalled module download, a slow link, or Defender
+        # scanning eight freshly written .exe files sits outside it. This
+        # step measures about 75 seconds.
+        timeout-minutes: 10
         run: |
-          go test -timeout 6m ./internal/update/ ./internal/childproc/
-          go test -timeout 6m ./internal/userdirs/ ./internal/skills/ ./internal/rules/
-          go test -timeout 6m ./internal/session/ ./internal/daemon/
-          go test -timeout 6m ./cmd/localcode/
+          go test -timeout 5m ./internal/update/ ./internal/childproc/
+          go test -timeout 5m ./internal/userdirs/ ./internal/skills/ ./internal/rules/
+          go test -timeout 5m ./internal/session/ ./internal/daemon/
+          go test -timeout 5m ./cmd/localcode/
         env:
           CGO_ENABLED: '0'
 
@@ -239,6 +245,7 @@ jobs:
       # `run:` under PowerShell reports only the last command's status.
       - name: Test every package
         shell: bash
-        run: go test ./... -count=1 -timeout 6m
+        timeout-minutes: 10
+        run: go test ./... -count=1 -timeout 5m
         env:
           CGO_ENABLED: '0'

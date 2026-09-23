@@ -20,13 +20,24 @@ Project rules for agents working in this repo.
   the same finding in its own scheduling notes (44s serial against 61s
   all-at-once while four agents built). Wait for the reviewer, or read
   its report first.
-* **Every `go test` that runs unattended carries `-timeout`.** The job
-  timeout in a workflow stops a wedged runner and reports nothing, while
-  `go test` reaching its own timeout panics and names the test in a
-  goroutine dump. Two tests in `cmd/localcode` hold this over the
-  workflows and over `check.sh`, along with a `timeout-minutes` on every
-  workflow job. A `build` job without one ran 38 minutes on a 75-second
-  step, and the force-cancel threw away the log that would have said why.
+* **Bound every unattended run, innermost first: `go test -timeout` <
+  step `timeout-minutes` < job `timeout-minutes`.** Each says something
+  the outer one cannot. A `go test` timeout panics and names the test in
+  a goroutine dump. A step timeout names the step, which is the only
+  thing that catches a stall in the part of `go test` that is not the
+  test: downloading modules, compiling, linking, waiting on the build
+  cache lock. A job timeout names nothing and cancels the run. Two tests
+  in `cmd/localcode` hold the inner two over the workflows and
+  `check.sh`. A `build` job with no bound at all ran 44 minutes on a
+  75-second step.
+* **Size a `-timeout` from the slowest package, not the lane**, because
+  `go test` applies it per test binary. `internal/tui` under `-race` is
+  most of the race lane and has measured around 500s on the CI macOS
+  runner, against Go's silent 600s default. Read the real numbers from a
+  recent run before changing one.
+* **Download a failed run's log before re-running it.** A re-run replaces
+  the attempt's log, and a force-cancelled attempt may keep none at all.
+  The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
   * `go test ./... -race -parallel 8 -count=1 -timeout 6m` — 2,072 tests
     over 31 packages. `-count=1` matters: a cached PASS is a statement about a
