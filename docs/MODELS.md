@@ -143,6 +143,7 @@ Send a message. Check failures in this order:
 | `no EC2 IMDS role found`, `failed to refresh cached credentials` | See below. |
 | `ValidationException: ... Your account is not authorized to invoke this API operation` | See below. |
 | `ValidationException: ... 'temperature' is deprecated for this model` | See below. |
+| `ValidationException: Value '' at 'toolConfig.tools.N.member.toolSpec.description' failed to satisfy constraint` | An MCP tool with no description, on a version before v0.143.1. Upgrade. |
 
 **`no EC2 IMDS role found` or `failed to refresh cached credentials`**
 

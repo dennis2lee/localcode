@@ -392,6 +392,10 @@ func (m *Manager) add(ctx context.Context, name string, sc config.MCPServerConfi
 			warnings = append(warnings, fmt.Errorf("mcp server %q: marshal schema for tool %q: %w — skipping that tool", name, t.Name, err))
 			continue
 		}
+		if top, ok := objectSchema(schema); !ok {
+			warnings = append(warnings, fmt.Errorf("mcp server %q: tool %q describes its input as %s, and MCP requires an object — skipping that tool", name, t.Name, top))
+			continue
+		}
 		out = append(out, mcpTool{
 			manager:     m,
 			server:      name,
@@ -401,6 +405,41 @@ func (m *Manager) add(ctx context.Context, name string, sc config.MCPServerConfi
 		})
 	}
 	return out, warnings
+}
+
+// objectSchema reports whether an advertised input schema describes an
+// object, and what it describes instead when it does not.
+//
+// MCP requires a tool's inputSchema to be an object schema, and so does
+// every model provider: Bedrock refuses the whole request, every turn,
+// when one tool in the list breaks the rule. A tool that breaks it is
+// skipped here, where the refusal can name the server, rather than left
+// to take every request down with it. A missing schema and one with no
+// "type" are let through, because both are read as an object with no
+// stated fields.
+func objectSchema(raw json.RawMessage) (string, bool) {
+	var top any
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return "something that is not JSON", false
+	}
+	switch s := top.(type) {
+	case nil:
+		return "", true
+	case map[string]any:
+		t, stated := s["type"]
+		if !stated || t == "object" {
+			return "", true
+		}
+		b, _ := json.Marshal(t)
+		return "type " + string(b), false
+	case []any:
+		return "an array", false
+	case string:
+		return "a string", false
+	case bool:
+		return "a boolean", false
+	}
+	return "a number", false
 }
 
 // Ping starts one configured MCP server, completes the MCP handshake, lists

@@ -65,7 +65,13 @@ jobs:
         with:
           node-version: '22'
 
+      # 25 sits between the race lane's own -timeout (20m, in
+      # scripts/check.sh) and the job bound (30m), so the innermost and
+      # most informative bound always fires first: a `go test` timeout
+      # names the test, a step timeout names the step, and a job timeout
+      # names nothing.
       - name: Run the gate
+        timeout-minutes: 25
         # bash explicitly. A multi-line `run:` under PowerShell reports
         # only the last command's exit code, which is how 27 failing tests
         # once passed for green; this job is not on Windows, and the habit
