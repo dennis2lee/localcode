@@ -273,7 +273,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `agent.switched` | `{"agent"}` |
 | `thinking.delta` | `{"text"}` while reasoning streams; transient, never logged |
 | `thinking.end` | reasoning block ended; transient, empty payload |
-| `error` | a turn failure; distinct from `turn.cancelled`, which is a person stopping it on purpose |
+| `error` | `{"error", "recovered"?, "history_replaced"?}` a turn failure; distinct from `turn.cancelled`, which is a person stopping it on purpose. `recovered: true` is a notice from a turn that carries on. `history_replaced: true` marks the trim that dropped the oldest messages to fit the window: the context usage count went with them, as after a compaction |
 | `mcp.status` | `{"servers": [{"name", "status", "detail"}]}`; daemon-wide, complete list every time |
 | `session.activity` | `{"session", "busy"}`; daemon-wide turn indicator |
 | `session.archived` | `{"session", "archived"}`; either direction, daemon-wide |

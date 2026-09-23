@@ -228,15 +228,22 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 					}},
 				}}
 				resetPending()
-				inDebate = false
+				// The debate mark stays, as it does live. The live
+				// session keeps its mark through a compaction that lands
+				// inside a debate and lets collapsedDebate decide by
+				// content whether the mark still points at the debate's
+				// opening. Dropping it here meant a debate whose first
+				// round compacted at its top collapsed live and kept every
+				// round, briefs included, after a restart.
 				droppedImages = 0
 			}
 
 		case events.TypeCleared:
 			// A barrier moves everything, the debate mark included: an
 			// offset into a history that no longer exists would collapse
-			// the wrong span. The same goes for the compaction above,
-			// which is why both reset it.
+			// the wrong span. A compaction keeps it, because the live
+			// session does and collapsedDebate confirms the mark by
+			// content; a clear has no debate left to confirm it against.
 			inDebate = false
 			// The barrier with nothing behind it. Compaction replaces the
 			// history with a summary; this replaces it with nothing, which
@@ -399,13 +406,6 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			addModelTotals(cum, dataString(ev.Data, "model"), callTokensOf(ev.Data))
 
 		case events.TypeCompacted, events.TypeCleared, events.TypeRewound, events.TypeDebateEnded:
-			// A debate that had nothing to collapse left the history,
-			// and so the count, as it was. Older logs carry no
-			// "collapsed" and are reset, which is where the count's
-			// absence errs: the next request is sized from the estimate.
-			if ev.Type == events.TypeDebateEnded && ev.Data["collapsed"] == false {
-				continue
-			}
 			// setHistory drops the count live on each of these, so the
 			// snapshot shouldn't carry forward past this point — but the
 			// cumulative totals are never cleared by any of them, and the
@@ -418,6 +418,17 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			// and the next request would be sized against it. Live, the
 			// collapse goes through setHistory and the count goes with
 			// it; a restart has to reach the same state.
+			//
+			// Every debate's end, not only one whose "collapsed" is true.
+			// The history pass decides the collapse again from the history
+			// it rebuilds, and that history can differ from the live one:
+			// a trim the live session made to fit the window is not in
+			// the log, so a mark the live session found stale can be
+			// sound here, and the rounds collapse on restart where they
+			// did not live. A count kept on the live session's word would
+			// then describe rounds the restored history no longer holds.
+			// Dropped, the next request is sized from the estimate, which
+			// is the direction a missing count errs in.
 			//
 			// This is why the rewind filter is not applied to the usage
 			// pass. The snapshot is what the context gauge shows and it is

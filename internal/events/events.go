@@ -58,7 +58,12 @@ const (
 	// is not looking simply misses it, which is correct.
 	TypeThinkingDelta Type = "thinking.delta"
 	TypeThinkingEnd   Type = "thinking.end"
-	TypeError         Type = "error"
+	// TypeError is {"error","recovered"?,"history_replaced"?}.
+	// "recovered": true is a notice from a turn that carries on.
+	// "history_replaced": true marks the trim that dropped the oldest
+	// messages to fit the window: the daemon's usage count went with
+	// them, and a client's context gauge has to let go of its reading.
+	TypeError Type = "error"
 
 	// TypeMCPStatus reports the state of every configured MCP server:
 	// {"servers":[{"name","status","detail"}]}, status being one of

@@ -240,3 +240,21 @@ for (const [name, data, kept] of [
     assert.equal(/context: 85\.0%/.test(text), kept, text);
   });
 }
+
+// A trim that dropped the oldest messages replaced the history, and the
+// turn can still fail after it with no usage event to follow. Its notice
+// says the history was replaced; any other recovered notice leaves the
+// reading alone.
+for (const [name, data, kept] of [
+  ['a trim', { error: 'still too long', recovered: true, history_replaced: true }, false],
+  ['another notice', { error: 'retrying', recovered: true }, true],
+]) {
+  test(`a recovered error from ${name} ${kept ? 'keeps' : 'blanks'} the context percent`, async () => {
+    const app = await load();
+    app.applyEvent({ type: 'usage', data: { percent: 85, tps: 13.5, model: 'reported-model' } });
+    app.applyEvent({ type: 'error', data });
+    app.renderStatusBar();
+    const text = app.el('status-text').textContent;
+    assert.equal(/context: 85\.0%/.test(text), kept, text);
+  });
+}

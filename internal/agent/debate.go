@@ -176,10 +176,14 @@ func (l *Loop) runDebate(ctx context.Context, d debateRun) error {
 				sessions[r.reviewer] = r.session
 			}
 			if r.err != nil {
-				l.Store.Append(d.sessionID, events.TypeError, map[string]any{
-					"error":     fmt.Sprintf("the %s agent could not review round %d: %v", r.reviewer, round, r.err),
-					"recovered": true,
-				})
+				// A reviewer that Stop cancelled did not fail, and saying
+				// it could not review puts a failure on a deliberate act.
+				if ctx.Err() == nil {
+					l.Store.Append(d.sessionID, events.TypeError, map[string]any{
+						"error":     fmt.Sprintf("the %s agent could not review round %d: %v", r.reviewer, round, r.err),
+						"recovered": true,
+					})
+				}
 				continue
 			}
 			answered++
@@ -197,17 +201,27 @@ func (l *Loop) runDebate(ctx context.Context, d debateRun) error {
 			})
 		}
 
+		// Every reviewer that answered has to approve. A panel where one
+		// approves and one does not is a disagreement, and taking the
+		// approval would be picking the answer that ends the work. Asked
+		// before Stop is: every review came back and approved, so the
+		// debate ended in agreement whatever was pressed after.
+		if answered > 0 && approvals == answered && answered == len(d.reviewers) {
+			l.endDebate(d, "approved", round, true)
+			return nil
+		}
+		// Stop pressed while the reviewers were reading. The author's
+		// phase already tells this apart from a failure; the reviews
+		// did not, and a deliberate Stop ended the debate as "no review
+		// came back".
+		if err := ctx.Err(); err != nil {
+			l.endDebate(d, "stopped", round, false)
+			return err
+		}
 		if answered == 0 {
 			// Nobody reviewed anything. Looping would spend the budget on
 			// a provider that is not answering.
 			l.endDebate(d, "failed", round, false)
-			return nil
-		}
-		// Every reviewer that answered has to approve. A panel where one
-		// approves and one does not is a disagreement, and taking the
-		// approval would be picking the answer that ends the work.
-		if approvals == answered && answered == len(d.reviewers) {
-			l.endDebate(d, "approved", round, true)
 			return nil
 		}
 		// A round in which the author called no tool at all changed

@@ -429,9 +429,15 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				trimmed, changed := forceFit(run.system, l.history(sessionID), trimBudget)
 				if changed {
 					l.setHistory(sessionID, trimmed)
+					// "history_replaced" because the trim goes through
+					// setHistory, which drops the usage count, and a
+					// client's context gauge has to let go of its reading
+					// with it: the turn can still fail after this, and
+					// then no usage event comes to replace the old fill.
 					l.Store.Append(sessionID, events.TypeError, map[string]any{
-						"error":     "still too long — the oldest part of the conversation has been dropped so this turn can continue",
-						"recovered": true,
+						"error":            "still too long — the oldest part of the conversation has been dropped so this turn can continue",
+						"recovered":        true,
+						"history_replaced": true,
 					})
 					continue
 				}

@@ -577,6 +577,9 @@ const handlers = {
     // it red would say the turn is over when the reply is still coming.
     if (d.recovered) {
       appendTool(`[${d.error || ''}]`);
+      // A trim that dropped the oldest messages replaced the history the
+      // gauge was a reading of.
+      if (d.history_replaced === true) forgetContextFill();
       return;
     }
     session.runningTool = '';

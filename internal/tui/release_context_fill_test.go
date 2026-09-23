@@ -61,3 +61,30 @@ func TestADebateThatCollapsedNothingKeepsTheContextGauge(t *testing.T) {
 		})
 	}
 }
+
+// A trim that dropped the oldest messages to fit the window replaced the
+// history through the same path a compaction does, and the turn can still
+// fail after it, so no usage event comes to replace the old fill. The
+// trim's own notice says the history was replaced; any other recovered
+// notice leaves the reading alone.
+func TestATrimThatReplacedTheHistoryBlanksTheContextGauge(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		data map[string]any
+		kept bool
+	}{
+		{"a trim", map[string]any{"error": "still too long", "recovered": true, "history_replaced": true}, false},
+		{"another notice", map[string]any{"error": "retrying", "recovered": true}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := New(client.New("http://unused.invalid"), "s1", "general-purpose", make(chan events.Event), false)
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+			m = updated.(Model)
+			m.applyEvent(events.Event{Type: events.TypeUsage, Data: map[string]any{"percent": 85.0, "tps": 12.0, "show_tps": true}})
+			m.applyEvent(events.Event{Type: events.TypeError, Data: c.data})
+			if kept := strings.Contains(m.View().Content, "context: 85.0%"); kept != c.kept {
+				t.Errorf("gauge kept = %v, want %v:\n%s", kept, c.kept, m.View().Content)
+			}
+		})
+	}
+}

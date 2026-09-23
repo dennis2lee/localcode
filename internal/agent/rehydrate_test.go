@@ -304,14 +304,16 @@ func TestRehydrateUsageDropsTheCountADebateCollapseInvalidates(t *testing.T) {
 		t.Errorf("a count survived a debate that says it collapsed")
 	}
 
-	// Said to have collapsed nothing: the history was not replaced live,
-	// the count was not dropped, and a restart keeps it too.
-	latest, haveUsage, _ = rehydrateUsage([]events.Event{
+	// Said to have collapsed nothing: reset all the same. The history
+	// pass decides the collapse again from the history it rebuilds, which
+	// can differ from the live one (a trim to fit the window is not in the
+	// log), so the live session's word does not describe the restored
+	// history. A dropped count errs toward the estimate.
+	if _, haveUsage, _ := rehydrateUsage([]events.Event{
 		ev(events.TypeUsage, map[string]any{"input_tokens": 12900, "max_context": 16384, "model": "m1"}),
 		ev(events.TypeDebateEnded, map[string]any{"rounds": 1, "collapsed": false}),
-	})
-	if !haveUsage || latest.InputTokens != 12900 {
-		t.Errorf("a debate that collapsed nothing dropped the count on restart: have=%v %+v", haveUsage, latest)
+	}); haveUsage {
+		t.Errorf("a count survived a debate end on the live session's word that nothing collapsed")
 	}
 }
 

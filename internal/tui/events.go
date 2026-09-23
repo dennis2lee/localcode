@@ -489,6 +489,11 @@ func (m *Model) applyEvent(ev events.Event) {
 			if msg, ok := ev.Data["error"].(string); ok {
 				m.appendTool("[" + msg + "]")
 			}
+			// A trim that dropped the oldest messages replaced the
+			// history the gauge was a reading of.
+			if replaced, _ := ev.Data["history_replaced"].(bool); replaced {
+				m.forgetContextFill()
+			}
 			break
 		}
 		m.endTurn()
