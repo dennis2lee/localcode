@@ -78,9 +78,13 @@ export function figuresOf(t) {
 // and the 70/90 context thresholds of the status line belong to this
 // conversation's window fill, a different thing entirely.
 export function renderUsage() {
-  const models = (app.usageSummary && app.usageSummary.models) || {};
-  const names = Object.keys(models).sort((a, b) => totalOf(models[b]) - totalOf(models[a]));
   usageRowsEl.innerHTML = '';
+  // No answer yet, or none coming: the totals are unknown, which is not
+  // the same as none. "No usage recorded yet." under "the totals could not
+  // be read" said both at once.
+  if (!app.usageSummary) return;
+  const models = app.usageSummary.models || {};
+  const names = Object.keys(models).sort((a, b) => totalOf(models[b]) - totalOf(models[a]));
   if (names.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'meta';
@@ -158,25 +162,34 @@ function usageLegend(rowsShown, largest) {
 export function renderUsageScope() {
   const s = app.usageSummary || {};
   const sessions = count(s.sessions);
+  // Sessions, not conversations: a sub-agent's, a scheduled run's and a
+  // debate reviewer's are counted, and none is a conversation in the list.
   usageScopeEl.textContent =
-    `Token usage across every conversation (${sessions} conversation${sessions === 1 ? '' : 's'})`;
+    `Token usage across every conversation (${sessions} session${sessions === 1 ? '' : 's'})`;
+  // Both lines, as /usage all prints both: what could not be read, and
+  // what the figures are counted from.
+  const lines = [];
   const unread = count(s.unread);
   if (unread > 0) {
-    usageNoteEl.textContent =
-      `${unread} conversation${unread === 1 ? '' : 's'} could not be read and ${unread === 1 ? 'is' : 'are'} not in this total.`;
-  } else {
-    usageNoteEl.textContent =
-      'Counted from the conversations’ own logs, archived ones and sub-agents’ included. A turn that was later undone still cost what it cost, so it is still counted.';
+    lines.push(`${unread} session log${unread === 1 ? '' : 's'} could not be read and ${unread === 1 ? 'is' : 'are'} not in this total.`);
   }
+  lines.push('Counted from the sessions’ own logs, archived conversations and sub-agents included. A turn that was later undone still cost what it cost, so it is still counted.');
+  usageNoteEl.textContent = lines.join(' ');
 }
 
 export function closeUsage() {
   usageView.close();
 }
 
+// asking counts the requests openUsage has made, so an answer to one a
+// later opening has overtaken is dropped rather than drawn over the newer
+// one.
+let asking = 0;
+
 // openUsage asks the daemon for the totals and draws them. The answer is
 // the moment it was asked for; reopening the window asks again.
 export async function openUsage() {
+  const mine = ++asking;
   usageView.open();
   app.usageSummary = null;
   renderUsage();
@@ -186,10 +199,12 @@ export async function openUsage() {
   try {
     summary = await apiClient.getUsage('all');
   } catch (err) {
+    if (mine !== asking) return;
     usageScopeEl.textContent = 'Token usage across every conversation';
     usageNoteEl.textContent = `The totals could not be read: ${err}`;
     return;
   }
+  if (mine !== asking) return;
   app.usageSummary = summary && typeof summary === 'object' ? summary : {};
   renderUsage();
   renderUsageScope();

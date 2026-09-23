@@ -237,16 +237,20 @@ func usageAcrossReport(w usageWindow, totals map[string]modelTotals, sessions, u
 	if len(totals) == 0 {
 		return fmt.Sprintf("No usage recorded for %s.", w.name)
 	}
-	heading := fmt.Sprintf("Token usage across %s (%d conversation", w.name, sessions)
+	// Sessions, not conversations: a sub-agent's, a scheduled run's and a
+	// debate reviewer's are counted, and none of them is a conversation in
+	// the list, so "4 conversations" for one listed conversation that
+	// delegated three times named things nobody could find.
+	heading := fmt.Sprintf("Token usage across %s (%d session", w.name, sessions)
 	if sessions != 1 {
 		heading += "s"
 	}
 	var b strings.Builder
 	b.WriteString(usageReport(heading+"):\n", totals))
 	if unread > 0 {
-		fmt.Fprintf(&b, "\n\n%d conversation(s) could not be read and are not in this total.", unread)
+		fmt.Fprintf(&b, "\n\n%d session log(s) could not be read and are not in this total.", unread)
 	}
-	b.WriteString("\n\nCounted from the conversations' own logs, archived ones included. " +
+	b.WriteString("\n\nCounted from the sessions' own logs, archived conversations and sub-agents included. " +
 		"A turn that was later undone still cost what it cost, so it is still counted.")
 	return b.String()
 }

@@ -94,7 +94,7 @@ func TestUsageAcrossCountsEveryConversation(t *testing.T) {
 	}
 
 	report := usageAcrossReport(usageWindow{name: "every conversation"}, totals, sessions, unread)
-	for _, want := range []string{"muse", "opus", "Grand total", "3 conversations"} {
+	for _, want := range []string{"muse", "opus", "Grand total", "3 sessions"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("the report does not mention %q: %s", want, report)
 		}

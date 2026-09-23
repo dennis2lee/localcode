@@ -55,7 +55,7 @@ test('opening the window asks the daemon for every conversation\'s totals', asyn
   assert.equal(asked.length, 1, 'the window did not ask the daemon');
   assert.equal(asked[0].query.get('window'), 'all');
   assert.deepEqual(figuresByModel(app), { 'model-a': 'input 100 · output 20 · total 120 (2 calls)' });
-  assert.match(app.el('usage-scope').textContent, /3 conversations/);
+  assert.match(app.el('usage-scope').textContent, /\(3 sessions\)/);
 });
 
 test('each bar says what it holds: input and output as separate segments', async () => {
@@ -178,7 +178,8 @@ test('huge totals never touch the status line or its warning thresholds', async 
 test('a conversation that cannot be read is named, not silently dropped', async () => {
   const app = await withUsage(summary({ 'model-a': figures(1, 1, 1) }, { unread: 2 }));
   await openUsage(app);
-  assert.match(app.el('usage-note').textContent, /2 conversations could not be read and are not in this total/);
+  assert.match(app.el('usage-note').textContent, /2 session logs could not be read and are not in this total/);
+  assert.match(app.el('usage-note').textContent, /Counted from the sessions’ own logs/);
 });
 
 test('totals the daemon could not give are said, not drawn as nothing', async () => {
@@ -186,6 +187,7 @@ test('totals the daemon could not give are said, not drawn as nothing', async ()
   await openUsage(app);
   assert.match(app.el('usage-note').textContent, /could not be read: .*connection refused/);
   assert.deepEqual(rows(app), []);
+  assert.doesNotMatch(app.el('usage-rows').textContent, /No usage recorded yet/, 'an unknown total was drawn as none');
 });
 
 test('closing the window closes it', async () => {
@@ -193,4 +195,31 @@ test('closing the window closes it', async () => {
   await openUsage(app);
   app.el('usage-close').fire('click');
   assert.equal(app.internals.usageView.isOpen, false);
+});
+
+test('one session is one session', async () => {
+  const app = await withUsage(summary({ 'model-a': figures(1, 1, 1) }, { sessions: 1, unread: 1 }));
+  await openUsage(app);
+  assert.match(app.el('usage-scope').textContent, /\(1 session\)/);
+  assert.match(app.el('usage-note').textContent, /1 session log could not be read and is not in this total/);
+});
+
+// Closed and opened again while the first answer is still on its way: the
+// older answer, arriving last, is not drawn over the newer one.
+test('an answer an opening has overtaken is not drawn', async () => {
+  let answer = 0;
+  const releases = [];
+  const app = await withUsage(() => new Promise((resolve) => {
+    const n = ++answer;
+    releases.push(() => resolve(summary({ [`model-${n}`]: figures(n, n, 1) })));
+  }));
+  app.el('usage-btn').fire('click');
+  app.el('usage-close').fire('click');
+  app.el('usage-btn').fire('click');
+  await app.settle();
+  releases[1]();
+  await app.settle();
+  releases[0]();
+  await app.settle();
+  assert.deepEqual(Object.keys(figuresByModel(app)), ['model-2'], 'the first answer, arriving last, was drawn over the second');
 });
