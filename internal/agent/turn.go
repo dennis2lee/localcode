@@ -422,7 +422,6 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				trimmed, changed := forceFit(run.system, l.history(sessionID), trimBudget)
 				if changed {
 					l.setHistory(sessionID, trimmed)
-					l.clearUsage(sessionID)
 					l.Store.Append(sessionID, events.TypeError, map[string]any{
 						"error":     "still too long — the oldest part of the conversation has been dropped so this turn can continue",
 						"recovered": true,

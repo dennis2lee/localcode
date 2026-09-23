@@ -163,6 +163,48 @@ func TestCollapsingADebateDropsTheCountItInvalidates(t *testing.T) {
 	}
 }
 
+// The invariant behind the case above, held where it cannot be
+// forgotten: replacing a history drops the count, whatever the reason
+// for replacing it.
+//
+// It used to be six separate calls beside six separate replacements,
+// and the seventh replacement did not have one. This walks the reasons
+// rather than the call sites, so a new one that forgets is caught here
+// and not in a session sized against a conversation that had gone.
+func TestReplacingAHistoryDropsTheCount(t *testing.T) {
+	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: 16384}
+	for _, replacement := range []struct {
+		name string
+		with []provider.Message
+	}{
+		{"a compaction, leaving a summary", []provider.Message{
+			{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("summary of what came before")}}}},
+		{"a clear, leaving nothing", nil},
+		{"a trim, leaving the end of it", []provider.Message{
+			{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("the last thing said")}}}},
+	} {
+		t.Run(replacement.name, func(t *testing.T) {
+			loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+			const sid = "s1"
+			before := []provider.Message{{Role: provider.RoleUser,
+				Content: []provider.Block{provider.TextBlock(strings.Repeat("a long conversation. ", 500))}}}
+			loop.setHistory(sid, before)
+			loop.mu.Lock()
+			loop.usage[sid] = sessionUsage{InputTokens: 12900, OutputTokens: 100, Measured: estimateTokens("", before)}
+			loop.mu.Unlock()
+			if got := loop.inputEstimate(sid, "", before); got != 12900 {
+				t.Fatalf("precondition: the count is not in force, estimate = %d", got)
+			}
+
+			loop.setHistory(sid, replacement.with)
+			measures := estimateTokens("", replacement.with)
+			if got := loop.inputEstimate(sid, "", replacement.with); got != measures {
+				t.Errorf("after %s the estimate is %d, want the %d the new history measures", replacement.name, got, measures)
+			}
+		})
+	}
+}
+
 // The measurement has to survive a restart, or every session read back
 // from disk takes the fallback above for ever rather than until its next
 // turn.

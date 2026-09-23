@@ -354,7 +354,7 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			addModelTotals(cum, dataString(ev.Data, "model"), latest.InputTokens, latest.OutputTokens)
 
 		case events.TypeCompacted, events.TypeCleared, events.TypeRewound:
-			// clearUsage() runs live right after each of these, so the
+			// setHistory drops the count live on each of these, so the
 			// snapshot shouldn't carry forward past this point — but the
 			// cumulative totals are never cleared by any of them, and the
 			// compaction call itself is billed too (if it reported usage).

@@ -145,12 +145,6 @@ func (l *Loop) getUsage(sessionID string) (sessionUsage, bool) {
 	return u, ok
 }
 
-func (l *Loop) clearUsage(sessionID string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.usage, sessionID)
-}
-
 // addCumulativeUsage folds one off-transcript model call (e.g. the
 // compaction summarization) into /usage's running totals, without touching
 // the latest-usage snapshot or emitting a usage event.
