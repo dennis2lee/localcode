@@ -38,6 +38,15 @@ func cacheTestEntries() []transcriptEntry {
 		{kind: entryModel, text: "- one\n- two\n\n| a | b |\n|---|---|\n| 1 | 2 |"},
 		{kind: entryUser, text: ""},        // renders to nothing, and is skipped
 		{kind: entryModel, text: "\n\n\n"}, // trims to nothing, and is skipped
+		// The third shape, and the one that is not the other two: it
+		// survives the newline trim, so it keeps its place between the
+		// entries either side, and then renders to nothing through
+		// markdown. Deciding "does this show" from the rendered text
+		// rather than from the entry dropped it and lost two blank
+		// lines.
+		{kind: entryModel, text: "   "},
+		{kind: entryTool, text: "  "},
+		{kind: entryUser, text: " \t "},
 		// A code block is never wrapped, so this line is wider than any
 		// terminal the transcript is laid out for, and the width pass
 		// pads the whole transcript out to it rather than to the width.

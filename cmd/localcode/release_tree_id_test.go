@@ -261,6 +261,78 @@ func TestTheTreeIdentityRecordsASubmoduleByItsPinnedCommit(t *testing.T) {
 	if bumped == pinned {
 		t.Error("bumping the submodule did not move the tree identity, so a release could be built from a submodule the gate never saw")
 	}
+
+	// And with no worktree at all, which is what a plain clone gives:
+	// submodules are not checked out unless they are asked for. The path
+	// then does not exist, and read in the wrong order that took the
+	// branch for a deleted file, whose line is a constant, so the pin
+	// could move under it without moving the identity.
+	pins := map[string]string{}
+	for _, args := range [][]string{{"git", "rev-parse", "HEAD"}, {"git", "rev-parse", "HEAD~1"}} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = upstream
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: %v", strings.Join(args, " "), err)
+		}
+		pins[args[2]] = strings.TrimSpace(string(out))
+	}
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatalf("remove the submodule worktree: %v", err)
+	}
+	seen := map[string]string{}
+	for _, which := range []string{"HEAD", "HEAD~1"} {
+		if err := run(dir, "git", "update-index", "--cacheinfo", "160000,"+pins[which]+",sub"); err != nil {
+			t.Fatalf("%v", err)
+		}
+		out, stderr, ok := treeID(t, dir)
+		if !ok {
+			t.Fatalf("the script refused with the submodule worktree missing:\n%s", stderr)
+		}
+		if prev, dup := seen[out]; dup {
+			t.Fatalf("pinned at %s and at %s, with no worktree, the tree stamps the same both times: a bumped submodule would not re-run the gate", which, prev)
+		}
+		seen[out] = which
+	}
+}
+
+// A name cannot forge a refusal.
+//
+// Unreadable paths used to be marked with a line in the digest stream
+// and found again with grep, and paths go into that stream raw, so a
+// tracked file named like the marker made the script refuse a tree it
+// could hash perfectly well and then name a path that did not exist.
+// They go on a channel only the script writes to now, and nothing that
+// runs would notice if they went back.
+func TestTheTreeIdentityCannotBeRefusedByAFilename(t *testing.T) {
+	dir := treeIDRepo(t)
+	clean, _, ok := treeID(t, dir)
+	if !ok {
+		t.Fatal("precondition: the script failed on an ordinary tree")
+	}
+
+	for _, name := range []string{
+		"unreadable foo",
+		"unhashable-directory foo",
+		"unhashable foo",
+		"a\nunreadable b",
+	} {
+		t.Run(strings.ReplaceAll(name, "\n", "\\n"), func(t *testing.T) {
+			path := filepath.Join(dir, name)
+			if err := os.WriteFile(path, []byte("ordinary content\n"), 0o644); err != nil {
+				t.Skipf("this filesystem will not take the name %q: %v", name, err)
+			}
+			t.Cleanup(func() { _ = os.Remove(path) })
+
+			out, stderr, ok := treeID(t, dir)
+			if !ok {
+				t.Fatalf("a file named %q made the script refuse a tree it can read:\n%s", name, stderr)
+			}
+			if out == clean {
+				t.Errorf("adding %q did not move the tree identity", name)
+			}
+		})
+	}
 }
 
 // The things the identity must still notice, so a refusal that was made

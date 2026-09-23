@@ -50,6 +50,27 @@ func turnSeparator(width int) string {
 // a user turn is wrapped here rather than by the viewport: the gutter has
 // to be drawn on every line of the block, and a wrap that happens after
 // the border is applied would put it on the first line only.
+// transcriptEntryShows reports whether an entry puts anything in the
+// transcript at all.
+//
+// The separator between entries owns the spacing, so an entry's own
+// leading and trailing newlines are stripped and one made of nothing but
+// those is not an entry. Only newlines are trimmed, never other
+// whitespace: the indentation of a code line the model emitted is
+// content, and a reply of three spaces is a reply that rendered to
+// nothing rather than one that was never there.
+//
+// Its own function because the render cache has to make the same call,
+// and it made a different one: it dropped an entry whose rendered text
+// came out empty, which is not the same set. A model entry of "   "
+// survives this test, renders to nothing through markdown, and still
+// occupies its place between the entries either side. Deciding that
+// twice put a different number of blank lines on the screen depending on
+// which path drew it.
+func transcriptEntryShows(e transcriptEntry) bool {
+	return strings.Trim(e.text, "\n") != ""
+}
+
 func renderTranscript(entries []transcriptEntry, width int) string {
 	if len(entries) == 0 {
 		return ""
@@ -62,16 +83,10 @@ func renderTranscript(entries []transcriptEntry, width int) string {
 	}
 	parts := make([]string, 0, len(entries))
 	for _, e := range entries {
-		// The separator below owns the spacing between entries, so an
-		// entry's own leading/trailing newlines are stripped first. Model
-		// replies almost always end with one, which stacked on top of the
-		// separator and left two blank lines between paragraphs instead of
-		// one. Only newlines are trimmed, never other whitespace — the
-		// indentation of a code line the model emitted is content.
-		text := strings.Trim(e.text, "\n")
-		if text == "" {
+		if !transcriptEntryShows(e) {
 			continue
 		}
+		text := strings.Trim(e.text, "\n")
 		switch e.kind {
 		case entryUser:
 			parts = append(parts, turnSeparator(width)+"\n"+userStyle.Width(width).Render(text))

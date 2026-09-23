@@ -54,14 +54,14 @@ digest="$(
 			printf '%s\n' "$f"
 			if [ -L "$f" ]; then
 				printf 'symlink %s\n' "$(readlink "$f")"
-			elif [ ! -e "$f" ]; then
-				# Tracked and deleted from the working tree.
-				printf 'absent\n'
 			elif [ -f "$f" ] && sum="$(shasum -a 256 < "$f" 2>/dev/null)"; then
 				# The executable bit is part of the build for the
 				# scripts/ and build/ directories. Mode and hash are
 				# printed by one printf, so a failure cannot leave half
 				# a line for the next path to be joined onto.
+				#
+				# First, because it is every entry but a handful and the
+				# branches under it each cost a git of their own.
 				if [ -x "$f" ]; then mode=x; else mode=-; fi
 				printf '%s %s\n' "$mode" "${sum%% *}"
 			elif link="$(git ls-files -s -- "$f" | awk '$1 == "160000" { print $2; exit }')" && [ -n "$link" ]; then
@@ -72,7 +72,17 @@ digest="$(
 				# apply to a tracked path, so refusing one would leave
 				# the tree permanently unstampable with a message
 				# prescribing something that cannot work.
+				#
+				# Before the absent branch, because a clone does not
+				# check submodules out unless it is asked to, and on
+				# such a tree the path does not exist at all. Read in
+				# the other order it took the absent line, which is a
+				# constant, and moving the pin changed nothing in the
+				# digest: the one thing about a submodule that can move.
 				printf 'gitlink %s\n' "$link"
+			elif [ ! -e "$f" ]; then
+				# Tracked and deleted from the working tree.
+				printf 'absent\n'
 			else
 				# Everything else that is not a readable regular file. A
 				# repository somebody left inside the checkout, whose

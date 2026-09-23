@@ -80,6 +80,10 @@ type transcriptWidthSlot struct {
 	// wrapped[i] is entries[i] styled and wrapped to width, and "" for an
 	// entry that shows nothing.
 	wrapped []string
+	// shows[i] is whether entries[i] takes a place in the transcript at
+	// all, which is not the same as rendering to something: see
+	// transcriptEntryShows.
+	shows []bool
 	// owns[i] is the widest line in wrapped[i]. It is at least width,
 	// and more when the entry holds a run of characters with nowhere to
 	// break: a long path, a hash, a line of minified code.
@@ -105,6 +109,7 @@ func (c *transcriptRenderCache) content(entries []transcriptEntry, width int) st
 	// prompt is replaced by the real one, and /clear empties it.
 	if len(slot.entries) > len(entries) {
 		slot.entries = slot.entries[:len(entries)]
+		slot.shows = slot.shows[:len(entries)]
 		slot.wrapped = slot.wrapped[:len(entries)]
 		slot.owns = slot.owns[:len(entries)]
 		slot.padded = slot.padded[:len(entries)]
@@ -114,6 +119,7 @@ func (c *transcriptRenderCache) content(entries []transcriptEntry, width int) st
 		switch {
 		case i >= len(slot.entries):
 			slot.entries = append(slot.entries, e)
+			slot.shows = append(slot.shows, false)
 			slot.wrapped = append(slot.wrapped, "")
 			slot.owns = append(slot.owns, 0)
 			slot.padded = append(slot.padded, "")
@@ -125,11 +131,11 @@ func (c *transcriptRenderCache) content(entries []transcriptEntry, width int) st
 		}
 		c.renders++
 		slot.entries[i] = e
-		body := renderTranscript([]transcriptEntry{e}, width)
-		if body == "" {
+		slot.shows[i] = transcriptEntryShows(e)
+		if !slot.shows[i] {
 			slot.wrapped[i], slot.owns[i], slot.padded[i] = "", 0, ""
 		} else {
-			slot.wrapped[i] = lipgloss.NewStyle().Width(width).Render(body)
+			slot.wrapped[i] = lipgloss.NewStyle().Width(width).Render(renderTranscript([]transcriptEntry{e}, width))
 			slot.owns[i] = lipgloss.Width(slot.wrapped[i])
 		}
 		fresh = append(fresh, i)
@@ -159,7 +165,7 @@ func (c *transcriptRenderCache) content(entries []transcriptEntry, width int) st
 
 	shown := make([]string, 0, len(slot.padded))
 	for i, p := range slot.padded {
-		if slot.wrapped[i] == "" {
+		if !slot.shows[i] {
 			continue
 		}
 		shown = append(shown, p)

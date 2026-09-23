@@ -233,6 +233,68 @@ func TestTheTimeoutFlagHasToBeRealToCount(t *testing.T) {
 	}
 }
 
+// timeoutValues' own cases, because the files it reads use one spelling
+// and one duration format, so the branches for the others are never
+// exercised by anything that runs. Removing them left the suite green.
+func TestTheLaneTimeoutsAreReadInEveryShapeTheyAreWritten(t *testing.T) {
+	const body = `
+	"race	race	go test ./... -race -parallel 8 -count=1 -timeout=1200s"
+	"plain	plain	go test ./... -count=1 -timeout 10m"
+	"go	gui	go build -tags gui ./... && go test -tags gui -race ./internal/gui/ -count=1 -timeout 600s"
+`
+	got := timeoutValues(t, body)
+	want := map[string]time.Duration{
+		"race":  20 * time.Minute,
+		"plain": 10 * time.Minute,
+		"gui":   10 * time.Minute,
+	}
+	for lane, d := range want {
+		if got[lane] != d {
+			t.Errorf("the %s lane read as %v, want %v: %v", lane, got[lane], d, got)
+		}
+	}
+	// The gui lane carries -race too, so a scan that matched that first
+	// filed it under race and one of the two disappeared.
+	if len(got) != 3 {
+		t.Errorf("read %d lanes, want 3: %v", len(got), got)
+	}
+	// A comment is not a bound here either.
+	if v := timeoutValues(t, "go test ./... -race # -timeout 5m"); len(v) != 0 {
+		t.Errorf("a commented-out timeout was read as one: %v", v)
+	}
+}
+
+// The stamp is the one file whose wrongness cannot be seen: `make dist`
+// trusts it. Every command that writes it has to be checked, which the
+// redirect was not and then the move was not.
+func TestTheStampIsNeverWrittenByAnUncheckedCommand(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "scripts", "check.sh"))
+	if err != nil {
+		t.Fatalf("read check.sh: %v", err)
+	}
+	writes := 0
+	for i, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") || !strings.Contains(trimmed, ".check-passed") {
+			continue
+		}
+		// Reading it, or removing it, cannot leave a wrong one behind.
+		if strings.HasPrefix(trimmed, "rm ") || strings.Contains(trimmed, "$stamp_file") {
+			continue
+		}
+		if !strings.Contains(trimmed, ">") && !strings.Contains(trimmed, "mv ") {
+			continue
+		}
+		writes++
+		if !strings.HasPrefix(trimmed, "elif !") && !strings.HasPrefix(trimmed, "if !") && !strings.Contains(trimmed, "||") {
+			t.Errorf("scripts/check.sh:%d writes the stamp without checking whether it worked, so a failure here reports a passing gate over a stamp for some other tree:\n\t%s", i+1, trimmed)
+		}
+	}
+	if writes == 0 {
+		t.Error("no stamp write found in check.sh, so this test is checking nothing")
+	}
+}
+
 // Every workflow job says how long it may run.
 //
 // Read from the text rather than a parsed document: this repo has no YAML
