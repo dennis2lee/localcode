@@ -79,6 +79,14 @@ digest="$(
 				# the other order it took the absent line, which is a
 				# constant, and moving the pin changed nothing in the
 				# digest: the one thing about a submodule that can move.
+				#
+				# The cost is one git per entry that gets this far,
+				# measured at about 6ms, against about 9ms for the
+				# shasum every ordinary file already pays. Usually that
+				# is a handful of entries. It is not on a sparse
+				# checkout, where the index lists everything and the
+				# worktree holds a fraction, so thousands of paths take
+				# the absent branch and pay a spawn each on the way.
 				printf 'gitlink %s\n' "$link"
 			elif [ ! -e "$f" ]; then
 				# Tracked and deleted from the working tree.

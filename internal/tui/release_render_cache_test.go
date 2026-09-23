@@ -47,6 +47,11 @@ func cacheTestEntries() []transcriptEntry {
 		{kind: entryModel, text: "   "},
 		{kind: entryTool, text: "  "},
 		{kind: entryUser, text: " \t "},
+		// The fourth shape, and not a whitespace one: a fence with
+		// nothing in it is ordinary characters, so it keeps its place,
+		// and the markdown renderer returns nothing for it.
+		{kind: entryModel, text: "```\n```"},
+		{kind: entryModel, text: "```go\n```"},
 		// A code block is never wrapped, so this line is wider than any
 		// terminal the transcript is laid out for, and the width pass
 		// pads the whole transcript out to it rather than to the width.
@@ -155,6 +160,41 @@ func TestTheRenderCacheRendersAnEntryOnce(t *testing.T) {
 	cache.content(entries, 80)
 	if got := cache.renders - before; got != 1 {
 		t.Errorf("a delta on the last entry rendered %d entries, want 1", got)
+	}
+}
+
+// The rule itself, not just that both paths follow it.
+//
+// The corpus checks the cache against the full render, and both call
+// transcriptEntryShows, so they move together: changing the rule to
+// TrimSpace leaves every one of those tests green while quietly taking
+// away the place a whitespace-only reply holds. What the rule has to be
+// is its own question and belongs in its own test.
+func TestWhatCountsAsAnEntryThatShows(t *testing.T) {
+	cases := []struct {
+		text  string
+		shows bool
+		why   string
+	}{
+		{"", false, "nothing at all"},
+		{"\n", false, "one newline"},
+		{"\n\n\n", false, "only newlines, which the separator owns"},
+		{"   ", true, "spaces are not newlines: the reply was there and rendered to nothing"},
+		{"\t", true, "a tab likewise"},
+		{"\r\n", true, "a carriage return is content to everything but the trim"},
+		{"\n  \n", true, "spaces between newlines survive the trim"},
+		{"```\n```", true, "an empty fence is ordinary characters"},
+		{"hello", true, "a reply"},
+		{"\nhello\n", true, "a reply with the newlines the separator owns"},
+		{"    indented code\n", true, "leading whitespace is content, never trimmed"},
+	}
+	for _, c := range cases {
+		for _, kind := range []entryKind{entryUser, entryModel, entryTool, entryLocal, entryPending, entrySent} {
+			e := transcriptEntry{kind: kind, text: c.text}
+			if got := transcriptEntryShows(e); got != c.shows {
+				t.Errorf("transcriptEntryShows(%d, %q) = %v, want %v: %s", kind, c.text, got, c.shows, c.why)
+			}
+		}
 	}
 }
 

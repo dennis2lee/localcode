@@ -282,7 +282,15 @@ func TestTheStampIsNeverWrittenByAnUncheckedCommand(t *testing.T) {
 		if strings.HasPrefix(trimmed, "rm ") || strings.Contains(trimmed, "$stamp_file") {
 			continue
 		}
-		if !strings.Contains(trimmed, ">") && !strings.Contains(trimmed, "mv ") {
+		// Every way a shell writes a file, not only the two this has
+		// been bitten by. Named this way round because the test claims
+		// "never written by an unchecked command", and a list of two
+		// verbs does not say that.
+		write := strings.Contains(trimmed, ">")
+		for _, verb := range []string{"mv ", "cp ", "tee ", "install ", "ln ", "printf ", "echo ", "cat "} {
+			write = write || strings.Contains(trimmed, verb)
+		}
+		if !write {
 			continue
 		}
 		writes++
