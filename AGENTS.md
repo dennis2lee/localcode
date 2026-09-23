@@ -9,9 +9,27 @@ Project rules for agents working in this repo.
   names them and `./scripts/check.sh vet` runs one. It is also the thing
   that makes a release possible: it stamps the tree it passed on, and
   `make dist` refuses to build unless that stamp matches.
+* **The stamp is over file contents, not over HEAD.** `scripts/tree-id.sh`
+  hashes every tracked and untracked file by path, mode and contents, so
+  committing, amending, rebasing, or merging a branch whose tree is
+  already gated leaves the stamp valid. Re-run the gate when the files
+  change, not when the history does.
+* **Do not run the gate while a delegated review is running its own.**
+  Both fan out across every core. Measured on this machine: 197s alone
+  against 426s for the same run beside a reviewer's, and `check.sh` has
+  the same finding in its own scheduling notes (44s serial against 61s
+  all-at-once while four agents built). Wait for the reviewer, or read
+  its report first.
+* **Every `go test` that runs unattended carries `-timeout`.** The job
+  timeout in a workflow stops a wedged runner and reports nothing, while
+  `go test` reaching its own timeout panics and names the test in a
+  goroutine dump. Two tests in `cmd/localcode` hold this over the
+  workflows and over `check.sh`, along with a `timeout-minutes` on every
+  workflow job. A `build` job without one ran 38 minutes on a 75-second
+  step, and the force-cancel threw away the log that would have said why.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1` — 1,182 tests over 30
-    packages. `-count=1` matters: a cached PASS is a statement about a
+  * `go test ./... -race -parallel 8 -count=1 -timeout 6m` — 2,072 tests
+    over 31 packages. `-count=1` matters: a cached PASS is a statement about a
     previous run of a previous tree. `-parallel 8` does not: it bounds
     only the tests that call `t.Parallel()`, of which this repo has ten,
     all in `internal/config`. The suite's concurrency is `go test` running
