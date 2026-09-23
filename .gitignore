@@ -19,3 +19,18 @@
 # passed was the one for this release. Local state, not a fact about the
 # repository.
 .check-passed
+
+# Worktrees the agent harness makes inside the checkout. Each one is a
+# git repository, which `git ls-files --others` reports as a single
+# directory entry, and scripts/tree-id.sh refuses those rather than
+# hash a tree it cannot see into. Ignored here rather than in
+# .git/info/exclude, which is where it was: that file is not committed,
+# so every other clone had a release gate one worktree away from
+# refusing to run.
+.claude/worktrees/
+
+# RELEASING.md has `gh release create --notes-file notes.md`, written at
+# the root between `make check` and `make dist`. Untracked and unignored,
+# it entered the tree identity and invalidated the stamp the gate had
+# just written, which cost a second full gate every release.
+notes.md

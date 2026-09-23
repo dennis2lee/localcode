@@ -37,6 +37,16 @@
 #   scripts/check.sh            run everything
 #   scripts/check.sh vet test   run only these
 #   scripts/check.sh --list     name the checks and exit
+# The -timeout on each lane is sized from the slowest PACKAGE, not the
+# lane: go test applies it per test binary. internal/tui is 94% of the
+# race lane's wall time, and on the CI macOS runner it has measured
+# around 500s, which is 80% of Go's silent 10-minute default. The gate
+# was one slow runner away from going red on a test that works. 20m
+# removes that cliff and still fires well inside the 30-minute job bound.
+#
+# What it does not bound is the part of `go test` that is not the test:
+# downloading modules, compiling, linking, and waiting on the build cache
+# lock. Those need a bound on the step instead, which the workflows set.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -70,10 +80,10 @@ cd "$(dirname "$0")/.."
 # the detector. Its own lane, so it runs beside the slow one rather than
 # after it.
 checks=(
-	"race	race	go test ./... -race -parallel 8 -count=1"
-	"plain	plain	go test ./... -count=1"
+	"race	race	go test ./... -race -parallel 8 -count=1 -timeout 20m"
+	"plain	plain	go test ./... -count=1 -timeout 10m"
 	"go	vet	go vet ./..."
-	"go	gui	go build -tags gui ./... && go test -tags gui -race ./internal/gui/ -count=1"
+	"go	gui	go build -tags gui ./... && go test -tags gui -race ./internal/gui/ -count=1 -timeout 10m"
 	"go	windows	GOOS=windows GOARCH=amd64 go build ./..."
 	"go	linux	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./..."
 	"go	deadcode	scripts/check-deadcode.sh"
@@ -191,8 +201,21 @@ if [ ${#failed[@]} -eq 0 ]; then
 		printf '  (a partial run leaves no stamp: the release gate needs all of them)\n'
 	elif [ ${#skipped[@]} -gt 0 ]; then
 		printf '  (no stamp: %s did not run, and the release gate needs every check)\n' "${skipped[*]}"
-	else
-		scripts/tree-id.sh > .check-passed
+	elif ! scripts/tree-id.sh > "$logdir/tree-id"; then
+		# The redirect truncates before the script runs, so writing
+		# straight to the stamp left a zero-byte file on a failure while
+		# this still printed "all checks passed" and exited 0. The next
+		# `make dist` then refused with "passed on a different tree",
+		# which names the wrong cause and costs a whole rerun.
+		rm -f .check-passed
+		printf '  (no stamp: the tree identity could not be taken, and the message above says why)\n'
+	elif ! mv "$logdir/tree-id" .check-passed; then
+		# Unchecked, this had the shape the redirect above just lost: a
+		# failed move leaves whatever stamp was there before, which can
+		# be one for a different tree, while this still says everything
+		# passed.
+		rm -f .check-passed
+		printf '  (no stamp: it could not be written, and the message above says why)\n'
 	fi
 	exit 0
 fi
