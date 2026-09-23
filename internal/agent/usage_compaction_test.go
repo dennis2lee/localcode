@@ -201,7 +201,10 @@ func TestAutoCompactTriggersAboveThresholdAndResetsHistory(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "first message"); err != nil {
+	// Long enough to be worth compacting: a conversation no longer than
+	// what a compaction puts in its place is left alone whatever the
+	// count says.
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "first message "+strings.Repeat("x", 4000)); err != nil {
 		t.Fatalf("SendMessage (first): %v", err)
 	}
 	if srv.requestCount() != 1 {

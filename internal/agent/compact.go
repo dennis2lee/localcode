@@ -120,6 +120,18 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 	if soonAfterASummary(history) {
 		return false
 	}
+	// Nor one that could not leave the conversation smaller: a
+	// conversation no longer than what a compaction puts in its place,
+	// the summary's header and notes and the shortest summary there can
+	// be, would come out the same size or larger, and the call is billed.
+	// It happens on a first compaction under a system prompt that is most
+	// of the window, where a single short exchange is over the threshold.
+	// Measured on the estimate, the ruler a summary's own length is held
+	// to, with images left out, as the threshold leaves out the ones the
+	// count did not see.
+	if textTokens(history) <= compactionKeeps(history, l.smartOn(ctx))+shortestSummary {
+		return false
+	}
 	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic) == nil
 }
 

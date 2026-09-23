@@ -1648,7 +1648,8 @@ Automatic compaction runs on the next message once the conversation reaches the 
 * With no count, for example after `/rewind`, the conversation's text is estimated and its images are left out.
 * A count restored from a log written before v0.145.0 decides alone, as it did then.
 * It is measured against the window of the profile the next message goes to.
-* A conversation that is a previous compaction's summary does not compact again until the text that followed the summary is longer than the summary. Images are left out of that comparison too. Otherwise a system prompt that is most of the window would have a summary summarized every turn.
+* A conversation that is a previous compaction's summary does not compact again until the text that followed the summary is longer than the summary. Images are left out of that comparison too.
+* A conversation no longer than what a compaction would put in its place, the summary's header and notes, does not compact. Under a system prompt that is most of the window, one short exchange can reach the threshold. Otherwise a system prompt that is most of the window would have a summary summarized every turn.
 
 When automatic compaction is enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction. A request that still overflows is summarized and retried, as described below.
 

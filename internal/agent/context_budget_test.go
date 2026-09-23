@@ -307,8 +307,11 @@ func TestAutoCompactionCountsTheCachedPrefix(t *testing.T) {
 	// Something to compact, put in place before the count: replacing the
 	// history drops the count, which is the right thing everywhere but
 	// in a test that is about to set one by hand.
+	// Long enough to be worth compacting: a conversation no longer than
+	// what a compaction puts in its place is left alone whatever the
+	// count says.
 	loop.setHistory(sid, []provider.Message{
-		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("a long conversation")}},
+		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("a long conversation " + strings.Repeat("x", 4000))}},
 		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock("that went on")}},
 	})
 
