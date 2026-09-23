@@ -61,7 +61,7 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 	if !ok || u.MaxContext <= 0 {
 		return false
 	}
-	percent := float64(u.InputTokens+u.OutputTokens) / float64(u.MaxContext) * 100
+	percent := float64(u.promptTokens()+u.OutputTokens) / float64(u.MaxContext) * 100
 	if percent < float64(l.CompactPercent()) {
 		return false
 	}

@@ -227,6 +227,10 @@ func estimateTokens(system string, msgs []provider.Message) int {
 // place that replaces a history clears the count instead, so the
 // subtraction is floored at zero rather than trusted to stay positive.
 //
+// The count here is the whole prompt the provider read, cached prefix
+// included: see sessionUsage.promptTokens for why that is not the field
+// the provider calls input_tokens.
+//
 // A count with no measurement behind it comes from a log written before
 // that was recorded, which every session restored from disk had until
 // it takes its next turn. There is no way to know what it covered, so
@@ -238,12 +242,12 @@ func (l *Loop) inputEstimate(sessionID, system string, msgs []provider.Message) 
 	now := estimateTokens(system, msgs)
 	u, ok := l.getUsage(sessionID)
 	switch {
-	case !ok || u.InputTokens <= 0:
+	case !ok || u.promptTokens() <= 0:
 		return now
 	case u.Measured <= 0:
-		return max(u.InputTokens+u.OutputTokens, now)
+		return max(u.promptTokens()+u.OutputTokens, now)
 	}
-	return u.InputTokens + max(0, now-u.Measured)
+	return u.promptTokens() + max(0, now-u.Measured)
 }
 
 // overflowPhrases are how the providers say "this did not fit".

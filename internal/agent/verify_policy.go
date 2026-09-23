@@ -67,7 +67,7 @@ func (l *Loop) contextLeftFor(sessionID string) string {
 	if !ok || u.MaxContext <= 0 {
 		return ""
 	}
-	left := u.MaxContext - (u.InputTokens + u.OutputTokens)
+	left := u.MaxContext - (u.promptTokens() + u.OutputTokens)
 	if left < 0 {
 		left = 0
 	}

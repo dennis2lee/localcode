@@ -20,6 +20,26 @@ type sessionUsage struct {
 	// mean four-characters-to-a-token simply overshoots this content.
 	// See Loop.inputEstimate.
 	Measured int
+	// CachedInputTokens is the part of the prompt the provider served
+	// from its cache and reported apart from InputTokens. See
+	// promptTokens.
+	CachedInputTokens int
+}
+
+// promptTokens is the whole prompt the provider read for this call: what
+// it counted fresh, plus what it served from its own cache.
+//
+// InputTokens alone is not that number. Where a prompt cache is working,
+// the provider reports the cached prefix separately and InputTokens
+// covers only the fresh suffix: this repo's own fixture has
+// input_tokens 12 beside cache_read_input_tokens 4096. The two are kept
+// apart because they are priced apart, and everything about the window
+// wants them together, because the window holds all of it. Read apart,
+// a working cache made a nearly full conversation look empty: the gauge
+// read near zero, auto-compaction never fired, and the next request was
+// sized as though the prefix were not there.
+func (u sessionUsage) promptTokens() int {
+	return u.InputTokens + u.CachedInputTokens
 }
 
 // modelTotals accumulates token usage across every provider.Chat call a
@@ -93,11 +113,12 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, us
 	}
 
 	u := sessionUsage{
-		InputTokens:  usage.inputTokens,
-		OutputTokens: usage.outputTokens,
-		MaxContext:   maxContext,
-		TPS:          tps,
-		Measured:     measured,
+		InputTokens:       usage.inputTokens,
+		OutputTokens:      usage.outputTokens,
+		MaxContext:        maxContext,
+		TPS:               tps,
+		Measured:          measured,
+		CachedInputTokens: usage.cacheRead + usage.cacheWrite,
 	}
 
 	l.mu.Lock()
@@ -114,7 +135,7 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, us
 
 	percent := 0.0
 	if maxContext > 0 {
-		percent = float64(u.InputTokens+u.OutputTokens) / float64(maxContext) * 100
+		percent = float64(u.promptTokens()+u.OutputTokens) / float64(maxContext) * 100
 	}
 	l.Store.Append(sessionID, events.TypeUsage, map[string]any{
 		"input_tokens":  u.InputTokens,
@@ -129,6 +150,10 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, us
 		// treats as "no measurement" rather than as a measurement of
 		// nothing.
 		"measured": u.Measured,
+		// The cached prefix, so a session read back from the log knows
+		// how much of its window is in use. Kept out of input_tokens,
+		// which clients show as what was billed at the full rate.
+		"cached_input_tokens": u.CachedInputTokens,
 		// Explicitly false so it clears the flag set by the live estimates
 		// broadcast during the stream — a client merges usage events, and
 		// a missing key would leave the "~" on an exact figure.

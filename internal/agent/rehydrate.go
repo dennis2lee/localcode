@@ -345,11 +345,12 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 		case events.TypeUsage:
 			haveUsage = true
 			latest = sessionUsage{
-				InputTokens:  dataInt(ev.Data, "input_tokens"),
-				OutputTokens: dataInt(ev.Data, "output_tokens"),
-				MaxContext:   dataInt(ev.Data, "max_context"),
-				TPS:          dataFloat(ev.Data, "tps"),
-				Measured:     dataInt(ev.Data, "measured"),
+				InputTokens:       dataInt(ev.Data, "input_tokens"),
+				OutputTokens:      dataInt(ev.Data, "output_tokens"),
+				MaxContext:        dataInt(ev.Data, "max_context"),
+				TPS:               dataFloat(ev.Data, "tps"),
+				Measured:          dataInt(ev.Data, "measured"),
+				CachedInputTokens: dataInt(ev.Data, "cached_input_tokens"),
 			}
 			addModelTotals(cum, dataString(ev.Data, "model"), latest.InputTokens, latest.OutputTokens)
 

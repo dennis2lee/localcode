@@ -163,6 +163,69 @@ func TestCollapsingADebateDropsTheCountItInvalidates(t *testing.T) {
 	}
 }
 
+// A prompt cache does not make a conversation smaller.
+//
+// Where the cache is working the provider reports the prefix it served
+// apart from what it counted fresh, and InputTokens covers only the
+// suffix: this repo's fixture has input_tokens 12 beside
+// cache_read_input_tokens 4096. Everything about the window wants them
+// together. Read apart, a nearly full conversation looked almost empty:
+// the next request was sized as though the prefix were not there, the
+// gauge read near zero, and auto-compaction never fired.
+func TestACachedPrefixStillFillsTheWindow(t *testing.T) {
+	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: 32768}
+	loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+	const sid = "s1"
+	sent := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("carry on")}}}
+	loop.setHistory(sid, sent)
+
+	// What a cached turn reports: almost nothing fresh, the conversation
+	// itself served from the cache.
+	loop.recordUsage(sid, "m", 32768, estimateTokens("", sent),
+		streamUsage{hasUsage: true, inputTokens: 12, outputTokens: 9, cacheRead: 4096, cacheWrite: 128})
+
+	u, ok := loop.getUsage(sid)
+	if !ok {
+		t.Fatal("no usage recorded")
+	}
+	if got, want := u.promptTokens(), 12+4096+128; got != want {
+		t.Errorf("the prompt measured %d tokens, want %d: the cached prefix is part of what the window holds", got, want)
+	}
+	if got := loop.inputEstimate(sid, "", sent); got != u.promptTokens() {
+		t.Errorf("the next request is sized against %d tokens, want the %d the prompt actually carried", got, u.promptTokens())
+	}
+
+	// And it survives the log, or a restored session sizes against the
+	// suffix alone for ever.
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(store.Close)
+	const rsid = "s2"
+	if _, err := store.CreateSession(rsid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	logged := New(store, tools.NewRegistry(nil), map[string]provider.Provider{}, &config.Config{})
+	logged.recordUsage(rsid, "m", 32768, 5,
+		streamUsage{hasUsage: true, inputTokens: 12, outputTokens: 9, cacheRead: 4096, cacheWrite: 128})
+	evs, err := store.Events(rsid, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	back, have, _ := rehydrateUsage(evs)
+	if !have {
+		t.Fatal("no usage event was written")
+	}
+	if got, want := back.promptTokens(), 12+4096+128; got != want {
+		t.Errorf("read back a prompt of %d tokens, want %d", got, want)
+	}
+	// The billed figure stays what was billed at the full rate.
+	if back.InputTokens != 12 {
+		t.Errorf("read back InputTokens = %d, want the 12 that were counted fresh", back.InputTokens)
+	}
+}
+
 // The invariant behind the case above, held where it cannot be
 // forgotten: replacing a history drops the count, whatever the reason
 // for replacing it.
