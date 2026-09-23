@@ -49,7 +49,11 @@ func ciFiles(t *testing.T) map[string]string {
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}
-		out[rel] = string(raw)
+		// Windows checks these out with CRLF unless told otherwise, and
+		// a line compared for equality then never matches. This cost a
+		// release: every job read as having no timeout because "jobs:"
+		// was "jobs:\r".
+		out[rel] = strings.ReplaceAll(string(raw), "\r\n", "\n")
 	}
 	workflows, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.y*ml"))
 	if err != nil {
@@ -314,46 +318,81 @@ func TestEveryWorkflowJobCarriesATimeout(t *testing.T) {
 		if !strings.HasSuffix(rel, ".yml") && !strings.HasSuffix(rel, ".yaml") {
 			continue
 		}
-		lines := strings.Split(body, "\n")
-		inJobs := false
-		job, jobLine := "", 0
-		bounded := false
-		// Counted so a parser that stopped recognising jobs fails loudly
-		// rather than passing every file by finding nothing to check.
-		found := 0
-		// finish closes the job being read, if any.
-		finish := func() {
-			if job != "" && !bounded {
-				t.Errorf("%s:%d: job %q has no timeout-minutes, so it runs until GitHub's six-hour default: a hang costs hours and is killed without a reason",
-					rel, jobLine, job)
-			}
-		}
-		for i, line := range lines {
-			switch {
-			case line == "jobs:":
-				inJobs = true
-				continue
-			case !inJobs, strings.TrimSpace(line) == "", strings.HasPrefix(strings.TrimSpace(line), "#"):
-				continue
-			case !strings.HasPrefix(line, " "):
-				// A top-level key after jobs: ends the block.
-				finish()
-				job, inJobs, bounded = "", false, false
-				continue
-			}
-			if name, ok := strings.CutPrefix(line, "  "); ok && !strings.HasPrefix(name, " ") && strings.HasSuffix(strings.TrimSpace(name), ":") {
-				finish()
-				job, jobLine, bounded = strings.TrimSuffix(strings.TrimSpace(name), ":"), i+1, false
-				found++
-				continue
-			}
-			if job != "" && strings.HasPrefix(line, "    timeout-minutes:") {
-				bounded = true
-			}
-		}
-		finish()
-		if found == 0 {
+		jobs, unbounded := readWorkflowJobs(body)
+		if jobs == 0 {
 			t.Errorf("%s: no job was read out of this workflow, so this test is checking nothing in it", rel)
 		}
+		for _, job := range unbounded {
+			t.Errorf("%s: job %q has no timeout-minutes, so it runs until GitHub's six-hour default: a hang costs hours and is killed without a reason",
+				rel, job)
+		}
+	}
+}
+
+// readWorkflowJobs counts the jobs in a workflow and names the ones with
+// no timeout-minutes.
+//
+// Read from the text rather than a parsed document: this repo has no
+// YAML dependency, and the shape being checked is a line at a known
+// indent inside a block at a known indent, which is the whole of what a
+// parser would tell us here. Its own function so the reading can be
+// tested on input this repo's own files do not have.
+func readWorkflowJobs(body string) (jobs int, unbounded []string) {
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	inJobs := false
+	job := ""
+	bounded := false
+	finish := func() {
+		if job != "" && !bounded {
+			unbounded = append(unbounded, job)
+		}
+	}
+	for _, line := range strings.Split(body, "\n") {
+		switch {
+		case line == "jobs:":
+			inJobs = true
+			continue
+		case !inJobs, strings.TrimSpace(line) == "", strings.HasPrefix(strings.TrimSpace(line), "#"):
+			continue
+		case !strings.HasPrefix(line, " "):
+			// A top-level key after jobs: ends the block.
+			finish()
+			job, inJobs, bounded = "", false, false
+			continue
+		}
+		if name, ok := strings.CutPrefix(line, "  "); ok && !strings.HasPrefix(name, " ") && strings.HasSuffix(strings.TrimSpace(name), ":") {
+			finish()
+			job, bounded = strings.TrimSuffix(strings.TrimSpace(name), ":"), false
+			jobs++
+			continue
+		}
+		if job != "" && strings.HasPrefix(line, "    timeout-minutes:") {
+			bounded = true
+		}
+	}
+	finish()
+	return jobs, unbounded
+}
+
+// The reading itself, on the line endings this repo's files do not have
+// and a Windows checkout does.
+func TestWorkflowJobsAreReadWhateverEndsTheLines(t *testing.T) {
+	const unix = "name: x\non: push\njobs:\n  one:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - run: echo\n  two:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"
+	for _, c := range []struct {
+		name string
+		body string
+	}{
+		{"unix endings", unix},
+		{"windows endings", strings.ReplaceAll(unix, "\n", "\r\n")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			jobs, unbounded := readWorkflowJobs(c.body)
+			if jobs != 2 {
+				t.Errorf("read %d jobs, want 2", jobs)
+			}
+			if len(unbounded) != 1 || unbounded[0] != "two" {
+				t.Errorf("unbounded = %v, want [two]", unbounded)
+			}
+		})
 	}
 }

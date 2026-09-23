@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,15 @@ import (
 // where the script expects to find it, and returns the repository path.
 func treeIDRepo(t *testing.T) string {
 	t.Helper()
+	// An explicit exclusion with its reason, which is the sanctioned
+	// shape here rather than filtering the package out of the Windows
+	// job. tree-id.sh is bash over shasum, awk, sed and mktemp, and
+	// nothing runs it on Windows: gate.yml is ubuntu and macOS, and
+	// releases are cut on the Mac. A Windows runner can start the file
+	// but not the tools it is written in.
+	if runtime.GOOS == "windows" {
+		t.Skip("tree-id.sh is bash over Unix tooling, and no job on Windows runs it")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not on PATH")
 	}
