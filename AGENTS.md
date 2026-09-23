@@ -39,7 +39,7 @@ Project rules for agents working in this repo.
   the attempt's log, and a force-cancelled attempt may keep none at all.
   The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1 -timeout 6m` — 2,072 tests
+  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,072 tests
     over 31 packages. `-count=1` matters: a cached PASS is a statement about a
     previous run of a previous tree. `-parallel 8` does not: it bounds
     only the tests that call `t.Parallel()`, of which this repo has ten,

@@ -48,6 +48,17 @@ import (
 // scrollbar, and then one column narrower to leave room for it. With a
 // single slot those two would evict each other on every event and the
 // cache would never hit.
+//
+// Entries are compared by position, so removing one from the middle
+// re-renders everything after it: each entry has shifted a place and
+// mismatches the one it is now compared against, although none of its
+// text changed. Deliberately not detected. The only removal in the
+// package is resolvePendingUser dropping the echo of a prompt, and
+// appendPendingUser put that echo at the end, so what shifts is the
+// handful of entries that arrived while the daemon was answering. At
+// about 50us an entry that is microseconds, once per prompt, against
+// shift detection that would run on every event to find it. The output
+// is right either way; this is only about work.
 type transcriptRenderCache struct {
 	slots [2]transcriptWidthSlot
 	next  int

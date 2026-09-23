@@ -89,13 +89,87 @@ func TestEveryCIGoTestCarriesATimeout(t *testing.T) {
 
 // hasTimeoutFlag reports whether one `go test` invocation sets -timeout,
 // in either spelling.
+//
+// Anything from a `#` onwards is dropped first. Without that,
+// `go test ./... # -timeout 5m` read as bounded while setting nothing,
+// which is the one shape where this guard would have been worse than no
+// guard: it says in review that a limit is there.
 func hasTimeoutFlag(invocation string) bool {
+	if before, _, found := strings.Cut(invocation, "#"); found {
+		invocation = before
+	}
 	for _, field := range strings.Fields(invocation) {
 		if field == "-timeout" || strings.HasPrefix(field, "-timeout=") {
 			return true
 		}
 	}
 	return false
+}
+
+// The gate's own rules file quotes the race lane's command, and a
+// -timeout is sized from a measurement rather than derived, so the two
+// copies of the number drift silently. They did: check.sh was raised to
+// 20m from a CI measurement and AGENTS.md kept saying 6m, which is below
+// what internal/tui takes on a macOS runner. Nothing would have run the
+// documented command, and the next person sizing a bound would have read
+// it.
+func TestTheRulesFileQuotesTheGateItDescribes(t *testing.T) {
+	files := ciFiles(t)
+	raw, err := os.ReadFile(filepath.Join("..", "..", "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	want := timeoutValues(files[filepath.Join("scripts", "check.sh")])
+	got := timeoutValues(string(raw))
+	if len(want) == 0 {
+		t.Fatal("no -timeout found in check.sh, so this test is checking nothing")
+	}
+	for lane, value := range got {
+		if real, ok := want[lane]; ok && real != value {
+			t.Errorf("AGENTS.md says the %s lane runs -timeout %s and scripts/check.sh runs %s: a bound sized from the doc would be the wrong one",
+				lane, value, real)
+		}
+	}
+}
+
+// timeoutValues maps a lane's distinguishing flag to the -timeout beside
+// it, for the `go test` lines in either file. The race lane is the one
+// that matters and the one with a flag nothing else carries.
+func timeoutValues(body string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(body, "\n") {
+		start := strings.Index(line, "go test")
+		if start < 0 {
+			continue
+		}
+		invocation := line[start:]
+		if before, _, found := strings.Cut(invocation, "#"); found {
+			invocation = before
+		}
+		fields := strings.Fields(invocation)
+		lane := "plain"
+		for _, f := range fields {
+			if f == "-race" {
+				lane = "race"
+			}
+			if f == "-tags" {
+				lane = "gui"
+			}
+		}
+		for i, f := range fields {
+			if f == "-timeout" && i+1 < len(fields) {
+				if _, seen := out[lane]; !seen {
+					// One file quotes the command in backticks and the
+					// other in shell quotes, so the duration arrives
+					// wearing whichever one it was written in.
+					out[lane] = strings.TrimFunc(fields[i+1], func(r rune) bool {
+						return !strings.ContainsRune("0123456789hms", r)
+					})
+				}
+			}
+		}
+	}
+	return out
 }
 
 // Every workflow job says how long it may run.

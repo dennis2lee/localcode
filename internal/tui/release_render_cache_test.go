@@ -149,6 +149,53 @@ func TestTheRenderCacheRendersAnEntryOnce(t *testing.T) {
 	}
 }
 
+// What a removal costs, pinned rather than left to be discovered.
+//
+// The cache compares entries by position, so an entry removed from the
+// middle shifts every entry after it out of line and they re-render
+// although their text is identical. The cost is exactly the number of
+// entries after the hole, which for the only removal this package makes
+// is small: resolvePendingUser drops an echo that appendPendingUser put
+// at the end. A test saying so is the difference between a known cost
+// and one somebody measures again in a year.
+func TestRemovingAnEntryCostsTheEntriesAfterIt(t *testing.T) {
+	build := func() (*transcriptRenderCache, []transcriptEntry) {
+		cache := &transcriptRenderCache{}
+		var entries []transcriptEntry
+		for i := 0; i < 50; i++ {
+			entries = append(entries, transcriptEntry{kind: entryUser, text: fmt.Sprintf("turn %d", i)})
+		}
+		cache.content(entries, 80)
+		return cache, entries
+	}
+
+	for _, after := range []int{0, 1, 3} {
+		t.Run(fmt.Sprintf("%d entries after it", after), func(t *testing.T) {
+			cache, entries := build()
+			before := cache.renders
+			at := len(entries) - 1 - after
+			shortened := append(entries[:at:at], entries[at+1:]...)
+
+			got := cache.content(shortened, 80)
+			if want := uncachedTranscript(shortened, 80); got != want {
+				t.Fatalf("a removal produced the wrong text")
+			}
+			if spent := cache.renders - before; spent != after {
+				t.Errorf("removing an entry with %d after it rendered %d, want %d", after, spent, after)
+			}
+		})
+	}
+
+	// The echo a prompt actually drops is the last entry, and that is the
+	// case that must cost nothing.
+	cache, entries := build()
+	before := cache.renders
+	cache.content(entries[:len(entries)-1], 80)
+	if spent := cache.renders - before; spent != 0 {
+		t.Errorf("dropping the last entry rendered %d entries, want 0", spent)
+	}
+}
+
 // refreshViewport asks for two widths on every event: the full one to
 // decide whether the scrollbar is earned, then one column narrower to
 // leave it room. One slot would let those evict each other and the cache
