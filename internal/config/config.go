@@ -103,8 +103,9 @@ type Config struct {
 	// show_tps is one: two clients watching the same conversation
 	// showing different amounts of it is a difference nobody asked for,
 	// and a preference kept in a browser is lost on the next machine.
-	// Reasoning is broadcast and never logged, so turning this off
-	// hides what is arriving rather than deleting anything.
+	// Turning it off hides reasoning rather than deleting anything: a
+	// muse model's reasoning blocks are logged either way (see
+	// FoldThinking), and other models' reasoning never is.
 	ShowThinking *bool `json:"show_thinking,omitempty"`
 
 	// FoldThinking draws a muse model's reasoning as a block of its own:

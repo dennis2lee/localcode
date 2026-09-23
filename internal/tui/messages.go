@@ -90,6 +90,39 @@ type sessionSwitchedMsg struct {
 	// failed switch left this client attached to nothing. The transcript
 	// is not rebuilt for one.
 	reattach bool
+	// showThinking is the daemon's show_thinking read beside the switch,
+	// nil when it could not be read. Carried here so it is in force
+	// before the new stream's first event is.
+	showThinking *bool
+}
+
+// settingsMsg is GET /api/settings, read when the TUI starts.
+type settingsMsg struct {
+	settings client.Settings
+	err      error
+}
+
+// lostTurnDueMsg is a lost-turn check coming due. The first one, after a
+// grace for the backlog the reconnect brought, asks the daemon whether
+// the session is busy; the confirm one, after a second grace, declares
+// the turn lost if nothing has ended it meanwhile. Stale unless the
+// stream, the session and the epoch are the ones it was scheduled for.
+type lostTurnDueMsg struct {
+	sessionID string
+	gen       uint64
+	epoch     uint64
+	confirm   bool
+}
+
+// turnCheckMsg is the daemon's answer: whether the session is running a
+// turn, and whether it knows the session at all.
+type turnCheckMsg struct {
+	sessionID string
+	gen       uint64
+	epoch     uint64
+	busy      bool
+	found     bool
+	err       error
 }
 
 type spinTickMsg struct{}

@@ -241,6 +241,7 @@ export function dequeueNext(isRetry = false) {
   const next = session.promptQueue.shift();
   const item = typeof next === 'string' ? { text: next, images: [] } : next;
   setWaiting(true);
+  session.turnEpoch++;
   apiClient.sendChatMessage(session.sessionID, item.text, item.images).catch((err) => {
     if (apiClient.isBusy(err)) {
       // Still busy — put it back and wait for the next turn.done.
@@ -525,6 +526,7 @@ export async function sendMessage() {
       // then this stands in for it, since the wait can be minutes; it is
       // removed when that event lands.
       appendPendingUser(text, true);
+      session.turnEpoch++;
       apiClient.sendChatMessage(session.sessionID, text).catch((err) => {
         if (apiClient.isBusy(err)) {
           // The turn ended in the gap. Queue it for dequeueNext, which
@@ -571,6 +573,7 @@ export async function sendMessage() {
   appendPendingUser(text, false, images);
   setWaiting(true);
   try {
+    session.turnEpoch++;
     await apiClient.sendChatMessage(session.sessionID, text, images);
   } catch (err) {
     if (apiClient.isBusy(err)) {

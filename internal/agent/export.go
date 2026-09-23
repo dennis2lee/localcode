@@ -148,6 +148,16 @@ func renderTranscript(title, sessionID string, evs []events.Event) string {
 			if text := dataString(ev.Data, "text"); text != "" {
 				fmt.Fprintf(&b, "\n%s\n", text)
 			}
+		case events.TypeThinkingBlock:
+			// A muse model's reasoning, folded the way the clients draw
+			// it: the time on the summary line, the text behind it.
+			if text := strings.TrimSpace(dataString(ev.Data, "text")); text != "" {
+				took := "Thought"
+				if ms, ok := ev.Data["elapsed_ms"]; ok {
+					took = "Thought for " + formatThought(ms)
+				}
+				fmt.Fprintf(&b, "\n<details><summary>%s</summary>\n\n%s\n\n</details>\n", took, quoteLines(text))
+			}
 		case events.TypeToolStart:
 			pending[dataString(ev.Data, "tool_use_id")] = dataString(ev.Data, "name")
 		case events.TypeToolEnd:
@@ -197,4 +207,46 @@ func cut(s string) string {
 		return s
 	}
 	return s[:exportToolLimit] + fmt.Sprintf("\n... cut here: %d more characters", len(s)-exportToolLimit)
+}
+
+// formatThought says a reasoning block's time the way both clients do:
+// whole seconds, then minutes, then hours. The figure comes off the
+// event, which is a number of either Go type depending on whether it was
+// read back from disk.
+func formatThought(v any) string {
+	var ms int64
+	switch n := v.(type) {
+	case float64:
+		ms = int64(n)
+	case int:
+		ms = int64(n)
+	case int64:
+		ms = n
+	}
+	total := ms / 1000
+	if total < 0 {
+		total = 0
+	}
+	h, m, sec := total/3600, total/60%60, total%60
+	switch {
+	case h > 0:
+		return fmt.Sprintf("%dh%dm%ds", h, m, sec)
+	case m > 0:
+		return fmt.Sprintf("%dm%ds", m, sec)
+	}
+	return fmt.Sprintf("%ds", sec)
+}
+
+// quoteLines sets text as a Markdown blockquote, line by line, so the
+// reasoning reads as set apart from the answer inside its fold.
+func quoteLines(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		if l == "" {
+			lines[i] = ">"
+		} else {
+			lines[i] = "> " + l
+		}
+	}
+	return strings.Join(lines, "\n")
 }

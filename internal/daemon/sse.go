@@ -57,19 +57,25 @@ func collapseFinishedDeltas(evs []events.Event) []events.Event {
 
 func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	// Where to start replaying from, in precedence order: an explicit
-	// ?since=, then the Last-Event-ID a reconnecting EventSource sends
-	// back, then ?tail=.
+	// Where to start replaying from, in precedence order: the
+	// Last-Event-ID a reconnecting EventSource sends back, then an
+	// explicit ?since=, then ?tail=.
 	//
-	// Last-Event-ID has to beat ?tail= rather than the other way round,
-	// and the ordering is the whole correctness argument: EventSource
-	// reconnects to the *same URL*, so the ?tail= that opened the stream
-	// is still on it. Preferring tail there would re-cut to the end of
-	// the log on every dropped connection and silently drop everything
-	// the client missed while it was away — which is precisely the
-	// failure the resume machinery exists to prevent.
+	// Last-Event-ID has to beat both, and the ordering is the whole
+	// correctness argument: EventSource reconnects to the *same URL*, so
+	// the ?tail= or ?since= that opened the stream is still on it, and
+	// says where the stream started rather than where it got to.
+	// Preferring tail there would re-cut to the end of the log on every
+	// dropped connection and silently drop everything the client missed
+	// while it was away; preferring since replayed everything the client
+	// had drawn since it opened. The Go client never sends the header, so
+	// its ?since= decides.
 	since := uint64(0)
+	lastEventID, lastErr := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
 	switch {
+	case r.Header.Get("Last-Event-ID") != "" && lastErr == nil:
+		since = lastEventID
+
 	case r.URL.Query().Get("since") != "":
 		v, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
 		if err != nil {
@@ -77,15 +83,6 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		since = v
-
-	case r.Header.Get("Last-Event-ID") != "":
-		// Browsers' EventSource auto-reconnects on a dropped connection
-		// and resends whatever `id:` value the server last sent, so a
-		// client that never set ?since= explicitly still resumes without
-		// re-fetching what it already has.
-		if v, err := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64); err == nil {
-			since = v
-		}
 
 	case r.URL.Query().Get("tail") != "":
 		// ?tail=N opens a long conversation at its end rather than its

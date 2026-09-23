@@ -181,9 +181,10 @@ func TestReasoningCarriesTheDisplaySwitch(t *testing.T) {
 	}
 }
 
-// Reasoning is still never logged: folding it is a way of drawing it,
-// not a reason to keep it.
-func TestFoldedReasoningIsStillNotLogged(t *testing.T) {
+// A fold block is logged once, whole, as one thinking.block with its
+// time, ahead of the answer it came before; the deltas and the end stay
+// broadcast. Other models' reasoning is not logged at all.
+func TestAFoldBlockIsLoggedWholeAndOnce(t *testing.T) {
 	server := reasoningServer(t)
 	loop := foldLoop(t, server.URL, "muse-glimmer")
 	streamedEvents(t, loop, "s1")
@@ -191,10 +192,197 @@ func TestFoldedReasoningIsStillNotLogged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ev := range logged {
-		if ev.Type == events.TypeThinkingDelta || ev.Type == events.TypeThinkingEnd {
+	blocks, blockAt, answerAt := 0, -1, -1
+	for i, ev := range logged {
+		switch ev.Type {
+		case events.TypeThinkingDelta, events.TypeThinkingEnd:
 			t.Errorf("%s was written to the log", ev.Type)
+		case events.TypeThinkingBlock:
+			blocks++
+			blockAt = i
+			if got := ev.Data["text"]; got != "The user asks 17 times 23. That is 391." {
+				t.Errorf("logged text = %q, want the whole reasoning", got)
+			}
+			if ms, ok := ev.Data["elapsed_ms"].(int); !ok || ms < 0 {
+				t.Errorf("elapsed_ms = %#v", ev.Data["elapsed_ms"])
+			}
+		case events.TypeMessagePartEnd:
+			answerAt = i
 		}
+	}
+	if blocks != 1 || blockAt > answerAt {
+		t.Errorf("logged %d blocks at %d with the answer at %d, want one before the answer", blocks, blockAt, answerAt)
+	}
+
+	plain := foldLoop(t, server.URL, "qwen3-30b-a3b")
+	streamedEvents(t, plain, "s1")
+	logged, _ = plain.Store.Events("s1", 0)
+	for _, ev := range logged {
+		if ev.Type == events.TypeThinkingBlock {
+			t.Error("another model's reasoning was logged")
+		}
+	}
+}
+
+// foldScriptProvider streams exactly the events it is given, for the
+// endings a real server does not produce on demand: a stream that dies
+// mid-thought, one that closes with a block open, a block of whitespace.
+type foldScriptProvider struct{ evs []provider.StreamEvent }
+
+func (p foldScriptProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent, len(p.evs))
+	for _, ev := range p.evs {
+		ch <- ev
+	}
+	close(ch)
+	return ch, nil
+}
+
+func foldScriptLoop(t *testing.T, model string, evs ...provider.StreamEvent) *Loop {
+	t.Helper()
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	cfg := &config.Config{
+		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: "http://127.0.0.1:1"}},
+		Profiles:       map[string]config.Profile{"main": {Provider: "local", Model: model}},
+		Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "main"}},
+		DefaultProfile: "main",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return New(store, tools.NewRegistry(nil), map[string]provider.Provider{"local": foldScriptProvider{evs: evs}}, cfg)
+}
+
+func loggedBlocks(t *testing.T, l *Loop, sid string) []events.Event {
+	t.Helper()
+	logged, err := l.Store.Events(sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []events.Event
+	for _, ev := range logged {
+		if ev.Type == events.TypeThinkingBlock {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func thinkingDeltaEv(s string) provider.StreamEvent {
+	return provider.StreamEvent{Type: provider.EventThinkingDelta, ThinkingDelta: s}
+}
+
+// A stream that dies mid-thought records the block as far as it got,
+// before the failure, as it was shown live.
+func TestABlockCutOffByAnErrorIsLoggedAsFarAsItGot(t *testing.T) {
+	l := foldScriptLoop(t, "muse-glimmer",
+		thinkingDeltaEv("half a "),
+		thinkingDeltaEv("thought"),
+		provider.StreamEvent{Type: provider.EventError, Err: fmt.Errorf("connection reset")},
+	)
+	if _, err := l.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.SendMessage(context.Background(), "s1", "general-purpose", "go")
+	b := loggedBlocks(t, l, "s1")
+	if len(b) != 1 || b[0].Data["text"] != "half a thought" {
+		t.Fatalf("blocks = %#v, want the partial block", b)
+	}
+	logged, _ := l.Store.Events("s1", 0)
+	blockAt, errAt := -1, -1
+	for i, ev := range logged {
+		switch ev.Type {
+		case events.TypeThinkingBlock:
+			blockAt = i
+		case events.TypeError:
+			if errAt < 0 {
+				errAt = i
+			}
+		}
+	}
+	if blockAt < 0 || errAt < 0 || blockAt > errAt {
+		t.Errorf("the block at %d is not ahead of the error at %d", blockAt, errAt)
+	}
+}
+
+// A stream that closes with a block open, as a stop mid-thought leaves
+// it, records the block too.
+func TestABlockLeftOpenWhenTheStreamClosesIsLogged(t *testing.T) {
+	l := foldScriptLoop(t, "muse-glimmer",
+		thinkingDeltaEv("still thinking when it stopped"),
+		provider.StreamEvent{Type: provider.EventMessageStop, StopReason: "end_turn"},
+	)
+	if _, err := l.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.SendMessage(context.Background(), "s1", "general-purpose", "go")
+	if b := loggedBlocks(t, l, "s1"); len(b) != 1 || b[0].Data["text"] != "still thinking when it stopped" {
+		t.Fatalf("blocks = %#v", b)
+	}
+}
+
+// Whitespace alone is not a block: neither client draws one, so none is
+// kept.
+func TestWhitespaceReasoningIsNotLogged(t *testing.T) {
+	l := foldScriptLoop(t, "muse-glimmer",
+		thinkingDeltaEv("\n\n"),
+		provider.StreamEvent{Type: provider.EventThinkingEnd},
+		provider.StreamEvent{Type: provider.EventTextDelta, TextDelta: "ok"},
+		provider.StreamEvent{Type: provider.EventMessageStop, StopReason: "end_turn"},
+	)
+	if _, err := l.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.SendMessage(context.Background(), "s1", "general-purpose", "go")
+	if b := loggedBlocks(t, l, "s1"); len(b) != 0 {
+		t.Fatalf("whitespace was logged: %#v", b)
+	}
+}
+
+// Reasoning kept in the record never reaches the model: a history rebuilt
+// from the log after a restart holds none, the same as the live one.
+func TestALoggedBlockIsNotRebuiltIntoTheHistory(t *testing.T) {
+	server := reasoningServer(t)
+	loop := foldLoop(t, server.URL, "muse-glimmer")
+	streamedEvents(t, loop, "s1")
+	logged, err := loop.Store.Events("s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range rehydrateHistory(logged) {
+		for _, b := range m.Content {
+			if b.Type == provider.BlockThinking || strings.Contains(b.Text, "The user asks 17 times 23") {
+				t.Errorf("the rebuilt history carries reasoning: %#v", b)
+			}
+		}
+	}
+}
+
+// /export sets the block folded, as the clients draw it.
+func TestExportFoldsALoggedBlock(t *testing.T) {
+	server := reasoningServer(t)
+	loop := foldLoop(t, server.URL, "muse-glimmer")
+	streamedEvents(t, loop, "s1")
+	logged, err := loop.Store.Events("s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range logged {
+		if logged[i].Type == events.TypeThinkingBlock {
+			logged[i].Data["elapsed_ms"] = 65000
+		}
+	}
+	out := renderTranscript("t", "s1", logged)
+	if !strings.Contains(out, "<details><summary>Thought for 1m5s</summary>") ||
+		!strings.Contains(out, "> The user asks 17 times 23. That is 391.") {
+		t.Errorf("the export does not fold the reasoning:\n%s", out)
+	}
+	if strings.Index(out, "Thought for") > strings.Index(out, "17 times 23 is 391.") {
+		t.Errorf("the reasoning is exported after the answer:\n%s", out)
 	}
 }
 
@@ -310,5 +498,23 @@ func TestFoldThinkingReplyNamesASpecialistsLaneModel(t *testing.T) {
 	}
 	if !strings.Contains(out, "meta/muse-glimmer-30b, which the switch applies to") {
 		t.Errorf("the reply does not name the specialist's lane model:\n%s", out)
+	}
+}
+
+// /thinking and /timestamps tell every client once. announceConfig does,
+// and a second call beside it sent the same snapshot twice, which the TUI
+// answers with a roster request each time.
+func TestTheDisplaySwitchesAnnounceOnce(t *testing.T) {
+	for _, cmd := range []string{"/thinking off", "/timestamps on"} {
+		loop := foldLoop(t, "http://127.0.0.1:1", "qwen3")
+		announced := 0
+		loop.OnSettingsChanged = func() { announced++ }
+		if _, err := loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+			t.Fatal(err)
+		}
+		replyTo(t, loop, "s1", cmd)
+		if announced != 1 {
+			t.Errorf("%s announced %d times, want 1", cmd, announced)
+		}
 	}
 }

@@ -155,6 +155,44 @@ func (m Model) fetchReferenceNames() tea.Cmd {
 	}
 }
 
+// fetchSettings reads the daemon's settings. Only show_thinking is used,
+// and a failure is silent: the default, shown, stands, and the next
+// reasoning delta carries the switch anyway.
+func (m Model) fetchSettings() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		defer cancel()
+		s, err := m.client.GetSettings(ctx)
+		return settingsMsg{settings: s, err: err}
+	}
+}
+
+// lostTurnGrace is how long a lost-turn check waits at each of its two
+// steps. The first wait lets the backlog the reconnect brought be read:
+// a turn that ended while the stream was down has its turn.done in it.
+// The second is the daemon's own ordering: it clears a session's busy
+// flag just before it writes turn.done, so a check can answer idle for a
+// turn whose end is already on its way. A variable so tests need not
+// wait.
+var lostTurnGrace = time.Second
+
+// scheduleLostTurnCheck brings a lost-turn check due after the grace.
+func (m Model) scheduleLostTurnCheck(confirm bool) tea.Cmd {
+	msg := lostTurnDueMsg{sessionID: m.sessionID, gen: m.streamGen, epoch: m.turnEpoch, confirm: confirm}
+	return tea.Tick(lostTurnGrace, func(time.Time) tea.Msg { return msg })
+}
+
+// checkTurn asks the daemon whether this session is running a turn.
+func (m Model) checkTurn(due lostTurnDueMsg) tea.Cmd {
+	c := m.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
+		defer cancel()
+		busy, found, err := c.SessionBusy(ctx, due.sessionID)
+		return turnCheckMsg{sessionID: due.sessionID, gen: due.gen, epoch: due.epoch, busy: busy, found: found, err: err}
+	}
+}
+
 // fetchEffort reads the level for the open conversation. pick opens the
 // picker on the answer, so "/effort-set" is one round trip rather than a
 // list written from a cache that may be a model out of date.

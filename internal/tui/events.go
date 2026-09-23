@@ -75,15 +75,6 @@ func intField(data map[string]any, key string) int {
 	return 0
 }
 
-// showThinkingOf reads show_thinking off a thinking event: the switch
-// rides on the event, the way show_tps rides on usage, because this
-// client keeps no copy of the daemon's settings. Absent means on, which
-// is the switch's own default.
-func showThinkingOf(data map[string]any) bool {
-	v, ok := data["show_thinking"].(bool)
-	return !ok || v
-}
-
 // endTurn clears everything that means "a turn is running". Called
 // unconditionally for every turn-terminating event, including an error
 // event whose payload turns out to be malformed — previously the "waiting"
@@ -175,7 +166,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		// The message is over, so its reasoning is too. After a
 		// reconnect this can be the only sign of the answer: the
 		// daemon replays a finished reply as its end alone, and the
-		// reasoning's own end was never logged. Ahead of the command
+		// reasoning's broadcast end is not replayed. Ahead of the command
 		// output below, which ends a message as well, as the Web UI
 		// has it.
 		m.foldThinking(0)
@@ -419,6 +410,12 @@ func (m *Model) applyEvent(ev events.Event) {
 		// muse block folds to one line once the answer starts. See
 		// thinking.go.
 		m.thinking = true
+		// The delta carries the switch, and is always current: it is
+		// broadcast, never replayed. It keeps this client's copy right
+		// after a settings.changed it missed.
+		if v, ok := ev.Data["show_thinking"].(bool); ok {
+			m.hideThinking = !v
+		}
 		fold, _ := ev.Data["fold"].(bool)
 		if !fold {
 			// Reasoning the fold does not apply to, while a block is
@@ -426,10 +423,25 @@ func (m *Model) applyEvent(ev events.Event) {
 			// nothing having closed the block. Close it, as the Web UI
 			// does, so the next muse request gets a block of its own.
 			m.foldThinking(0)
-		} else if showThinkingOf(ev.Data) {
+		} else if !m.hideThinking {
 			if text, _ := ev.Data["text"].(string); text != "" {
 				m.appendThinkingDelta(text)
 			}
+		}
+	case events.TypeThinkingBlock:
+		// A fold block as the log keeps it. Live, it arrives as the
+		// block ends and folds the block the deltas drew, with the
+		// whole text. On a replay it is the only sign of the block, and
+		// draws it folded. See settleThinkingBlock.
+		m.thinking = false
+		m.settleThinkingBlock(strField(ev.Data, "text"),
+			time.Duration(intField(ev.Data, "elapsed_ms"))*time.Millisecond)
+	case events.TypeSettingsChanged:
+		// The daemon-wide switches, as a snapshot. Only show_thinking is
+		// this client's to keep; the roster refetch it also brings is
+		// in handleServerEvent.
+		if v, ok := ev.Data["show_thinking"].(bool); ok {
+			m.hideThinking = !v
 		}
 	case events.TypeThinkingEnd:
 		m.thinking = false

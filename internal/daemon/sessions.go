@@ -281,6 +281,13 @@ func (d *Daemon) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	for _, id := range d.turns.running() {
 		busy[id] = true
 	}
+	// A session the daemon this one replaced is still finishing a turn
+	// in is busy too, although no turn runs here. Answering idle for it
+	// told a client whose stream had reconnected to this daemon that its
+	// turn was lost, while the old one was still writing the answer.
+	for id := range d.sessionsOwnedElsewhere() {
+		busy[id] = true
+	}
 	// Asking is the other half of "what is this session doing". Busy says
 	// the model is working; asking says it stopped and is waiting for a
 	// person, which is the one state a client should draw differently

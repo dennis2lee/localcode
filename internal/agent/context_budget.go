@@ -289,8 +289,9 @@ func (l *Loop) inputEstimate(sessionID, system string, msgs []provider.Message) 
 // withoutReasoning is msgs with the model's reasoning blocks left out.
 //
 // Reasoning text is kept in the live history, and only the last
-// assistant message's is ever sent back; the log does not keep it, so a
-// history rebuilt after a restart has none. Measured over it, the same
+// assistant message's is ever sent back; a history rebuilt from the log
+// after a restart has none (the log keeps a muse model's blocks for the
+// clients to draw, and rehydrateHistory leaves them out). Measured over it, the same
 // conversation read one size live and another restored: a live session
 // read its reasoning as conversation and compacted a summary and one
 // exchange every turn that the restored one left alone, and a restored

@@ -342,8 +342,8 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `auto_compact_percent` | The threshold, as a percent of the context window, between 10 and 95. `50` unless set; `/auto-compact <percent>` changes it live and saves it, and refuses a percent outside that range, while a nonzero value outside it in config.json is clamped instead, without a message (`0` counts as unset, so it uses 50). |
 | `auto_memory_enabled` | The notes the model keeps for itself across sessions. On unless set to false. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
-| `show_thinking` | Whether the clients paint the model's reasoning while it arrives. On unless set to false; `/thinking` toggles it. Daemon-wide, like `show_tps`. The Web UI and the desktop window paint every model's reasoning. The TUI paints only a Muse model's reasoning block (see `fold_thinking`) and otherwise shows a `thinking` state on the busy line. This changes nothing about what the model does: reasoning is broadcast and never logged either way. See [What the transcript shows](#what-the-transcript-shows). |
-| `fold_thinking` | Whether a Muse model's reasoning is drawn as a block of its own: labelled Thinking with its running time, and folded to one line when the answer starts. On unless set to false; `/fold-thinking` and the settings Muse tab toggle it. Daemon-wide. Applies only to model IDs containing `muse`; other models keep the plain drawing. `show_thinking` off hides the block too. See [What the transcript shows](#what-the-transcript-shows). |
+| `show_thinking` | Whether the clients paint the model's reasoning while it arrives. On unless set to false; `/thinking` toggles it. Daemon-wide, like `show_tps`. The Web UI and the desktop window paint every model's reasoning. The TUI paints only a Muse model's reasoning block (see `fold_thinking`) and otherwise shows a `thinking` state on the busy line. This changes nothing about what the model does, and nothing about what is kept: a Muse model's reasoning blocks are logged either way, and other models' reasoning is never logged. See [What the transcript shows](#what-the-transcript-shows). |
+| `fold_thinking` | Whether a Muse model's reasoning is drawn as a block of its own: labelled Thinking with its running time, and folded to one line when the answer starts. On unless set to false; `/fold-thinking` and the settings Muse tab toggle it. Daemon-wide. Applies only to model IDs containing `muse`; other models keep the plain drawing. `show_thinking` off hides the block too. While it is on, each block is also written to the session log, so a reload draws it again. See [What the transcript shows](#what-the-transcript-shows). |
 | `show_timestamps` | Whether a time is shown beside each turn boundary in the Web UI and the desktop window. Off unless set to true; `/timestamps` toggles it. Daemon-wide. The TUI shows no turn-boundary times. See [What the transcript shows](#what-the-transcript-shows). |
 | `mouse` | Whether the TUI takes the mouse for a clickable scrollbar beside the transcript. Off unless set to true. Read from the config on the machine running the TUI, never from the daemon. See [Screen controls](#screen-controls). |
 | `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
@@ -954,6 +954,8 @@ Other behavior:
 * The TUI places the real terminal cursor at the insertion point inside the prompt box, so IME composition for Korean, Japanese, and Chinese renders in the box while you type rather than below it.
 * **Running work shows below the prompt box, not in the conversation.** While a turn is in flight the TUI animates a line naming what it is doing (the running tool's name, or `working`), the queue depth, and how many background tasks are going. It disappears the moment the turn ends. The Web UI shows the same information in its status bar. Tool starts and finishes no longer write `[tool] ...` lines into the transcript.
 
+**A turn lost while the stream was away is ended.** Both clients reconnect to the daemon on their own. When the stream comes back while a turn is in progress, the client asks the daemon whether the session is still busy. A daemon that restarted, crashed, or took over from an update that did not finish never ran that turn, and nothing would ever end it. The client then ends it after a one-second grace, which lets a `turn.done` that was on its way arrive first. It marks prompts sent into the turn as not sent, stops its running tool rows, closes a permission question or a model's question it left open, folds a reasoning block, and adds the line `[the localcode running this turn is no longer running it; the turn did not finish]`. A turn the client was only watching has its reasoning block folded and nothing said. A reconnect the turn survived changes nothing. During an update's handoff, a session the old daemon is still finishing is reported busy, so it is not mistaken for a lost turn. The TUI also asks the daemon for its agents again after a reconnect, as the Web UI does.
+
 Both clients follow new output only while the transcript is at the bottom. Scrolling up pauses following. Returning to the bottom resumes it. In the Web UI, **↓ latest** jumps to the bottom. Sending a prompt or opening a session also moves to the bottom. Background-task windows use the same behavior.
 
 TUI transcript scrolling: `PgUp` and `PgDn` by screen, `Shift+Up` and `Shift+Down` by line. Plain arrows move within the prompt or recall history. Resizing the prompt box preserves transcript following.
@@ -1316,7 +1318,7 @@ Three switches, all daemon-wide and persisted, so the choice survives a restart 
 | `/fold-thinking [on\|off]` | Whether a Muse model's reasoning is a labelled block that folds when the answer starts | on |
 | `/timestamps [on\|off]` | Whether a time is shown beside each turn boundary in the Web UI | off |
 
-`/thinking off` is about what the clients paint, not about what the model does: reasoning is broadcast and never logged either way, so turning it off hides what is arriving rather than deleting anything. `/effort` is the one that changes how much reasoning there is. Turning it back on mid-turn shows the rest of the reasoning, because the switch is read where the text is painted rather than where it arrives.
+`/thinking off` is about what the clients paint, not about what the model does or what is kept: turning it off hides reasoning rather than deleting anything. `/effort` is the one that changes how much reasoning there is. Turning it back on mid-turn shows the rest of the reasoning, because the switch is read where the text is painted rather than where it arrives.
 
 What each client draws:
 
@@ -1327,7 +1329,7 @@ What each client draws:
 
 A Muse model reasons at length before every answer, often by restating the question first. Drawn open and unlabelled, that reasoning read as the start of the reply. The block keeps the two apart. It folds when its end arrives, when the answer's first text arrives, when the message ends, when a tool starts, when the next prompt arrives, or when the turn ends, whichever comes first. The time is the daemon's figure, from the block's first reasoning token to its end. A block that folds before its end arrives shows the client's own time since its first reasoning token. Ctrl+O's choice in the TUI lasts until the conversation is switched; a conversation opened in the TUI starts with its blocks folded.
 
-Reasoning blocks are not replayed. The daemon never logs reasoning, so a reload or a re-attach shows the answers without the blocks that preceded them.
+A Muse model's reasoning block is written to the session log when it ends, whole, with its time, as one `thinking.block` event. A reload, a reconnect, or a conversation opened later draws each block folded where it was, and `/export` writes it as a folded `<details>` section. A block cut off by an error or a stop is kept as far as it got. The model is never sent a logged block: a history rebuilt from the log after a restart leaves it out, as the live history does. Other models' reasoning, and a Muse model's with `/fold-thinking` off, is broadcast only: a reload shows the answers without it.
 
 The TUI shows no times on turn boundaries, so `/timestamps` does not affect the terminal.
 
@@ -1365,7 +1367,7 @@ Permission rules answer "which tool, on which path". They say nothing about dest
 
 ### What a session log holds, and who can read it
 
-A session's log is the conversation: every prompt, every reply, every tool result. Compaction adds one more — the summary is recorded in full so a restart can rebuild the model's history from it, which means a condensed copy of everything above it lives in a single event.
+A session's log is the conversation: every prompt, every reply, every tool result, and a Muse model's reasoning blocks while `fold_thinking` is on. Compaction adds one more — the summary is recorded in full so a restart can rebuild the model's history from it, which means a condensed copy of everything above it lives in a single event.
 
 Logs are written `0600` in a `0700` directory under `~/.localcode/sessions`, so on a shared machine no other account can read them. Opening a store also narrows a directory and the `.jsonl` and `.meta.json` files already in it, because a directory keeps the mode it was created with and every conversation written before this was `0644` in a `0755` directory. Files the store does not write are left alone. Narrowing is best effort: a store that refused to open over a permission it could not change would be a worse answer than one whose modes are as they were.
 
@@ -2605,7 +2607,7 @@ Automatic compatibility adjustments:
 * Reasoning budgets are reduced to fit `max_tokens`, reserving 1024 tokens for the answer. A cap too small for useful reasoning disables the budget. The high budget is 16384 tokens before adjustment.
 * Temperature is omitted when the provider's reasoning mode requires a fixed temperature.
 
-Reasoning appears as a separate muted block in the Web UI. The TUI status reads `thinking`. A Muse model's reasoning is a labelled block in both clients that folds when the answer starts; see [What the transcript shows](#what-the-transcript-shows). Reasoning-stream text is not written to session logs or replayed after reload.
+Reasoning appears as a separate muted block in the Web UI. The TUI status reads `thinking`. A Muse model's reasoning is a labelled block in both clients that folds when the answer starts; see [What the transcript shows](#what-the-transcript-shows). Reasoning-stream text is not written to session logs or replayed after reload, except a Muse model's folded blocks, which are.
 
 ### Zoom and what a reload keeps
 
@@ -2825,7 +2827,7 @@ See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for mor
 
 LocalCode reads local-provider `reasoning_content` and `reasoning` stream fields. The TUI shows `thinking`; the Web UI displays reasoning above the answer. A Muse model's reasoning is a labelled block in both clients that folds when the answer starts (`fold_thinking`).
 
-Separate reasoning-stream text is neither logged nor returned to the model. Reloading removes it.
+Separate reasoning-stream text is never returned to the model. It is not logged, and a reload removes it, except a Muse model's folded blocks, which are logged and drawn again.
 
 Reasoning written into the answer itself, between `<think>` tags, is not separated out: it arrives as content, so it is shown and kept as content.
 

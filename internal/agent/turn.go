@@ -912,8 +912,41 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 	// API requires of a continuation.
 	var thinking []provider.Block
 	// When the reasoning block being streamed began, for the time its
-	// label reports. Zero between blocks.
+	// label reports, and what it has said so far. Zero and empty between
+	// blocks.
 	var thinkingSince time.Time
+	var thinkingText strings.Builder
+	// closeThinking ends the reasoning block being streamed, and reports
+	// its time, or -1 when no block was open. A fold block (see
+	// foldsThinking) is written to the log here as one thinking.block, so
+	// a client that reloads or reconnects draws it folded again rather
+	// than losing it: its text, whole, and its time. Called at the
+	// block's end, and when the stream stops without one (a provider
+	// error, a stop) so what was shown live is what a reload shows.
+	//
+	// Written to the record and never to the history: rehydrateHistory
+	// has no case for it, so a restarted session sends the model no more
+	// reasoning than a live one does. Whitespace alone is not a block;
+	// neither client draws one.
+	closeThinking := func(endText string) int {
+		if thinkingSince.IsZero() {
+			return -1
+		}
+		elapsed := int(time.Since(thinkingSince).Milliseconds())
+		said := thinkingText.String()
+		if said == "" {
+			said = endText
+		}
+		if fold && strings.TrimSpace(said) != "" {
+			l.Store.Append(sessionID, events.TypeThinkingBlock, map[string]any{
+				"text":       said,
+				"elapsed_ms": elapsed,
+			})
+		}
+		thinkingSince = time.Time{}
+		thinkingText.Reset()
+		return elapsed
+	}
 
 	// Generation timing, and the live rate estimate built on top of it.
 	// deltas counts stream deltas, not tokens — the authoritative token
@@ -953,15 +986,17 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			generated()
 
 		case provider.EventThinkingDelta:
-			// Broadcast, not appended: reasoning is worth watching while
-			// it happens and is not part of the transcript afterwards.
-			// The API does not want it back on a later turn either, and
+			// Broadcast, not appended: a delta is worth watching while it
+			// happens, and the record keeps a fold block whole when it
+			// ends rather than in fragments (see closeThinking). The API
+			// does not want reasoning back on a later turn either, and
 			// the block that does have to go back is carried in memory
 			// for exactly as long as that is true — see EventThinkingEnd
 			// and toAnthropicMessages.
 			if thinkingSince.IsZero() {
 				thinkingSince = time.Now()
 			}
+			thinkingText.WriteString(ev.ThinkingDelta)
 			l.Store.Broadcast(sessionID, events.TypeThinkingDelta, map[string]any{
 				"text":          ev.ThinkingDelta,
 				"fold":          fold,
@@ -976,10 +1011,14 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			thinking = append(thinking, provider.Block{
 				Type: provider.BlockThinking, Text: ev.ThinkingDelta, Signature: ev.Signature,
 			})
+			// The logged block first and the broadcast end after it: a
+			// client folds the live block on thinking.block, with the
+			// whole text, and the end then finds nothing open. A client
+			// from before thinking.block ignores it and folds on the end,
+			// as it always did.
 			end := map[string]any{"fold": fold}
-			if !thinkingSince.IsZero() {
-				end["elapsed_ms"] = int(time.Since(thinkingSince).Milliseconds())
-				thinkingSince = time.Time{}
+			if elapsed := closeThinking(ev.ThinkingDelta); elapsed >= 0 {
+				end["elapsed_ms"] = elapsed
 			}
 			l.Store.Broadcast(sessionID, events.TypeThinkingEnd, end)
 
@@ -1062,6 +1101,9 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			// record already, and with no part.end to close it a replay
 			// kept waiting for the call's result and folded the next
 			// turn's iterations into it.
+			// A reasoning block the error cut off is recorded as far as
+			// it got, as it was shown.
+			closeThinking("")
 			if text.Len() > 0 || len(toolUses) > 0 {
 				l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String(), "failed": true})
 			}
@@ -1088,6 +1130,9 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 		usage.elapsed = time.Since(genStart)
 	}
 
+	// A stream that closed with a reasoning block still open, a stop
+	// pressed mid-thought among them, records it as far as it got.
+	closeThinking("")
 	l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String()})
 
 	blocks = append(blocks, thinking...)

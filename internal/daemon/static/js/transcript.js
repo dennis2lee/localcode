@@ -540,9 +540,10 @@ export function appendReview(d) {
 //
 // Its own block, muted, and deliberately not part of the answer: it is
 // the working, not the conclusion, and a reader scrolling back wants the
-// conclusion. It is never replayed either — the daemon broadcasts these
-// and logs none of them — so what is on screen is what this page watched
-// arrive, which is the only claim it can honestly make.
+// conclusion. The plain block is never replayed — the daemon broadcasts
+// its deltas and logs none of them — so what is on screen is what this
+// page watched arrive. A fold block is the exception: the daemon logs it
+// whole when it ends (thinking.block), so a reload draws it again.
 //
 // Two drawings. The plain one is the text in a muted block, and is what
 // every model gets. A muse model's stream arrives marked "fold" (the
@@ -637,9 +638,74 @@ function appendFoldedThinking(text) {
   });
 }
 
+// settleThinkingBlock takes a fold block as the log keeps it
+// (thinking.block): the whole text and the daemon's time. With a block
+// streaming, that block is the one it is: its text is replaced by the
+// record's, which is whole where the deltas may have missed some across
+// a reconnect, and it folds. With none, it is a replay, and the block is
+// drawn folded where it was.
+export function settleThinkingBlock(text, elapsedMs) {
+  const said = typeof text === 'string' ? text : '';
+  const f = thinkingFold;
+  if (f) {
+    if (said.trim()) {
+      f.buffer = said;
+      changeQuietly(() => { f.body.textContent = said; });
+    }
+    foldThinking(elapsedMs);
+    return;
+  }
+  if (!app.showThinking || !said.trim()) return;
+  const done = buildFoldedThinking(false);
+  done.buffer = said;
+  done.body.textContent = said;
+  done.label.textContent = 'Thought for';
+  done.time.textContent = formatThinkingTime(elapsedMs > 0 ? elapsedMs : 0);
+  setThinkingOpen(done, false);
+  placeThinking(done.wrap);
+}
+
+// hasLiveThinking reports whether a fold block is still streaming, for
+// the check that asks after a reconnect whether its turn is still
+// running.
+export function hasLiveThinking() {
+  return thinkingFold !== null;
+}
+
 function startFoldedThinking() {
+  const f = buildFoldedThinking(true);
+  setThinkingOpen(f, true);
+  // The clock runs between deltas too: a model can pause mid-thought for
+  // longer than a second, and a time that stops then reads as a block
+  // that has stopped.
+  f.timer = setInterval(() => {
+    if (thinkingFold !== f) {
+      clearInterval(f.timer);
+      return;
+    }
+    f.time.textContent = formatThinkingTime(Date.now() - f.since);
+  }, 1000);
+  placeThinking(f.wrap);
+  return f;
+}
+
+// placeThinking puts a block in front of an answer that has already
+// started, which is where reasoning sits in the message, and where the
+// TUI puts it: the rest of that answer goes on writing into the element
+// below the block.
+function placeThinking(wrap) {
+  const answer = session.currentModelEl;
+  change(() => {
+    if (answer && answer.parentNode === transcriptEl) transcriptEl.insertBefore(wrap, answer);
+    else transcriptEl.appendChild(wrap);
+  });
+}
+
+// buildFoldedThinking makes the element of a fold block, streaming or
+// finished, without placing it.
+function buildFoldedThinking(live) {
   const wrap = document.createElement('div');
-  wrap.className = 'msg-thinking fold live';
+  wrap.className = live ? 'msg-thinking fold live' : 'msg-thinking fold';
 
   // A button, so the header is reachable and operable from the keyboard
   // and says to a screen reader whether the text under it is showing.
@@ -674,28 +740,9 @@ function startFoldedThinking() {
   // A find landing on a match inside the folded text opens it through
   // here, so the header says open when the text is showing.
   body.reveal = () => setThinkingOpen(f, true);
-  setThinkingOpen(f, true);
-  // The clock runs between deltas too: a model can pause mid-thought for
-  // longer than a second, and a time that stops then reads as a block
-  // that has stopped.
-  f.timer = setInterval(() => {
-    if (thinkingFold !== f) {
-      clearInterval(f.timer);
-      return;
-    }
-    f.time.textContent = formatThinkingTime(Date.now() - f.since);
-  }, 1000);
 
   wrap.appendChild(head);
   wrap.appendChild(body);
-  // In front of an answer that has already started, which is where
-  // reasoning sits in the message, and where the TUI puts it: the rest
-  // of that answer goes on writing into the element below the block.
-  const answer = session.currentModelEl;
-  change(() => {
-    if (answer && answer.parentNode === transcriptEl) transcriptEl.insertBefore(wrap, answer);
-    else transcriptEl.appendChild(wrap);
-  });
   return f;
 }
 

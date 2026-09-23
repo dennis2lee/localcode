@@ -215,6 +215,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.skillsList = msg.skills
 		return m, nil
+
+	case settingsMsg:
+		// Silent on failure, as the other startup reads are: shown is
+		// the default, and the next reasoning delta carries the switch.
+		if msg.err == nil && msg.settings.ShowThinking != nil {
+			m.hideThinking = !*msg.settings.ShowThinking
+		}
+		return m, nil
+
+	case lostTurnDueMsg:
+		return m.handleLostTurnDue(msg)
+
+	case turnCheckMsg:
+		return m.handleTurnCheck(msg)
 	}
 
 	var cmd tea.Cmd
@@ -249,6 +263,17 @@ func (m Model) handleServerEvent(msg eventMsg) (tea.Model, tea.Cmd) {
 	}
 	m.applyEvent(msg.ev)
 	cmds := []tea.Cmd{listenForEvent(m.events, m.streamGen)}
+	// The stream came back after it had ended or failed to open. The
+	// daemon behind it may be a new process: its agents may not be the
+	// ones cached, and a turn this client was waiting on may be one it
+	// never ran. The roster is asked for again, and a turn still in
+	// progress here is checked. See handleLostTurnDue.
+	if msg.ev.Type == client.TypeReconnected {
+		cmds = append(cmds, m.fetchAgents())
+		if m.turnInProgress() {
+			cmds = append(cmds, m.scheduleLostTurnCheck(false))
+		}
+	}
 	// The roster moves when Smart Agent flips, from any client, and the
 	// daemon announces the flip on this broadcast. Re-request it here
 	// rather than trusting the startup fetch: offering an agent the daemon
@@ -295,6 +320,7 @@ func (m Model) handleTurnDone(msg turnDoneMsg) (tea.Model, tea.Cmd) {
 		// turn's turn.done to drain it.
 		m.queue = append([]string{msg.text}, m.queue...)
 		m.waiting = true
+		m.turnEpoch++
 		m.appendLocal(fmt.Sprintf("[queued] %s", msg.text))
 		return m, m.startSpin()
 	}
@@ -412,6 +438,12 @@ func (m *Model) openSession(id string) tea.Cmd {
 			cancel()
 			return sessionSwitchedMsg{gen: gen, err: err}
 		}
+		// The display switch, read before the stream opens so it is in
+		// force for the replay. A failure is not a failed switch.
+		var showThinking *bool
+		if s, serr := c.GetSettings(callCtx); serr == nil {
+			showThinking = s.ShowThinking
+		}
 		agent := ""
 		found := false
 		for _, s := range sessions {
@@ -426,8 +458,8 @@ func (m *Model) openSession(id string) tea.Cmd {
 		}
 		// From sequence zero: the transcript is being rebuilt from
 		// nothing, so the whole conversation is what it needs.
-		ch := c.StreamEvents(ctx, id, 0)
-		return sessionSwitchedMsg{sessionID: id, agent: agent, events: ch, cancel: cancel, gen: gen}
+		ch := c.StreamEventsMarkingReconnects(ctx, id, 0)
+		return sessionSwitchedMsg{sessionID: id, agent: agent, events: ch, cancel: cancel, gen: gen, showThinking: showThinking}
 	}
 }
 
@@ -450,15 +482,24 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 		return m, m.reopenCurrent()
 	}
 
+	if msg.showThinking != nil {
+		m.hideThinking = !*msg.showThinking
+	}
+
 	if msg.reattach {
 		// The same session, a fresh stream. Only the plumbing changes —
 		// plus the roster: a re-attach means the daemon may be a new
 		// process since, and its agents may not be the ones cached at
 		// startup. The transcript is still this session's and is left
-		// alone.
+		// alone. For the same reason a turn still in progress here is
+		// checked: the daemon that was running it may be gone.
 		m.events = msg.events
 		m.streamCancel = msg.cancel
-		return m, tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents())
+		cmds := []tea.Cmd{listenForEvent(m.events, m.streamGen), m.fetchAgents()}
+		if m.turnInProgress() {
+			cmds = append(cmds, m.scheduleLostTurnCheck(false))
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	// Everything below belonged to the conversation being left.
@@ -540,8 +581,14 @@ func (m *Model) reopenCurrent() tea.Cmd {
 		// delivered nothing, for as long as the client stayed on this
 		// session. A resume point has to be a position in the log rather
 		// than a word meaning "none".
-		ch := c.StreamEvents(ctx, id, since)
-		return sessionSwitchedMsg{sessionID: id, agent: agent, events: ch, cancel: cancel, gen: gen, reattach: true}
+		var showThinking *bool
+		callCtx, callCancel := context.WithTimeout(ctx, apiCallTimeout)
+		if s, err := c.GetSettings(callCtx); err == nil {
+			showThinking = s.ShowThinking
+		}
+		callCancel()
+		ch := c.StreamEventsMarkingReconnects(ctx, id, since)
+		return sessionSwitchedMsg{sessionID: id, agent: agent, events: ch, cancel: cancel, gen: gen, reattach: true, showThinking: showThinking}
 	}
 }
 

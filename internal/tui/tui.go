@@ -253,6 +253,16 @@ type Model struct {
 	// thinkingLive says a reasoning block may be streaming; see
 	// liveThinking, which it only lets skip a search.
 	thinkingLive bool
+	// hideThinking is this client's copy of the daemon's show_thinking,
+	// inverted so the zero value is the daemon's default: shown. Read at
+	// start and on every switch, and kept current by settings.changed and
+	// by each reasoning delta, which carries it. A block replayed from
+	// the log is drawn only while it is false.
+	hideThinking bool
+	// turnEpoch moves every time this client sends a prompt, so a check
+	// for a lost turn that was started before the send cannot end the
+	// turn the send began. See lostTurnDueMsg.
+	turnEpoch uint64
 	// spin/spinning drive the indicator's animation. spinning guards
 	// against starting a second tick loop: one loop keeps rescheduling
 	// itself while the client is busy and dies on its first tick after
@@ -323,6 +333,20 @@ func (m Model) Init() tea.Cmd {
 	// event to replay, so without asking once at the start the footer
 	// named no level until the first switch — on a conversation where one
 	// was in force the whole time.
-	return tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents(), m.fetchCommands(),
-		m.fetchSkills(), m.fetchSlashCommands(), m.fetchReferenceNames(), m.fetchEffort(false))
+	//
+	// The settings before the first event, in sequence rather than beside
+	// it: the replay can hold reasoning blocks, and whether to draw them
+	// is the daemon's show_thinking, which has to be known first.
+	return tea.Batch(tea.Sequence(m.fetchSettings(), listenForEvent(m.events, m.streamGen)), m.fetchAgents(),
+		m.fetchCommands(), m.fetchSkills(), m.fetchSlashCommands(), m.fetchReferenceNames(), m.fetchEffort(false))
+}
+
+// WithStreamCancel hands the model the cancel for the stream it was
+// built with, so the first switch to another conversation closes it the
+// way every later switch closes its own. Without it the first stream
+// outlived the switch, a connection and a goroutine that went on
+// receiving another conversation's events until its buffer filled.
+func (m Model) WithStreamCancel(cancel context.CancelFunc) Model {
+	m.streamCancel = cancel
+	return m
 }

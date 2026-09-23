@@ -169,7 +169,7 @@ implementations.
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
 | `POST /api/sessions` | `{"agent"?}`, default `general-purpose` | `201` the session, stamped with the live workspace | `400` bad body; `409` every session is being deleted; `500` creation failed |
-| `GET /api/sessions` | `?archived=1` for the other list | `200` visible sessions newest first, each with `"busy"` (a turn is running) and `"asking"` (it waits for a person) | none |
+| `GET /api/sessions` | `?archived=1` for the other list | `200` visible sessions newest first, each with `"busy"` (a turn is running, here or in the daemon this one took over from, which is still finishing it) and `"asking"` (it waits for a person) | none |
 | `GET /api/sessions/{id}` | nothing | `200` the session. No in-tree caller; both clients use the list plus the event stream | `404` unknown session |
 | `DELETE /api/sessions/{id}` | nothing | `204`. Removes the session, the background work it started, and all their logs; the parent's task row is marked deleted | `404` unknown session; `409` a turn is running |
 | `DELETE /api/sessions` | nothing | `204`. Refuses while any session has a turn in flight | `409` naming the busy sessions |
@@ -190,9 +190,11 @@ implementations.
 
 `GET /api/sessions/{id}/events` is Server-Sent Events, `Content-Type:
 text/event-stream`, with a `: ping` comment every 20 seconds so silent
-turns do not look dead. Resume with `?since=<seq>` (wins), the
-`Last-Event-ID` header a reconnecting `EventSource` sends back, or
-`?tail=N` to open near the end at a turn boundary. Invalid `since`/`tail`
+turns do not look dead. Resume with the `Last-Event-ID` header a
+reconnecting `EventSource` sends back (wins), `?since=<seq>`, or `?tail=N`
+to open near the end at a turn boundary. The header wins because a
+browser reconnects to the same URL, whose `?since=` or `?tail=` says
+where the stream started rather than where it got to. Invalid `since`/`tail`
 is `400`, an unknown session `404`. The backlog collapses finished
 replies (deltas before the last `message.part.end` are skipped; a reply
 still streaming keeps its deltas). Daemon-wide events (`mcp.status`,
@@ -265,6 +267,7 @@ Every constant in `internal/events/events.go` a client can receive on the
 stream, with the payload fields the comments there promise. Per-session
 log events carry `seq`; transient broadcast events (`task.progress`,
 `thinking.delta`, `thinking.end`) carry none and are missed when missed.
+`thinking.block` is logged, so a reconnect or a reload replays it.
 
 | Type | Payload and scope |
 |---|---|
@@ -279,8 +282,9 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `task.spawned`, `task.status` | the panel rows; a `deleted` status removes one |
 | `task.progress` | `{"task_id", "doing"}`; transient, mirrored into the parent |
 | `agent.switched` | `{"agent"}` |
-| `thinking.delta` | `{"text", "fold", "show_thinking"}` while reasoning streams; transient, never logged. `fold` is true when the block is drawn labelled and folded once the answer starts: `fold_thinking` is on and the model ID contains `muse`. `show_thinking` carries that switch for a client that keeps no copy of the settings |
-| `thinking.end` | `{"fold", "elapsed_ms"?}` when a reasoning block ends; transient. `elapsed_ms` is the time from the block's first delta to its end |
+| `thinking.delta` | `{"text", "fold", "show_thinking"}` while reasoning streams; transient, never logged. `fold` is true when the block is drawn labelled and folded once the answer starts: `fold_thinking` is on and the model ID contains `muse`. `show_thinking` is the switch's current value; a delta is never replayed, so it is always current |
+| `thinking.end` | `{"fold", "elapsed_ms"?}` when a reasoning block ends; transient. `elapsed_ms` is the time from the block's first delta to its end. For a fold block it follows `thinking.block`, which has already folded it |
+| `thinking.block` | `{"text", "elapsed_ms"}`; logged. A fold block as the record keeps it: the whole reasoning and its time, written when the block ends, or when the stream stops with it open. A client folds the live block on it and takes its text as authoritative; with no live block (a replay) it draws the block folded. Only fold blocks are logged. Never rebuilt into the history the model is sent |
 | `error` | `{"error", "recovered"?, "history_replaced"?, "fallback"?}` a turn failure; distinct from `turn.cancelled`, which is a person stopping it on purpose. `recovered: true` is a notice from a turn that carries on. `fallback` names the model the turn moved to, on the notice that reports the switch. `history_replaced: true` marks the trim that dropped the oldest messages to fit the window: the context usage count went with them, as after a compaction |
 | `mcp.status` | `{"servers": [{"name", "status", "detail"}]}`; daemon-wide, complete list every time |
 | `session.activity` | `{"session", "busy"}`; daemon-wide turn indicator |

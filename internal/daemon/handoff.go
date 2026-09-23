@@ -118,30 +118,35 @@ func (d *Daemon) publishOwned() error {
 // it changes as the other daemon finishes turns, and caching it would be
 // caching the one fact that is supposed to change.
 func (d *Daemon) ownedElsewhere(sessionID string) bool {
+	return d.sessionsOwnedElsewhere()[sessionID]
+}
+
+// sessionsOwnedElsewhere is every session the daemon this one replaced
+// is still writing, read once. See ownedElsewhere.
+func (d *Daemon) sessionsOwnedElsewhere() map[string]bool {
 	path := d.handoffPath()
 	if path == "" {
-		return false
+		return nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return nil
 	}
 	var m handoffManifest
 	if json.Unmarshal(data, &m) != nil || m.PID == os.Getpid() {
-		return false
+		return nil
 	}
 	if !pidAlive(m.PID) {
 		// A retiring daemon that died mid-drain. Its sessions are nobody's
 		// now, and a file that says otherwise would lock them forever.
 		_ = os.Remove(path)
-		return false
+		return nil
 	}
+	owned := make(map[string]bool, len(m.Sessions))
 	for _, id := range m.Sessions {
-		if id == sessionID {
-			return true
-		}
+		owned[id] = true
 	}
-	return false
+	return owned
 }
 
 // takeOwnership is what the new daemon does the first time it is about

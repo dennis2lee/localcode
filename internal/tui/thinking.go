@@ -21,8 +21,9 @@ import (
 // them again.
 //
 // Other models keep what they had, the busy line's word and nothing in
-// the transcript. Nothing here is replayed: the daemon never logs
-// reasoning, so a block exists only in the client that watched it arrive.
+// the transcript. The deltas are never replayed, but the daemon logs a
+// fold block whole when it ends (thinking.block), so a replay draws each
+// block folded again: see settleThinkingBlock.
 
 // thinkingTailLines is how much of a live block is on screen: enough to
 // see that it moves and roughly what about, few enough that the answer
@@ -82,6 +83,34 @@ func (m *Model) appendThinkingDelta(text string) {
 		// the message, and the answer stays the open entry: splitting
 		// it here would have message.part.end write the whole reply
 		// again below the block, the part above it included.
+		m.transcript = append(m.transcript[:last], block, m.transcript[last])
+	} else {
+		m.transcript = append(m.transcript, block)
+	}
+	m.transcriptRev++
+}
+
+// settleThinkingBlock takes a fold block as the log keeps it: the whole
+// text and the daemon's time. With a block streaming, that block is the
+// one it is: its text is replaced by the record's, which is whole where
+// the deltas may have missed some across a reconnect, and it folds. With
+// none, it is a replay, and the block is drawn folded where it was, in
+// front of an answer that has already started.
+func (m *Model) settleThinkingBlock(text string, elapsed time.Duration) {
+	if i := m.liveThinking(); i >= 0 {
+		if strings.TrimSpace(text) != "" {
+			m.transcript[i].text = text
+		}
+		m.foldThinking(elapsed)
+		return
+	}
+	if m.hideThinking || strings.TrimSpace(text) == "" {
+		return
+	}
+	block := transcriptEntry{
+		kind: entryThinking, text: text, note: "Thought for " + formatElapsed(elapsed), open: m.thinkingExpanded,
+	}
+	if last := len(m.transcript) - 1; m.streamOpen && last >= 0 {
 		m.transcript = append(m.transcript[:last], block, m.transcript[last])
 	} else {
 		m.transcript = append(m.transcript, block)
