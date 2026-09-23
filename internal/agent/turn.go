@@ -556,7 +556,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// and a Korean reply measured by characters came out at a
 			// third of what the provider had just counted.
 			l.recordUsage(sessionID, run.profile.Model, l.contextWindow(ctx, run.profile),
-				estimateTokens(run.system, append(append([]provider.Message(nil), messages...),
+				measure(run.system, append(append([]provider.Message(nil), messages...),
 					provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})), usage)
 		}
 

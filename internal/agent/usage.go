@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"localcode/internal/events"
+	"localcode/internal/provider"
 )
 
 // sessionUsage is the latest known token usage for one session, used to
@@ -23,6 +24,10 @@ type sessionUsage struct {
 	// appended since, or could mean four-characters-to-a-token simply
 	// overshoots this content. See Loop.inputEstimate.
 	Measured int
+	// MeasuredImages is how many image blocks those messages held, so
+	// the images appended after the count can be told from the ones it
+	// covered. See Loop.compactionMeasure.
+	MeasuredImages int
 	// CachedInputTokens is the part of the prompt the provider served
 	// from its cache and reported apart from InputTokens. See
 	// promptTokens.
@@ -99,6 +104,14 @@ func (t modelTotals) cached() bool {
 	return t.CacheReadTokens > 0 || t.CacheWriteTokens > 0 || t.CachedTokens > 0
 }
 
+// measurement is what estimateTokens made of the messages a count
+// covered, and how many image blocks were among them.
+type measurement struct{ tokens, images int }
+
+func measure(system string, msgs []provider.Message) measurement {
+	return measurement{tokens: estimateTokens(system, msgs), images: countImages(msgs)}
+}
+
 // tokensOf is what a streamed call reported.
 func tokensOf(u streamUsage) callTokens {
 	return callTokens{input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite}
@@ -134,7 +147,7 @@ func (l *Loop) startTurnRate(sessionID string) {
 // window down. Resolving it in one place is what keeps the meter, the
 // auto-compaction trigger, and the size of the next request from
 // disagreeing about how much room there is.
-func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, usage streamUsage) {
+func (l *Loop) recordUsage(sessionID, model string, maxContext int, measured measurement, usage streamUsage) {
 
 	// Rate over the whole turn so far, not over this one model call.
 	//
@@ -167,7 +180,8 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, us
 		OutputTokens:      usage.outputTokens,
 		MaxContext:        maxContext,
 		TPS:               tps,
-		Measured:          measured,
+		Measured:          measured.tokens,
+		MeasuredImages:    measured.images,
 		CachedInputTokens: usage.cacheRead + usage.cacheWrite,
 	}
 
@@ -196,6 +210,10 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, us
 		// treats as "no measurement" rather than as a measurement of
 		// nothing.
 		"measured": u.Measured,
+		// And how many images were among them, so a restored session can
+		// tell the images appended after the count from the ones it
+		// covered, as a live one does.
+		"measured_images": u.MeasuredImages,
 		// The cached prefix, so a session read back from the log knows
 		// how much of its window is in use. Kept out of input_tokens,
 		// which clients show as what was billed at the full rate.

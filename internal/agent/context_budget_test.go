@@ -218,7 +218,7 @@ func TestACachedPrefixStillFillsTheWindow(t *testing.T) {
 
 	// What a cached turn reports: almost nothing fresh, the conversation
 	// itself served from the cache.
-	loop.recordUsage(sid, "m", 32768, estimateTokens("", sent),
+	loop.recordUsage(sid, "m", 32768, measurement{tokens: estimateTokens("", sent)},
 		streamUsage{hasUsage: true, inputTokens: 12, outputTokens: 9, cacheRead: 4096, cacheWrite: 128})
 
 	u, ok := loop.getUsage(sid)
@@ -244,7 +244,7 @@ func TestACachedPrefixStillFillsTheWindow(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	logged := New(store, tools.NewRegistry(nil), map[string]provider.Provider{}, &config.Config{})
-	logged.recordUsage(rsid, "m", 32768, 5,
+	logged.recordUsage(rsid, "m", 32768, measurement{tokens: 5},
 		streamUsage{hasUsage: true, inputTokens: 12, outputTokens: 9, cacheRead: 4096, cacheWrite: 128})
 	evs, err := store.Events(rsid, 0)
 	if err != nil {
@@ -386,7 +386,7 @@ func TestTheMeasurementSurvivesBeingReadBackFromTheLog(t *testing.T) {
 	}
 	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{}, &config.Config{})
 
-	loop.recordUsage(sid, "m", 32768, 4321, streamUsage{hasUsage: true, inputTokens: 5000, outputTokens: 100})
+	loop.recordUsage(sid, "m", 32768, measurement{tokens: 4321}, streamUsage{hasUsage: true, inputTokens: 5000, outputTokens: 100})
 
 	evs, err := store.Events(sid, 0)
 	if err != nil {

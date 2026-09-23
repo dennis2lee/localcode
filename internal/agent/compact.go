@@ -87,46 +87,95 @@ const compactionPrompt = "Summarize our conversation so far concisely, preservin
 
 // maybeAutoCompact summarizes sessionID's history in place when
 // AutoCompactEnabled is on and the conversation the next request would
-// carry has crossed the threshold, freeing up context space before the
+// carry has reached the threshold, freeing up context space before the
 // next user turn is appended. Best-effort: any failure (including the
 // summarization call itself erroring) just leaves the full history intact
 // rather than blocking the real turn.
 // It reports whether it actually compacted, which is what the caller
 // needs to count compactions for the turn's trace record.
 //
-// Measured the way the next request is sized, by inputEstimate: the
-// provider's count for what it covered, and an estimate of only what was
-// appended after it. It used to be the count alone, which describes the
-// messages it was taken over and nothing since: the output of a "!"
-// command, a delegated turn's answer, the tool results of a turn whose
-// follow-up request failed or was cancelled. Any of those can be a
-// quarter of the window, and a conversation the count put at 3% went to
-// the provider at 65% with the threshold at 50. Taking the larger of the
-// count and a character estimate of everything instead would have made
-// it eager on Korean and Japanese, where the estimate is a floor on
-// appended text but the count is exact for what it saw, and a count is
-// what decides wherever there is one.
-//
-// With no count at all, after a rewind or a restart from a log that kept
-// none, the estimate decides alone: it reads low rather than high for
-// text, so it fires no earlier than the truth would.
-//
-// Against the window of the profile the next request goes to, not the
-// one the count was recorded with: a /model switch to a smaller model
-// left the threshold measured against the larger one.
+// Measured by compactionMeasure, against the window of the profile the
+// next request goes to, not the one the count was recorded with: a
+// /model switch to a smaller model left the threshold measured against
+// the larger one.
 func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt string, carried []provider.SystemBlock) bool {
 	if !l.AutoCompactEnabled() {
+		return false
+	}
+	// Nothing to compact, and asked before the window is: resolving it
+	// can probe the server, and a first message in a new conversation
+	// would wait on that probe before it was even recorded.
+	history := sendableHistory(l.history(sessionID))
+	if len(history) == 0 {
 		return false
 	}
 	window := l.contextWindow(ctx, profile)
 	if window <= 0 {
 		return false
 	}
-	used := l.inputEstimate(sessionID, systemPrompt, sendableHistory(l.history(sessionID)))
+	used := l.compactionMeasure(sessionID, systemPrompt, history)
 	if float64(used)/float64(window)*100 < float64(l.CompactPercent()) {
 		return false
 	}
+	// A compaction that could not leave the conversation smaller does not
+	// run. It happens when the system prompt alone is most of the window:
+	// every turn measures over the threshold, and each would spend a
+	// summarization call replacing a summary and one exchange with a
+	// summary. The request is still sized to fit, and one the provider
+	// refuses is summarized and retried as any other.
+	if used-estimateTokens(systemPrompt, nil) <= compactionKeeps(history, l.smartOn(ctx))+longestSummary {
+		return false
+	}
 	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic) == nil
+}
+
+// compactionMeasure is how full the conversation is, for deciding
+// whether to compact it: the provider's count for what it covered, plus
+// the text appended since, estimated. It used to be the count alone,
+// which describes the messages it was taken over and nothing after: the
+// output of a "!" command, a delegated turn's answer, the tool results
+// of a turn whose follow-up request failed. A conversation the count put
+// at 3% went to the provider at 65% with the threshold at 50.
+//
+// It is inputEstimate, which sizes the next request, with two
+// differences, both because a compaction is lossy and a request that
+// overflows is summarized and retried anyway, so where the figure is
+// unsure it errs toward not compacting:
+//
+//   - Images appended after the count are left out. What one costs
+//     depends on its pixels and on the model, from 1,600 tokens for a
+//     large image on Claude down to a fixed 256 on some local vision
+//     models, and the sizing prices each at the ceiling. Priced that way
+//     here, ten screenshots pasted into a turn that was then cancelled
+//     compacted the conversation before the retry, and a compaction
+//     replaces every image with a note: the retry went out without the
+//     screenshots it was about.
+//   - A count from a log that never recorded what it covered (Measured
+//     0) decides alone, as it always did. inputEstimate takes the larger
+//     of it and an estimate of everything there, which is safe for
+//     sizing a reply and not for deciding to summarize a conversation
+//     the provider counted well under the threshold.
+//
+// With no count at all, after /rewind or a restart from a log that kept
+// none, the conversation's text is estimated and its images are left
+// out, for the same reason.
+//
+// Not the larger of the count and an estimate of everything: the count
+// is exact for what it covered, and the four-characters-to-a-token
+// estimate reads Korean and Japanese low and separator-heavy logs high,
+// so letting it overrule the count moves the threshold by content.
+func (l *Loop) compactionMeasure(sessionID, system string, msgs []provider.Message) int {
+	now := estimateTokens(system, msgs)
+	images := countImages(msgs)
+	u, ok := l.getUsage(sessionID)
+	switch {
+	case !ok || u.promptTokens() <= 0:
+		return now - images*imageTokenEstimate
+	case u.Measured <= 0:
+		return u.promptTokens() + u.OutputTokens
+	}
+	appended := now - u.Measured - max(0, images-u.MeasuredImages)*imageTokenEstimate
+	return u.promptTokens() + u.OutputTokens + max(0, appended)
 }
 
 // CompactTrigger names why a compaction ran. It is on the one lifecycle

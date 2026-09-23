@@ -133,7 +133,7 @@ const (
 
 	// TypeUsage reports the latest known token usage/context-window fill
 	// for a turn: {"input_tokens","output_tokens","cached_input_tokens",
-	// "cache_read_tokens","cache_write_tokens","measured","max_context",
+	// "cache_read_tokens","cache_write_tokens","measured","measured_images","max_context",
 	// "percent","tps","show_tps","model"}. The two cache keys split
 	// cached_input_tokens the way it is billed; logs written before them
 	// carry cached_input_tokens alone.
