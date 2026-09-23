@@ -53,9 +53,14 @@ func TestFoldThinkingSwitchSyncsSavesAndNamesTheMuseProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST fold-thinking: %v", err)
 	}
+	var answered map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&answered); err != nil {
+		t.Fatalf("decode POST answer: %v", err)
+	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("POST fold-thinking status = %d, want 204", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK || answered["fold_thinking"] != false ||
+		answered["applied"] != true || answered["persisted"] != true {
+		t.Errorf("POST fold-thinking answered %d %v, want 200 with the switch applied and saved", resp.StatusCode, answered)
 	}
 	if data := waitForSettings(t, evCh); data["fold_thinking"] != false {
 		t.Errorf("settings.changed fold_thinking = %v after the checkbox turned it off", data["fold_thinking"])
@@ -161,5 +166,38 @@ func TestTheDisplaySwitchesReachEveryClientLive(t *testing.T) {
 		if _, ok := data[key].(bool); !ok {
 			t.Errorf("settings.changed carries no %s: %v", key, data)
 		}
+	}
+}
+
+// A save that fails is still a change that was made. The answer says it
+// was applied and not persisted, rather than an error status a client
+// reads as "not changed" while the daemon has the new value.
+func TestFoldThinkingSaysAppliedWhenTheSaveFails(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+	d := newTestDaemon(t, model.URL)
+	// A directory where the file should be: every write fails.
+	d.Broker.ConfigPath = t.TempDir()
+	httpSrv := httptest.NewServer(d.Handler())
+	defer httpSrv.Close()
+
+	resp, err := http.Post(httpSrv.URL+"/api/settings/fold-thinking", "application/json",
+		strings.NewReader(`{"enabled":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var answered map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&answered); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK || answered["applied"] != true || answered["persisted"] != false {
+		t.Errorf("answered %d %v, want 200 applied and not persisted", resp.StatusCode, answered)
+	}
+	if msg, _ := answered["error"].(string); !strings.Contains(msg, "failed to persist") {
+		t.Errorf("error = %q", msg)
+	}
+	if d.Loop.FoldThinkingEnabled() {
+		t.Error("the switch was not applied")
 	}
 }

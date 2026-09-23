@@ -60,7 +60,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.refreshViewport()
 			return m, nil, true
 		}
-		m.appendLocal("No folded reasoning in this transcript. A muse model's reasoning folds here once its answer starts; /fold-thinking turns that on or off.")
+		// Said only between replies: a line written into the
+		// transcript closes the reply streaming now, and the rest of
+		// it would then be drawn again below the note.
+		if !m.streamOpen {
+			m.appendLocal("No folded reasoning in this transcript. A muse model's reasoning folds here once its answer starts; /fold-thinking turns that on or off.")
+		}
 		return m, nil, true
 
 	case "esc":

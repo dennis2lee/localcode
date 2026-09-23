@@ -93,10 +93,16 @@ function renderMuseNote() {
 // when show_thinking is hiding reasoning altogether: the box can be on
 // and still change nothing on screen, and that should be read here
 // rather than worked out from an absence.
-function renderFoldThinking(warning) {
+//
+// The warning is kept here rather than passed in, so the redraw that a
+// settings.changed brings (which arrives for this very change) does not
+// erase a save that failed.
+let foldThinkingWarning = '';
+
+function renderFoldThinking() {
   foldThinkingCheckbox.checked = !!app.foldThinking;
-  foldThinkingWarnEl.textContent = warning || '';
-  foldThinkingWarnEl.hidden = !warning;
+  foldThinkingWarnEl.textContent = foldThinkingWarning;
+  foldThinkingWarnEl.hidden = !foldThinkingWarning;
   if (!app.showThinking) {
     foldThinkingNoteEl.textContent = 'Reasoning is not drawn at all while show_thinking is off. /thinking on draws it again.';
     return;
@@ -110,18 +116,24 @@ export function refreshFoldThinkingIfOpen() {
   if (settings.isOpen) renderFoldThinking();
 }
 
+// The daemon answers with what it did in two parts, as it does for
+// Smart Agent: "applied" is the state the box has to show, "persisted"
+// only whether config.json was written.
 async function toggleFoldThinking() {
   const enabled = foldThinkingCheckbox.checked;
   foldThinkingCheckbox.disabled = true;
   try {
-    await apiClient.setFoldThinking(enabled);
-    app.foldThinking = enabled;
-    renderFoldThinking();
+    const res = await apiClient.setFoldThinking(enabled);
+    app.foldThinking = res && 'fold_thinking' in res ? !!res.fold_thinking : enabled;
+    foldThinkingWarning = res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '';
   } catch (err) {
-    foldThinkingCheckbox.checked = !enabled;
-    renderFoldThinking(`Not changed: ${err}`);
+    // Nothing was applied. The box goes back to what the daemon has.
+    foldThinkingWarning = `Not changed: ${err}`;
   } finally {
     foldThinkingCheckbox.disabled = false;
+    renderFoldThinking();
   }
 }
 

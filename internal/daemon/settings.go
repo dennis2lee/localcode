@@ -270,10 +270,14 @@ func (d *Daemon) handleSetKeepGoing(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSetFoldThinking turns the muse reasoning block on or off live
-// and, when a config.json path is known, persists it. Same shape as
-// keep_going, and for the same reason it does not check whether any
-// profile runs a muse model: GET /api/settings reports muse_profiles,
-// and the panel says it.
+// and, when a config.json path is known, persists it. It does not check
+// whether any profile runs a muse model: GET /api/settings reports
+// muse_profiles, and the panel says it.
+//
+// It answers in two parts, as orchestrate does, rather than with a 500
+// for a save that failed: the switch was applied either way, and an
+// error status read as "not changed" left the box saying the opposite
+// of the state the daemon was in.
 func (d *Daemon) handleSetFoldThinking(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`
@@ -284,13 +288,18 @@ func (d *Daemon) handleSetFoldThinking(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Loop.SetFoldThinkingEnabled(req.Enabled)
 	d.announceSettings()
+	resp := map[string]any{
+		"fold_thinking": req.Enabled,
+		"applied":       true,
+		"persisted":     true,
+	}
 	if d.Broker.ConfigPath != "" {
 		if err := config.SetFoldThinkingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
-			http.Error(w, fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err), http.StatusInternalServerError)
-			return
+			resp["persisted"] = false
+			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
 		}
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleSetRepeatLimit moves the repeat guard's ceiling; zero turns it

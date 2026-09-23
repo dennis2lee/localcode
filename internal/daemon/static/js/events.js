@@ -107,6 +107,10 @@ const handlers = {
     // it is a no-op for text no placeholder was made for (another client's
     // message, or a replayed one).
     resolvePendingUser(d.text);
+    // A new turn's prompt: any reasoning block still open belongs to a
+    // turn that ended without saying so, and the next reasoning must not
+    // be written into it above this prompt.
+    foldThinking(0);
     // Every prompt this session has seen goes into Up/Down recall, whoever
     // typed it and whenever. On the replay that opens a session this is
     // what rebuilds the list, so recall survives a reload and a switch
@@ -134,6 +138,11 @@ const handlers = {
   // typed during tool execution skip the queue and bounce off the daemon's
   // busy flag with a 409.
   'message.part.end': (d) => {
+    // The message is over, so its reasoning is too. After a reconnect
+    // this can be the only sign of the answer: the daemon replays a
+    // finished reply as its end alone, and the reasoning's own end was
+    // never logged.
+    foldThinking(0);
     // Command output the person ran is not something the model said, so
     // it draws as a tool line rather than a model message. The header
     // names the command; the user message above it already shows the
@@ -710,6 +719,7 @@ async function resyncAfterReconnect() {
   const mine = (app.sessions || []).find(s => s.id === session.sessionID);
   if (!mine || mine.busy) return;
   setWaiting(false);
+  foldThinking(0);
   appendTool('[the localcode running this turn is no longer running it; the turn did not finish]');
   renderCommDot();
 }

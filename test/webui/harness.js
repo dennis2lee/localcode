@@ -308,6 +308,15 @@ async function load(opts = {}) {
     },
     setTimeout,
     clearTimeout,
+    // Unreferenced, so an interval a page leaves running (a reasoning
+    // block's clock in a test that ends mid-thought) does not keep the
+    // test process alive after its last test.
+    setInterval: (...args) => {
+      const t = setInterval(...args);
+      if (t && typeof t.unref === 'function') t.unref();
+      return t;
+    },
+    clearInterval,
     URLSearchParams,
     queueMicrotask,
     AbortController,

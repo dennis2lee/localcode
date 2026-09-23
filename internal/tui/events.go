@@ -115,6 +115,10 @@ func (m *Model) applyEvent(ev events.Event) {
 		if auto, _ := ev.Data["auto"].(bool); auto {
 			break
 		}
+		// A new turn's prompt: any reasoning block still open belongs to
+		// a turn that ended without saying so, and the next reasoning
+		// must not be written into it above this prompt.
+		m.foldThinking(0)
 		text, _ := ev.Data["text"].(string)
 		if text != "" {
 			// Every prompt this session has seen goes into Up/Down recall,
@@ -176,6 +180,11 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.appendTool("$ " + command + "\n" + text)
 			break
 		}
+		// The message is over, so its reasoning is too. After a
+		// reconnect this can be the only sign of the answer: the
+		// daemon replays a finished reply as its end alone, and the
+		// reasoning's own end was never logged.
+		m.foldThinking(0)
 		m.endModelStream(text)
 	case events.TypeSessionForked:
 		// A fork copies the conversation verbatim, so nothing else in this

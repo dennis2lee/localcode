@@ -556,7 +556,7 @@ export function appendReview(d) {
 let thinkingEl = null;
 let thinkingBuffer = '';
 // The fold block streaming now, or null: { wrap, head, marker, label,
-// time, body, since }.
+// time, body, since, buffer, stick, timer }.
 let thinkingFold = null;
 
 export function appendThinking(text, fold) {
@@ -569,8 +569,9 @@ export function appendThinking(text, fold) {
     appendFoldedThinking(text);
     return;
   }
-  // The switch went off mid-block: what streamed so far stays folded,
-  // and the rest is drawn the plain way.
+  // A plain delta while a fold block is still open is the next request
+  // going to a model the fold does not apply to, with nothing having
+  // closed the block: close it, and draw this one the plain way.
   foldThinking(0);
   if (!thinkingEl) {
     thinkingEl = document.createElement('div');
@@ -596,12 +597,17 @@ export function endThinking(elapsedMs) {
 // with no time when the block ended without saying so — the answer
 // started, a tool ran, the turn stopped — and then this page's own
 // clock is the next best figure.
+//
+// Quietly, as far as an open find bar is concerned: folding changes what
+// shows, not what the conversation says, and telling the bar made it land
+// on its current match again, which opened what had just been folded.
 export function foldThinking(elapsedMs) {
   const f = thinkingFold;
   if (!f) return;
   thinkingFold = null;
+  clearInterval(f.timer);
   const ms = elapsedMs > 0 ? elapsedMs : Date.now() - f.since;
-  change(() => {
+  changeQuietly(() => {
     f.wrap.classList.remove('live');
     f.label.textContent = 'Thought for';
     f.time.textContent = formatThinkingTime(ms);
@@ -610,9 +616,15 @@ export function foldThinking(elapsedMs) {
 }
 
 function appendFoldedThinking(text) {
-  // A plain block still open is the switch having come on mid-block.
+  // A plain block still open is the next request's reasoning being
+  // marked for folding where the last one was not.
   thinkingEl = null;
-  if (!thinkingFold) thinkingFold = startFoldedThinking();
+  if (!thinkingFold) {
+    // Not opened on whitespace alone: a block whose reasoning is a
+    // couple of newlines would be a header over nothing.
+    if (!text.trim()) return;
+    thinkingFold = startFoldedThinking();
+  }
   const f = thinkingFold;
   changeQuietly(() => {
     f.buffer += text;
@@ -649,14 +661,30 @@ function startFoldedThinking() {
   const body = document.createElement('div');
   body.className = 'body';
 
-  const f = { wrap, head, marker, label, time, body, since: Date.now(), buffer: '', stick: true };
+  const f = { wrap, head, marker, label, time, body, since: Date.now(), buffer: '', stick: true, timer: null };
   body.addEventListener('scroll', () => {
     f.stick = body.scrollHeight - body.scrollTop - body.clientHeight < 8;
   });
+  // Quietly, like a tool row's toggle: a click is the reader choosing
+  // what shows, and an open find bar told about it would land on its
+  // current match again and open whatever that is inside.
   head.addEventListener('click', () => {
-    change(() => setThinkingOpen(f, body.hidden));
+    changeQuietly(() => setThinkingOpen(f, body.hidden));
   });
+  // A find landing on a match inside the folded text opens it through
+  // here, so the header says open when the text is showing.
+  body.reveal = () => setThinkingOpen(f, true);
   setThinkingOpen(f, true);
+  // The clock runs between deltas too: a model can pause mid-thought for
+  // longer than a second, and a time that stops then reads as a block
+  // that has stopped.
+  f.timer = setInterval(() => {
+    if (thinkingFold !== f) {
+      clearInterval(f.timer);
+      return;
+    }
+    f.time.textContent = formatThinkingTime(Date.now() - f.since);
+  }, 1000);
 
   wrap.appendChild(head);
   wrap.appendChild(body);
@@ -665,9 +693,8 @@ function startFoldedThinking() {
 }
 
 // setThinkingOpen shows or hides a fold block's text. Read back from the
-// body's own hidden flag on every click rather than kept beside it, so a
-// find that opened the body to land on a match does not leave the next
-// click doing the opposite of what the reader sees.
+// body's own hidden flag on every click rather than kept beside it, so
+// the click always does the opposite of what the reader sees.
 function setThinkingOpen(f, open) {
   f.body.hidden = !open;
   f.marker.textContent = open ? '▾' : '▸';
@@ -689,6 +716,7 @@ function formatThinkingTime(ms) {
 export function clearTranscript() {
   thinkingEl = null;
   thinkingBuffer = '';
+  if (thinkingFold) clearInterval(thinkingFold.timer);
   thinkingFold = null;
   // The find bar's matches were in the conversation being replaced, and
   // a bar left open over a different one counts hits nobody searched for.

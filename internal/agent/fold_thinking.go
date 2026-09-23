@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -69,7 +70,11 @@ func (l *Loop) routeFoldThinking(sessionID, text string) (bool, error) {
 	// and the feature is one family's.
 	b.WriteString("\nApplies only to models whose id contains \"muse\": their reasoning is drawn as a labelled block " +
 		"that folds to one line when the answer starts. Other models keep the drawing they had.")
-	switch model := l.ModelView(sessionID).Model; {
+	// The model the next turn will run, resolved the way the turn
+	// resolves it: a conversation's own choice, then a Smart Agent
+	// specialist's lane, then the agent's profile.
+	_, next, _ := l.profileFor(l.pinSmart(context.Background()), sessionID, l.sessionAgent(sessionID))
+	switch model := next.Model; {
 	case model == "":
 	case museModel(model):
 		fmt.Fprintf(&b, "\nThis conversation is on %s, which the switch applies to.", model)

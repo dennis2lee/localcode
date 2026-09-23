@@ -1322,10 +1322,10 @@ What each client draws:
 
 | Model | Web UI and desktop window | TUI |
 |---|---|---|
-| Model ID contains `muse`, `/fold-thinking` on | A block headed THINKING with its running time. The text shows under the header, held to six lines while it streams. When the answer starts, the block folds to one line: "Thought for 12s". Click the line to open it again. | A block headed "Thinking · 4s" with the last six lines of the reasoning. When the answer starts, it folds to "Thought for 12s". **Ctrl+O** opens every folded block and folds them again. |
+| Model ID contains `muse`, `/fold-thinking` on | A block headed THINKING with its running time. The text shows under the header, held to six lines while it streams. When the answer starts, the block folds to one line: THOUGHT FOR 12s. Click the line to open it again. | A block headed "Thinking · 4s" with the last six lines of the reasoning. When the answer starts, it folds to "Thought for 12s". **Ctrl+O** opens every folded block and folds them again. |
 | Every other model, or `/fold-thinking` off | The reasoning in a muted block, open above the answer | A `thinking` state on the busy line, and nothing in the transcript |
 
-A Muse model reasons at length before every answer, often by restating the question first. Drawn open and unlabelled, that reasoning read as the start of the reply. The block keeps the two apart. It folds when its end arrives, when the answer's first text arrives, when a tool starts, or when the turn ends, whichever comes first. The time is the daemon's figure, from the block's first reasoning token to its end.
+A Muse model reasons at length before every answer, often by restating the question first. Drawn open and unlabelled, that reasoning read as the start of the reply. The block keeps the two apart. It folds when its end arrives, when the answer's first text arrives, when the message ends, when a tool starts, when the next prompt arrives, or when the turn ends, whichever comes first. The time is the daemon's figure, from the block's first reasoning token to its end.
 
 Reasoning blocks are not replayed. The daemon never logs reasoning, so a reload or a re-attach shows the answers without the blocks that preceded them.
 
@@ -2605,7 +2605,7 @@ Automatic compatibility adjustments:
 * Reasoning budgets are reduced to fit `max_tokens`, reserving 1024 tokens for the answer. A cap too small for useful reasoning disables the budget. The high budget is 16384 tokens before adjustment.
 * Temperature is omitted when the provider's reasoning mode requires a fixed temperature.
 
-Reasoning appears as a separate muted block in the Web UI. The TUI status reads `thinking`. Reasoning-stream text is not written to session logs or replayed after reload.
+Reasoning appears as a separate muted block in the Web UI. The TUI status reads `thinking`. A Muse model's reasoning is a labelled block in both clients that folds when the answer starts; see [What the transcript shows](#what-the-transcript-shows). Reasoning-stream text is not written to session logs or replayed after reload.
 
 ### Zoom and what a reload keeps
 
@@ -2823,7 +2823,7 @@ Wrapped invocations such as `env python3 x.py` and `xargs python3` are not cover
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
-LocalCode reads local-provider `reasoning_content` and `reasoning` stream fields. The TUI shows `thinking`; the Web UI displays reasoning above the answer.
+LocalCode reads local-provider `reasoning_content` and `reasoning` stream fields. The TUI shows `thinking`; the Web UI displays reasoning above the answer. A Muse model's reasoning is a labelled block in both clients that folds when the answer starts (`fold_thinking`).
 
 Separate reasoning-stream text is neither logged nor returned to the model. Reloading removes it.
 

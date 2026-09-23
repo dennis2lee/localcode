@@ -57,14 +57,25 @@ func (m *Model) appendThinkingDelta(text string) {
 		m.transcriptRev++
 		return
 	}
+	// Not opened on whitespace alone: a block whose reasoning is a
+	// couple of newlines shows nothing, and would still count as one for
+	// Ctrl+O.
+	if strings.TrimSpace(text) == "" {
+		return
+	}
 	m.thinkingSince = time.Now()
-	m.transcript = append(m.transcript, transcriptEntry{
-		kind: entryThinking, text: text, live: true, note: thinkingLiveNote(0),
-	})
+	block := transcriptEntry{kind: entryThinking, text: text, live: true, note: thinkingLiveNote(0)}
+	if last := len(m.transcript) - 1; m.streamOpen && last >= 0 {
+		// The model reasons after it has started answering. The block
+		// goes in front of the answer, which is where reasoning sits in
+		// the message, and the answer stays the open entry: splitting
+		// it here would have message.part.end write the whole reply
+		// again below the block, the part above it included.
+		m.transcript = append(m.transcript[:last], block, m.transcript[last])
+	} else {
+		m.transcript = append(m.transcript, block)
+	}
 	m.transcriptRev++
-	// The answer that follows is a message of its own, never the
-	// continuation of whatever model text came before this block.
-	m.streamOpen = false
 }
 
 // foldThinking closes the block streaming now, if there is one. elapsed
@@ -112,7 +123,7 @@ func (m *Model) toggleThinkingBlocks() bool {
 	found := false
 	for i := range m.transcript {
 		e := &m.transcript[i]
-		if e.kind != entryThinking || e.live {
+		if e.kind != entryThinking || e.live || !transcriptEntryShows(*e) {
 			continue
 		}
 		found = true

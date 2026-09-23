@@ -281,3 +281,34 @@ func TestMuseProfilesNamesTheFamilyInOrder(t *testing.T) {
 		t.Errorf("MuseProfiles = %v, want %v", got, want)
 	}
 }
+
+// The reply names the model the next turn will run, resolved the way the
+// turn resolves it. A Smart Agent specialist runs on its lane's profile,
+// which is not the default profile, and the reply read the default and
+// said the opposite of what the turn then did.
+func TestFoldThinkingReplyNamesASpecialistsLaneModel(t *testing.T) {
+	server := reasoningServer(t)
+	loop := foldLoop(t, server.URL, "qwen3-30b-a3b")
+	loop.Config.Profiles["smart-deep"] = config.Profile{Provider: "local", Model: "meta/muse-glimmer-30b"}
+	loop.SetSmartAgentEnabled(true)
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "oracle", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "oracle", "/fold-thinking on"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	evs, err := loop.Store.Events(sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	for _, ev := range evs {
+		if ev.Type == events.TypeMessagePartEnd {
+			out, _ = ev.Data["text"].(string)
+		}
+	}
+	if !strings.Contains(out, "meta/muse-glimmer-30b, which the switch applies to") {
+		t.Errorf("the reply does not name the specialist's lane model:\n%s", out)
+	}
+}

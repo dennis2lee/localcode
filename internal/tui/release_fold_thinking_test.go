@@ -213,3 +213,98 @@ func TestTheLiveBlocksClockTicks(t *testing.T) {
 		t.Errorf("after five seconds the header says %q", m.thinkingEntries()[0].note)
 	}
 }
+
+// A model that reasons after it has started answering: the block goes in
+// front of the answer, and the answer is drawn once. Splitting the reply
+// at the block had message.part.end write the whole reply again below
+// it, the part above included.
+func TestReasoningAfterTheAnswerStartedDoesNotRepeatTheAnswer(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "Part one. "}})
+	m.applyEvent(thinkingDelta("wait, reconsider", true))
+	m.applyEvent(events.Event{Type: events.TypeThinkingEnd, Data: map[string]any{"fold": true, "elapsed_ms": float64(1000)}})
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "Part two."}})
+	m.applyEvent(events.Event{Type: events.TypeMessagePartEnd, Data: map[string]any{"text": "Part one. Part two."}})
+
+	out := stripTestANSI(renderTranscript(m.transcript, 80))
+	if n := strings.Count(out, "Part one."); n != 1 {
+		t.Errorf("the answer's first part is drawn %d times:\n%s", n, out)
+	}
+	if !strings.Contains(out, "Part one. Part two.") {
+		t.Errorf("the answer is not drawn whole:\n%s", out)
+	}
+	if b := m.thinkingEntries(); len(b) != 1 || b[0].live {
+		t.Errorf("blocks = %#v", b)
+	}
+	if last := m.transcript[len(m.transcript)-1]; last.kind != entryModel {
+		t.Errorf("the answer is not the last entry: %#v", m.transcript)
+	}
+}
+
+// After a reconnect the daemon replays a finished reply as its end alone,
+// and the reasoning's own end was never logged. The end folds the block,
+// and the next request's reasoning gets a block of its own.
+func TestAReplyArrivingAsItsEndAloneFoldsTheBlock(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(thinkingDelta("first request", true))
+	m.applyEvent(events.Event{Type: events.TypeMessagePartEnd, Data: map[string]any{"text": "Answer one."}})
+	m.applyEvent(thinkingDelta("second request", true))
+	b := m.thinkingEntries()
+	if len(b) != 2 || b[0].live || b[0].text != "first request" || b[1].text != "second request" {
+		t.Errorf("blocks = %#v", b)
+	}
+}
+
+// A new prompt closes a block its turn left open.
+func TestANewPromptFoldsABlockLeftOpen(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(thinkingDelta("old turn", true))
+	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "second question"}})
+	m.applyEvent(thinkingDelta("new turn", true))
+	b := m.thinkingEntries()
+	if len(b) != 2 || b[0].live || b[0].text != "old turn" || b[1].text != "new turn" {
+		t.Errorf("blocks = %#v", b)
+	}
+}
+
+// Reasoning of whitespace alone opens no block: it would show nothing
+// and still count for Ctrl+O, which then did nothing on screen and left
+// the next block open.
+func TestWhitespaceReasoningOpensNoBlock(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(thinkingDelta("\n\n", true))
+	m.applyEvent(events.Event{Type: events.TypeThinkingEnd, Data: map[string]any{"fold": true}})
+	if b := m.thinkingEntries(); len(b) != 0 {
+		t.Fatalf("whitespace opened a block: %#v", b)
+	}
+	next, _, _ := m.handleKey(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	m = next.(Model)
+	if m.thinkingExpanded {
+		t.Error("Ctrl+O with nothing to open changed what the next block does")
+	}
+	// A block whose first delta is whitespace opens on the first text.
+	m.applyEvent(thinkingDelta("\n", true))
+	m.applyEvent(thinkingDelta("real text", true))
+	if b := m.thinkingEntries(); len(b) != 1 || b[0].text != "real text" {
+		t.Errorf("blocks = %#v", b)
+	}
+}
+
+// Ctrl+O with nothing to open says so only between replies: a note
+// written while an answer streams closed it, and the rest of the answer
+// was then drawn again below the note.
+func TestCtrlOWithNothingToOpenLeavesAStreamingAnswerAlone(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "Hello"}})
+	next, _, handled := m.handleKey(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	m = next.(Model)
+	if !handled {
+		t.Fatal("Ctrl+O fell through to the prompt box")
+	}
+	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": ", world"}})
+	m.applyEvent(events.Event{Type: events.TypeMessagePartEnd, Data: map[string]any{"text": "Hello, world"}})
+	out := stripTestANSI(renderTranscript(m.transcript, 80))
+	if n := strings.Count(out, "Hello"); n != 1 {
+		t.Errorf("the answer is drawn %d times:\n%s", n, out)
+	}
+}

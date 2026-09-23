@@ -14,7 +14,20 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { load } = require('./harness');
+const { load, defaultRoutes } = require('./harness');
+
+function openFind(app, query) {
+  app.doc.fire('keydown', { key: 'f', ctrlKey: true, target: app.document.body });
+  app.el('find-input').value = query;
+  app.el('find-input').fire('input');
+}
+
+// headerAgrees reports whether a block's header says what its body shows.
+function headerAgrees(block) {
+  const open = !block.querySelector('.body').hidden;
+  return block.querySelector('.head').getAttribute('aria-expanded') === String(open) &&
+    block.querySelector('.marker').textContent === (open ? '▾' : '▸');
+}
 
 function foldBlocks(app) {
   return Array.from(app.el('transcript').querySelectorAll('.msg-thinking'))
@@ -68,12 +81,137 @@ test('clicking the folded line opens the reasoning and closes it again', async (
   assert.equal(block.querySelector('.marker').textContent, '▾');
   head.click();
   assert.equal(body.hidden, true);
+});
 
-  // A find that landed on a match opened the body behind the header's
-  // back; the next click follows what is on screen, and folds it.
-  body.hidden = false;
-  head.click();
-  assert.equal(body.hidden, true, 'the click did the opposite of what the reader sees');
+// The find bar and a fold block. A find that lands on a match inside the
+// folded text opens it, and the header has to say so; a click on the
+// header with the bar open has to stay done; and neither may reopen
+// something else the reader had closed.
+test('a find opens a folded block with its header, and a click folds it again', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'look at handoff.go first', fold: true } });
+  app.sse.emit({ type: 'thinking.end', data: { fold: true, elapsed_ms: 2000 } });
+  app.sse.emit({ type: 'message.part.delta', data: { text: 'The answer.' } });
+  app.sse.emit({ type: 'turn.done', data: {} });
+  await app.settle();
+  const [block] = foldBlocks(app);
+  assert.equal(block.querySelector('.body').hidden, true);
+
+  openFind(app, 'handoff');
+  await app.settle();
+  assert.equal(block.querySelector('.body').hidden, false, 'the find did not open the block its match is in');
+  assert.ok(headerAgrees(block), 'the header says folded while the text shows');
+
+  block.querySelector('.head').click();
+  await app.settle();
+  assert.equal(block.querySelector('.body').hidden, true, 'the click was undone by the open find bar');
+  assert.ok(headerAgrees(block));
+});
+
+test('a block folding while the find bar is open keeps its header true', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'look at handoff.go first', fold: true } });
+  openFind(app, 'handoff');
+  await app.settle();
+  app.sse.emit({ type: 'message.part.delta', data: { text: 'The answer.' } });
+  await app.settle();
+  const [block] = foldBlocks(app);
+  assert.ok(headerAgrees(block), 'the header and the text disagree after the fold');
+  app.sse.emit({ type: 'turn.done', data: {} });
+  await app.settle();
+  assert.ok(headerAgrees(block), 'the header and the text disagree after the turn ended');
+});
+
+test('a click on a block\'s header does not reopen a tool row the reader closed', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'tool.start', data: { tool_use_id: 't1', name: 'read_file', input: '{"path":"handoff.go"}' } });
+  app.sse.emit({ type: 'tool.end', data: { tool_use_id: 't1', content: 'package handoff.go', is_error: false } });
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'nothing to find here', fold: true } });
+  app.sse.emit({ type: 'thinking.end', data: { fold: true, elapsed_ms: 1000 } });
+  app.sse.emit({ type: 'turn.done', data: {} });
+  await app.settle();
+  openFind(app, 'handoff.go');
+  await app.settle();
+  const detail = app.el('transcript').querySelectorAll('.detail')[0];
+  assert.equal(detail.hidden, false, 'the find did not open the tool row');
+  app.el('transcript').querySelectorAll('.msg-toolcall')[0].querySelector('.head').click();
+  assert.equal(detail.hidden, true);
+
+  foldBlocks(app)[0].querySelector('.head').click();
+  await app.settle();
+  assert.equal(detail.hidden, true, 'clicking the reasoning header reopened the tool row');
+});
+
+test('the clock runs between deltas', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'hm', fold: true } });
+  const [block] = foldBlocks(app);
+  assert.equal(block.querySelector('.time').textContent, '0s');
+  // Waited on rather than slept past: the tick lands when the scheduler
+  // lets it, and a fixed sleep races it.
+  for (let i = 0; i < 40 && block.querySelector('.time').textContent === '0s'; i++) await app.wait(100);
+  assert.notEqual(block.querySelector('.time').textContent, '0s', 'the clock stood still with no delta arriving');
+  app.sse.emit({ type: 'thinking.end', data: { fold: true, elapsed_ms: 7000 } });
+  await app.wait(1200);
+  assert.equal(block.querySelector('.time').textContent, '7s', 'the clock went on after the block folded');
+});
+
+test('a new prompt closes a block its turn left open', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'OLD TURN', fold: true } });
+  app.sse.emit({ type: 'message.user', data: { text: 'second question' } });
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'NEW TURN', fold: true } });
+  const blocks = foldBlocks(app);
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0].querySelector('.body').textContent, 'OLD TURN');
+  assert.equal(blocks[0].classList.contains('live'), false);
+  assert.equal(blocks[1].querySelector('.body').textContent, 'NEW TURN');
+});
+
+test('a reply that arrives as its end alone folds the block', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'first request', fold: true } });
+  app.sse.emit({ type: 'message.part.end', data: { text: 'Answer one.' } });
+  const [block] = foldBlocks(app);
+  assert.equal(block.classList.contains('live'), false);
+  assert.equal(block.querySelector('.body').hidden, true);
+});
+
+test('whitespace alone opens no block', async () => {
+  const app = await load();
+  app.sse.emit({ type: 'thinking.delta', data: { text: '\n\n', fold: true } });
+  assert.equal(foldBlocks(app).length, 0);
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'real text', fold: true } });
+  const blocks = foldBlocks(app);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].querySelector('.body').textContent, 'real text');
+});
+
+test('a turn lost on reconnect folds its block, and the next turn gets its own', async () => {
+  let busy = false;
+  const app = await load({
+    routes: { ...defaultRoutes(), 'GET /api/sessions': () => [{ id: 'sess-1', title: 'one', busy }] },
+  });
+  app.el('input').value = 'first question';
+  app.el('send').click();
+  await app.settle();
+  busy = true;
+  app.sse.emit({ type: 'message.user', data: { text: 'first question' } });
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'OLD TURN reasoning. ', fold: true } });
+  app.sse.fail();
+  await app.settle();
+  busy = false;
+  app.sse.reopen();
+  await app.settle();
+  assert.match(app.el('transcript').textContent, /did not finish/);
+  const [old] = foldBlocks(app);
+  assert.equal(old.classList.contains('live'), false, 'the lost turn\'s block still says it is thinking');
+
+  app.sse.emit({ type: 'message.user', data: { text: 'second question' } });
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'NEW TURN reasoning.', fold: true } });
+  const blocks = foldBlocks(app);
+  assert.equal(blocks.length, 2, 'the new turn\'s reasoning was written into the old block');
+  assert.equal(old.querySelector('.body').textContent, 'OLD TURN reasoning. ');
 });
 
 test('a block whose end never came folds when the answer, a tool or the turn\'s end arrives', async () => {
@@ -206,8 +344,30 @@ test('the reasoning checkbox posts the change and follows a change made elsewher
   assert.match(app.el('fold-thinking-note').textContent, /show_thinking is off/);
 });
 
+// A save that failed is still a change that was made: the box keeps the
+// value the daemon now has, and the warning survives the redraw the
+// change's own settings.changed brings.
+test('an applied but unsaved change keeps the box and the warning', async () => {
+  const app = await load({ routes: { 'POST /api/settings/fold-thinking': {
+    fold_thinking: false, applied: true, persisted: false, error: 'applied for this run, but failed to persist to config.json: disk full',
+  } } });
+  await app.settle();
+  app.el('settings-btn').click();
+  await app.settle();
+  const box = app.el('fold-thinking-checkbox');
+  box.checked = false;
+  box.fire('change');
+  await app.settle();
+  assert.equal(box.checked, false, 'the box went back although the daemon applied the change');
+  assert.equal(app.state.foldThinking, false);
+  assert.match(app.el('fold-thinking-warn').textContent, /^Applied, but not saved/);
+  app.applyEvent({ type: 'settings.changed', data: { fold_thinking: false } });
+  assert.equal(app.el('fold-thinking-warn').hidden, false, 'the redraw erased the warning');
+  assert.match(app.el('fold-thinking-warn').textContent, /disk full/);
+});
+
 test('a refused change puts the box back and says why', async () => {
-  const app = await load({ routes: { 'POST /api/settings/fold-thinking': { status: 500, body: 'disk full' } } });
+  const app = await load({ routes: { 'POST /api/settings/fold-thinking': { status: 400, body: 'invalid request body' } } });
   await app.settle();
   app.el('settings-btn').click();
   await app.settle();
