@@ -532,10 +532,17 @@ func TestAnAutomaticCompactionWritesOneLifecycleRecord(t *testing.T) {
 	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	sendOne(t, loop, sid, "general-purpose")
-	// Past the threshold, so the next turn compacts on its own.
+	// Long enough to be worth compacting: a conversation no longer than
+	// what a compaction puts in its place is left alone whatever the
+	// count says.
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "hello "+strings.Repeat("x", 4000)); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	// Past the threshold, so the next turn compacts on its own. Measured
+	// against the window the next request goes to, which is the profile's.
+	window := loop.contextWindow(context.Background(), loop.Config.Profiles["strong"])
 	loop.mu.Lock()
-	loop.usage[sid] = sessionUsage{InputTokens: 99_000, MaxContext: 100_000}
+	loop.usage[sid] = sessionUsage{InputTokens: window * 99 / 100, MaxContext: window}
 	loop.mu.Unlock()
 	sendOne(t, loop, sid, "general-purpose")
 

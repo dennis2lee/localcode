@@ -218,7 +218,7 @@ func TestACachedPrefixStillFillsTheWindow(t *testing.T) {
 
 	// What a cached turn reports: almost nothing fresh, the conversation
 	// itself served from the cache.
-	loop.recordUsage(sid, "m", 32768, estimateTokens("", sent),
+	loop.recordUsage(sid, "m", 32768, measurement{tokens: estimateTokens("", sent)},
 		streamUsage{hasUsage: true, inputTokens: 12, outputTokens: 9, cacheRead: 4096, cacheWrite: 128})
 
 	u, ok := loop.getUsage(sid)
@@ -244,7 +244,7 @@ func TestACachedPrefixStillFillsTheWindow(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	logged := New(store, tools.NewRegistry(nil), map[string]provider.Provider{}, &config.Config{})
-	logged.recordUsage(rsid, "m", 32768, 5,
+	logged.recordUsage(rsid, "m", 32768, measurement{tokens: 5},
 		streamUsage{hasUsage: true, inputTokens: 12, outputTokens: 9, cacheRead: 4096, cacheWrite: 128})
 	evs, err := store.Events(rsid, 0)
 	if err != nil {
@@ -307,8 +307,11 @@ func TestAutoCompactionCountsTheCachedPrefix(t *testing.T) {
 	// Something to compact, put in place before the count: replacing the
 	// history drops the count, which is the right thing everywhere but
 	// in a test that is about to set one by hand.
+	// Long enough to be worth compacting: a conversation no longer than
+	// what a compaction puts in its place is left alone whatever the
+	// count says.
 	loop.setHistory(sid, []provider.Message{
-		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("a long conversation")}},
+		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("a long conversation " + strings.Repeat("x", 4000))}},
 		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock("that went on")}},
 	})
 
@@ -386,7 +389,7 @@ func TestTheMeasurementSurvivesBeingReadBackFromTheLog(t *testing.T) {
 	}
 	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{}, &config.Config{})
 
-	loop.recordUsage(sid, "m", 32768, 4321, streamUsage{hasUsage: true, inputTokens: 5000, outputTokens: 100})
+	loop.recordUsage(sid, "m", 32768, measurement{tokens: 4321}, streamUsage{hasUsage: true, inputTokens: 5000, outputTokens: 100})
 
 	evs, err := store.Events(sid, 0)
 	if err != nil {

@@ -82,24 +82,6 @@ func TestSplashCarriesTheLogoAndTheProgressHooks(t *testing.T) {
 	}
 }
 
-// live is the splash with its commented-out lines removed.
-//
-// Searching the raw page for a definition finds one that has been
-// commented out, which is a definition the browser never makes: the hook
-// is dead, every Eval reaching for it finds nothing, and nothing says so.
-// That is the same silence these tests exist to break, arrived at by a
-// different edit.
-func live(html string) string {
-	var kept []string
-	for _, line := range strings.Split(html, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "//") {
-			continue
-		}
-		kept = append(kept, line)
-	}
-	return strings.Join(kept, "\n")
-}
-
 // And what Go calls is what the page defines.
 //
 // Two lists that have to agree and had nothing making them: the names

@@ -197,6 +197,13 @@ type EffortView struct {
 	Note   string   `json:"note"`
 }
 
+// SessionUsage is what a conversation and every session below it spent.
+func (c *Client) SessionUsage(ctx context.Context, sessionID string) (agent.UsageSummary, error) {
+	var out agent.UsageSummary
+	err := c.doJSON(ctx, http.MethodGet, "/api/sessions/"+sessionID+"/usage", nil, &out)
+	return out, err
+}
+
 // GetEffort reads the level in force for a conversation.
 func (c *Client) GetEffort(ctx context.Context, sessionID string) (EffortView, error) {
 	var out EffortView

@@ -160,7 +160,29 @@ type oaStreamChunk struct {
 	Usage *struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
+		// The part of prompt_tokens a prompt cache served, where the
+		// server says: OpenAI does, and vLLM with prefix caching.
+		PromptTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details,omitempty"`
 	} `json:"usage,omitempty"`
+}
+
+// oaUsageEvent reports an OpenAI-compatible usage chunk the way the
+// Anthropic and Bedrock adapters report theirs: InputTokens is what was
+// counted fresh and CacheReadTokens what the prompt cache served, apart.
+// prompt_tokens includes the cached part, so it is split here rather
+// than reported whole, where /usage would have counted cached prompt as
+// fresh input and the cache as nothing. The whole prompt is the sum of
+// the two either way, which is all the context window reads.
+func oaUsageEvent(prompt, completion int, details *struct {
+	CachedTokens int `json:"cached_tokens"`
+}) StreamEvent {
+	cached := 0
+	if details != nil && details.CachedTokens > 0 {
+		cached = min(details.CachedTokens, prompt)
+	}
+	return StreamEvent{Type: EventUsage, InputTokens: prompt - cached, OutputTokens: completion, CacheReadTokens: cached}
 }
 
 // toOpenAIMessages translates our block-based messages (plus system prompt)
@@ -519,7 +541,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			// as a context meter that never moves.
 			if chunk.Usage != nil {
 				select {
-				case out <- StreamEvent{Type: EventUsage, InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens}:
+				case out <- oaUsageEvent(chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.PromptTokensDetails):
 				case <-ctx.Done():
 					return
 				}

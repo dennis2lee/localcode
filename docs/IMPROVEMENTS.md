@@ -597,7 +597,7 @@ Completed findings remain in this list to preserve item numbers and release hist
 | Collapsible tool-call cards | Done. `internal/daemon/static/js/transcript.js` expands tool input and output. The row said "Open" until the v0.120.0 sweep read the code. |
 | Diff viewer | Open. Before-and-after views for `edit` and `write_file` results. |
 | Persistent permission approval | Done in v0.20.0. Options: allow once, allow for session, and always allow. The last option writes a matching config rule. |
-| Usage visualization | Open. Per-model token bars and context-use indicator. |
+| Usage visualization | Partial. Per-model token bars done in v0.122.0: the Web UI's usage window draws one segmented bar per model, one segment per token kind, from `GET /api/usage` since v0.146.0. Remaining: a graphical context-use indicator; the status line shows a percentage. |
 | Session completion indication | Done in v0.40.0. The session light identifies running work and unread completed replies. Cross-client activity sources were aligned in v0.42.0. Running indicators became amber in v0.52.0 across the session list, prompt status, and task panel. Green indicates an available session. |
 | Session search and filter | Open. Search by title and workspace. Manual card ordering shipped in v0.43.0. |
 | Scroll control | Done in TUI v0.31.0 and Web UI v0.51.0. Output follows only when the view was already at the bottom before an update. Web UI and background-task windows provide a jump-to-bottom control. |

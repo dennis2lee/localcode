@@ -58,7 +58,14 @@ const (
 	// is not looking simply misses it, which is correct.
 	TypeThinkingDelta Type = "thinking.delta"
 	TypeThinkingEnd   Type = "thinking.end"
-	TypeError         Type = "error"
+	// TypeError is {"error","recovered"?,"history_replaced"?,"fallback"?}.
+	// "recovered": true is a notice from a turn that carries on.
+	// "fallback" names the model the turn moved to, on the notice that
+	// reports the switch.
+	// "history_replaced": true marks the trim that dropped the oldest
+	// messages to fit the window: the daemon's usage count went with
+	// them, and a client's context gauge has to let go of its reading.
+	TypeError Type = "error"
 
 	// TypeMCPStatus reports the state of every configured MCP server:
 	// {"servers":[{"name","status","detail"}]}, status being one of
@@ -127,13 +134,17 @@ const (
 	TypeWorkspaceChanged Type = "workspace.changed"
 
 	// TypeUsage reports the latest known token usage/context-window fill
-	// for a turn: {"input_tokens","output_tokens","cached_input_tokens","measured","max_context","percent",
-	// "tps","show_tps","model"}.
+	// for a turn: {"input_tokens","output_tokens","cached_input_tokens",
+	// "cache_read_tokens","cache_write_tokens","measured","measured_images","max_context",
+	// "percent","tps","show_tps","model"}. The two cache keys split
+	// cached_input_tokens the way it is billed; logs written before them
+	// carry cached_input_tokens alone.
 	TypeUsage Type = "usage"
 	// TypeCompacted marks that compaction replaced a session's in-memory
 	// history with a summary: {"summary_length","manual","summary",
-	// "model","input_tokens","output_tokens"} (the last three are omitted
-	// if the compaction call didn't report usage). "summary" carries the
+	// "model","input_tokens","output_tokens","cache_read_tokens",
+	// "cache_write_tokens"} (the last five are omitted if the compaction
+	// call didn't report usage). "summary" carries the
 	// full text (not just its length) so a restart can restore the exact
 	// post-compaction history — see agent.rehydrateHistory.
 	TypeCompacted Type = "compacted"
@@ -214,11 +225,15 @@ const (
 	// nor this session's model: it is another agent's words, and a client
 	// that paints it as either is lying about who said it. "session" is
 	// the reviewer's own session, so the row can be opened and read.
-	// TypeDebateEnded: {"reason","rounds","approved","note"}, reason being
-	// one of approved / rounds / stalled / stopped / failed. "note" is the
-	// sentence to show; it rides on the event rather than being written as
-	// a reply, because a reply with no user message before it rehydrates
-	// as a second assistant message in a row.
+	// TypeDebateEnded: {"reason","rounds","approved","note","collapsed"},
+	// reason being one of approved / rounds / stalled / stopped / failed.
+	// "note" is the sentence to show; it rides on the event rather than
+	// being written as a reply, because a reply with no user message
+	// before it rehydrates as a second assistant message in a row.
+	// "collapsed" says the debate's rounds were taken out of the history:
+	// the daemon's usage count went with them, and a client's context
+	// gauge has to let go of its reading too. Logs written before the key
+	// existed do not carry it.
 	// TypeInputRequest is a question the model put to the person in the
 	// middle of a turn: {"id", "question", "options": [...]}. The turn is
 	// blocked until TypeInputResolved carries {"id","answer"} back, or
@@ -282,7 +297,10 @@ const (
 	// TypeSessionRenamed reports a session's title changing: {"title"}.
 	TypeSessionRenamed Type = "session.renamed"
 	// TypeSessionForked opens the log of a session created by forking
-	// another, naming what it was forked from: {"from", "from_title"}.
+	// another, naming what it was forked from: {"from", "from_title",
+	// "copied"}. "copied" is how many events after this one are the copy
+	// of the source's log, so a total across conversations counts the
+	// calls in them once, under the conversation that made them.
 	//
 	// A fork is a copy of a conversation, so the two transcripts are
 	// identical and nothing in either one says which is which. "Is 'fork

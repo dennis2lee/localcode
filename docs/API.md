@@ -66,7 +66,10 @@ with the daemon, via `internal/client`) and the Web UI (via
   (page; the TUI updates through `/update`), task spawn/list/output
   (TUI commands and the model's own tools; the page reads task state
   from `task.spawned`/`task.status` events and cancels through `POST
-  /api/tasks/{taskId}/cancel`).
+  /api/tasks/{taskId}/cancel`), `GET /api/usage` (page: the usage
+  window; the TUI prints `/usage all` instead).
+* Used by `localcode run`: `GET /api/sessions/{id}/usage`, for the usage
+  a run through a daemon reports.
 * Incidental: `GET /api/trace` has no in-tree caller (the turn log is
   read with `jq` from `~/.localcode/trace/`); `GET /api/sessions/{id}`
   has no in-tree caller (both clients use the list plus the event
@@ -104,6 +107,7 @@ A session object in answers is `{"id", "agent", "title", "workspace",
 | `GET /api/update` (window: local) | nothing | Always `200`. On failure: `{"current", "checked": false, "detail"}`. On success: `{"current", "checked": true, "source", "latest", "tag", "page_url", "notes", "available", "can_install", ...}` plus `"asset"` and `"size"` when an installable asset fits this platform | none (failures are `200` with `checked: false`) |
 | `POST /api/update/install` (window: local) | nothing | `200 {"version", "source", "verified", "started", "replaced", "restarting", "path", "detail"}`. `verified: false` is reported, not hidden | `403` installing is not allowed from here; download/install failures carry their own status |
 | `GET /api/trace` | `?limit=` (1-500, default 100), `?session=`, `?trace=` | `200 {"enabled", "records"}`. `enabled` is false with Smart Agent off, which is a setting, not a failure | none |
+| `GET /api/usage` | `?window=` `all` (default), `today`, `week` or `month` | `200 {"scope", "models", "sessions", "unread", "note"?}`: what `/usage all` and its windows print, as data. `scope` is the window as the heading names it (`every conversation`, `today`, `the last 7 days`, `the last 30 days`). `models` maps each model to `{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cache_read_or_write_tokens", "calls"}`, and is `{}` when nothing was recorded. `sessions` counts the sessions that recorded a call, `unread` the logs that could not be read. `note` is present when a cache figure is: the text `/usage` prints under its report to say what the cache figures are. Every session counts, archived ones and sub-agents' included, and a fork's copy of another log is not counted twice. The Web UI's usage window draws this | `400` unknown window |
 
 ### Settings (daemon-wide)
 
@@ -172,6 +176,7 @@ implementations.
 | `POST /api/sessions/{id}/group` | `{"group"}`, or `""` for ungrouped; must already be in the group list, and is matched exactly rather than trimmed | `200` the session | `400` no such group or the session is archived; `404` unknown session; `500` the session could not be written |
 | `POST /api/sessions/{id}/agent` | `{"agent"}`; must be one the listing offers | `200` the session; an `agent.switched` event follows | `400` unknown agent or bad body; `403` archived; `404` unknown session |
 | `POST /api/sessions/{id}/rename` | `{"title"}`; display only, resolution stays by id | `200` the session; a `session.renamed` event follows | `400` bad body; `404` unknown session |
+| `GET /api/sessions/{id}/usage` | nothing | `200` the same shape as `GET /api/usage`, for this session and every session below it. `localcode run --format json` reports its total as a run's usage | `404` unknown session |
 | `POST /api/sessions/{id}/fork` | nothing | `201` the new session: a verbatim event-log copy (minus `session.renamed`), same effort levels and model choice, titled `fork of X` | `404` unknown source; `409` a turn is running in the source, or delete-all is |
 | `POST /api/sessions/{id}/archive` | nothing | `200` the session. Refuses rather than stops running work | `404` unknown session; `400` store refusal; `409` a turn is running, background tasks are running (names them), scheduled runs are in progress, or delete-all is |
 | `POST /api/sessions/{id}/retrieve` | nothing | `200` the session, history rebuilt from the log; shelved schedule rows come back, missed ones marked missed | `404` unknown session; `409` busy, or delete-all is |
@@ -273,19 +278,19 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `agent.switched` | `{"agent"}` |
 | `thinking.delta` | `{"text"}` while reasoning streams; transient, never logged |
 | `thinking.end` | reasoning block ended; transient, empty payload |
-| `error` | a turn failure; distinct from `turn.cancelled`, which is a person stopping it on purpose |
+| `error` | `{"error", "recovered"?, "history_replaced"?, "fallback"?}` a turn failure; distinct from `turn.cancelled`, which is a person stopping it on purpose. `recovered: true` is a notice from a turn that carries on. `fallback` names the model the turn moved to, on the notice that reports the switch. `history_replaced: true` marks the trim that dropped the oldest messages to fit the window: the context usage count went with them, as after a compaction |
 | `mcp.status` | `{"servers": [{"name", "status", "detail"}]}`; daemon-wide, complete list every time |
 | `session.activity` | `{"session", "busy"}`; daemon-wide turn indicator |
 | `session.archived` | `{"session", "archived"}`; either direction, daemon-wide |
 | `session.deleted` | `{"session"}`; daemon-wide, since the log it would ride in is gone |
 | `session.renamed` | `{"title"}` |
-| `session.forked` | `{"from", "from_title"}`; reader note, ignored rebuilding history |
+| `session.forked` | `{"from", "from_title", "copied"}`; reader note, ignored rebuilding history. `copied` is how many events after it are the copy of the source's log; usage totals skip them. Absent in logs written before it existed |
 | `session.scheduled` | `{"schedule", "name", "run", "run_total", "at", "repeat", "from"}`; reader note, ignored rebuilding history |
 | `settings.changed` | every daemon switch as a snapshot, daemon-wide |
 | `config.changed` | `{"auto_compact_enabled", "show_tps"}` from `/config` |
 | `workspace.changed` | `{"path"}`; per session |
-| `usage` | `{"input_tokens", "output_tokens", "cached_input_tokens", "measured", "max_context", "percent", "tps", "show_tps", "model"}`; from reported usage, never estimated. `percent` is of the whole prompt the provider read, `input_tokens` plus `cached_input_tokens`; `input_tokens` alone is what was billed at the full rate. `measured` is the daemon's own character estimate of the same messages, for sizing after a restart. Draw a gauge from `percent`, not from `input_tokens` |
-| `compacted` | `{"summary_length", "manual", "summary", "model"?, "input_tokens"?, "output_tokens"?}` |
+| `usage` | `{"input_tokens", "output_tokens", "cached_input_tokens", "cache_read_tokens", "cache_write_tokens", "measured", "measured_images", "max_context", "percent", "tps", "show_tps", "model", "estimated"}`; from reported usage. The daemon also broadcasts live estimates during a stream, `{"tps", "show_tps", "estimated": true}`, which are not logged; the settled event carries `estimated: false`. `percent` is `input_tokens` plus `cached_input_tokens` plus `output_tokens` over `max_context`: the whole prompt the provider read and the reply it wrote, which the next request carries. `input_tokens` alone is what was billed at the full rate. `cache_read_tokens` and `cache_write_tokens` split `cached_input_tokens` the way it is billed: served from the prompt cache, or written to it. Logs written before the split carry `cached_input_tokens` alone. `measured` is the daemon's own character estimate of the same messages, for sizing after a restart, and `measured_images` the number of images among them. Draw a gauge from `percent`, not from `input_tokens` |
+| `compacted` | `{"summary_length", "manual", "summary", "model"?, "input_tokens"?, "output_tokens"?, "cache_read_tokens"?, "cache_write_tokens"?, "replaced_assets"?}`. The token figures are the summarizing call's own, present when it reported usage. `replaced_assets` names the assets the replaced messages carried, with Smart Agent on |
 | `cleared` | no payload; `/clear`, a barrier rebuilding history |
 | `rewound` | `{"from_seq", "turn_text", "restored", "skipped", "created"}` |
 | `redone` | `{"rewind_seq", "turn_text", "written", "skipped"}` |
@@ -300,7 +305,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `plan.updated` | `{"plan": [{"step", "status"}], "explanation"?}`; logged, unlike `task.progress` |
 | `debate.started` | `{"author", "reviewer", "reviewers", "model", "models", "rounds", "task"}`. `reviewer` holds the reviewers joined and `model` the first reviewer's. Clients prefer the plurals and fall back to the singulars for logs written before them |
 | `debate.review` | `{"round", "rounds", "reviewer", "model", "text", "approved", "session"}` |
-| `debate.ended` | `{"reason" ("approved", "rounds", "stalled", "stopped", "failed"), "rounds", "approved", "note"}` |
+| `debate.ended` | `{"reason" ("approved", "rounds", "stalled", "stopped", "failed"), "rounds", "approved", "note", "collapsed"}`. `collapsed: true` means the rounds were taken out of the history and the context usage count went with them, as after a compaction. Absent in logs written before it existed |
 | `delegated` | `{"agent", "prompt"}`; a sub-agent answered on its own model |
 | `effort.changed` | `{"model", "agent", "level", "source", "levels", "note"}` |
 | `model.changed` | `{"agent", "profile", "model", "provider", "source", "choices"}` |

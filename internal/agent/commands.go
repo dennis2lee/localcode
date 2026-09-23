@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -872,7 +871,8 @@ func (l *Loop) handleCompactCommand(ctx context.Context, sessionID, agentName, d
 
 // handleCostCommand answers "/usage" locally — no model call — with a
 // per-model breakdown of cumulative token usage for this session (input,
-// output, total, number of API calls), plus a grand total. Tokens only,
+// the cache read and write where there are any, output, total, number of
+// API calls), plus a grand total. Tokens only,
 // deliberately no dollar figures: this project has no per-model pricing
 // table to keep in sync, and the raw counts are what the context-window
 // math elsewhere in this file already uses.
@@ -888,24 +888,7 @@ func (l *Loop) handleCostCommand(sessionID, displayText string) error {
 	if len(totals) == 0 {
 		text = "No usage yet."
 	} else {
-		models := make([]string, 0, len(totals))
-		for m := range totals {
-			models = append(models, m)
-		}
-		sort.Strings(models)
-
-		var b strings.Builder
-		b.WriteString("Token usage by model:\n")
-		var grandInput, grandOutput, grandCalls int
-		for _, m := range models {
-			t := totals[m]
-			fmt.Fprintf(&b, "- %s: input %d · output %d · total %d (%d calls)\n", m, t.InputTokens, t.OutputTokens, t.InputTokens+t.OutputTokens, t.Calls)
-			grandInput += t.InputTokens
-			grandOutput += t.OutputTokens
-			grandCalls += t.Calls
-		}
-		fmt.Fprintf(&b, "\nGrand total: input %d · output %d · total %d (%d calls)", grandInput, grandOutput, grandInput+grandOutput, grandCalls)
-		text = b.String()
+		text = usageReport("Token usage by model:\n", totals)
 	}
 
 	return l.replyLocal(sessionID, displayText, text)

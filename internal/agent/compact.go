@@ -86,26 +86,169 @@ func cutSummary(summary string) string {
 const compactionPrompt = "Summarize our conversation so far concisely, preserving important facts, decisions, file paths, and outstanding tasks needed for continuity. When the summary restates something that came from tool output or other external content, say so (for example: per the build output, according to the fetched page), so the record keeps those sources distinct from the user's own words. Output ONLY the summary, with no preamble."
 
 // maybeAutoCompact summarizes sessionID's history in place when
-// AutoCompactEnabled is on and the last recorded usage crossed
-// the threshold — freeing up context space before the next
-// user turn is appended. Best-effort: any failure (including the
+// AutoCompactEnabled is on and the conversation the next request would
+// carry has reached the threshold, freeing up context space before the
+// next user turn is appended. Best-effort: any failure (including the
 // summarization call itself erroring) just leaves the full history intact
 // rather than blocking the real turn.
 // It reports whether it actually compacted, which is what the caller
 // needs to count compactions for the turn's trace record.
+//
+// Measured by compactionMeasure, against the window of the profile the
+// next request goes to, not the one the count was recorded with: a
+// /model switch to a smaller model left the threshold measured against
+// the larger one.
 func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt string, carried []provider.SystemBlock) bool {
 	if !l.AutoCompactEnabled() {
 		return false
 	}
-	u, ok := l.getUsage(sessionID)
-	if !ok || u.MaxContext <= 0 {
+	// Nothing to compact, and asked before the window is: resolving it
+	// can probe the server, and a first message in a new conversation
+	// would wait on that probe before it was even recorded.
+	stored := l.history(sessionID)
+	history := sendableHistory(stored)
+	if len(history) == 0 {
 		return false
 	}
-	percent := float64(u.promptTokens()+u.OutputTokens) / float64(u.MaxContext) * 100
-	if percent < float64(l.CompactPercent()) {
+	window := l.contextWindow(ctx, profile)
+	if window <= 0 {
+		return false
+	}
+	used := l.compactionMeasure(sessionID, systemPrompt, history)
+	threshold := float64(window) * float64(l.CompactPercent()) / 100
+	if float64(used) < threshold {
+		return false
+	}
+	// The conversation, as a compaction would weigh it: its text on the
+	// estimate a summary's own length is held to, reasoning left out as a
+	// rebuilt history has none, the images the count covered at the
+	// estimate, and the ones it did not left out, as the measure leaves
+	// them out. Every guard below reads this one figure.
+	uncounted := l.uncountedImages(sessionID, history)
+	conversation := conversationTokens(history, uncounted)
+	// A compaction that could not leave the conversation smaller does not
+	// run: a conversation no longer than what a compaction puts in its
+	// place, the summary's header and notes and the shortest summary there
+	// can be, would come out the same size or larger, and the call is
+	// billed. It happens on a first compaction under a system prompt that
+	// is most of the window, where a single short exchange is over the
+	// threshold.
+	if conversation <= compactionKeeps(history, l.smartOn(ctx))+shortestSummary {
+		return false
+	}
+	// On the history as stored, not as it is sent. A summary re-enters as
+	// a user message, and sending merges the user message after it into
+	// it, so the sent history read the first follow-up as summary: a
+	// follow-up longer than its summary read as a summary with a short
+	// reply, and the compaction it called for waited until the overflow.
+	if soonAfterASummary(stored, uncounted) {
+		return false
+	}
+	// Where the system prompt alone reaches the threshold, no compaction
+	// brings the measure under it, and the threshold says compact on every
+	// turn: a tool-using session was compacted five turns in five, the file
+	// it had just read discarded each time, while the conversation never
+	// passed 3% of the window. There, compact once the conversation is half
+	// the room the system prompt leaves a request, the window less it and
+	// the least a reply is given. The system prompt on the estimate, the
+	// ruler the conversation is weighed on; tool definitions, which no
+	// estimate here sees, are not in it.
+	if system := estimateTokens(systemPrompt, nil); float64(system) >= threshold && conversation <= (window-system-minOutputTokens)/2 {
 		return false
 	}
 	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic) == nil
+}
+
+// soonAfterASummary says the conversation is a compaction's summary and
+// not more than as much again after it.
+//
+// A compaction then would mostly summarize a summary, and where the
+// system prompt is most of the window it would do so every turn: the
+// measure stays over the threshold after each one, so each turn spent a
+// summarization call replacing a summary and one exchange with a summary.
+// Once what followed the summary is longer than the summary, there is
+// something to shrink again. Both sides are weighed as the conversation
+// is (see conversationTokens), with the images the count did not see left
+// out: priced at the sizing's ceiling, one screenshot pasted after a
+// compaction turned a short follow-up into something to shrink, and the
+// compaction that followed replaced it with a note. The images the count
+// did see weigh what the measure weighs them at, or answered screenshots
+// after a compaction filled the window with the guard holding.
+//
+// history is the history as stored, the summary a message of its own.
+func soonAfterASummary(history []provider.Message, uncounted int) bool {
+	if len(history) == 0 || len(history[0].Content) == 0 || history[0].Content[0].Source != compactSummarySource {
+		return false
+	}
+	return conversationTokens(history[1:], uncounted) <= conversationTokens(history[:1], 0)
+}
+
+// conversationTokens is what estimateTokens makes of msgs with the
+// model's reasoning left out and the last uncounted images left out.
+func conversationTokens(msgs []provider.Message, uncounted int) int {
+	return estimateTokens("", withoutReasoning(msgs)) - min(uncounted, countImages(msgs))*imageTokenEstimate
+}
+
+// uncountedImages is how many of the images in msgs the provider's last
+// count did not see: all of them with no count, none for a count read
+// back from a log that never said (it decides alone, see
+// compactionMeasure), and otherwise those past the number it measured.
+func (l *Loop) uncountedImages(sessionID string, msgs []provider.Message) int {
+	u, ok := l.getUsage(sessionID)
+	switch {
+	case !ok || u.promptTokens() <= 0:
+		return countImages(msgs)
+	case u.Measured <= 0:
+		return 0
+	}
+	return max(0, countImages(msgs)-u.MeasuredImages)
+}
+
+// compactionMeasure is how full the conversation is, for deciding
+// whether to compact it: the provider's count for what it covered, plus
+// the text appended since, estimated. It used to be the count alone,
+// which describes the messages it was taken over and nothing after: the
+// output of a "!" command, a delegated turn's answer, the tool results
+// of a turn whose follow-up request failed. A conversation the count put
+// at 3% went to the provider at 65% with the threshold at 50.
+//
+// It is inputEstimate, which sizes the next request, with two
+// differences, both because a compaction is lossy and a request that
+// overflows is summarized and retried anyway, so where the figure is
+// unsure it errs toward not compacting:
+//
+//   - Images appended after the count are left out. What one costs
+//     depends on its pixels and on the model, from 1,600 tokens for a
+//     large image on Claude down to a fixed 256 on some local vision
+//     models, and the sizing prices each at the ceiling. Priced that way
+//     here, ten screenshots pasted into a turn that was then cancelled
+//     compacted the conversation before the retry, and a compaction
+//     replaces every image with a note: the retry went out without the
+//     screenshots it was about.
+//   - A count from a log that never recorded what it covered (Measured
+//     0) decides alone, as it always did. inputEstimate takes the larger
+//     of it and an estimate of everything there, which is safe for
+//     sizing a reply and not for deciding to summarize a conversation
+//     the provider counted well under the threshold.
+//
+// With no count at all, after /rewind or a restart from a log that kept
+// none, the conversation's text is estimated and its images are left
+// out, for the same reason.
+//
+// Not the larger of the count and an estimate of everything: the count
+// is exact for what it covered, and the four-characters-to-a-token
+// estimate reads Korean and Japanese low and separator-heavy logs high,
+// so letting it overrule the count moves the threshold by content.
+func (l *Loop) compactionMeasure(sessionID, system string, msgs []provider.Message) int {
+	u, ok := l.getUsage(sessionID)
+	if ok && u.promptTokens() > 0 && u.Measured <= 0 {
+		return u.promptTokens() + u.OutputTokens
+	}
+	now := estimateTokens(system, withoutReasoning(msgs)) - l.uncountedImages(sessionID, msgs)*imageTokenEstimate
+	if !ok || u.promptTokens() <= 0 {
+		return now
+	}
+	return u.promptTokens() + u.OutputTokens + max(0, now-u.Measured)
 }
 
 // CompactTrigger names why a compaction ran. It is on the one lifecycle
@@ -251,6 +394,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		attemptRecord := trace.Record{
 			Model: profile.Model, Provider: profile.Provider,
 			InputTokens: usage.inputTokens, OutputTokens: usage.outputTokens,
+			CacheReadTokens: usage.cacheRead, CacheWriteTokens: usage.cacheWrite,
 			DurationMS: time.Since(callStarted).Milliseconds(), Attempt: attempt,
 			FinishReason:   finishReason,
 			PromptManifest: am.ID, PromptAssets: am.SelectedIDs(), PromptUntrusted: am.UntrustedIDs(),
@@ -268,13 +412,18 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		}
 		budget = shrinkBudget(budget, systemPrompt, kept)
 	}
-	// The summarization call is billed like any other — fold it into
-	// /usage's totals even though it never appears in the transcript.
-	if usage.hasUsage {
-		l.addCumulativeUsage(sessionID, profile.Model, usage.inputTokens, usage.outputTokens)
-	}
 	if summary == "" {
 		return fmt.Errorf("model returned an empty summary")
+	}
+	// The summarization call is billed like any other — fold it into
+	// /usage's totals even though it never appears in the transcript.
+	// After the empty-summary check, not before: the compacted event
+	// below is the call's only record in the log, and a call counted
+	// live with no record read as spend in this process's /usage that a
+	// restart, /usage all and the usage window all left out. A summary
+	// that came back empty is left out of all four alike.
+	if usage.hasUsage {
+		l.addCumulativeUsage(sessionID, profile.Model, usage)
 	}
 	// Held to the length the notice priced it at, before the notes join
 	// it: the notes are the compaction's own and are priced apart, in
@@ -291,6 +440,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	l.traceSpan(ctx, trace.ID(ctx), sessionID, trace.SpanCompact, trace.Record{
 		Model: profile.Model, Provider: profile.Provider,
 		InputTokens: usage.inputTokens, OutputTokens: usage.outputTokens,
+		CacheReadTokens: usage.cacheRead, CacheWriteTokens: usage.cacheWrite,
 		Detail: "lifecycle: history replaced by the summary, " + string(trigger),
 	})
 
@@ -331,6 +481,8 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		compactedData["model"] = profile.Model
 		compactedData["input_tokens"] = usage.inputTokens
 		compactedData["output_tokens"] = usage.outputTokens
+		compactedData["cache_read_tokens"] = usage.cacheRead
+		compactedData["cache_write_tokens"] = usage.cacheWrite
 	}
 	l.Store.Append(sessionID, events.TypeCompacted, compactedData)
 	return nil

@@ -70,6 +70,9 @@ func (l *Loop) RehydrateSession(sessionID string) {
 	l.setHistory(sessionID, rehydrateHistory(applyRewinds(evs)))
 
 	latest, haveUsage, cum := rehydrateUsage(evs)
+	if haveUsage && latest.Measured > 0 {
+		latest.MeasuredImages = measuredImagesOf(evs, latest.MeasuredImages)
+	}
 
 	l.mu.Lock()
 	if haveUsage {
@@ -143,7 +146,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 		// has to be put back there — not as a user message of its own,
 		// which would leave two user messages in a row.
 		for _, text := range pendingInjected {
-			resultBlocks = append(resultBlocks, provider.TextBlock(injectedPreface+text))
+			resultBlocks = append(resultBlocks, injectedUserBlock(text))
 		}
 		if len(resultBlocks) > 0 {
 			out = append(out, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
@@ -228,15 +231,22 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 					}},
 				}}
 				resetPending()
-				inDebate = false
+				// The debate mark stays, as it does live. The live
+				// session keeps its mark through a compaction that lands
+				// inside a debate and lets collapsedDebate decide by
+				// content whether the mark still points at the debate's
+				// opening. Dropping it here meant a debate whose first
+				// round compacted at its top collapsed live and kept every
+				// round, briefs included, after a restart.
 				droppedImages = 0
 			}
 
 		case events.TypeCleared:
 			// A barrier moves everything, the debate mark included: an
 			// offset into a history that no longer exists would collapse
-			// the wrong span. The same goes for the compaction above,
-			// which is why both reset it.
+			// the wrong span. A compaction keeps it, because the live
+			// session does and collapsedDebate confirms the mark by
+			// content; a clear has no debate left to confirm it against.
 			inDebate = false
 			// The barrier with nothing behind it. Compaction replaces the
 			// history with a summary; this replaces it with nothing, which
@@ -265,9 +275,8 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			// the text goes onto the end of it. pendingInjected is the
 			// fallback for the other order.
 			if isTrue(ev.Data["injected"]) {
-				text := injectedPreface + dataString(ev.Data, "text")
 				if n := len(out); n > 0 && out[n-1].Role == provider.RoleUser && len(toolsDone) == 0 {
-					out[n-1].Content = append(out[n-1].Content, provider.TextBlock(text))
+					out[n-1].Content = append(out[n-1].Content, injectedUserBlock(dataString(ev.Data, "text")))
 				} else {
 					pendingInjected = append(pendingInjected, dataString(ev.Data, "text"))
 				}
@@ -394,9 +403,10 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 				MaxContext:        dataInt(ev.Data, "max_context"),
 				TPS:               dataFloat(ev.Data, "tps"),
 				Measured:          dataInt(ev.Data, "measured"),
+				MeasuredImages:    dataInt(ev.Data, "measured_images"),
 				CachedInputTokens: dataInt(ev.Data, "cached_input_tokens"),
 			}
-			addModelTotals(cum, dataString(ev.Data, "model"), latest.InputTokens, latest.OutputTokens)
+			addModelTotals(cum, dataString(ev.Data, "model"), callTokensOf(ev.Data))
 
 		case events.TypeCompacted, events.TypeCleared, events.TypeRewound, events.TypeDebateEnded:
 			// setHistory drops the count live on each of these, so the
@@ -412,6 +422,17 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			// collapse goes through setHistory and the count goes with
 			// it; a restart has to reach the same state.
 			//
+			// Every debate's end, not only one whose "collapsed" is true.
+			// The history pass decides the collapse again from the history
+			// it rebuilds, and that history can differ from the live one:
+			// a trim the live session made to fit the window is not in
+			// the log, so a mark the live session found stale can be
+			// sound here, and the rounds collapse on restart where they
+			// did not live. A count kept on the live session's word would
+			// then describe rounds the restored history no longer holds.
+			// Dropped, the next request is sized from the estimate, which
+			// is the direction a missing count errs in.
+			//
 			// This is why the rewind filter is not applied to the usage
 			// pass. The snapshot is what the context gauge shows and it is
 			// right to reset; the totals are what a turn cost, and a turn
@@ -420,7 +441,7 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			// bill.
 			haveUsage = false
 			if model := dataString(ev.Data, "model"); model != "" {
-				addModelTotals(cum, model, dataInt(ev.Data, "input_tokens"), dataInt(ev.Data, "output_tokens"))
+				addModelTotals(cum, model, callTokensOf(ev.Data))
 			}
 		}
 	}
@@ -430,15 +451,51 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 	return latest, haveUsage, cum
 }
 
-func addModelTotals(cum map[string]modelTotals, model string, inputTokens, outputTokens int) {
+// measuredImagesOf is how many images the last count covered. A log
+// written by v0.145.0 records the measurement without that number, and
+// read as zero it said the count covered no images: every image in the
+// history then read as appended since, and the 1,600 tokens each that
+// the measurement had priced it at were taken off the text appended
+// since, which hid a command's output from the compaction decision. The
+// number is worked out instead from the history as it stood at that
+// count, which is what the measurement was taken over.
+func measuredImagesOf(evs []events.Event, recorded int) int {
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].Type != events.TypeUsage {
+			continue
+		}
+		if _, said := evs[i].Data["measured_images"]; said {
+			return recorded
+		}
+		return countImages(rehydrateHistory(applyRewinds(evs[:i+1])))
+	}
+	return recorded
+}
+
+func addModelTotals(cum map[string]modelTotals, model string, c callTokens) {
 	if model == "" {
 		return
 	}
-	mt := cum[model]
-	mt.InputTokens += inputTokens
-	mt.OutputTokens += outputTokens
-	mt.Calls++
-	cum[model] = mt
+	cum[model] = cum[model].add(c)
+}
+
+// callTokensOf reads what one logged call reported. A usage event names
+// the whole cached prefix as cached_input_tokens, for the window, and
+// the split the way it is billed as cache_read_tokens and
+// cache_write_tokens. A log written before the split was recorded has
+// only the first, and what it has that the split does not account for
+// is counted as cached, not guessed into either column.
+func callTokensOf(data map[string]any) callTokens {
+	c := callTokens{
+		input:      dataInt(data, "input_tokens"),
+		output:     dataInt(data, "output_tokens"),
+		cacheRead:  dataInt(data, "cache_read_tokens"),
+		cacheWrite: dataInt(data, "cache_write_tokens"),
+	}
+	if rest := dataInt(data, "cached_input_tokens") - c.cacheRead - c.cacheWrite; rest > 0 {
+		c.cached = rest
+	}
+	return c
 }
 
 func isTrue(v any) bool {

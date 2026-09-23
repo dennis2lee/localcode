@@ -65,7 +65,7 @@ Default execution characteristics:
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--format` | `text` | `text` streams the answer as it arrives; `json` prints one object at the end; `stream-json` prints one event per line, the same events every other client reads |
+| `--format` | `text` | `text` streams the answer as it arrives; `json` prints one object at the end; `stream-json` prints one event per line, the same events every other client reads. The `json` object's `usage` is the whole run: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cache_read_or_write_tokens` and `calls`, summed over every model call it made, a sub-agent's and an automatic compaction's included |
 | `--agent <name>` | `general-purpose` | Which agent from config answers |
 | `--profile <name>` | the agent's own | Which model profile to use |
 | `--model <id>` | the profile's own | Override the model id inside that profile |
@@ -1258,6 +1258,23 @@ Shows cumulative token counts per model for the current session, with no model c
 
 `/usage` sums every API call since session creation, including repeatedly sent history. The status-bar context percentage describes the latest request instead.
 
+Each model's line counts these kinds of token, because they are billed apart:
+
+| Figure | What it is |
+|---|---|
+| `input` | Prompt the provider counted fresh. |
+| `cache read` | Prompt the provider served from its prompt cache. Under a working cache this is most of the repeatedly sent history. Billed at the provider's cache rate, which on Anthropic's models is below the input rate. |
+| `cache write` | Prompt the provider wrote to its prompt cache. Billed at the provider's cache rate, which on Anthropic's models is above the input rate. |
+| `cache read or write` | Cached prompt a conversation logged by v0.145.0 recorded as one figure, without saying which of the two it was. |
+| `output` | What the model wrote. |
+| `total` | All of them. |
+
+A cache figure appears only when a provider reported one. Anthropic and Bedrock report a read and a write. An OpenAI-compatible server reports a read when it sends `prompt_tokens_details.cached_tokens`, as OpenAI does and some compatible servers do, and never a write.
+
+A fork copies the log of the conversation it was forked from. Its own `/usage` includes the calls in that copy. `/usage all` counts them once, under the conversation that made them. Deleting that conversation removes its calls from `/usage all`, the copies in its forks included, as deleting any conversation removes its own.
+
+The Web UI's usage window draws the `/usage all` figures, read from the daemon (`GET /api/usage`), so the two always agree. Sessions no list shows count too: a sub-agent's, a scheduled run's, a debate reviewer's.
+
 With no calls yet, it just says so.
 
 An argument widens it past this conversation:
@@ -1618,13 +1635,28 @@ Sessions are identified and resumed by ID, so a `title` is purely for display.
 
 Provider token usage is recorded as a `usage` event at turn end. Bedrock, Anthropic, and OpenAI-compatible servers with `stream_options.include_usage` supply these values.
 
-The event includes input and output tokens, context limit, percentage used, and tokens per second. The context limit uses [internal/modelinfo](../internal/modelinfo/modelinfo.go), with a 128000-token default for unknown models. Both clients use this event for their status bars.
+The event includes input and output tokens, the cached prompt and its split into cache read and cache write, context limit, percentage used, and tokens per second. The context limit uses [internal/modelinfo](../internal/modelinfo/modelinfo.go), with a 128000-token default for unknown models. Both clients use this event for their status bars.
 
-The percentage counts the whole prompt the provider read, including the part it served from its prompt cache. Anthropic and Bedrock report that part apart from `input_tokens`, which covers only what was counted fresh, and `input_tokens` stays that figure because it is what was billed at the full rate. The event carries the cached part as `cached_input_tokens`, and `measured`, the daemon's own character-based estimate of the same messages, so a session restored from its log can size its next request the same way a live one does.
+The percentage counts the whole prompt the provider read, including the part it served from its prompt cache, and the reply, which the next request carries. Anthropic, Bedrock, and an OpenAI-compatible server that sends `prompt_tokens_details.cached_tokens` report the cached part apart from `input_tokens`, which covers only what was counted fresh, and `input_tokens` stays that figure because it is what was billed at the full rate. The event carries the cached part as `cached_input_tokens`, and `measured`, the daemon's own character-based estimate of the same messages, so a session restored from its log can size its next request the same way a live one does.
 
 The next request is sized against what the conversation holds now: the provider's count for the messages it covered, plus an estimate of anything appended since, such as a tool result. Replacing the history (a compaction, `/clear`, a rewind, a debate's collapse) drops the count, and the next request is sized from the estimate until the server reports again.
 
-Automatic compaction runs on the next message after context use exceeds the threshold. The default is 50%. `/auto-compact <percent>` changes it. When enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction.
+Automatic compaction runs on the next message once the conversation reaches the threshold. The default is 50%, and `/auto-compact <percent>` changes it. The measure differs from the status-bar percentage, which is the provider's count of the last request and its reply:
+
+* It starts from the provider's count for what that count covered, and adds an estimate of text appended since, such as the output of a `!` command.
+* Images appended since the count are left out. Their cost depends on their size and on the model, and a compaction replaces every image with a note, so the images just pasted into a retried turn are not summarized away on an estimate. Images the count covered are in it.
+* The model's reasoning is left out of every estimate. The live conversation keeps it and a conversation restored from its log does not, and the two decide the same way.
+* With no count, for example after `/rewind`, the conversation's text is estimated and its images are left out.
+* A count restored from a log written before v0.145.0 decides alone, as it did then.
+* It is measured against the window of the profile the next message goes to.
+
+A conversation that reaches the threshold is still not compacted in three cases:
+
+* It is no longer than what a compaction would put in its place, the summary's header and notes. Tool definitions can put one short exchange over the threshold, and nothing a compaction does would shrink it.
+* It is a previous compaction's summary, and the text that followed the summary is no longer than the summary.
+* The system prompt alone reaches the threshold, so no compaction can bring the conversation under it. It then compacts once the conversation is half the room the system prompt leaves, rather than on every turn.
+
+When automatic compaction is enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction. A request that still overflows is summarized and retried, as described below.
 
 The context gauge does not include all reserved output space. The following controls handle oversized requests:
 
@@ -2483,6 +2515,7 @@ Debate outcomes:
 | `rounds` | The budget ran out with no approval. The work stands; read it before trusting it. |
 | `stalled` | Two consecutive rounds without an author tool call. |
 | `stopped` | You pressed Stop. What was done is kept. |
+| `failed` | A model call failed without Stop being pressed: the author's turn, or every reviewer's review in a round. The note says which. What was done is kept. |
 
 At debate completion, model context replaces debate instructions, reviews, and intermediate answers with the task and final work state. The closing message reports this change. All rounds remain visible in the conversation and event log. Expired debate instructions do not apply to the next message.
 

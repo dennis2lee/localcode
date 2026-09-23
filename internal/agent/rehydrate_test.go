@@ -295,6 +295,26 @@ func TestRehydrateUsageDropsTheCountADebateCollapseInvalidates(t *testing.T) {
 	if cum["m1"].InputTokens != 12900 {
 		t.Errorf("cum[m1] = %+v, want the rounds still billed", cum["m1"])
 	}
+
+	// Said to have collapsed: reset, as the log without the key is.
+	if _, haveUsage, _ := rehydrateUsage([]events.Event{
+		ev(events.TypeUsage, map[string]any{"input_tokens": 12900, "max_context": 16384, "model": "m1"}),
+		ev(events.TypeDebateEnded, map[string]any{"rounds": 3, "collapsed": true}),
+	}); haveUsage {
+		t.Errorf("a count survived a debate that says it collapsed")
+	}
+
+	// Said to have collapsed nothing: reset all the same. The history
+	// pass decides the collapse again from the history it rebuilds, which
+	// can differ from the live one (a trim to fit the window is not in the
+	// log), so the live session's word does not describe the restored
+	// history. A dropped count errs toward the estimate.
+	if _, haveUsage, _ := rehydrateUsage([]events.Event{
+		ev(events.TypeUsage, map[string]any{"input_tokens": 12900, "max_context": 16384, "model": "m1"}),
+		ev(events.TypeDebateEnded, map[string]any{"rounds": 1, "collapsed": false}),
+	}); haveUsage {
+		t.Errorf("a count survived a debate end on the live session's word that nothing collapsed")
+	}
 }
 
 // TestRehydrateAllRestoresContextAndCostAcrossRestart is the end-to-end
@@ -549,5 +569,48 @@ func TestRehydrateHistoryDropsACallAStreamDiedOn(t *testing.T) {
 	}
 	if got, want := historyShape(rehydrateHistory(recovered)), "user: go on\nassistant: calling tool_use t1\nuser: tool_result t1\nassistant: done"; got != want {
 		t.Errorf("a recovered error dropped a call that was still owed its result:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// An instruction typed mid-turn comes back tagged as the person's, in
+// either order the log can hold it: after the iteration's last tool
+// result (it joins that message) or before it (it waits for the message
+// to be built). A bare text block made it read as unattributed text
+// inside tool output after a restart.
+func TestRehydrateHistoryTagsAnInjectedInstruction(t *testing.T) {
+	for name, evs := range map[string][]events.Event{
+		"after the last result": {
+			ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+			ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "read"}),
+			ev(events.TypeMessagePartEnd, map[string]any{"text": "reading"}),
+			ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t1", "input": "{}", "content": "ok"}),
+			ev(events.TypeUserMessage, map[string]any{"text": "use tabs", "injected": true, "source": "injected.user"}),
+		},
+		"before the last result": {
+			ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+			ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "read"}),
+			ev(events.TypeToolStart, map[string]any{"tool_use_id": "t2", "name": "read"}),
+			ev(events.TypeMessagePartEnd, map[string]any{"text": "reading"}),
+			ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t1", "input": "{}", "content": "ok"}),
+			ev(events.TypeUserMessage, map[string]any{"text": "use tabs", "injected": true, "source": "injected.user"}),
+			ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t2", "input": "{}", "content": "ok"}),
+		},
+	} {
+		hist := rehydrateHistory(evs)
+		want := injectedUserBlock("use tabs")
+		found := false
+		for _, m := range hist {
+			for _, b := range m.Content {
+				if b.Text == want.Text {
+					found = true
+					if b.Source != want.Source || len(b.Sources) != 1 || b.Sources[0] != want.Sources[0] {
+						t.Errorf("%s: the rebuilt instruction is tagged %q %v, want %q %v", name, b.Source, b.Sources, want.Source, want.Sources)
+					}
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: the instruction is not in the rebuilt history", name)
+		}
 	}
 }

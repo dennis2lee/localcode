@@ -143,6 +143,13 @@ func TestADebateLeavesTheConversationItsResultAndNotItsRounds(t *testing.T) {
 		t.Fatalf("plain prompt: %v", err)
 	}
 
+	// The end event says the history was replaced, which is what both
+	// clients let go of their context reading on.
+	ended := debateEvents(t, loop, sid, events.TypeDebateEnded)
+	if len(ended) != 1 || ended[0].Data["collapsed"] != true {
+		t.Errorf("debate.ended does not say the rounds were collapsed: %v", ended)
+	}
+
 	got := script.lastAuthorRequest(t)
 	want := []string{
 		"user: write a sum function",
@@ -374,5 +381,45 @@ func TestTheClosingLineSaysWhatWasActuallyKept(t *testing.T) {
 	}
 	if strings.Contains(note, "as it now stands") {
 		t.Errorf("closing line claims work was kept when none was: %q", note)
+	}
+}
+
+// debate.ended says whether the rounds were collapsed, because that is
+// whether the history, and the usage count describing it, was replaced.
+// A debate whose mark is stale collapses nothing: the count stands, and
+// the event has to say so or both clients blank a gauge that is still
+// right and a restart drops a count the live session kept.
+func TestTheEndOfADebateSaysWhetherItCollapsed(t *testing.T) {
+	loop := newDebateLoop(t, "http://127.0.0.1:1")
+	sid := startDebateSession(t, loop)
+	msg := func(role provider.Role, text string) provider.Message {
+		return provider.Message{Role: role, Content: []provider.Block{provider.TextBlock(text)}}
+	}
+	task := "write a sum function"
+	for _, c := range []struct {
+		name      string
+		mark      int
+		collapsed bool
+	}{
+		{"a sound mark", 0, true},
+		{"a stale mark", 99, false},
+	} {
+		loop.setHistory(sid, []provider.Message{
+			msg(provider.RoleUser, task),
+			msg(provider.RoleAssistant, "first attempt"),
+			msg(provider.RoleUser, "round 1 brief"),
+			msg(provider.RoleAssistant, "second attempt"),
+		})
+		setTestUsage(loop, sid, sessionUsage{InputTokens: 9000, MaxContext: 32768})
+		loop.endDebate(debateRun{sessionID: sid, task: task, historyMark: c.mark}, "stopped", 1, false)
+
+		ended := debateEvents(t, loop, sid, events.TypeDebateEnded)
+		last := ended[len(ended)-1]
+		if got, _ := last.Data["collapsed"].(bool); got != c.collapsed {
+			t.Errorf("%s: debate.ended collapsed = %v, want %v", c.name, last.Data["collapsed"], c.collapsed)
+		}
+		if _, kept := loop.getUsage(sid); kept == c.collapsed {
+			t.Errorf("%s: the usage count kept = %v after a collapse = %v", c.name, kept, c.collapsed)
+		}
 	}
 }

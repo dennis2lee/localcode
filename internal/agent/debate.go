@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -157,7 +158,7 @@ func (l *Loop) runDebate(ctx context.Context, d debateRun) error {
 			// deliberate act. The turn's own error is a cancellation
 			// wrapped in whatever the provider said about it, so the
 			// context is asked rather than the error inspected.
-			reason := "failed"
+			reason := authorFailed
 			if ctx.Err() != nil {
 				reason = "stopped"
 			}
@@ -176,10 +177,17 @@ func (l *Loop) runDebate(ctx context.Context, d debateRun) error {
 				sessions[r.reviewer] = r.session
 			}
 			if r.err != nil {
-				l.Store.Append(d.sessionID, events.TypeError, map[string]any{
-					"error":     fmt.Sprintf("the %s agent could not review round %d: %v", r.reviewer, round, r.err),
-					"recovered": true,
-				})
+				// A reviewer that Stop cancelled did not fail, and saying
+				// it could not review puts a failure on a deliberate act.
+				// One that failed for its own reason before Stop was
+				// pressed did, and says so: the cancellation is asked of
+				// its error, not only of the context.
+				if ctx.Err() == nil || !errors.Is(r.err, ctx.Err()) {
+					l.Store.Append(d.sessionID, events.TypeError, map[string]any{
+						"error":     fmt.Sprintf("the %s agent could not review round %d: %v", r.reviewer, round, r.err),
+						"recovered": true,
+					})
+				}
 				continue
 			}
 			answered++
@@ -197,17 +205,27 @@ func (l *Loop) runDebate(ctx context.Context, d debateRun) error {
 			})
 		}
 
+		// Every reviewer that answered has to approve. A panel where one
+		// approves and one does not is a disagreement, and taking the
+		// approval would be picking the answer that ends the work. Asked
+		// before Stop is: every review came back and approved, so the
+		// debate ended in agreement whatever was pressed after.
+		if answered > 0 && approvals == answered && answered == len(d.reviewers) {
+			l.endDebate(d, "approved", round, true)
+			return nil
+		}
+		// Stop pressed while the reviewers were reading. The author's
+		// phase already tells this apart from a failure; the reviews
+		// did not, and a deliberate Stop ended the debate as "no review
+		// came back".
+		if err := ctx.Err(); err != nil {
+			l.endDebate(d, "stopped", round, false)
+			return err
+		}
 		if answered == 0 {
 			// Nobody reviewed anything. Looping would spend the budget on
 			// a provider that is not answering.
 			l.endDebate(d, "failed", round, false)
-			return nil
-		}
-		// Every reviewer that answered has to approve. A panel where one
-		// approves and one does not is a disagreement, and taking the
-		// approval would be picking the answer that ends the work.
-		if approvals == answered && answered == len(d.reviewers) {
-			l.endDebate(d, "approved", round, true)
 			return nil
 		}
 		// A round in which the author called no tool at all changed
@@ -286,6 +304,10 @@ func (l *Loop) runReviews(
 // The reason is always named. "It stopped" and "it agreed" look identical
 // at the bottom of a long conversation, and only one of them means the
 // work has been through review.
+// authorFailed is endDebate's reason for the author's own turn failing,
+// recorded on the event as "failed" with a note of its own.
+const authorFailed = "failed: author"
+
 func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) {
 	who := strings.Join(d.reviewers, " and ")
 	var note string
@@ -302,6 +324,13 @@ func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) 
 		note = fmt.Sprintf("debate stopped after %s. What was done is kept.", roundCount(rounds))
 	case "failed":
 		note = fmt.Sprintf("debate ended after %s: no review came back. What was done is kept.", roundCount(rounds))
+	case authorFailed:
+		// Recorded as "failed", the reason a client knows, with a note
+		// that says whose call it was: the author's turn failing is not
+		// "no review came back", and saying so sent a person looking at
+		// the reviewers.
+		reason = "failed"
+		note = fmt.Sprintf("debate ended after %s: %s's turn failed. What was done is kept.", roundCount(rounds), d.author)
 	default:
 		note = fmt.Sprintf("debate ended after %s.", roundCount(rounds))
 	}
@@ -309,7 +338,8 @@ func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) 
 	// author needed them while they were running. Read before the note is
 	// finished, because whether anything was collapsed is what decides
 	// whether the note should mention it.
-	switch collapsed, kept := l.collapseDebate(d); {
+	collapsed, kept := l.collapseDebate(d)
+	switch {
 	case !collapsed:
 		// Nothing to take out: a debate that ended on its first round
 		// with no review to answer is already just the task and the
@@ -322,11 +352,18 @@ func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) 
 		note += " The rounds leave the model's context here; what it carries on with is the task and the " +
 			"work as it now stands. They stay in this conversation and in its log."
 	}
+	// "collapsed" says whether the history was replaced, which is what a
+	// client's context gauge needs to know: a collapse drops the count the
+	// daemon holds live, and a debate that had nothing to collapse leaves
+	// it standing. A restart does not read the key: rehydrateUsage drops
+	// the count at every debate's end, because the restored history can
+	// collapse where the live one did not.
 	l.Store.Append(d.sessionID, events.TypeDebateEnded, map[string]any{
-		"reason":   reason,
-		"rounds":   rounds,
-		"approved": approved,
-		"note":     note,
+		"reason":    reason,
+		"rounds":    rounds,
+		"approved":  approved,
+		"note":      note,
+		"collapsed": collapsed,
 	})
 }
 

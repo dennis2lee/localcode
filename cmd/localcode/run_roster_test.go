@@ -46,7 +46,7 @@ func TestTheOneShotRosterDiffersFromTheDaemonsOnlyOnPurpose(t *testing.T) {
 	}
 	defer stopDaemon()
 
-	loop, _, stopRun, err := buildOneShot(ctx, runOptions{agent: "general-purpose"})
+	loop, _, _, stopRun, err := buildOneShot(ctx, runOptions{agent: "general-purpose"})
 	if err != nil {
 		t.Fatalf("build the one-shot: %v", err)
 	}

@@ -98,3 +98,50 @@ func TestACancelledOpenAICompatStreamEndsCleanly(t *testing.T) {
 	srv := hangingSSE(t, "data: {\"choices\":[{\"delta\":{\"content\":\"half an\"}}]}\n\n")
 	cancelsEndCleanly(t, NewOpenAICompat(srv.URL, ""))
 }
+
+// An OpenAI-compatible server that says how much of the prompt its cache
+// served (OpenAI does, and vLLM with prefix caching) has that part
+// reported as a cache read, apart from the fresh input, as Anthropic and
+// Bedrock report theirs. prompt_tokens includes it, so reported whole
+// the cache counted as fresh input in /usage; the whole prompt, which is
+// what the window reads, is the same either way.
+func TestAnOpenAICompatCacheReadIsReportedApart(t *testing.T) {
+	for _, c := range []struct {
+		name                 string
+		usage                string
+		input, cached, total int
+	}{
+		{"a cache hit", `{"prompt_tokens":5000,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":4096}}`, 904, 4096, 5000},
+		{"no details", `{"prompt_tokens":5000,"completion_tokens":7}`, 5000, 0, 5000},
+		{"a cache larger than the prompt", `{"prompt_tokens":100,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":4096}}`, 0, 100, 100},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+				fmt.Fprintf(w, "data: {\"choices\":[],\"usage\":%s}\n\n", c.usage)
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}))
+			defer srv.Close()
+			stream, err := NewOpenAICompat(srv.URL, "").Chat(context.Background(), ChatRequest{Model: "m", Messages: []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}}})
+			if err != nil {
+				t.Fatalf("Chat: %v", err)
+			}
+			var got *StreamEvent
+			for ev := range stream {
+				if ev.Type == EventUsage {
+					e := ev
+					got = &e
+				}
+			}
+			if got == nil {
+				t.Fatal("no usage event")
+			}
+			if got.InputTokens != c.input || got.CacheReadTokens != c.cached || got.CacheWriteTokens != 0 || got.InputTokens+got.CacheReadTokens != c.total {
+				t.Errorf("usage = input %d, cache read %d, cache write %d; want input %d, cache read %d, whole prompt %d",
+					got.InputTokens, got.CacheReadTokens, got.CacheWriteTokens, c.input, c.cached, c.total)
+			}
+		})
+	}
+}

@@ -429,9 +429,15 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				trimmed, changed := forceFit(run.system, l.history(sessionID), trimBudget)
 				if changed {
 					l.setHistory(sessionID, trimmed)
+					// "history_replaced" because the trim goes through
+					// setHistory, which drops the usage count, and a
+					// client's context gauge has to let go of its reading
+					// with it: the turn can still fail after this, and
+					// then no usage event comes to replace the old fill.
 					l.Store.Append(sessionID, events.TypeError, map[string]any{
-						"error":     "still too long — the oldest part of the conversation has been dropped so this turn can continue",
-						"recovered": true,
+						"error":            "still too long — the oldest part of the conversation has been dropped so this turn can continue",
+						"recovered":        true,
+						"history_replaced": true,
 					})
 					continue
 				}
@@ -550,7 +556,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// and a Korean reply measured by characters came out at a
 			// third of what the provider had just counted.
 			l.recordUsage(sessionID, run.profile.Model, l.contextWindow(ctx, run.profile),
-				estimateTokens(run.system, append(append([]provider.Message(nil), messages...),
+				measure(run.system, append(append([]provider.Message(nil), messages...),
 					provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})), usage)
 		}
 
@@ -840,13 +846,24 @@ func (l *Loop) takeInjected(sessionID string) []provider.Block {
 		// says the same word for both; the tag is what tells them
 		// apart, and the preface is localcode's own framing rather than
 		// the person's, so only what they typed is inside the span.
-		body := injectedPreface + text
-		out = append(out, provider.Block{
-			Type: provider.BlockText, Text: body, Source: "injected.user",
-			Sources: []provider.BlockSource{{
-				ID: "injected.user", From: len(injectedPreface), To: len(body),
-			}},
-		})
+		out = append(out, injectedUserBlock(text))
+	}
+}
+
+// injectedUserBlock is what the person typed while a turn was running,
+// as the model is handed it: localcode's preface, then their words, the
+// span of their words tagged as theirs. Built here for the live turn and
+// for rehydrateHistory, so a restored session carries the same tag: a
+// rebuilt bare text block made the person's instruction read as
+// unattributed text inside tool output, and dropped the line a compaction
+// writes about it.
+func injectedUserBlock(text string) provider.Block {
+	body := injectedPreface + text
+	return provider.Block{
+		Type: provider.BlockText, Text: body, Source: "injected.user",
+		Sources: []provider.BlockSource{{
+			ID: "injected.user", From: len(injectedPreface), To: len(body),
+		}},
 	}
 }
 
@@ -1233,9 +1250,14 @@ func drainText(ctx context.Context, stream <-chan provider.StreamEvent) (string,
 			case provider.EventTextDelta:
 				text.WriteString(ev.TextDelta)
 			case provider.EventUsage:
+				// The cache fields too: the summarization call sends the
+				// same system prompt and history a turn does, so a working
+				// cache serves most of it, and those tokens are billed.
 				usage.hasUsage = true
 				usage.inputTokens = ev.InputTokens
 				usage.outputTokens = ev.OutputTokens
+				usage.cacheRead = ev.CacheReadTokens
+				usage.cacheWrite = ev.CacheWriteTokens
 			case provider.EventMessageStop:
 				if ev.StopReason != "" {
 					stop = ev.StopReason

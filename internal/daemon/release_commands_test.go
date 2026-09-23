@@ -435,8 +435,8 @@ func TestUsageReportsOneConversationAndEveryOne(t *testing.T) {
 	replyAlone := h.sendCommand(t, "/usage")
 	for _, want := range []string{
 		"Token usage by model:",
-		"test-model: input 150 · output 40 · total 190 (1 calls)",
-		"Grand total: input 150 · output 40 · total 190 (1 calls)",
+		"test-model: input 150 · output 40 · total 190 (1 call)",
+		"Grand total: input 150 · output 40 · total 190 (1 call)",
 	} {
 		if !strings.Contains(replyAlone, want) {
 			t.Errorf("/usage alone missing %q:\n%s", want, replyAlone)
@@ -452,11 +452,11 @@ func TestUsageReportsOneConversationAndEveryOne(t *testing.T) {
 	// Test /usage all: reports across every conversation, archived ones included
 	replyAll := h.sendCommand(t, "/usage all")
 	for _, want := range []string{
-		"Token usage across every conversation (3 conversations):",
+		"Token usage across every conversation (3 sessions):",
 		"test-model: input 400 · output 100 · total 500 (2 calls)",
-		"quick-model: input 80 · output 20 · total 100 (1 calls)",
+		"quick-model: input 80 · output 20 · total 100 (1 call)",
 		"Grand total: input 480 · output 120 · total 600 (3 calls)",
-		"Counted from the conversations' own logs, archived ones included.",
+		"Counted from the sessions' own logs, archived conversations and sub-agents included.",
 	} {
 		if !strings.Contains(replyAll, want) {
 			t.Errorf("/usage all missing %q:\n%s", want, replyAll)
@@ -466,7 +466,7 @@ func TestUsageReportsOneConversationAndEveryOne(t *testing.T) {
 	// Test /usage today
 	replyToday := h.sendCommand(t, "/usage today")
 	for _, want := range []string{
-		"Token usage across today (3 conversations):",
+		"Token usage across today (3 sessions):",
 		"test-model",
 		"quick-model",
 		"Grand total: input 480 · output 120 · total 600 (3 calls)",
@@ -479,7 +479,7 @@ func TestUsageReportsOneConversationAndEveryOne(t *testing.T) {
 	// Test /usage week
 	replyWeek := h.sendCommand(t, "/usage week")
 	for _, want := range []string{
-		"Token usage across the last 7 days (3 conversations):",
+		"Token usage across the last 7 days (3 sessions):",
 		"test-model",
 		"quick-model",
 		"Grand total: input 480 · output 120 · total 600 (3 calls)",
@@ -492,7 +492,7 @@ func TestUsageReportsOneConversationAndEveryOne(t *testing.T) {
 	// Test /usage month
 	replyMonth := h.sendCommand(t, "/usage month")
 	for _, want := range []string{
-		"Token usage across the last 30 days (3 conversations):",
+		"Token usage across the last 30 days (3 sessions):",
 		"test-model",
 		"quick-model",
 		"Grand total: input 480 · output 120 · total 600 (3 calls)",

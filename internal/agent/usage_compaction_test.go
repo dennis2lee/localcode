@@ -201,7 +201,10 @@ func TestAutoCompactTriggersAboveThresholdAndResetsHistory(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "first message"); err != nil {
+	// Long enough to be worth compacting: a conversation no longer than
+	// what a compaction puts in its place is left alone whatever the
+	// count says.
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "first message "+strings.Repeat("x", 4000)); err != nil {
 		t.Fatalf("SendMessage (first): %v", err)
 	}
 	if srv.requestCount() != 1 {
@@ -287,7 +290,13 @@ func TestAutoCompactDisabledNeverTriggers(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	loop.SendMessage(context.Background(), sid, "general-purpose", "first message")
+	// Long enough to be worth compacting, so the switch or the threshold
+	// is what decides and not the guard against compacting a conversation
+	// no longer than what a compaction leaves.
+	loop.SendMessage(context.Background(), sid, "general-purpose", "first message "+strings.Repeat("x", 4000))
+	if h := loop.history(sid); conversationTokens(h, 0) <= compactionKeeps(h, false)+shortestSummary {
+		t.Fatalf("precondition: the conversation should be worth compacting")
+	}
 	loop.SendMessage(context.Background(), sid, "general-purpose", "second message")
 
 	if srv.requestCount() != 2 {
@@ -309,7 +318,13 @@ func TestAutoCompactBelowThresholdNeverTriggers(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	loop.SendMessage(context.Background(), sid, "general-purpose", "first message")
+	// Long enough to be worth compacting, so the switch or the threshold
+	// is what decides and not the guard against compacting a conversation
+	// no longer than what a compaction leaves.
+	loop.SendMessage(context.Background(), sid, "general-purpose", "first message "+strings.Repeat("x", 4000))
+	if h := loop.history(sid); conversationTokens(h, 0) <= compactionKeeps(h, false)+shortestSummary {
+		t.Fatalf("precondition: the conversation should be worth compacting")
+	}
 	loop.SendMessage(context.Background(), sid, "general-purpose", "second message")
 
 	if srv.requestCount() != 2 {

@@ -247,6 +247,11 @@ const handlers = {
   // debate ended from a reason code.
   'debate.ended': (d) => {
     if (d.note) appendTool(`[${d.note}]`);
+    // A collapse replaces the history, as a compaction does. Only a
+    // debate that says it had nothing to collapse keeps the reading; one
+    // from an older daemon that does not say is let go of, since a blank
+    // gauge refills on the next turn and a stale one misleads.
+    if (d.collapsed !== false) forgetContextFill();
   },
   // The question is gone, however it went: answered from these buttons,
   // answered in another window, given up on unattended, or cancelled
@@ -572,6 +577,9 @@ const handlers = {
     // it red would say the turn is over when the reply is still coming.
     if (d.recovered) {
       appendTool(`[${d.error || ''}]`);
+      // A trim that dropped the oldest messages replaced the history the
+      // gauge was a reading of.
+      if (d.history_replaced === true) forgetContextFill();
       return;
     }
     session.runningTool = '';

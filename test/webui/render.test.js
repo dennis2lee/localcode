@@ -209,17 +209,52 @@ test('switching agents updates the model even before the new one has answered', 
 // and the status line has to let go of the reading too, or it shows the
 // old fill over a conversation that is nearly empty until the next turn
 // reports. The model and the rate stay: they are about the session.
-for (const replaced of ['cleared', 'compacted', 'rewound', 'redone']) {
+for (const replaced of ['cleared', 'compacted', 'rewound', 'redone', 'debate.ended']) {
   test(`a ${replaced} event blanks the context percent but keeps the rate`, async () => {
     const app = await load();
     app.applyEvent({ type: 'usage', data: { percent: 85, tps: 13.5, model: 'reported-model' } });
     app.renderStatusBar();
     assert.match(app.el('status-text').textContent, /context: 85\.0%/);
 
-    app.applyEvent({ type: replaced, data: { summary_length: 12, turn_text: 'x' } });
+    app.applyEvent({ type: replaced, data: { summary_length: 12, turn_text: 'x', collapsed: true } });
     app.renderStatusBar();
     const text = app.el('status-text').textContent;
     assert.doesNotMatch(text, /context:/, text);
     assert.match(text, /13\.5 tok\/s/, text);
+  });
+}
+
+// A debate that ended with nothing to collapse left the history as it was,
+// and the daemon's count with it. One from a daemon too old to say is let
+// go of: a blank gauge refills on the next turn, a stale one misleads.
+for (const [name, data, kept] of [
+  ['nothing collapsed', { note: 'debate ended after 1 round.', collapsed: false }, true],
+  ['an older daemon', { note: 'debate ended after 1 round.' }, false],
+]) {
+  test(`a debate.ended event from ${name} ${kept ? 'keeps' : 'blanks'} the context percent`, async () => {
+    const app = await load();
+    app.applyEvent({ type: 'usage', data: { percent: 85, tps: 13.5, model: 'reported-model' } });
+    app.applyEvent({ type: 'debate.ended', data });
+    app.renderStatusBar();
+    const text = app.el('status-text').textContent;
+    assert.equal(/context: 85\.0%/.test(text), kept, text);
+  });
+}
+
+// A trim that dropped the oldest messages replaced the history, and the
+// turn can still fail after it with no usage event to follow. Its notice
+// says the history was replaced; any other recovered notice leaves the
+// reading alone.
+for (const [name, data, kept] of [
+  ['a trim', { error: 'still too long', recovered: true, history_replaced: true }, false],
+  ['another notice', { error: 'retrying', recovered: true }, true],
+]) {
+  test(`a recovered error from ${name} ${kept ? 'keeps' : 'blanks'} the context percent`, async () => {
+    const app = await load();
+    app.applyEvent({ type: 'usage', data: { percent: 85, tps: 13.5, model: 'reported-model' } });
+    app.applyEvent({ type: 'error', data });
+    app.renderStatusBar();
+    const text = app.el('status-text').textContent;
+    assert.equal(/context: 85\.0%/.test(text), kept, text);
   });
 }

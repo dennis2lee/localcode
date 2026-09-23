@@ -202,9 +202,19 @@ func (d *Daemon) handleForkSession(w http.ResponseWriter, r *http.Request) {
 	if sourceName == "" {
 		sourceName = src.ID
 	}
+	// "copied" is how many events after this one are the copy, so a total
+	// across conversations counts the calls in them once, under the
+	// conversation that made them.
+	copied := 0
+	for _, ev := range evs {
+		if ev.Type != events.TypeSessionRenamed {
+			copied++
+		}
+	}
 	if _, err := d.Loop.Store.Append(newID, events.TypeSessionForked, map[string]any{
 		"from":       src.ID,
 		"from_title": sourceName,
+		"copied":     copied,
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("record the fork: %w", err))
 		return
