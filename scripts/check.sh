@@ -201,8 +201,16 @@ if [ ${#failed[@]} -eq 0 ]; then
 		printf '  (a partial run leaves no stamp: the release gate needs all of them)\n'
 	elif [ ${#skipped[@]} -gt 0 ]; then
 		printf '  (no stamp: %s did not run, and the release gate needs every check)\n' "${skipped[*]}"
+	elif ! scripts/tree-id.sh > "$logdir/tree-id"; then
+		# The redirect truncates before the script runs, so writing
+		# straight to the stamp left a zero-byte file on a failure while
+		# this still printed "all checks passed" and exited 0. The next
+		# `make dist` then refused with "passed on a different tree",
+		# which names the wrong cause and costs a whole rerun.
+		rm -f .check-passed
+		printf '  (no stamp: the tree identity could not be taken, and the message above says why)\n'
 	else
-		scripts/tree-id.sh > .check-passed
+		mv "$logdir/tree-id" .check-passed
 	fi
 	exit 0
 fi
