@@ -536,7 +536,11 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// last one.
 		sameTries = 0
 		if usage.hasUsage {
-			l.recordUsage(sessionID, run.profile.Model, l.contextWindow(ctx, run.profile), usage)
+			// estimateTokens over the messages this count describes,
+			// which is what the next request is measured against. The
+			// reply is appended below, after this.
+			l.recordUsage(sessionID, run.profile.Model, l.contextWindow(ctx, run.profile),
+				estimateTokens(run.system, messages), usage)
 		}
 
 		// Nothing is appended for a reply that produced nothing. A turn

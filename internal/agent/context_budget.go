@@ -200,31 +200,50 @@ func estimateTokens(system string, msgs []provider.Message) int {
 
 // inputEstimate is how many input tokens the next request will cost.
 //
-// The larger of two answers, because each is blind where the other sees.
+// The provider's own count for the messages it was given, plus this
+// side's estimate of everything appended since.
 //
-// The provider's own count from the last exchange is the same tokenizer
-// that will refuse the next request, so where it applies it beats any
-// estimate made here, and counting the reply on top of it covers the one
-// addition every report predates. But it only ever describes the
-// messages it was asked about. Anything appended since is invisible to
+// Each half is there because the other cannot do its job. The count
+// comes from the same tokenizer that will refuse the next request, so
+// for the messages it covers nothing here beats it. But it only ever
+// describes those messages. Anything appended afterwards is invisible to
 // it, and that is not a rounding error: a tool result is capped at a
 // quarter of the window, so one of them can outweigh the whole
-// conversation the count was taken over. A turn that calls several tools
-// sizes every request after the first against a number that predates
-// them.
+// conversation the count was taken over, and a turn that calls several
+// tools would size every request after the first against a number that
+// predates them.
 //
 // Counting characters sees all of it and is crude: four characters to a
 // token is about right for English and several times over for Korean or
-// Japanese, where it reads as a floor.
+// Japanese, where it reads as a floor. So it is applied to the part
+// nothing else can see, and the error it carries scales with that part
+// rather than with the whole conversation. Taking the larger of the two
+// instead threw the exact count away whenever the ratio happened to
+// overshoot, and shortened the reply for no reason.
 //
-// So: the count where nothing has been added since, the character sum
-// where something large has. Both err toward a larger input, which
-// shrinks the reply rather than getting the request refused.
+// Telling the two apart needs the estimate of the messages the count
+// covered, recorded when the count arrived: see sessionUsage.Measured.
+// A history that shrinks would make that difference negative, and every
+// place that replaces a history clears the count instead, so the
+// subtraction is floored at zero rather than trusted to stay positive.
+//
+// A count with no measurement behind it comes from a log written before
+// that was recorded, which every session restored from disk had until
+// it takes its next turn. There is no way to know what it covered, so
+// adding the conversation to it would count the part they share twice
+// and clamp the reply to the floor. Those fall back to the larger of
+// the count and the conversation: never under the count, and never
+// double.
 func (l *Loop) inputEstimate(sessionID, system string, msgs []provider.Message) int {
-	if u, ok := l.getUsage(sessionID); ok && u.InputTokens > 0 {
-		return max(u.InputTokens+u.OutputTokens, estimateTokens(system, msgs))
+	now := estimateTokens(system, msgs)
+	u, ok := l.getUsage(sessionID)
+	switch {
+	case !ok || u.InputTokens <= 0:
+		return now
+	case u.Measured <= 0:
+		return max(u.InputTokens+u.OutputTokens, now)
 	}
-	return estimateTokens(system, msgs)
+	return u.InputTokens + max(0, now-u.Measured)
 }
 
 // overflowPhrases are how the providers say "this did not fit".

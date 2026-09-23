@@ -13,6 +13,13 @@ type sessionUsage struct {
 	OutputTokens int
 	MaxContext   int
 	TPS          float64
+	// Measured is what estimateTokens made of the very messages
+	// InputTokens counts, taken when the count arrived. It is the only
+	// way to tell the two answers apart later: without it, a larger
+	// character sum could mean something was appended since, or could
+	// mean four-characters-to-a-token simply overshoots this content.
+	// See Loop.inputEstimate.
+	Measured int
 }
 
 // modelTotals accumulates token usage across every provider.Chat call a
@@ -57,7 +64,7 @@ func (l *Loop) startTurnRate(sessionID string) {
 // window down. Resolving it in one place is what keeps the meter, the
 // auto-compaction trigger, and the size of the next request from
 // disagreeing about how much room there is.
-func (l *Loop) recordUsage(sessionID, model string, maxContext int, usage streamUsage) {
+func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, usage streamUsage) {
 
 	// Rate over the whole turn so far, not over this one model call.
 	//
@@ -90,6 +97,7 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext int, usage stream
 		OutputTokens: usage.outputTokens,
 		MaxContext:   maxContext,
 		TPS:          tps,
+		Measured:     measured,
 	}
 
 	l.mu.Lock()
@@ -114,6 +122,13 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext int, usage stream
 		"max_context":   u.MaxContext,
 		"percent":       percent,
 		"tps":           tps,
+		// What this side made of the same messages, so a session read
+		// back from the log can still tell a count that covers
+		// everything from one that predates a tool result. A log written
+		// before this key existed reads as zero, which inputEstimate
+		// treats as "no measurement" rather than as a measurement of
+		// nothing.
+		"measured": u.Measured,
 		// Explicitly false so it clears the flag set by the live estimates
 		// broadcast during the stream — a client merges usage events, and
 		// a missing key would leave the "~" on an exact figure.

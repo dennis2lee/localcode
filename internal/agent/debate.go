@@ -370,6 +370,12 @@ func (l *Loop) collapseDebate(d debateRun) (collapsed bool, kept int) {
 		return false, len(h) - d.historyMark
 	}
 	l.setHistory(d.sessionID, out)
+	// The count describes the rounds that have just been collapsed away,
+	// and what it describes is no longer what is sent. Every other place
+	// that replaces a history clears it; this one did not, and the next
+	// request was then sized against a conversation that no longer
+	// existed.
+	l.clearUsage(d.sessionID)
 	return true, len(out) - d.historyMark
 }
 

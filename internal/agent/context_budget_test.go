@@ -60,35 +60,139 @@ func TestClampMaxTokensStopsAtTheFloor(t *testing.T) {
 // The provider's count describes the messages it was asked about, and
 // nothing else.
 //
-// A tool result appended after it is invisible to it, and a tool result
-// is capped at a quarter of the window, so one of them can outweigh the
-// whole conversation the count was taken over. A turn that calls
-// several tools sized every request after the first against a number
-// that predated them, and the notice then told somebody to raise
-// max_tokens when raising it bought the floor.
+// Two halves, and each is there because the other cannot do its job.
+// The count comes from the tokenizer that will refuse the next request,
+// so nothing here beats it for the messages it covers. But a tool
+// result appended after it is invisible to it, and a tool result is
+// capped at a quarter of the window, so one of them can outweigh the
+// whole conversation the count was taken over.
 func TestTheInputEstimateSeesWhatTheCountCouldNot(t *testing.T) {
 	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: 32768}
 	loop := probeTestLoop(t, &probeCounter{found: false}, profile)
 	const sid = "s1"
+
+	// The messages that were sent, as the count describes them. The
+	// count is deliberately far above what characters suggest, which is
+	// the case the ratio gets wrong: whitespace-padded code counts
+	// fewer tokens per character than prose, and prose in Korean counts
+	// many more.
+	sent := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("read the file")}}}
+	measured := estimateTokens("", sent)
+	loop.mu.Lock()
+	loop.usage[sid] = sessionUsage{InputTokens: 5000, OutputTokens: 100, Measured: measured}
+	loop.mu.Unlock()
+
+	// Nothing appended since: the count stands, exactly, and the
+	// character sum is not consulted.
+	if got := loop.inputEstimate(sid, "", sent); got != 5000 {
+		t.Errorf("with nothing appended since the count, the estimate is %d, want the count itself, 5000", got)
+	}
+
+	// The reply, which the count predates.
+	withReply := append(append([]provider.Message(nil), sent...),
+		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock(strings.Repeat("a", 4*400))}})
+	wantReply := 5000 + estimateTokens("", withReply) - measured
+	if got := loop.inputEstimate(sid, "", withReply); got != wantReply {
+		t.Errorf("after the reply the estimate is %d, want the count plus what the reply measures, %d", got, wantReply)
+	}
+
+	// And a tool result on top of it, which is the addition that can
+	// outweigh everything the count covered.
+	withTool := append(append([]provider.Message(nil), withReply...),
+		provider.Message{Role: provider.RoleUser, Content: []provider.Block{
+			provider.ToolResultBlock("t1", strings.Repeat("x", 4*26000), false)}})
+	wantTool := 5000 + estimateTokens("", withTool) - measured
+	if wantTool < 26000 {
+		t.Fatalf("precondition: the additions measure %d tokens, want the tool result to dominate", wantTool-5000)
+	}
+	if got := loop.inputEstimate(sid, "", withTool); got != wantTool {
+		t.Errorf("a tool result appended after the count left the estimate at %d, want %d", got, wantTool)
+	}
+
+	// A count with no measurement behind it is one this version did not
+	// write: every session restored from a log older than that key has
+	// one, until its next turn. Adding the conversation to it would
+	// count the part they share twice and clamp the reply to the floor,
+	// so those take the larger of the two instead.
 	loop.mu.Lock()
 	loop.usage[sid] = sessionUsage{InputTokens: 5000, OutputTokens: 100}
 	loop.mu.Unlock()
-
-	small := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("read the file")}}}
-	if got := loop.inputEstimate(sid, "", small); got != 5100 {
-		t.Errorf("with nothing added since the count, the estimate is %d, want the count plus the reply, 5100", got)
+	if got, want := loop.inputEstimate(sid, "", sent), 5100; got != want {
+		t.Errorf("an unmeasured count on a short conversation gave %d, want the count plus the reply, %d", got, want)
 	}
-
-	// The tool result the count predates.
-	big := append(append([]provider.Message(nil), small...),
-		provider.Message{Role: provider.RoleUser, Content: []provider.Block{
-			provider.ToolResultBlock("t1", strings.Repeat("x", 4*26000), false)}})
-	counted := estimateTokens("", big)
-	if counted < 26000 {
-		t.Fatalf("precondition: the conversation measures %d tokens, want more than the count it predates", counted)
+	if got, want := loop.inputEstimate(sid, "", withTool), estimateTokens("", withTool); got != want {
+		t.Errorf("an unmeasured count on a long conversation gave %d, want what the conversation measures, %d", got, want)
 	}
-	if got := loop.inputEstimate(sid, "", big); got != counted {
-		t.Errorf("a tool result appended after the count left the estimate at %d, want the %d the conversation now measures", got, counted)
+}
+
+// A count describes messages. A history that no longer holds them has
+// to drop it.
+//
+// Every place that replaces a history clears the count, except that
+// collapsing a debate did not: it swaps the rounds for a summary and
+// left the count describing rounds that are no longer sent. The next
+// request was then sized against a conversation that had gone.
+func TestCollapsingADebateDropsTheCountItInvalidates(t *testing.T) {
+	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: 16384}
+	loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+	const sid = "s1"
+	const task = "decide the retry policy"
+
+	loop.setHistory(sid, []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("hello")}},
+		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(task)}},
+		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock(strings.Repeat("round one deliberation. ", 400))}},
+		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock("final answer text")}},
+	})
+	// The count covered the rounds, because the rounds were sent.
+	sentMeasure := estimateTokens("", loop.history(sid))
+	loop.mu.Lock()
+	loop.usage[sid] = sessionUsage{InputTokens: 12900, OutputTokens: 100, Measured: sentMeasure}
+	loop.mu.Unlock()
+
+	if collapsed, _ := loop.collapseDebate(debateRun{sessionID: sid, historyMark: 1, task: task}); !collapsed {
+		t.Fatal("precondition: the debate did not collapse")
+	}
+	msgs := loop.history(sid)
+	measures := estimateTokens("", msgs)
+	if measures >= 1000 {
+		t.Fatalf("precondition: the collapsed conversation measures %d tokens, want it much smaller than the count", measures)
+	}
+	if got := loop.inputEstimate(sid, "", msgs); got != measures {
+		t.Errorf("after the collapse the estimate is %d, want the %d the collapsed conversation measures: the count describes rounds that are no longer sent", got, measures)
+	}
+}
+
+// The measurement has to survive a restart, or every session read back
+// from disk takes the fallback above for ever rather than until its next
+// turn.
+func TestTheMeasurementSurvivesBeingReadBackFromTheLog(t *testing.T) {
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	t.Cleanup(store.Close)
+	const sid = "s1"
+	if _, err := store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{}, &config.Config{})
+
+	loop.recordUsage(sid, "m", 32768, 4321, streamUsage{hasUsage: true, inputTokens: 5000, outputTokens: 100})
+
+	evs, err := store.Events(sid, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	latest, have, _ := rehydrateUsage(evs)
+	if !have {
+		t.Fatal("no usage event was written")
+	}
+	if latest.Measured != 4321 {
+		t.Errorf("read back Measured = %d, want 4321: a restored session cannot tell a count that covers everything from one that predates a tool result", latest.Measured)
+	}
+	if latest.InputTokens != 5000 || latest.OutputTokens != 100 {
+		t.Errorf("read back %d in / %d out, want 5000 / 100", latest.InputTokens, latest.OutputTokens)
 	}
 }
 

@@ -349,6 +349,7 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 				OutputTokens: dataInt(ev.Data, "output_tokens"),
 				MaxContext:   dataInt(ev.Data, "max_context"),
 				TPS:          dataFloat(ev.Data, "tps"),
+				Measured:     dataInt(ev.Data, "measured"),
 			}
 			addModelTotals(cum, dataString(ev.Data, "model"), latest.InputTokens, latest.OutputTokens)
 
