@@ -583,10 +583,11 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 	// so raising is all that is left, which is what the arithmetic says.
 	//
 	// Raising is priced against the input the NEXT request will carry,
-	// which is this one's plus the reply that has just been added to it:
-	// inputEstimate returns the provider's own input+output once a turn
-	// has reported usage. Priced at this request's input instead, the
-	// notice told a profile of 3000 on an 8192 window to raise
+	// which is this one's plus the reply that has just been added to it.
+	// s.input is what this request was sized against and the reply hit
+	// its cap, so it produced about s.sent tokens: the sum is what the
+	// conversation now holds. Priced at this request's input instead,
+	// the notice told a profile of 3000 on an 8192 window to raise
 	// max_tokens, when the 3000-token reply joining the history left
 	// room for 2644 and raising made the next reply shorter than the one
 	// that had just been cut off.
