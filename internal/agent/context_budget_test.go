@@ -57,6 +57,41 @@ func TestClampMaxTokensStopsAtTheFloor(t *testing.T) {
 	}
 }
 
+// The provider's count describes the messages it was asked about, and
+// nothing else.
+//
+// A tool result appended after it is invisible to it, and a tool result
+// is capped at a quarter of the window, so one of them can outweigh the
+// whole conversation the count was taken over. A turn that calls
+// several tools sized every request after the first against a number
+// that predated them, and the notice then told somebody to raise
+// max_tokens when raising it bought the floor.
+func TestTheInputEstimateSeesWhatTheCountCouldNot(t *testing.T) {
+	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: 32768}
+	loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+	const sid = "s1"
+	loop.mu.Lock()
+	loop.usage[sid] = sessionUsage{InputTokens: 5000, OutputTokens: 100}
+	loop.mu.Unlock()
+
+	small := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("read the file")}}}
+	if got := loop.inputEstimate(sid, "", small); got != 5100 {
+		t.Errorf("with nothing added since the count, the estimate is %d, want the count plus the reply, 5100", got)
+	}
+
+	// The tool result the count predates.
+	big := append(append([]provider.Message(nil), small...),
+		provider.Message{Role: provider.RoleUser, Content: []provider.Block{
+			provider.ToolResultBlock("t1", strings.Repeat("x", 4*26000), false)}})
+	counted := estimateTokens("", big)
+	if counted < 26000 {
+		t.Fatalf("precondition: the conversation measures %d tokens, want more than the count it predates", counted)
+	}
+	if got := loop.inputEstimate(sid, "", big); got != counted {
+		t.Errorf("a tool result appended after the count left the estimate at %d, want the %d the conversation now measures", got, counted)
+	}
+}
+
 func TestIsContextOverflowRecognizesTheProviders(t *testing.T) {
 	overflow := []string{
 		`openai-compat endpoint returned 400: {"error":{"message":"litellm.ContextWindowExceededError: This model's maximum context length is 131072 tokens. However, you requested 64000 output tokens and your prompt contains at least 67073 input tokens"}}`,
@@ -1000,65 +1035,91 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		windows := []int{0, 2048, 3072, 4096, 8192, 32768, 131072}
 		wants := []int{1, 512, 1023, 1024, 1025, 3000, 4096, 64000}
 		inputs := []int{0, 100, 500, 1000, 5000, 26600, 31000, 32000, 200000}
+		sources := []windowSource{windowFromConfig, windowFromServer, windowGuessed}
 		checked := 0
 		for _, window := range windows {
 			for _, wanted := range wants {
 				for _, input := range inputs {
-					s := requestSizing{wanted: wanted, input: input, window: window,
-						source: windowFromConfig, sent: clampMaxTokens(wanted, window, input)}
-					// What each move would actually send. "Raise
-					// max_tokens" names no number, so the move is
-					// modelled as raising it as far as it needs to go,
-					// and it is priced at the input the next request
-					// carries, which includes the reply just cut off.
-					// /compact alone leaves the profile's figure where
-					// it is.
-					raiseSends := clampMaxTokens(math.MaxInt, window, input+s.sent)
-					compactSends := clampMaxTokens(wanted, window, 0)
-					bothSends := clampMaxTokens(math.MaxInt, window, 0)
-					raiseHelps := raiseSends > s.sent
-					compactHelps := compactSends > s.sent
-					bothHelps := bothSends > s.sent
+					for _, source := range sources {
+						s := requestSizing{wanted: wanted, input: input, window: window,
+							source: source, sent: clampMaxTokens(wanted, window, input)}
+						// What each move would actually send. "Raise
+						// max_tokens" names no number, so the move is
+						// modelled as raising it as far as it needs to go,
+						// and it is priced at the input the next request
+						// carries, which includes the reply just cut off.
+						// /compact alone leaves the profile's figure where
+						// it is.
+						raiseSends := clampMaxTokens(math.MaxInt, window, input+s.sent)
+						compactSends := clampMaxTokens(wanted, window, 0)
+						bothSends := clampMaxTokens(math.MaxInt, window, 0)
+						raiseHelps := raiseSends > s.sent
+						compactHelps := compactSends > s.sent
+						bothHelps := bothSends > s.sent
 
-					got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
-					where := fmt.Sprintf("window %d, max_tokens %d, input %d (sent %d)", window, wanted, input, s.sent)
-					checked++
+						got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
+						where := fmt.Sprintf("window %d, max_tokens %d, input %d (sent %d)", window, wanted, input, s.sent)
+						checked++
 
-					switch {
-					case strings.Contains(got, "cannot give a reply more"):
-						if raiseHelps || compactHelps || bothHelps {
-							t.Errorf("%s: says nothing can give more, but raise=%v compact=%v both=%v:\n%s",
-								where, raiseHelps, compactHelps, bothHelps, got)
+						switch {
+						case strings.Contains(got, "cannot give a reply more"):
+							if raiseHelps || compactHelps || bothHelps {
+								t.Errorf("%s: says nothing can give more, but raise=%v compact=%v both=%v:\n%s",
+									where, raiseHelps, compactHelps, bothHelps, got)
+							}
+						case strings.Contains(got, "/compact makes room now"):
+							if !compactHelps {
+								t.Errorf("%s: prescribes /compact, which sends %d after %d:\n%s", where, compactSends, s.sent, got)
+							}
+						case strings.Contains(got, "needs both /compact and a higher max_tokens"):
+							if !bothHelps {
+								t.Errorf("%s: prescribes both, which sends %d after %d:\n%s", where, bothSends, s.sent, got)
+							}
+							if raiseHelps || compactHelps {
+								t.Errorf("%s: says both are needed, but raise=%v compact=%v alone would do:\n%s",
+									where, raiseHelps, compactHelps, got)
+							}
+						case strings.Contains(got, "for longer answers"):
+							if !raiseHelps {
+								t.Errorf("%s: prescribes raising max_tokens, which sends %d after %d:\n%s", where, raiseSends, s.sent, got)
+							}
+							// When it names a cap, the cap has to be what
+							// raising would actually get.
+							if cap := fmt.Sprintf("gets at most %d", raiseSends); strings.Contains(got, "gets at most") && !strings.Contains(got, cap) {
+								t.Errorf("%s: names a cap that is not what raising gets (%d):\n%s", where, raiseSends, got)
+							}
+						default:
+							t.Errorf("%s: the notice recommends nothing this test recognises:\n%s", where, got)
 						}
-					case strings.Contains(got, "/compact makes room now"):
-						if !compactHelps {
-							t.Errorf("%s: prescribes /compact, which sends %d after %d:\n%s", where, compactSends, s.sent, got)
+
+						// Anything that blames the window has to say where
+						// the figure came from, and offer a larger one when
+						// nobody stated it. A guess from a model name is the
+						// likeliest reason a window looks full when it is
+						// not, and a branch that leaves it out tells
+						// somebody to compact a conversation that fits.
+						if !strings.Contains(got, "window") {
+							continue
 						}
-					case strings.Contains(got, "needs both /compact and a higher max_tokens"):
-						if !bothHelps {
-							t.Errorf("%s: prescribes both, which sends %d after %d:\n%s", where, bothSends, s.sent, got)
+						if !strings.Contains(got, string(source)) {
+							t.Errorf("%s, window %s: blames the window without saying where the figure came from:\n%s", where, source, got)
 						}
-						if raiseHelps || compactHelps {
-							t.Errorf("%s: says both are needed, but raise=%v compact=%v alone would do:\n%s",
-								where, raiseHelps, compactHelps, got)
+						// Offered whenever the figure was not stated,
+						// and also when nothing else helps at all:
+						// there the window is the only lever there is,
+						// so it is worth naming even to the person who
+						// set it.
+						offers := strings.Contains(got, "set context_window") || strings.Contains(got, "raise context_window")
+						nothingHelps := strings.Contains(got, "cannot give a reply more")
+						if want := nothingHelps || source != windowFromConfig; offers != want {
+							t.Errorf("%s, window %s: offering a larger context_window = %v, want %v:\n%s", where, source, offers, want, got)
 						}
-					case strings.Contains(got, "for longer answers"):
-						if !raiseHelps {
-							t.Errorf("%s: prescribes raising max_tokens, which sends %d after %d:\n%s", where, raiseSends, s.sent, got)
-						}
-						// When it names a cap, the cap has to be what
-						// raising would actually get.
-						if cap := fmt.Sprintf("gets at most %d", raiseSends); strings.Contains(got, "gets at most") && !strings.Contains(got, cap) {
-							t.Errorf("%s: names a cap that is not what raising gets (%d):\n%s", where, raiseSends, got)
-						}
-					default:
-						t.Errorf("%s: the notice recommends nothing this test recognises:\n%s", where, got)
 					}
 				}
 			}
 		}
-		if checked != len(windows)*len(wants)*len(inputs) {
-			t.Fatalf("checked %d combinations, want %d", checked, len(windows)*len(wants)*len(inputs))
+		if want := len(windows) * len(wants) * len(inputs) * len(sources); checked != want {
+			t.Fatalf("checked %d combinations, want %d", checked, want)
 		}
 	})
 

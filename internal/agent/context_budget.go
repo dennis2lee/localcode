@@ -200,14 +200,29 @@ func estimateTokens(system string, msgs []provider.Message) int {
 
 // inputEstimate is how many input tokens the next request will cost.
 //
-// The provider's own count from the last exchange, when there is one:
-// it is the same tokenizer that will refuse the next request, so it beats
-// any estimate made here. Falls back to counting characters for the first
-// turn of a session, where there is nothing to go on yet.
+// The larger of two answers, because each is blind where the other sees.
+//
+// The provider's own count from the last exchange is the same tokenizer
+// that will refuse the next request, so where it applies it beats any
+// estimate made here, and counting the reply on top of it covers the one
+// addition every report predates. But it only ever describes the
+// messages it was asked about. Anything appended since is invisible to
+// it, and that is not a rounding error: a tool result is capped at a
+// quarter of the window, so one of them can outweigh the whole
+// conversation the count was taken over. A turn that calls several tools
+// sizes every request after the first against a number that predates
+// them.
+//
+// Counting characters sees all of it and is crude: four characters to a
+// token is about right for English and several times over for Korean or
+// Japanese, where it reads as a floor.
+//
+// So: the count where nothing has been added since, the character sum
+// where something large has. Both err toward a larger input, which
+// shrinks the reply rather than getting the request refused.
 func (l *Loop) inputEstimate(sessionID, system string, msgs []provider.Message) int {
 	if u, ok := l.getUsage(sessionID); ok && u.InputTokens > 0 {
-		// Plus this turn's additions, which the last report predates.
-		return u.InputTokens + u.OutputTokens
+		return max(u.InputTokens+u.OutputTokens, estimateTokens(system, msgs))
 	}
 	return estimateTokens(system, msgs)
 }
@@ -517,6 +532,21 @@ func (l *Loop) sizeRequest(ctx context.Context, sessionID string, run modelRun, 
 // And when the window is the cause, it says where the window figure came
 // from, because a figure guessed from a model name is the likeliest
 // reason a window looks full when it is not.
+// tryALargerWindow is the way out of every branch that blames the
+// window, for a window figure nobody stated.
+//
+// A figure guessed from a model name is the likeliest reason a window
+// looks full when it is not, so a branch that blames the window and
+// does not offer this is telling somebody to compact a conversation
+// that fits. It says nothing when the figure came from config.json,
+// where the person has already answered the question.
+func tryALargerWindow(s requestSizing, name string) string {
+	if s.source == windowFromConfig {
+		return ""
+	}
+	return fmt.Sprintf("; if the model's real window is larger than %d, set context_window on the %q profile in config.json", s.window, name)
+}
+
 func cutOffNotice(s requestSizing, profileName, model string) string {
 	name := profileName
 	if name == "" {
@@ -565,13 +595,9 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 
 	case s.sent < s.wanted:
 		// The window shrank it, and a smaller conversation lets it grow.
-		msg := fmt.Sprintf(
+		return fmt.Sprintf(
 			"the reply was cut off at %d tokens because the context window was nearly full: %s, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. /compact makes room now",
-			s.sent, inUse, s.source)
-		if s.source != windowFromConfig {
-			msg += fmt.Sprintf("; if the model's real window is larger than %d, set context_window on the %q profile in config.json", s.window, name)
-		}
-		return msg
+			s.sent, inUse, s.source) + tryALargerWindow(s, name)
 
 	case raised <= s.sent:
 		// The profile's figure was sent, and the window would give a
@@ -579,18 +605,18 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 		// max_tokens is shrunk back, and /compact makes room the
 		// profile's figure then caps.
 		return hit + fmt.Sprintf(
-			", and the context window had no room for more: %s. A longer answer needs both /compact and a higher max_tokens on that profile in config.json",
-			inUse)
+			", and the context window had no room for more: %s, and the window figure was %s. A longer answer needs both /compact and a higher max_tokens on that profile in config.json",
+			inUse, s.source) + tryALargerWindow(s, name)
 
 	case raised <= minOutputTokens:
 		// Raising helps, as far as the floor. Past that only a smaller
 		// conversation helps, if even an empty one would give more.
 		msg := hit + " — " + raiseIt + fmt.Sprintf(
-			"; the context window is nearly full as well (%s), so a raised max_tokens gets at most %d", inUse, raised)
+			"; the context window is nearly full as well (%s, and the window figure was %s), so a raised max_tokens gets at most %d", inUse, s.source, raised)
 		if both > raised {
 			msg += " until /compact makes room"
 		}
-		return msg
+		return msg + tryALargerWindow(s, name)
 	}
 	return hit + " — " + raiseIt
 }
