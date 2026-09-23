@@ -132,7 +132,14 @@ type Model struct {
 	// wasted work on a long session and a needless chance to disturb the
 	// scroll position.
 	transcriptRev uint64
-	pending       *pendingPermission
+	// renderCache holds what each transcript entry last rendered to, so
+	// an event re-renders the entry it changed instead of the whole
+	// conversation. A pointer, because bubbletea passes a Model by
+	// value: every copy shares the one cache, and since a hit needs the
+	// entry to be equal byte for byte, sharing it cannot make a copy
+	// show another's text. See rendercache.go.
+	renderCache *transcriptRenderCache
+	pending     *pendingPermission
 	// pendingQueue holds the requests behind the one on screen. An
 	// Orchestrate fanout raises up to four at once, and the broker keeps
 	// a question per waiter rather than one flag for the session — a

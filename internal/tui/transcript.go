@@ -3,8 +3,6 @@ package tui
 import (
 	"encoding/json"
 	"strings"
-
-	"charm.land/lipgloss/v2"
 )
 
 // argKeys are the tool arguments worth putting beside a tool's name — the
@@ -248,9 +246,15 @@ func (m *Model) refreshViewport() {
 		}
 	}
 	w := full
+	if m.renderCache == nil {
+		// Lazily, because a Model built as a literal rather than by New
+		// is a shape the tests use and there is no reason to make them
+		// carry this.
+		m.renderCache = &transcriptRenderCache{}
+	}
 	render := func(width int) {
 		m.viewport.SetWidth(width)
-		m.viewport.SetContent(lipgloss.NewStyle().Width(width).Render(renderTranscript(m.transcript, width)))
+		m.viewport.SetContent(m.renderCache.content(m.transcript, width))
 	}
 	atBottom := m.viewport.AtBottom()
 	render(w)
