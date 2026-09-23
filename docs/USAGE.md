@@ -1624,7 +1624,7 @@ The percentage counts the whole prompt the provider read, including the part it 
 
 The next request is sized against what the conversation holds now: the provider's count for the messages it covered, plus an estimate of anything appended since, such as a tool result. Replacing the history (a compaction, `/clear`, a rewind, a debate's collapse) drops the count, and the next request is sized from the estimate until the server reports again.
 
-Automatic compaction runs on the next message after context use exceeds the threshold. The default is 50%. `/auto-compact <percent>` changes it. When enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction.
+Automatic compaction runs on the next message after context use exceeds the threshold. Context use is measured the way the next request is sized: the provider's count for what it covered, plus an estimate of anything appended since, such as the output of a `!` command. With no count, for example after `/rewind`, the estimate decides alone. The window is the one of the profile the next message goes to. The default is 50%. `/auto-compact <percent>` changes it. When enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction.
 
 The context gauge does not include all reserved output space. The following controls handle oversized requests:
 

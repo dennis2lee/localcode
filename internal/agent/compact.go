@@ -86,23 +86,44 @@ func cutSummary(summary string) string {
 const compactionPrompt = "Summarize our conversation so far concisely, preserving important facts, decisions, file paths, and outstanding tasks needed for continuity. When the summary restates something that came from tool output or other external content, say so (for example: per the build output, according to the fetched page), so the record keeps those sources distinct from the user's own words. Output ONLY the summary, with no preamble."
 
 // maybeAutoCompact summarizes sessionID's history in place when
-// AutoCompactEnabled is on and the last recorded usage crossed
-// the threshold — freeing up context space before the next
-// user turn is appended. Best-effort: any failure (including the
+// AutoCompactEnabled is on and the conversation the next request would
+// carry has crossed the threshold, freeing up context space before the
+// next user turn is appended. Best-effort: any failure (including the
 // summarization call itself erroring) just leaves the full history intact
 // rather than blocking the real turn.
 // It reports whether it actually compacted, which is what the caller
 // needs to count compactions for the turn's trace record.
+//
+// Measured the way the next request is sized, by inputEstimate: the
+// provider's count for what it covered, and an estimate of only what was
+// appended after it. It used to be the count alone, which describes the
+// messages it was taken over and nothing since: the output of a "!"
+// command, a delegated turn's answer, the tool results of a turn whose
+// follow-up request failed or was cancelled. Any of those can be a
+// quarter of the window, and a conversation the count put at 3% went to
+// the provider at 65% with the threshold at 50. Taking the larger of the
+// count and a character estimate of everything instead would have made
+// it eager on Korean and Japanese, where the estimate is a floor on
+// appended text but the count is exact for what it saw, and a count is
+// what decides wherever there is one.
+//
+// With no count at all, after a rewind or a restart from a log that kept
+// none, the estimate decides alone: it reads low rather than high for
+// text, so it fires no earlier than the truth would.
+//
+// Against the window of the profile the next request goes to, not the
+// one the count was recorded with: a /model switch to a smaller model
+// left the threshold measured against the larger one.
 func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provider.Provider, profile config.Profile, systemPrompt string, carried []provider.SystemBlock) bool {
 	if !l.AutoCompactEnabled() {
 		return false
 	}
-	u, ok := l.getUsage(sessionID)
-	if !ok || u.MaxContext <= 0 {
+	window := l.contextWindow(ctx, profile)
+	if window <= 0 {
 		return false
 	}
-	percent := float64(u.promptTokens()+u.OutputTokens) / float64(u.MaxContext) * 100
-	if percent < float64(l.CompactPercent()) {
+	used := l.inputEstimate(sessionID, systemPrompt, sendableHistory(l.history(sessionID)))
+	if float64(used)/float64(window)*100 < float64(l.CompactPercent()) {
 		return false
 	}
 	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic) == nil

@@ -533,9 +533,11 @@ func TestAnAutomaticCompactionWritesOneLifecycleRecord(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	sendOne(t, loop, sid, "general-purpose")
-	// Past the threshold, so the next turn compacts on its own.
+	// Past the threshold, so the next turn compacts on its own. Measured
+	// against the window the next request goes to, which is the profile's.
+	window := loop.contextWindow(context.Background(), loop.Config.Profiles["strong"])
 	loop.mu.Lock()
-	loop.usage[sid] = sessionUsage{InputTokens: 99_000, MaxContext: 100_000}
+	loop.usage[sid] = sessionUsage{InputTokens: window * 99 / 100, MaxContext: window}
 	loop.mu.Unlock()
 	sendOne(t, loop, sid, "general-purpose")
 
