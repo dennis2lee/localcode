@@ -44,23 +44,25 @@ digest="$(
 			printf '%s\n' "$f"
 			if [ -L "$f" ]; then
 				printf 'symlink %s\n' "$(readlink "$f")"
-			elif [ -d "$f" ]; then
-				# git names a directory here only when it is a
-				# repository of its own: a submodule, or a worktree
-				# somebody put inside the checkout. Nothing below it is
-				# listed, so hashing the entry would hash nothing and
-				# the digest would stop responding to every file under
-				# it. Marked, and refused after the walk.
-				printf 'unhashable-directory %s\n' "$f"
 			elif [ ! -e "$f" ]; then
 				# Tracked and deleted from the working tree.
 				printf 'absent\n'
-			else
+			elif [ -f "$f" ] && sum="$(shasum -a 256 < "$f" 2>/dev/null)"; then
 				# The executable bit is part of the build for the
-				# scripts/ and build/ directories.
+				# scripts/ and build/ directories. Mode and hash are
+				# printed by one printf, so a failure cannot leave half
+				# a line for the next path to be joined onto.
 				if [ -x "$f" ]; then mode=x; else mode=-; fi
-				printf '%s ' "$mode"
-				shasum -a 256 < "$f" | cut -d' ' -f1
+				printf '%s %s\n' "$mode" "${sum%% *}"
+			else
+				# Everything that is not a readable regular file. A
+				# directory, which is how git names a repository inside
+				# the checkout and whose contents are not listed at all.
+				# A file this user cannot read. A pipe or a socket,
+				# which would block or hash nothing. Each would leave
+				# the digest unable to see part of the tree, so each is
+				# marked and refused after the walk.
+				printf 'unhashable %s\n' "$f"
 			fi
 		done
 )"
@@ -71,11 +73,11 @@ count="$(printf '%s\n' "$digest" | grep -c '^' || true)"
 # hash stays plausible, and the preflight believes it. Measured before
 # this check existed: a nested repository in the checkout made the
 # identity blind to every file under it, including new ones.
-unhashable="$(printf '%s\n' "$digest" | grep '^unhashable-directory ' || true)"
+unhashable="$(printf '%s\n' "$digest" | grep '^unhashable ' || true)"
 if [ -n "$unhashable" ]; then
-	echo "tree-id: these are directories, and nothing under them can be hashed:" >&2
-	printf '%s\n' "$unhashable" | sed 's/^unhashable-directory /  /' >&2
-	echo "tree-id: ignore them in .gitignore, or take them out of the checkout. A digest that skipped them would not identify this tree." >&2
+	echo "tree-id: these could not be read as files, so nothing in them was hashed:" >&2
+	printf '%s\n' "$unhashable" | sed 's/^unhashable /  /' >&2
+	echo "tree-id: ignore them in .gitignore, make them readable, or take them out of the checkout. A digest that skipped them would not identify this tree." >&2
 	exit 1
 fi
 

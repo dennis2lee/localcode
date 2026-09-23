@@ -49,8 +49,11 @@ func treeIDRepo(t *testing.T) string {
 	run("git", "config", "user.name", "t")
 
 	// Over the hundred-line floor the script refuses to go below, so the
-	// failure being tested is the silent one and not that guard.
-	for i := 0; i < 120; i++ {
+	// failure being tested is the silent one and not that guard. Each
+	// file is two lines of digest, and the script spawns a shasum per
+	// file, so this is also what these tests cost: sixty is comfortably
+	// over the floor and half the runtime of a rounder number.
+	for i := 0; i < 60; i++ {
 		name := filepath.Join(dir, "f"+strings.Repeat("0", 3-len(itoa(i)))+itoa(i)+".txt")
 		if err := os.WriteFile(name, []byte("file "+itoa(i)+"\n"), 0o644); err != nil {
 			t.Fatalf("write: %v", err)
@@ -143,6 +146,79 @@ func TestTheTreeIdentityRefusesWhatItCannotSeeInto(t *testing.T) {
 	if _, stderr, ok := treeID(t, dir); !ok {
 		t.Errorf("the script still refuses after the directory was ignored:\n%s", stderr)
 	}
+}
+
+// A directory was one shape. A file this user cannot read is another,
+// and it corrupted the digest the same silent way: the hash failed, the
+// mode was already printed without its hash, and the next path was
+// joined onto that half-written line.
+func TestTheTreeIdentityRefusesAFileItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, which can read a file with no permissions")
+	}
+	dir := treeIDRepo(t)
+	if _, _, ok := treeID(t, dir); !ok {
+		t.Fatal("precondition: the script failed on an ordinary tree")
+	}
+
+	locked := filepath.Join(dir, "locked.txt")
+	if err := os.WriteFile(locked, []byte("secret\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o644) })
+
+	out, stderr, ok := treeID(t, dir)
+	if ok {
+		t.Errorf("the script printed an identity (%s) for a tree holding a file it could not read", out)
+	}
+	if !strings.Contains(stderr, "locked.txt") {
+		t.Errorf("the refusal does not name the file it could not read:\n%s", stderr)
+	}
+}
+
+// The things the identity must still notice, so a refusal that was made
+// too eager would be caught here rather than by a release that never
+// re-ran the gate.
+func TestTheTreeIdentityStillSeesOrdinaryChanges(t *testing.T) {
+	dir := treeIDRepo(t)
+	seen := map[string]string{}
+	take := func(what string) string {
+		t.Helper()
+		out, stderr, ok := treeID(t, dir)
+		if !ok {
+			t.Fatalf("%s: the script refused:\n%s", what, stderr)
+		}
+		if prev, dup := seen[out]; dup {
+			t.Errorf("%s gives the same identity as %s", what, prev)
+		}
+		seen[out] = what
+		return out
+	}
+
+	take("the tree as committed")
+	if err := os.WriteFile(filepath.Join(dir, "f002.txt"), []byte("rewritten\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	take("a file rewritten")
+	if err := os.WriteFile(filepath.Join(dir, "brand-new.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	take("an untracked file added")
+	if err := os.Chmod(filepath.Join(dir, "f003.txt"), 0o755); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	take("a file made executable")
+	if err := os.Symlink("f004.txt", filepath.Join(dir, "alias.txt")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	take("a symlink added")
+	if err := os.Remove(filepath.Join(dir, "f005.txt")); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	take("a tracked file deleted")
 }
 
 // The harness's own worktrees are ignored by the committed .gitignore and
