@@ -661,3 +661,23 @@ func TestTheSizingLeavesOutReasoningAsTheMeasurementDoes(t *testing.T) {
 		t.Errorf("inputEstimate = %d with nothing appended since the count, want the count and its reply, 3,100", got)
 	}
 }
+
+// The measure's own estimate of what was appended since the count leaves
+// reasoning out, as the measurement it is compared with does: with
+// nothing appended, the measure is the count and its reply, however much
+// reasoning the live history keeps.
+func TestTheCompactionMeasureLeavesOutReasoning(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("plan the change")}},
+		{Role: provider.RoleAssistant, Content: []provider.Block{
+			{Type: provider.BlockThinking, Text: strings.Repeat("r", 40000), Signature: "sig"},
+			provider.TextBlock("here is the plan"),
+		}},
+	}
+	loop, _ := autoCompactLoop(t, 32768, msgs, 3000, 100)
+	setTestUsage(loop, "s1", sessionUsage{InputTokens: 3000, OutputTokens: 100, MaxContext: 32768,
+		Measured: measure(autoCompactSystem, msgs).tokens})
+	if got := loop.compactionMeasure("s1", autoCompactSystem, msgs); got != 3100 {
+		t.Errorf("compactionMeasure = %d with nothing appended since the count, want the count and its reply, 3,100", got)
+	}
+}

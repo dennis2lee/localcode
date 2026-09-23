@@ -846,13 +846,24 @@ func (l *Loop) takeInjected(sessionID string) []provider.Block {
 		// says the same word for both; the tag is what tells them
 		// apart, and the preface is localcode's own framing rather than
 		// the person's, so only what they typed is inside the span.
-		body := injectedPreface + text
-		out = append(out, provider.Block{
-			Type: provider.BlockText, Text: body, Source: "injected.user",
-			Sources: []provider.BlockSource{{
-				ID: "injected.user", From: len(injectedPreface), To: len(body),
-			}},
-		})
+		out = append(out, injectedUserBlock(text))
+	}
+}
+
+// injectedUserBlock is what the person typed while a turn was running,
+// as the model is handed it: localcode's preface, then their words, the
+// span of their words tagged as theirs. Built here for the live turn and
+// for rehydrateHistory, so a restored session carries the same tag: a
+// rebuilt bare text block made the person's instruction read as
+// unattributed text inside tool output, and dropped the line a compaction
+// writes about it.
+func injectedUserBlock(text string) provider.Block {
+	body := injectedPreface + text
+	return provider.Block{
+		Type: provider.BlockText, Text: body, Source: "injected.user",
+		Sources: []provider.BlockSource{{
+			ID: "injected.user", From: len(injectedPreface), To: len(body),
+		}},
 	}
 }
 

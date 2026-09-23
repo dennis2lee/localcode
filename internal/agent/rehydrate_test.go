@@ -571,3 +571,46 @@ func TestRehydrateHistoryDropsACallAStreamDiedOn(t *testing.T) {
 		t.Errorf("a recovered error dropped a call that was still owed its result:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// An instruction typed mid-turn comes back tagged as the person's, in
+// either order the log can hold it: after the iteration's last tool
+// result (it joins that message) or before it (it waits for the message
+// to be built). A bare text block made it read as unattributed text
+// inside tool output after a restart.
+func TestRehydrateHistoryTagsAnInjectedInstruction(t *testing.T) {
+	for name, evs := range map[string][]events.Event{
+		"after the last result": {
+			ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+			ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "read"}),
+			ev(events.TypeMessagePartEnd, map[string]any{"text": "reading"}),
+			ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t1", "input": "{}", "content": "ok"}),
+			ev(events.TypeUserMessage, map[string]any{"text": "use tabs", "injected": true, "source": "injected.user"}),
+		},
+		"before the last result": {
+			ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+			ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "read"}),
+			ev(events.TypeToolStart, map[string]any{"tool_use_id": "t2", "name": "read"}),
+			ev(events.TypeMessagePartEnd, map[string]any{"text": "reading"}),
+			ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t1", "input": "{}", "content": "ok"}),
+			ev(events.TypeUserMessage, map[string]any{"text": "use tabs", "injected": true, "source": "injected.user"}),
+			ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t2", "input": "{}", "content": "ok"}),
+		},
+	} {
+		hist := rehydrateHistory(evs)
+		want := injectedUserBlock("use tabs")
+		found := false
+		for _, m := range hist {
+			for _, b := range m.Content {
+				if b.Text == want.Text {
+					found = true
+					if b.Source != want.Source || len(b.Sources) != 1 || b.Sources[0] != want.Sources[0] {
+						t.Errorf("%s: the rebuilt instruction is tagged %q %v, want %q %v", name, b.Source, b.Sources, want.Source, want.Sources)
+					}
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: the instruction is not in the rebuilt history", name)
+		}
+	}
+}

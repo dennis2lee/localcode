@@ -244,3 +244,18 @@ func TestARunCountsABackgroundSubAgent(t *testing.T) {
 		t.Errorf("usage counts %d calls, the model was asked %d times: %v", got.Usage["calls"], n, got.Usage)
 	}
 }
+
+// Through a daemon, a background sub-agent runs on after the turn ends,
+// and the run waits for it as one in this process does, or its calls
+// are missing from a usage figure that says it is the whole run.
+func TestARunThroughADaemonWaitsForItsBackgroundSubAgents(t *testing.T) {
+	m := &runModel{tool: "TaskBackground"}
+	runModelHome(t, m.server(t).URL)
+	got, err := throughATestDaemon(t, "please delegate this")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if n := m.asked(); got.Usage["calls"] != n || n != 3 {
+		t.Errorf("usage counts %d calls, the model was asked %d times (want 3): %v", got.Usage["calls"], n, got.Usage)
+	}
+}

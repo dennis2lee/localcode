@@ -146,7 +146,7 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 		// has to be put back there — not as a user message of its own,
 		// which would leave two user messages in a row.
 		for _, text := range pendingInjected {
-			resultBlocks = append(resultBlocks, provider.TextBlock(injectedPreface+text))
+			resultBlocks = append(resultBlocks, injectedUserBlock(text))
 		}
 		if len(resultBlocks) > 0 {
 			out = append(out, provider.Message{Role: provider.RoleUser, Content: resultBlocks})
@@ -275,9 +275,8 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			// the text goes onto the end of it. pendingInjected is the
 			// fallback for the other order.
 			if isTrue(ev.Data["injected"]) {
-				text := injectedPreface + dataString(ev.Data, "text")
 				if n := len(out); n > 0 && out[n-1].Role == provider.RoleUser && len(toolsDone) == 0 {
-					out[n-1].Content = append(out[n-1].Content, provider.TextBlock(text))
+					out[n-1].Content = append(out[n-1].Content, injectedUserBlock(dataString(ev.Data, "text")))
 				} else {
 					pendingInjected = append(pendingInjected, dataString(ev.Data, "text"))
 				}

@@ -717,9 +717,22 @@ func throughDaemon(ctx context.Context, o runOptions, url, prompt string, out io
 	// session's first event, so the first turn end on it is this turn's.
 	accepted, ended := false, false
 	var endErr error
+	// Background sub-agents the turn started and that have not finished.
+	// The daemon ends the turn without waiting for them, and the run waits
+	// as one in this process does: the report's usage counts what they
+	// spend, and read at the turn's end it left out a sub-agent still
+	// running.
+	pending := map[string]bool{}
+	announced := false
 	for {
 		if accepted && ended {
-			return w.finish(sess.ID, endErr)
+			if len(pending) == 0 {
+				return w.finish(sess.ID, endErr)
+			}
+			if !announced {
+				fmt.Fprintf(os.Stderr, "waiting for %d background sub-agent(s) to finish\n", len(pending))
+				announced = true
+			}
 		}
 		select {
 		case ev, ok := <-stream:
@@ -735,6 +748,17 @@ func throughDaemon(ctx context.Context, o runOptions, url, prompt string, out io
 				ended, endErr = true, w.turnFailure()
 			case events.TypeTurnCancelled:
 				ended, endErr = true, errors.New("the turn was cancelled")
+			case events.TypeTaskSpawned:
+				if id, _ := ev.Data["task_id"].(string); id != "" {
+					pending[id] = true
+				}
+			case events.TypeTaskStatus:
+				if id, _ := ev.Data["task_id"].(string); id != "" {
+					switch status, _ := ev.Data["status"].(string); status {
+					case "completed", "failed", "cancelled", "deleted":
+						delete(pending, id)
+					}
+				}
 			}
 		case err := <-done:
 			done = nil
