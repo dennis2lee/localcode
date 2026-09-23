@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"localcode/internal/config"
+	"localcode/internal/events"
 	"localcode/internal/modelinfo"
 	"localcode/internal/provider"
 	"localcode/internal/session"
@@ -223,6 +224,72 @@ func TestACachedPrefixStillFillsTheWindow(t *testing.T) {
 	// The billed figure stays what was billed at the full rate.
 	if back.InputTokens != 12 {
 		t.Errorf("read back InputTokens = %d, want the 12 that were counted fresh", back.InputTokens)
+	}
+	// And the percent both clients draw their gauge from is of the whole
+	// prompt, not the suffix: (12+4096+128+9)/32768.
+	var percent float64
+	for _, e := range evs {
+		if e.Type == events.TypeUsage {
+			percent, _ = e.Data["percent"].(float64)
+		}
+	}
+	if want := float64(12+4096+128+9) / 32768 * 100; percent < want-0.01 || percent > want+0.01 {
+		t.Errorf("the usage event says %.2f%% of the window is in use, want %.2f%%: the gauge would read near empty on a cached session", percent, want)
+	}
+}
+
+// countingProvider answers nothing and remembers that it was asked, so a
+// test can tell "declined to compact" from "tried and failed".
+type countingProvider struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *countingProvider) Chat(context.Context, provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	return nil, errors.New("not today")
+}
+
+func (p *countingProvider) asked() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+// Auto-compaction decides from the same count, and a cached prefix used
+// to be invisible to it: a session that was 90% cached read as under the
+// threshold and never compacted, which is the one moment compaction is
+// for.
+func TestAutoCompactionCountsTheCachedPrefix(t *testing.T) {
+	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: 32768}
+	loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+	loop.SetAutoCompactEnabled(true)
+	loop.SetCompactPercent(50)
+	const sid = "s1"
+	// Something to compact, put in place before the count: replacing the
+	// history drops the count, which is the right thing everywhere but
+	// in a test that is about to set one by hand.
+	loop.setHistory(sid, []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("a long conversation")}},
+		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock("that went on")}},
+	})
+
+	// Under the threshold whichever way it is counted: not asked.
+	quiet := &countingProvider{}
+	setTestUsage(loop, sid, sessionUsage{InputTokens: 1_000, CachedInputTokens: 2_000, OutputTokens: 100, MaxContext: 32768})
+	loop.maybeAutoCompact(context.Background(), sid, quiet, profile, "", nil)
+	if quiet.asked() != 0 {
+		t.Errorf("compaction was attempted at %d%% of the window", (1000+2000+100)*100/32768)
+	}
+
+	// Over the threshold only once the cached prefix is counted: asked.
+	busy := &countingProvider{}
+	setTestUsage(loop, sid, sessionUsage{InputTokens: 1_000, CachedInputTokens: 20_000, OutputTokens: 100, MaxContext: 32768})
+	loop.maybeAutoCompact(context.Background(), sid, busy, profile, "", nil)
+	if busy.asked() == 0 {
+		t.Errorf("a window %d%% full was not compacted: the cached prefix was not counted", (1000+20000+100)*100/32768)
 	}
 }
 

@@ -354,11 +354,19 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			}
 			addModelTotals(cum, dataString(ev.Data, "model"), latest.InputTokens, latest.OutputTokens)
 
-		case events.TypeCompacted, events.TypeCleared, events.TypeRewound:
+		case events.TypeCompacted, events.TypeCleared, events.TypeRewound, events.TypeDebateEnded:
 			// setHistory drops the count live on each of these, so the
 			// snapshot shouldn't carry forward past this point — but the
 			// cumulative totals are never cleared by any of them, and the
 			// compaction call itself is billed too (if it reported usage).
+			//
+			// A debate's end is in the list because the history pass
+			// above collapses the rounds at that event, and the last
+			// count was taken over the rounds. Kept, it would describe a
+			// conversation several times the size of the one restored,
+			// and the next request would be sized against it. Live, the
+			// collapse goes through setHistory and the count goes with
+			// it; a restart has to reach the same state.
 			//
 			// This is why the rewind filter is not applied to the usage
 			// pass. The snapshot is what the context gauge shows and it is

@@ -256,12 +256,32 @@ func TestRehydrateUsageCompactionClearsSnapshotButKeepsCumulative(t *testing.T) 
 	})
 
 	if haveUsage {
-		t.Error("expected haveUsage = false after a compaction event (matches live clearUsage behavior)")
+		t.Error("expected haveUsage = false after a compaction event (matches setHistory dropping the count live)")
 	}
 	_ = latest
 	mt := cum["m1"]
 	if mt.InputTokens != 170500 || mt.OutputTokens != 10050 || mt.Calls != 2 {
 		t.Errorf("cum[m1] = %+v, want the pre-compaction call plus the compaction call's own usage summed in", mt)
+	}
+}
+
+// A debate's rounds are collapsed to a summary when it ends, live through
+// setHistory, which drops the count with them. The history pass here
+// collapses them too, and the usage pass has to drop the count the same
+// way, or a session restored after a debate carries a count taken over
+// rounds that are no longer there and sizes its next request against a
+// conversation several times the size of the one it has.
+func TestRehydrateUsageDropsTheCountADebateCollapseInvalidates(t *testing.T) {
+	latest, haveUsage, cum := rehydrateUsage([]events.Event{
+		ev(events.TypeDebateStarted, map[string]any{"task": "decide"}),
+		ev(events.TypeUsage, map[string]any{"input_tokens": 12900, "output_tokens": 100, "max_context": 16384, "model": "m1", "measured": 12000}),
+		ev(events.TypeDebateEnded, map[string]any{"rounds": 3}),
+	})
+	if haveUsage {
+		t.Errorf("a count taken over the debate rounds survived their collapse: %+v", latest)
+	}
+	if cum["m1"].InputTokens != 12900 {
+		t.Errorf("cum[m1] = %+v, want the rounds still billed", cum["m1"])
 	}
 }
 
