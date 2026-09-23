@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"localcode/internal/events"
 	"localcode/internal/provider"
@@ -283,5 +284,103 @@ func TestATrimThatReplacesTheHistorySaysSo(t *testing.T) {
 		t.Errorf("the daemon replaced the history (forceFit) and dropped its count, but nothing after the last "+
 			"usage event (percent %v) tells a client to let go of it; events since: %v; history now: %q",
 			all[lastUsage].Data["percent"], after, joinMessages(loop.history(sid)))
+	}
+}
+
+// Stop pressed while one reviewer is still reading does not hide the
+// other reviewer's own failure: it failed before Stop, for its own reason,
+// and the record says so. The one Stop cancelled says nothing.
+func TestStopDoesNotHideAReviewersOwnFailure(t *testing.T) {
+	arrived := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := dbgRead(r)
+		switch req.model {
+		case thirdModel:
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"this reviewer's model is not available"}}`)
+		case reviewModel:
+			select {
+			case arrived <- struct{}{}:
+			default:
+			}
+			<-r.Context().Done()
+		default:
+			dbgSend(w, textChunks("first attempt")...)
+		}
+	}))
+	defer srv.Close()
+	loop := newDebateLoop(t, srv.URL)
+	sid := startDebateSession(t, loop)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Stop once the other reviewer's turn has failed on its own: waited
+	// for on the record, not on a clock.
+	tomFailed := func() bool {
+		for _, s := range loop.Store.AllSessions() {
+			if s.Agent != "tom" {
+				continue
+			}
+			evs, _ := loop.Store.Events(s.ID, 0)
+			for _, e := range evs {
+				if e.Type == events.TypeError {
+					if r, _ := e.Data["recovered"].(bool); !r {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	go func() {
+		<-arrived
+		deadline := time.Now().Add(10 * time.Second)
+		for !tomFailed() && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		cancel()
+	}()
+	_ = loop.SendMessage(ctx, sid, "boy", "/debate girl,tom 2 write a sum function")
+	var errs []string
+	for _, e := range debateEvents(t, loop, sid, events.TypeError) {
+		errs = append(errs, dataString(e.Data, "error"))
+	}
+	var tom, girl bool
+	for _, e := range errs {
+		if strings.Contains(e, "the tom agent could not review") {
+			tom = true
+		}
+		if strings.Contains(e, "the girl agent could not review") {
+			girl = true
+		}
+	}
+	if !tom {
+		t.Errorf("the reviewer that failed on its own before Stop left no record: %q", errs)
+	}
+	if girl {
+		t.Errorf("the reviewer Stop cancelled is reported as one that could not review: %q", errs)
+	}
+}
+
+// The author's own turn failing ends the debate as failed, with a note
+// that says it was the author's turn, not that no review came back.
+func TestAnAuthorsFailedTurnSaysWhoseItWas(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"message":"this model is not available"}}`)
+	}))
+	defer srv.Close()
+	loop := newDebateLoop(t, srv.URL)
+	sid := startDebateSession(t, loop)
+	_ = loop.SendMessage(context.Background(), sid, "boy", "/debate girl 2 write a sum function")
+	ended := debateEvents(t, loop, sid, events.TypeDebateEnded)
+	if len(ended) != 1 {
+		t.Fatalf("%d debate.ended events", len(ended))
+	}
+	if reason := dataString(ended[0].Data, "reason"); reason != "failed" {
+		t.Errorf("reason = %q, want failed", reason)
+	}
+	note := dataString(ended[0].Data, "note")
+	if !strings.Contains(note, "boy's turn failed") || strings.Contains(note, "no review came back") {
+		t.Errorf("note = %q, want it to say the author's turn failed", note)
 	}
 }

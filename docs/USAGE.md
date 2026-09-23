@@ -2509,6 +2509,7 @@ Debate outcomes:
 | `rounds` | The budget ran out with no approval. The work stands; read it before trusting it. |
 | `stalled` | Two consecutive rounds without an author tool call. |
 | `stopped` | You pressed Stop. What was done is kept. |
+| `failed` | A model call failed without Stop being pressed: the author's turn, or every reviewer's review in a round. The note says which. What was done is kept. |
 
 At debate completion, model context replaces debate instructions, reviews, and intermediate answers with the task and final work state. The closing message reports this change. All rounds remain visible in the conversation and event log. Expired debate instructions do not apply to the next message.
 
