@@ -92,6 +92,7 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 		{method: "POST", path: "/api/workspace", body: `{"path":"` + jsonPath(work) + `","session_id":"` + sid + `"}`, ok: only(200)},
 
 		{method: "POST", path: "/api/settings/keep-going", body: `{"enabled":false}`, ok: only(200, 204)},
+		{method: "POST", path: "/api/settings/fold-thinking", body: `{"enabled":false}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/settings/repeat-limit", body: `{"limit":0}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/settings/smart-agent", body: `{"enabled":false}`, ok: only(200, 204)},
 		{method: "POST", path: "/api/settings/orchestrate", body: `{"enabled":false}`, ok: only(200, 204)},

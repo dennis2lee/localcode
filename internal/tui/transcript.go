@@ -46,12 +46,13 @@ func oneLine(s string) string {
 type entryKind int
 
 const (
-	entryUser    entryKind = iota // "You: <prompt>"
-	entryModel                    // streamed model output, unstyled
-	entryTool                     // a server-driven status line ([delegated to x], [cancelled])
-	entryLocal                    // a client-only reply (/help, /version, a queued-prompt notice, ...)
-	entryPending                  // a prompt drawn on Enter, until the daemon confirms it
-	entrySent                     // a message handed to a turn already running
+	entryUser     entryKind = iota // "You: <prompt>"
+	entryModel                     // streamed model output, unstyled
+	entryTool                      // a server-driven status line ([delegated to x], [cancelled])
+	entryLocal                     // a client-only reply (/help, /version, a queued-prompt notice, ...)
+	entryPending                   // a prompt drawn on Enter, until the daemon confirms it
+	entrySent                      // a message handed to a turn already running
+	entryThinking                  // a muse model's reasoning, folded once the answer starts; see thinking.go
 )
 
 // transcriptEntry is one unit of transcript content. Plain data — no
@@ -61,6 +62,13 @@ const (
 type transcriptEntry struct {
 	kind entryKind
 	text string
+	// The rest is entryThinking's alone: its header line, whether it is
+	// still streaming, and whether its body shows once it has folded.
+	// Plain comparable fields, so the render cache still tells an entry
+	// that changed from one that did not by comparing the two.
+	note string
+	live bool
+	open bool
 }
 
 // appendEntry is the single mutation point for the transcript. Every write

@@ -13,6 +13,7 @@ import {
   orchestrateCheckbox, orchestrateNoteEl, orchestrateWarnEl,
   modelInvocableCheckbox, modelInvocableNoteEl, modelInvocableWarnEl,
   keepGoingCheckbox, keepGoingWarnEl,
+  foldThinkingCheckbox, foldThinkingNoteEl, foldThinkingWarnEl, museNoteEl,
   repeatLimitCheckbox, repeatLimitInput, repeatLimitWarnEl,
   updateCheckBtn, updateInstallBtn, updateNoteEl,
 } from './dom.js';
@@ -69,13 +70,77 @@ export function openSettings() {
   renderOrchestrate();
   renderModelInvocable();
   renderKeepGoing();
+  renderMuseNote();
+  renderFoldThinking();
   settings.open();
+}
+
+// The Muse tab.
+//
+// Its note answers the question somebody on another model opens it with:
+// whether any of it is theirs. The daemon reports which profiles run a
+// muse model, by the same rule the switches are applied with.
+function renderMuseNote() {
+  const names = app.museProfiles || [];
+  museNoteEl.textContent = names.length
+    ? `These switches apply only to models whose id contains "muse". Profiles on one: ${names.join(', ')}.`
+    : 'These switches apply only to models whose id contains "muse", and no profile in this config runs one, so they change nothing until one does.';
+}
+
+// The reasoning block.
+//
+// The note says what the switch does in the state it is in, and says so
+// when show_thinking is hiding reasoning altogether: the box can be on
+// and still change nothing on screen, and that should be read here
+// rather than worked out from an absence.
+//
+// The warning is kept here rather than passed in, so the redraw that a
+// settings.changed brings (which arrives for this very change) does not
+// erase a save that failed.
+let foldThinkingWarning = '';
+
+function renderFoldThinking() {
+  foldThinkingCheckbox.checked = !!app.foldThinking;
+  foldThinkingWarnEl.textContent = foldThinkingWarning;
+  foldThinkingWarnEl.hidden = !foldThinkingWarning;
+  if (!app.showThinking) {
+    foldThinkingNoteEl.textContent = 'Reasoning is not drawn at all while show_thinking is off. /thinking on draws it again.';
+    return;
+  }
+  foldThinkingNoteEl.textContent = app.foldThinking
+    ? 'On. Click the folded line to read the reasoning again; Ctrl+O does the same in the TUI.'
+    : 'Off. The reasoning is drawn as it arrives, with no label, and stays open above the answer.';
+}
+
+export function refreshFoldThinkingIfOpen() {
+  if (settings.isOpen) renderFoldThinking();
+}
+
+// The daemon answers with what it did in two parts, as it does for
+// Smart Agent: "applied" is the state the box has to show, "persisted"
+// only whether config.json was written.
+async function toggleFoldThinking() {
+  const enabled = foldThinkingCheckbox.checked;
+  foldThinkingCheckbox.disabled = true;
+  try {
+    const res = await apiClient.setFoldThinking(enabled);
+    app.foldThinking = res && 'fold_thinking' in res ? !!res.fold_thinking : enabled;
+    foldThinkingWarning = res && res.persisted === false
+      ? `Applied, but not saved to config.json, so it lasts only until the daemon restarts: ${res.error || 'unknown error'}`
+      : '';
+  } catch (err) {
+    // Nothing was applied. The box goes back to what the daemon has.
+    foldThinkingWarning = `Not changed: ${err}`;
+  } finally {
+    foldThinkingCheckbox.disabled = false;
+    renderFoldThinking();
+  }
 }
 
 // Keep going.
 //
-// The label in index.html carries the scope (muse models only); this
-// only moves the box and reports a save that did not stick.
+// The tab carries the scope (muse models only); this only moves the box
+// and reports a save that did not stick.
 function renderKeepGoing(warning) {
   keepGoingCheckbox.checked = !!app.keepGoing;
   keepGoingWarnEl.textContent = warning || '';
@@ -453,6 +518,7 @@ export function initSettings() {
   orchestrateCheckbox.addEventListener('change', toggleOrchestrate);
   modelInvocableCheckbox.addEventListener('change', toggleModelInvocable);
   keepGoingCheckbox.addEventListener('change', toggleKeepGoing);
+  foldThinkingCheckbox.addEventListener('change', toggleFoldThinking);
   repeatLimitCheckbox.addEventListener('change', applyRepeatLimit);
   repeatLimitInput.addEventListener('change', applyRepeatLimit);
   updateCheckBtn.addEventListener('click', checkForUpdate);

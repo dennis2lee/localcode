@@ -308,6 +308,15 @@ async function load(opts = {}) {
     },
     setTimeout,
     clearTimeout,
+    // Unreferenced, so an interval a page leaves running (a reasoning
+    // block's clock in a test that ends mid-thought) does not keep the
+    // test process alive after its last test.
+    setInterval: (...args) => {
+      const t = setInterval(...args);
+      if (t && typeof t.unref === 'function') t.unref();
+      return t;
+    },
+    clearInterval,
     URLSearchParams,
     queueMicrotask,
     AbortController,
@@ -475,6 +484,9 @@ async function load(opts = {}) {
       get skipPermissions() { return internals.app.skipPermissions; }, set skipPermissions(v) { internals.app.skipPermissions = v; },
       get smartAgent() { return internals.app.smartAgent; }, set smartAgent(v) { internals.app.smartAgent = v; },
       get keepGoing() { return internals.app.keepGoing; }, set keepGoing(v) { internals.app.keepGoing = v; },
+      get foldThinking() { return internals.app.foldThinking; }, set foldThinking(v) { internals.app.foldThinking = v; },
+      get museProfiles() { return internals.app.museProfiles; }, set museProfiles(v) { internals.app.museProfiles = v; },
+      get showThinking() { return internals.app.showThinking; }, set showThinking(v) { internals.app.showThinking = v; },
       get permissionRules() { return internals.app.permissionRules; }, set permissionRules(v) { internals.app.permissionRules = v; },
       get sessionPermissions() { return internals.app.sessionPermissions; }, set sessionPermissions(v) { internals.app.sessionPermissions = v; },
       get rememberedOutside() { return internals.app.rememberedOutside; }, set rememberedOutside(v) { internals.app.rememberedOutside = v; },

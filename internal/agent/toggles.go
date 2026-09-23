@@ -398,6 +398,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "write-outside", Description: "writing outside the workspace: on, off, or mem-clear to forget approved directories", Usage: "[on|off|mem-clear]"},
 		{Name: "keep-going", Description: "toggle the carry-on nudge for muse models", Usage: "[on|off]"},
 		{Name: "thinking", Description: "whether the clients paint the model's reasoning while it arrives", Usage: "[on|off]"},
+		{Name: "fold-thinking", Description: "draw a muse model's reasoning as a labelled block that folds when the answer starts", Usage: "[on|off]"},
 		{Name: "timestamps", Description: "whether a time is shown beside each message", Usage: "[on|off]"},
 		{Name: "repeat-limit", Description: "how many nothing-new steps end a turn; /repeat-limit off turns the guard off", Usage: "[on|off|<steps>]"},
 		{Name: "debug-log", Description: "write every model request and response to a file per prompt, in this workspace"},

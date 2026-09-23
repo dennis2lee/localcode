@@ -151,6 +151,10 @@ export const windowCloseBtn = document.getElementById('window-close');
 export const smartAgentCheckbox = document.getElementById('smart-agent-checkbox');
 export const keepGoingCheckbox = document.getElementById('keep-going-checkbox');
 export const keepGoingWarnEl = document.getElementById('keep-going-warn');
+export const foldThinkingCheckbox = document.getElementById('fold-thinking-checkbox');
+export const foldThinkingNoteEl = document.getElementById('fold-thinking-note');
+export const foldThinkingWarnEl = document.getElementById('fold-thinking-warn');
+export const museNoteEl = document.getElementById('muse-note');
 export const repeatLimitCheckbox = document.getElementById('repeat-limit-checkbox');
 export const repeatLimitInput = document.getElementById('repeat-limit-input');
 export const repeatLimitWarnEl = document.getElementById('repeat-limit-warn');
@@ -171,7 +175,7 @@ export const updateNoteEl = document.getElementById('update-note');
 // The settings tabs. One entry per tab, in the order the tablist shows
 // them: the first is where the window always opens, and settings.js
 // reads the panels' visibility from the Modal flag, never from the DOM.
-export const settingsTabs = ['agents', 'turns', 'updates', 'typography'].map((name) => ({
+export const settingsTabs = ['agents', 'turns', 'muse', 'updates', 'typography'].map((name) => ({
   name,
   tab: document.getElementById('settings-tab-' + name),
   panel: document.getElementById('settings-panel-' + name),

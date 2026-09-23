@@ -33,8 +33,12 @@ type liveSettings struct {
 	autoCompactPercent int
 	showTPS            bool
 	showThinking       bool
-	showTimestamps     bool
-	autoDelegate       bool
+	// foldThinking draws a muse model's reasoning as a labelled block
+	// that folds once the answer starts. Daemon-wide like keepGoing, and
+	// like it only ever reaching one family: see foldsThinking.
+	foldThinking   bool
+	showTimestamps bool
+	autoDelegate   bool
 	// keepGoing gates the carry-on nudge. The switch is daemon-wide;
 	// whether it applies to a model at all is decided in keep_going.go,
 	// and only ever for one family.
@@ -130,6 +134,18 @@ func (s *liveSettings) SetShowThinking(v bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.showThinking = v
+}
+
+func (s *liveSettings) FoldThinking() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.foldThinking
+}
+
+func (s *liveSettings) SetFoldThinking(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.foldThinking = v
 }
 
 func (s *liveSettings) ShowTimestamps() bool {
@@ -435,6 +451,7 @@ func New(store *session.Store, reg *tools.Registry, providers map[string]provide
 			autoCompactPercent: cfg.CompactPercent(),
 			showTPS:            cfg.TPSEnabled(),
 			showThinking:       cfg.ShowThinkingEnabled(),
+			foldThinking:       cfg.FoldThinkingEnabled(),
 			showTimestamps:     cfg.ShowTimestampsEnabled(),
 			autoDelegate:       cfg.DelegateEnabled(),
 			keepGoing:          cfg.KeepGoing(),
@@ -673,6 +690,12 @@ func (l *Loop) ShowThinking() bool       { return l.settings.ShowThinking() }
 func (l *Loop) SetShowThinking(v bool)   { l.settings.SetShowThinking(v) }
 func (l *Loop) ShowTimestamps() bool     { return l.settings.ShowTimestamps() }
 func (l *Loop) SetShowTimestamps(v bool) { l.settings.SetShowTimestamps(v) }
+
+// FoldThinkingEnabled reports the daemon-wide switch for the muse
+// reasoning block. Whether it reaches a given stream is foldsThinking's
+// question, which also asks what the model is.
+func (l *Loop) FoldThinkingEnabled() bool     { return l.settings.FoldThinking() }
+func (l *Loop) SetFoldThinkingEnabled(v bool) { l.settings.SetFoldThinking(v) }
 
 // AutoDelegateEnabled reports whether prompts matching the auto_delegate
 // rules are routed to the configured sub-agent — process-global,

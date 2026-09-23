@@ -50,6 +50,24 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.appendLocal("This model has no reasoning level to set.")
 		return m, nil, true
 
+	case "ctrl+o":
+		// Every folded reasoning block opens, or every one closes. One
+		// key for all of them rather than a cursor to pick one: a
+		// terminal transcript has nothing to point at, and the question
+		// being asked is usually "what was it thinking", not "what was
+		// it thinking three answers ago".
+		if m.toggleThinkingBlocks() {
+			m.refreshViewport()
+			return m, nil, true
+		}
+		// Said only between replies: a line written into the
+		// transcript closes the reply streaming now, and the rest of
+		// it would then be drawn again below the note.
+		if !m.streamOpen {
+			m.appendLocal("No folded reasoning in this transcript. A muse model's reasoning folds here once its answer starts; /fold-thinking turns that on or off.")
+		}
+		return m, nil, true
+
 	case "esc":
 		// Esc stops whatever is running. Queued prompts go with it: the
 		// whole point of cancelling is to stop, so letting the queue

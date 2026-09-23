@@ -192,6 +192,7 @@ func TestTheDocumentedConfigurationKeysAreNamedInUSAGE(t *testing.T) {
 	doc := string(raw)
 	for _, key := range []string{
 		"show_thinking",
+		"fold_thinking",
 		"show_timestamps",
 		"top_p",
 		"top_k",

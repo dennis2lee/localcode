@@ -231,6 +231,11 @@ func (m Model) handleSpinTick() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.spin++
+	// The live reasoning block's clock, which moves on its own between
+	// deltas: a model can pause mid-thought for longer than a second.
+	if m.tickThinking() {
+		m.refreshViewport()
+	}
 	return m, spinTick()
 }
 
@@ -486,6 +491,10 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.runningTool = ""
 	m.toolStartedAt = time.Time{}
 	m.thinking = false
+	// Ctrl+O's choice belongs to the transcript it was made over, and a
+	// conversation opened here starts folded, as the Web UI's does.
+	m.thinkingExpanded = false
+	m.thinkingLive = false
 	m.errMsg = ""
 	m.tasks = map[string]taskState{}
 	m.completion = completionState{}

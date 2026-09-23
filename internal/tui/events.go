@@ -75,6 +75,15 @@ func intField(data map[string]any, key string) int {
 	return 0
 }
 
+// showThinkingOf reads show_thinking off a thinking event: the switch
+// rides on the event, the way show_tps rides on usage, because this
+// client keeps no copy of the daemon's settings. Absent means on, which
+// is the switch's own default.
+func showThinkingOf(data map[string]any) bool {
+	v, ok := data["show_thinking"].(bool)
+	return !ok || v
+}
+
 // endTurn clears everything that means "a turn is running". Called
 // unconditionally for every turn-terminating event, including an error
 // event whose payload turns out to be malformed — previously the "waiting"
@@ -86,6 +95,9 @@ func (m *Model) endTurn() {
 	m.runningTool = ""
 	m.toolStartedAt = time.Time{}
 	m.thinking = false
+	// A block still open when the turn ends is one whose end never came:
+	// the stream stopped, or the turn was cancelled mid-thought.
+	m.foldThinking(0)
 	// A cancelled call never gets its tool.end, so whatever its start
 	// left behind would otherwise sit here until a call reuses its id.
 	clear(m.pendingTools)
@@ -103,6 +115,10 @@ func (m *Model) applyEvent(ev events.Event) {
 		if auto, _ := ev.Data["auto"].(bool); auto {
 			break
 		}
+		// A new turn's prompt: any reasoning block still open belongs to
+		// a turn that ended without saying so, and the next reasoning
+		// must not be written into it above this prompt.
+		m.foldThinking(0)
 		text, _ := ev.Data["text"].(string)
 		if text != "" {
 			// Every prompt this session has seen goes into Up/Down recall,
@@ -145,6 +161,9 @@ func (m *Model) applyEvent(ev events.Event) {
 		}
 	case events.TypeMessagePartDelta:
 		if text, ok := ev.Data["text"].(string); ok {
+			// The answer has started, so the reasoning before it is
+			// over whether or not its end arrived first.
+			m.foldThinking(0)
 			m.appendModelDelta(text)
 		}
 	case events.TypeMessagePartEnd:
@@ -153,6 +172,13 @@ func (m *Model) applyEvent(ev events.Event) {
 		// and treating the first as end-of-turn is what used to make a
 		// prompt typed during tool execution skip the queue and 409.
 		text, _ := ev.Data["text"].(string)
+		// The message is over, so its reasoning is too. After a
+		// reconnect this can be the only sign of the answer: the
+		// daemon replays a finished reply as its end alone, and the
+		// reasoning's own end was never logged. Ahead of the command
+		// output below, which ends a message as well, as the Web UI
+		// has it.
+		m.foldThinking(0)
 		// Command output the person ran is not something the model said,
 		// so it draws as a status line rather than a model message. The
 		// header names the command; the user message above it already
@@ -234,6 +260,7 @@ func (m *Model) applyEvent(ev events.Event) {
 			}
 			m.pendingTools[id] = pendingToolCall{name: name, input: input}
 		}
+		m.foldThinking(0)
 		m.endModelStream("")
 		if arg := summarizeToolInput(input); arg != "" {
 			m.appendEntry(entryTool, "▸ "+name+"  "+arg)
@@ -385,12 +412,28 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.appendTool(fmt.Sprintf("[delegated to %s]", name))
 		}
 	case events.TypeThinkingDelta:
-		// The status line, not the transcript. Reasoning is worth knowing
-		// about while it happens and is not worth scrolling past
-		// afterwards, and the TUI's transcript is the part that keeps.
+		// The status line, and for a muse model a block in the
+		// transcript as well. Reasoning is worth knowing about while it
+		// happens and is not worth scrolling past afterwards, which is
+		// why every other model gets only the status line, and why the
+		// muse block folds to one line once the answer starts. See
+		// thinking.go.
 		m.thinking = true
+		fold, _ := ev.Data["fold"].(bool)
+		if !fold {
+			// Reasoning the fold does not apply to, while a block is
+			// still open: the next request went to another model with
+			// nothing having closed the block. Close it, as the Web UI
+			// does, so the next muse request gets a block of its own.
+			m.foldThinking(0)
+		} else if showThinkingOf(ev.Data) {
+			if text, _ := ev.Data["text"].(string); text != "" {
+				m.appendThinkingDelta(text)
+			}
+		}
 	case events.TypeThinkingEnd:
 		m.thinking = false
+		m.foldThinking(time.Duration(intField(ev.Data, "elapsed_ms")) * time.Millisecond)
 	case events.TypeInputRequest:
 		id, _ := ev.Data["id"].(string)
 		question, _ := ev.Data["question"].(string)

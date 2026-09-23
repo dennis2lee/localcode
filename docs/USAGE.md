@@ -342,13 +342,14 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `auto_compact_percent` | The threshold, as a percent of the context window, between 10 and 95. `50` unless set; `/auto-compact <percent>` changes it live and saves it, and refuses a percent outside that range, while a nonzero value outside it in config.json is clamped instead, without a message (`0` counts as unset, so it uses 50). |
 | `auto_memory_enabled` | The notes the model keeps for itself across sessions. On unless set to false. See [Auto memory](#auto-memory). |
 | `show_tps` | The tokens per second reading under the prompt. On unless set to false; also `/config show_tps`. |
-| `show_thinking` | Whether the Web UI and the desktop window paint the model's reasoning while it arrives. On unless set to false; `/thinking` toggles it. Daemon-wide, like `show_tps`. The TUI shows a `thinking` state on the busy line instead and is unaffected by this switch. This changes nothing about what the model does: reasoning is broadcast and never logged either way. See [What the transcript shows](#what-the-transcript-shows). |
+| `show_thinking` | Whether the clients paint the model's reasoning while it arrives. On unless set to false; `/thinking` toggles it. Daemon-wide, like `show_tps`. The Web UI and the desktop window paint every model's reasoning. The TUI paints only a Muse model's reasoning block (see `fold_thinking`) and otherwise shows a `thinking` state on the busy line. This changes nothing about what the model does: reasoning is broadcast and never logged either way. See [What the transcript shows](#what-the-transcript-shows). |
+| `fold_thinking` | Whether a Muse model's reasoning is drawn as a block of its own: labelled Thinking with its running time, and folded to one line when the answer starts. On unless set to false; `/fold-thinking` and the settings Muse tab toggle it. Daemon-wide. Applies only to model IDs containing `muse`; other models keep the plain drawing. `show_thinking` off hides the block too. See [What the transcript shows](#what-the-transcript-shows). |
 | `show_timestamps` | Whether a time is shown beside each turn boundary in the Web UI and the desktop window. Off unless set to true; `/timestamps` toggles it. Daemon-wide. The TUI shows no turn-boundary times. See [What the transcript shows](#what-the-transcript-shows). |
 | `mouse` | Whether the TUI takes the mouse for a clickable scrollbar beside the transcript. Off unless set to true. Read from the config on the machine running the TUI, never from the daemon. See [Screen controls](#screen-controls). |
 | `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
 | `trace_max_total_mb` | Optional cap on the trace directory, and separately on the prompt-manifest directory beside it. When set, each is bounded on its own: the oldest files go until it fits, and today's file is never removed. See [What it did](#the-turn-log). |
 | `default_profile` | The profile used when an agent name resolves to nothing. |
-| `keep_going` | The carry-on nudge for Muse models. Daemon-wide, on unless set to false; `/keep-going` and the settings Turns tab toggle it. The per-profile `keep_going` below is a different, numeric setting. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
+| `keep_going` | The carry-on nudge for Muse models. Daemon-wide, on unless set to false; `/keep-going` and the settings Muse tab toggle it. The per-profile `keep_going` below is a different, numeric setting. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
 | `repeat_limit` | How many steps in a row may only repeat earlier tool calls before the turn ends. Daemon-wide; unset or `0` is off, the default, and a number arms the guard at that ceiling, at most 50. `/repeat-limit` changes it. See [A model that repeats itself](#a-model-that-repeats-itself). |
 | `orchestrate` | The Orchestrate tool. Daemon-wide, off unless set; `/orchestrate` toggles it. Needs at least two agents to delegate to. See [Orchestration](#orchestration). |
 | `auto_update` | Whether a newer release is installed at startup. Daemon-wide, on unless set to false; a project config.json can turn it off for that checkout alone. See [At startup](#at-startup). |
@@ -942,6 +943,7 @@ Common to the TUI and Web UI:
 | Quit the TUI | **Ctrl+C** on an empty prompt, or type `exit`, `quit`, `:q`, `/exit`, `/quit` or `/q`. With something typed, the first Ctrl+C clears the line the way a shell prompt does and the second leaves, so the key that stops things does not also throw away a half-written message. |
 | Let go of a sub-agent | **Ctrl+B**, TUI only, while a turn is waiting on one. The turn carries on without its answer and the sub-agent keeps working; **Esc** is the other answer to the same moment and throws the work away. |
 | Step the reasoning effort | **Ctrl+E**, TUI only. Moves to the next level this model tells apart and wraps at the end; `/effort-set` opens the same list. |
+| Open or fold the reasoning | **Ctrl+O**, TUI only. Opens every folded Muse reasoning block in the transcript, and folds them again on the next press. Blocks folded later follow the same choice. The Web UI opens one block per click on its line. See [What the transcript shows](#what-the-transcript-shows). |
 | Narrow a picker | Type, in any TUI picker. Case-insensitive substring over the row and its detail; **Backspace** removes a character and **Esc** clears the filter before it closes the list. |
 
 Other behavior:
@@ -1306,14 +1308,28 @@ Off hides that server's tools from the next request here. The server stays conne
 
 ### What the transcript shows
 
-Two switches, both daemon-wide and persisted, so the choice survives a restart and follows you to another browser. A preference kept in one browser is lost on the next machine, which is why neither is per client. Both are drawn by the Web UI and the desktop window; the TUI shows a `thinking` state on the busy line rather than reasoning text, and shows no times on turn boundaries, so neither switch affects the terminal.
+Three switches, all daemon-wide and persisted, so the choice survives a restart and follows you to another browser. A preference kept in one browser is lost on the next machine, which is why none is per client.
 
 | Command | Effect | Default |
 |---|---|---|
-| `/thinking [on\|off]` | Whether the Web UI paints the model's reasoning while it arrives | on |
+| `/thinking [on\|off]` | Whether the clients paint the model's reasoning while it arrives | on |
+| `/fold-thinking [on\|off]` | Whether a Muse model's reasoning is a labelled block that folds when the answer starts | on |
 | `/timestamps [on\|off]` | Whether a time is shown beside each turn boundary in the Web UI | off |
 
-`/thinking off` is about what the Web UI paints, not about what the model does: reasoning is broadcast and never logged either way, so turning it off hides what is arriving rather than deleting anything. `/effort` is the one that changes how much reasoning there is. Turning it back on mid-turn shows the rest of the reasoning, because the switch is read where the text is painted rather than where it arrives.
+`/thinking off` is about what the clients paint, not about what the model does: reasoning is broadcast and never logged either way, so turning it off hides what is arriving rather than deleting anything. `/effort` is the one that changes how much reasoning there is. Turning it back on mid-turn shows the rest of the reasoning, because the switch is read where the text is painted rather than where it arrives.
+
+What each client draws:
+
+| Model | Web UI and desktop window | TUI |
+|---|---|---|
+| Model ID contains `muse`, `/fold-thinking` on | A block headed THINKING with its running time. The text shows under the header, held to six lines while it streams. When the answer starts, the block folds to one line: THOUGHT FOR 12s. Click the line to open it again. | A block headed "Thinking · 4s" with the last six lines of the reasoning. When the answer starts, it folds to "Thought for 12s". **Ctrl+O** opens every folded block and folds them again. |
+| Every other model, or `/fold-thinking` off | The reasoning in a muted block, open above the answer | A `thinking` state on the busy line, and nothing in the transcript |
+
+A Muse model reasons at length before every answer, often by restating the question first. Drawn open and unlabelled, that reasoning read as the start of the reply. The block keeps the two apart. It folds when its end arrives, when the answer's first text arrives, when the message ends, when a tool starts, when the next prompt arrives, or when the turn ends, whichever comes first. The time is the daemon's figure, from the block's first reasoning token to its end. A block that folds before its end arrives shows the client's own time since its first reasoning token. Ctrl+O's choice in the TUI lasts until the conversation is switched; a conversation opened in the TUI starts with its blocks folded.
+
+Reasoning blocks are not replayed. The daemon never logs reasoning, so a reload or a re-attach shows the answers without the blocks that preceded them.
+
+The TUI shows no times on turn boundaries, so `/timestamps` does not affect the terminal.
 
 The time goes on the turn boundary rather than on every line. A transcript is read as a conversation, and a column of times down the side of one is noise until the question is "when did this happen" — which is the question the switch exists for.
 
@@ -1420,7 +1436,8 @@ The following daemon commands work in both clients.
 | `/smart-agent` | `smart_agent` | The specialist roster, the fallback chain, the trace, the prompt cache markers and the guards. See [Smart Agent](#smart-agent). |
 | `/orchestrate` | `orchestrate` | The Orchestrate tool. Needs at least two agents to delegate to, so in practice Smart Agent as well. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
-| `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also available in settings. |
+| `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Muse tab. |
+| `/fold-thinking` | `fold_thinking` | A Muse model's reasoning as a labelled block that folds when the answer starts. See [What the transcript shows](#what-the-transcript-shows). Also on the settings Muse tab. |
 | `/auto-compact` | `auto_compact_enabled`, `auto_compact_percent` | Auto-compaction. A number sets the threshold and turns it on: `/auto-compact 70` compacts past 70% of the context window. The default threshold is 50%. |
 | `/model-invocable` | `model_invocable` | Whether the model may run commands itself. Off unless set; each command still needs its own opt-in. See [/model-invocable](#model-invocable). |
 
@@ -1801,7 +1818,8 @@ The **settings** pill opens the settings window, grouped into one tab per subjec
 | Tab | What is in it |
 |---|---|
 | Agents | [Smart Agent](#smart-agent), [Orchestration](#orchestration), and whether the model may run opted-in commands itself |
-| Turns | The carry-on nudge for muse models, and the repeat guard that ends a turn which only repeats earlier tool calls |
+| Turns | The repeat guard that ends a turn which only repeats earlier tool calls |
+| Muse | The switches that apply only to Muse models: the reasoning block (`fold_thinking`) and the carry-on nudge (`keep_going`). A note names the profiles in this config that run a Muse model, or says that none do. |
 | Updates | Check for updates, and download and install. See [Checking for updates](#checking-for-updates) |
 | Typography | The reading, interface and monospace faces, and the text sizes. See below |
 
@@ -2587,7 +2605,7 @@ Automatic compatibility adjustments:
 * Reasoning budgets are reduced to fit `max_tokens`, reserving 1024 tokens for the answer. A cap too small for useful reasoning disables the budget. The high budget is 16384 tokens before adjustment.
 * Temperature is omitted when the provider's reasoning mode requires a fixed temperature.
 
-Reasoning appears as a separate muted block in the Web UI. The TUI status reads `thinking`. Reasoning-stream text is not written to session logs or replayed after reload.
+Reasoning appears as a separate muted block in the Web UI. The TUI status reads `thinking`. A Muse model's reasoning is a labelled block in both clients that folds when the answer starts; see [What the transcript shows](#what-the-transcript-shows). Reasoning-stream text is not written to session logs or replayed after reload.
 
 ### Zoom and what a reload keeps
 
@@ -2805,7 +2823,7 @@ Wrapped invocations such as `env python3 x.py` and `xargs python3` are not cover
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
-LocalCode reads local-provider `reasoning_content` and `reasoning` stream fields. The TUI shows `thinking`; the Web UI displays reasoning above the answer.
+LocalCode reads local-provider `reasoning_content` and `reasoning` stream fields. The TUI shows `thinking`; the Web UI displays reasoning above the answer. A Muse model's reasoning is a labelled block in both clients that folds when the answer starts (`fold_thinking`).
 
 Separate reasoning-stream text is neither logged nor returned to the model. Reloading removes it.
 

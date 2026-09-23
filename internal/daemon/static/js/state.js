@@ -51,6 +51,8 @@ export const app = {
   // conversation starts with; see sessionPermissions for the open one.
   skipPermissions: false,
   keepGoing: true,       // the carry-on nudge for muse models
+  foldThinking: true,    // a muse model's reasoning drawn as a labelled block that folds
+  museProfiles: [],      // the profiles in this config that run a muse model
   repeatLimit: 0,        // nothing-new steps that end a turn; 0 (the default) is off
   zoom: 1,               // the page's own ctrl+wheel zoom, restored across reloads
   autoCompactPercent: 50,

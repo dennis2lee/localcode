@@ -124,9 +124,10 @@ func (c *transcriptRenderCache) content(entries []transcriptEntry, width int) st
 			slot.owns = append(slot.owns, 0)
 			slot.padded = append(slot.padded, "")
 		case slot.entries[i] == e:
-			// Struct equality over {kind, text}. Comparing the text
-			// compares the bytes, which is the only thing that decides
-			// what an entry renders to, so a hit cannot be stale.
+			// Struct equality over every field: the kind, the text,
+			// and a reasoning block's header and its live and open
+			// flags. Those are the only things that decide what an
+			// entry renders to, so a hit cannot be stale.
 			continue
 		}
 		c.renders++

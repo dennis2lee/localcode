@@ -274,6 +274,9 @@ func TestMergeFieldsGuard(t *testing.T) {
 		// The two display switches, beside ShowTPS.
 		"ShowThinking":   true,
 		"ShowTimestamps": true,
+		// The muse reasoning block, beside the switch that decides
+		// whether reasoning is drawn at all.
+		"FoldThinking": true,
 		// The TUI's scrollbar: a project that says nothing keeps the
 		// global answer, and one that answers turns it either way.
 		"Mouse": true,

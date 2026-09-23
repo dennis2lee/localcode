@@ -30,6 +30,8 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"auto_compact_enabled": d.Loop.AutoCompactEnabled(),
 		"auto_compact_percent": d.Loop.CompactPercent(),
 		"keep_going":           d.Loop.KeepGoingEnabled(),
+		"fold_thinking":        d.Loop.FoldThinkingEnabled(),
+		"muse_profiles":        d.Loop.MuseProfiles(),
 		"repeat_limit":         d.Loop.RepeatLimit(),
 		"smart_agent":          d.Loop.SmartAgentEnabled(),
 		"orchestrate":          d.Loop.OrchestrateEnabled(),
@@ -265,6 +267,39 @@ func (d *Daemon) handleSetKeepGoing(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSetFoldThinking turns the muse reasoning block on or off live
+// and, when a config.json path is known, persists it. It does not check
+// whether any profile runs a muse model: GET /api/settings reports
+// muse_profiles, and the panel says it.
+//
+// It answers in two parts, as orchestrate does, rather than with a 500
+// for a save that failed: the switch was applied either way, and an
+// error status read as "not changed" left the box saying the opposite
+// of the state the daemon was in.
+func (d *Daemon) handleSetFoldThinking(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	d.Loop.SetFoldThinkingEnabled(req.Enabled)
+	d.announceSettings()
+	resp := map[string]any{
+		"fold_thinking": req.Enabled,
+		"applied":       true,
+		"persisted":     true,
+	}
+	if d.Broker.ConfigPath != "" {
+		if err := config.SetFoldThinkingInFile(d.Broker.ConfigPath, req.Enabled); err != nil {
+			resp["persisted"] = false
+			resp["error"] = fmt.Sprintf("applied for this run, but failed to persist to config.json: %v", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleSetRepeatLimit moves the repeat guard's ceiling; zero turns it

@@ -277,8 +277,13 @@ function land() {
   // is searched all the same — a path or a stack trace in there is
   // exactly what a find is for. Landing on one opens what it is inside,
   // or the view would scroll to a match nothing on screen shows.
+  //
+  // A folded part that has a header saying whether it is open (a muse
+  // reasoning block) opens through its own reveal, so the header follows.
   for (let p = mark.parentNode; p && p !== transcriptEl; p = p.parentNode) {
-    if (p.hidden) p.hidden = false;
+    if (!p.hidden) continue;
+    if (typeof p.reveal === 'function') p.reveal();
+    else p.hidden = false;
   }
 
   // Measured against the mark where the layout knows where it is, and

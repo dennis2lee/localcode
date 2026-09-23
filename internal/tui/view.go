@@ -96,6 +96,8 @@ func renderTranscript(entries []transcriptEntry, width int) string {
 			parts = append(parts, turnSeparator(width)+"\n"+pendingStyle.Width(width).Render(text))
 		case entryTool, entryLocal, entrySent:
 			parts = append(parts, toolStyle.Render(text))
+		case entryThinking:
+			parts = append(parts, renderThinking(e, width))
 		default: // entryModel: markdown, rendered here at display time
 			// so the stored entry stays raw text with no escape
 			// sequences in it. See markdown.go.
