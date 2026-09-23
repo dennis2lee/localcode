@@ -491,6 +491,10 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 	m.runningTool = ""
 	m.toolStartedAt = time.Time{}
 	m.thinking = false
+	// Ctrl+O's choice belongs to the transcript it was made over, and a
+	// conversation opened here starts folded, as the Web UI's does.
+	m.thinkingExpanded = false
+	m.thinkingLive = false
 	m.errMsg = ""
 	m.tasks = map[string]taskState{}
 	m.completion = completionState{}

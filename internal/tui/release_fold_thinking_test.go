@@ -337,3 +337,26 @@ func TestPlainReasoningClosesALiveBlock(t *testing.T) {
 		t.Errorf("blocks = %#v", b)
 	}
 }
+
+// Ctrl+O's choice does not follow the TUI into another conversation: a
+// block folded there starts folded, as the Web UI's does. (Found by the
+// second external review.)
+func TestCtrlOChoiceDoesNotCrossSessions(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(thinkingDelta("first session thought", true))
+	m.applyEvent(events.Event{Type: events.TypeThinkingEnd, Data: map[string]any{"fold": true}})
+	next, _, _ := m.handleKey(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	m = next.(Model)
+	if !m.thinkingExpanded {
+		t.Fatal("Ctrl+O did not open the block")
+	}
+	upd, _ := m.handleSessionSwitched(sessionSwitchedMsg{
+		sessionID: "s2", agent: "general-purpose", events: make(chan events.Event), gen: m.streamGen,
+	})
+	m = upd.(Model)
+	m.applyEvent(thinkingDelta("second session thought", true))
+	m.applyEvent(events.Event{Type: events.TypeThinkingEnd, Data: map[string]any{"fold": true}})
+	if b := m.thinkingEntries(); len(b) != 1 || b[0].open {
+		t.Fatalf("a block folded in the new conversation starts open: %#v", b)
+	}
+}
