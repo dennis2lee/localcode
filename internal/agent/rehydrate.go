@@ -299,6 +299,19 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 				resetPending()
 				continue
 			}
+			// A reply whose stream died before it finished is on the
+			// record because the model said it, and not in the history
+			// because a failed response is not a turn: the live turn
+			// appended nothing from it (see consumeStream), and a
+			// restart must not put back what the live session refused
+			// to send. The tool calls it may have started never ran, so
+			// what was pending for them goes with it. A cancelled stream
+			// closes cleanly and carries no mark: live, that reply is
+			// kept, and so it is here.
+			if isTrue(ev.Data["failed"]) {
+				resetPending()
+				continue
+			}
 			pendingText = dataString(ev.Data, "text")
 			textSet = true
 			if len(pendingToolOrder) == 0 {

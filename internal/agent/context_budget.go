@@ -54,6 +54,19 @@ const contextHeadroom = 2048
 // for less than this gets what it asked for, and is sent below it.
 const minOutputTokens = 1024
 
+// shortestSummary is the least a compaction can leave behind, in tokens.
+// compactHistory rejects an empty summary as a failed compaction, so the
+// shortest one there can be is a token: shorter than any summary a model
+// writes, but the smallest figure this side's estimate can state, and
+// enough to keep the notice from offering a compaction that only an
+// empty summary would satisfy.
+const shortestSummary = 1
+
+// blockFraming is what estimateTokens charges each block for its role,
+// type and ids, in bytes. Small, but a long session has thousands of
+// blocks, and a compaction's summary rides in one.
+const blockFraming = 16
+
 // contextWindow is the model's total input+output budget: what the config
 // says, or a guess from the model name.
 //
@@ -192,9 +205,7 @@ func estimateTokens(system string, msgs []provider.Message) int {
 	for _, m := range msgs {
 		for _, b := range m.Content {
 			n += len(b.Text) + len(b.ToolInput) + len(b.ToolResultContent)
-			// Per-block framing: role, type, ids. Small, but there can be
-			// thousands of blocks in a long session.
-			n += 16
+			n += blockFraming
 			if b.Type == provider.BlockImage {
 				images++
 			}
@@ -542,6 +553,11 @@ type requestSizing struct {
 	// included. It is the part of a conversation a compaction cannot
 	// remove, so it is where the notice starts when it prices one.
 	system int
+	// keeps is what a compaction stores beside the summary itself, for
+	// the history this request carries: the summary's header, its notes
+	// about dropped images and carried assets, and the framing of the
+	// block they share. See compactionKeeps.
+	keeps int
 	// defaulted says wanted is the built-in default rather than a figure
 	// the profile set: the person then has no max_tokens to raise, only
 	// one to add.
@@ -560,8 +576,30 @@ func (l *Loop) sizeRequest(ctx context.Context, sessionID string, run modelRun, 
 		window:    window,
 		source:    source,
 		system:    estimateTokens(run.system, nil),
+		keeps:     compactionKeeps(messages, l.smartOn(ctx)),
 		defaulted: run.profile.MaxTokens == 0,
 	}
+}
+
+// compactionKeeps is what a compaction of msgs would store beside the
+// summary itself, in tokens: the header the summary re-enters behind,
+// the note about the images it dropped, the note about the assets the
+// replaced messages carried (behind Smart Agent, as the note is), and
+// the framing estimateTokens charges the one block they share. What
+// compactHistory writes, priced the way estimateTokens will read it.
+//
+// Rounded up, because this is the floor of the residual the notice
+// reasons from, and a floor a token under what is stored told a person
+// that /compact would make room by exactly the token it did not.
+func compactionKeeps(msgs []provider.Message, smart bool) int {
+	text := summaryHeader
+	if n := countImages(msgs); n > 0 {
+		text += imageDroppedNote(n)
+	}
+	if smart {
+		text += carriedAssetNote(droppedCarriedAssets(msgs))
+	}
+	return (len(text) + blockFraming + 3) / 4
 }
 
 // grow accounts for text a hook added to the request after it was sized.
@@ -577,15 +615,36 @@ func (s requestSizing) grow(extra string) requestSizing {
 }
 
 // afterCompaction is what the conversation would hold once compacted:
-// the system prompt, which compaction cannot remove, the summary's
-// header, and the summary itself, whose length is not known until it is
-// written. At best it is next to nothing; at worst it is the cap the
-// summarization call runs under. A notice that priced compaction as an
-// empty conversation told a first turn that /compact would make room,
-// when the summary alone would have been bigger than the conversation it
-// replaced.
+// the system prompt, which compaction cannot remove, what the compaction
+// stores around the summary, and the summary itself, whose length is not
+// known until it is written. At the least it is shortestSummary; at the
+// most it is longestSummary, which is all compactHistory keeps of it. A
+// notice that priced compaction as an empty conversation told a first
+// turn that /compact would make room, when the summary alone would have
+// been bigger than the conversation it replaced.
 func (s requestSizing) afterCompaction(summary int) int {
-	return s.system + estimateTokens(summaryHeader, nil) + summary
+	return s.system + s.keeps + summary
+}
+
+// summaryRoom is the longest summary a compaction could leave behind and
+// still let the next request, capped at want, ask for more than beyond:
+// from 0 up to longestSummary, or -1 when even an empty summary would
+// not do. Worked out by the function that sizes the request, so a
+// condition the notice puts on /compact is one the next request will
+// honour. A longer summary leaves less room, so the answer is found by
+// bisection.
+func (s requestSizing) summaryRoom(want, beyond int) int {
+	room := -1
+	lo, hi := 0, longestSummary
+	for lo <= hi {
+		mid := lo + (hi-lo)/2
+		if clampMaxTokens(want, s.window, s.afterCompaction(mid)) > beyond {
+			room, lo = mid, mid+1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return room
 }
 
 // cutOffNotice says why a reply stopped at its length cap, and what would
@@ -646,26 +705,40 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 	// is on top of it and cannot be known here. The floor is the honest
 	// number, because it is the smallest the next request can be.
 	//
-	// Compacting is priced twice, because the one thing about it nobody
-	// knows in advance is how long the summary comes out: once with the
-	// shortest summary there could be, once with the longest the
-	// summarization call is allowed. A move is promised only when it
-	// helps even at the worst, offered with a condition when it helps
-	// only at the best, and not mentioned when it does not help at all.
+	// Compacting is priced by the one thing about it nobody knows in
+	// advance, how long the summary comes out: summaryRoom is the
+	// longest summary that would still leave the next request more. At
+	// longestSummary, which is all a compaction keeps, the move is
+	// promised. Under shortestSummary it is not mentioned. In between it
+	// is offered with that length as its condition, in tokens, because
+	// "if its summary comes out short" was being offered where only an
+	// empty summary would have done, and an empty summary is a failed
+	// compaction: the person waited through a summarization call that
+	// could not have helped.
 	raised := clampMaxTokens(math.MaxInt, s.window, s.input+s.sent)
-	bothAtBest := clampMaxTokens(math.MaxInt, s.window, s.afterCompaction(0))
-	bothAtWorst := clampMaxTokens(math.MaxInt, s.window, s.afterCompaction(defaultMaxTokens))
-	compactAtWorst := clampMaxTokens(s.wanted, s.window, s.afterCompaction(defaultMaxTokens))
+	compactRoom := s.summaryRoom(s.wanted, s.sent)
+	bothRoom := s.summaryRoom(math.MaxInt, s.sent)
 	inUse := fmt.Sprintf("about %d of %d tokens were in use", s.input, s.window)
-	ifShort := ", if its summary comes out short"
+	ifShort := func(room int) string {
+		return fmt.Sprintf(", if its summary comes out at %d tokens or fewer", room)
+	}
 
 	switch {
-	case bothAtBest <= s.sent:
+	case bothRoom < shortestSummary && raised <= s.sent:
 		// A window too small to give more to any request: most of it
 		// is the margin held back for estimation error, and what a
 		// compaction leaves behind. Only a larger window helps, and a
 		// small figure is as likely to be wrong as the model's.
-		room := s.window - s.afterCompaction(0) - contextHeadroom
+		//
+		// Both moves are checked, not just the compaction, because the
+		// two are priced from different figures: the compaction from
+		// this side's estimate of the system prompt, raising from the
+		// provider's count of the whole request, and the count can come
+		// in under the estimate by a fifth on an English prompt. A
+		// system prompt estimated past what the whole request was
+		// counted at read as a window nothing could grow in, while
+		// raising max_tokens would have sent more.
+		room := s.window - s.afterCompaction(shortestSummary) - contextHeadroom
 		if room < 0 {
 			room = 0
 		}
@@ -687,8 +760,8 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 		// gives nothing even at its best, so at least the conditional
 		// promise holds here.
 		compact := "/compact makes room now"
-		if compactAtWorst <= s.sent {
-			compact = "/compact makes room" + ifShort
+		if compactRoom < longestSummary {
+			compact = "/compact makes room" + ifShort(compactRoom)
 		}
 		return fmt.Sprintf(
 			"the reply was cut off at %d tokens because the context window was nearly full: %s, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. %s",
@@ -700,8 +773,8 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 		// max_tokens is shrunk back, and /compact makes room the
 		// profile's figure then caps.
 		both := "A longer answer needs both /compact and a higher max_tokens on that profile in config.json"
-		if bothAtWorst <= s.sent {
-			both += ifShort
+		if bothRoom < longestSummary {
+			both += ifShort(bothRoom)
 		}
 		return hit + fmt.Sprintf(
 			", and the context window had no room for more: %s, and the window figure was %s. %s",
@@ -712,11 +785,11 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 		// conversation helps, if even a compacted one would give more.
 		msg := hit + " — " + raiseIt + fmt.Sprintf(
 			"; the context window is nearly full as well (%s, and the window figure was %s), so a raised max_tokens gets at most %d", inUse, s.source, raised)
-		switch {
-		case bothAtWorst > raised:
+		switch pastRoom := s.summaryRoom(math.MaxInt, raised); {
+		case pastRoom >= longestSummary:
 			msg += " until /compact makes room"
-		case bothAtBest > raised:
-			msg += " until /compact makes room" + ifShort
+		case pastRoom >= shortestSummary:
+			msg += " until /compact makes room" + ifShort(pastRoom)
 		}
 		return msg + tryALargerWindow(s, name)
 	}

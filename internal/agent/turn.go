@@ -1011,8 +1011,15 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			// history — that stays as it was, since a failed response is
 			// not a turn and must not be sent back as one. The model did
 			// say these words, and the session is where that is kept.
+			//
+			// Marked failed so the record and the history stay two
+			// questions after a restart too. rehydrateHistory rebuilds
+			// the history from these events, and a part.end with nothing
+			// to tell it apart from a finished reply was rebuilt as one:
+			// the half answer this turn refused to send back went out on
+			// the next request of every restarted session.
 			if text.Len() > 0 {
-				l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String()})
+				l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String(), "failed": true})
 			}
 			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": ev.Err.Error()})
 			// Whatever had already been said comes back with the error.

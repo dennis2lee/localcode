@@ -401,3 +401,74 @@ func TestDataIntAndDataFloatHelpers(t *testing.T) {
 		t.Errorf("dataFloat(int) = %v, want 5", got)
 	}
 }
+
+// A reply the stream failed on is on the record and marked so, and it
+// is not a turn: the live history does not hold it (see consumeStream),
+// and a rebuilt one must not either. A cancelled stream closes cleanly,
+// carries no mark, and is kept, as it is live.
+func TestRehydrateHistoryLeavesOutAFailedReply(t *testing.T) {
+	evs := []events.Event{
+		ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+		ev(events.TypeMessagePartDelta, map[string]any{"text": "half "}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "half an answer", "failed": true}),
+		ev(events.TypeError, map[string]any{"error": "provider stream error: connection reset"}),
+		ev(events.TypeUserMessage, map[string]any{"text": "again"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "a whole answer"}),
+	}
+	hist := rehydrateHistory(evs)
+	var replies []string
+	for _, m := range hist {
+		if m.Role == provider.RoleAssistant {
+			replies = append(replies, m.Content[0].Text)
+		}
+	}
+	if len(replies) != 1 || replies[0] != "a whole answer" {
+		t.Errorf("assistant messages = %q, want only the whole answer", replies)
+	}
+
+	// A failed reply that had asked for a tool leaves nothing pending:
+	// the tool never ran, and a call still waiting for its result would
+	// hold back the next turn's iterations until they were folded into
+	// one message, with the earlier one's text overwritten.
+	evs = []events.Event{
+		ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "read"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "", "failed": true}),
+		ev(events.TypeError, map[string]any{"error": "provider stream error: connection reset"}),
+		ev(events.TypeUserMessage, map[string]any{"text": "again"}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t2", "name": "read"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "reading"}),
+		ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t2", "input": `{"path":"a.go"}`, "content": "package a"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "done"}),
+	}
+	hist = rehydrateHistory(evs)
+	var shape []string
+	for _, m := range hist {
+		s := string(m.Role) + ":"
+		for _, b := range m.Content {
+			switch b.Type {
+			case provider.BlockText:
+				s += " " + b.Text
+			case provider.BlockToolUse:
+				s += " tool_use " + b.ToolUseID
+			case provider.BlockToolResult:
+				s += " tool_result " + b.ToolUseID
+			}
+		}
+		shape = append(shape, s)
+	}
+	want := []string{"user: go on", "user: again", "assistant: reading tool_use t2", "user: tool_result t2", "assistant: done"}
+	if strings.Join(shape, "\n") != strings.Join(want, "\n") {
+		t.Errorf("rebuilt history after a failed tool call:\n%s\nwant:\n%s", strings.Join(shape, "\n"), strings.Join(want, "\n"))
+	}
+
+	// Cancelled, not failed: kept.
+	evs = []events.Event{
+		ev(events.TypeUserMessage, map[string]any{"text": "go on"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "half an answer"}),
+	}
+	hist = rehydrateHistory(evs)
+	if len(hist) != 2 || hist[1].Role != provider.RoleAssistant {
+		t.Errorf("a cancelled reply, which the live history keeps, was left out: %d messages", len(hist))
+	}
+}

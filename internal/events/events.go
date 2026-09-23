@@ -18,6 +18,12 @@ const (
 	// log (see agent.rehydrateHistory). "images", if present, carries
 	// attached images as [{"media_type", "data"}], where data is base64
 	// encoded in the JSON log.
+	//
+	// A "message.part.end" carries the finished reply as "text".
+	// "failed": true closes a reply whose stream died before it
+	// finished: the text is on the record because the model said it,
+	// and it is not in the history, live or rebuilt from the log,
+	// because a failed response is not a turn.
 	TypeUserMessage        Type = "message.user"
 	TypeMessagePartDelta   Type = "message.part.delta"
 	TypeMessagePartEnd     Type = "message.part.end"

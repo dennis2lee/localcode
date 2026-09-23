@@ -8,6 +8,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1363,117 +1365,166 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		wants := []int{1, 512, 1023, 1024, 1025, 3000, 4096, 8192, 64000}
 		inputs := []int{0, 100, 500, 1000, 5000, 26600, 31000, 32000, 200000}
 		sources := []windowSource{windowFromConfig, windowFromServer, windowGuessed}
+		// What a compaction stores beside the summary: the header alone,
+		// and the header with both its notes, for a history that carried
+		// images and assets.
+		keepses := []int{compactionKeeps(nil, false), compactionKeeps(carriedHistory(), true)}
 		// The system prompt is what a compaction cannot remove, so it
-		// decides what /compact can free: none, and a Smart Agent
-		// prompt's worth.
-		systems := []int{0, 440}
-		checked := 0
+		// decides what /compact can free: none, a Smart Agent prompt's
+		// worth, a long one, and the sizes that put the shortest and the
+		// longest compaction exactly at the floor, one token under it
+		// and one over. That boundary is where "if its summary comes
+		// out short" was offered for a summary of nothing, which is a
+		// failed compaction, not a short one.
+		systemsFor := func(window, keeps int) []int {
+			systems := []int{0, 440, 2000}
+			for _, summary := range []int{shortestSummary, longestSummary} {
+				at := window - contextHeadroom - keeps - summary - minOutputTokens
+				for _, d := range []int{-1, 0, 1} {
+					if at+d >= 0 {
+						systems = append(systems, at+d)
+					}
+				}
+			}
+			return systems
+		}
+		hedgeAt := regexp.MustCompile(`if its summary comes out at (\d+) tokens or fewer`)
+		roomFor := regexp.MustCompile(`leaves room for (\d+)`)
+		checked, want := 0, 0
 		for _, window := range windows {
-			for _, wanted := range wants {
-				for _, input := range inputs {
-					for _, source := range sources {
-						for _, system := range systems {
-							s := requestSizing{wanted: wanted, input: input, window: window, system: system,
-								source: source, sent: clampMaxTokens(wanted, window, input)}
-							// What each move would actually send. "Raise
-							// max_tokens" names no number, so the move is
-							// modelled as raising it as far as it needs to
-							// go, and it is priced at the input the next
-							// request carries, which includes the reply just
-							// cut off. /compact leaves the system prompt,
-							// the summary's header and a summary of unknown
-							// length behind, so it is priced twice: with the
-							// shortest summary and with the longest the
-							// summarization call may write. A promise has to
-							// hold at the worst; an offer with a condition
-							// has to hold at the best.
-							raiseSends := clampMaxTokens(math.MaxInt, window, input+s.sent)
-							compactBest := clampMaxTokens(wanted, window, s.afterCompaction(0))
-							compactWorst := clampMaxTokens(wanted, window, s.afterCompaction(defaultMaxTokens))
-							bothBest := clampMaxTokens(math.MaxInt, window, s.afterCompaction(0))
-							bothWorst := clampMaxTokens(math.MaxInt, window, s.afterCompaction(defaultMaxTokens))
-							raiseHelps := raiseSends > s.sent
+			for _, keeps := range keepses {
+				systems := systemsFor(window, keeps)
+				want += len(wants) * len(inputs) * len(sources) * len(systems)
+				for _, wanted := range wants {
+					for _, input := range inputs {
+						for _, source := range sources {
+							for _, system := range systems {
+								s := requestSizing{wanted: wanted, input: input, window: window, system: system, keeps: keeps,
+									source: source, sent: clampMaxTokens(wanted, window, input)}
+								// What each move would actually send. "Raise
+								// max_tokens" names no number, so the move is
+								// modelled as raising it as far as it needs to
+								// go, and it is priced at the input the next
+								// request carries, which includes the reply just
+								// cut off. /compact leaves the system prompt,
+								// what the compaction keeps and a summary of
+								// unknown length behind, so it is priced by the
+								// summary: helps says whether one that comes out
+								// at summary tokens would let the next request,
+								// capped at want, ask for more than beyond. A
+								// promise has to hold at the longest summary a
+								// compaction keeps; a condition has to name the
+								// longest that helps, and one below the shortest
+								// summary there can be is no condition at all.
+								raiseSends := clampMaxTokens(math.MaxInt, window, input+s.sent)
+								raiseHelps := raiseSends > s.sent
+								helps := func(want, summary, beyond int) bool {
+									return clampMaxTokens(want, window, s.afterCompaction(summary)) > beyond
+								}
 
-							got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
-							where := fmt.Sprintf("window %d, max_tokens %d, input %d, system %d (sent %d)", window, wanted, input, system, s.sent)
-							checked++
-							hedged := strings.Contains(got, "if its summary comes out short")
+								got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
+								where := fmt.Sprintf("window %d, max_tokens %d, input %d, system %d, keeps %d (sent %d)", window, wanted, input, system, keeps, s.sent)
+								checked++
+								hedged, at := false, 0
+								if m := hedgeAt.FindStringSubmatch(got); m != nil {
+									hedged = true
+									at, _ = strconv.Atoi(m[1])
+								}
+								checkHedge := func(want, beyond int) {
+									switch {
+									case at < shortestSummary || at >= longestSummary:
+										t.Errorf("%s: conditions /compact on a summary of %d tokens, outside [%d, %d):\n%s", where, at, shortestSummary, longestSummary, got)
+									case !helps(want, at, beyond):
+										t.Errorf("%s: conditions /compact on a summary of %d tokens, which sends no more than %d:\n%s", where, at, beyond, got)
+									case helps(want, at+1, beyond):
+										t.Errorf("%s: conditions /compact on a summary of %d tokens, when %d would still do:\n%s", where, at, at+1, got)
+									}
+								}
 
-							switch {
-							case strings.Contains(got, "cannot give a reply more"):
-								if raiseHelps || compactBest > s.sent || bothBest > s.sent {
-									t.Errorf("%s: says nothing can give more, but raise=%v compact(best)=%d both(best)=%d against %d:\n%s",
-										where, raiseHelps, compactBest, bothBest, s.sent, got)
-								}
-							case strings.Contains(got, "for longer answers"):
-								if !raiseHelps {
-									t.Errorf("%s: prescribes raising max_tokens, which sends %d after %d:\n%s", where, raiseSends, s.sent, got)
-								}
-								// When it names a cap, the cap has to be what
-								// raising would actually get, and the way past
-								// the cap has to be one that works.
-								if cap := fmt.Sprintf("gets at most %d", raiseSends); strings.Contains(got, "gets at most") && !strings.Contains(got, cap) {
-									t.Errorf("%s: names a cap that is not what raising gets (%d):\n%s", where, raiseSends, got)
-								}
-								past := strings.Contains(got, "until /compact makes room")
 								switch {
-								case past && !hedged && bothWorst <= raiseSends:
-									t.Errorf("%s: promises /compact past the cap, but at worst it sends %d against %d:\n%s", where, bothWorst, raiseSends, got)
-								case past && hedged && (bothBest <= raiseSends || bothWorst > raiseSends):
-									t.Errorf("%s: hedges /compact past the cap, but best=%d worst=%d against %d:\n%s", where, bothBest, bothWorst, raiseSends, got)
-								case !past && strings.Contains(got, "gets at most") && bothBest > raiseSends:
-									t.Errorf("%s: names a cap and no way past it, though /compact at best sends %d:\n%s", where, bothBest, got)
+								case strings.Contains(got, "cannot give a reply more"):
+									if raiseHelps || helps(wanted, shortestSummary, s.sent) || helps(math.MaxInt, shortestSummary, s.sent) {
+										t.Errorf("%s: says nothing can give more, but raise=%v compact(shortest)=%v both(shortest)=%v against %d:\n%s",
+											where, raiseHelps, helps(wanted, shortestSummary, s.sent), helps(math.MaxInt, shortestSummary, s.sent), s.sent, got)
+									}
+									// The room it names is what the shortest
+									// compaction leaves, which is the one figure
+									// that lets a person check the claim.
+									room := window - s.afterCompaction(shortestSummary) - contextHeadroom
+									if room < 0 {
+										room = 0
+									}
+									if m := roomFor.FindStringSubmatch(got); m == nil || m[1] != strconv.Itoa(room) {
+										t.Errorf("%s: names a room that is not what the shortest compaction leaves (%d):\n%s", where, room, got)
+									}
+								case strings.Contains(got, "for longer answers"):
+									if !raiseHelps {
+										t.Errorf("%s: prescribes raising max_tokens, which sends %d after %d:\n%s", where, raiseSends, s.sent, got)
+									}
+									// When it names a cap, the cap has to be what
+									// raising would actually get, and the way past
+									// the cap has to be one that works.
+									if cap := fmt.Sprintf("gets at most %d", raiseSends); strings.Contains(got, "gets at most") && !strings.Contains(got, cap) {
+										t.Errorf("%s: names a cap that is not what raising gets (%d):\n%s", where, raiseSends, got)
+									}
+									past := strings.Contains(got, "until /compact makes room")
+									switch {
+									case past && !hedged && !helps(math.MaxInt, longestSummary, raiseSends):
+										t.Errorf("%s: promises /compact past the cap, but at the longest summary it sends no more than %d:\n%s", where, raiseSends, got)
+									case past && hedged:
+										checkHedge(math.MaxInt, raiseSends)
+									case !past && strings.Contains(got, "gets at most") && helps(math.MaxInt, shortestSummary, raiseSends):
+										t.Errorf("%s: names a cap and no way past it, though /compact at the shortest summary sends more than %d:\n%s", where, raiseSends, got)
+									}
+								case strings.Contains(got, "needs both /compact and a higher max_tokens"):
+									if hedged {
+										checkHedge(math.MaxInt, s.sent)
+									} else if !helps(math.MaxInt, longestSummary, s.sent) {
+										t.Errorf("%s: promises both, which at the longest summary sends no more than %d:\n%s", where, s.sent, got)
+									}
+									if raiseHelps || helps(wanted, shortestSummary, s.sent) {
+										t.Errorf("%s: says both are needed, but raise=%v compact(shortest)=%v alone would do:\n%s",
+											where, raiseHelps, helps(wanted, shortestSummary, s.sent), got)
+									}
+								case strings.Contains(got, "/compact makes room"):
+									if hedged {
+										checkHedge(wanted, s.sent)
+									} else if !helps(wanted, longestSummary, s.sent) {
+										t.Errorf("%s: promises /compact, which at the longest summary sends no more than %d:\n%s", where, s.sent, got)
+									}
+								default:
+									t.Errorf("%s: the notice recommends nothing this test recognises:\n%s", where, got)
 								}
-							case strings.Contains(got, "needs both /compact and a higher max_tokens"):
-								if hedged && (bothBest <= s.sent || bothWorst > s.sent) {
-									t.Errorf("%s: hedges both, but best=%d worst=%d against %d:\n%s", where, bothBest, bothWorst, s.sent, got)
-								}
-								if !hedged && bothWorst <= s.sent {
-									t.Errorf("%s: promises both, which at worst sends %d after %d:\n%s", where, bothWorst, s.sent, got)
-								}
-								if raiseHelps || compactBest > s.sent {
-									t.Errorf("%s: says both are needed, but raise=%v compact(best)=%d alone would do:\n%s",
-										where, raiseHelps, compactBest, got)
-								}
-							case strings.Contains(got, "/compact makes room"):
-								if hedged && (compactBest <= s.sent || compactWorst > s.sent) {
-									t.Errorf("%s: hedges /compact, but best=%d worst=%d against %d:\n%s", where, compactBest, compactWorst, s.sent, got)
-								}
-								if !hedged && compactWorst <= s.sent {
-									t.Errorf("%s: promises /compact, which at worst sends %d after %d:\n%s", where, compactWorst, s.sent, got)
-								}
-							default:
-								t.Errorf("%s: the notice recommends nothing this test recognises:\n%s", where, got)
-							}
 
-							// Anything that blames the window has to say where
-							// the figure came from, and offer a larger one when
-							// nobody stated it. A guess from a model name is the
-							// likeliest reason a window looks full when it is
-							// not, and a branch that leaves it out tells
-							// somebody to compact a conversation that fits.
-							if !strings.Contains(got, "window") {
-								continue
-							}
-							if !strings.Contains(got, string(source)) {
-								t.Errorf("%s, window %s: blames the window without saying where the figure came from:\n%s", where, source, got)
-							}
-							// Offered whenever the figure was not stated,
-							// and also when nothing else helps at all:
-							// there the window is the only lever there is,
-							// so it is worth naming even to the person who
-							// set it.
-							offers := strings.Contains(got, "set context_window") || strings.Contains(got, "raise context_window")
-							nothingHelps := strings.Contains(got, "cannot give a reply more")
-							if want := nothingHelps || source != windowFromConfig; offers != want {
-								t.Errorf("%s, window %s: offering a larger context_window = %v, want %v:\n%s", where, source, offers, want, got)
+								// Anything that blames the window has to say where
+								// the figure came from, and offer a larger one when
+								// nobody stated it. A guess from a model name is the
+								// likeliest reason a window looks full when it is
+								// not, and a branch that leaves it out tells
+								// somebody to compact a conversation that fits.
+								if !strings.Contains(got, "window") {
+									continue
+								}
+								if !strings.Contains(got, string(source)) {
+									t.Errorf("%s, window %s: blames the window without saying where the figure came from:\n%s", where, source, got)
+								}
+								// Offered whenever the figure was not stated,
+								// and also when nothing else helps at all:
+								// there the window is the only lever there is,
+								// so it is worth naming even to the person who
+								// set it.
+								offers := strings.Contains(got, "set context_window") || strings.Contains(got, "raise context_window")
+								nothingHelps := strings.Contains(got, "cannot give a reply more")
+								if want := nothingHelps || source != windowFromConfig; offers != want {
+									t.Errorf("%s, window %s: offering a larger context_window = %v, want %v:\n%s", where, source, offers, want, got)
+								}
 							}
 						}
 					}
 				}
 			}
 		}
-		if want := len(windows) * len(wants) * len(inputs) * len(sources) * len(systems); checked != want {
+		if checked != want {
 			t.Fatalf("checked %d combinations, want %d", checked, want)
 		}
 	})
