@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.144.0
+
+A terminal that stops redrawing the whole conversation, and a release gate that cannot be fooled about what it tested.
+
+**Changed**
+
+* **The terminal renders the transcript entry by entry instead of whole.** `refreshViewport` rebuilt every entry on every event, and an event is every streaming delta of every reply, so the cost of a turn grew with the length of the session. On a 200-turn transcript at eighty columns that was 8.6ms per delta. Each entry's rendered text is now kept and reused, and an arriving event renders the entry it changed. An entry depends on nothing but itself and the width, so a hit is decided by comparing the entry.
+* **The test suite under the race detector went from 190s to 47s**, because twelve of its tests were paying that square: their helpers post two hundred events one at a time. The slowest single test went from 50s to 4.8s.
+
+**Fixed**
+
+* **A release could be stamped from a tree the gate never saw whole.** `git ls-files --others` reports a repository inside the checkout as one directory entry, and the walk that hashes the tree could not read it: the entry contributed a constant line, the digest stayed plausible, and the guard against a short walk never fired because only one line was lost. Every file under such a directory was then invisible to the identity, so editing one did not move it and `make dist` accepted a stamp that covered nothing of it. A file the user cannot read did the same. Both are refused now, by name.
+* **The agent harness's own worktrees were that shape**, hidden only by `.git/info/exclude`, which is not committed. Any other clone had a gate one worktree away from stamping a tree it had not read. The ignore is committed.
+* **A submodule is recorded by the commit it is pinned to.** It was refused, which could not be undone: `--exclude-standard` does not apply to a tracked path, so the refusal's own advice to ignore it could never work and the tree would never stamp again. The pin is read before the check for a path that is not there, because a clone does not check submodules out unless it is asked to, and on such a tree the path does not exist at all.
+* **A file name could forge a refusal.** Unreadable paths were marked in the digest stream and found again with grep, and paths enter that stream raw, so a tracked file named like the marker made the gate refuse a tree it could read and then name a path that did not exist. They go on a channel only the script writes to now.
+* **The stamp is written by a checked command.** A redirect straight onto it truncated it to nothing when the identity could not be taken, while the gate still reported everything passed; the move that replaced the redirect was itself unchecked.
+* **`notes.md` is ignored.** RELEASING.md says to write it at the repository root between `make check` and `make dist`, where, untracked and unignored, it joined the tree identity and invalidated the stamp the gate had just written. One wasted full gate per release.
+* **A hung CI job ends by itself and says what hung.** The Windows build job carried no `timeout-minutes`, so GitHub's six-hour default applied and a step that takes 75 seconds ran for 44 minutes. Every job is bounded, every step that builds or tests is bounded, and every `go test` carries `-timeout`, sized from the slowest package rather than the lane. Two tests hold all of it over the workflows and the gate script.
+* **A whitespace-only model reply keeps its place.** Whether an entry appears at all was decided in two places by two different rules, so the number of blank lines on screen depended on which path drew it.
+
 ## v0.143.1
 
 Bedrock refused every turn over one MCP tool.
