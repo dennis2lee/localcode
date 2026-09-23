@@ -70,10 +70,10 @@ cd "$(dirname "$0")/.."
 # the detector. Its own lane, so it runs beside the slow one rather than
 # after it.
 checks=(
-	"race	race	go test ./... -race -parallel 8 -count=1"
-	"plain	plain	go test ./... -count=1"
+	"race	race	go test ./... -race -parallel 8 -count=1 -timeout 6m"
+	"plain	plain	go test ./... -count=1 -timeout 6m"
 	"go	vet	go vet ./..."
-	"go	gui	go build -tags gui ./... && go test -tags gui -race ./internal/gui/ -count=1"
+	"go	gui	go build -tags gui ./... && go test -tags gui -race ./internal/gui/ -count=1 -timeout 6m"
 	"go	windows	GOOS=windows GOARCH=amd64 go build ./..."
 	"go	linux	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./..."
 	"go	deadcode	scripts/check-deadcode.sh"

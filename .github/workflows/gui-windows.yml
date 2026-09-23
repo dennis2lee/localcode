@@ -38,6 +38,15 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    # A bound on the job, because this one had none and the default is
+    # six hours. On 2026-09-22 the test step below, which takes about
+    # 75 seconds, sat for 38 minutes until it was cancelled by hand; the
+    # re-run passed in two. Nothing was going to stop it, and because
+    # the attempt had to be force-cancelled its log was not kept, so
+    # which test hung is not known. Normal is about two minutes end to
+    # end, so this is roughly seven times that: long enough never to
+    # fire on a slow runner, short enough to be a bound.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -141,13 +150,22 @@ jobs:
       # with 27 failing tests in internal/session was reported green,
       # and the only reason anybody saw them was reading the log. Under
       # bash, Actions sets `-e`, and the first failure ends the step.
+      #
+      # -timeout on every invocation, because the job timeout above is a
+      # bound and not a diagnosis: it kills the runner and says nothing
+      # about why. `go test` reaching its own timeout panics and prints
+      # every goroutine's stack, which names the test that hung. These
+      # four commands take about 20 seconds each, so six minutes is the
+      # answer to "this is not running any more" rather than a limit any
+      # honest run could reach. Go's own default is ten minutes per
+      # package, which is both looser and silent about being a default.
       - name: Test the Windows code paths
         shell: bash
         run: |
-          go test ./internal/update/ ./internal/childproc/
-          go test ./internal/userdirs/ ./internal/skills/ ./internal/rules/
-          go test ./internal/session/ ./internal/daemon/
-          go test ./cmd/localcode/
+          go test -timeout 6m ./internal/update/ ./internal/childproc/
+          go test -timeout 6m ./internal/userdirs/ ./internal/skills/ ./internal/rules/
+          go test -timeout 6m ./internal/session/ ./internal/daemon/
+          go test -timeout 6m ./cmd/localcode/
         env:
           CGO_ENABLED: '0'
 
@@ -221,6 +239,6 @@ jobs:
       # `run:` under PowerShell reports only the last command's status.
       - name: Test every package
         shell: bash
-        run: go test ./... -count=1
+        run: go test ./... -count=1 -timeout 6m
         env:
           CGO_ENABLED: '0'
