@@ -271,6 +271,18 @@ func TestRehydrateUsageCompactionClearsSnapshotButKeepsCumulative(t *testing.T) 
 // way, or a session restored after a debate carries a count taken over
 // rounds that are no longer there and sizes its next request against a
 // conversation several times the size of the one it has.
+// A rewind replaces the history live through setHistory and the count
+// goes with it; the log's rewound event has to do the same on a restart.
+func TestRehydrateUsageDropsTheCountARewindInvalidates(t *testing.T) {
+	latest, haveUsage, _ := rehydrateUsage([]events.Event{
+		ev(events.TypeUsage, map[string]any{"input_tokens": 9000, "output_tokens": 100, "max_context": 16384, "model": "m1", "measured": 8000}),
+		ev(events.TypeRewound, map[string]any{"from_seq": 3}),
+	})
+	if haveUsage {
+		t.Errorf("a count taken before a rewind survived it: %+v", latest)
+	}
+}
+
 func TestRehydrateUsageDropsTheCountADebateCollapseInvalidates(t *testing.T) {
 	latest, haveUsage, cum := rehydrateUsage([]events.Event{
 		ev(events.TypeDebateStarted, map[string]any{"task": "decide"}),

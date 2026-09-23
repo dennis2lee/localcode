@@ -109,6 +109,33 @@ func TestTheInputEstimateSeesWhatTheCountCouldNot(t *testing.T) {
 		t.Errorf("a tool result appended after the count left the estimate at %d, want %d", got, wantTool)
 	}
 
+	// A history that measures less than the count covered cannot make
+	// the estimate smaller than the count: the difference is floored,
+	// because every place that shrinks a history drops the count and a
+	// negative delta would mean the count is stale in the other direction.
+	loop.mu.Lock()
+	loop.usage[sid] = sessionUsage{InputTokens: 5000, OutputTokens: 400, Measured: measured + 10_000}
+	loop.mu.Unlock()
+	if got := loop.inputEstimate(sid, "", withReply); got != 5400 {
+		t.Errorf("a measurement above the conversation pulled the estimate to %d, want the count itself, 5400", got)
+	}
+	loop.mu.Lock()
+	loop.usage[sid] = sessionUsage{InputTokens: 5000, OutputTokens: 400, Measured: measured}
+	loop.mu.Unlock()
+
+	// A prompt served wholly from the cache counts nothing fresh, and is
+	// still a count: input_tokens 0 beside a cached prefix is not "no
+	// usage yet".
+	loop.mu.Lock()
+	loop.usage[sid] = sessionUsage{InputTokens: 0, CachedInputTokens: 5000, OutputTokens: 400, Measured: measured}
+	loop.mu.Unlock()
+	if got := loop.inputEstimate(sid, "", withReply); got != 5400 {
+		t.Errorf("a wholly cached prompt gave %d, want the cached count plus the reply, 5400: input_tokens 0 was read as no count", got)
+	}
+	loop.mu.Lock()
+	loop.usage[sid] = sessionUsage{InputTokens: 5000, OutputTokens: 400, Measured: measured}
+	loop.mu.Unlock()
+
 	// An image appended after the count is an addition too, and not
 	// one a character count can see.
 	withImage := append(append([]provider.Message(nil), withReply...),
@@ -1448,6 +1475,15 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		}
 		if want := len(windows) * len(wants) * len(inputs) * len(sources) * len(systems); checked != want {
 			t.Fatalf("checked %d combinations, want %d", checked, want)
+		}
+	})
+
+	t.Run("a run with no profile name is named by its model", func(t *testing.T) {
+		s := requestSizing{wanted: 4096, input: 1000, window: 32768, source: windowFromConfig,
+			sent: clampMaxTokens(4096, 32768, 1000)}
+		got := cutOffNotice(s, "", "DSA-Flash-CODE")
+		if !strings.Contains(got, `"DSA-Flash-CODE"`) {
+			t.Errorf("with no profile name the notice names nothing the person can find:\n%s", got)
 		}
 	})
 

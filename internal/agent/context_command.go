@@ -156,12 +156,12 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 		builtinCount++
 	}
 	toolTokens := builtinTokens + mcpTokens
-	convTokens := 0
-	for _, msg := range history {
-		for _, blk := range msg.Content {
-			convTokens += (len([]rune(blk.Text)) + len([]rune(blk.ToolResultContent)) + len(blk.ToolInput)) / 4
-		}
-	}
+	// Measured by the same estimator that sizes a request, so the figures
+	// on this report add up to the one the clamp below is computed from.
+	// It counted runes here and bytes there, and the report then said a
+	// conversation of 251 tokens was shrinking the next reply on a 6506
+	// window, with the 1724 the clamp had actually used appearing nowhere.
+	convTokens := estimateTokens("", history)
 	maxTokens := profile.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = defaultMaxTokens
@@ -188,8 +188,15 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 	// reservation that was not being made: this said 4096 on a session
 	// whose replies were being cut off at 1024.
 	fmt.Fprintf(&b, "  %-24s %d tokens\n", "reserved for the answer", maxTokens)
-	if got := clampMaxTokens(maxTokens, window, l.inputEstimate(sessionID, env.SystemText(), history)); got < maxTokens {
-		fmt.Fprintf(&b, "  %-24s %d tokens, because the window is nearly full\n", "  but the next reply gets", got)
+	// The input the next request is sized against is the provider's
+	// count for what it has read plus an estimate of what was added
+	// since, which is more than the conversation figure above whenever a
+	// system prompt and tool definitions are in the request. Printed
+	// with the shrunk figure, so the line can be checked against the
+	// window rather than taken on faith.
+	if inUse := l.inputEstimate(sessionID, env.SystemText(), history); clampMaxTokens(maxTokens, window, inUse) < maxTokens {
+		fmt.Fprintf(&b, "  %-24s %d tokens, because the window is nearly full: about %d of %d in use\n",
+			"  but the next reply gets", clampMaxTokens(maxTokens, window, inUse), inUse, window)
 	}
 	fmt.Fprintf(&b, "  %-24s %d tokens\n", "context window", window)
 	// Where that number came from. It is the half nobody could see, and
