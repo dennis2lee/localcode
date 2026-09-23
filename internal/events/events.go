@@ -127,13 +127,17 @@ const (
 	TypeWorkspaceChanged Type = "workspace.changed"
 
 	// TypeUsage reports the latest known token usage/context-window fill
-	// for a turn: {"input_tokens","output_tokens","cached_input_tokens","measured","max_context","percent",
-	// "tps","show_tps","model"}.
+	// for a turn: {"input_tokens","output_tokens","cached_input_tokens",
+	// "cache_read_tokens","cache_write_tokens","measured","max_context",
+	// "percent","tps","show_tps","model"}. The two cache keys split
+	// cached_input_tokens the way it is billed; logs written before them
+	// carry cached_input_tokens alone.
 	TypeUsage Type = "usage"
 	// TypeCompacted marks that compaction replaced a session's in-memory
 	// history with a summary: {"summary_length","manual","summary",
-	// "model","input_tokens","output_tokens"} (the last three are omitted
-	// if the compaction call didn't report usage). "summary" carries the
+	// "model","input_tokens","output_tokens","cache_read_tokens",
+	// "cache_write_tokens"} (the last five are omitted if the compaction
+	// call didn't report usage). "summary" carries the
 	// full text (not just its length) so a restart can restore the exact
 	// post-compaction history — see agent.rehydrateHistory.
 	TypeCompacted Type = "compacted"

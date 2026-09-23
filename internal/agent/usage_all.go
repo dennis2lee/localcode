@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -76,15 +75,13 @@ func (l *Loop) usageAcross(w usageWindow) (totals map[string]modelTotals, sessio
 			}
 			switch ev.Type {
 			case events.TypeUsage:
-				addModelTotals(totals, dataString(ev.Data, "model"),
-					dataInt(ev.Data, "input_tokens"), dataInt(ev.Data, "output_tokens"))
+				addModelTotals(totals, dataString(ev.Data, "model"), callTokensOf(ev.Data))
 				counted = true
 			case events.TypeCompacted:
 				// The compaction call is billed too, when it reported
 				// usage. Cleared and rewound markers carry none.
 				if model := dataString(ev.Data, "model"); model != "" {
-					addModelTotals(totals, model,
-						dataInt(ev.Data, "input_tokens"), dataInt(ev.Data, "output_tokens"))
+					addModelTotals(totals, model, callTokensOf(ev.Data))
 					counted = true
 				}
 			}
@@ -101,34 +98,12 @@ func usageAcrossReport(w usageWindow, totals map[string]modelTotals, sessions, u
 	if len(totals) == 0 {
 		return fmt.Sprintf("No usage recorded for %s.", w.name)
 	}
-	models := make([]string, 0, len(totals))
-	for m := range totals {
-		models = append(models, m)
-	}
-	sort.Strings(models)
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "Token usage across %s (%d conversation", w.name, sessions)
+	heading := fmt.Sprintf("Token usage across %s (%d conversation", w.name, sessions)
 	if sessions != 1 {
-		b.WriteString("s")
+		heading += "s"
 	}
-	b.WriteString("):\n")
-
-	var grandInput, grandOutput, grandCalls int
-	for _, m := range models {
-		t := totals[m]
-		name := m
-		if name == "" {
-			name = "(model not recorded)"
-		}
-		fmt.Fprintf(&b, "- %s: input %d · output %d · total %d (%d calls)\n",
-			name, t.InputTokens, t.OutputTokens, t.InputTokens+t.OutputTokens, t.Calls)
-		grandInput += t.InputTokens
-		grandOutput += t.OutputTokens
-		grandCalls += t.Calls
-	}
-	fmt.Fprintf(&b, "\nGrand total: input %d · output %d · total %d (%d calls)",
-		grandInput, grandOutput, grandInput+grandOutput, grandCalls)
+	var b strings.Builder
+	b.WriteString(usageReport(heading+"):\n", totals))
 	if unread > 0 {
 		fmt.Fprintf(&b, "\n\n%d conversation(s) could not be read and are not in this total.", unread)
 	}

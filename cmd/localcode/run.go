@@ -442,7 +442,9 @@ type runWriter struct {
 
 	text    strings.Builder
 	toolLog []map[string]any
-	usage   map[string]any
+	// usage is the run's token spend, summed over every model call it
+	// made; nil until one reports.
+	usage   map[string]int
 	started time.Time
 	errs    []string
 }
@@ -499,12 +501,44 @@ func (w *runWriter) record(ev events.Event) {
 		// Only the settled figures. The live ones broadcast during a
 		// stream are estimates and carry a flag saying so; reporting one
 		// as the answer's cost would be reporting a guess as a fact.
+		//
+		// Summed, not the last one: a run that called a tool made two
+		// model calls or more, each billed for its own request, and the
+		// last call alone was the run's cost only when there was one.
 		if estimated, _ := ev.Data["estimated"].(bool); !estimated {
-			w.usage = ev.Data
+			w.addUsage(ev.Data)
+		}
+	case events.TypeCompacted:
+		// An automatic compaction's summarizing call is billed too, and
+		// names its model when it reported usage, as /usage counts it.
+		if model, _ := ev.Data["model"].(string); model != "" {
+			w.addUsage(ev.Data)
 		}
 	case events.TypeError:
 		if s, _ := ev.Data["error"].(string); s != "" {
 			w.errs = append(w.errs, s)
+		}
+	}
+}
+
+// usageKeys are the figures the json format reports, as the usage event
+// names them. The cache read and write are the prompt the provider served
+// from its cache or wrote to it, billed apart from input_tokens.
+var usageKeys = []string{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"}
+
+// addUsage folds one model call's reported figures into the run's.
+func (w *runWriter) addUsage(data map[string]any) {
+	if w.usage == nil {
+		w.usage = map[string]int{}
+		for _, k := range usageKeys {
+			w.usage[k] = 0
+		}
+	}
+	for _, k := range usageKeys {
+		if n, ok := data[k].(float64); ok {
+			w.usage[k] += int(n)
+		} else if n, ok := data[k].(int); ok {
+			w.usage[k] += n
 		}
 	}
 }
@@ -527,10 +561,7 @@ func (w *runWriter) finish(sessionID string, turnErr error) error {
 			out["tools"] = w.toolLog
 		}
 		if w.usage != nil {
-			out["usage"] = map[string]any{
-				"input_tokens":  w.usage["input_tokens"],
-				"output_tokens": w.usage["output_tokens"],
-			}
+			out["usage"] = w.usage
 		}
 		if turnErr != nil {
 			out["error"] = turnErr.Error()

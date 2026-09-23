@@ -92,7 +92,7 @@ export function freshSessionState(id) {
     // Work booked for later in this conversation, id -> entry. Per
     // session like the tasks are, and reloaded on a switch.
     schedules: new Map(), // task_id -> {agent, status}
-    lastUsage: null,   // {input_tokens, output_tokens, cached_input_tokens, measured, max_context, percent, tps, show_tps, model}
+    lastUsage: null,   // {input_tokens, output_tokens, cached_input_tokens, cache_read_tokens, cache_write_tokens, measured, max_context, percent, tps, show_tps, model}
     // The model this conversation chose apart from its agent, or '' when
     // the agent's own is answering. Per session and cleared on a switch
     // like everything else here: a choice made in one conversation is not

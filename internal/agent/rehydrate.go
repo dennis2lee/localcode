@@ -396,7 +396,7 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 				Measured:          dataInt(ev.Data, "measured"),
 				CachedInputTokens: dataInt(ev.Data, "cached_input_tokens"),
 			}
-			addModelTotals(cum, dataString(ev.Data, "model"), latest.InputTokens, latest.OutputTokens)
+			addModelTotals(cum, dataString(ev.Data, "model"), callTokensOf(ev.Data))
 
 		case events.TypeCompacted, events.TypeCleared, events.TypeRewound, events.TypeDebateEnded:
 			// A debate that had nothing to collapse left the history,
@@ -427,7 +427,7 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			// bill.
 			haveUsage = false
 			if model := dataString(ev.Data, "model"); model != "" {
-				addModelTotals(cum, model, dataInt(ev.Data, "input_tokens"), dataInt(ev.Data, "output_tokens"))
+				addModelTotals(cum, model, callTokensOf(ev.Data))
 			}
 		}
 	}
@@ -437,15 +437,30 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 	return latest, haveUsage, cum
 }
 
-func addModelTotals(cum map[string]modelTotals, model string, inputTokens, outputTokens int) {
+func addModelTotals(cum map[string]modelTotals, model string, c callTokens) {
 	if model == "" {
 		return
 	}
-	mt := cum[model]
-	mt.InputTokens += inputTokens
-	mt.OutputTokens += outputTokens
-	mt.Calls++
-	cum[model] = mt
+	cum[model] = cum[model].add(c)
+}
+
+// callTokensOf reads what one logged call reported. A usage event names
+// the whole cached prefix as cached_input_tokens, for the window, and
+// the split the way it is billed as cache_read_tokens and
+// cache_write_tokens. A log written before the split was recorded has
+// only the first, and what it has that the split does not account for
+// is counted as cached, not guessed into either column.
+func callTokensOf(data map[string]any) callTokens {
+	c := callTokens{
+		input:      dataInt(data, "input_tokens"),
+		output:     dataInt(data, "output_tokens"),
+		cacheRead:  dataInt(data, "cache_read_tokens"),
+		cacheWrite: dataInt(data, "cache_write_tokens"),
+	}
+	if rest := dataInt(data, "cached_input_tokens") - c.cacheRead - c.cacheWrite; rest > 0 {
+		c.cached = rest
+	}
+	return c
 }
 
 func isTrue(v any) bool {

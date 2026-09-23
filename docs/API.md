@@ -284,8 +284,8 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `settings.changed` | every daemon switch as a snapshot, daemon-wide |
 | `config.changed` | `{"auto_compact_enabled", "show_tps"}` from `/config` |
 | `workspace.changed` | `{"path"}`; per session |
-| `usage` | `{"input_tokens", "output_tokens", "cached_input_tokens", "measured", "max_context", "percent", "tps", "show_tps", "model"}`; from reported usage, never estimated. `percent` is of the whole prompt the provider read, `input_tokens` plus `cached_input_tokens`; `input_tokens` alone is what was billed at the full rate. `measured` is the daemon's own character estimate of the same messages, for sizing after a restart. Draw a gauge from `percent`, not from `input_tokens` |
-| `compacted` | `{"summary_length", "manual", "summary", "model"?, "input_tokens"?, "output_tokens"?}` |
+| `usage` | `{"input_tokens", "output_tokens", "cached_input_tokens", "cache_read_tokens", "cache_write_tokens", "measured", "max_context", "percent", "tps", "show_tps", "model"}`; from reported usage, never estimated. `percent` is of the whole prompt the provider read, `input_tokens` plus `cached_input_tokens`; `input_tokens` alone is what was billed at the full rate. `cache_read_tokens` and `cache_write_tokens` split `cached_input_tokens` the way it is billed: served from the prompt cache, or written to it. Logs written before the split carry `cached_input_tokens` alone. `measured` is the daemon's own character estimate of the same messages, for sizing after a restart. Draw a gauge from `percent`, not from `input_tokens` |
+| `compacted` | `{"summary_length", "manual", "summary", "model"?, "input_tokens"?, "output_tokens"?, "cache_read_tokens"?, "cache_write_tokens"?}`. The token figures are the summarizing call's own, present when it reported usage |
 | `cleared` | no payload; `/clear`, a barrier rebuilding history |
 | `rewound` | `{"from_seq", "turn_text", "restored", "skipped", "created"}` |
 | `redone` | `{"rewind_seq", "turn_text", "written", "skipped"}` |

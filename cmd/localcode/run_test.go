@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"localcode/internal/events"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -457,4 +458,39 @@ func freeAddr(t *testing.T) string {
 	addr := ln.Addr().String()
 	ln.Close()
 	return addr
+}
+
+// A run that called a tool made two model calls or more, each billed for
+// its own request, and the json format reported the last one's usage as
+// the run's. It sums every settled call now, an automatic compaction's
+// summarizing call included, and says what the cache served, which under
+// a working prompt cache is most of what was sent. The live estimates a
+// stream broadcasts are left out: a guess is not a cost.
+func TestTheJSONUsageIsTheWholeRun(t *testing.T) {
+	var buf strings.Builder
+	w := newRunWriter(formatJSON, &buf)
+	for _, ev := range []events.Event{
+		{Type: events.TypeUsage, Data: map[string]any{"input_tokens": 900.0, "output_tokens": 999.0, "estimated": true}},
+		{Type: events.TypeUsage, Data: map[string]any{"input_tokens": 12.0, "output_tokens": 30.0, "cache_read_tokens": 4096.0, "cache_write_tokens": 128.0, "estimated": false}},
+		{Type: events.TypeCompacted, Data: map[string]any{"model": "m", "input_tokens": 5.0, "output_tokens": 50.0, "cache_read_tokens": 4000.0}},
+		{Type: events.TypeCompacted, Data: map[string]any{"summary_length": 12.0}},
+		{Type: events.TypeUsage, Data: map[string]any{"input_tokens": 20, "output_tokens": 7, "cache_read_tokens": 4224, "estimated": false}},
+	} {
+		w.record(ev)
+	}
+	if err := w.finish("s1", nil); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	var got struct {
+		Usage map[string]int `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(buf.String()), &got); err != nil {
+		t.Fatalf("output is not one JSON object: %v\n%s", err, buf.String())
+	}
+	want := map[string]int{"input_tokens": 37, "output_tokens": 87, "cache_read_tokens": 12320, "cache_write_tokens": 128}
+	for k, v := range want {
+		if got.Usage[k] != v {
+			t.Errorf("usage[%s] = %d, want %d (the whole run, estimates left out): %v", k, got.Usage[k], v, got.Usage)
+		}
+	}
 }

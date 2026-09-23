@@ -65,7 +65,7 @@ Default execution characteristics:
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--format` | `text` | `text` streams the answer as it arrives; `json` prints one object at the end; `stream-json` prints one event per line, the same events every other client reads |
+| `--format` | `text` | `text` streams the answer as it arrives; `json` prints one object at the end; `stream-json` prints one event per line, the same events every other client reads. The `json` object's `usage` is the whole run: `input_tokens`, `output_tokens`, `cache_read_tokens` and `cache_write_tokens`, summed over every model call it made, an automatic compaction's included |
 | `--agent <name>` | `general-purpose` | Which agent from config answers |
 | `--profile <name>` | the agent's own | Which model profile to use |
 | `--model <id>` | the profile's own | Override the model id inside that profile |
@@ -1257,6 +1257,18 @@ A model-invoked command cannot invoke another command.
 Shows cumulative token counts per model for the current session, with no model call. **Token counts only, never dollar figures.**
 
 `/usage` sums every API call since session creation, including repeatedly sent history. The status-bar context percentage describes the latest request instead.
+
+Each model's line counts four kinds of token, because they are billed apart:
+
+| Figure | What it is |
+|---|---|
+| `input` | Prompt the provider counted fresh. |
+| `cache read` | Prompt the provider served from its prompt cache. Under a working cache this is most of the repeatedly sent history. Billed below the input rate. |
+| `cache write` | Prompt the provider wrote to its prompt cache. Billed above the input rate. |
+| `output` | What the model wrote. |
+| `total` | All four. |
+
+The two cache figures appear only when a provider reported them. Anthropic and Bedrock report them. OpenAI-compatible servers do not. A conversation logged before the two were recorded apart shows its cached prompt as one `cached` figure.
 
 With no calls yet, it just says so.
 

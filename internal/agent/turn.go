@@ -1233,9 +1233,14 @@ func drainText(ctx context.Context, stream <-chan provider.StreamEvent) (string,
 			case provider.EventTextDelta:
 				text.WriteString(ev.TextDelta)
 			case provider.EventUsage:
+				// The cache fields too: the summarization call sends the
+				// same system prompt and history a turn does, so a working
+				// cache serves most of it, and those tokens are billed.
 				usage.hasUsage = true
 				usage.inputTokens = ev.InputTokens
 				usage.outputTokens = ev.OutputTokens
+				usage.cacheRead = ev.CacheReadTokens
+				usage.cacheWrite = ev.CacheWriteTokens
 			case provider.EventMessageStop:
 				if ev.StopReason != "" {
 					stop = ev.StopReason

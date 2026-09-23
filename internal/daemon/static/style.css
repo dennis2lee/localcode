@@ -1363,6 +1363,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .usage-seg { height: 100%; }
 .usage-seg.usage-input { background: var(--interactive); }
 .usage-seg.usage-output { background: var(--ok); }
+.usage-seg.usage-cache-read { background: var(--muted); }
+.usage-seg.usage-cache-write { background: var(--warn); }
+.usage-seg.usage-cached { background: var(--faint); }
+.usage-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: var(--t-fine); color: var(--muted); }
+.usage-key { display: inline-flex; align-items: center; gap: 4px; }
+.usage-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.usage-swatch.usage-input { background: var(--interactive); }
+.usage-swatch.usage-output { background: var(--ok); }
+.usage-swatch.usage-cache-read { background: var(--muted); }
+.usage-swatch.usage-cache-write { background: var(--warn); }
+.usage-swatch.usage-cached { background: var(--faint); }
 
 #permission-settings-modal {
   position: fixed;

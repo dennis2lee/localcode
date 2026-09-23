@@ -165,3 +165,62 @@ test('closing the window closes every stream it opened', async () => {
   assert.ok(streams.every((s) => s.closed), 'a viewing stream kept running after its window closed');
   assert.equal(app.internals.usageView.isOpen, false);
 });
+
+// Under a working prompt cache the repeatedly sent history is not in
+// input_tokens: the provider reports it as a cache read, and the first
+// time a prefix is cached as a cache write. Both are billed, apart from
+// input and from each other, so each has its own figure and its own
+// segment, and the total counts them.
+test('the cache read and write are counted, named, and drawn apart', async () => {
+  const app = await withSessions();
+  const streams = await openUsage(app);
+  streams[0].emit({ type: 'usage', data: {
+    model: 'model-a', input_tokens: 12, output_tokens: 30,
+    cached_input_tokens: 4224, cache_read_tokens: 4096, cache_write_tokens: 128,
+  } });
+  streams[0].emit({ type: 'compacted', data: {
+    model: 'model-a', input_tokens: 8, output_tokens: 70, cache_read_tokens: 4000,
+  } });
+  assert.equal(figuresByModel(app)['model-a'],
+    'input 20 · cache read 8096 · cache write 128 · output 100 · total 8344 (2 calls)');
+  const [row] = rows(app);
+  const width = (cls) => row.querySelector(cls).style.width;
+  assert.equal(width('.usage-cache-read'), `${(8096 / 8344) * 100}%`);
+  assert.equal(width('.usage-cache-write'), `${(128 / 8344) * 100}%`);
+  assert.equal(width('.usage-input'), `${(20 / 8344) * 100}%`);
+  assert.equal(width('.usage-output'), `${(100 / 8344) * 100}%`);
+});
+
+// A log written before the split was recorded names only
+// cached_input_tokens. It was sent, so it counts, as cached, without a
+// claim about which part was read and which written. And a provider
+// with no cache reads as it always did: no cache figure, no cache
+// segment.
+test('an unsplit cached figure counts as cached, and no cache draws nothing', async () => {
+  const app = await withSessions();
+  const streams = await openUsage(app);
+  streams[0].emit({ type: 'usage', data: { model: 'old-log', input_tokens: 12, output_tokens: 30, cached_input_tokens: 4224 } });
+  streams[0].emit({ type: 'usage', data: { model: 'no-cache', input_tokens: 150, output_tokens: 40 } });
+  const figures = figuresByModel(app);
+  assert.equal(figures['old-log'], 'input 12 · cached 4224 · output 30 · total 4266 (1 call)');
+  assert.equal(figures['no-cache'], 'input 150 · output 40 · total 190 (1 call)');
+  const plain = rows(app).find((r) => r.querySelector('.usage-model').textContent === 'no-cache');
+  assert.equal(plain.querySelectorAll('.usage-seg').length, 2, 'a provider with no cache drew a cache segment');
+  const old = rows(app).find((r) => r.querySelector('.usage-model').textContent === 'old-log');
+  assert.ok(old.querySelector('.usage-cached'), 'the unsplit cached figure has no segment');
+});
+
+// Five colours of segment, and a bar whose colours and scale are a
+// secret is decoration. The key under the rows names the kinds some row
+// drew, and only those, and the total the bars are scaled to.
+test('the key names the segments drawn and the scale', async () => {
+  const app = await withSessions();
+  const streams = await openUsage(app);
+  streams[0].emit({ type: 'usage', data: { model: 'model-a', input_tokens: 12, output_tokens: 30, cache_read_tokens: 4096 } });
+  streams[0].emit({ type: 'usage', data: { model: 'model-b', input_tokens: 150, output_tokens: 40 } });
+  const legend = app.el('usage-rows').querySelector('.usage-legend');
+  assert.ok(legend, 'no key under the rows');
+  const keys = Array.from(legend.querySelectorAll('.usage-key')).map((k) => k.textContent);
+  assert.deepEqual(keys, ['input', 'cache read', 'output']);
+  assert.match(legend.textContent, /scaled to the largest total, 4138 tokens/);
+});

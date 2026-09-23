@@ -44,44 +44,88 @@ export const usageView = new Modal(usageModalEl);
 // opening.
 let viewingStreams = new Map();
 
+// count reads one reported figure. Non-numeric counts read as zero rather
+// than poisoning the sum — the daemon's dataInt likewise answers 0 for
+// anything that is not a number.
+function count(v) {
+  return Number.isFinite(+v) ? Math.trunc(+v) : 0;
+}
+
+// tokensOf is what one logged call reported, the way the daemon's
+// callTokensOf (internal/agent/rehydrate.go) reads it: fresh input,
+// output, and the cached prompt split the way it is billed, read from the
+// cache or written to it. A log written before the split was recorded
+// names only cached_input_tokens, and what the split does not account
+// for is counted as cached rather than guessed into either column.
+export function tokensOf(d) {
+  const t = {
+    input: count(d.input_tokens),
+    output: count(d.output_tokens),
+    cacheRead: count(d.cache_read_tokens),
+    cacheWrite: count(d.cache_write_tokens),
+    cached: 0,
+  };
+  const rest = count(d.cached_input_tokens) - t.cacheRead - t.cacheWrite;
+  if (rest > 0) t.cached = rest;
+  return t;
+}
+
+// totalOf is every token a row's calls processed: what they were sent,
+// fresh or from the cache, and what they wrote back.
+export function totalOf(row) {
+  return row.input + row.cacheRead + row.cacheWrite + row.cached + row.output;
+}
+
 // addModelTokens folds one billable model call into the running per-model
 // totals. A mirror of the daemon's addModelTotals (internal/agent/
 // rehydrate.go): a usage report naming no model is left out, because there
 // is no row it could belong to and a row for "unknown" would invite
-// reading it as a model. Non-numeric counts read as zero rather than
-// poisoning the sum — the daemon's dataInt likewise answers 0 for
-// anything that is not a number.
-export function addModelTokens(totals, model, inputTokens, outputTokens) {
+// reading it as a model.
+export function addModelTokens(totals, model, tokens) {
   if (typeof model !== 'string' || model === '') return totals;
-  const input = Number.isFinite(+inputTokens) ? Math.trunc(+inputTokens) : 0;
-  const output = Number.isFinite(+outputTokens) ? Math.trunc(+outputTokens) : 0;
-  const row = totals[model] || { input: 0, output: 0, calls: 0 };
-  row.input += input;
-  row.output += output;
+  const row = totals[model] || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cached: 0, calls: 0 };
+  row.input += tokens.input;
+  row.output += tokens.output;
+  row.cacheRead += tokens.cacheRead;
+  row.cacheWrite += tokens.cacheWrite;
+  row.cached += tokens.cached;
   row.calls += 1;
   totals[model] = row;
   return totals;
 }
 
 // foldUsageEvent counts one log event toward the per-model totals, if it
-// is one of the two kinds /usage all counts. usage events are every
-// provider call's own full request (history included), so summing them is
-// the spend — not the context fill, which is the latest snapshot and a
-// different number. compacted events count when they name the model whose
-// summarising call they billed; cleared and rewound markers carry no model
-// and no tokens, so they pass through untouched, exactly as on the daemon
-// side where only a non-empty model adds anything.
+// is one of the two kinds /usage all counts. A usage event is one
+// provider call: input_tokens is what it counted fresh, and under a
+// working prompt cache the repeatedly sent history is not in it at all
+// but in the cache read, so the spend is the sum of all four figures, not
+// of input and output. compacted events count when they name the model
+// whose summarising call they billed; cleared and rewound markers carry
+// no model and no tokens, so they pass through untouched, exactly as on
+// the daemon side where only a non-empty model adds anything.
 export function foldUsageEvent(totals, ev) {
   if (!ev || typeof ev.type !== 'string') return totals;
   const d = (ev.data && typeof ev.data === 'object') ? ev.data : {};
   if (ev.type === 'usage') {
-    addModelTokens(totals, d.model, d.input_tokens, d.output_tokens);
+    addModelTokens(totals, d.model, tokensOf(d));
   } else if (ev.type === 'compacted') {
     if (typeof d.model === 'string' && d.model !== '') {
-      addModelTokens(totals, d.model, d.input_tokens, d.output_tokens);
+      addModelTokens(totals, d.model, tokensOf(d));
     }
   }
   return totals;
+}
+
+// figuresOf is one row's figures as /usage prints them: the cache columns
+// only where there is something in them, so a provider with no prompt
+// cache reads as it always has.
+export function figuresOf(t) {
+  const parts = [`input ${t.input}`];
+  if (t.cacheRead > 0) parts.push(`cache read ${t.cacheRead}`);
+  if (t.cacheWrite > 0) parts.push(`cache write ${t.cacheWrite}`);
+  if (t.cached > 0) parts.push(`cached ${t.cached}`);
+  parts.push(`output ${t.output}`);
+  return `${parts.join(' · ')} · total ${totalOf(t)} (${t.calls} call${t.calls === 1 ? '' : 's'})`;
 }
 
 // summarizeUsageEvents folds a whole log's events into per-model totals.
@@ -95,12 +139,12 @@ export function summarizeUsageEvents(events) {
 }
 
 // renderUsage draws the totals: one row per model, most-spending first,
-// each with its input, output and combined figures beside a bar showing
-// the same two numbers as two segments of one track. Two segments rather
-// than one summed bar because input and output tokens are neither
-// interchangeable nor priced alike, and a single bar summing them tells a
-// comforting lie about where the spend went. The track is scaled to the
-// largest model's combined total, which the caption says — a bar whose
+// each with its figures beside a bar showing the same numbers as segments
+// of one track: input, the cache read and write where there are any, and
+// output. Segments rather than one summed bar because these tokens are
+// neither interchangeable nor priced alike, and a single bar summing them
+// tells a comforting lie about where the spend went. The track is scaled
+// to the largest model's total, which the caption says — a bar whose
 // scale is a secret is decoration, not information.
 //
 // Totals, never percentages: there is no window here to be a percent of,
@@ -108,8 +152,7 @@ export function summarizeUsageEvents(events) {
 // conversation's window fill, a different thing entirely.
 export function renderUsage() {
   const totals = app.usageTotals || {};
-  const models = Object.keys(totals).sort((a, b) =>
-    (totals[b].input + totals[b].output) - (totals[a].input + totals[a].output));
+  const models = Object.keys(totals).sort((a, b) => totalOf(totals[b]) - totalOf(totals[a]));
   usageRowsEl.innerHTML = '';
   if (models.length === 0) {
     const empty = document.createElement('div');
@@ -118,10 +161,9 @@ export function renderUsage() {
     usageRowsEl.appendChild(empty);
     return;
   }
-  const largest = Math.max(...models.map((m) => totals[m].input + totals[m].output));
+  const largest = Math.max(...models.map((m) => totalOf(totals[m])));
   for (const m of models) {
     const t = totals[m];
-    const combined = t.input + t.output;
     const row = document.createElement('div');
     row.className = 'usage-row';
 
@@ -132,25 +174,64 @@ export function renderUsage() {
 
     const figures = document.createElement('div');
     figures.className = 'usage-figures';
-    figures.textContent =
-      `input ${t.input} · output ${t.output} · total ${combined} (${t.calls} call${t.calls === 1 ? '' : 's'})`;
+    figures.textContent = figuresOf(t);
     row.appendChild(figures);
 
     const track = document.createElement('div');
     track.className = 'usage-track';
-    track.title = `${m}: input ${t.input}, output ${t.output} tokens across every conversation, archived ones included`;
-    const inputSeg = document.createElement('div');
-    inputSeg.className = 'usage-seg usage-input';
-    inputSeg.style.width = largest > 0 ? `${(t.input / largest) * 100}%` : '0%';
-    track.appendChild(inputSeg);
-    const outputSeg = document.createElement('div');
-    outputSeg.className = 'usage-seg usage-output';
-    outputSeg.style.width = largest > 0 ? `${(t.output / largest) * 100}%` : '0%';
-    track.appendChild(outputSeg);
+    track.title = `${m}: ${figuresOf(t)}, across every conversation, archived ones included`;
+    // Input first and output last as before, the cache between them, and
+    // a cache segment only where there is a cache figure: an empty
+    // segment is nothing to draw and a stray one to style.
+    for (const [cls, n] of [
+      ['usage-input', t.input],
+      ['usage-cache-read', t.cacheRead],
+      ['usage-cache-write', t.cacheWrite],
+      ['usage-cached', t.cached],
+      ['usage-output', t.output],
+    ]) {
+      if (cls !== 'usage-input' && cls !== 'usage-output' && n === 0) continue;
+      const seg = document.createElement('div');
+      seg.className = `usage-seg ${cls}`;
+      seg.style.width = largest > 0 ? `${(n / largest) * 100}%` : '0%';
+      track.appendChild(seg);
+    }
     row.appendChild(track);
 
     usageRowsEl.appendChild(row);
   }
+  usageRowsEl.appendChild(usageLegend(models.map((m) => totals[m]), largest));
+}
+
+// usageLegend says what each colour of segment is and what the bars are
+// scaled to, for the kinds some row actually drew: a key for a segment
+// nobody can see is noise, and a bar whose colours and scale are a secret
+// is decoration, not information.
+function usageLegend(rowsShown, largest) {
+  const legend = document.createElement('div');
+  legend.className = 'usage-legend';
+  const kinds = [
+    ['usage-input', 'input', () => true],
+    ['usage-cache-read', 'cache read', (t) => t.cacheRead > 0],
+    ['usage-cache-write', 'cache write', (t) => t.cacheWrite > 0],
+    ['usage-cached', 'cached', (t) => t.cached > 0],
+    ['usage-output', 'output', () => true],
+  ];
+  for (const [cls, label, shown] of kinds) {
+    if (!rowsShown.some(shown)) continue;
+    const key = document.createElement('span');
+    key.className = 'usage-key';
+    const swatch = document.createElement('span');
+    swatch.className = `usage-swatch ${cls}`;
+    key.appendChild(swatch);
+    key.appendChild(document.createTextNode(label));
+    legend.appendChild(key);
+  }
+  const scale = document.createElement('span');
+  scale.className = 'usage-scale';
+  scale.textContent = `bars scaled to the largest total, ${largest} tokens`;
+  legend.appendChild(scale);
+  return legend;
 }
 
 // renderUsageScope names what the figures cover and what they left out.

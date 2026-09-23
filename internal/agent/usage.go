@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"localcode/internal/events"
@@ -48,10 +51,57 @@ func (u sessionUsage) promptTokens() int {
 // API call is billed for its own full request (history included), so
 // summing every call's tokens is the correct "how much has this session
 // used" figure — see /usage.
+//
+// Four kinds of token, kept apart because they are billed apart. Under a
+// working prompt cache the repeatedly sent history is not in InputTokens
+// at all: the provider serves it from the cache and reports it as a
+// cache read, at a fraction of the input rate, and the first time a
+// prefix is cached it is reported as a cache write, above the input
+// rate. A total of input and output alone left out most of what a cached
+// session sent, which is the part /usage says it counts.
 type modelTotals struct {
-	InputTokens  int
-	OutputTokens int
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
+	// CachedTokens is cached prompt a log recorded as one figure, without
+	// saying which part was read from the cache and which was written to
+	// it: usage events carried only cached_input_tokens before the two
+	// were recorded apart. Counted, because it was sent, and shown as
+	// what it is rather than guessed into either column.
+	CachedTokens int
 	Calls        int
+}
+
+// callTokens is what one model call reported, in the four kinds
+// modelTotals keeps, plus a cached figure recorded without its split.
+type callTokens struct {
+	input, output, cacheRead, cacheWrite, cached int
+}
+
+func (t modelTotals) add(c callTokens) modelTotals {
+	t.InputTokens += c.input
+	t.OutputTokens += c.output
+	t.CacheReadTokens += c.cacheRead
+	t.CacheWriteTokens += c.cacheWrite
+	t.CachedTokens += c.cached
+	t.Calls++
+	return t
+}
+
+// total is every token the calls processed: what they were sent, fresh
+// or from the cache, and what they wrote back.
+func (t modelTotals) total() int {
+	return t.InputTokens + t.CacheReadTokens + t.CacheWriteTokens + t.CachedTokens + t.OutputTokens
+}
+
+func (t modelTotals) cached() bool {
+	return t.CacheReadTokens > 0 || t.CacheWriteTokens > 0 || t.CachedTokens > 0
+}
+
+// tokensOf is what a streamed call reported.
+func tokensOf(u streamUsage) callTokens {
+	return callTokens{input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite}
 }
 
 // turnRate accumulates output tokens and generation time across every
@@ -126,11 +176,7 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, us
 	if l.cumulativeUsage[sessionID] == nil {
 		l.cumulativeUsage[sessionID] = map[string]modelTotals{}
 	}
-	mt := l.cumulativeUsage[sessionID][model]
-	mt.InputTokens += usage.inputTokens
-	mt.OutputTokens += usage.outputTokens
-	mt.Calls++
-	l.cumulativeUsage[sessionID][model] = mt
+	l.cumulativeUsage[sessionID][model] = l.cumulativeUsage[sessionID][model].add(tokensOf(usage))
 	l.mu.Unlock()
 
 	percent := 0.0
@@ -154,6 +200,10 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, us
 		// how much of its window is in use. Kept out of input_tokens,
 		// which clients show as what was billed at the full rate.
 		"cached_input_tokens": u.CachedInputTokens,
+		// The same prefix split the way it is billed, read from the
+		// cache or written to it, for /usage and the usage window.
+		"cache_read_tokens":  usage.cacheRead,
+		"cache_write_tokens": usage.cacheWrite,
 		// Explicitly false so it clears the flag set by the live estimates
 		// broadcast during the stream — a client merges usage events, and
 		// a missing key would leave the "~" on an exact figure.
@@ -173,15 +223,67 @@ func (l *Loop) getUsage(sessionID string) (sessionUsage, bool) {
 // addCumulativeUsage folds one off-transcript model call (e.g. the
 // compaction summarization) into /usage's running totals, without touching
 // the latest-usage snapshot or emitting a usage event.
-func (l *Loop) addCumulativeUsage(sessionID, model string, inputTokens, outputTokens int) {
+func (l *Loop) addCumulativeUsage(sessionID, model string, usage streamUsage) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.cumulativeUsage[sessionID] == nil {
 		l.cumulativeUsage[sessionID] = map[string]modelTotals{}
 	}
-	mt := l.cumulativeUsage[sessionID][model]
-	mt.InputTokens += inputTokens
-	mt.OutputTokens += outputTokens
-	mt.Calls++
-	l.cumulativeUsage[sessionID][model] = mt
+	l.cumulativeUsage[sessionID][model] = l.cumulativeUsage[sessionID][model].add(tokensOf(usage))
+}
+
+// usageLine is one model's figures as /usage prints them. The cache
+// columns appear only where there is something in them, so a provider
+// with no prompt cache reads as it always has.
+func usageLine(t modelTotals) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "input %d", t.InputTokens)
+	if t.CacheReadTokens > 0 {
+		fmt.Fprintf(&b, " · cache read %d", t.CacheReadTokens)
+	}
+	if t.CacheWriteTokens > 0 {
+		fmt.Fprintf(&b, " · cache write %d", t.CacheWriteTokens)
+	}
+	if t.CachedTokens > 0 {
+		fmt.Fprintf(&b, " · cached %d", t.CachedTokens)
+	}
+	fmt.Fprintf(&b, " · output %d · total %d (%d calls)", t.OutputTokens, t.total(), t.Calls)
+	return b.String()
+}
+
+// usageReport is the per-model lines, the grand total, and, where any
+// cache column appeared, what those columns are.
+func usageReport(heading string, totals map[string]modelTotals) string {
+	models := make([]string, 0, len(totals))
+	for m := range totals {
+		models = append(models, m)
+	}
+	sort.Strings(models)
+
+	var b strings.Builder
+	b.WriteString(heading)
+	var grand modelTotals
+	for _, m := range models {
+		t := totals[m]
+		name := m
+		if name == "" {
+			name = "(model not recorded)"
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", name, usageLine(t))
+		grand.InputTokens += t.InputTokens
+		grand.OutputTokens += t.OutputTokens
+		grand.CacheReadTokens += t.CacheReadTokens
+		grand.CacheWriteTokens += t.CacheWriteTokens
+		grand.CachedTokens += t.CachedTokens
+		grand.Calls += t.Calls
+	}
+	fmt.Fprintf(&b, "\nGrand total: %s", usageLine(grand))
+	if grand.cached() {
+		b.WriteString("\n\nCache read and cache write are prompt the provider served from its prompt cache or wrote to it. " +
+			"They are counted apart from input because they are billed apart from it, a read below the input rate and a write above it.")
+		if grand.CachedTokens > 0 {
+			b.WriteString(" Cached is prompt a log recorded as one figure, without saying which of the two it was.")
+		}
+	}
+	return b.String()
 }

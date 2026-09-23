@@ -292,7 +292,7 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 	// The summarization call is billed like any other — fold it into
 	// /usage's totals even though it never appears in the transcript.
 	if usage.hasUsage {
-		l.addCumulativeUsage(sessionID, profile.Model, usage.inputTokens, usage.outputTokens)
+		l.addCumulativeUsage(sessionID, profile.Model, usage)
 	}
 	if summary == "" {
 		return fmt.Errorf("model returned an empty summary")
@@ -352,6 +352,8 @@ func (l *Loop) compactHistory(ctx context.Context, sessionID string, p provider.
 		compactedData["model"] = profile.Model
 		compactedData["input_tokens"] = usage.inputTokens
 		compactedData["output_tokens"] = usage.outputTokens
+		compactedData["cache_read_tokens"] = usage.cacheRead
+		compactedData["cache_write_tokens"] = usage.cacheWrite
 	}
 	l.Store.Append(sessionID, events.TypeCompacted, compactedData)
 	return nil
