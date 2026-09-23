@@ -1723,6 +1723,12 @@ func TestDaemonForkCopiesTheConversation(t *testing.T) {
 	if len(evs) != 3 {
 		t.Fatalf("fork log has %d events, want the fork marker plus the 2 conversation ones (the source's rename is not part of the conversation): %+v", len(evs), evs)
 	}
+	// And the marker says how many events after it are the copy, the
+	// rename left out, so a total across conversations skips exactly the
+	// copy and counts the fork's own calls.
+	if got := fmt.Sprint(evs[0].Data["copied"]); got != fmt.Sprint(len(evs)-1) {
+		t.Errorf("session.forked says %s events are the copy, want %d (the source's rename is not copied)", got, len(evs)-1)
+	}
 	if evs[0].Seq != 1 {
 		t.Errorf("fork log starts at seq %d, want its own sequence from 1", evs[0].Seq)
 	}

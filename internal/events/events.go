@@ -58,8 +58,10 @@ const (
 	// is not looking simply misses it, which is correct.
 	TypeThinkingDelta Type = "thinking.delta"
 	TypeThinkingEnd   Type = "thinking.end"
-	// TypeError is {"error","recovered"?,"history_replaced"?}.
+	// TypeError is {"error","recovered"?,"history_replaced"?,"fallback"?}.
 	// "recovered": true is a notice from a turn that carries on.
+	// "fallback" names the model the turn moved to, on the notice that
+	// reports the switch.
 	// "history_replaced": true marks the trim that dropped the oldest
 	// messages to fit the window: the daemon's usage count went with
 	// them, and a client's context gauge has to let go of its reading.

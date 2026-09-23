@@ -1269,9 +1269,9 @@ Each model's line counts these kinds of token, because they are billed apart:
 | `output` | What the model wrote. |
 | `total` | All of them. |
 
-A cache figure appears only when a provider reported one. Anthropic and Bedrock report a read and a write. An OpenAI-compatible server reports a read when it sends `prompt_tokens_details.cached_tokens`, as OpenAI does and vLLM does with prefix caching, and never a write.
+A cache figure appears only when a provider reported one. Anthropic and Bedrock report a read and a write. An OpenAI-compatible server reports a read when it sends `prompt_tokens_details.cached_tokens`, as OpenAI does and some compatible servers do, and never a write.
 
-A fork copies the log of the conversation it was forked from. Its own `/usage` includes the calls in that copy. `/usage all` counts them once, under the conversation that made them.
+A fork copies the log of the conversation it was forked from. Its own `/usage` includes the calls in that copy. `/usage all` counts them once, under the conversation that made them. Deleting that conversation removes its calls from `/usage all`, the copies in its forks included, as deleting any conversation removes its own.
 
 The Web UI's usage window draws the `/usage all` figures, read from the daemon (`GET /api/usage`), so the two always agree. Sessions no list shows count too: a sub-agent's, a scheduled run's, a debate reviewer's.
 
@@ -1637,7 +1637,7 @@ Provider token usage is recorded as a `usage` event at turn end. Bedrock, Anthro
 
 The event includes input and output tokens, the cached prompt and its split into cache read and cache write, context limit, percentage used, and tokens per second. The context limit uses [internal/modelinfo](../internal/modelinfo/modelinfo.go), with a 128000-token default for unknown models. Both clients use this event for their status bars.
 
-The percentage counts the whole prompt the provider read, including the part it served from its prompt cache. Anthropic and Bedrock report that part apart from `input_tokens`, which covers only what was counted fresh, and `input_tokens` stays that figure because it is what was billed at the full rate. The event carries the cached part as `cached_input_tokens`, and `measured`, the daemon's own character-based estimate of the same messages, so a session restored from its log can size its next request the same way a live one does.
+The percentage counts the whole prompt the provider read, including the part it served from its prompt cache, and the reply, which the next request carries. Anthropic, Bedrock, and an OpenAI-compatible server that sends `prompt_tokens_details.cached_tokens` report the cached part apart from `input_tokens`, which covers only what was counted fresh, and `input_tokens` stays that figure because it is what was billed at the full rate. The event carries the cached part as `cached_input_tokens`, and `measured`, the daemon's own character-based estimate of the same messages, so a session restored from its log can size its next request the same way a live one does.
 
 The next request is sized against what the conversation holds now: the provider's count for the messages it covered, plus an estimate of anything appended since, such as a tool result. Replacing the history (a compaction, `/clear`, a rewind, a debate's collapse) drops the count, and the next request is sized from the estimate until the server reports again.
 

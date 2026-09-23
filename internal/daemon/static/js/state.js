@@ -55,13 +55,14 @@ export const app = {
   zoom: 1,               // the page's own ctrl+wheel zoom, restored across reloads
   autoCompactPercent: 50,
   permissionRules: {},        // tool -> [{match, decision}]
-  // The per-model spend the usage window is showing: model ->
-  // {input, output, calls}, folded from every session's own log (archived
-  // ones included) while the window is open. App-scoped rather than per
-  // session because it is a fact about the daemon, not about the open
-  // conversation — and cleared on every opening, so a viewing never shows
-  // the previous one's rows while the new streams are still arriving.
-  usageSummary: null, // GET /api/usage's answer while the usage window is open
+  // What GET /api/usage answered for the usage window: {scope, models,
+  // sessions, unread, note?}, each model carrying calls and the token
+  // kinds usage.js's KINDS table names. The same figures /usage all
+  // prints. App-scoped rather than per session because it is a fact about
+  // the daemon, not about the open conversation, and cleared on every
+  // opening, so a viewing never shows the previous answer while the new
+  // one is on its way.
+  usageSummary: null,
   // The four switches as they apply to the open conversation, plus where
   // each answer came from ('session' | 'parent' | 'default') and the
   // directories this conversation has approved leaving the project for.
