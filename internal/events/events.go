@@ -214,11 +214,15 @@ const (
 	// nor this session's model: it is another agent's words, and a client
 	// that paints it as either is lying about who said it. "session" is
 	// the reviewer's own session, so the row can be opened and read.
-	// TypeDebateEnded: {"reason","rounds","approved","note"}, reason being
-	// one of approved / rounds / stalled / stopped / failed. "note" is the
-	// sentence to show; it rides on the event rather than being written as
-	// a reply, because a reply with no user message before it rehydrates
-	// as a second assistant message in a row.
+	// TypeDebateEnded: {"reason","rounds","approved","note","collapsed"},
+	// reason being one of approved / rounds / stalled / stopped / failed.
+	// "note" is the sentence to show; it rides on the event rather than
+	// being written as a reply, because a reply with no user message
+	// before it rehydrates as a second assistant message in a row.
+	// "collapsed" says the debate's rounds were taken out of the history:
+	// the daemon's usage count went with them, and a client's context
+	// gauge has to let go of its reading too. Logs written before the key
+	// existed do not carry it.
 	// TypeInputRequest is a question the model put to the person in the
 	// middle of a turn: {"id", "question", "options": [...]}. The turn is
 	// blocked until TypeInputResolved carries {"id","answer"} back, or

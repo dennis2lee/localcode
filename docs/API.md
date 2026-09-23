@@ -300,7 +300,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `plan.updated` | `{"plan": [{"step", "status"}], "explanation"?}`; logged, unlike `task.progress` |
 | `debate.started` | `{"author", "reviewer", "reviewers", "model", "models", "rounds", "task"}`. `reviewer` holds the reviewers joined and `model` the first reviewer's. Clients prefer the plurals and fall back to the singulars for logs written before them |
 | `debate.review` | `{"round", "rounds", "reviewer", "model", "text", "approved", "session"}` |
-| `debate.ended` | `{"reason" ("approved", "rounds", "stalled", "stopped", "failed"), "rounds", "approved", "note"}` |
+| `debate.ended` | `{"reason" ("approved", "rounds", "stalled", "stopped", "failed"), "rounds", "approved", "note", "collapsed"}`. `collapsed: true` means the rounds were taken out of the history and the context usage count went with them, as after a compaction. Absent in logs written before it existed |
 | `delegated` | `{"agent", "prompt"}`; a sub-agent answered on its own model |
 | `effort.changed` | `{"model", "agent", "level", "source", "levels", "note"}` |
 | `model.changed` | `{"agent", "profile", "model", "provider", "source", "choices"}` |

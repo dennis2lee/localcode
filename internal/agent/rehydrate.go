@@ -399,6 +399,13 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 			addModelTotals(cum, dataString(ev.Data, "model"), latest.InputTokens, latest.OutputTokens)
 
 		case events.TypeCompacted, events.TypeCleared, events.TypeRewound, events.TypeDebateEnded:
+			// A debate that had nothing to collapse left the history,
+			// and so the count, as it was. Older logs carry no
+			// "collapsed" and are reset, which is where the count's
+			// absence errs: the next request is sized from the estimate.
+			if ev.Type == events.TypeDebateEnded && ev.Data["collapsed"] == false {
+				continue
+			}
 			// setHistory drops the count live on each of these, so the
 			// snapshot shouldn't carry forward past this point — but the
 			// cumulative totals are never cleared by any of them, and the

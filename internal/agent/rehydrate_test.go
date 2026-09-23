@@ -295,6 +295,24 @@ func TestRehydrateUsageDropsTheCountADebateCollapseInvalidates(t *testing.T) {
 	if cum["m1"].InputTokens != 12900 {
 		t.Errorf("cum[m1] = %+v, want the rounds still billed", cum["m1"])
 	}
+
+	// Said to have collapsed: reset, as the log without the key is.
+	if _, haveUsage, _ := rehydrateUsage([]events.Event{
+		ev(events.TypeUsage, map[string]any{"input_tokens": 12900, "max_context": 16384, "model": "m1"}),
+		ev(events.TypeDebateEnded, map[string]any{"rounds": 3, "collapsed": true}),
+	}); haveUsage {
+		t.Errorf("a count survived a debate that says it collapsed")
+	}
+
+	// Said to have collapsed nothing: the history was not replaced live,
+	// the count was not dropped, and a restart keeps it too.
+	latest, haveUsage, _ = rehydrateUsage([]events.Event{
+		ev(events.TypeUsage, map[string]any{"input_tokens": 12900, "max_context": 16384, "model": "m1"}),
+		ev(events.TypeDebateEnded, map[string]any{"rounds": 1, "collapsed": false}),
+	})
+	if !haveUsage || latest.InputTokens != 12900 {
+		t.Errorf("a debate that collapsed nothing dropped the count on restart: have=%v %+v", haveUsage, latest)
+	}
 }
 
 // TestRehydrateAllRestoresContextAndCostAcrossRestart is the end-to-end

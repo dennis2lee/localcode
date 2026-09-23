@@ -459,6 +459,13 @@ func (m *Model) applyEvent(ev events.Event) {
 		if note, _ := ev.Data["note"].(string); note != "" {
 			m.appendTool("[" + note + "]")
 		}
+		// A collapse replaces the history, as a compaction does. Only a
+		// debate that says it had nothing to collapse keeps the reading;
+		// one from an older daemon that does not say is let go of, since
+		// a blank gauge refills on the next turn and a stale one misleads.
+		if collapsed, said := ev.Data["collapsed"].(bool); !said || collapsed {
+			m.forgetContextFill()
+		}
 	case events.TypeDaemonReplaced:
 		// The daemon under this TUI is a newer process now, and this
 		// stream is about to end; the reconnect lands on it on its own.

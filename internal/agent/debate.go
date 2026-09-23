@@ -309,7 +309,8 @@ func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) 
 	// author needed them while they were running. Read before the note is
 	// finished, because whether anything was collapsed is what decides
 	// whether the note should mention it.
-	switch collapsed, kept := l.collapseDebate(d); {
+	collapsed, kept := l.collapseDebate(d)
+	switch {
 	case !collapsed:
 		// Nothing to take out: a debate that ended on its first round
 		// with no review to answer is already just the task and the
@@ -322,11 +323,16 @@ func (l *Loop) endDebate(d debateRun, reason string, rounds int, approved bool) 
 		note += " The rounds leave the model's context here; what it carries on with is the task and the " +
 			"work as it now stands. They stay in this conversation and in its log."
 	}
+	// "collapsed" says whether the history was replaced, which is what a
+	// client's context gauge and a restart's usage count both need to
+	// know: a collapse drops the count the daemon held, and a debate that
+	// had nothing to collapse leaves it standing.
 	l.Store.Append(d.sessionID, events.TypeDebateEnded, map[string]any{
-		"reason":   reason,
-		"rounds":   rounds,
-		"approved": approved,
-		"note":     note,
+		"reason":    reason,
+		"rounds":    rounds,
+		"approved":  approved,
+		"note":      note,
+		"collapsed": collapsed,
 	})
 }
 
