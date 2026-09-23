@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -892,6 +893,11 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 	// words are: raising max_tokens a long way, compacting to an empty
 	// conversation (the most /compact could free), and both. Advice to
 	// make a move is only true when that move sends more.
+	//
+	// The next request carries the reply that was just cut off, so
+	// raising is priced at input+sent. Priced at input alone, a profile
+	// of 3000 on an 8192 window was told to raise, and raising made the
+	// next reply shorter than the one it was complaining about.
 	advice := []struct {
 		name                  string
 		window, wanted, input int
@@ -899,6 +905,10 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 		says, doesNotSay      string
 	}{
 		{"a profile with room to spare", 32768, 4096, 1000, true, false, true, "raise max_tokens on that profile", "nearly full"},
+		// The reply is the thing that closes the window. Room was 5644
+		// against a 3000-token reply, so raising looked free until that
+		// reply joined the history and left 2644.
+		{"room for more than was sent, but not for two of it", 8192, 3000, 500, false, false, true, "needs both /compact and a higher max_tokens", "for longer answers"},
 		{"a window that shrank the request", 32768, 4096, 28000, false, true, true, "/compact makes room now", "raise max_tokens on that profile"},
 		{"the profile at the floor, on a full window", 32768, 1024, 31000, false, false, true, "needs both /compact and a higher max_tokens", "for longer answers"},
 		{"a window with exactly the profile's figure left", 32768, 4096, 32768 - contextHeadroom - 4096, false, false, true, "needs both /compact and a higher max_tokens", "for longer answers"},
@@ -922,7 +932,7 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 				sends     int
 				wantHelps bool
 			}{
-				{"raising max_tokens", clampMaxTokens(c.wanted*64, c.window, c.input), c.raise},
+				{"raising max_tokens", clampMaxTokens(c.wanted*64, c.window, c.input+clampMaxTokens(c.wanted, c.window, c.input)), c.raise},
 				{"/compact", clampMaxTokens(c.wanted, c.window, 0), c.compact},
 				{"both", clampMaxTokens(c.wanted*64, c.window, 0), c.both},
 			} {
@@ -939,6 +949,118 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 			}
 		})
 	}
+
+	// Where the window figure came from changes what the notice tells
+	// somebody to do about it, and every case above pins one source, so
+	// the two branches that read it were unasserted: swapping their
+	// suffixes passed the whole table.
+	t.Run("what the notice says about a window it was not told", func(t *testing.T) {
+		sources := []struct {
+			source windowSource
+			says   string
+		}{
+			{windowFromConfig, "raise context_window"},
+			{windowGuessed, "set context_window"},
+			{windowFromServer, "set context_window"},
+		}
+		for _, src := range sources {
+			// A window no request can grow in, which is the branch that
+			// has nothing to suggest but a larger window.
+			s := requestSizing{wanted: 4096, input: 500, window: 3072, source: src.source,
+				sent: clampMaxTokens(4096, 3072, 500)}
+			got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
+			if !strings.Contains(got, src.says) {
+				t.Errorf("a window %s does not say %q:\n%s", src.source, src.says, got)
+			}
+			if !strings.Contains(got, "config.json") {
+				t.Errorf("a window %s says where to set it but not in what:\n%s", src.source, got)
+			}
+		}
+
+		// And the branch where the window shrank the request, which
+		// suggests a larger window only when it was not told one.
+		for _, src := range sources {
+			s := requestSizing{wanted: 4096, input: 28000, window: 32768, source: src.source,
+				sent: clampMaxTokens(4096, 32768, 28000)}
+			got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
+			if want := src.source != windowFromConfig; strings.Contains(got, "set context_window") != want {
+				t.Errorf("a window %s: telling them to set context_window = %v, want %v:\n%s",
+					src.source, !want, want, got)
+			}
+		}
+	})
+
+	// The same question asked of the whole space rather than of the
+	// cases somebody thought of. Every round of review on this function
+	// found another combination where a move it recommended sent no more
+	// than the reply that had just been cut off, so the invariant is
+	// worth stating once over everything: whatever the notice tells
+	// somebody to do, doing it has to change the next request.
+	t.Run("every move the notice recommends sends more than was sent", func(t *testing.T) {
+		windows := []int{0, 2048, 3072, 4096, 8192, 32768, 131072}
+		wants := []int{1, 512, 1023, 1024, 1025, 3000, 4096, 64000}
+		inputs := []int{0, 100, 500, 1000, 5000, 26600, 31000, 32000, 200000}
+		checked := 0
+		for _, window := range windows {
+			for _, wanted := range wants {
+				for _, input := range inputs {
+					s := requestSizing{wanted: wanted, input: input, window: window,
+						source: windowFromConfig, sent: clampMaxTokens(wanted, window, input)}
+					// What each move would actually send. "Raise
+					// max_tokens" names no number, so the move is
+					// modelled as raising it as far as it needs to go,
+					// and it is priced at the input the next request
+					// carries, which includes the reply just cut off.
+					// /compact alone leaves the profile's figure where
+					// it is.
+					raiseSends := clampMaxTokens(math.MaxInt, window, input+s.sent)
+					compactSends := clampMaxTokens(wanted, window, 0)
+					bothSends := clampMaxTokens(math.MaxInt, window, 0)
+					raiseHelps := raiseSends > s.sent
+					compactHelps := compactSends > s.sent
+					bothHelps := bothSends > s.sent
+
+					got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
+					where := fmt.Sprintf("window %d, max_tokens %d, input %d (sent %d)", window, wanted, input, s.sent)
+					checked++
+
+					switch {
+					case strings.Contains(got, "cannot give a reply more"):
+						if raiseHelps || compactHelps || bothHelps {
+							t.Errorf("%s: says nothing can give more, but raise=%v compact=%v both=%v:\n%s",
+								where, raiseHelps, compactHelps, bothHelps, got)
+						}
+					case strings.Contains(got, "/compact makes room now"):
+						if !compactHelps {
+							t.Errorf("%s: prescribes /compact, which sends %d after %d:\n%s", where, compactSends, s.sent, got)
+						}
+					case strings.Contains(got, "needs both /compact and a higher max_tokens"):
+						if !bothHelps {
+							t.Errorf("%s: prescribes both, which sends %d after %d:\n%s", where, bothSends, s.sent, got)
+						}
+						if raiseHelps || compactHelps {
+							t.Errorf("%s: says both are needed, but raise=%v compact=%v alone would do:\n%s",
+								where, raiseHelps, compactHelps, got)
+						}
+					case strings.Contains(got, "for longer answers"):
+						if !raiseHelps {
+							t.Errorf("%s: prescribes raising max_tokens, which sends %d after %d:\n%s", where, raiseSends, s.sent, got)
+						}
+						// When it names a cap, the cap has to be what
+						// raising would actually get.
+						if cap := fmt.Sprintf("gets at most %d", raiseSends); strings.Contains(got, "gets at most") && !strings.Contains(got, cap) {
+							t.Errorf("%s: names a cap that is not what raising gets (%d):\n%s", where, raiseSends, got)
+						}
+					default:
+						t.Errorf("%s: the notice recommends nothing this test recognises:\n%s", where, got)
+					}
+				}
+			}
+		}
+		if checked != len(windows)*len(wants)*len(inputs) {
+			t.Fatalf("checked %d combinations, want %d", checked, len(windows)*len(wants)*len(inputs))
+		}
+	})
 
 	t.Run("the profile is named as it appears in config.json", func(t *testing.T) {
 		loop := probeTestLoop(t, &probeCounter{found: false}, profile)

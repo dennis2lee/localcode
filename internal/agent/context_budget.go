@@ -526,11 +526,26 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 	hit := fmt.Sprintf("the reply hit the %q profile's max_tokens limit of %d and was cut off", name, s.sent)
 	// What each move would send, worked out by the function that sizes
 	// the next request, so the advice cannot promise what the request
-	// will not do. Compacting is modelled as an empty conversation, the
-	// most it could ever free: a move that does not help even then does
-	// not help. With no window figure clampMaxTokens has no opinion, so
-	// raising is all that is left, which is what the arithmetic says.
-	raised := clampMaxTokens(math.MaxInt, s.window, s.input)
+	// will not do. With no window figure clampMaxTokens has no opinion,
+	// so raising is all that is left, which is what the arithmetic says.
+	//
+	// Raising is priced against the input the NEXT request will carry,
+	// which is this one's plus the reply that has just been added to it:
+	// inputEstimate returns the provider's own input+output once a turn
+	// has reported usage. Priced at this request's input instead, the
+	// notice told a profile of 3000 on an 8192 window to raise
+	// max_tokens, when the 3000-token reply joining the history left
+	// room for 2644 and raising made the next reply shorter than the one
+	// that had just been cut off.
+	//
+	// It is still a floor, not a promise: whatever the person types next
+	// is on top of it and cannot be known here. The floor is the honest
+	// number, because it is the smallest the next request can be.
+	//
+	// Compacting is modelled as an empty conversation, the most it could
+	// ever free, and it takes the reply with it: a move that does not
+	// help even then does not help.
+	raised := clampMaxTokens(math.MaxInt, s.window, s.input+s.sent)
 	both := clampMaxTokens(math.MaxInt, s.window, 0)
 	inUse := fmt.Sprintf("about %d of %d tokens were in use", s.input, s.window)
 
@@ -544,7 +559,7 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 			"the reply was cut off at %d tokens, and a %d-token context window cannot give a reply more: after the %d tokens held back as a margin, even an empty conversation leaves room for %d. The window figure was %s",
 			s.sent, s.window, contextHeadroom, both, s.source)
 		if s.source == windowFromConfig {
-			return msg + fmt.Sprintf("; if the model's real window is larger, raise context_window on the %q profile", name)
+			return msg + fmt.Sprintf("; if the model's real window is larger, raise context_window on the %q profile in config.json", name)
 		}
 		return msg + fmt.Sprintf("; if the model's real window is larger, set context_window on the %q profile in config.json", name)
 
