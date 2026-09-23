@@ -131,8 +131,13 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 // measure stays over the threshold after each one, so each turn spent a
 // summarization call replacing a summary and one exchange with a summary.
 // Once what followed the summary is longer than the summary, there is
-// something to shrink again. Both sides are this side's estimate, the
-// ruler the summary's own length is held to (see cutSummary).
+// something to shrink again. Both sides are this side's estimate of text,
+// the ruler the summary's own length is held to (see cutSummary), and
+// images are left out of both, as compactionMeasure leaves out the images
+// the count did not see: priced at the sizing's ceiling here, one
+// screenshot pasted after a compaction turned a short follow-up into
+// something to shrink, and the compaction that followed replaced that
+// screenshot with a note.
 //
 // It used to be a fixed floor, the longest summary a compaction keeps,
 // against the conversation less an estimate of the system prompt. That
@@ -144,7 +149,13 @@ func soonAfterASummary(history []provider.Message) bool {
 	if len(history) == 0 || len(history[0].Content) == 0 || history[0].Content[0].Source != compactSummarySource {
 		return false
 	}
-	return estimateTokens("", history[1:]) <= estimateTokens("", history[:1])
+	return textTokens(history[1:]) <= textTokens(history[:1])
+}
+
+// textTokens is what estimateTokens makes of msgs with their images left
+// out.
+func textTokens(msgs []provider.Message) int {
+	return estimateTokens("", msgs) - countImages(msgs)*imageTokenEstimate
 }
 
 // compactionMeasure is how full the conversation is, for deciding
