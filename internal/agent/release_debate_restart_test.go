@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"localcode/internal/events"
+	"localcode/internal/provider"
 )
 
 // A debate's end, a compaction inside one, Stop pressed during its
@@ -136,52 +137,43 @@ func TestARestartDropsTheCountOfADebateItCollapsesAgain(t *testing.T) {
 }
 
 func TestACompactionInsideADebateDoesNotUndoItsCollapse(t *testing.T) {
-	summary := strings.Repeat("summary ", 1000)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		req := dbgRead(r)
-		switch {
-		case strings.Contains(req.raw, "Summarize our conversation so far"):
-			dbgSend(w, textChunks(summary)...)
-		case req.model == authorModel && req.lastRole == "tool":
-			dbgSend(w, textChunks("the sum function")...)
-		case req.model == authorModel && strings.Contains(req.raw, "write a sum function"):
-			dbgSend(w, toolCallChunks("call_glob", "glob", `{\"pattern\":\"*.go\"}`)...)
-		case req.model == authorModel:
-			dbgSend(w, textChunks("hi")...)
-		case req.lastRole == "tool":
-			dbgSend(w, textChunks("review done")...)
-		default:
-			dbgSend(w, toolCallChunks("call_verdict", verdictToolName,
-				`{\"approved\":true,\"findings\":\"fine\"}`)...)
-		}
-	}))
-	defer srv.Close()
-
-	loop := newDebateLoop(t, srv.URL)
-	loop.SetAutoCompactEnabled(true)
-	loop.SetCompactPercent(1) // stands in for a small window where system prompt + summary cross the default 50%
-	sid := startDebateSession(t, loop)
-	for _, line := range []string{"hello", "/compact", "/debate girl 1 write a sum function"} {
-		if err := loop.SendMessage(context.Background(), sid, "boy", line); err != nil {
-			t.Fatalf("%s: %v", line, err)
-		}
+	// Pinned on the log rather than through a live turn: whether a
+	// compaction lands inside a debate is the compaction policy's call,
+	// and a policy change had already stopped the end-to-end version from
+	// compacting at all while it went on passing. This is the log a
+	// compaction at the top of round one writes, and the history the
+	// live session holds after it: the summary, the task and the answer.
+	task := "write a sum function"
+	msg := func(role provider.Role, text string) provider.Message {
+		return provider.Message{Role: role, Content: []provider.Block{provider.TextBlock(text)}}
 	}
-	ended := debateEvents(t, loop, sid, events.TypeDebateEnded)
-	if len(ended) != 1 || ended[0].Data["collapsed"] != true {
-		t.Fatalf("precondition: want one debate.ended with collapsed:true, got %v", ended)
+	evs := []events.Event{
+		ev(events.TypeUserMessage, map[string]any{"text": strings.Repeat("a long first prompt ", 200)}),
+		ev(events.TypeDebateStarted, map[string]any{"task": task}),
+		ev(events.TypeCompacted, map[string]any{"summary": "the conversation so far", "summary_length": 23}),
+		ev(events.TypeUserMessage, map[string]any{"text": task}),
+		ev(events.TypeToolStart, map[string]any{"tool_use_id": "t1", "name": "glob"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": ""}),
+		ev(events.TypeToolEnd, map[string]any{"tool_use_id": "t1", "input": "{}", "content": "main.go"}),
+		ev(events.TypeMessagePartEnd, map[string]any{"text": "the sum function"}),
+		ev(events.TypeDebateEnded, map[string]any{"reason": "approved", "collapsed": true}),
 	}
-	short := func(s string) string { return strings.ReplaceAll(s, summary, "<summary>") }
-	liveN := len(loop.history(sid))
-	live := joinMessages(loop.history(sid))
-	loop.setHistory(sid, nil)
-	loop.RehydrateSession(sid)
-	restoredN := len(loop.history(sid))
-	restored := joinMessages(loop.history(sid))
-	if restored != live {
-		t.Errorf("debate.ended says collapsed:true but a restart rebuilt the rounds:\n--- live (%d messages) ---\n%s--- restored (%d messages) ---\n%s",
-			liveN, short(live), restoredN, short(restored))
+	rebuilt := rehydrateHistory(evs)
+	live := collapsedDebate([]provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Block{{Type: provider.BlockText, Text: summaryHeader + "the conversation so far", Source: compactSummarySource}}},
+		msg(provider.RoleUser, task),
+		{Role: provider.RoleAssistant, Content: []provider.Block{{Type: provider.BlockToolUse, ToolUseID: "t1", ToolName: "glob"}}},
+		{Role: provider.RoleUser, Content: []provider.Block{provider.ToolResultBlock("t1", "main.go", false)}},
+		msg(provider.RoleAssistant, "the sum function"),
+	}, 1, task)
+	if got, want := historyShape(rebuilt), historyShape(live); got != want {
+		t.Errorf("a restart rebuilt a debate compacted at its top as:\n%s\nthe live session holds:\n%s", got, want)
+	}
+	if len(rebuilt) != 3 {
+		t.Errorf("rebuilt %d messages, want the summary, the task and the answer:\n%s", len(rebuilt), historyShape(rebuilt))
 	}
 }
+
 func TestStopDuringTheReviewsIsAStop(t *testing.T) {
 	arrived := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -117,16 +117,34 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 	if float64(used)/float64(window)*100 < float64(l.CompactPercent()) {
 		return false
 	}
-	// A compaction that could not leave the conversation smaller does not
-	// run. It happens when the system prompt alone is most of the window:
-	// every turn measures over the threshold, and each would spend a
-	// summarization call replacing a summary and one exchange with a
-	// summary. The request is still sized to fit, and one the provider
-	// refuses is summarized and retried as any other.
-	if used-estimateTokens(systemPrompt, nil) <= compactionKeeps(history, l.smartOn(ctx))+longestSummary {
+	if soonAfterASummary(history) {
 		return false
 	}
 	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic) == nil
+}
+
+// soonAfterASummary says the conversation is a compaction's summary and
+// not more than as much again after it.
+//
+// A compaction then would mostly summarize a summary, and where the
+// system prompt is most of the window it would do so every turn: the
+// measure stays over the threshold after each one, so each turn spent a
+// summarization call replacing a summary and one exchange with a summary.
+// Once what followed the summary is longer than the summary, there is
+// something to shrink again. Both sides are this side's estimate, the
+// ruler the summary's own length is held to (see cutSummary).
+//
+// It used to be a fixed floor, the longest summary a compaction keeps,
+// against the conversation less an estimate of the system prompt. That
+// kept auto-compaction from running at all on an 8,192-token window until
+// the request was past 80% of it, and it measured the system prompt on
+// one ruler and the count on another, so tool definitions and a Korean
+// system prompt read as conversation.
+func soonAfterASummary(history []provider.Message) bool {
+	if len(history) == 0 || len(history[0].Content) == 0 || history[0].Content[0].Source != compactSummarySource {
+		return false
+	}
+	return estimateTokens("", history[1:]) <= estimateTokens("", history[:1])
 }
 
 // compactionMeasure is how full the conversation is, for deciding

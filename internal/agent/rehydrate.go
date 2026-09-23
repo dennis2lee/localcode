@@ -70,6 +70,9 @@ func (l *Loop) RehydrateSession(sessionID string) {
 	l.setHistory(sessionID, rehydrateHistory(applyRewinds(evs)))
 
 	latest, haveUsage, cum := rehydrateUsage(evs)
+	if haveUsage && latest.Measured > 0 {
+		latest.MeasuredImages = measuredImagesOf(evs, latest.MeasuredImages)
+	}
 
 	l.mu.Lock()
 	if haveUsage {
@@ -447,6 +450,27 @@ func rehydrateUsage(evs []events.Event) (latest sessionUsage, haveUsage bool, cu
 		cum = nil
 	}
 	return latest, haveUsage, cum
+}
+
+// measuredImagesOf is how many images the last count covered. A log
+// written by v0.145.0 records the measurement without that number, and
+// read as zero it said the count covered no images: every image in the
+// history then read as appended since, and the 1,600 tokens each that
+// the measurement had priced it at were taken off the text appended
+// since, which hid a command's output from the compaction decision. The
+// number is worked out instead from the history as it stood at that
+// count, which is what the measurement was taken over.
+func measuredImagesOf(evs []events.Event, recorded int) int {
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].Type != events.TypeUsage {
+			continue
+		}
+		if _, said := evs[i].Data["measured_images"]; said {
+			return recorded
+		}
+		return countImages(rehydrateHistory(applyRewinds(evs[:i+1])))
+	}
+	return recorded
 }
 
 func addModelTotals(cum map[string]modelTotals, model string, c callTokens) {

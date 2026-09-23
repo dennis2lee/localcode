@@ -1641,16 +1641,16 @@ The percentage counts the whole prompt the provider read, including the part it 
 
 The next request is sized against what the conversation holds now: the provider's count for the messages it covered, plus an estimate of anything appended since, such as a tool result. Replacing the history (a compaction, `/clear`, a rewind, a debate's collapse) drops the count, and the next request is sized from the estimate until the server reports again.
 
-Automatic compaction runs on the next message once the conversation reaches the threshold. The default is 50%. The measure differs from the status-bar percentage, which is the provider's last count:
+Automatic compaction runs on the next message once the conversation reaches the threshold. The default is 50%, and `/auto-compact <percent>` changes it. The measure differs from the status-bar percentage, which is the provider's count of the last request and its reply:
 
 * It starts from the provider's count for what that count covered, and adds an estimate of text appended since, such as the output of a `!` command.
 * Images appended since the count are left out. Their cost depends on their size and on the model, and a compaction replaces every image with a note, so the images just pasted into a retried turn are not summarized away on an estimate.
 * With no count, for example after `/rewind`, the conversation's text is estimated and its images are left out.
 * A count restored from a log written before v0.145.0 decides alone, as it did then.
 * It is measured against the window of the profile the next message goes to.
-* A compaction that could not leave the conversation smaller does not run. That happens when the system prompt alone is most of the window.
+* A conversation that is a previous compaction's summary does not compact again until what followed the summary is longer than the summary. Otherwise a system prompt that is most of the window would have a summary summarized every turn.
 
-A request that still overflows is summarized and retried, as described below. `/auto-compact <percent>` changes it. When enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction.
+When automatic compaction is enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction. A request that still overflows is summarized and retried, as described below.
 
 The context gauge does not include all reserved output space. The following controls handle oversized requests:
 

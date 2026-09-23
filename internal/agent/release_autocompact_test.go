@@ -272,15 +272,18 @@ func TestAutoCompactionTrustsACountFromAnOldLog(t *testing.T) {
 	}
 }
 
-// A compaction that could not leave the conversation smaller does not
-// run. A system prompt that is most of the window reads over the
-// threshold every turn, and each turn would spend a summarization call
-// replacing a summary and one exchange with a summary.
-func TestAutoCompactionDoesNotRunWhenItCannotShrinkTheConversation(t *testing.T) {
+// A compaction does not summarize a summary again until what followed it
+// is longer than it. A system prompt that is most of the window reads
+// over the threshold every turn, and each turn would otherwise spend a
+// summarization call replacing a summary and one exchange with a summary.
+func TestAutoCompactionDoesNotSummarizeASummaryAgain(t *testing.T) {
 	const window = 32768
 	system := strings.Repeat("p", window*4*6/10)
+	summary := provider.Message{Role: provider.RoleUser, Content: []provider.Block{{
+		Type: provider.BlockText, Text: summaryHeader + strings.Repeat("s", 4000), Source: compactSummarySource,
+	}}}
 	afterOne := []provider.Message{
-		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(summaryHeader + strings.Repeat("s", 4000))}},
+		summary,
 		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("and now?")}},
 		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock("done")}},
 	}
@@ -292,16 +295,90 @@ func TestAutoCompactionDoesNotRunWhenItCannotShrinkTheConversation(t *testing.T)
 	p := &countingProvider{}
 	loop.maybeAutoCompact(context.Background(), "s1", p, profile, system, nil)
 	if p.asked() != 0 {
-		t.Errorf("a conversation of a summary and one exchange was compacted again under a system prompt of %d%% of the window", estimateTokens(system, nil)*100/window)
+		t.Errorf("a summary and one exchange were compacted again under a system prompt of %d%% of the window", estimateTokens(system, nil)*100/window)
 	}
 
-	// The same system prompt with a long conversation behind it compacts:
-	// there is something to shrink.
-	loop.setHistory("s1", append(afterOne, provider.Message{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(strings.Repeat("x", 40000))}}))
+	// The same text not marked as a summary is a conversation like any
+	// other, and compacts.
+	plain := append([]provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(summary.Content[0].Text)}}}, afterOne[1:]...)
+	loop.setHistory("s1", plain)
+	fresh := &countingProvider{}
+	loop.maybeAutoCompact(context.Background(), "s1", fresh, profile, system, nil)
+	if fresh.asked() == 0 {
+		t.Errorf("a conversation that is not a summary was treated as one")
+	}
+
+	// And once more than the summary has followed it, there is something
+	// to shrink again.
+	loop.setHistory("s1", append(append([]provider.Message(nil), afterOne...),
+		provider.Message{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock(strings.Repeat("x", 8000))}}))
 	busy := &countingProvider{}
 	loop.maybeAutoCompact(context.Background(), "s1", busy, profile, system, nil)
 	if busy.asked() == 0 {
-		t.Errorf("a 10,000-token conversation under the same system prompt was not compacted")
+		t.Errorf("a summary followed by twice its length was not compacted")
+	}
+}
+
+// On a small window auto-compaction runs at the threshold, as it does on
+// a large one. A fixed floor of the longest summary a compaction keeps
+// held it off an 8,192-token window until the request was past 80%.
+func TestAutoCompactionRunsOnASmallWindow(t *testing.T) {
+	const window = 8192
+	system := strings.Repeat("p", 6000)
+	msgs := []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("read the build log")}},
+		{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock(strings.Repeat("y", 12000))}},
+	}
+	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: window}
+	loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+	loop.SetAutoCompactEnabled(true)
+	loop.SetCompactPercent(50)
+	loop.setHistory("s1", msgs)
+	if pct := estimateTokens(system, msgs) * 100 / window; pct < 50 || pct > 60 {
+		t.Fatalf("precondition: the request is %d%% of the window, want just over the threshold", pct)
+	}
+	p := &countingProvider{}
+	loop.maybeAutoCompact(context.Background(), "s1", p, profile, system, nil)
+	if p.asked() == 0 {
+		t.Errorf("a conversation just over the threshold on an 8,192-token window was not compacted")
+	}
+}
+
+// A count restored from a v0.145.0 log carries the measurement without
+// the number of images it covered. Read as zero, every image in the
+// history read as appended, and the 1,600 tokens each the measurement had
+// priced it at were taken off the text appended since: a command's
+// 20,000-token output vanished from the decision.
+func TestAutoCompactionReadsAV0145CountsImages(t *testing.T) {
+	const window = 32768
+	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: window}
+	loop := probeTestLoop(t, &probeCounter{found: false}, profile)
+	loop.SetAutoCompactEnabled(true)
+	loop.SetCompactPercent(50)
+	if _, err := loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	imgs := make([]events.Image, 12)
+	for i := range imgs {
+		imgs[i] = events.Image{MediaType: "image/png", Data: []byte("png")}
+	}
+	loop.Store.Append("s1", events.TypeUserMessage, map[string]any{"text": "why does the build page look like this?", "images": imgs})
+	loop.Store.Append("s1", events.TypeMessagePartEnd, map[string]any{"text": "The sidebar overlaps the log pane in every screenshot."})
+	loop.RehydrateSession("s1")
+	measured := estimateTokens(autoCompactSystem, sendableHistory(loop.history("s1")))
+	loop.Store.Append("s1", events.TypeUsage, map[string]any{
+		"input_tokens": 7000, "output_tokens": 100, "max_context": window, "model": "DSA-Flash-CODE", "measured": measured,
+	})
+	loop.RehydrateSession("s1")
+	if u, _ := loop.getUsage("s1"); u.MeasuredImages != 12 {
+		t.Fatalf("the restored count covers %d images, want the 12 in the history it was taken over", u.MeasuredImages)
+	}
+	loop.appendShellTurn("s1", "!cat build.log", strings.Repeat("x", 80000))
+	p := &countingProvider{}
+	loop.maybeAutoCompact(context.Background(), "s1", p, profile, autoCompactSystem, nil)
+	if p.asked() == 0 {
+		t.Errorf("a restored conversation carrying about %d tokens on a 32,768 window was not compacted at 50%%",
+			loop.compactionMeasure("s1", autoCompactSystem, sendableHistory(loop.history("s1"))))
 	}
 }
 
