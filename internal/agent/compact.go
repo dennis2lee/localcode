@@ -105,7 +105,8 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 	// Nothing to compact, and asked before the window is: resolving it
 	// can probe the server, and a first message in a new conversation
 	// would wait on that probe before it was even recorded.
-	history := sendableHistory(l.history(sessionID))
+	stored := l.history(sessionID)
+	history := sendableHistory(stored)
 	if len(history) == 0 {
 		return false
 	}
@@ -114,22 +115,45 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 		return false
 	}
 	used := l.compactionMeasure(sessionID, systemPrompt, history)
-	if float64(used)/float64(window)*100 < float64(l.CompactPercent()) {
+	threshold := float64(window) * float64(l.CompactPercent()) / 100
+	if float64(used) < threshold {
 		return false
 	}
-	if soonAfterASummary(history) {
+	// The conversation, as a compaction would weigh it: its text on the
+	// estimate a summary's own length is held to, reasoning left out as a
+	// rebuilt history has none, the images the count covered at the
+	// estimate, and the ones it did not left out, as the measure leaves
+	// them out. Every guard below reads this one figure.
+	uncounted := l.uncountedImages(sessionID, history)
+	conversation := conversationTokens(history, uncounted)
+	// A compaction that could not leave the conversation smaller does not
+	// run: a conversation no longer than what a compaction puts in its
+	// place, the summary's header and notes and the shortest summary there
+	// can be, would come out the same size or larger, and the call is
+	// billed. It happens on a first compaction under a system prompt that
+	// is most of the window, where a single short exchange is over the
+	// threshold.
+	if conversation <= compactionKeeps(history, l.smartOn(ctx))+shortestSummary {
 		return false
 	}
-	// Nor one that could not leave the conversation smaller: a
-	// conversation no longer than what a compaction puts in its place,
-	// the summary's header and notes and the shortest summary there can
-	// be, would come out the same size or larger, and the call is billed.
-	// It happens on a first compaction under a system prompt that is most
-	// of the window, where a single short exchange is over the threshold.
-	// Measured on the estimate, the ruler a summary's own length is held
-	// to, with images left out, as the threshold leaves out the ones the
-	// count did not see.
-	if textTokens(history) <= compactionKeeps(history, l.smartOn(ctx))+shortestSummary {
+	// On the history as stored, not as it is sent. A summary re-enters as
+	// a user message, and sending merges the user message after it into
+	// it, so the sent history read the first follow-up as summary: a
+	// follow-up longer than its summary read as a summary with a short
+	// reply, and the compaction it called for waited until the overflow.
+	if soonAfterASummary(stored, uncounted) {
+		return false
+	}
+	// Where the system prompt alone reaches the threshold, no compaction
+	// brings the measure under it, and the threshold says compact on every
+	// turn: a tool-using session was compacted five turns in five, the file
+	// it had just read discarded each time, while the conversation never
+	// passed 3% of the window. There, compact once the conversation is half
+	// the room the system prompt leaves a request, the window less it and
+	// the least a reply is given. The system prompt on the estimate, the
+	// ruler the conversation is weighed on; tool definitions, which no
+	// estimate here sees, are not in it.
+	if system := estimateTokens(systemPrompt, nil); float64(system) >= threshold && conversation <= (window-system-minOutputTokens)/2 {
 		return false
 	}
 	return l.compactHistory(ctx, sessionID, p, profile, systemPrompt, carried, "", CompactAutomatic) == nil
@@ -143,31 +167,41 @@ func (l *Loop) maybeAutoCompact(ctx context.Context, sessionID string, p provide
 // measure stays over the threshold after each one, so each turn spent a
 // summarization call replacing a summary and one exchange with a summary.
 // Once what followed the summary is longer than the summary, there is
-// something to shrink again. Both sides are this side's estimate of text,
-// the ruler the summary's own length is held to (see cutSummary), and
-// images are left out of both, as compactionMeasure leaves out the images
-// the count did not see: priced at the sizing's ceiling here, one
-// screenshot pasted after a compaction turned a short follow-up into
-// something to shrink, and the compaction that followed replaced that
-// screenshot with a note.
+// something to shrink again. Both sides are weighed as the conversation
+// is (see conversationTokens), with the images the count did not see left
+// out: priced at the sizing's ceiling, one screenshot pasted after a
+// compaction turned a short follow-up into something to shrink, and the
+// compaction that followed replaced it with a note. The images the count
+// did see weigh what the measure weighs them at, or answered screenshots
+// after a compaction filled the window with the guard holding.
 //
-// It used to be a fixed floor, the longest summary a compaction keeps,
-// against the conversation less an estimate of the system prompt. That
-// kept auto-compaction from running at all on an 8,192-token window until
-// the request was past 80% of it, and it measured the system prompt on
-// one ruler and the count on another, so tool definitions and a Korean
-// system prompt read as conversation.
-func soonAfterASummary(history []provider.Message) bool {
+// history is the history as stored, the summary a message of its own.
+func soonAfterASummary(history []provider.Message, uncounted int) bool {
 	if len(history) == 0 || len(history[0].Content) == 0 || history[0].Content[0].Source != compactSummarySource {
 		return false
 	}
-	return textTokens(history[1:]) <= textTokens(history[:1])
+	return conversationTokens(history[1:], uncounted) <= conversationTokens(history[:1], 0)
 }
 
-// textTokens is what estimateTokens makes of msgs with their images left
-// out.
-func textTokens(msgs []provider.Message) int {
-	return estimateTokens("", msgs) - countImages(msgs)*imageTokenEstimate
+// conversationTokens is what estimateTokens makes of msgs with the
+// model's reasoning left out and the last uncounted images left out.
+func conversationTokens(msgs []provider.Message, uncounted int) int {
+	return estimateTokens("", withoutReasoning(msgs)) - min(uncounted, countImages(msgs))*imageTokenEstimate
+}
+
+// uncountedImages is how many of the images in msgs the provider's last
+// count did not see: all of them with no count, none for a count read
+// back from a log that never said (it decides alone, see
+// compactionMeasure), and otherwise those past the number it measured.
+func (l *Loop) uncountedImages(sessionID string, msgs []provider.Message) int {
+	u, ok := l.getUsage(sessionID)
+	switch {
+	case !ok || u.promptTokens() <= 0:
+		return countImages(msgs)
+	case u.Measured <= 0:
+		return 0
+	}
+	return max(0, countImages(msgs)-u.MeasuredImages)
 }
 
 // compactionMeasure is how full the conversation is, for deciding
@@ -206,17 +240,15 @@ func textTokens(msgs []provider.Message) int {
 // estimate reads Korean and Japanese low and separator-heavy logs high,
 // so letting it overrule the count moves the threshold by content.
 func (l *Loop) compactionMeasure(sessionID, system string, msgs []provider.Message) int {
-	now := estimateTokens(system, msgs)
-	images := countImages(msgs)
 	u, ok := l.getUsage(sessionID)
-	switch {
-	case !ok || u.promptTokens() <= 0:
-		return now - images*imageTokenEstimate
-	case u.Measured <= 0:
+	if ok && u.promptTokens() > 0 && u.Measured <= 0 {
 		return u.promptTokens() + u.OutputTokens
 	}
-	appended := now - u.Measured - max(0, images-u.MeasuredImages)*imageTokenEstimate
-	return u.promptTokens() + u.OutputTokens + max(0, appended)
+	now := estimateTokens(system, withoutReasoning(msgs)) - l.uncountedImages(sessionID, msgs)*imageTokenEstimate
+	if !ok || u.promptTokens() <= 0 {
+		return now
+	}
+	return u.promptTokens() + u.OutputTokens + max(0, now-u.Measured)
 }
 
 // CompactTrigger names why a compaction ran. It is on the one lifecycle

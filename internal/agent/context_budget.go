@@ -281,7 +281,42 @@ func (l *Loop) inputEstimate(sessionID, system string, msgs []provider.Message) 
 	case u.Measured <= 0:
 		return max(u.promptTokens()+u.OutputTokens, now)
 	}
-	return u.promptTokens() + u.OutputTokens + max(0, now-u.Measured)
+	// What was appended since the count, on the ruler the measurement was
+	// taken with: reasoning left out of both. See measure.
+	return u.promptTokens() + u.OutputTokens + max(0, estimateTokens(system, withoutReasoning(msgs))-u.Measured)
+}
+
+// withoutReasoning is msgs with the model's reasoning blocks left out.
+//
+// Reasoning text is kept in the live history, and only the last
+// assistant message's is ever sent back; the log does not keep it, so a
+// history rebuilt after a restart has none. Measured over it, the same
+// conversation read one size live and another restored: a live session
+// read its reasoning as conversation and compacted a summary and one
+// exchange every turn that the restored one left alone, and a restored
+// one lost the text appended since its count to the reasoning the count's
+// measurement had included. What the provider read of it is in its count
+// already.
+func withoutReasoning(msgs []provider.Message) []provider.Message {
+	out := make([]provider.Message, 0, len(msgs))
+	for _, m := range msgs {
+		kept := m
+		for i, b := range m.Content {
+			if b.Type != provider.BlockThinking {
+				continue
+			}
+			kept.Content = make([]provider.Block, 0, len(m.Content))
+			kept.Content = append(kept.Content, m.Content[:i]...)
+			for _, b := range m.Content[i:] {
+				if b.Type != provider.BlockThinking {
+					kept.Content = append(kept.Content, b)
+				}
+			}
+			break
+		}
+		out = append(out, kept)
+	}
+	return out
 }
 
 // overflowPhrases are how the providers say "this did not fit".

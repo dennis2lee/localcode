@@ -105,11 +105,13 @@ func (t modelTotals) cached() bool {
 }
 
 // measurement is what estimateTokens made of the messages a count
-// covered, and how many image blocks were among them.
+// covered, reasoning left out, and how many image blocks were among them.
+// Reasoning is left out because a history rebuilt from the log has none:
+// see withoutReasoning.
 type measurement struct{ tokens, images int }
 
 func measure(system string, msgs []provider.Message) measurement {
-	return measurement{tokens: estimateTokens(system, msgs), images: countImages(msgs)}
+	return measurement{tokens: estimateTokens(system, withoutReasoning(msgs)), images: countImages(msgs)}
 }
 
 // tokensOf is what a streamed call reported.

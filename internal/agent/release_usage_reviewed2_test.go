@@ -40,7 +40,7 @@ func TestReviewedTinyConversationUnderAHugeSystemPromptDoesNotCompact(t *testing
 	if got := loop.compactionMeasure("s1", system, sendableHistory(loop.history("s1"))); got*100/window < 50 {
 		t.Fatalf("precondition: the request is %d%% of the window, want over the 50%% threshold", got*100/window)
 	}
-	if soonAfterASummary(sendableHistory(loop.history("s1"))) {
+	if soonAfterASummary(loop.history("s1"), 0) {
 		t.Fatalf("precondition: a plain exchange is not a summary")
 	}
 	p := &countingProvider{}

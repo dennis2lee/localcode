@@ -219,13 +219,13 @@ func TestReviewedSummaryGuardSurvivesRestart(t *testing.T) {
 	}
 	_ = store
 	liveHist := loop.history(sid)
-	if !soonAfterASummary(liveHist) {
+	if !soonAfterASummary(liveHist, 0) {
 		t.Fatal("a fresh summary does not read as one live")
 	}
 	loop.ReleaseSessionMemory(sid)
 	loop.RehydrateSession(sid)
 	restHist := loop.history(sid)
-	if !soonAfterASummary(restHist) {
+	if !soonAfterASummary(restHist, 0) {
 		t.Errorf("a fresh summary does not read as one after a restart: %+v", restHist)
 	}
 	if len(restHist) == 0 || len(restHist[0].Content) == 0 || restHist[0].Content[0].Source != liveHist[0].Content[0].Source {
@@ -260,7 +260,7 @@ func TestReviewedSummaryGuardLeavesOutNewImages(t *testing.T) {
 			provider.ImageBlock("image/png", []byte("a fresh screenshot")),
 		},
 	}}
-	if !soonAfterASummary(withImage) {
+	if !soonAfterASummary(withImage, 1) {
 		t.Errorf("a follow-up shorter than the summary stops reading as one once a screenshot is pasted after it")
 	}
 }

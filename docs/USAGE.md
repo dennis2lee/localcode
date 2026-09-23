@@ -1644,12 +1644,17 @@ The next request is sized against what the conversation holds now: the provider'
 Automatic compaction runs on the next message once the conversation reaches the threshold. The default is 50%, and `/auto-compact <percent>` changes it. The measure differs from the status-bar percentage, which is the provider's count of the last request and its reply:
 
 * It starts from the provider's count for what that count covered, and adds an estimate of text appended since, such as the output of a `!` command.
-* Images appended since the count are left out. Their cost depends on their size and on the model, and a compaction replaces every image with a note, so the images just pasted into a retried turn are not summarized away on an estimate.
+* Images appended since the count are left out. Their cost depends on their size and on the model, and a compaction replaces every image with a note, so the images just pasted into a retried turn are not summarized away on an estimate. Images the count covered are in it.
+* The model's reasoning is left out of every estimate. The live conversation keeps it and a conversation restored from its log does not, and the two decide the same way.
 * With no count, for example after `/rewind`, the conversation's text is estimated and its images are left out.
 * A count restored from a log written before v0.145.0 decides alone, as it did then.
 * It is measured against the window of the profile the next message goes to.
-* A conversation that is a previous compaction's summary does not compact again until the text that followed the summary is longer than the summary. Images are left out of that comparison too.
-* A conversation no longer than what a compaction would put in its place, the summary's header and notes, does not compact. Under a system prompt that is most of the window, one short exchange can reach the threshold. Otherwise a system prompt that is most of the window would have a summary summarized every turn.
+
+A conversation that reaches the threshold is still not compacted in three cases:
+
+* It is no longer than what a compaction would put in its place, the summary's header and notes. Tool definitions can put one short exchange over the threshold, and nothing a compaction does would shrink it.
+* It is a previous compaction's summary, and the text that followed the summary is no longer than the summary.
+* The system prompt alone reaches the threshold, so no compaction can bring the conversation under it. It then compacts once the conversation is half the room the system prompt leaves, rather than on every turn.
 
 When automatic compaction is enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction. A request that still overflows is summarized and retried, as described below.
 
