@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A hang has to end by itself, and it has to say what hung.
@@ -119,10 +120,14 @@ func TestTheRulesFileQuotesTheGateItDescribes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read AGENTS.md: %v", err)
 	}
-	want := timeoutValues(files[filepath.Join("scripts", "check.sh")])
-	got := timeoutValues(string(raw))
-	if len(want) == 0 {
-		t.Fatal("no -timeout found in check.sh, so this test is checking nothing")
+	want := timeoutValues(t, files[filepath.Join("scripts", "check.sh")])
+	got := timeoutValues(t, string(raw))
+	// Every lane check.sh runs must be one this can see, or a drift in
+	// the lane it cannot see would go unreported.
+	for _, lane := range []string{"race", "plain", "gui"} {
+		if _, ok := want[lane]; !ok {
+			t.Fatalf("no -timeout read for the %s lane of check.sh, so a drift in it would not be compared: %v", lane, want)
+		}
 	}
 	for lane, value := range got {
 		if real, ok := want[lane]; ok && real != value {
@@ -132,11 +137,20 @@ func TestTheRulesFileQuotesTheGateItDescribes(t *testing.T) {
 	}
 }
 
-// timeoutValues maps a lane's distinguishing flag to the -timeout beside
-// it, for the `go test` lines in either file. The race lane is the one
-// that matters and the one with a flag nothing else carries.
-func timeoutValues(body string) map[string]string {
-	out := map[string]string{}
+// timeoutValues maps each lane to the -timeout it runs with, in seconds,
+// for the `go test` lines in either file.
+//
+// Three things it has to get right, each of which it got wrong first.
+// Both spellings of the flag, because hasTimeoutFlag accepts both and a
+// lane written as -timeout=20m would otherwise vanish from the
+// comparison rather than be compared. The gui lane before the race lane,
+// because the gui check carries -race too and matching on that first put
+// the two under one key and dropped one of them. And the durations
+// parsed rather than compared as text, so 1200s and 20m are the same
+// answer.
+func timeoutValues(t *testing.T, body string) map[string]time.Duration {
+	t.Helper()
+	out := map[string]time.Duration{}
 	for _, line := range strings.Split(body, "\n") {
 		start := strings.Index(line, "go test")
 		if start < 0 {
@@ -147,29 +161,76 @@ func timeoutValues(body string) map[string]string {
 			invocation = before
 		}
 		fields := strings.Fields(invocation)
+
 		lane := "plain"
-		for _, f := range fields {
+		for i, f := range fields {
+			if f == "-tags" && i+1 < len(fields) && strings.Contains(fields[i+1], "gui") {
+				lane = "gui"
+				break
+			}
+			if strings.HasPrefix(f, "-tags=") && strings.Contains(f, "gui") {
+				lane = "gui"
+				break
+			}
 			if f == "-race" {
 				lane = "race"
 			}
-			if f == "-tags" {
-				lane = "gui"
-			}
 		}
+
+		value := ""
 		for i, f := range fields {
 			if f == "-timeout" && i+1 < len(fields) {
-				if _, seen := out[lane]; !seen {
-					// One file quotes the command in backticks and the
-					// other in shell quotes, so the duration arrives
-					// wearing whichever one it was written in.
-					out[lane] = strings.TrimFunc(fields[i+1], func(r rune) bool {
-						return !strings.ContainsRune("0123456789hms", r)
-					})
-				}
+				value = fields[i+1]
+			} else if rest, ok := strings.CutPrefix(f, "-timeout="); ok {
+				value = rest
+			} else {
+				continue
 			}
+			break
+		}
+		if value == "" {
+			continue
+		}
+		// One file quotes the command in backticks and the other in
+		// shell quotes, so the duration arrives wearing whichever one it
+		// was written in.
+		value = strings.TrimFunc(value, func(r rune) bool {
+			return !strings.ContainsRune("0123456789hms", r)
+		})
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			t.Errorf("cannot read %q as a duration, from:\n\t%s", value, strings.TrimSpace(line))
+			continue
+		}
+		if _, seen := out[lane]; !seen {
+			out[lane] = d
 		}
 	}
 	return out
+}
+
+// hasTimeoutFlag's own cases, because nothing that runs feeds it the one
+// it was fixed for: no workflow carries a commented-out -timeout, so
+// removing the comment strip left the whole suite green and the fix
+// unverified by anything.
+func TestTheTimeoutFlagHasToBeRealToCount(t *testing.T) {
+	cases := []struct {
+		invocation string
+		want       bool
+	}{
+		{"go test ./...", false},
+		{"go test ./... -timeout 5m", true},
+		{"go test ./... -timeout=5m", true},
+		{"go test ./... # -timeout 5m", false},
+		{"go test ./... #-timeout=5m", false},
+		{"go test ./... -count=1 # a note about -timeout", false},
+		{"go test -timeout 5m ./... # a note", true},
+	}
+	for _, c := range cases {
+		if got := hasTimeoutFlag(c.invocation); got != c.want {
+			t.Errorf("hasTimeoutFlag(%q) = %v, want %v", c.invocation, got, c.want)
+		}
+	}
 }
 
 // Every workflow job says how long it may run.

@@ -209,8 +209,13 @@ if [ ${#failed[@]} -eq 0 ]; then
 		# which names the wrong cause and costs a whole rerun.
 		rm -f .check-passed
 		printf '  (no stamp: the tree identity could not be taken, and the message above says why)\n'
-	else
-		mv "$logdir/tree-id" .check-passed
+	elif ! mv "$logdir/tree-id" .check-passed; then
+		# Unchecked, this had the shape the redirect above just lost: a
+		# failed move leaves whatever stamp was there before, which can
+		# be one for a different tree, while this still says everything
+		# passed.
+		rm -f .check-passed
+		printf '  (no stamp: it could not be written, and the message above says why)\n'
 	fi
 	exit 0
 fi
