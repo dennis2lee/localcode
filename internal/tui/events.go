@@ -175,6 +175,11 @@ func (m *Model) applyEvent(ev events.Event) {
 		// what is above this line, because everything above it is still
 		// there — which is the point, and is exactly why it needs saying.
 		m.appendTool("[cleared: the model starts fresh from here. Everything above stays in this conversation]")
+		m.forgetContextFill()
+	case events.TypeCompacted:
+		// The transcript line for a compaction is the model's own
+		// summary arriving as a message; here only the gauge changes.
+		m.forgetContextFill()
 	case events.TypeRewound:
 		what, _ := ev.Data["turn_text"].(string)
 		if what != "" {
@@ -190,12 +195,14 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.input.SetValue(prompt)
 			m.resizeLayout()
 		}
+		m.forgetContextFill()
 	case events.TypeRedone:
 		what, _ := ev.Data["turn_text"].(string)
 		if what != "" {
 			what = ": " + what
 		}
 		m.appendTool("[put the turn back" + what + redoneFiles(ev.Data) + "]")
+		m.forgetContextFill()
 	case events.TypeSessionScheduled:
 		// Opened on its own, a run session is a conversation that starts
 		// with an instruction nobody in it typed, at a moment nobody was
@@ -606,4 +613,14 @@ func planLines(data map[string]any) string {
 		fmt.Fprintf(&b, "\n  [%s] %s", mark, text)
 	}
 	return b.String()
+}
+
+// forgetContextFill blanks the context percentage. Every event that calls
+// it replaces the history the percentage was a reading of, and the daemon
+// drops its own count with it and says nothing until the next turn
+// reports. A gauge that went on showing the old fill was wrong at the one
+// moment somebody was looking at it. The rate stays: it is about the
+// model, not about the conversation that was replaced.
+func (m *Model) forgetContextFill() {
+	m.usagePercent = 0
 }

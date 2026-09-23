@@ -63,6 +63,25 @@ func TestTheContextMeterOnlySpeaksFromMeasuredUsage(t *testing.T) {
 	}
 }
 
+// What the model is told about remaining room has to count the cached
+// prefix, or a working prompt cache makes it read as tens of thousands of
+// tokens richer than it is, and a model told that acts on it.
+func TestTheContextMeterCountsTheCachedPrefix(t *testing.T) {
+	loop, sid := testLoop(t, "")
+	// Nearly all of the window is in the cache. input_tokens alone would
+	// say 4,000 are in use of 200,000.
+	setTestUsage(loop, sid, sessionUsage{InputTokens: 4_000, CachedInputTokens: 176_000, OutputTokens: 10_000, MaxContext: 200_000})
+	got := loop.contextLeftFor(sid)
+	for _, want := range []string{"10,000", "200,000", "5%"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("meter lacks %q, so the cached prefix is not counted as in use: %s", want, got)
+		}
+	}
+	if !strings.Contains(got, "not room for another long file") {
+		t.Errorf("at 5%% left the meter should say to stop, but it read: %s", got)
+	}
+}
+
 // setTestUsage puts a measured snapshot where getUsage will find it.
 // recordUsage takes a whole stream's worth of fields this test does not
 // need, and the meter reads only the snapshot.

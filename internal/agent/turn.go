@@ -247,6 +247,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	for {
 		history := l.history(sessionID)
 		messages := sendableHistory(history)
+		// Sized once, and kept: a notice about how this reply ended has to
+		// describe this request, and recomputing it after the reply would
+		// count the reply as input. See requestSizing.
+		sizing := l.sizeRequest(ctx, sessionID, run, messages)
 
 		req := provider.ChatRequest{
 			Model:        run.profile.Model,
@@ -259,7 +263,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// remaining is refused by the server as one total that does
 			// not fit — see context_budget.go for the arithmetic and the
 			// error it produces.
-			MaxTokens:   clampMaxTokens(run.maxTokens, l.contextWindow(ctx, run.profile), l.inputEstimate(sessionID, run.system, messages)),
+			MaxTokens:   sizing.sent,
 			Temperature: run.profile.Temperature,
 			TopP:        run.profile.TopP,
 			TopK:        run.profile.TopK,
@@ -328,6 +332,13 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				req.System = req.System + "\n\n" + extra
 				req.SystemBlocks = append(req.SystemBlocks, provider.SystemBlock{Text: extra, Asset: "hook.pre_model"})
 				req.CachePrefix = false
+				// The request was sized before the hook ran, and the
+				// hook's text is part of what the provider reads. Sized
+				// again with it counted, so a large injection cannot
+				// push the request over, and so the notice about a reply
+				// that hit its cap describes the request that was sent.
+				sizing = sizing.grow(extra)
+				req.MaxTokens = sizing.sent
 				// The occurrence suffix rather than a separate literal,
 				// so the id every call can produce starts with the same
 				// text a reader can find. See
@@ -418,7 +429,6 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				trimmed, changed := forceFit(run.system, l.history(sessionID), trimBudget)
 				if changed {
 					l.setHistory(sessionID, trimmed)
-					l.clearUsage(sessionID)
 					l.Store.Append(sessionID, events.TypeError, map[string]any{
 						"error":     "still too long — the oldest part of the conversation has been dropped so this turn can continue",
 						"recovered": true,
@@ -532,7 +542,16 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// last one.
 		sameTries = 0
 		if usage.hasUsage {
-			l.recordUsage(sessionID, run.profile.Model, l.contextWindow(ctx, run.profile), usage)
+			// estimateTokens over the messages this count describes and
+			// the reply about to join them, which together are what the
+			// next request is measured against. The reply is in the
+			// measurement so that it is never estimated from its
+			// characters: its token count is in the same report, exact,
+			// and a Korean reply measured by characters came out at a
+			// third of what the provider had just counted.
+			l.recordUsage(sessionID, run.profile.Model, l.contextWindow(ctx, run.profile),
+				estimateTokens(run.system, append(append([]provider.Message(nil), messages...),
+					provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})), usage)
 		}
 
 		// Nothing is appended for a reply that produced nothing. A turn
@@ -600,10 +619,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			// model is broken rather than that a number needs raising.
 			if stopReason == "max_tokens" {
 				l.Store.Append(sessionID, events.TypeError, map[string]any{
-					"error": fmt.Sprintf(
-						"the reply hit this profile's max_tokens limit of %d and was cut off — raise max_tokens on the %q profile in config.json for longer answers",
-						clampMaxTokens(run.maxTokens, l.contextWindow(ctx, run.profile), l.inputEstimate(sessionID, run.system, messages)),
-						run.profile.Model),
+					"error":     cutOffNotice(sizing, run.profileName, run.profile.Model),
 					"recovered": true,
 				})
 			}
@@ -995,8 +1011,23 @@ func (l *Loop) consumeStream(sessionID string, stream <-chan provider.StreamEven
 			// history — that stays as it was, since a failed response is
 			// not a turn and must not be sent back as one. The model did
 			// say these words, and the session is where that is kept.
-			if text.Len() > 0 {
-				l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String()})
+			//
+			// Marked failed so the record and the history stay two
+			// questions after a restart too. rehydrateHistory rebuilds
+			// the history from these events, and a part.end with nothing
+			// to tell it apart from a finished reply was rebuilt as one:
+			// the half answer this turn refused to send back went out on
+			// the next request of every restarted session whose log held
+			// one.
+			//
+			// Closed whenever anything of the reply reached the record,
+			// not only text: a stream that died after the model's tool
+			// call and before any text has that call's tool.start on the
+			// record already, and with no part.end to close it a replay
+			// kept waiting for the call's result and folded the next
+			// turn's iterations into it.
+			if text.Len() > 0 || len(toolUses) > 0 {
+				l.Store.Append(sessionID, events.TypeMessagePartEnd, map[string]any{"text": text.String(), "failed": true})
 			}
 			l.Store.Append(sessionID, events.TypeError, map[string]any{"error": ev.Err.Error()})
 			// Whatever had already been said comes back with the error.

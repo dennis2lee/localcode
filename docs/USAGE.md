@@ -420,7 +420,7 @@ No continuation occurs in the following cases:
 | No tool ran | The turn may be a completed answer |
 | Last tool call refused | Further work lacks approval |
 | Reply ends with a question | User input is required |
-| Reply reached `max_tokens` | The output cap must be increased |
+| Reply reached `max_tokens` | The notice under the reply names which limit cut it. The profile's own `max_tokens`: raise it, or set one if the profile has none and the built-in 4096 applied. The window: `/compact`, or a larger `context_window` if the figure in use was guessed or set too low. Both, when neither alone would let the next reply run longer. `/compact` is promised when it helps even with the longest summary a compaction keeps. It is offered with the longest summary that would still help when only a shorter one would. It is not offered when no summary would help. |
 | Previous continuation produced no new tool call | The task is complete or repeating work |
 | User message already queued | The user message takes precedence |
 
@@ -1368,6 +1368,8 @@ Each prompt asset has a stable ID, source, trust class, request position, and in
 * Cache-order warnings
 * Tool schemas by built-in group and MCP server
 * Conversation size, reserved answer space, and context-window limit
+* Where the context-window figure came from: set by `context_window` in config.json, reported by the server, or guessed from the model name because the server did not report one. A guessed figure carries a hint to set `context_window` on the profile.
+* What the next reply actually gets, when the window shrinks it below the reserved answer space.
 
 `/context all` adds excluded assets and reasons. It lists individual conversation sources. The short form groups tool-result sources into a count after twelve entries.
 
@@ -1618,20 +1620,25 @@ Provider token usage is recorded as a `usage` event at turn end. Bedrock, Anthro
 
 The event includes input and output tokens, context limit, percentage used, and tokens per second. The context limit uses [internal/modelinfo](../internal/modelinfo/modelinfo.go), with a 128000-token default for unknown models. Both clients use this event for their status bars.
 
+The percentage counts the whole prompt the provider read, including the part it served from its prompt cache. Anthropic and Bedrock report that part apart from `input_tokens`, which covers only what was counted fresh, and `input_tokens` stays that figure because it is what was billed at the full rate. The event carries the cached part as `cached_input_tokens`, and `measured`, the daemon's own character-based estimate of the same messages, so a session restored from its log can size its next request the same way a live one does.
+
+The next request is sized against what the conversation holds now: the provider's count for the messages it covered, plus an estimate of anything appended since, such as a tool result. Replacing the history (a compaction, `/clear`, a rewind, a debate's collapse) drops the count, and the next request is sized from the estimate until the server reports again.
+
 Automatic compaction runs on the next message after context use exceeds the threshold. The default is 50%. `/auto-compact <percent>` changes it. When enabled, one summary replaces the model history before the new message is sent. The transcript retains the original history and records the compaction.
 
 The context gauge does not include all reserved output space. The following controls handle oversized requests:
 
 | Guard | What it does |
 |---|---|
-| `max_tokens` is clamped | Every request asks for only what is left of the window, so the reply cap cannot be what pushes a request over. |
+| `max_tokens` is clamped | Every request asks for only what is left of the window, so the reply cap cannot be what pushes a request over. Never below 1024, so a nearly full window still gets an answer rather than a fragment, and never above the profile's own `max_tokens`. A reply that hits its cap is followed by a notice naming which limit cut it, the profile's `max_tokens` or the window, and prescribing only a change that would let the next reply run longer: raise `max_tokens` on the profile, `/compact`, both when neither works alone, or a larger `context_window` when the window cannot give more to any request. A notice that blames the window says where the window figure came from. |
 | Tool output is capped | One tool result may take at most a quarter of the window. The start and the end are kept and the gap is described, so the model knows to read a file in ranges rather than believing it saw all of it. Without this, `read_file` on a large file or `bash` running `cat` could exceed the whole window inside a single message, which no summarizing or dropping can undo. |
+| The summary is bounded | A compaction keeps at most 5120 tokens of the summary the model wrote: the 4096 the request allowed, plus a quarter for the difference between the model's tokenizer and the daemon's estimate. A longer one is cut so that it and a note saying so fit in that length. The notice under a cut-off reply prices `/compact` against this bound, so what it promises is what the next request can do. |
 | A refused turn is summarized and retried | Not the end of the turn. The transcript says it happened, and the turn carries on. |
 | Still refused, it is trimmed | Whole messages go from the oldest end, and the remaining text is cut if dropping is not enough. Each attempt aims at two thirds of what the conversation *measures*, not of the window, so it converges on a size the server accepts. This matters most for Korean and Japanese, where the character-count estimate runs about 4x low and a request the server refuses can measure as comfortably fitting. |
 
 `/compact` also reduces its own request size when needed.
 
-Set `context_window` on the profile if the model is one whose name gives no clue to its real limit.
+Set `context_window` on the profile if the model is one whose name gives no clue to its real limit. `/context` says whether the figure in use was set there, reported by the server, or guessed.
 
 If summarization fails for another reason, such as a network error, LocalCode uses the original history and continues.
 

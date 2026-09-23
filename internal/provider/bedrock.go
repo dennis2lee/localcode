@@ -883,7 +883,7 @@ func streamBedrock(ctx context.Context, stream bedrockEventStream, req ChatReque
 		}
 	}
 
-	if err := stream.Err(); err != nil {
+	if err := readError(ctx, stream.Err()); err != nil {
 		send(StreamEvent{Type: EventError, Err: wrapVisionRefusal(err, req.Model)})
 	}
 }

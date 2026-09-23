@@ -46,11 +46,11 @@ func (l *Loop) routeClear(sessionID, text string) (bool, error) {
 	before := len(l.history(sessionID))
 
 	l.Store.Append(sessionID, events.TypeCleared, nil)
+	// Which also drops the context gauge, a reading of a history that
+	// no longer exists: left alone it would go on reporting the old fill
+	// until the next turn replaced it, which is the one moment somebody
+	// is looking at it. See setHistory.
 	l.setHistory(sessionID, nil)
-	// The context gauge is a reading of the history that no longer exists.
-	// Left alone it would go on reporting the old fill until the next turn
-	// replaced it, which is the one moment somebody is looking at it.
-	l.clearUsage(sessionID)
 
 	var b strings.Builder
 	b.WriteString("Cleared. The model starts the next message with no history.\n")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -41,13 +42,31 @@ import (
 // request, at the price of a slightly shorter reply.
 const contextHeadroom = 2048
 
-// minOutputTokens is the floor clampMaxTokens will not go below.
+// minOutputTokens is the floor clampMaxTokens will not shrink a request
+// below.
 //
 // A reply capped at a few dozen tokens is not a reply, and a session that
 // has genuinely no room left should be compacted rather than answered in
 // fragments — so the floor is deliberately high enough that hitting it
 // means "compact", not "carry on".
+//
+// It is a floor on shrinking, never a reason to grow: a profile that asks
+// for less than this gets what it asked for, and is sent below it.
 const minOutputTokens = 1024
+
+// shortestSummary is the least a compaction can leave behind, in tokens.
+// compactHistory rejects an empty summary as a failed compaction, and a
+// summary that is not empty is at least a token to the tokenizer that
+// will count it, whatever this side's four-bytes-a-token floor reads for
+// three bytes. One token is shorter than any summary a model writes, but
+// it is the smallest figure above nothing, and enough to keep the notice
+// from offering a compaction that only an empty summary would satisfy.
+const shortestSummary = 1
+
+// blockFraming is what estimateTokens charges each block for its role,
+// type and ids, in bytes. Small, but a long session has thousands of
+// blocks, and a compaction's summary rides in one.
+const blockFraming = 16
 
 // contextWindow is the model's total input+output budget: what the config
 // says, or a guess from the model name.
@@ -87,12 +106,35 @@ const probeTimeout = 3 * time.Second
 // answer was "I do not say", so a server with no answer is not asked again
 // every turn.
 func (l *Loop) contextWindow(ctx context.Context, profile config.Profile) int {
+	n, _ := l.resolveContextWindow(ctx, profile)
+	return n
+}
+
+// windowSource is where a context window figure came from, which is the
+// half of the answer nobody could see.
+//
+// The number on its own is not enough to trust. A server that reports
+// nothing and a server that reports its real window can produce the same
+// session, and the only difference is whether 128000 was measured or made
+// up — so a person with a reply cut short at an absurd length asked
+// whether localcode had actually asked the server at all, and nothing it
+// printed could say.
+type windowSource string
+
+const (
+	windowFromConfig windowSource = "set by context_window in config.json"
+	windowFromServer windowSource = "reported by the server"
+	windowGuessed    windowSource = "guessed from the model name, because the server did not report one"
+)
+
+// resolveContextWindow is contextWindow with its source.
+func (l *Loop) resolveContextWindow(ctx context.Context, profile config.Profile) (int, windowSource) {
 	if profile.ContextWindow > 0 {
-		return profile.ContextWindow
+		return profile.ContextWindow, windowFromConfig
 	}
 	guess := modelinfo.MaxContextTokens(profile.Model)
 	if l.ProbeContextWindow == nil {
-		return guess
+		return guess, windowGuessed
 	}
 
 	key := profile.Provider + "\x00" + profile.Model
@@ -101,9 +143,9 @@ func (l *Loop) contextWindow(ctx context.Context, profile config.Profile) int {
 	l.mu.Unlock()
 	if seen {
 		if cached > 0 {
-			return cached
+			return cached, windowFromServer
 		}
-		return guess
+		return guess, windowGuessed
 	}
 
 	// Bounded, and still cancelled with the turn: a probe must not outlive
@@ -123,9 +165,9 @@ func (l *Loop) contextWindow(ctx context.Context, profile config.Profile) int {
 	l.mu.Unlock()
 
 	if n > 0 {
-		return n
+		return n, windowFromServer
 	}
-	return guess
+	return guess, windowGuessed
 }
 
 // clampMaxTokens returns how much output to ask for so that the request as
@@ -133,7 +175,9 @@ func (l *Loop) contextWindow(ctx context.Context, profile config.Profile) int {
 //
 // Returns want unchanged when it already fits, or when there is no usable
 // window figure — this must never be the reason a request gets *smaller*
-// than what was configured for no reason.
+// than what was configured for no reason. Nor larger: the floor used to
+// be returned as it was, so a profile asking for 512 sent 1024 whenever
+// the window was nearly full.
 func clampMaxTokens(want, window, inputTokens int) int {
 	if window <= 0 || want <= 0 {
 		return want
@@ -143,7 +187,7 @@ func clampMaxTokens(want, window, inputTokens int) int {
 		return want
 	}
 	if room < minOutputTokens {
-		return minOutputTokens
+		return min(want, minOutputTokens)
 	}
 	return room
 }
@@ -158,29 +202,86 @@ func clampMaxTokens(want, window, inputTokens int) int {
 // session (see Loop.inputEstimate).
 func estimateTokens(system string, msgs []provider.Message) int {
 	n := len(system)
+	images := 0
 	for _, m := range msgs {
 		for _, b := range m.Content {
 			n += len(b.Text) + len(b.ToolInput) + len(b.ToolResultContent)
-			// Per-block framing: role, type, ids. Small, but there can be
-			// thousands of blocks in a long session.
-			n += 16
+			n += blockFraming
+			if b.Type == provider.BlockImage {
+				images++
+			}
 		}
 	}
-	return n / 4
+	return n/4 + images*imageTokenEstimate
 }
+
+// imageTokenEstimate is what one image block is taken to cost. An image
+// is not text and its bytes say nothing about its tokens: the providers
+// price it by its pixels, and the largest image they accept without
+// resizing comes to about this many. Counted at that ceiling, because an
+// image the estimate cannot see is the one addition to a conversation
+// that a character count misses entirely, and it was being priced at the
+// sixteen bytes of framing around it.
+const imageTokenEstimate = 1600
 
 // inputEstimate is how many input tokens the next request will cost.
 //
-// The provider's own count from the last exchange, when there is one:
-// it is the same tokenizer that will refuse the next request, so it beats
-// any estimate made here. Falls back to counting characters for the first
-// turn of a session, where there is nothing to go on yet.
+// The provider's own count for the messages it was given and for the
+// reply it wrote, plus this side's estimate of everything appended
+// since.
+//
+// Each half is there because the other cannot do its job. The count
+// comes from the same tokenizer that will refuse the next request, so
+// for the messages it covers nothing here beats it. But it only ever
+// describes those messages. Anything appended afterwards is invisible to
+// it, and that is not a rounding error: a tool result is capped at a
+// quarter of the window, so one of them can outweigh the whole
+// conversation the count was taken over, and a turn that calls several
+// tools would size every request after the first against a number that
+// predates them.
+//
+// Counting characters sees all of it and is crude: four characters to a
+// token is about right for English and several times over for Korean or
+// Japanese, where it reads as a floor. So it is applied to the part
+// nothing else can see, and the error it carries scales with that part
+// rather than with the whole conversation. Taking the larger of the two
+// instead threw the exact count away whenever the ratio happened to
+// overshoot, and shortened the reply for no reason.
+//
+// The reply is in the count as OutputTokens and in the history as text,
+// and it is priced from the count: a reply the provider tokenized in
+// front of us is the one thing here that never needs estimating, and
+// estimating a Korean reply from its characters came out at a third of
+// its size. So the measurement recorded with the count covers the reply
+// too, and the difference to now is only what came after it.
+//
+// Telling the two apart needs the estimate of the messages the count
+// covered, recorded when the count arrived: see sessionUsage.Measured.
+// A history that shrinks would make that difference negative, and every
+// place that replaces a history clears the count instead, so the
+// subtraction is floored at zero rather than trusted to stay positive.
+//
+// The count here is the whole prompt the provider read, cached prefix
+// included: see sessionUsage.promptTokens for why that is not the field
+// the provider calls input_tokens.
+//
+// A count with no measurement behind it comes from a log written before
+// that was recorded, which every session restored from disk had until
+// it takes its next turn. There is no way to know what it covered, so
+// adding the conversation to it would count the part they share twice
+// and clamp the reply to the floor. Those fall back to the larger of
+// the count and the conversation: never under the count, and never
+// double.
 func (l *Loop) inputEstimate(sessionID, system string, msgs []provider.Message) int {
-	if u, ok := l.getUsage(sessionID); ok && u.InputTokens > 0 {
-		// Plus this turn's additions, which the last report predates.
-		return u.InputTokens + u.OutputTokens
+	now := estimateTokens(system, msgs)
+	u, ok := l.getUsage(sessionID)
+	switch {
+	case !ok || u.promptTokens() <= 0:
+		return now
+	case u.Measured <= 0:
+		return max(u.promptTokens()+u.OutputTokens, now)
 	}
-	return estimateTokens(system, msgs)
+	return u.promptTokens() + u.OutputTokens + max(0, now-u.Measured)
 }
 
 // overflowPhrases are how the providers say "this did not fit".
@@ -431,4 +532,306 @@ func startsWithToolResult(m provider.Message) bool {
 		}
 	}
 	return false
+}
+
+// requestSizing is what one request was sized against.
+//
+// Kept, rather than worked out again afterwards, so that what is said about
+// a reply describes the request that produced it. The reply itself changes
+// the answer: its usage is recorded before anything reads it, so the input
+// a notice recomputes after the reply already includes the reply. A request
+// that went out with the profile's full reservation and filled it would
+// then re-read as one the window had shrunk — and the notice would say
+// raising max_tokens cannot help, about the one case where it is exactly
+// the fix.
+type requestSizing struct {
+	wanted int // the profile's max_tokens, or the default
+	sent   int // what the request actually asked for
+	input  int // the input estimate the request was sized against
+	window int
+	source windowSource
+	// system is what the system prompt alone measures, hook text
+	// included. It is the part of a conversation a compaction cannot
+	// remove, so it is where the notice starts when it prices one.
+	system int
+	// keeps is what a compaction stores beside the summary itself, for
+	// the history this request carries: the summary's header, its notes
+	// about dropped images and carried assets, and the framing of the
+	// block they share. See compactionKeeps.
+	keeps int
+	// defaulted says wanted is the built-in default rather than a figure
+	// the profile set: the person then has no max_tokens to raise, only
+	// one to add.
+	defaulted bool
+}
+
+// sizeRequest works out how much output one request may ask for, and
+// keeps the figures it used.
+func (l *Loop) sizeRequest(ctx context.Context, sessionID string, run modelRun, messages []provider.Message) requestSizing {
+	window, source := l.resolveContextWindow(ctx, run.profile)
+	input := l.inputEstimate(sessionID, run.system, messages)
+	return requestSizing{
+		wanted:    run.maxTokens,
+		sent:      clampMaxTokens(run.maxTokens, window, input),
+		input:     input,
+		window:    window,
+		source:    source,
+		system:    estimateTokens(run.system, nil),
+		keeps:     compactionKeeps(messages, l.smartOn(ctx)),
+		defaulted: run.profile.MaxTokens == 0,
+	}
+}
+
+// compactionKeeps is what a compaction of msgs would store beside the
+// summary itself, in tokens: the header the summary re-enters behind,
+// the note about the images it dropped, the note about the assets the
+// replaced messages carried (behind Smart Agent, as the note is, and
+// read at sizing time: a switch flipped between the notice and the
+// /compact it advised is a change the notice's floor does not cover),
+// and the framing estimateTokens charges the one block they share. What
+// compactHistory writes, priced the way estimateTokens will read it.
+//
+// Rounded up, because this is the floor of the residual the notice
+// reasons from, and a floor a token under what is stored told a person
+// that /compact would make room by exactly the token it did not. The
+// stored block is floored once over all of its bytes together, while
+// the residual adds three figures floored apart: the system prompt's,
+// this one, and the summary's, which is up to three bytes more than
+// four times its token figure. Those three bytes are carried here and
+// the whole is rounded up, which puts the residual at or above what
+// estimateTokens reads for the stored block in every byte alignment,
+// and at most two tokens over.
+func compactionKeeps(msgs []provider.Message, smart bool) int {
+	text := summaryHeader
+	if n := countImages(msgs); n > 0 {
+		text += imageDroppedNote(n)
+	}
+	if smart {
+		text += carriedAssetNote(droppedCarriedAssets(msgs))
+	}
+	bytes := len(text) + blockFraming + 3
+	return (bytes + 3) / 4
+}
+
+// grow accounts for text a hook added to the request after it was sized.
+// The hook's text is part of what the provider will read, so the request
+// is clamped again with it counted, and it is system text, so it stays
+// through a compaction.
+func (s requestSizing) grow(extra string) requestSizing {
+	added := estimateTokens(extra, nil)
+	s.input += added
+	s.system += added
+	s.sent = clampMaxTokens(s.wanted, s.window, s.input)
+	return s
+}
+
+// afterCompaction is what the conversation would hold once compacted:
+// the system prompt, which compaction cannot remove, what the compaction
+// stores around the summary, and the summary itself, whose length is not
+// known until it is written. At the least it is shortestSummary; at the
+// most it is longestSummary, which is all compactHistory keeps of it. A
+// notice that priced compaction as an empty conversation told a first
+// turn that /compact would make room, when the summary alone would have
+// been bigger than the conversation it replaced.
+func (s requestSizing) afterCompaction(summary int) int {
+	return s.system + s.keeps + summary
+}
+
+// summaryRoom is the longest summary a compaction could leave behind and
+// still let the next request, capped at want, ask for more than beyond:
+// from 0 up to longestSummary, or -1 when even an empty summary would
+// not do. Worked out by the function that sizes the request, so a
+// condition the notice puts on /compact is one the next request will
+// honour. A longer summary leaves less room, so the answer is found by
+// bisection.
+func (s requestSizing) summaryRoom(want, beyond int) int {
+	room := -1
+	lo, hi := 0, longestSummary
+	for lo <= hi {
+		mid := lo + (hi-lo)/2
+		if clampMaxTokens(want, s.window, s.afterCompaction(mid)) > beyond {
+			room, lo = mid, mid+1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return room
+}
+
+// cutOffNotice says why a reply stopped at its length cap, and what would
+// let it run longer.
+//
+// Two different limits end a reply this way and they want opposite
+// advice. One is the profile's own max_tokens, and raising it is the fix.
+// The other is the context window: clampMaxTokens shrinks the request to
+// fit what is left, down to a floor of minOutputTokens, and a reply cut
+// off there was cut off by a full window — raising max_tokens changes
+// nothing, because the next request is shrunk the same way.
+//
+// This used to give the first answer to both. It printed the shrunk
+// figure as though it were the profile's limit, so a reply stopped at
+// 1024 read as "your max_tokens is 1024" on a profile that set none, and
+// told the person to raise a number that was not the one in the way. It
+// also named the profile by its model id, which is not a key anyone can
+// find in their config.json.
+//
+// Which limit it was is read off the request that was sent, not worked
+// out again — see requestSizing for why that is not the same thing.
+//
+// And when the window is the cause, it says where the window figure came
+// from, because a figure guessed from a model name is the likeliest
+// reason a window looks full when it is not.
+
+func cutOffNotice(s requestSizing, profileName, model string) string {
+	name := profileName
+	if name == "" {
+		name = model
+	}
+	// The cap that was sent is either the profile's own figure or the
+	// built-in default, and the person can only raise a figure that is
+	// there. Printing the default as "the profile's max_tokens limit" was
+	// the same mistake this notice was rewritten to stop making.
+	raiseIt := "raise max_tokens on that profile in config.json for longer answers"
+	hit := fmt.Sprintf("the reply hit the %q profile's max_tokens limit of %d and was cut off", name, s.sent)
+	if s.defaulted {
+		raiseIt = "set max_tokens on that profile in config.json for longer answers"
+		hit = fmt.Sprintf("the reply hit the default max_tokens of %d and was cut off (the %q profile sets none)", s.sent, name)
+	}
+	// What each move would send, worked out by the function that sizes
+	// the next request, so the advice cannot promise what the request
+	// will not do. With no window figure clampMaxTokens has no opinion,
+	// so raising is all that is left, which is what the arithmetic says.
+	//
+	// Raising is priced against the input the NEXT request will carry,
+	// which is this one's plus the reply that has just been added to it.
+	// s.input is what this request was sized against and the reply hit
+	// its cap, so it produced about s.sent tokens: the sum is what the
+	// conversation now holds. Priced at this request's input instead,
+	// the notice told a profile of 3000 on an 8192 window to raise
+	// max_tokens, when the 3000-token reply joining the history left
+	// room for 2644 and raising made the next reply shorter than the one
+	// that had just been cut off.
+	//
+	// It is still a floor, not a promise: whatever the person types next
+	// is on top of it and cannot be known here. The floor is the honest
+	// number, because it is the smallest the next request can be.
+	//
+	// Compacting is priced by the one thing about it nobody knows in
+	// advance, how long the summary comes out: summaryRoom is the
+	// longest summary that would still leave the next request more. At
+	// longestSummary, which is all a compaction keeps, the move is
+	// promised. Under shortestSummary it is not mentioned. In between it
+	// is offered with that length as its condition, in tokens, because
+	// "if its summary comes out short" was being offered where only an
+	// empty summary would have done, and an empty summary is a failed
+	// compaction: the person waited through a summarization call that
+	// could not have helped.
+	raised := clampMaxTokens(math.MaxInt, s.window, s.input+s.sent)
+	compactRoom := s.summaryRoom(s.wanted, s.sent)
+	bothRoom := s.summaryRoom(math.MaxInt, s.sent)
+	inUse := fmt.Sprintf("about %d of %d tokens were in use", s.input, s.window)
+	// Named as the compaction's, not "its": the clause follows a
+	// sentence with three other nouns in it.
+	ifShort := func(room int) string {
+		word := "tokens"
+		if room == 1 {
+			word = "token"
+		}
+		return fmt.Sprintf(", if the compaction's summary comes out at %d %s or fewer", room, word)
+	}
+
+	switch {
+	case bothRoom < shortestSummary && raised <= s.sent:
+		// A window too small to give more to any request: most of it
+		// is the margin held back for estimation error, and what a
+		// compaction leaves behind. Only a larger window helps, and a
+		// small figure is as likely to be wrong as the model's.
+		//
+		// Both moves are checked, not just the compaction, because the
+		// two are priced from different figures: the compaction from
+		// this side's estimate of the system prompt, raising from the
+		// provider's count of the whole request, and the count can come
+		// in under the estimate by a fifth on an English prompt. A
+		// system prompt estimated past what the whole request was
+		// counted at read as a window nothing could grow in, while
+		// raising max_tokens would have sent more.
+		room := s.window - s.afterCompaction(shortestSummary) - contextHeadroom
+		if room < 0 {
+			room = 0
+		}
+		// Every term of the subtraction is named, so the figure at the
+		// end can be checked against the window by the person reading
+		// it: what a compaction keeps was left out, and the arithmetic
+		// printed did not sum.
+		msg := fmt.Sprintf(
+			"the reply was cut off at %d tokens, and a context window of %d tokens cannot give a reply more: after the %d tokens held back as a margin, the %d the system prompt takes and the %d the shortest compaction keeps, it leaves room for %d",
+			s.sent, s.window, contextHeadroom, s.system, s.keeps+shortestSummary, room)
+		if room < minOutputTokens {
+			msg += fmt.Sprintf(", below the %d a request asks for at the least", minOutputTokens)
+		}
+		msg += fmt.Sprintf(". The window figure was %s", s.source)
+		if s.source == windowFromConfig {
+			return msg + fmt.Sprintf("; if the model's real window is larger, raise context_window on the %q profile in config.json", name)
+		}
+		return msg + fmt.Sprintf("; if the model's real window is larger, set context_window on the %q profile in config.json", name)
+
+	case s.sent < s.wanted:
+		// The window shrank it, and a smaller conversation lets it grow.
+		// The nothing-helps case above has ruled out a compaction that
+		// gives nothing even at its best, so at least the conditional
+		// promise holds here.
+		compact := "/compact makes room now"
+		if compactRoom < longestSummary {
+			compact = "/compact makes room" + ifShort(compactRoom)
+		}
+		return fmt.Sprintf(
+			"the reply was cut off at %d tokens because the context window was nearly full: %s, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. %s",
+			s.sent, inUse, s.source, compact) + tryALargerWindow(s, name)
+
+	case raised <= s.sent:
+		// The profile's figure was sent, and the window would give a
+		// larger one no more. Neither move works alone: a raised
+		// max_tokens is shrunk back, and /compact makes room the
+		// profile's figure then caps.
+		// The person can only raise a figure that is there.
+		both := "A longer answer needs both /compact and a higher max_tokens on that profile in config.json"
+		if s.defaulted {
+			both = "A longer answer needs both /compact and a max_tokens set on that profile in config.json"
+		}
+		if bothRoom < longestSummary {
+			both += ifShort(bothRoom)
+		}
+		return hit + fmt.Sprintf(
+			", and the context window had no room for more: %s, and the window figure was %s. %s",
+			inUse, s.source, both) + tryALargerWindow(s, name)
+
+	case raised <= minOutputTokens:
+		// Raising helps, as far as the floor. Past that only a smaller
+		// conversation helps, if even a compacted one would give more.
+		msg := hit + " — " + raiseIt + fmt.Sprintf(
+			"; the context window is nearly full as well (%s, and the window figure was %s), so a raised max_tokens gets at most %d", inUse, s.source, raised)
+		switch pastRoom := s.summaryRoom(math.MaxInt, raised); {
+		case pastRoom >= longestSummary:
+			msg += " until /compact makes room"
+		case pastRoom >= shortestSummary:
+			msg += " until /compact makes room" + ifShort(pastRoom)
+		}
+		return msg + tryALargerWindow(s, name)
+	}
+	return hit + " — " + raiseIt
+}
+
+// tryALargerWindow is the way out of every branch that blames the
+// window, for a window figure nobody stated.
+//
+// A figure guessed from a model name is the likeliest reason a window
+// looks full when it is not, so a branch that blames the window and
+// does not offer this is telling somebody to compact a conversation
+// that fits. It says nothing when the figure came from config.json,
+// where the person has already answered the question.
+func tryALargerWindow(s requestSizing, name string) string {
+	if s.source == windowFromConfig {
+		return ""
+	}
+	return fmt.Sprintf("; if the model's real window is larger than %d, set context_window on the %q profile in config.json", s.window, name)
 }

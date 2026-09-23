@@ -262,7 +262,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 |---|---|
 | `message.user` | `{"text", "model_text"?, "local"?}`. `local: true` was answered without a model call and is skipped rebuilding history |
 | `message.part.delta` | `{"text"}` fragment of a streaming reply |
-| `message.part.end` | the finished reply text; one turn has several when tools ran |
+| `message.part.end` | `{"text", "failed"?, "shell_command"?}` the finished reply text; one turn has several when tools ran. `failed: true` closes a reply whose stream died before it finished: the text is on the record and not in the history, which is rebuilt without it. `text` is empty when the stream died after a tool call and before any text; the calls a failed reply started never ran. A log written before this key existed rebuilds such a reply into the history as finished. `shell_command` names the `!` command whose output `text` is |
 | `tool.start`, `tool.end` | a tool call and its result |
 | `permission.request` | a tool approval question; answered at `POST /api/sessions/{id}/permissions/{permId}` |
 | `permission.resolved` | how it was answered |
@@ -284,7 +284,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `settings.changed` | every daemon switch as a snapshot, daemon-wide |
 | `config.changed` | `{"auto_compact_enabled", "show_tps"}` from `/config` |
 | `workspace.changed` | `{"path"}`; per session |
-| `usage` | `{"input_tokens", "output_tokens", "max_context", "percent", "tps", "show_tps", "model"}`; from reported usage, never estimated |
+| `usage` | `{"input_tokens", "output_tokens", "cached_input_tokens", "measured", "max_context", "percent", "tps", "show_tps", "model"}`; from reported usage, never estimated. `percent` is of the whole prompt the provider read, `input_tokens` plus `cached_input_tokens`; `input_tokens` alone is what was billed at the full rate. `measured` is the daemon's own character estimate of the same messages, for sizing after a restart. Draw a gauge from `percent`, not from `input_tokens` |
 | `compacted` | `{"summary_length", "manual", "summary", "model"?, "input_tokens"?, "output_tokens"?}` |
 | `cleared` | no payload; `/clear`, a barrier rebuilding history |
 | `rewound` | `{"from_seq", "turn_text", "restored", "skipped", "created"}` |

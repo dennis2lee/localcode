@@ -603,3 +603,18 @@ test('an unrecovered error still ends the turn', async () => {
   assert.equal(app.state.waiting, false);
   assert.ok(app.el('transcript').innerHTML.includes('error'), app.el('transcript').innerHTML);
 });
+
+// A stream that dies after the model asked for a tool leaves the row
+// running: no tool.end is coming, and the error is not a cancel, so
+// nothing closed it. It sat spinning under the error line for the life
+// of the page.
+test('a turn that ends with a call still running closes out its row', async () => {
+  const app = await load();
+  app.applyEvent({ type: 'tool.start', data: { tool_use_id: 't1', name: 'bash', input: '{"command":"ls"}' } });
+  assert.ok(app.el('transcript').innerHTML.includes('running'), app.el('transcript').innerHTML);
+
+  app.applyEvent({ type: 'error', data: { error: 'the wire went quiet' } });
+  app.applyEvent({ type: 'turn.done', data: {} });
+  assert.ok(!app.el('transcript').innerHTML.includes('running'), 'the row is still spinning after the turn ended');
+  assert.ok(app.el('transcript').innerHTML.includes('not run'), app.el('transcript').innerHTML);
+});

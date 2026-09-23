@@ -203,3 +203,23 @@ test('switching agents updates the model even before the new one has answered', 
   assert.match(text, /agent: plan/);
   assert.match(text, /model: test-model-2/, text);
 });
+
+// The context percentage is a reading of the history the daemon holds. An
+// event that replaces that history takes the daemon's own count with it,
+// and the status line has to let go of the reading too, or it shows the
+// old fill over a conversation that is nearly empty until the next turn
+// reports. The model and the rate stay: they are about the session.
+for (const replaced of ['cleared', 'compacted', 'rewound', 'redone']) {
+  test(`a ${replaced} event blanks the context percent but keeps the rate`, async () => {
+    const app = await load();
+    app.applyEvent({ type: 'usage', data: { percent: 85, tps: 13.5, model: 'reported-model' } });
+    app.renderStatusBar();
+    assert.match(app.el('status-text').textContent, /context: 85\.0%/);
+
+    app.applyEvent({ type: replaced, data: { summary_length: 12, turn_text: 'x' } });
+    app.renderStatusBar();
+    const text = app.el('status-text').textContent;
+    assert.doesNotMatch(text, /context:/, text);
+    assert.match(text, /13\.5 tok\/s/, text);
+  });
+}

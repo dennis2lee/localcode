@@ -13,6 +13,33 @@ type sessionUsage struct {
 	OutputTokens int
 	MaxContext   int
 	TPS          float64
+	// Measured is what estimateTokens made of the messages InputTokens
+	// counts plus the reply OutputTokens counts, taken when the count
+	// arrived. It is the only way to tell the two answers apart later:
+	// without it, a larger character sum could mean something was
+	// appended since, or could mean four-characters-to-a-token simply
+	// overshoots this content. See Loop.inputEstimate.
+	Measured int
+	// CachedInputTokens is the part of the prompt the provider served
+	// from its cache and reported apart from InputTokens. See
+	// promptTokens.
+	CachedInputTokens int
+}
+
+// promptTokens is the whole prompt the provider read for this call: what
+// it counted fresh, plus what it served from its own cache.
+//
+// InputTokens alone is not that number. Where a prompt cache is working,
+// the provider reports the cached prefix separately and InputTokens
+// covers only the fresh suffix: this repo's own fixture has
+// input_tokens 12 beside cache_read_input_tokens 4096. The two are kept
+// apart because they are priced apart, and everything about the window
+// wants them together, because the window holds all of it. Read apart,
+// a working cache made a nearly full conversation look empty: the gauge
+// read near zero, auto-compaction never fired, and the next request was
+// sized as though the prefix were not there.
+func (u sessionUsage) promptTokens() int {
+	return u.InputTokens + u.CachedInputTokens
 }
 
 // modelTotals accumulates token usage across every provider.Chat call a
@@ -57,7 +84,7 @@ func (l *Loop) startTurnRate(sessionID string) {
 // window down. Resolving it in one place is what keeps the meter, the
 // auto-compaction trigger, and the size of the next request from
 // disagreeing about how much room there is.
-func (l *Loop) recordUsage(sessionID, model string, maxContext int, usage streamUsage) {
+func (l *Loop) recordUsage(sessionID, model string, maxContext, measured int, usage streamUsage) {
 
 	// Rate over the whole turn so far, not over this one model call.
 	//
@@ -86,10 +113,12 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext int, usage stream
 	}
 
 	u := sessionUsage{
-		InputTokens:  usage.inputTokens,
-		OutputTokens: usage.outputTokens,
-		MaxContext:   maxContext,
-		TPS:          tps,
+		InputTokens:       usage.inputTokens,
+		OutputTokens:      usage.outputTokens,
+		MaxContext:        maxContext,
+		TPS:               tps,
+		Measured:          measured,
+		CachedInputTokens: usage.cacheRead + usage.cacheWrite,
 	}
 
 	l.mu.Lock()
@@ -106,7 +135,7 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext int, usage stream
 
 	percent := 0.0
 	if maxContext > 0 {
-		percent = float64(u.InputTokens+u.OutputTokens) / float64(maxContext) * 100
+		percent = float64(u.promptTokens()+u.OutputTokens) / float64(maxContext) * 100
 	}
 	l.Store.Append(sessionID, events.TypeUsage, map[string]any{
 		"input_tokens":  u.InputTokens,
@@ -114,6 +143,17 @@ func (l *Loop) recordUsage(sessionID, model string, maxContext int, usage stream
 		"max_context":   u.MaxContext,
 		"percent":       percent,
 		"tps":           tps,
+		// What this side made of the same messages, so a session read
+		// back from the log can still tell a count that covers
+		// everything from one that predates a tool result. A log written
+		// before this key existed reads as zero, which inputEstimate
+		// treats as "no measurement" rather than as a measurement of
+		// nothing.
+		"measured": u.Measured,
+		// The cached prefix, so a session read back from the log knows
+		// how much of its window is in use. Kept out of input_tokens,
+		// which clients show as what was billed at the full rate.
+		"cached_input_tokens": u.CachedInputTokens,
 		// Explicitly false so it clears the flag set by the live estimates
 		// broadcast during the stream — a client merges usage events, and
 		// a missing key would leave the "~" on an exact figure.
@@ -128,12 +168,6 @@ func (l *Loop) getUsage(sessionID string) (sessionUsage, bool) {
 	defer l.mu.Unlock()
 	u, ok := l.usage[sessionID]
 	return u, ok
-}
-
-func (l *Loop) clearUsage(sessionID string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.usage, sessionID)
 }
 
 // addCumulativeUsage folds one off-transcript model call (e.g. the

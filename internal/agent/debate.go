@@ -369,6 +369,10 @@ func (l *Loop) collapseDebate(d debateRun) (collapsed bool, kept int) {
 	if len(out) == len(h) {
 		return false, len(h) - d.historyMark
 	}
+	// Which drops the count describing the rounds just collapsed away.
+	// See setHistory: it is the replacement that invalidates the count,
+	// not the reason for it, and this was the one site that had
+	// forgotten to say so.
 	l.setHistory(d.sessionID, out)
 	return true, len(out) - d.historyMark
 }

@@ -779,12 +779,28 @@ func (l *Loop) history(sessionID string) []provider.Message {
 	return out
 }
 
-// setHistory replaces sessionID's entire in-memory history — used only by
-// auto-compaction to swap in a summary.
+// setHistory replaces a session's history, and drops the provider's
+// token count with it.
+//
+// The count describes the messages it was given. A replaced history is
+// not those messages, so what the count says about it is fiction:
+// inputEstimate would size the next request against a conversation that
+// no longer exists, and on a compaction or a debate collapse the
+// fiction is several times the truth.
+//
+// Here rather than at the call sites, because it is a property of
+// replacing a history and not of any one reason for doing it. It was at
+// the call sites, and the one that collapses a debate did not have it.
+// Growing a history is appendHistory, which leaves the count alone: the
+// count still describes what it described, and inputEstimate adds an
+// estimate of the rest.
 func (l *Loop) setHistory(sessionID string, msgs []provider.Message) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.messages[sessionID] = msgs
+	// Deleted here rather than through a helper, which would take this
+	// same lock.
+	delete(l.usage, sessionID)
 }
 
 // ClaimSessionTree is claimSessionTree for a caller outside this package

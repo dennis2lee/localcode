@@ -231,6 +231,23 @@ func ValidEffort(s string) bool {
 
 // StreamEvent is one item from a streamed model response. Exactly one field
 // is meaningful per Type.
+// readError is what a stream's read failing means once the stream has
+// ended: the error, or nothing when the turn was cancelled.
+//
+// A cancelled turn closes the connection, the read fails with the
+// cancel, and the readers offered that as a stream error. Their send
+// selects between the event channel and the context's done channel,
+// both ready by then, so about a third of cancels arrived as errors:
+// the reply was closed as failed, an error line was drawn, and the reply
+// the other two thirds kept was dropped. Pressing Esc had a coin flip's
+// outcome.
+func readError(ctx context.Context, err error) error {
+	if err == nil || ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
 type StreamEvent struct {
 	Type StreamEventType
 

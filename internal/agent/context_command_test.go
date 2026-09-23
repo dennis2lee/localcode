@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -98,5 +99,66 @@ func TestContextCommandParsing(t *testing.T) {
 			t.Errorf("parseContextCommand(%q) = (%q, %v, %v), want (%q, %v, %v)",
 				tc.text, id, all, ok, tc.id, tc.all, tc.ok)
 		}
+	}
+}
+
+// /context says where the window figure came from.
+//
+// The question that prompted it was "did it actually ask the server?",
+// about a reply cut off at an absurd length on an on-prem model. The
+// number alone cannot answer that — a guess and a measurement print the
+// same — and /context is where somebody goes to look.
+func TestContextNamesTheSourceOfTheWindow(t *testing.T) {
+	loop := newFallbackLoop(t, "http://127.0.0.1:1")
+	// No server to ask: every figure here is the name's guess.
+	loop.ProbeContextWindow = nil
+
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/context"); err != nil {
+		t.Fatalf("/context: %v", err)
+	}
+
+	out := lastMessagePartEnd(t, loop.Store, sid)
+	if !strings.Contains(out, string(windowGuessed)) {
+		t.Errorf("/context does not say the window was guessed:\n%s", out)
+	}
+	// And what to do about it, since a guess is exactly the case where
+	// the figure may be wrong in the direction that shortens replies.
+	if !strings.Contains(out, "set context_window on this profile") {
+		t.Errorf("/context names a guessed window without saying how to state the real one:\n%s", out)
+	}
+	if strings.Contains(out, "but the next reply gets") {
+		t.Errorf("/context on an empty session claims the window shrinks the next reply:\n%s", out)
+	}
+
+	// The window this loop guessed, read off the report so the next
+	// part is sized against the figure actually in use.
+	window := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "context window") && !strings.Contains(line, "guessed") {
+			fmt.Sscanf(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "context window")), "%d", &window)
+		}
+	}
+	if window == 0 {
+		t.Fatalf("could not read the window figure out of:\n%s", out)
+	}
+
+	// And once the window is nearly full, the line that says what the
+	// answer will actually get: the reservation alone described a
+	// request that was not being made.
+	full := window - contextHeadroom - 900
+	setTestUsage(loop, sid, sessionUsage{InputTokens: full, MaxContext: window})
+	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "/context"); err != nil {
+		t.Fatalf("/context: %v", err)
+	}
+	out = lastMessagePartEnd(t, loop.Store, sid)
+	if !strings.Contains(out, "but the next reply gets") || !strings.Contains(out, "because the window is nearly full") {
+		t.Errorf("/context on a nearly full window does not say what the next reply actually gets:\n%s", out)
+	}
+	if want := fmt.Sprintf("%d tokens, because", clampMaxTokens(defaultMaxTokens, window, full)); !strings.Contains(out, want) {
+		t.Errorf("/context names a figure other than what clampMaxTokens would send (%s):\n%s", want, out)
 	}
 }

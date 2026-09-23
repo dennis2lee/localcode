@@ -613,7 +613,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 				}
 			}
 		}
-		if err := scanner.Err(); err != nil {
+		if err := readError(ctx, scanner.Err()); err != nil {
 			emitErr(fmt.Errorf("read stream: %w", err))
 			return
 		}

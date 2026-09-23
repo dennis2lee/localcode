@@ -78,7 +78,6 @@ var tuiIgnoredEventTypes = map[string]string{
 	"task.progress":        "transient tool progress of background tasks; displayed in Web UI task indicator, whereas TUI task status only tracks spawned/status lifecycle",
 	"settings.changed":     "daemon-wide settings snapshot; consumed by Web UI settings modal, whereas TUI does not configure daemon-wide settings",
 	"workspace.changed":    "session directory switch; consumed by Web UI workspace picker, whereas TUI runs within the current terminal directory",
-	"compacted":            "context compaction summary event; TUI compaction runs locally or transparently without inserting a transcript system note",
 	"config.changed":       "session configuration change; TUI handles /config commands directly in the client rather than consuming broadcast config changes",
 	"permissions.changed":  "session permission flags snapshot; consumed by Web UI permission modal, whereas TUI handles permissions via request modals and local commands",
 }
@@ -200,7 +199,6 @@ var rehydrateIgnoredEventTypes = map[string]string{
 	"agent.switched":       "agent persona switch; system prompt changes are supplied separately from conversation history",
 	"model.changed":        "model selection update; model configuration is supplied per request rather than in message history",
 	"effort.changed":       "thinking effort configuration; supplied as request parameter rather than conversation message",
-	"error":                "turn error event; not an assistant or user message in provider history",
 	"mcp.status":           "daemon-wide MCP server connection status; not part of LLM conversation history",
 	"session.activity":     "daemon-wide session activity indicator; not part of LLM conversation history",
 	"session.archived":     "session archive lifecycle event; not part of LLM conversation history",

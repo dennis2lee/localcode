@@ -259,7 +259,6 @@ func (l *Loop) routeRewind(ctx context.Context, sessionID, text string) (bool, e
 			Data: map[string]any{"from_seq": from}})
 	}
 	l.setHistory(sessionID, rehydrateHistory(applyRewinds(after)))
-	l.clearUsage(sessionID)
 
 	return true, l.replyText(sessionID, rewindReport(first, restored, removed, skipped))
 }

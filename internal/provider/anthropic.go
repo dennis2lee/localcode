@@ -734,7 +734,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 				return
 			}
 		}
-		if err := scanner.Err(); err != nil {
+		if err := readError(ctx, scanner.Err()); err != nil {
 			send(StreamEvent{Type: EventError, Err: fmt.Errorf("read stream: %w", err)})
 		}
 	}()
