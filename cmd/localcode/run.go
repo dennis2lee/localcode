@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"localcode/internal/agent"
@@ -165,7 +166,7 @@ func oneShot(ctx context.Context, o runOptions, prompt string, out io.Writer) er
 		}
 	}
 
-	loop, agentName, cleanup, err := buildOneShot(ctx, o)
+	loop, agentName, drain, cleanup, err := buildOneShot(ctx, o)
 	if err != nil {
 		return err
 	}
@@ -224,6 +225,9 @@ func oneShot(ctx context.Context, o runOptions, prompt string, out io.Writer) er
 			// is the one outcome worth refusing.
 			return errors.New("fell behind the event stream; the answer would be incomplete")
 		case err := <-done:
+			// The background sub-agents the turn started finish before the
+			// run reports, since the report counts what they spent.
+			drain()
 			// Whatever is already in the channel belongs to this turn.
 			for {
 				select {
@@ -249,14 +253,17 @@ func oneShot(ctx context.Context, o runOptions, prompt string, out io.Writer) er
 // second copy of any of them would drift. What differs is the
 // composition — no session directory, no rehydration, no scheduler, no
 // task manager, no trace.
-func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(), error) {
+// It returns the loop, the agent to answer as, drain, which waits for the
+// background sub-agents the run started, and cleanup, which drains too
+// and then closes the session store.
+func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(), func(), error) {
 	e, err := resolveEnv()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	cfg, err := loadConfig(o.config, e)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	// The same first move the daemon makes, for the same reason: a bash
 	// permission is decided against whether the shell is POSIX, and a run
@@ -265,7 +272,7 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 	shell.Configure(cfg.Shell)
 	agentName, err := applyModelChoice(cfg, o)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	if o.bare {
 		// Hooks are somebody's shell commands running around every turn,
@@ -276,7 +283,7 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 
 	providers, err := buildProviders(ctx, cfg, e)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	// In memory unless the conversation is being kept. A run that is
 	// thrown away must not touch the session directory at all: that is
@@ -292,12 +299,12 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 	}
 	store, err := session.NewStore(storeDir)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	broker := agent.NewPermissionBroker(store)
 	registry, err := buildRegistry(cfg, broker, store)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 
 	loop := agent.New(store, registry, providers, cfg)
@@ -363,7 +370,7 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 		// from.
 		skillsSection, memoryPolicy, memorySection, skillList, cmdList, memDir, err := buildSystemPrompt(cfg, registry, e.cwd, e.home)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, "", nil, nil, err
 		}
 		loop.SkillsSection = skillsSection
 		loop.MemoryPolicy = memoryPolicy
@@ -373,20 +380,31 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 		loop.MemoryDir = memDir
 		loop.Version = version
 	}
-	return loop, agentName, func() {
-		// The run does not end before the work it started does. A background
-		// sub-agent was told to keep going after the turn that launched it;
-		// in a daemon there is a process for it to keep going in, and here
-		// the only one is this. Returning now would kill it mid-edit, having
-		// already reported to the model that it was under way.
-		//
-		// Said before waiting rather than after, on stderr so it stays out
-		// of the answer a script is parsing: a pipe that goes quiet is
-		// indistinguishable from one that hung.
-		if n := tasks.Outstanding(); n > 0 {
-			fmt.Fprintf(os.Stderr, "waiting for %d background sub-agent(s) to finish\n", n)
-		}
-		tasks.Drain(ctx)
+	// The run does not end before the work it started does. A background
+	// sub-agent was told to keep going after the turn that launched it;
+	// in a daemon there is a process for it to keep going in, and here
+	// the only one is this. Returning now would kill it mid-edit, having
+	// already reported to the model that it was under way.
+	//
+	// Said before waiting rather than after, on stderr so it stays out
+	// of the answer a script is parsing: a pipe that goes quiet is
+	// indistinguishable from one that hung.
+	//
+	// Its own function, which the run calls before it reports, because the
+	// report's usage counts what those sub-agents spent: drained only in
+	// the cleanup after the report, their calls were missing from a
+	// figure that says it is the whole run.
+	var drained sync.Once
+	drain := func() {
+		drained.Do(func() {
+			if n := tasks.Outstanding(); n > 0 {
+				fmt.Fprintf(os.Stderr, "waiting for %d background sub-agent(s) to finish\n", n)
+			}
+			tasks.Drain(ctx)
+		})
+	}
+	return loop, agentName, drain, func() {
+		drain()
 		// And close the session log, after the tasks that might still be
 		// writing to it. A one-shot run exits straight afterwards, so on
 		// Unix this leaked nothing anybody noticed — the process took the
@@ -453,6 +471,11 @@ type runWriter struct {
 	tree    func() (agent.UsageSummary, error)
 	started time.Time
 	errs    []string
+	// failure is the last error the turn did not recover from. A run
+	// through a daemon learns how its turn ended from the stream alone,
+	// and a turn that failed there has to exit non-zero as one run in
+	// this process does.
+	failure string
 }
 
 func newRunWriter(format string, out io.Writer) *runWriter {
@@ -521,6 +544,10 @@ func (w *runWriter) record(ev events.Event) {
 	case events.TypeError:
 		if s, _ := ev.Data["error"].(string); s != "" {
 			w.errs = append(w.errs, s)
+			// One the turn did not recover from is what it failed on.
+			if recovered, _ := ev.Data["recovered"].(bool); !recovered {
+				w.failure = s
+			}
 		}
 	}
 }
@@ -536,6 +563,15 @@ func (w *runWriter) addUsage(ev events.Event) {
 		w.usage = &agent.UsageFigures{}
 	}
 	w.usage.Add(f)
+}
+
+// turnFailure is the error a turn that ended on the stream failed on, or
+// nil for one that did not.
+func (w *runWriter) turnFailure() error {
+	if w.failure == "" {
+		return nil
+	}
+	return errors.New(w.failure)
 }
 
 // runUsage is the run's spend: the conversation's and every session's
@@ -671,32 +707,41 @@ func throughDaemon(ctx context.Context, o runOptions, url, prompt string, out io
 	done := make(chan error, 1)
 	go func() { done <- c.SendMessage(ctx, sess.ID, prompt) }()
 
+	// The daemon answers the message with 202 the moment it has taken the
+	// turn, and the turn runs on after that. The run is over at the turn's
+	// own end, turn.done or turn.cancelled on the stream, and not at the
+	// 202: waiting two seconds past it and then finishing printed whatever
+	// had arrived in those two seconds and exited 0, so a model that took
+	// longer to answer produced an empty result, no usage, and a success.
+	// The two can arrive in either order; the stream starts at the
+	// session's first event, so the first turn end on it is this turn's.
+	accepted, ended := false, false
+	var endErr error
 	for {
+		if accepted && ended {
+			return w.finish(sess.ID, endErr)
+		}
 		select {
 		case ev, ok := <-stream:
 			if !ok {
-				return w.finish(sess.ID, <-done)
+				if !accepted {
+					return w.finish(sess.ID, <-done)
+				}
+				return w.finish(sess.ID, errors.New("the daemon closed the event stream before the turn ended"))
 			}
 			w.event(ev)
-		case err := <-done:
-			// Drain what the daemon has already sent for this turn.
-			deadline := time.NewTimer(2 * time.Second)
-			defer deadline.Stop()
-			for {
-				select {
-				case ev, ok := <-stream:
-					if !ok {
-						return w.finish(sess.ID, err)
-					}
-					w.event(ev)
-					if ev.Type == events.TypeTurnDone {
-						return w.finish(sess.ID, err)
-					}
-					continue
-				case <-deadline.C:
-					return w.finish(sess.ID, err)
-				}
+			switch ev.Type {
+			case events.TypeTurnDone:
+				ended, endErr = true, w.turnFailure()
+			case events.TypeTurnCancelled:
+				ended, endErr = true, errors.New("the turn was cancelled")
 			}
+		case err := <-done:
+			done = nil
+			if err != nil {
+				return w.finish(sess.ID, err)
+			}
+			accepted = true
 		case <-ctx.Done():
 			return fmt.Errorf("gave up after %s", o.timeout)
 		}
