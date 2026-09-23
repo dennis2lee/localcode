@@ -42,7 +42,8 @@ import (
 // request, at the price of a slightly shorter reply.
 const contextHeadroom = 2048
 
-// minOutputTokens is the floor clampMaxTokens will not go below.
+// minOutputTokens is the floor clampMaxTokens will not shrink a request
+// below.
 //
 // A reply capped at a few dozen tokens is not a reply, and a session that
 // has genuinely no room left should be compacted rather than answered in
@@ -50,7 +51,7 @@ const contextHeadroom = 2048
 // means "compact", not "carry on".
 //
 // It is a floor on shrinking, never a reason to grow: a profile that asks
-// for less than this gets what it asked for.
+// for less than this gets what it asked for, and is sent below it.
 const minOutputTokens = 1024
 
 // contextWindow is the model's total input+output budget: what the config
@@ -187,21 +188,35 @@ func clampMaxTokens(want, window, inputTokens int) int {
 // session (see Loop.inputEstimate).
 func estimateTokens(system string, msgs []provider.Message) int {
 	n := len(system)
+	images := 0
 	for _, m := range msgs {
 		for _, b := range m.Content {
 			n += len(b.Text) + len(b.ToolInput) + len(b.ToolResultContent)
 			// Per-block framing: role, type, ids. Small, but there can be
 			// thousands of blocks in a long session.
 			n += 16
+			if b.Type == provider.BlockImage {
+				images++
+			}
 		}
 	}
-	return n / 4
+	return n/4 + images*imageTokenEstimate
 }
+
+// imageTokenEstimate is what one image block is taken to cost. An image
+// is not text and its bytes say nothing about its tokens: the providers
+// price it by its pixels, and the largest image they accept without
+// resizing comes to about this many. Counted at that ceiling, because an
+// image the estimate cannot see is the one addition to a conversation
+// that a character count misses entirely, and it was being priced at the
+// sixteen bytes of framing around it.
+const imageTokenEstimate = 1600
 
 // inputEstimate is how many input tokens the next request will cost.
 //
-// The provider's own count for the messages it was given, plus this
-// side's estimate of everything appended since.
+// The provider's own count for the messages it was given and for the
+// reply it wrote, plus this side's estimate of everything appended
+// since.
 //
 // Each half is there because the other cannot do its job. The count
 // comes from the same tokenizer that will refuse the next request, so
@@ -220,6 +235,13 @@ func estimateTokens(system string, msgs []provider.Message) int {
 // rather than with the whole conversation. Taking the larger of the two
 // instead threw the exact count away whenever the ratio happened to
 // overshoot, and shortened the reply for no reason.
+//
+// The reply is in the count as OutputTokens and in the history as text,
+// and it is priced from the count: a reply the provider tokenized in
+// front of us is the one thing here that never needs estimating, and
+// estimating a Korean reply from its characters came out at a third of
+// its size. So the measurement recorded with the count covers the reply
+// too, and the difference to now is only what came after it.
 //
 // Telling the two apart needs the estimate of the messages the count
 // covered, recorded when the count arrived: see sessionUsage.Measured.
@@ -247,7 +269,7 @@ func (l *Loop) inputEstimate(sessionID, system string, msgs []provider.Message) 
 	case u.Measured <= 0:
 		return max(u.promptTokens()+u.OutputTokens, now)
 	}
-	return u.promptTokens() + max(0, now-u.Measured)
+	return u.promptTokens() + u.OutputTokens + max(0, now-u.Measured)
 }
 
 // overflowPhrases are how the providers say "this did not fit".
@@ -516,6 +538,14 @@ type requestSizing struct {
 	input  int // the input estimate the request was sized against
 	window int
 	source windowSource
+	// system is what the system prompt alone measures, hook text
+	// included. It is the part of a conversation a compaction cannot
+	// remove, so it is where the notice starts when it prices one.
+	system int
+	// defaulted says wanted is the built-in default rather than a figure
+	// the profile set: the person then has no max_tokens to raise, only
+	// one to add.
+	defaulted bool
 }
 
 // sizeRequest works out how much output one request may ask for, and
@@ -524,12 +554,38 @@ func (l *Loop) sizeRequest(ctx context.Context, sessionID string, run modelRun, 
 	window, source := l.resolveContextWindow(ctx, run.profile)
 	input := l.inputEstimate(sessionID, run.system, messages)
 	return requestSizing{
-		wanted: run.maxTokens,
-		sent:   clampMaxTokens(run.maxTokens, window, input),
-		input:  input,
-		window: window,
-		source: source,
+		wanted:    run.maxTokens,
+		sent:      clampMaxTokens(run.maxTokens, window, input),
+		input:     input,
+		window:    window,
+		source:    source,
+		system:    estimateTokens(run.system, nil),
+		defaulted: run.profile.MaxTokens == 0,
 	}
+}
+
+// grow accounts for text a hook added to the request after it was sized.
+// The hook's text is part of what the provider will read, so the request
+// is clamped again with it counted, and it is system text, so it stays
+// through a compaction.
+func (s requestSizing) grow(extra string) requestSizing {
+	added := estimateTokens(extra, nil)
+	s.input += added
+	s.system += added
+	s.sent = clampMaxTokens(s.wanted, s.window, s.input)
+	return s
+}
+
+// afterCompaction is what the conversation would hold once compacted:
+// the system prompt, which compaction cannot remove, the summary's
+// header, and the summary itself, whose length is not known until it is
+// written. At best it is next to nothing; at worst it is the cap the
+// summarization call runs under. A notice that priced compaction as an
+// empty conversation told a first turn that /compact would make room,
+// when the summary alone would have been bigger than the conversation it
+// replaced.
+func (s requestSizing) afterCompaction(summary int) int {
+	return s.system + estimateTokens(summaryHeader, nil) + summary
 }
 
 // cutOffNotice says why a reply stopped at its length cap, and what would
@@ -555,28 +611,22 @@ func (l *Loop) sizeRequest(ctx context.Context, sessionID string, run modelRun, 
 // And when the window is the cause, it says where the window figure came
 // from, because a figure guessed from a model name is the likeliest
 // reason a window looks full when it is not.
-// tryALargerWindow is the way out of every branch that blames the
-// window, for a window figure nobody stated.
-//
-// A figure guessed from a model name is the likeliest reason a window
-// looks full when it is not, so a branch that blames the window and
-// does not offer this is telling somebody to compact a conversation
-// that fits. It says nothing when the figure came from config.json,
-// where the person has already answered the question.
-func tryALargerWindow(s requestSizing, name string) string {
-	if s.source == windowFromConfig {
-		return ""
-	}
-	return fmt.Sprintf("; if the model's real window is larger than %d, set context_window on the %q profile in config.json", s.window, name)
-}
 
 func cutOffNotice(s requestSizing, profileName, model string) string {
 	name := profileName
 	if name == "" {
 		name = model
 	}
+	// The cap that was sent is either the profile's own figure or the
+	// built-in default, and the person can only raise a figure that is
+	// there. Printing the default as "the profile's max_tokens limit" was
+	// the same mistake this notice was rewritten to stop making.
 	raiseIt := "raise max_tokens on that profile in config.json for longer answers"
 	hit := fmt.Sprintf("the reply hit the %q profile's max_tokens limit of %d and was cut off", name, s.sent)
+	if s.defaulted {
+		raiseIt = "set max_tokens on that profile in config.json for longer answers"
+		hit = fmt.Sprintf("the reply hit the default max_tokens of %d and was cut off (the %q profile sets none)", s.sent, name)
+	}
 	// What each move would send, worked out by the function that sizes
 	// the next request, so the advice cannot promise what the request
 	// will not do. With no window figure clampMaxTokens has no opinion,
@@ -596,22 +646,36 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 	// is on top of it and cannot be known here. The floor is the honest
 	// number, because it is the smallest the next request can be.
 	//
-	// Compacting is modelled as an empty conversation, the most it could
-	// ever free, and it takes the reply with it: a move that does not
-	// help even then does not help.
+	// Compacting is priced twice, because the one thing about it nobody
+	// knows in advance is how long the summary comes out: once with the
+	// shortest summary there could be, once with the longest the
+	// summarization call is allowed. A move is promised only when it
+	// helps even at the worst, offered with a condition when it helps
+	// only at the best, and not mentioned when it does not help at all.
 	raised := clampMaxTokens(math.MaxInt, s.window, s.input+s.sent)
-	both := clampMaxTokens(math.MaxInt, s.window, 0)
+	bothAtBest := clampMaxTokens(math.MaxInt, s.window, s.afterCompaction(0))
+	bothAtWorst := clampMaxTokens(math.MaxInt, s.window, s.afterCompaction(defaultMaxTokens))
+	compactAtWorst := clampMaxTokens(s.wanted, s.window, s.afterCompaction(defaultMaxTokens))
 	inUse := fmt.Sprintf("about %d of %d tokens were in use", s.input, s.window)
+	ifShort := ", if its summary comes out short"
 
 	switch {
-	case both <= s.sent:
-		// A window too small to give more to any request: most of it is
-		// the margin held back for estimation error. Only a larger
-		// window helps, and a small figure is as likely to be wrong as
-		// the model's.
+	case bothAtBest <= s.sent:
+		// A window too small to give more to any request: most of it
+		// is the margin held back for estimation error, and what a
+		// compaction leaves behind. Only a larger window helps, and a
+		// small figure is as likely to be wrong as the model's.
+		room := s.window - s.afterCompaction(0) - contextHeadroom
+		if room < 0 {
+			room = 0
+		}
 		msg := fmt.Sprintf(
-			"the reply was cut off at %d tokens, and a %d-token context window cannot give a reply more: after the %d tokens held back as a margin, even an empty conversation leaves room for %d. The window figure was %s",
-			s.sent, s.window, contextHeadroom, both, s.source)
+			"the reply was cut off at %d tokens, and a %d-token context window cannot give a reply more: after the %d tokens held back as a margin and the %d the system prompt takes, even the shortest compaction leaves room for %d",
+			s.sent, s.window, contextHeadroom, s.system, room)
+		if room < minOutputTokens {
+			msg += fmt.Sprintf(", below the %d a request asks for at the least", minOutputTokens)
+		}
+		msg += fmt.Sprintf(". The window figure was %s", s.source)
 		if s.source == windowFromConfig {
 			return msg + fmt.Sprintf("; if the model's real window is larger, raise context_window on the %q profile in config.json", name)
 		}
@@ -619,28 +683,57 @@ func cutOffNotice(s requestSizing, profileName, model string) string {
 
 	case s.sent < s.wanted:
 		// The window shrank it, and a smaller conversation lets it grow.
+		// The nothing-helps case above has ruled out a compaction that
+		// gives nothing even at its best, so at least the conditional
+		// promise holds here.
+		compact := "/compact makes room now"
+		if compactAtWorst <= s.sent {
+			compact = "/compact makes room" + ifShort
+		}
 		return fmt.Sprintf(
-			"the reply was cut off at %d tokens because the context window was nearly full: %s, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. /compact makes room now",
-			s.sent, inUse, s.source) + tryALargerWindow(s, name)
+			"the reply was cut off at %d tokens because the context window was nearly full: %s, and the window figure was %s. Raising max_tokens will not help — the next reply is shrunk the same way. %s",
+			s.sent, inUse, s.source, compact) + tryALargerWindow(s, name)
 
 	case raised <= s.sent:
 		// The profile's figure was sent, and the window would give a
 		// larger one no more. Neither move works alone: a raised
 		// max_tokens is shrunk back, and /compact makes room the
 		// profile's figure then caps.
+		both := "A longer answer needs both /compact and a higher max_tokens on that profile in config.json"
+		if bothAtWorst <= s.sent {
+			both += ifShort
+		}
 		return hit + fmt.Sprintf(
-			", and the context window had no room for more: %s, and the window figure was %s. A longer answer needs both /compact and a higher max_tokens on that profile in config.json",
-			inUse, s.source) + tryALargerWindow(s, name)
+			", and the context window had no room for more: %s, and the window figure was %s. %s",
+			inUse, s.source, both) + tryALargerWindow(s, name)
 
 	case raised <= minOutputTokens:
 		// Raising helps, as far as the floor. Past that only a smaller
-		// conversation helps, if even an empty one would give more.
+		// conversation helps, if even a compacted one would give more.
 		msg := hit + " — " + raiseIt + fmt.Sprintf(
 			"; the context window is nearly full as well (%s, and the window figure was %s), so a raised max_tokens gets at most %d", inUse, s.source, raised)
-		if both > raised {
+		switch {
+		case bothAtWorst > raised:
 			msg += " until /compact makes room"
+		case bothAtBest > raised:
+			msg += " until /compact makes room" + ifShort
 		}
 		return msg + tryALargerWindow(s, name)
 	}
 	return hit + " — " + raiseIt
+}
+
+// tryALargerWindow is the way out of every branch that blames the
+// window, for a window figure nobody stated.
+//
+// A figure guessed from a model name is the likeliest reason a window
+// looks full when it is not, so a branch that blames the window and
+// does not offer this is telling somebody to compact a conversation
+// that fits. It says nothing when the figure came from config.json,
+// where the person has already answered the question.
+func tryALargerWindow(s requestSizing, name string) string {
+	if s.source == windowFromConfig {
+		return ""
+	}
+	return fmt.Sprintf("; if the model's real window is larger than %d, set context_window on the %q profile in config.json", s.window, name)
 }

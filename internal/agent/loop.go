@@ -779,8 +779,6 @@ func (l *Loop) history(sessionID string) []provider.Message {
 	return out
 }
 
-// setHistory replaces sessionID's entire in-memory history — used only by
-// auto-compaction to swap in a summary.
 // setHistory replaces a session's history, and drops the provider's
 // token count with it.
 //

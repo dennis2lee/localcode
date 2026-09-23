@@ -59,6 +59,16 @@ function stageLine(d) {
 // degrades to "nothing to read" instead of throwing out of the whole
 // dispatch — before this table, `ev.data.name`/`ev.data.id` were dereferenced
 // unguarded and a malformed frame from the daemon could abort the handler.
+// The context percentage is a reading of the history the daemon holds,
+// and every one of these events replaces that history: the daemon drops
+// its own count with it and says nothing until the next turn reports. A
+// gauge that went on showing the old fill was wrong at the one moment
+// somebody was looking at it. The model name and the rate stay: they are
+// about the session, not about the conversation that was replaced.
+function forgetContextFill() {
+  if (session.lastUsage) session.lastUsage = { ...session.lastUsage, percent: null };
+}
+
 const handlers = {
   // A daemon that handed its address to a newer version of itself, and
   // is about to end this stream. The reconnect that follows lands on the
@@ -309,6 +319,7 @@ const handlers = {
   },
   cleared: () => {
     appendTool('[system] cleared: the model starts fresh from here. Everything above is still in this conversation.');
+    forgetContextFill();
   },
   rewound: (d) => {
     const files = [];
@@ -325,6 +336,7 @@ const handlers = {
       // So the box grows to fit it, the way it does while typing.
       inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     }
+    forgetContextFill();
   },
   // Which model answers here, chosen apart from which agent does — here
   // or in another client. Carried in the event rather than fetched, so a
@@ -354,9 +366,11 @@ const handlers = {
     if (d.skipped) files.push(`${d.skipped} left alone`);
     const what = d.turn_text ? `: ${d.turn_text}` : '';
     appendTool(`[system] put the turn back${what}${files.length ? ' — ' + files.join(', ') : ''}.`);
+    forgetContextFill();
   },
   compacted: (d) => {
     appendTool(`[system] conversation compacted to save context (summary: ${d.summary_length || 0} chars).`);
+    forgetContextFill();
   },
   'config.changed': (d) => {
     // Turning Smart Agent on or off changes which agents exist, so a

@@ -13,12 +13,12 @@ type sessionUsage struct {
 	OutputTokens int
 	MaxContext   int
 	TPS          float64
-	// Measured is what estimateTokens made of the very messages
-	// InputTokens counts, taken when the count arrived. It is the only
-	// way to tell the two answers apart later: without it, a larger
-	// character sum could mean something was appended since, or could
-	// mean four-characters-to-a-token simply overshoots this content.
-	// See Loop.inputEstimate.
+	// Measured is what estimateTokens made of the messages InputTokens
+	// counts plus the reply OutputTokens counts, taken when the count
+	// arrived. It is the only way to tell the two answers apart later:
+	// without it, a larger character sum could mean something was
+	// appended since, or could mean four-characters-to-a-token simply
+	// overshoots this content. See Loop.inputEstimate.
 	Measured int
 	// CachedInputTokens is the part of the prompt the provider served
 	// from its cache and reported apart from InputTokens. See

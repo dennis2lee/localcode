@@ -78,36 +78,43 @@ func TestTheInputEstimateSeesWhatTheCountCouldNot(t *testing.T) {
 	// fewer tokens per character than prose, and prose in Korean counts
 	// many more.
 	sent := []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("read the file")}}}
-	measured := estimateTokens("", sent)
+	// The reply is Korean: 400 syllables the provider counted as 400
+	// tokens, which a character count would price at a third of that.
+	// The count is the truth for it, and the measurement covers it.
+	reply := provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock(strings.Repeat("가", 400))}}
+	withReply := append(append([]provider.Message(nil), sent...), reply)
+	measured := estimateTokens("", withReply)
 	loop.mu.Lock()
-	loop.usage[sid] = sessionUsage{InputTokens: 5000, OutputTokens: 100, Measured: measured}
+	loop.usage[sid] = sessionUsage{InputTokens: 5000, OutputTokens: 400, Measured: measured}
 	loop.mu.Unlock()
 
-	// Nothing appended since: the count stands, exactly, and the
-	// character sum is not consulted.
-	if got := loop.inputEstimate(sid, "", sent); got != 5000 {
-		t.Errorf("with nothing appended since the count, the estimate is %d, want the count itself, 5000", got)
+	// Nothing appended since: the count stands, exactly, for the
+	// messages and for the reply, and the character sum is not
+	// consulted for either.
+	if got := loop.inputEstimate(sid, "", withReply); got != 5400 {
+		t.Errorf("with nothing appended since the count, the estimate is %d, want the count for the messages and the reply, 5400", got)
 	}
 
-	// The reply, which the count predates.
-	withReply := append(append([]provider.Message(nil), sent...),
-		provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock(strings.Repeat("a", 4*400))}})
-	wantReply := 5000 + estimateTokens("", withReply) - measured
-	if got := loop.inputEstimate(sid, "", withReply); got != wantReply {
-		t.Errorf("after the reply the estimate is %d, want the count plus what the reply measures, %d", got, wantReply)
-	}
-
-	// And a tool result on top of it, which is the addition that can
-	// outweigh everything the count covered.
+	// A tool result on top of it, which is the addition that can
+	// outweigh everything the count covered, and the one thing that is
+	// estimated.
 	withTool := append(append([]provider.Message(nil), withReply...),
 		provider.Message{Role: provider.RoleUser, Content: []provider.Block{
 			provider.ToolResultBlock("t1", strings.Repeat("x", 4*26000), false)}})
-	wantTool := 5000 + estimateTokens("", withTool) - measured
-	if wantTool < 26000 {
-		t.Fatalf("precondition: the additions measure %d tokens, want the tool result to dominate", wantTool-5000)
+	wantTool := 5400 + estimateTokens("", withTool) - measured
+	if wantTool-5400 < 26000 {
+		t.Fatalf("precondition: the addition measures %d tokens, want the tool result to dominate", wantTool-5400)
 	}
 	if got := loop.inputEstimate(sid, "", withTool); got != wantTool {
 		t.Errorf("a tool result appended after the count left the estimate at %d, want %d", got, wantTool)
+	}
+
+	// An image appended after the count is an addition too, and not
+	// one a character count can see.
+	withImage := append(append([]provider.Message(nil), withReply...),
+		provider.Message{Role: provider.RoleUser, Content: []provider.Block{provider.ImageBlock("image/png", make([]byte, 1<<20))}})
+	if got := loop.inputEstimate(sid, "", withImage); got < 5400+imageTokenEstimate {
+		t.Errorf("an image appended after the count moved the estimate to %d, want at least %d", got, 5400+imageTokenEstimate)
 	}
 
 	// A count with no measurement behind it is one this version did not
@@ -192,8 +199,8 @@ func TestACachedPrefixStillFillsTheWindow(t *testing.T) {
 	if got, want := u.promptTokens(), 12+4096+128; got != want {
 		t.Errorf("the prompt measured %d tokens, want %d: the cached prefix is part of what the window holds", got, want)
 	}
-	if got := loop.inputEstimate(sid, "", sent); got != u.promptTokens() {
-		t.Errorf("the next request is sized against %d tokens, want the %d the prompt actually carried", got, u.promptTokens())
+	if got, want := loop.inputEstimate(sid, "", sent), u.promptTokens()+u.OutputTokens; got != want {
+		t.Errorf("the next request is sized against %d tokens, want the %d the prompt actually carried plus the reply", got, want)
 	}
 
 	// And it survives the log, or a restored session sizes against the
@@ -297,10 +304,10 @@ func TestAutoCompactionCountsTheCachedPrefix(t *testing.T) {
 // forgotten: replacing a history drops the count, whatever the reason
 // for replacing it.
 //
-// It used to be six separate calls beside six separate replacements,
-// and the seventh replacement did not have one. This walks the reasons
-// rather than the call sites, so a new one that forgets is caught here
-// and not in a session sized against a conversation that had gone.
+// It used to be a separate call beside each replacement, and the one
+// that collapses a debate did not have it. This walks the reasons rather
+// than the call sites, so the next replacement is covered by the thing
+// every replacement goes through rather than by remembering.
 func TestReplacingAHistoryDropsTheCount(t *testing.T) {
 	profile := config.Profile{Provider: "local", Model: "DSA-Flash-CODE", ContextWindow: 16384}
 	for _, replacement := range []struct {
@@ -322,7 +329,7 @@ func TestReplacingAHistoryDropsTheCount(t *testing.T) {
 			loop.mu.Lock()
 			loop.usage[sid] = sessionUsage{InputTokens: 12900, OutputTokens: 100, Measured: estimateTokens("", before)}
 			loop.mu.Unlock()
-			if got := loop.inputEstimate(sid, "", before); got != 12900 {
+			if got := loop.inputEstimate(sid, "", before); got != 12900+100 {
 				t.Fatalf("precondition: the count is not in force, estimate = %d", got)
 			}
 
@@ -1155,11 +1162,25 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 
 		got := cutOffNotice(loop.sizeRequest(context.Background(), "s1", run, msgs), run.profileName, run.profile.Model)
 
-		if !strings.Contains(got, "raise max_tokens") {
-			t.Errorf("a profile cap does not say to raise max_tokens:\n%s", got)
+		// This profile sets no max_tokens, so 4096 is the built-in
+		// default, and there is no figure in config.json to raise:
+		// only one to add. Naming the default as the profile's own
+		// limit was the shape of the bug this notice was rewritten for.
+		if !strings.Contains(got, "the default max_tokens of 4096") || !strings.Contains(got, "sets none") {
+			t.Errorf("a cap that is the default is not named as the default:\n%s", got)
 		}
-		if !strings.Contains(got, "4096") {
-			t.Errorf("does not name the profile's actual limit:\n%s", got)
+		if !strings.Contains(got, "set max_tokens on that profile") || strings.Contains(got, "raise max_tokens") {
+			t.Errorf("tells the person to raise a max_tokens the profile does not have:\n%s", got)
+		}
+
+		// A profile that sets one is told to raise it.
+		explicit := profile
+		explicit.MaxTokens = 4096
+		loopSet := probeTestLoop(t, &probeCounter{found: false}, explicit)
+		runSet := modelRun{profileName: "itg-flash", profile: explicit, maxTokens: 4096}
+		got = cutOffNotice(loopSet.sizeRequest(context.Background(), "s1", runSet, msgs), runSet.profileName, runSet.profile.Model)
+		if !strings.Contains(got, "max_tokens limit of 4096") || !strings.Contains(got, "raise max_tokens on that profile") {
+			t.Errorf("a profile that set 4096 is not told to raise it:\n%s", got)
 		}
 	})
 
@@ -1309,92 +1330,123 @@ func TestTheCutOffNoticeBlamesTheRightLimit(t *testing.T) {
 	// somebody to do, doing it has to change the next request.
 	t.Run("every move the notice recommends sends more than was sent", func(t *testing.T) {
 		windows := []int{0, 2048, 3072, 4096, 8192, 32768, 131072}
-		wants := []int{1, 512, 1023, 1024, 1025, 3000, 4096, 64000}
+		// 8192 is there for a profile whose cap is the whole of a
+		// llama.cpp window, the case where /compact was promised on a
+		// first turn and would have sent less.
+		wants := []int{1, 512, 1023, 1024, 1025, 3000, 4096, 8192, 64000}
 		inputs := []int{0, 100, 500, 1000, 5000, 26600, 31000, 32000, 200000}
 		sources := []windowSource{windowFromConfig, windowFromServer, windowGuessed}
+		// The system prompt is what a compaction cannot remove, so it
+		// decides what /compact can free: none, and a Smart Agent
+		// prompt's worth.
+		systems := []int{0, 440}
 		checked := 0
 		for _, window := range windows {
 			for _, wanted := range wants {
 				for _, input := range inputs {
 					for _, source := range sources {
-						s := requestSizing{wanted: wanted, input: input, window: window,
-							source: source, sent: clampMaxTokens(wanted, window, input)}
-						// What each move would actually send. "Raise
-						// max_tokens" names no number, so the move is
-						// modelled as raising it as far as it needs to go,
-						// and it is priced at the input the next request
-						// carries, which includes the reply just cut off.
-						// /compact alone leaves the profile's figure where
-						// it is.
-						raiseSends := clampMaxTokens(math.MaxInt, window, input+s.sent)
-						compactSends := clampMaxTokens(wanted, window, 0)
-						bothSends := clampMaxTokens(math.MaxInt, window, 0)
-						raiseHelps := raiseSends > s.sent
-						compactHelps := compactSends > s.sent
-						bothHelps := bothSends > s.sent
+						for _, system := range systems {
+							s := requestSizing{wanted: wanted, input: input, window: window, system: system,
+								source: source, sent: clampMaxTokens(wanted, window, input)}
+							// What each move would actually send. "Raise
+							// max_tokens" names no number, so the move is
+							// modelled as raising it as far as it needs to
+							// go, and it is priced at the input the next
+							// request carries, which includes the reply just
+							// cut off. /compact leaves the system prompt,
+							// the summary's header and a summary of unknown
+							// length behind, so it is priced twice: with the
+							// shortest summary and with the longest the
+							// summarization call may write. A promise has to
+							// hold at the worst; an offer with a condition
+							// has to hold at the best.
+							raiseSends := clampMaxTokens(math.MaxInt, window, input+s.sent)
+							compactBest := clampMaxTokens(wanted, window, s.afterCompaction(0))
+							compactWorst := clampMaxTokens(wanted, window, s.afterCompaction(defaultMaxTokens))
+							bothBest := clampMaxTokens(math.MaxInt, window, s.afterCompaction(0))
+							bothWorst := clampMaxTokens(math.MaxInt, window, s.afterCompaction(defaultMaxTokens))
+							raiseHelps := raiseSends > s.sent
 
-						got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
-						where := fmt.Sprintf("window %d, max_tokens %d, input %d (sent %d)", window, wanted, input, s.sent)
-						checked++
+							got := cutOffNotice(s, "itg-flash", "DSA-Flash-CODE")
+							where := fmt.Sprintf("window %d, max_tokens %d, input %d, system %d (sent %d)", window, wanted, input, system, s.sent)
+							checked++
+							hedged := strings.Contains(got, "if its summary comes out short")
 
-						switch {
-						case strings.Contains(got, "cannot give a reply more"):
-							if raiseHelps || compactHelps || bothHelps {
-								t.Errorf("%s: says nothing can give more, but raise=%v compact=%v both=%v:\n%s",
-									where, raiseHelps, compactHelps, bothHelps, got)
+							switch {
+							case strings.Contains(got, "cannot give a reply more"):
+								if raiseHelps || compactBest > s.sent || bothBest > s.sent {
+									t.Errorf("%s: says nothing can give more, but raise=%v compact(best)=%d both(best)=%d against %d:\n%s",
+										where, raiseHelps, compactBest, bothBest, s.sent, got)
+								}
+							case strings.Contains(got, "for longer answers"):
+								if !raiseHelps {
+									t.Errorf("%s: prescribes raising max_tokens, which sends %d after %d:\n%s", where, raiseSends, s.sent, got)
+								}
+								// When it names a cap, the cap has to be what
+								// raising would actually get, and the way past
+								// the cap has to be one that works.
+								if cap := fmt.Sprintf("gets at most %d", raiseSends); strings.Contains(got, "gets at most") && !strings.Contains(got, cap) {
+									t.Errorf("%s: names a cap that is not what raising gets (%d):\n%s", where, raiseSends, got)
+								}
+								past := strings.Contains(got, "until /compact makes room")
+								switch {
+								case past && !hedged && bothWorst <= raiseSends:
+									t.Errorf("%s: promises /compact past the cap, but at worst it sends %d against %d:\n%s", where, bothWorst, raiseSends, got)
+								case past && hedged && (bothBest <= raiseSends || bothWorst > raiseSends):
+									t.Errorf("%s: hedges /compact past the cap, but best=%d worst=%d against %d:\n%s", where, bothBest, bothWorst, raiseSends, got)
+								case !past && strings.Contains(got, "gets at most") && bothBest > raiseSends:
+									t.Errorf("%s: names a cap and no way past it, though /compact at best sends %d:\n%s", where, bothBest, got)
+								}
+							case strings.Contains(got, "needs both /compact and a higher max_tokens"):
+								if hedged && (bothBest <= s.sent || bothWorst > s.sent) {
+									t.Errorf("%s: hedges both, but best=%d worst=%d against %d:\n%s", where, bothBest, bothWorst, s.sent, got)
+								}
+								if !hedged && bothWorst <= s.sent {
+									t.Errorf("%s: promises both, which at worst sends %d after %d:\n%s", where, bothWorst, s.sent, got)
+								}
+								if raiseHelps || compactBest > s.sent {
+									t.Errorf("%s: says both are needed, but raise=%v compact(best)=%d alone would do:\n%s",
+										where, raiseHelps, compactBest, got)
+								}
+							case strings.Contains(got, "/compact makes room"):
+								if hedged && (compactBest <= s.sent || compactWorst > s.sent) {
+									t.Errorf("%s: hedges /compact, but best=%d worst=%d against %d:\n%s", where, compactBest, compactWorst, s.sent, got)
+								}
+								if !hedged && compactWorst <= s.sent {
+									t.Errorf("%s: promises /compact, which at worst sends %d after %d:\n%s", where, compactWorst, s.sent, got)
+								}
+							default:
+								t.Errorf("%s: the notice recommends nothing this test recognises:\n%s", where, got)
 							}
-						case strings.Contains(got, "/compact makes room now"):
-							if !compactHelps {
-								t.Errorf("%s: prescribes /compact, which sends %d after %d:\n%s", where, compactSends, s.sent, got)
-							}
-						case strings.Contains(got, "needs both /compact and a higher max_tokens"):
-							if !bothHelps {
-								t.Errorf("%s: prescribes both, which sends %d after %d:\n%s", where, bothSends, s.sent, got)
-							}
-							if raiseHelps || compactHelps {
-								t.Errorf("%s: says both are needed, but raise=%v compact=%v alone would do:\n%s",
-									where, raiseHelps, compactHelps, got)
-							}
-						case strings.Contains(got, "for longer answers"):
-							if !raiseHelps {
-								t.Errorf("%s: prescribes raising max_tokens, which sends %d after %d:\n%s", where, raiseSends, s.sent, got)
-							}
-							// When it names a cap, the cap has to be what
-							// raising would actually get.
-							if cap := fmt.Sprintf("gets at most %d", raiseSends); strings.Contains(got, "gets at most") && !strings.Contains(got, cap) {
-								t.Errorf("%s: names a cap that is not what raising gets (%d):\n%s", where, raiseSends, got)
-							}
-						default:
-							t.Errorf("%s: the notice recommends nothing this test recognises:\n%s", where, got)
-						}
 
-						// Anything that blames the window has to say where
-						// the figure came from, and offer a larger one when
-						// nobody stated it. A guess from a model name is the
-						// likeliest reason a window looks full when it is
-						// not, and a branch that leaves it out tells
-						// somebody to compact a conversation that fits.
-						if !strings.Contains(got, "window") {
-							continue
-						}
-						if !strings.Contains(got, string(source)) {
-							t.Errorf("%s, window %s: blames the window without saying where the figure came from:\n%s", where, source, got)
-						}
-						// Offered whenever the figure was not stated,
-						// and also when nothing else helps at all:
-						// there the window is the only lever there is,
-						// so it is worth naming even to the person who
-						// set it.
-						offers := strings.Contains(got, "set context_window") || strings.Contains(got, "raise context_window")
-						nothingHelps := strings.Contains(got, "cannot give a reply more")
-						if want := nothingHelps || source != windowFromConfig; offers != want {
-							t.Errorf("%s, window %s: offering a larger context_window = %v, want %v:\n%s", where, source, offers, want, got)
+							// Anything that blames the window has to say where
+							// the figure came from, and offer a larger one when
+							// nobody stated it. A guess from a model name is the
+							// likeliest reason a window looks full when it is
+							// not, and a branch that leaves it out tells
+							// somebody to compact a conversation that fits.
+							if !strings.Contains(got, "window") {
+								continue
+							}
+							if !strings.Contains(got, string(source)) {
+								t.Errorf("%s, window %s: blames the window without saying where the figure came from:\n%s", where, source, got)
+							}
+							// Offered whenever the figure was not stated,
+							// and also when nothing else helps at all:
+							// there the window is the only lever there is,
+							// so it is worth naming even to the person who
+							// set it.
+							offers := strings.Contains(got, "set context_window") || strings.Contains(got, "raise context_window")
+							nothingHelps := strings.Contains(got, "cannot give a reply more")
+							if want := nothingHelps || source != windowFromConfig; offers != want {
+								t.Errorf("%s, window %s: offering a larger context_window = %v, want %v:\n%s", where, source, offers, want, got)
+							}
 						}
 					}
 				}
 			}
 		}
-		if want := len(windows) * len(wants) * len(inputs) * len(sources); checked != want {
+		if want := len(windows) * len(wants) * len(inputs) * len(sources) * len(systems); checked != want {
 			t.Fatalf("checked %d combinations, want %d", checked, want)
 		}
 	})

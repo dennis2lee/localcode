@@ -332,6 +332,13 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				req.System = req.System + "\n\n" + extra
 				req.SystemBlocks = append(req.SystemBlocks, provider.SystemBlock{Text: extra, Asset: "hook.pre_model"})
 				req.CachePrefix = false
+				// The request was sized before the hook ran, and the
+				// hook's text is part of what the provider reads. Sized
+				// again with it counted, so a large injection cannot
+				// push the request over, and so the notice about a reply
+				// that hit its cap describes the request that was sent.
+				sizing = sizing.grow(extra)
+				req.MaxTokens = sizing.sent
 				// The occurrence suffix rather than a separate literal,
 				// so the id every call can produce starts with the same
 				// text a reader can find. See
@@ -535,11 +542,16 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// last one.
 		sameTries = 0
 		if usage.hasUsage {
-			// estimateTokens over the messages this count describes,
-			// which is what the next request is measured against. The
-			// reply is appended below, after this.
+			// estimateTokens over the messages this count describes and
+			// the reply about to join them, which together are what the
+			// next request is measured against. The reply is in the
+			// measurement so that it is never estimated from its
+			// characters: its token count is in the same report, exact,
+			// and a Korean reply measured by characters came out at a
+			// third of what the provider had just counted.
 			l.recordUsage(sessionID, run.profile.Model, l.contextWindow(ctx, run.profile),
-				estimateTokens(run.system, messages), usage)
+				estimateTokens(run.system, append(append([]provider.Message(nil), messages...),
+					provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})), usage)
 		}
 
 		// Nothing is appended for a reply that produced nothing. A turn

@@ -118,7 +118,7 @@ const (
 	TypeWorkspaceChanged Type = "workspace.changed"
 
 	// TypeUsage reports the latest known token usage/context-window fill
-	// for a turn: {"input_tokens","output_tokens","max_context","percent",
+	// for a turn: {"input_tokens","output_tokens","cached_input_tokens","measured","max_context","percent",
 	// "tps","show_tps","model"}.
 	TypeUsage Type = "usage"
 	// TypeCompacted marks that compaction replaced a session's in-memory
