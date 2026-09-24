@@ -2885,7 +2885,7 @@ What Windows still cannot do is bring a console program back into the terminal i
 
 The desktop window hands over too, one step indirect. The window owns the loopback listener its page is connected to and never gives it up, so the new version gets a listener of its own and the window serves a proxy onto it; the two routes that open native dialogs stay in the window's process. At startup that is how a staged update runs from the first message. On `/update` the same thing happens mid-session: the new daemon comes up, the old one finishes what it has and retires, the window switches to the proxy, and the page reloads onto the new version's interface. The window stays open throughout. The daemon behind the window watches the same pipe the terminal's does, so closing the window ends it.
 
-The settings window's install button is the one path that closes the window. It stages the MSI and a helper, and the helper waits for localcode to exit before it runs the installer. The installer starts when the window closes. LocalCode opens again when the installer has finished. In a terminal the installer starts when localcode exits, and the person has to quit it. A recorded install is reported on the panel with the installer exit code and the log path while its version is newer than the running version. Once the running version catches up, the record says nothing and is cleared.
+The settings window's install button is the one path that closes the window. It stages the MSI and a helper, and the helper waits for localcode to exit before it runs the installer. The installer starts when the window closes. LocalCode opens again when the installer has finished. In a terminal the installer starts when localcode exits, and the person has to quit it. A failed install shows no message box where the window comes back: the helper relaunches the window at once, and the reopened window draws one line about the failure in the conversation view on its first load, with the version, the exit code and its meaning, and the log path. A message box appears only where nothing else can say it: a terminal parent, or no window binary left to come back to. A recorded install is reported on the panel with the installer exit code and the log path while its version is newer than the running version. Once the running version catches up, the record says nothing and is cleared.
 
 #### The settings window
 
@@ -2908,7 +2908,7 @@ Update behavior depends on the install format:
 | Windows `.msi` | A helper runs the installer at basic UI after the localcode that asked exits, with a full log beside the MSI. The asking process holds nothing by then. Another localcode still open, a second window or a terminal, still holds its files, and the installer's own files-in-use dialog names what is open | The window opens again when the installer has finished. A terminal never comes back: quit localcode to run the installer, then start it again. |
 | Windows `.zip`, macOS `.app`, Linux `.deb` | Downloaded, with what to do next | No. |
 
-A Windows MSI update never brings back a terminal. Quit localcode to run the installer. Start it again after installation. The desktop window opens again on its own.
+A Windows MSI update never brings back a terminal. Quit localcode to run the installer. Start it again after installation. The desktop window opens again on its own. A failed install shows no message box on the window path: the reopened window says it once in the conversation view on its first load. The box stays only for a terminal parent or a missing window binary.
 
 An older MSI installs over a newer one. Windows Installer would otherwise refuse with "a newer version is already installed", which only ever sent people to Add/Remove Programs first — the same outcome with an extra step. The permission lives in the package being installed, so it holds for every version from 0.133.0 on: any of those can be installed over anything newer, and nothing before 0.133.0 can be.
 
@@ -2975,7 +2975,7 @@ A remote daemon is not automatically restarted.
 
 Package-managed and bundle installs:
 
-* Windows MSI: stage the MSI and a helper. The helper runs `msiexec /i` with a log after localcode exits, then opens the window again. In a terminal, quit localcode to run the installer. The panel reports a recorded install with the exit code and the log path while its version is newer than the running version, and clears it once the running version catches up.
+* Windows MSI: stage the MSI and a helper. The helper runs `msiexec /i` with a log after localcode exits, then opens the window again. In a terminal, quit localcode to run the installer. A failed install shows no message box where the window comes back: the reopened window draws one line about it in the conversation view on its first load. The box stays only for a terminal parent or a missing window binary. The panel reports a recorded install with the exit code and the log path while its version is newer than the running version, and clears it once the running version catches up.
 * Linux `.deb` or a root-owned `/usr/bin` copy: download and verify, then show `sudo apt install <path>`. LocalCode does not request a password or run the package manager.
 * macOS `LocalCode.app` and Windows ZIP: download the complete distribution and show manual instructions.
 
