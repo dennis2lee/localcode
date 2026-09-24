@@ -1,0 +1,306 @@
+# Diagnostic, not part of the release: builds two versions of localcode
+# from this branch, packages each as an MSI, installs the older one on a
+# Windows runner, and updates it to the newer one through the window's
+# install button, the way a person would.
+# Runs on pushes to diag/* branches only.
+name: diag-msi-e2e
+
+on:
+  push:
+    branches: ['diag/**']
+
+permissions:
+  contents: read
+
+env:
+  FROM: '0.148.90'
+  TO: '0.148.91'
+
+jobs:
+  gui:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: Build the window at both versions
+        timeout-minutes: 12
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          for v in "$FROM" "$TO"; do
+            go build -tags gui -ldflags "-s -w -H windowsgui -X main.version=$v" -o "gui-$v/localcode-gui.exe" ./cmd/localcode
+          done
+          ls -la gui-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui
+          path: gui-*
+          if-no-files-found: error
+
+  # On macOS with Homebrew's msitools, because that is what the release
+  # machine packages with: Ubuntu's wixl is an older version, and its
+  # osslsigncode prints the signer in a form package-msi.sh does not read.
+  msi:
+    needs: gui
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: Install msitools
+        timeout-minutes: 12
+        run: |
+          brew install msitools osslsigncode
+          wixl --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: gui
+      - name: Package both versions
+        timeout-minutes: 10
+        run: |
+          for v in "$FROM" "$TO"; do
+            build/package-msi.sh "$v" dist "gui-$v/localcode-gui.exe"
+          done
+          for v in "$FROM" "$TO"; do
+            echo "== $v"
+            msiinfo export "dist/windows/localcode-$v-windows-amd64.msi" InstallExecuteSequence | sort -t$'\t' -k3 -n
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msis
+          path: dist/windows/*.msi
+          if-no-files-found: error
+
+  update:
+    needs: msi
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # close: the window closes three seconds after the reply, as
+        #   settings.js does.
+        # stay-then-close: the window stays open for a minute first, so the
+        #   installer has to wait for it, and a second install is asked
+        #   for while it waits.
+        # blocked: Windows Installer is turned off by policy, so msiexec
+        #   fails; the old version has to stay and the window come back.
+        mode: [close, stay-then-close, blocked]
+    steps:
+      - name: Turn on Windows Installer logging
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          reg add 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v Logging /t REG_SZ /d voicewarmupx /f
+          reg add 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v Debug /t REG_DWORD /d 7 /f
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: msis
+          path: msis
+
+      - name: Install the older version
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/i', "msis\localcode-$env:FROM-windows-amd64.msi", '/qn', '/l*v', 'install-from.log' -Wait -PassThru
+          "msiexec exit code: $($p.ExitCode)"
+          Get-ChildItem 'C:\Program Files\LocalCode' | Format-Table Name, Length, LastWriteTime
+
+      - name: Update through the window's install button
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $dir = 'C:\Program Files\LocalCode'
+          New-Item -ItemType Directory serve -Force | Out-Null
+          Copy-Item "msis\localcode-$env:TO-windows-amd64.msi" serve
+          $srv = Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1' -WorkingDirectory "$PWD\serve" -PassThru -RedirectStandardOutput srv-out.txt -RedirectStandardError srv-err.txt
+          $up = $false
+          for ($i = 0; $i -lt 60 -and -not $up; $i++) {
+            try { Invoke-WebRequest 'http://127.0.0.1:8765/' -TimeoutSec 2 -UseBasicParsing | Out-Null; $up = $true } catch { Start-Sleep 1 }
+          }
+          "release server up: $up"
+          if (-not $up) { exit 1 }
+          New-Item -ItemType Directory "$env:USERPROFILE\.localcode" -Force | Out-Null
+          @"
+          {
+            "auto_update": false,
+            "update_url": "http://127.0.0.1:8765/",
+            "providers": { "local": { "type": "openai-compat", "base_url": "http://127.0.0.1:9/v1" } },
+            "profiles": { "main": { "provider": "local", "model": "test-model" } },
+            "agents": { "general-purpose": { "profile": "main" } },
+            "default_profile": "main"
+          }
+          "@ | Set-Content -Encoding utf8 "$env:USERPROFILE\.localcode\config.json"
+
+          Add-Type -AssemblyName Microsoft.VisualBasic
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          New-Item -ItemType Directory shots -Force | Out-Null
+          function Shot($name) {
+            try {
+              $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+              $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+              $g = [System.Drawing.Graphics]::FromImage($bmp)
+              $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+              $bmp.Save("shots\$name.png")
+              $g.Dispose(); $bmp.Dispose()
+            } catch { "screenshot $name failed: $($_.Exception.Message)" }
+          }
+          function PortOf($procId) {
+            for ($i = 0; $i -lt 90; $i++) {
+              $ports = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $procId } | ForEach-Object { $_.LocalPort }
+              foreach ($port in $ports) {
+                try { Invoke-RestMethod "http://127.0.0.1:$port/api/version" -TimeoutSec 2 | Out-Null; return "http://127.0.0.1:$port" } catch {}
+              }
+              Start-Sleep 1
+            }
+            return $null
+          }
+
+          $app = Start-Process "$dir\localcode-gui.exe" -PassThru
+          $base = PortOf $app.Id
+          "window pid $($app.Id), daemon at $base"
+          if (-not $base) { exit 1 }
+          try { "check: $((Invoke-RestMethod "$base/api/update" -TimeoutSec 60) | ConvertTo-Json -Compress -Depth 5)" } catch { "check failed: $($_.Exception.Message)" }
+          try {
+            $r = Invoke-RestMethod -Method Post "$base/api/update/install" -TimeoutSec 300
+            "install reply: $($r | ConvertTo-Json -Compress)"
+          } catch {
+            "install call failed: $($_.Exception.Message)"
+            try { $_.ErrorDetails.Message } catch {}
+          }
+          if ('${{ matrix.mode }}' -eq 'blocked') {
+            reg add 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer' /v DisableMSI /t REG_DWORD /d 2 /f
+          }
+          if ('${{ matrix.mode }}' -eq 'stay-then-close') {
+            try {
+              $r2 = Invoke-RestMethod -Method Post "$base/api/update/install" -TimeoutSec 300
+              "second install reply: $($r2 | ConvertTo-Json -Compress)"
+            } catch {
+              "second install refused: $($_.Exception.Message)"
+              try { $_.ErrorDetails.Message } catch {}
+            }
+          }
+          $wait = if ('${{ matrix.mode }}' -eq 'stay-then-close') { 60 } else { 3 }
+          for ($i = 0; $i -lt $wait; $i++) {
+            if ($i % 10 -eq 0) {
+              $m = Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" | Where-Object { $_.CommandLine -match 'localcode' }
+              "t+$($i)s, window open: installer running: $([bool]$m)"
+            }
+            Start-Sleep 1
+          }
+          Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'localcode*' } | ForEach-Object { "process $($_.ProcessId) $($_.ExecutablePath) :: $($_.CommandLine)" }
+          "closing the window: $($app.CloseMainWindow())"
+
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class W {
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+            [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+            [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder sb, int n);
+            [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int v, int size);
+          }
+          "@
+          function WinState($title) {
+            $h = [W]::FindWindow([NullString]::Value, $title)
+            if ($h -eq [IntPtr]::Zero) { return "window '$title': none" }
+            $r = New-Object W+RECT
+            [W]::GetWindowRect($h, [ref]$r) | Out-Null
+            $cloaked = 0
+            [W]::DwmGetWindowAttribute($h, 14, [ref]$cloaked, 4) | Out-Null
+            $fg = New-Object System.Text.StringBuilder 256
+            [W]::GetWindowText([W]::GetForegroundWindow(), $fg, 256) | Out-Null
+            "window '$title': visible=$([W]::IsWindowVisible($h)) iconic=$([W]::IsIconic($h)) topmost=$((([W]::GetWindowLong($h, -20)) -band 8) -ne 0) rect=$($r.L),$($r.T),$($r.R),$($r.B) cloaked=$cloaked foreground='$($fg.ToString())'"
+          }
+          $boxAt = -1
+
+          # The installer, then the window it opens again.
+          $seen = $false
+          $again = $null
+          for ($i = 0; $i -lt 480; $i++) {
+            $m = Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" | Where-Object { $_.CommandLine -match 'localcode' }
+            if ($m -and -not $seen) { $seen = $true; "t+$($i)s: installer started: $(($m | ForEach-Object { $_.CommandLine }) -join ' | ')" }
+            $again = Get-Process localcode-gui -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $app.Id }
+            if ($seen -and -not $m -and $again) { "t+$($i)s: installer gone, window back as pid $($again.Id)"; break }
+            if ($boxAt -lt 0 -and [W]::FindWindow([NullString]::Value, 'LocalCode update failed') -ne [IntPtr]::Zero) { $boxAt = $i; "t+$($i)s: the failure box exists" }
+            if ($boxAt -ge 0 -and $i -eq $boxAt + 3) {
+              WinState 'LocalCode update failed'
+              Shot "box-t$i"
+            }
+            if ($i % 15 -eq 5 -and ($boxAt -lt 0 -or $i -gt $boxAt + 3)) {
+              WinState 'Windows Installer'
+              WinState 'LocalCode update failed'
+              Shot "t$i"
+              foreach ($title in 'LocalCode update failed', 'Windows Installer', 'LocalCode') {
+                try {
+                  [Microsoft.VisualBasic.Interaction]::AppActivate($title)
+                  Start-Sleep -Milliseconds 300
+                  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+                  "t+$($i)s: Enter sent to a window titled $title"
+                  break
+                } catch {}
+              }
+            }
+            Start-Sleep 1
+          }
+          Shot 'end'
+          if ($again) {
+            $b2 = PortOf ($again | Select-Object -First 1).Id
+            try { "reopened window reports: $((Invoke-RestMethod "$b2/api/version" -TimeoutSec 5) | ConvertTo-Json -Compress)" } catch { "reopened window did not answer: $($_.Exception.Message)" }
+            try {
+              $c2 = Invoke-RestMethod "$b2/api/update" -TimeoutSec 60
+              "reopened window's check: last_install = $($c2.last_install | ConvertTo-Json -Compress); available = $($c2.available)"
+            } catch { "reopened window's check failed: $($_.Exception.Message)" }
+          } else { 'no window came back' }
+          Stop-Process -Id $srv.Id -ErrorAction SilentlyContinue
+
+      - name: What is installed now
+        if: always()
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $dir = 'C:\Program Files\LocalCode'
+          if (Test-Path $dir) { Get-ChildItem $dir | Format-Table Name, Length, LastWriteTime } else { "$dir does not exist" }
+          if (Test-Path "$dir\localcode.exe") { & "$dir\localcode.exe" --version } else { 'no localcode.exe' }
+          Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -eq 'LocalCode' } | Format-Table DisplayName, DisplayVersion, PSChildName
+          Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\LocalCode" -ErrorAction SilentlyContinue | Format-Table FullName
+          Get-ChildItem "$env:LOCALAPPDATA\localcode\updates" -ErrorAction SilentlyContinue | Format-Table Name, Length, LastWriteTime
+          Get-ChildItem "$env:LOCALAPPDATA\localcode\updates\*.json" -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.Name)"; Get-Content $_.FullName }
+          $pending = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
+          "pending renames at reboot: $(($pending | Where-Object { $_ }) -join ' | ')"
+          Get-Process localcode*, msiexec -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime, Path
+          Get-WinEvent -LogName Application -MaxEvents 80 -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -eq 'MsiInstaller' } | ForEach-Object { "$($_.TimeCreated) $($_.Id) $($_.Message)" } | Select-Object -First 20
+
+      - name: Collect the logs
+        if: always()
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory logs -Force | Out-Null
+          Copy-Item install-from.log, srv-out.txt, srv-err.txt logs -ErrorAction SilentlyContinue
+          Copy-Item shots\*.png logs -ErrorAction SilentlyContinue
+          Get-ChildItem "$env:LOCALAPPDATA\localcode\updates\*.log", "$env:LOCALAPPDATA\localcode\updates\*.json", "$env:TEMP\MSI*.LOG", 'C:\Windows\Temp\MSI*.LOG' -ErrorAction SilentlyContinue | Copy-Item -Destination logs
+          Get-ChildItem logs | Format-Table Name, Length
+
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ matrix.mode }}
+          path: logs
