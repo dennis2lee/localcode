@@ -214,8 +214,19 @@ func RunMSIHelper(pendingPath string) error {
 	// Whatever is at the window's path is what the person has, so the
 	// window comes back whether the install succeeded, was cancelled,
 	// or failed. A terminal gets nothing back: a new console is not the
-	// person's terminal.
+	// person's terminal. But the parent has exited by now, terminal or
+	// not, so nobody is watching for a sentence on it either: an
+	// outcome that is neither installed nor cancelled (failed, another
+	// installation in progress) says so in a message box first, for a
+	// terminal parent too. Cancelled says nothing, because the person
+	// cancelled it themselves. The box comes before the relaunch, so
+	// the person reads what happened before the window is back.
+	status, installed := ClassifyMSIExit(code)
+	failed := !installed && status != "cancelled"
 	if !p.GUI {
+		if failed {
+			alertMSI("LocalCode update failed", msiFailureText(p, code))
+		}
 		return nil
 	}
 	target := GUIExecutableBeside(p.ParentExe)
@@ -223,20 +234,29 @@ func RunMSIHelper(pendingPath string) error {
 		// No window left to say it, so a message box says it: the exit
 		// code and the log. This is the end state the bug report
 		// described, an old product removed and no new one installed,
-		// and silence about it would be the same failure again.
-		_, installed := ClassifyMSIExit(code)
+		// and silence about it would be the same failure again. One
+		// box: a failed install with no window says it here rather
+		// than twice.
 		title := "LocalCode update failed"
 		if installed {
 			title = "LocalCode update"
 		}
-		alertMSI(
-			title,
-			fmt.Sprintf("LocalCode %s: the installer exited %d (%s). The installer log is at %s.",
-				p.Version, code, MSIExitMeaning(code), p.Log),
-		)
+		alertMSI(title, msiFailureText(p, code))
 		return nil
 	}
+	if failed {
+		alertMSI("LocalCode update failed", msiFailureText(p, code))
+	}
 	return relaunchMSI(target, p.ParentArgs)
+}
+
+// msiFailureText is what the message box names: the version, the exit
+// code and what it means, and the log. The panel never shows it — the
+// check reports the same record — so this box is the only place it is
+// said when the window is about to come back over it.
+func msiFailureText(p MSIPending, code int) string {
+	return fmt.Sprintf("LocalCode %s: the installer exited %d (%s). The installer log is at %s.",
+		p.Version, code, MSIExitMeaning(code), p.Log)
 }
 
 // waitMSIParent waits for the parent process to exit, by the inherited
@@ -294,6 +314,12 @@ var relaunchMSI = func(target string, args []string) error {
 	return cmd.Process.Release()
 }
 
+// msiAlertFlags is how the message box is shown: an error icon, and
+// brought to the front. The box reports an install that has already
+// happened, behind whatever the person has open since; left behind
+// other windows it is silence with one more click attached.
+const msiAlertFlags = 0x10 | 0x10000 | 0x40000 // MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST
+
 // alertMSI shows a message box, for when there is no window left to say
 // what happened.
 var alertMSI = func(title, text string) {
@@ -301,5 +327,5 @@ var alertMSI = func(title, text string) {
 	proc := dll.NewProc("MessageBoxW")
 	t, _ := syscall.UTF16PtrFromString(text)
 	c, _ := syscall.UTF16PtrFromString(title)
-	_, _, _ = proc.Call(0, uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(c)), 0x10)
+	_, _, _ = proc.Call(0, uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(c)), msiAlertFlags)
 }

@@ -81,12 +81,17 @@ func (d *Daemon) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		// 200 with the reason, not an HTTP error: the panel shows this
 		// beside the button that was clicked, and "failed to fetch" with a
 		// status code is not what someone whose network is behind a proxy
-		// needs to read.
-		writeJSON(w, http.StatusOK, map[string]any{
+		// needs to read. A failed install is still reported beside it: it
+		// is a local fact, and the network being down does not change it.
+		body := map[string]any{
 			"current": d.Version,
 			"checked": false,
 			"detail":  err.Error(),
-		})
+		}
+		if last := d.lastInstallReport(); last != nil {
+			body["last_install"] = last
+		}
+		writeJSON(w, http.StatusOK, body)
 		return
 	}
 
@@ -175,9 +180,13 @@ func (d *Daemon) lastInstallReport() map[string]any {
 		_ = update.ClearMSIRecord(dir)
 		return nil
 	}
+	// The status travels with the record so the panel words its line by
+	// what happened instead of re-deriving it from the exit code.
+	status, _ := update.ClassifyMSIExit(rec.ExitCode)
 	return map[string]any{
 		"version":   rec.Version,
 		"exit_code": rec.ExitCode,
+		"status":    status,
 		"meaning":   update.MSIExitMeaning(rec.ExitCode),
 		"log":       rec.Log,
 	}

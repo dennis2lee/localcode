@@ -251,16 +251,16 @@ func ClearMSIPending(dir string) error {
 	return nil
 }
 
-// ReportMSIRecord says whether GET /api/update should include a record:
-// when it did not install the version it was for. Cancelled, failed, or
-// still not the running version are all reported. An install that
-// succeeded and is now the running version says nothing.
+// ReportMSIRecord says whether GET /api/update should include a record.
+// Cancelled, failed, or another installation in progress are always
+// reported. An installed status (installed, restart needed, restart
+// started) is reported only while its version is not the running one:
+// once the running version is what it installed, the record says
+// nothing and is cleared. Reporting it forever would put the same
+// install on the panel on every check after every reboot.
 func ReportMSIRecord(r MSIRecord, running string) bool {
-	status, installed := ClassifyMSIExit(r.ExitCode)
+	_, installed := ClassifyMSIExit(r.ExitCode)
 	if !installed {
-		return true
-	}
-	if status != "installed" {
 		return true
 	}
 	return r.Version != running

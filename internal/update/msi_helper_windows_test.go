@@ -113,12 +113,15 @@ func TestTheHelperWaitsRunsAndRecords(t *testing.T) {
 }
 
 // A failed install still brings the window back: whatever is at that
-// path is what the person has.
+// path is what the person has. The failure is said in a message box
+// first, because the window comes back over it.
 func TestAFailedInstallStillRelaunches(t *testing.T) {
 	dir, pending := helperFixture(t, true)
 	waited, installed := stubHelperSeams(t, 1603)
 	relaunched := stubRelaunch(t)
-	stubAlert(t)
+	var title, text string
+	defer func(f func(string, string)) { alertMSI = f }(alertMSI)
+	alertMSI = func(gotTitle, gotText string) { title, text = gotTitle, gotText }
 
 	if err := RunMSIHelper(pending); err != nil {
 		t.Fatalf("helper: %v", err)
@@ -133,8 +136,101 @@ func TestAFailedInstallStillRelaunches(t *testing.T) {
 	if rec.ExitCode != 1603 {
 		t.Errorf("record = %+v, want exit 1603", rec)
 	}
+	if title == "" || !strings.Contains(text, "1603") {
+		t.Errorf("alert = %q %q, want the exit code before the window comes back", title, text)
+	}
 	if *relaunched == "" {
 		t.Error("a failed install did not bring the window back")
+	}
+}
+
+// Another installation in progress is neither installed nor cancelled,
+// so it says so in a message box, and the window still comes back.
+func TestABusyInstallAlertsAndRelaunches(t *testing.T) {
+	_, pending := helperFixture(t, true)
+	stubHelperSeams(t, 1618)
+	relaunched := stubRelaunch(t)
+	alerted := stubAlert(t)
+
+	if err := RunMSIHelper(pending); err != nil {
+		t.Fatalf("helper: %v", err)
+	}
+	if !*alerted {
+		t.Error("no message box for an install refused by another installation in progress")
+	}
+	if *relaunched == "" {
+		t.Error("the window did not come back")
+	}
+}
+
+// A cancelled install says nothing: the person cancelled it themselves.
+// The window still comes back.
+func TestACancelledInstallIsSilent(t *testing.T) {
+	_, pending := helperFixture(t, true)
+	stubHelperSeams(t, 1602)
+	relaunched := stubRelaunch(t)
+	alerted := stubAlert(t)
+
+	if err := RunMSIHelper(pending); err != nil {
+		t.Fatalf("helper: %v", err)
+	}
+	if *alerted {
+		t.Error("a message box appeared for an install the person cancelled")
+	}
+	if *relaunched == "" {
+		t.Error("the window did not come back after a cancelled install")
+	}
+}
+
+// An installed outcome says nothing either: the window coming back is
+// the whole of the report.
+func TestAnInstalledOutcomeIsSilent(t *testing.T) {
+	for _, code := range []int{0, 3010, 1641} {
+		_, pending := helperFixture(t, true)
+		stubHelperSeams(t, code)
+		relaunched := stubRelaunch(t)
+		alerted := stubAlert(t)
+
+		if err := RunMSIHelper(pending); err != nil {
+			t.Fatalf("helper (exit %d): %v", code, err)
+		}
+		if *alerted {
+			t.Errorf("a message box appeared for exit %d, which installed", code)
+		}
+		if *relaunched == "" {
+			t.Errorf("the window did not come back after exit %d", code)
+		}
+	}
+}
+
+// A terminal parent gets nothing started back, but the parent has
+// exited, so a failed install still says so in a message box: nobody
+// is at the terminal any more to read a sentence on it.
+func TestATerminalFailureAlerts(t *testing.T) {
+	_, pending := helperFixture(t, false)
+	stubHelperSeams(t, 1603)
+	relaunched := stubRelaunch(t)
+	var title, text string
+	defer func(f func(string, string)) { alertMSI = f }(alertMSI)
+	alertMSI = func(gotTitle, gotText string) { title, text = gotTitle, gotText }
+
+	if err := RunMSIHelper(pending); err != nil {
+		t.Fatalf("helper: %v", err)
+	}
+	if title == "" || !strings.Contains(text, "1603") {
+		t.Errorf("alert = %q %q, want the exit code for a terminal parent too", title, text)
+	}
+	if *relaunched != "" {
+		t.Errorf("a terminal parent was relaunched as %q", *relaunched)
+	}
+}
+
+// The message box is an error icon brought to the front. Left behind
+// other windows it is silence with one more click attached.
+func TestTheAlertIsAnErrorBoxInFront(t *testing.T) {
+	const want = 0x10 | 0x10000 | 0x40000 // MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST
+	if msiAlertFlags != want {
+		t.Errorf("msiAlertFlags = %#x, want %#x", msiAlertFlags, want)
 	}
 }
 
@@ -143,6 +239,9 @@ func TestAFailedInstallStillRelaunches(t *testing.T) {
 // exit code and the log.
 func TestAMissingWindowAlerts(t *testing.T) {
 	dir, pending := helperFixture(t, true)
+	if err := os.Remove(filepath.Join(dir, "localcode-gui.exe")); err != nil {
+		t.Fatalf("remove the window binary: %v", err)
+	}
 	stubHelperSeams(t, 1603)
 	stubRelaunch(t)
 	var title, text string

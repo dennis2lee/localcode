@@ -369,13 +369,18 @@ function showUpdate(text, warn) {
   updateNoteEl.className = warn ? 'note warn' : 'note';
 }
 
-// lastInstallLine is the one line for a recorded install that did not
-// land: the version, the exit code and what it means, and the log path.
-// An install that succeeded and is now running says nothing, so neither
-// does this.
+// lastInstallLine is the one line for a recorded install: the version,
+// the exit code and what it means, and the log path. Worded by the
+// status the daemon sent, not by the code: a record is reported with an
+// installed status when its version is not the running one, for example
+// when a daemon that is still the old version reads it. Only the
+// not-installed statuses say "did not install".
 function lastInstallLine(res) {
   const last = res && res.last_install;
   if (!last || !last.version) return '';
+  if (last.status && last.status.startsWith('installed')) {
+    return `Update to ${last.version} was installed: the installer exited ${last.exit_code} (${last.meaning}). Restart localcode to run it. Log: ${last.log}.`;
+  }
   return `Update to ${last.version} did not install: the installer exited ${last.exit_code} (${last.meaning}). Log: ${last.log}.`;
 }
 
@@ -435,8 +440,14 @@ async function installUpdate() {
   if (!latest) return;
   // Asked once, plainly, because the answer is not undoable: the program
   // the person is using is about to be replaced, and on Windows that also
-  // means an elevation prompt and localcode closing.
-  if (!window.confirm(`Download and install localcode ${latest.latest}?\n\nlocalcode restarts, or closes for an installer to replace its files.`)) return;
+  // means an elevation prompt and localcode closing. The words depend on
+  // where the page runs: in the desktop window the window closes and
+  // comes back, anywhere else localcode has to be quit.
+  const inWindow = typeof window.lcWindowCommand === 'function';
+  const confirmText = inWindow
+    ? `Download and install localcode ${latest.latest}?\n\nThe window closes and the installer runs. The window opens again when the installer has finished.`
+    : `Download and install localcode ${latest.latest}?\n\nThe installer starts when localcode exits. Quit localcode to run it.`;
+  if (!window.confirm(confirmText)) return;
 
   updateInstallBtn.disabled = true;
   updateCheckBtn.disabled = true;
@@ -473,7 +484,7 @@ async function installUpdate() {
       // either way — a window vanishing under someone mid-click is worse
       // than a line asking them to close it.
       if (typeof window.lcWindowCommand === 'function') {
-        showUpdate(`${res.detail} — closing localcode in a moment.`);
+        showUpdate(`${res.detail} This window closes in 3 seconds.`);
         setTimeout(() => window.lcWindowCommand('close'), 3000);
       }
     }

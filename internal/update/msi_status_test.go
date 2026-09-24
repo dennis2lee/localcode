@@ -115,24 +115,35 @@ func TestMSIRecordRoundTrip(t *testing.T) {
 	}
 }
 
-// The check reports a record unless it installed the running version.
+// The check reports a record unless an installed status is for the
+// running version. Every installed status crossed with the version
+// being equal or not to the running one: an installed record for the
+// running version says nothing and is cleared, or the panel reports
+// that install on every check forever.
 func TestReportMSIRecord(t *testing.T) {
 	log := filepath.Join("c:", "updates", "localcode-0.46.0-msi.log")
 	cases := []struct {
 		name    string
-		rec     MSIRecord
+		code    int
 		running string
 		report  bool
 	}{
-		{"cancelled", MSIRecord{Version: "0.46.0", ExitCode: 1602, Log: log}, "0.45.2", true},
-		{"failed", MSIRecord{Version: "0.46.0", ExitCode: 1603, Log: log}, "0.45.2", true},
-		{"another install", MSIRecord{Version: "0.46.0", ExitCode: 1618, Log: log}, "0.45.2", true},
-		{"installed but old still running", MSIRecord{Version: "0.46.0", ExitCode: 0, Log: log}, "0.45.2", true},
-		{"restart needed", MSIRecord{Version: "0.46.0", ExitCode: 3010, Log: log}, "0.46.0", true},
-		{"installed and running", MSIRecord{Version: "0.46.0", ExitCode: 0, Log: log}, "0.46.0", false},
+		{"installed, older running", 0, "0.45.2", true},
+		{"installed, running", 0, "0.46.0", false},
+		{"restart needed, older running", 3010, "0.45.2", true},
+		{"restart needed, running", 3010, "0.46.0", false},
+		{"restart started, older running", 1641, "0.45.2", true},
+		{"restart started, running", 1641, "0.46.0", false},
+		{"cancelled, older running", 1602, "0.45.2", true},
+		{"cancelled, running", 1602, "0.46.0", true},
+		{"another installation, older running", 1618, "0.45.2", true},
+		{"another installation, running", 1618, "0.46.0", true},
+		{"failed, older running", 1603, "0.45.2", true},
+		{"failed, running", 1603, "0.46.0", true},
 	}
 	for _, tc := range cases {
-		if got := ReportMSIRecord(tc.rec, tc.running); got != tc.report {
+		rec := MSIRecord{Version: "0.46.0", ExitCode: tc.code, Log: log}
+		if got := ReportMSIRecord(rec, tc.running); got != tc.report {
 			t.Errorf("%s: ReportMSIRecord = %v, want %v", tc.name, got, tc.report)
 		}
 	}

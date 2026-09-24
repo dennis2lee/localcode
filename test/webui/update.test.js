@@ -275,8 +275,27 @@ test('an install with no restart tells the user to restart', async () => {
 
 // The install is asked once, in fixed words: the program in use is about
 // to be replaced, and on Windows that means an elevation prompt and
-// localcode closing.
-test('installing asks in fixed words', async () => {
+// localcode closing. In the desktop window the window closes and comes
+// back; anywhere else localcode has to be quit.
+test('installing in the window asks in fixed words', async () => {
+  const app = await load({
+    routes: { 'GET /api/update': AVAILABLE },
+    confirm: false,
+    globals: { lcWindowCommand: () => {} },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.equal(app.confirmMessages.length, 1);
+  assert.match(app.confirmMessages[0], /The window closes and the installer runs/);
+  assert.match(app.confirmMessages[0], /opens again when the installer has finished/);
+});
+
+test('installing outside the window asks in fixed words', async () => {
   const app = await load({
     routes: { 'GET /api/update': AVAILABLE },
     confirm: false,
@@ -289,7 +308,8 @@ test('installing asks in fixed words', async () => {
   await app.settle();
 
   assert.equal(app.confirmMessages.length, 1);
-  assert.match(app.confirmMessages[0], /localcode restarts, or closes for an installer to replace its files/);
+  assert.match(app.confirmMessages[0], /The installer starts when localcode exits/);
+  assert.match(app.confirmMessages[0], /Quit localcode to run it/);
 });
 
 // In the desktop window the installer starts when the window closes,
@@ -346,7 +366,7 @@ test('a failed install is reported beside the offer', async () => {
       'GET /api/update': {
         ...AVAILABLE,
         last_install: {
-          version: '0.46.0', exit_code: 1602, meaning: 'cancelled',
+          version: '0.46.0', exit_code: 1602, status: 'cancelled', meaning: 'cancelled',
           log: 'C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log',
         },
       },
@@ -371,7 +391,7 @@ test('a failed install is reported when already up to date', async () => {
       'GET /api/update': {
         ...UP_TO_DATE,
         last_install: {
-          version: '0.45.0', exit_code: 1603, meaning: 'failed (exit code 1603)',
+          version: '0.45.0', exit_code: 1603, status: 'failed', meaning: 'failed (exit code 1603)',
           log: '/home/u/.cache/localcode/updates/localcode-0.45.0-msi.log',
         },
       },
@@ -386,4 +406,79 @@ test('a failed install is reported when already up to date', async () => {
   assert.match(note, /latest release/);
   assert.match(note, /0\.45\.0 did not install/);
   assert.match(note, /1603/);
+});
+
+// A record with an installed status says the version was installed and
+// that localcode has to be restarted to run it: a daemon that is still
+// the old version reports the install it just staged. Only the
+// not-installed statuses say "did not install".
+test('an installed record says it was installed, not that it did not', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...AVAILABLE,
+        last_install: {
+          version: '0.46.0', exit_code: 0, status: 'installed', meaning: 'installed',
+          log: 'C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log',
+        },
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  const note = app.el('update-note').textContent;
+  assert.match(note, /0\.46\.0 was installed/);
+  assert.match(note, /Restart localcode to run it/);
+  assert.doesNotMatch(note, /did not install/);
+});
+
+test('a cancelled record still says it did not install', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...AVAILABLE,
+        last_install: {
+          version: '0.46.0', exit_code: 1602, status: 'cancelled', meaning: 'cancelled',
+          log: 'C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log',
+        },
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  const note = app.el('update-note').textContent;
+  assert.match(note, /0\.46\.0 did not install/);
+  assert.match(note, /cancelled/);
+});
+
+// In the desktop window the started installer gets its own sentence
+// saying when this window closes, and the window closes itself.
+test('a started window install says when it closes and closes it', async () => {
+  const closed = [];
+  const app = await load({
+    routes: {
+      'GET /api/update': AVAILABLE,
+      'POST /api/update/install': {
+        version: '0.46.0', started: true,
+        detail: 'The installer for localcode 0.46.0 starts when this window closes. LocalCode opens again when the installer has finished.',
+      },
+    },
+    globals: { lcWindowCommand: (cmd) => closed.push(cmd) },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.match(app.el('update-note').textContent, /This window closes in 3 seconds\./);
+  await app.wait(3400);
+  assert.deepEqual(closed, ['close']);
 });

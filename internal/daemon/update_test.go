@@ -249,11 +249,52 @@ func TestTheCheckReportsAFailedInstall(t *testing.T) {
 	if last["exit_code"] != float64(1602) {
 		t.Errorf("exit_code = %v", last["exit_code"])
 	}
+	// The status travels with the record so the panel words its line by
+	// what happened instead of re-deriving it from the exit code.
+	if last["status"] != "cancelled" {
+		t.Errorf("status = %v, want what ClassifyMSIExit says about 1602", last["status"])
+	}
 	if meaning, _ := last["meaning"].(string); !strings.Contains(meaning, "cancelled") {
 		t.Errorf("meaning = %q, want what 1602 means", meaning)
 	}
 	if last["log"] != log {
 		t.Errorf("log = %v, want %q", last["log"], log)
+	}
+}
+
+// A failed install is a local fact: the check reporting that GitHub
+// could not be reached still carries the record beside the reason, or
+// nothing on screen says the install failed until somebody's network
+// comes back.
+func TestAFailedCheckStillReportsAFailedInstall(t *testing.T) {
+	dir := t.TempDir()
+	log := dir + "/localcode-0.46.0-msi.log"
+	if err := update.WriteMSIRecord(dir, update.MSIRecord{Version: "0.46.0", ExitCode: 1603, Log: log}); err != nil {
+		t.Fatal(err)
+	}
+	old := msiRecordDir
+	msiRecordDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { msiRecordDir = old })
+
+	unreachable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(unreachable.Close)
+
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+	d.Version = "0.45.2"
+	d.UpdateAPI = unreachable.URL
+
+	body := checkUpdate(t, d)
+	if body["checked"] != false {
+		t.Errorf("checked = %v, want false", body["checked"])
+	}
+	last, ok := body["last_install"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_install = %v, want the recorded install beside the failed check", body["last_install"])
+	}
+	if last["version"] != "0.46.0" || last["status"] != "failed" {
+		t.Errorf("last_install = %v, want the 0.46.0 failure", last)
 	}
 }
 
