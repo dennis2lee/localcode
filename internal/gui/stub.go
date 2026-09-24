@@ -17,10 +17,6 @@ func Launch(title string, start func(progress func(string), setVersion func(stri
 	return errors.New(unavailable(runtime.GOOS))
 }
 
-// InstallerRestarts is false without a window: there is nothing for an
-// installer to bring back.
-func InstallerRestarts() bool { return false }
-
 // unavailable is the explanation, per platform, because the answer is a
 // different one on each and the wrong answer is worse than none.
 //

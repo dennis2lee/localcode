@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"localcode/internal/events"
 	"localcode/internal/update"
 )
 
@@ -79,12 +81,17 @@ func (d *Daemon) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		// 200 with the reason, not an HTTP error: the panel shows this
 		// beside the button that was clicked, and "failed to fetch" with a
 		// status code is not what someone whose network is behind a proxy
-		// needs to read.
-		writeJSON(w, http.StatusOK, map[string]any{
+		// needs to read. A failed install is still reported beside it: it
+		// is a local fact, and the network being down does not change it.
+		body := map[string]any{
 			"current": d.Version,
 			"checked": false,
 			"detail":  err.Error(),
-		})
+		}
+		if last := d.lastInstallReport(); last != nil {
+			body["last_install"] = last
+		}
+		writeJSON(w, http.StatusOK, body)
 		return
 	}
 
@@ -115,6 +122,9 @@ func (d *Daemon) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		} else {
 			body["detail"] = "localcode " + d.Version + " is the latest release"
 		}
+		if last := d.lastInstallReport(); last != nil {
+			body["last_install"] = last
+		}
 		writeJSON(w, http.StatusOK, body)
 		return
 	}
@@ -124,6 +134,9 @@ func (d *Daemon) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		body["available"] = true
 		body["can_install"] = false
 		body["detail"] = err.Error()
+		if last := d.lastInstallReport(); last != nil {
+			body["last_install"] = last
+		}
 		writeJSON(w, http.StatusOK, body)
 		return
 	}
@@ -136,7 +149,60 @@ func (d *Daemon) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		// do — the same rule as the folder picker.
 		body["detail"] = "install it on the machine running localcode, or from " + rel.PageURL
 	}
+	// Beside the offer, not instead of it: a failed install does not
+	// stop the next one being offered.
+	if last := d.lastInstallReport(); last != nil {
+		body["last_install"] = last
+	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// msiRecordDir is where the helper's record is read from. A variable so
+// a test can point it at a directory it controls rather than the user's
+// cache.
+var msiRecordDir = updateDir
+
+// lastInstallReport reads the helper's record for the panel. Included
+// only while the record's version is newer than the running version.
+// Otherwise it says nothing and is cleared: a version since installed
+// another way must not keep being reported as not installed.
+func (d *Daemon) lastInstallReport() map[string]any {
+	dir, err := msiRecordDir()
+	if err != nil {
+		return nil
+	}
+	rec, err := update.ReadMSIRecord(dir)
+	if err != nil {
+		return nil
+	}
+	if !update.ReportMSIRecord(rec, d.Version) {
+		_ = update.ClearMSIRecord(dir)
+		return nil
+	}
+	// The status travels with the record so the panel words its line by
+	// what happened instead of re-deriving it from the exit code.
+	status, _ := update.ClassifyMSIExit(rec.ExitCode)
+	return map[string]any{
+		"version":   rec.Version,
+		"exit_code": rec.ExitCode,
+		"status":    status,
+		"meaning":   update.MSIExitMeaning(rec.ExitCode),
+		"log":       rec.Log,
+	}
+}
+
+// msiTerminalNotice is the daemon-wide notice for an MSI install staged
+// from a terminal or a headless daemon. A recovered error event, which
+// both clients draw as a note that ends nothing: a plain error ends the
+// TUI's turn while the daemon keeps running it, and the Web UI paints it
+// as a failure for the same turn. See case events.TypeError in
+// internal/tui/events.go and the error handler in
+// internal/daemon/static/js/events.js.
+func msiTerminalNotice(detail string) events.Event {
+	return events.Event{
+		Type: events.TypeError,
+		Data: map[string]any{"error": detail, "recovered": true},
+	}
 }
 
 // handleUpdateInstall downloads the release and hands it to the platform's
@@ -164,8 +230,16 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, updateHTTPStatus(err), err)
 		return
 	}
-	out, err := update.Apply(path)
+	out, err := update.ApplyFor(path, d.DesktopWindow)
 	if err != nil {
+		// A helper still waiting or installing refuses a second one.
+		// 409, not 500: the request was understood and the state, not
+		// the server, is what refuses it.
+		var pending *update.ErrMSIPending
+		if errors.As(err, &pending) {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -176,8 +250,17 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	// the version in the header does not change, and the next thing the
 	// user does is run the same old build.
 	detail, restarting := restartPlan(out, d.Restart != nil)
-	if out.Started && d.InstallerRestarts {
-		detail += installerRestartsNote
+	if out.Started {
+		// No rewrite here: the detail already says which case this is,
+		// from the same DesktopWindow value the helper's pending file
+		// got. The browser that clicked is not the only client, and
+		// the person at the terminal is the one who has to quit. Said
+		// on every stream, the way a failed handoff is: the reply
+		// above goes to the browser, and the terminal never sees
+		// it otherwise.
+		if !d.DesktopWindow {
+			d.daemonEvents.send(msiTerminalNotice(detail))
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": rel.Version,
@@ -221,15 +304,15 @@ var restartDelay = 400 * time.Millisecond
 func restartPlan(out update.Outcome, canRestart bool) (detail string, restarting bool) {
 	if !out.Replaced {
 		// Either nothing was replaced (a .deb, a Windows zip, a bundle) or
-		// an installer is running and will do it. Both already say what
-		// happens next in their own words.
+		// an installer is staged and will do it once localcode exits.
+		// Both already say what happens next in their own words.
 		//
-		// The installer case does not become a restart even though it now
-		// reliably closes localcode. On Windows the Restart Manager brings
-		// a console program back in a NEW console, which is not the
-		// terminal the person is sitting in, and no flag, custom action or
-		// helper process changes that. Saying "restarting localcode now"
-		// and then opening a window somewhere else would be worse than
+		// The installer case does not become a restart. A terminal or a
+		// headless daemon is never started back: a new console is not the
+		// terminal the person is sitting in. The window is started back
+		// by the helper, on its own terms rather than this process's, so
+		// there is nothing here to wait on either. Saying "restarting
+		// localcode now" and then doing anything else would be worse than
 		// saying nothing.
 		return out.Detail, false
 	}
@@ -242,12 +325,6 @@ func restartPlan(out update.Outcome, canRestart bool) (detail string, restarting
 	// worked and changes nothing on screen reads as one that did not.
 	return out.Detail + " — restart localcode to run the new version", false
 }
-
-// installerRestartsNote is appended to an installer's detail where the
-// platform will bring the program back. "When the install finishes" and
-// not "now": the restart is the Restart Manager's, on its own terms, and
-// one of those terms is that the program had been running a minute.
-const installerRestartsNote = " Windows starts localcode again when the install finishes."
 
 // updateDir is where downloads are kept: the user's cache directory, since
 // an installer is disposable the moment it has run.

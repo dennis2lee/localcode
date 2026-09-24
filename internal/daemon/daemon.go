@@ -45,12 +45,12 @@ type Daemon struct {
 	// on the *server*, at the request of a browser somewhere else. Checking
 	// for a release is not gated; only installing one is.
 	AllowUpdateInstall bool
-	// InstallerRestarts says the platform has agreed to start this program
-	// again after an installer closes it, which on Windows the desktop
-	// window arranges through the Restart Manager. It changes one
-	// sentence: an install that ends with "start it again when it has
-	// finished" ends with "Windows starts it again" instead.
-	InstallerRestarts bool
+	// DesktopWindow says this daemon serves the native desktop window in
+	// this process. Only the window's install reply promises a return:
+	// the installer starts when the window closes, and the window opens
+	// again when the installer has finished. Everywhere else the reply
+	// tells the person to quit, because a new console is not theirs.
+	DesktopWindow bool
 	// Restart brings this program back up on the binary that has just
 	// replaced it. Nil where that cannot be done — a daemon someone
 	// reached over the network is not one to restart from a browser, and
@@ -125,6 +125,11 @@ type Daemon struct {
 	// to a conversation (MCP status), which is why they bypass the
 	// session event log entirely — see broadcast.go.
 	daemonEvents *broadcaster
+
+	// msiNoticeMu serializes the failed-install check-and-mark in
+	// maybeMSINotice, so two streams opening at once cannot both draw
+	// it. See sse.go.
+	msiNoticeMu sync.Mutex
 }
 
 // New builds the daemon's HTTP handler. webFS, if non-nil, is served at "/"

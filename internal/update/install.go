@@ -17,10 +17,10 @@ import (
 // Outcome says what installing did, because it is not the same thing on
 // every platform and the difference is the user's business.
 type Outcome struct {
-	// Started reports that an installer is now running and will replace
-	// this install. Nothing else here is going to happen on its own: the
-	// caller has to let localcode exit, since a running program's files
-	// cannot be replaced while it holds them.
+	// Started reports that an installer is staged and will replace this
+	// install once localcode exits. Nothing else here is going to happen
+	// on its own: the caller has to let localcode exit, since a running
+	// program's files cannot be replaced while it holds them.
 	Started bool `json:"started"`
 	// Replaced reports that this program's own binary has been written
 	// over, so the version now on disk is not the one running. Nothing
@@ -44,12 +44,13 @@ type Outcome struct {
 
 // installerArgs is the command line the Windows installer is started with.
 //
-// Here rather than beside startInstaller, which is behind a windows build
-// tag, because the flags are the whole of what makes an update apply and a
-// fact nobody can check from another machine is one that goes wrong
-// quietly. See install_windows.go for what each one is for.
-func installerArgs(path string) []string {
-	return []string{"/i", path, "/qb"}
+// Here rather than beside the helper that runs it, which is behind a
+// windows build tag, because the flags are the whole of what makes an
+// update apply and a fact nobody can check from another machine is one
+// that goes wrong quietly. See msi_helper_windows.go for what each one
+// is for.
+func installerArgs(msi, log string) []string {
+	return []string{"/i", msi, "/qb", "/l*v", log}
 }
 
 // Apply installs a downloaded release.
@@ -64,12 +65,20 @@ func installerArgs(path string) []string {
 // a binary unpacked into somewhere like ~/.local/bin. That one this user
 // already owns, so localcode replaces it itself, and a root-free install
 // updates with a click like every other one.
-func Apply(path string) (Outcome, error) { return apply(path, currentBinary) }
+func Apply(path string) (Outcome, error) { return ApplyFor(path, false) }
 
-// apply is Apply with the running binary's location injected, so a test
-// can exercise the replacement without the test binary being the thing
-// that gets replaced.
-func apply(path string, target func() (string, error)) (Outcome, error) {
+// ApplyFor installs a downloaded release, with window saying whether the
+// asking process is the desktop window. The daemon's DesktopWindow is the
+// only source: the same value builds the reply's detail and the helper's
+// pending file, so the two cannot disagree about what was promised and
+// what will happen. Apply is the same with no window to ask, for the
+// callers that have none.
+func ApplyFor(path string, window bool) (Outcome, error) { return apply(path, currentBinary, window) }
+
+// apply is ApplyFor with the running binary's location injected, so a
+// test can exercise the replacement without the test binary being the
+// thing that gets replaced.
+func apply(path string, target func() (string, error), window bool) (Outcome, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("the downloaded update is not there: %w", err)
@@ -79,14 +88,21 @@ func apply(path string, target func() (string, error)) (Outcome, error) {
 	}
 
 	if strings.EqualFold(filepath.Ext(path), ".msi") && runtime.GOOS == "windows" {
-		if err := startInstaller(path); err != nil {
+		if err := startInstaller(path, window); err != nil {
 			return Outcome{Path: path}, err
+		}
+		// The reply depends on where the parent runs: the window closes
+		// itself and comes back, while a terminal has to be quit by the
+		// person sitting at it. window says which, and it is the same
+		// value the pending file above got.
+		version := MSIVersionFromName(path)
+		if version == "" {
+			version = filepath.Base(path)
 		}
 		return Outcome{
 			Started: true,
 			Path:    path,
-			Detail: "the installer is running and will close localcode to replace its files; " +
-				"start it again when it has finished",
+			Detail:  MSIDetail(version, window),
 		}, nil
 	}
 
@@ -161,7 +177,7 @@ func ApplyForHandoff(path string) (Outcome, error) {
 func applyForHandoff(path, goos string, target func() (string, error),
 	writable func(string) bool, cache func() (string, error)) (Outcome, error) {
 	if goos != "windows" {
-		return apply(path, target)
+		return apply(path, target, false)
 	}
 	exe, err := target()
 	if err != nil {

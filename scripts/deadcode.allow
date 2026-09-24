@@ -45,3 +45,19 @@ internal/childproc/childproc_other.go:HideConsole
 # nobody can check from another machine is one that goes wrong quietly, so
 # it lives where TestTheInstallerIsStartedAtBasicUI can read it here.
 internal/update/install.go:installerArgs
+
+# --- the MSI install helper ------------------------------------------
+# The helper that runs the installer after localcode exits lives in
+# internal/update/msi_helper_windows.go, so everything it alone calls is
+# unreachable on every platform this gate runs on. The platform-independent
+# half deliberately lives in msi_status.go instead, where the macOS gate
+# tests it: exit-code classification, the record, the reply text.
+internal/update/msi_status.go:ClearMSIPending
+internal/update/msi_status.go:GUIExecutableBeside
+internal/update/msi_status.go:HelperCopyPath
+internal/update/msi_status.go:MSIHelperName
+internal/update/msi_status.go:MSILogPath
+internal/update/msi_status.go:MSIPendingPath
+internal/update/msi_status.go:ReadMSIPending
+internal/update/msi_status.go:WriteMSIPending
+internal/update/msi_status.go:WriteMSIRecord

@@ -155,13 +155,20 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 	if handoff {
 		out, err = update.ApplyForHandoff(path)
 	} else {
-		out, err = update.Apply(path)
+		out, err = update.ApplyFor(path, d.DesktopWindow)
 	}
 	if err != nil {
 		return "", err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "localcode %s installed from %s.\n", rel.Version, d.updateSource())
+	if out.Started {
+		// Staged, not installed: the helper runs the installer after
+		// this process exits. "Installed" would say what has not
+		// happened yet.
+		fmt.Fprintf(&b, "localcode %s installer staged from %s.\n", rel.Version, d.updateSource())
+	} else {
+		fmt.Fprintf(&b, "localcode %s installed from %s.\n", rel.Version, d.updateSource())
+	}
 	if d.updateSourceUnverified() {
 		// The TUI names the source here, so it says the rest here too:
 		// the address alone reads as authenticated, and it was not.
@@ -201,9 +208,6 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 
 	detail, restarting := restartPlan(out, d.Restart != nil)
 	b.WriteString(detail)
-	if out.Started && d.InstallerRestarts {
-		b.WriteString(installerRestartsNote)
-	}
 	if restarting {
 		// What a restart does and does not cost, because the version in
 		// the header changing is not by itself an explanation for a
@@ -283,7 +287,7 @@ func (d *Daemon) InstallAtStartup(ctx context.Context, running string, forHandof
 		return update.Outcome{}, "", err
 	}
 	if !out.Replaced {
-		// An installer is running, or a package was left on disk for a
+		// An installer is staged, or a package was left on disk for a
 		// package manager. Either way this process is not about to become
 		// the new version, so the caller must not exec into it.
 		return out, "", fmt.Errorf("localcode %s: %s", rel.Version, out.Detail)

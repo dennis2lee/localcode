@@ -16,12 +16,14 @@ import (
 // this machine cannot run them. What it pins is the reasoning, so that
 // removing a flag has to be a decision rather than a tidy-up.
 func TestTheInstallerIsStartedAtBasicUI(t *testing.T) {
-	args := installerArgs(`C:\Users\u\AppData\Local\localcode\updates\localcode.msi`)
+	msi := `C:\Users\u\AppData\Local\localcode\updates\localcode-0.46.0-windows-amd64.msi`
+	log := `C:\Users\u\AppData\Local\localcode\updates\localcode-0.46.0-msi.log`
+	args := installerArgs(msi, log)
 
 	if len(args) < 2 || args[0] != "/i" {
 		t.Fatalf("args = %v, want an /i install", args)
 	}
-	if args[1] != `C:\Users\u\AppData\Local\localcode\updates\localcode.msi` {
+	if args[1] != msi {
 		t.Errorf("the package is not the second argument: %v", args)
 	}
 
@@ -51,6 +53,16 @@ func TestTheInstallerIsStartedAtBasicUI(t *testing.T) {
 			t.Errorf("%s changes what the Restart Manager is allowed to do", bad)
 		}
 	}
+
+	// A full log beside the MSI, named after the version. A failed
+	// upgrade with no log is what started this, so losing the log has
+	// to be a decision rather than a tidy-up.
+	if !has(args, "/l*v") {
+		t.Errorf("the installer keeps no log: %v", args)
+	}
+	if len(args) == 0 || args[len(args)-1] != log {
+		t.Errorf("the log is not the last argument: %v", args)
+	}
 }
 
 func has(args []string, want string) bool {
@@ -65,19 +77,19 @@ func has(args []string, want string) bool {
 // The call site, checked as source because it cannot be checked as code.
 //
 // installerArgs is pinned by the test above, and on its own that pins
-// nothing that ships: startInstaller is behind a windows build tag, so no
-// test on this machine can call it, and someone could inline the flags at
-// the call site and leave every test here passing. Reading the file is the
-// only check available, and this repository already uses the shape
-// elsewhere (the spawn-site walk in internal/agent, the stylesheet
-// property check) for the same reason: a guard that cannot run the code
-// can still read it.
+// nothing that ships: the helper that runs msiexec is behind a windows
+// build tag, so no test on this machine can call it, and someone could
+// inline the flags at the call site and leave every test here passing.
+// Reading the file is the only check available, and this repository
+// already uses the shape elsewhere (the spawn-site walk in
+// internal/agent, the stylesheet property check) for the same reason: a
+// guard that cannot run the code can still read it.
 func TestTheWindowsCallSiteUsesTheFlagsThisFilePins(t *testing.T) {
-	src, err := os.ReadFile("install_windows.go")
+	src, err := os.ReadFile("msi_helper_windows.go")
 	if err != nil {
-		t.Fatalf("read the windows install file: %v", err)
+		t.Fatalf("read the windows helper file: %v", err)
 	}
-	file, err := parser.ParseFile(token.NewFileSet(), "install_windows.go", src, 0)
+	file, err := parser.ParseFile(token.NewFileSet(), "msi_helper_windows.go", src, 0)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -96,6 +108,15 @@ func TestTheWindowsCallSiteUsesTheFlagsThisFilePins(t *testing.T) {
 		if !ok || pkg.Name != "exec" {
 			return true
 		}
+		// Only the msiexec call site: the same file starts the helper
+		// copy and relaunches the window, and neither takes pinned
+		// flags.
+		if len(call.Args) == 0 {
+			return true
+		}
+		if lit, ok := call.Args[0].(*ast.BasicLit); !ok || lit.Value != `"msiexec"` {
+			return true
+		}
 		found = true
 
 		// Exactly two arguments: the program, and this file's flags
@@ -103,9 +124,6 @@ func TestTheWindowsCallSiteUsesTheFlagsThisFilePins(t *testing.T) {
 		if len(call.Args) != 2 {
 			t.Errorf("exec.Command has %d arguments; the flags belong in installerArgs, not at the call site", len(call.Args))
 			return false
-		}
-		if lit, ok := call.Args[0].(*ast.BasicLit); !ok || lit.Value != `"msiexec"` {
-			t.Errorf("the program is %v, want msiexec", call.Args[0])
 		}
 		spread, ok := call.Args[1].(*ast.CallExpr)
 		if !ok {
@@ -121,6 +139,6 @@ func TestTheWindowsCallSiteUsesTheFlagsThisFilePins(t *testing.T) {
 		return false
 	})
 	if !found {
-		t.Error("install_windows.go starts no command, so nothing here reaches msiexec")
+		t.Error("msi_helper_windows.go starts no command, so nothing here reaches msiexec")
 	}
 }

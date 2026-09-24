@@ -65,9 +65,6 @@ func Launch(title string, start func(progress func(string), setVersion func(stri
 	w.Navigate(dataURL(splashHTML()))
 	setWindowIcon(uintptr(w.Window()))
 	hideTitleBar(uintptr(w.Window()))
-	// Told to Windows before anything else, so an installer that closes
-	// this window later brings it back. See restart_windows.go.
-	registerRestart()
 
 	// Where the OS frame has been taken away, the page draws the buttons
 	// that went with it and works them through here. Bound before the

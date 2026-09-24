@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"localcode/internal/events"
 	"localcode/internal/update"
 )
 
@@ -218,5 +219,123 @@ func TestAnInstallThatReplacedNothingIsNotRestarted(t *testing.T) {
 		if detail != out.Detail {
 			t.Errorf("the answer was rewritten: %q became %q", out.Detail, detail)
 		}
+	}
+}
+
+// The check reports a recorded install that did not land: the version,
+// the exit code and what it means, and the log path.
+func TestTheCheckReportsAFailedInstall(t *testing.T) {
+	dir := t.TempDir()
+	log := dir + "/localcode-0.46.0-msi.log"
+	if err := update.WriteMSIRecord(dir, update.MSIRecord{Version: "0.46.0", ExitCode: 1602, Log: log}); err != nil {
+		t.Fatal(err)
+	}
+	old := msiRecordDir
+	msiRecordDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { msiRecordDir = old })
+
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+	d.Version = "0.45.2"
+	d.UpdateAPI = githubWith(t, "v0.46.0").URL
+
+	body := checkUpdate(t, d)
+	last, ok := body["last_install"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_install = %v, want the recorded install", body["last_install"])
+	}
+	if last["version"] != "0.46.0" {
+		t.Errorf("version = %v", last["version"])
+	}
+	if last["exit_code"] != float64(1602) {
+		t.Errorf("exit_code = %v", last["exit_code"])
+	}
+	// The status travels with the record so the panel words its line by
+	// what happened instead of re-deriving it from the exit code.
+	if last["status"] != "cancelled" {
+		t.Errorf("status = %v, want what ClassifyMSIExit says about 1602", last["status"])
+	}
+	if meaning, _ := last["meaning"].(string); !strings.Contains(meaning, "cancelled") {
+		t.Errorf("meaning = %q, want what 1602 means", meaning)
+	}
+	if last["log"] != log {
+		t.Errorf("log = %v, want %q", last["log"], log)
+	}
+}
+
+// A failed install is a local fact: the check reporting that GitHub
+// could not be reached still carries the record beside the reason, or
+// nothing on screen says the install failed until somebody's network
+// comes back.
+func TestAFailedCheckStillReportsAFailedInstall(t *testing.T) {
+	dir := t.TempDir()
+	log := dir + "/localcode-0.46.0-msi.log"
+	if err := update.WriteMSIRecord(dir, update.MSIRecord{Version: "0.46.0", ExitCode: 1603, Log: log}); err != nil {
+		t.Fatal(err)
+	}
+	old := msiRecordDir
+	msiRecordDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { msiRecordDir = old })
+
+	unreachable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(unreachable.Close)
+
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+	d.Version = "0.45.2"
+	d.UpdateAPI = unreachable.URL
+
+	body := checkUpdate(t, d)
+	if body["checked"] != false {
+		t.Errorf("checked = %v, want false", body["checked"])
+	}
+	last, ok := body["last_install"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_install = %v, want the recorded install beside the failed check", body["last_install"])
+	}
+	if last["version"] != "0.46.0" || last["status"] != "failed" {
+		t.Errorf("last_install = %v, want the 0.46.0 failure", last)
+	}
+}
+
+// The terminal install notice is a recovered error event: both clients
+// draw that as a note that ends nothing. A plain error ends the TUI's
+// turn while the daemon keeps running it, and the Web UI paints it as a
+// failure for the same turn.
+func TestTheTerminalInstallNoticeEndsNothing(t *testing.T) {
+	const detail = "The installer for localcode 0.46.0 starts when localcode exits. Quit localcode to run it."
+	ev := msiTerminalNotice(detail)
+	if ev.Type != events.TypeError {
+		t.Errorf("Type = %q, want the error event both clients already handle", ev.Type)
+	}
+	if errMsg, _ := ev.Data["error"].(string); errMsg != detail {
+		t.Errorf("error = %q, want the install reply", errMsg)
+	}
+	if recovered, _ := ev.Data["recovered"].(bool); !recovered {
+		t.Error("recovered is not true, so the TUI ends its turn while the daemon keeps running it")
+	}
+}
+
+// An install that succeeded and is now the running version says nothing,
+// and the record is cleared.
+func TestTheCheckSaysNothingAboutTheRunningInstall(t *testing.T) {
+	dir := t.TempDir()
+	if err := update.WriteMSIRecord(dir, update.MSIRecord{Version: "0.46.0", ExitCode: 0, Log: dir + "/x.log"}); err != nil {
+		t.Fatal(err)
+	}
+	old := msiRecordDir
+	msiRecordDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { msiRecordDir = old })
+
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+	d.Version = "0.46.0"
+	d.UpdateAPI = githubWith(t, "v0.46.0").URL
+
+	body := checkUpdate(t, d)
+	if last, ok := body["last_install"]; ok && last != nil {
+		t.Errorf("last_install = %v, want nothing for the running version", last)
+	}
+	if _, err := update.ReadMSIRecord(dir); err == nil {
+		t.Error("the spent record was kept")
 	}
 }

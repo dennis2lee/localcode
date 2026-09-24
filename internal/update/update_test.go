@@ -236,7 +236,7 @@ func TestApplyOnlyRunsAnInstallerItHasOne(t *testing.T) {
 	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out, err := apply(path, func() (string, error) { return exe, nil })
+	out, err := apply(path, func() (string, error) { return exe, nil }, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}

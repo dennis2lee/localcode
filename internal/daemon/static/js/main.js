@@ -368,6 +368,10 @@ async function init() {
     const open = app.sessions.find((s) => s.id === remembered) || app.sessions[0];
     selectSession(open.id, open.agent, open.workspace);
   }
+  // A failure the helper recorded arrives on the conversation's own
+  // stream, after the replay, as a recovered note: the daemon writes it
+  // there once, so the page draws it at the end of what it draws without
+  // fetching anything itself.
 }
 
 export const ready = init();

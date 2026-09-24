@@ -272,3 +272,280 @@ test('an install with no restart tells the user to restart', async () => {
 
   assert.match(app.el('update-note').textContent, /restart localcode to run the new version/);
 });
+
+// The install is asked once, in fixed words: the program in use is about
+// to be replaced, and on Windows that means an elevation prompt and
+// localcode closing. The words follow the asset, not the page: only the
+// Windows MSI closes the window and opens it again, or starts when
+// localcode exits. Anything else keeps the generic sentence, in the
+// window and outside it.
+test('installing an MSI in the window asks in MSI words', async () => {
+  const app = await load({
+    routes: { 'GET /api/update': AVAILABLE },
+    confirm: false,
+    globals: { lcWindowCommand: () => {} },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.equal(app.confirmMessages.length, 1);
+  assert.match(app.confirmMessages[0], /The window closes and the installer runs/);
+  assert.match(app.confirmMessages[0], /opens again when the installer has finished/);
+});
+
+test('installing an MSI outside the window asks in MSI words', async () => {
+  const app = await load({
+    routes: { 'GET /api/update': AVAILABLE },
+    confirm: false,
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.equal(app.confirmMessages.length, 1);
+  assert.match(app.confirmMessages[0], /The installer starts when localcode exits/);
+  assert.match(app.confirmMessages[0], /Quit localcode to run it/);
+});
+
+// A tarball replaces the binary and restarts rather than closing a
+// window for an installer, so the confirm keeps the generic sentence
+// even where the window draws its own frame.
+test('installing a non-MSI asset in the window asks in generic words', async () => {
+  const app = await load({
+    routes: { 'GET /api/update': { ...AVAILABLE, asset: 'localcode-0.46.0-linux-amd64.tar.gz' } },
+    confirm: false,
+    globals: { lcWindowCommand: () => {} },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.equal(app.confirmMessages.length, 1);
+  assert.match(app.confirmMessages[0], /localcode restarts, or closes for an installer to replace its files/);
+  assert.doesNotMatch(app.confirmMessages[0], /The window closes and the installer runs/);
+});
+
+test('installing a non-MSI asset outside the window asks in generic words', async () => {
+  const app = await load({
+    routes: { 'GET /api/update': { ...AVAILABLE, asset: 'localcode-0.46.0-linux-amd64.tar.gz' } },
+    confirm: false,
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.equal(app.confirmMessages.length, 1);
+  assert.match(app.confirmMessages[0], /localcode restarts, or closes for an installer to replace its files/);
+  assert.doesNotMatch(app.confirmMessages[0], /The installer starts when localcode exits/);
+});
+
+// In the desktop window the installer starts when the window closes,
+// and LocalCode opens again when the installer has finished.
+test('a window install says it starts on close and comes back', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': AVAILABLE,
+      'POST /api/update/install': {
+        version: '0.46.0', started: true,
+        detail: 'The installer for localcode 0.46.0 starts when this window closes. LocalCode opens again when the installer has finished.',
+      },
+    },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.match(app.el('update-note').textContent, /starts when this window closes/);
+  assert.match(app.el('update-note').textContent, /opens again when the installer has finished/);
+});
+
+// In a terminal the installer starts when localcode exits, and the
+// person has to quit it.
+test('a terminal install says it starts on exit and must be quit', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': AVAILABLE,
+      'POST /api/update/install': {
+        version: '0.46.0', started: true,
+        detail: 'The installer for localcode 0.46.0 starts when localcode exits. Quit localcode to run it.',
+      },
+    },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.match(app.el('update-note').textContent, /starts when localcode exits/);
+  assert.match(app.el('update-note').textContent, /Quit localcode to run it/);
+});
+
+// A recorded install that did not land is one line: the version, the
+// exit code and what it means, and the log path.
+test('a failed install is reported beside the offer', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...AVAILABLE,
+        last_install: {
+          version: '0.46.0', exit_code: 1602, status: 'cancelled', meaning: 'cancelled',
+          log: 'C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log',
+        },
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  const note = app.el('update-note').textContent;
+  assert.match(note, /0\.46\.0 did not install/);
+  assert.match(note, /1602/);
+  assert.match(note, /cancelled/);
+  assert.match(note, /localcode-0\.46\.0-msi\.log/);
+});
+
+// A check with nothing new still reports the failed install.
+test('a failed install is reported when already up to date', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...UP_TO_DATE,
+        last_install: {
+          version: '0.45.0', exit_code: 1603, status: 'failed', meaning: 'a fatal error during installation',
+          log: '/home/u/.cache/localcode/updates/localcode-0.45.0-msi.log',
+        },
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  const note = app.el('update-note').textContent;
+  assert.match(note, /latest release/);
+  assert.match(note, /0\.45\.0 did not install/);
+  assert.match(note, /1603/);
+});
+
+// The panel's failed-install sentence is the same one the daemon writes
+// on the next stream to open (MSIFailureLine in
+// internal/update/msi_notice.go): this pins the same literal the Go test
+// TestMSIFailureLineMatchesThePanel pins, so the two cannot drift apart
+// without a test failing.
+test('the failed line is the exact sentence the stream carries', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...UP_TO_DATE,
+        last_install: {
+          version: '0.46.0', exit_code: 1625, status: 'failed', meaning: 'blocked by system policy',
+          log: 'C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log',
+        },
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  const note = app.el('update-note').textContent;
+  assert.ok(note.includes('Update to 0.46.0 did not install: the installer exited 1625 (blocked by system policy). Log: C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log.'),
+    'the panel line drifted from the stream line: ' + note);
+});
+
+// A record with an installed status says the version was installed and
+// that localcode has to be restarted to run it: a daemon that is still
+// the old version reports the install it just staged. Only the
+// not-installed statuses say "did not install".
+test('an installed record says it was installed, not that it did not', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...AVAILABLE,
+        last_install: {
+          version: '0.46.0', exit_code: 0, status: 'installed', meaning: 'installed',
+          log: 'C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log',
+        },
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  const note = app.el('update-note').textContent;
+  assert.match(note, /0\.46\.0 was installed/);
+  assert.match(note, /Restart localcode to run it/);
+  assert.doesNotMatch(note, /did not install/);
+});
+
+test('a cancelled record still says it did not install', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...AVAILABLE,
+        last_install: {
+          version: '0.46.0', exit_code: 1602, status: 'cancelled', meaning: 'cancelled',
+          log: 'C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log',
+        },
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  const note = app.el('update-note').textContent;
+  assert.match(note, /0\.46\.0 did not install/);
+  assert.match(note, /cancelled/);
+});
+
+// In the desktop window the started installer gets its own sentence
+// saying when this window closes, and the window closes itself.
+test('a started window install says when it closes and closes it', async () => {
+  const closed = [];
+  const app = await load({
+    routes: {
+      'GET /api/update': AVAILABLE,
+      'POST /api/update/install': {
+        version: '0.46.0', started: true,
+        detail: 'The installer for localcode 0.46.0 starts when this window closes. LocalCode opens again when the installer has finished.',
+      },
+    },
+    globals: { lcWindowCommand: (cmd) => closed.push(cmd) },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.match(app.el('update-note').textContent, /This window closes in 3 seconds\./);
+  await app.wait(3400);
+  assert.deepEqual(closed, ['close']);
+});

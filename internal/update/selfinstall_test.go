@@ -85,7 +85,7 @@ func TestApplyReplacesAnInstallThisUserOwns(t *testing.T) {
 		"localcode": "#!/bin/sh\necho 0.49.0\n",
 	})
 
-	out, err := apply(archive, func() (string, error) { return exe, nil })
+	out, err := apply(archive, func() (string, error) { return exe, nil }, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestApplyLeavesAnInstallItCannotWriteAlone(t *testing.T) {
 	archive := tarball(t, t.TempDir(), "localcode-0.49.0-linux-amd64.tar.gz", map[string]string{
 		"localcode": "#!/bin/sh\necho 0.49.0\n",
 	})
-	out, err := apply(archive, func() (string, error) { return exe, nil })
+	out, err := apply(archive, func() (string, error) { return exe, nil }, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestApplyWillNotReachIntoAnAppBundle(t *testing.T) {
 		"localcode": "#!/bin/sh\necho 0.49.0\n",
 	})
 
-	out, err := apply(archive, func() (string, error) { return exe, nil })
+	out, err := apply(archive, func() (string, error) { return exe, nil }, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestAnUnrunnableDownloadDoesNotTakeTheInstallsPlace(t *testing.T) {
 		"localcode": "\x7fELF not really\n",
 	})
 
-	out, err := apply(archive, func() (string, error) { return exe, nil })
+	out, err := apply(archive, func() (string, error) { return exe, nil }, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestAFileThatIsNotAnArchiveIsNotInstalled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := apply(archive, func() (string, error) { return exe, nil })
+	out, err := apply(archive, func() (string, error) { return exe, nil }, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}

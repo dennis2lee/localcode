@@ -369,6 +369,25 @@ function showUpdate(text, warn) {
   updateNoteEl.className = warn ? 'note warn' : 'note';
 }
 
+// lastInstallLine is the one line for a recorded install: the version,
+// the exit code and what it means, and the log path. Worded by the
+// status the daemon sent, not by the code: a record is reported with an
+// installed status when its version is not the running one, for example
+// when a daemon that is still the old version reads it. Only the
+// not-installed statuses say "did not install". The failed-install
+// sentence here is the same one the daemon writes on the next stream to
+// open (MSIFailureLine in internal/update/msi_notice.go): the panel test
+// in test/webui/update.test.js and the Go test pin the same literal, so
+// the two cannot drift apart without a test failing.
+function lastInstallLine(res) {
+  const last = res && res.last_install;
+  if (!last || !last.version) return '';
+  if (last.status && last.status.startsWith('installed')) {
+    return `Update to ${last.version} was installed: the installer exited ${last.exit_code} (${last.meaning}). Restart localcode to run it. Log: ${last.log}.`;
+  }
+  return `Update to ${last.version} did not install: the installer exited ${last.exit_code} (${last.meaning}). Log: ${last.log}.`;
+}
+
 async function checkForUpdate() {
   latest = null;
   updateInstallBtn.hidden = true;
@@ -383,8 +402,10 @@ async function checkForUpdate() {
       showUpdate(`Could not check: ${res.detail}`, true);
       return;
     }
+    const last = lastInstallLine(res);
+    const withLast = (text) => last ? `${text} ${last}` : text;
     if (!res.available) {
-      showUpdate(res.detail || `localcode ${res.current} is the latest release`);
+      showUpdate(withLast(res.detail || `localcode ${res.current} is the latest release`));
       return;
     }
     latest = res;
@@ -406,11 +427,11 @@ async function checkForUpdate() {
       ? ', unverified: plain http, the host was not authenticated' : '';
     const from = rawSource ? ` (from ${rawSource}${unverified})` : '';
     if (res.can_install) {
-      showUpdate(`localcode ${res.latest} is available${from}. This will download ${res.asset}${size} and run the installer.`);
+      showUpdate(withLast(`localcode ${res.latest} is available${from}. This will download ${res.asset}${size} and run the installer.`));
       updateInstallBtn.textContent = `Download and install ${res.latest}`;
       updateInstallBtn.hidden = false;
     } else {
-      showUpdate(`localcode ${res.latest} is available${from}. ${res.detail || ''}`.trim());
+      showUpdate(withLast(`localcode ${res.latest} is available${from}. ${res.detail || ''}`.trim()));
     }
   } catch (err) {
     showUpdate(`Could not check: ${err}`, true);
@@ -423,8 +444,22 @@ async function installUpdate() {
   if (!latest) return;
   // Asked once, plainly, because the answer is not undoable: the program
   // the person is using is about to be replaced, and on Windows that also
-  // means an elevation prompt and localcode closing.
-  if (!window.confirm(`Download and install localcode ${latest.latest}?\n\nlocalcode restarts, or closes for an installer to replace its files.`)) return;
+  // means an elevation prompt and localcode closing. The words depend on
+  // what will be installed, not on where the page runs: only the Windows
+  // MSI closes the window and opens it again, or starts when localcode
+  // exits. A bundle, a tarball, a .deb or a zip each does something else,
+  // and for those the confirm keeps the generic sentence.
+  const inWindow = typeof window.lcWindowCommand === 'function';
+  const isMSI = typeof latest.asset === 'string' && latest.asset.endsWith('.msi');
+  let confirmText;
+  if (!isMSI) {
+    confirmText = `Download and install localcode ${latest.latest}?\n\nlocalcode restarts, or closes for an installer to replace its files.`;
+  } else if (inWindow) {
+    confirmText = `Download and install localcode ${latest.latest}?\n\nThe window closes and the installer runs. The window opens again when the installer has finished.`;
+  } else {
+    confirmText = `Download and install localcode ${latest.latest}?\n\nThe installer starts when localcode exits. Quit localcode to run it.`;
+  }
+  if (!window.confirm(confirmText)) return;
 
   updateInstallBtn.disabled = true;
   updateCheckBtn.disabled = true;
@@ -461,7 +496,7 @@ async function installUpdate() {
       // either way — a window vanishing under someone mid-click is worse
       // than a line asking them to close it.
       if (typeof window.lcWindowCommand === 'function') {
-        showUpdate(`${res.detail} — closing localcode in a moment.`);
+        showUpdate(`${res.detail} This window closes in 3 seconds.`);
         setTimeout(() => window.lcWindowCommand('close'), 3000);
       }
     }

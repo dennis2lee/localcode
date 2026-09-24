@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**Fixed**
+
+* **A Windows update that removed the old version and installed nothing.** The installer ran while localcode still held its files. It found the window holding them and waited on its files-in-use dialog instead of installing, even after the window had gone. The old product was already removed outside the install transaction, so a failure or a cancel after that point left neither version behind. A helper now runs the installer after localcode exits. The old product is removed after the new files land, inside the transaction. The window opens again when the installer has finished. A terminal is never brought back: the reply tells the person to quit.
+* **A WebView2 bootstrapper lost on every upgrade.** The new product skipped the same-version file, and the early removal of the old product deleted it. Late removal keeps the shared component on disk across the upgrade.
+* **An install reply that promised a restart that never happened.** The reply claimed Windows starts localcode again when the install finishes. The Restart Manager never closed the window that asked for the install. The window reply now says the installer starts when the window closes and LocalCode opens again when it has finished. The terminal reply says the installer starts when localcode exits and the person has to quit it.
+* **A failed install the panel never mentioned.** The update check now reports the last recorded install while its version is newer than the running version, with the version, the installer exit code and its meaning, and the log path. Once the running version catches up, the record says nothing and is cleared.
+* **A failure box that held the relaunched window back.** The helper showed its message box before relaunching the window, and the box is modal. Without the foreground the box sat behind whatever window had it, with a flashing taskbar button, while the relaunch waited behind it. Where the window comes back the helper now relaunches it at once and shows no box, whatever the outcome. The next window or terminal to open says the failure once, at the end of the conversation it opens, with the version, the exit code and its meaning, and the log path. The box stays only where nothing else can say it: a terminal parent, or no window binary left to come back to. It is now system-modal as well.
+
 ## v0.148.0
 
 Reasoning that a server sends inside the answer is shown as reasoning, a muse model's reasoning blocks come back after a reload, and the terminal ends a turn that the daemon behind a reconnected stream never ran.
