@@ -186,16 +186,19 @@ func SweepMSIHelper() {
 // before anything else in main, before the desktop window opens
 // anything.
 func RunMSIHelper(pendingPath string) error {
+	// Read before unsetting: the wait below needs the parent's handle,
+	// and after this nothing the helper starts may see either variable.
 	// Unset before anything is started: msiexec and the relaunched
 	// window inherit this process's environment, and either one seeing
 	// the helper's mode would mistake itself for the helper.
+	parentRaw := os.Getenv(EnvMSIParent)
 	os.Unsetenv(EnvMSIHelper)
 	os.Unsetenv(EnvMSIParent)
 	p, err := ReadMSIPending(pendingPath)
 	if err != nil {
 		return err
 	}
-	if err := waitMSIParent(os.Getenv(EnvMSIParent)); err != nil {
+	if err := waitMSIParent(parentRaw); err != nil {
 		return err
 	}
 	code := runMSIInstaller(p.MSI, p.Log)
