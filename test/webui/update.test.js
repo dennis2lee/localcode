@@ -448,6 +448,33 @@ test('a failed install is reported when already up to date', async () => {
   assert.match(note, /1603/);
 });
 
+// The panel's failed-install sentence is the same one the daemon writes
+// on the next stream to open (MSIFailureLine in
+// internal/update/msi_notice.go): this pins the same literal the Go test
+// TestMSIFailureLineMatchesThePanel pins, so the two cannot drift apart
+// without a test failing.
+test('the failed line is the exact sentence the stream carries', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/update': {
+        ...UP_TO_DATE,
+        last_install: {
+          version: '0.46.0', exit_code: 1625, status: 'failed', meaning: 'failed (exit code 1625)',
+          log: 'C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log',
+        },
+      },
+    },
+  });
+  await settingsOpen(app);
+
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  const note = app.el('update-note').textContent;
+  assert.ok(note.includes('Update to 0.46.0 did not install: the installer exited 1625 (failed (exit code 1625)). Log: C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log.'),
+    'the panel line drifted from the stream line: ' + note);
+});
+
 // A record with an installed status says the version was installed and
 // that localcode has to be restarted to run it: a daemon that is still
 // the old version reports the install it just staged. Only the

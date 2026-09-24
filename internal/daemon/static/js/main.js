@@ -14,8 +14,8 @@ import {
   effortBtn,
 } from './dom.js';
 import { app, session } from './state.js';
-import { uploadFile, switchAgent, getInstallNotice } from './api.js';
-import { appendError, appendTool, jumpToTurn } from './transcript.js';
+import { uploadFile, switchAgent } from './api.js';
+import { appendError, jumpToTurn } from './transcript.js';
 import { openFind, closeFind, findIsOpen, wireFind } from './find.js';
 import { renderTasks, renderStatusBar } from './render.js';
 import {
@@ -44,26 +44,7 @@ import {
 import { closeTaskView, cancelOpenTask, deleteOpenTask, taskView } from './taskview.js';
 import { initResizers } from './resize.js';
 import { tryComplete, resetCompletion } from './complete.js';
-import { initSettings, settings, lastInstallLine } from './settings.js';
-
-// A failed MSI install is said once, in the conversation, without any
-// click: the helper relaunched this window instead of a message box, so
-// this line is the whole of the report until somebody clicks Check. The
-// endpoint answers from the local record alone, so this works with the
-// network down, and the daemon remembers the record it already drew, so
-// a reload stays silent. Drawn the way a recovered notice is drawn (see
-// the error handler in events.js): a note that ends nothing, written to
-// no session's log: this function only reads, and draws in the DOM.
-async function showInstallFailureNotice() {
-  try {
-    const res = await getInstallNotice();
-    const line = res ? lastInstallLine({ last_install: res.notice }) : '';
-    if (line) appendTool(`[${line}]`);
-  } catch {
-    // A notice that cannot load is not worth an error line: the
-    // settings panel still reports the record when somebody checks.
-  }
-}
+import { initSettings, settings } from './settings.js';
 
 agentSelectEl.addEventListener('change', async () => {
   const name = agentSelectEl.value;
@@ -387,9 +368,10 @@ async function init() {
     const open = app.sessions.find((s) => s.id === remembered) || app.sessions[0];
     selectSession(open.id, open.agent, open.workspace);
   }
-  // After the conversation is open, so the line lands in it. A failure
-  // the helper recorded is said here, once, without being asked.
-  await showInstallFailureNotice();
+  // A failure the helper recorded arrives on the conversation's own
+  // stream, after the replay, as a recovered note: the daemon writes it
+  // there once, so the page draws it at the end of what it draws without
+  // fetching anything itself.
 }
 
 export const ready = init();

@@ -8,8 +8,8 @@ import (
 )
 
 // Only a not-installed failure for a version newer than the running one
-// is drawn on page load: failed and another-installation. Cancelled
-// draws nothing, and neither does anything installed.
+// is drawn on the next stream to open: failed and another-installation.
+// Cancelled draws nothing, and neither does anything installed.
 func TestShouldNotifyMSIFailure(t *testing.T) {
 	cases := []struct {
 		code    int
@@ -103,5 +103,26 @@ func TestMSINoticeUnreadableRecord(t *testing.T) {
 	}
 	if _, ok := MSINoticePending(dir, "0.45.2"); ok {
 		t.Error("an unreadable record is owed a notice")
+	}
+}
+
+// The stream's line is the panel's sentence, not a second wording: the
+// same literal is pinned for the panel in test/webui/update.test.js, so
+// the two cannot drift apart without a test failing.
+func TestMSIFailureLineMatchesThePanel(t *testing.T) {
+	rec := MSIRecord{
+		Version:  "0.46.0",
+		ExitCode: 1625,
+		Log:      `C:\Users\u\AppData\Local\localcode\updates\localcode-0.46.0-msi.log`,
+		Time:     time.Now(),
+	}
+	want := `Update to 0.46.0 did not install: the installer exited 1625 (failed (exit code 1625)). Log: C:\Users\u\AppData\Local\localcode\updates\localcode-0.46.0-msi.log.`
+	if got := MSIFailureLine(rec); got != want {
+		t.Errorf("MSIFailureLine = %q, want %q", got, want)
+	}
+	busy := MSIRecord{Version: "0.46.0", ExitCode: 1618, Log: "x.log", Time: time.Now()}
+	wantBusy := "Update to 0.46.0 did not install: the installer exited 1618 (another installation in progress). Log: x.log."
+	if got := MSIFailureLine(busy); got != wantBusy {
+		t.Errorf("MSIFailureLine = %q, want %q", got, wantBusy)
 	}
 }

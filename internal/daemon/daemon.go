@@ -125,6 +125,11 @@ type Daemon struct {
 	// to a conversation (MCP status), which is why they bypass the
 	// session event log entirely — see broadcast.go.
 	daemonEvents *broadcaster
+
+	// msiNoticeMu serializes the failed-install check-and-mark in
+	// maybeMSINotice, so two streams opening at once cannot both draw
+	// it. See sse.go.
+	msiNoticeMu sync.Mutex
 }
 
 // New builds the daemon's HTTP handler. webFS, if non-nil, is served at "/"
@@ -210,7 +215,6 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/daemon/shutdown", d.handleShutdown)
 	d.mux.HandleFunc("GET /api/update", d.handleUpdateCheck)
 	d.mux.HandleFunc("POST /api/update/install", d.handleUpdateInstall)
-	d.mux.HandleFunc("GET /api/update/install-notice", d.handleInstallNotice)
 	d.mux.HandleFunc("GET /api/trace", d.handleTrace)
 	d.mux.HandleFunc("GET /api/usage", d.handleUsage)
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)

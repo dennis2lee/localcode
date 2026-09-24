@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"localcode/internal/events"
+	"localcode/internal/update"
 )
 
 // handleEvents streams the session's event log as SSE: any backlog since
@@ -203,6 +204,12 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 		send(ev, lastSeq)
 	}
 
+	// A failed MSI install is said once, on the next stream to open, at
+	// the end of what it draws. After the backlog, so the line lands
+	// below the replayed conversation rather than above it; before the
+	// live loop, so nothing later can overtake it. See maybeMSINotice.
+	d.maybeMSINotice(w, flusher.Flush)
+
 	// A heartbeat, because a stream that says nothing is indistinguishable
 	// from a stream that is dead.
 	//
@@ -267,4 +274,46 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// maybeMSINotice writes the failed-install line owed to the next stream
+// to open, if one is owed, as one transient event after the backlog. A
+// recovered error event, which both clients already draw as a note that
+// ends nothing: the same shape msiTerminalNotice uses for the install
+// staged from a terminal.
+//
+// The check, the write and the mark are one locked section, so two
+// streams opening at once cannot both draw it. The mark happens only
+// when the write to this stream succeeded: a stream that fails on the
+// write leaves the notice owed for the next one. The marker is the round
+// 4 one: the exact record bytes already drawn. Nothing here touches any
+// session's log: this write is the whole of the report, and the settings
+// panel keeps reading the record itself on Check.
+func (d *Daemon) maybeMSINotice(w io.Writer, flush func()) {
+	d.msiNoticeMu.Lock()
+	defer d.msiNoticeMu.Unlock()
+	dir, err := msiRecordDir()
+	if err != nil {
+		return
+	}
+	rec, owed := update.MSINoticePending(dir, d.Version)
+	if !owed {
+		return
+	}
+	ev := events.Event{
+		Type: events.TypeError,
+		Data: map[string]any{"error": update.MSIFailureLine(rec), "recovered": true},
+	}
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	// The same write a daemon-wide event gets: Seq 0, so no `id:` line
+	// and no lastSeq bookkeeping, either of which would corrupt the
+	// resume point the client sends back after a dropped connection.
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+		return
+	}
+	flush()
+	_ = update.MarkMSINoticeShown(dir)
 }
