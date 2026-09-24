@@ -275,9 +275,11 @@ test('an install with no restart tells the user to restart', async () => {
 
 // The install is asked once, in fixed words: the program in use is about
 // to be replaced, and on Windows that means an elevation prompt and
-// localcode closing. In the desktop window the window closes and comes
-// back; anywhere else localcode has to be quit.
-test('installing in the window asks in fixed words', async () => {
+// localcode closing. The words follow the asset, not the page: only the
+// Windows MSI closes the window and opens it again, or starts when
+// localcode exits. Anything else keeps the generic sentence, in the
+// window and outside it.
+test('installing an MSI in the window asks in MSI words', async () => {
   const app = await load({
     routes: { 'GET /api/update': AVAILABLE },
     confirm: false,
@@ -295,7 +297,7 @@ test('installing in the window asks in fixed words', async () => {
   assert.match(app.confirmMessages[0], /opens again when the installer has finished/);
 });
 
-test('installing outside the window asks in fixed words', async () => {
+test('installing an MSI outside the window asks in MSI words', async () => {
   const app = await load({
     routes: { 'GET /api/update': AVAILABLE },
     confirm: false,
@@ -310,6 +312,44 @@ test('installing outside the window asks in fixed words', async () => {
   assert.equal(app.confirmMessages.length, 1);
   assert.match(app.confirmMessages[0], /The installer starts when localcode exits/);
   assert.match(app.confirmMessages[0], /Quit localcode to run it/);
+});
+
+// A tarball replaces the binary and restarts rather than closing a
+// window for an installer, so the confirm keeps the generic sentence
+// even where the window draws its own frame.
+test('installing a non-MSI asset in the window asks in generic words', async () => {
+  const app = await load({
+    routes: { 'GET /api/update': { ...AVAILABLE, asset: 'localcode-0.46.0-linux-amd64.tar.gz' } },
+    confirm: false,
+    globals: { lcWindowCommand: () => {} },
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.equal(app.confirmMessages.length, 1);
+  assert.match(app.confirmMessages[0], /localcode restarts, or closes for an installer to replace its files/);
+  assert.doesNotMatch(app.confirmMessages[0], /The window closes and the installer runs/);
+});
+
+test('installing a non-MSI asset outside the window asks in generic words', async () => {
+  const app = await load({
+    routes: { 'GET /api/update': { ...AVAILABLE, asset: 'localcode-0.46.0-linux-amd64.tar.gz' } },
+    confirm: false,
+  });
+  await settingsOpen(app);
+  app.el('update-check-btn').click();
+  await app.settle();
+
+  app.el('update-install-btn').click();
+  await app.settle();
+
+  assert.equal(app.confirmMessages.length, 1);
+  assert.match(app.confirmMessages[0], /localcode restarts, or closes for an installer to replace its files/);
+  assert.doesNotMatch(app.confirmMessages[0], /The installer starts when localcode exits/);
 });
 
 // In the desktop window the installer starts when the window closes,

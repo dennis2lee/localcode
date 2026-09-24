@@ -441,12 +441,20 @@ async function installUpdate() {
   // Asked once, plainly, because the answer is not undoable: the program
   // the person is using is about to be replaced, and on Windows that also
   // means an elevation prompt and localcode closing. The words depend on
-  // where the page runs: in the desktop window the window closes and
-  // comes back, anywhere else localcode has to be quit.
+  // what will be installed, not on where the page runs: only the Windows
+  // MSI closes the window and opens it again, or starts when localcode
+  // exits. A bundle, a tarball, a .deb or a zip each does something else,
+  // and for those the confirm keeps the generic sentence.
   const inWindow = typeof window.lcWindowCommand === 'function';
-  const confirmText = inWindow
-    ? `Download and install localcode ${latest.latest}?\n\nThe window closes and the installer runs. The window opens again when the installer has finished.`
-    : `Download and install localcode ${latest.latest}?\n\nThe installer starts when localcode exits. Quit localcode to run it.`;
+  const isMSI = typeof latest.asset === 'string' && latest.asset.endsWith('.msi');
+  let confirmText;
+  if (!isMSI) {
+    confirmText = `Download and install localcode ${latest.latest}?\n\nlocalcode restarts, or closes for an installer to replace its files.`;
+  } else if (inWindow) {
+    confirmText = `Download and install localcode ${latest.latest}?\n\nThe window closes and the installer runs. The window opens again when the installer has finished.`;
+  } else {
+    confirmText = `Download and install localcode ${latest.latest}?\n\nThe installer starts when localcode exits. Quit localcode to run it.`;
+  }
   if (!window.confirm(confirmText)) return;
 
   updateInstallBtn.disabled = true;
