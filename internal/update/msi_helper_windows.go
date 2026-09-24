@@ -23,10 +23,16 @@ import (
 // its parent, and the helper itself.
 //
 // The installer must not run while the localcode process that asked for
-// it still holds files under the install directory. The Restart Manager
-// cannot close that process: it classifies the window as RmUnknownApp,
-// which it closes only by force, and Windows Installer does not force
-// it. So the MSI waits on a files-in-use dialog instead of installing.
+// it still holds files under the install directory. Run while it does,
+// the installer finds the window holding its files and puts its
+// files-in-use dialog in front of the person instead of installing. The
+// server side logs the window as RmUnknownApp and the client side as
+// RmMainWindow. Pressing OK with the window open closes it through the
+// Restart Manager, and the install succeeds. Pressing OK with the window
+// already closed succeeds too, and nothing comes back, because the
+// Restart Manager closed nothing and has nothing to restart. With nobody
+// answering, the dialog waited more than eight minutes although the
+// window had already exited, and nothing was installed.
 //
 // The helper fixes the ordering. It is a copy of the running executable
 // under the updates directory, holding no file under the install
@@ -313,9 +319,10 @@ var waitMSIParent = func(raw string) error {
 // that does not. The package has no authored files-in-use dialog (wixl
 // cannot author dialogs), so at full UI a missing dialog falls back to
 // scheduling a reboot instead of replacing the files. Basic UI has a
-// built-in dialog. Nobody is holding the files any more by the time this
-// runs — the helper waited for that — so the dialog has nothing to wait
-// on either.
+// built-in dialog. The process that asked holds nothing by the time this
+// runs, because the helper waited for it to exit. Another localcode
+// still open, a second window or a terminal, still holds its files, and
+// then the installer's own files-in-use dialog names what is open.
 //
 // No /quiet: replacing the program is not something to do behind a
 // progress bar nobody can see or cancel. /l*v keeps a full log, since a

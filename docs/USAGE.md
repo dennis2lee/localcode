@@ -2854,7 +2854,7 @@ On Windows the same thing happens by a different route, because a Windows proces
 
 The window is never written over, and a folder it could write to does not change that. The zip holds the console `localcode.exe` and only ever that, so under the window's name it leaves a file that opens no window: it reports the new version correctly and starts the terminal interface instead, every time, until the MSI puts the real one back. A build named `localcode-gui` that has no window in it now says so on its first line rather than quietly becoming the terminal interface.
 
-The Program Files copy, and the window shell, are brought up to date by the settings window's install button. It downloads the MSI and stages a helper with a UAC prompt. The helper runs the installer after localcode exits. Nothing runs `msiexec` unasked.
+The Program Files copy, and the window shell, are brought up to date by the settings window's install button. It downloads the MSI and stages a helper. The helper runs the installer after localcode exits. Staging asks for nothing. The UAC prompt is msiexec's, when the helper runs it. Nothing runs `msiexec` unasked.
 
 #### `/update`
 
@@ -2905,14 +2905,14 @@ Update behavior depends on the install format:
 | Install shape | What happens | Comes back on its own |
 |---|---|---|
 | A binary somewhere you can write (`~/.local/bin`, and the same on macOS and Linux tarballs) | localcode writes the new binary over the running one | Yes, in the terminal. It re-executes itself, so the same terminal, the same process id and the same arguments come back. |
-| Windows `.msi` | A helper runs the installer at basic UI after localcode exits, with a full log beside the MSI. Nobody holds the files by then, so there is nothing for the files-in-use dialog to wait on | The window opens again when the installer has finished. A terminal never comes back: quit localcode to run the installer, then start it again. |
+| Windows `.msi` | A helper runs the installer at basic UI after the localcode that asked exits, with a full log beside the MSI. The asking process holds nothing by then. Another localcode still open, a second window or a terminal, still holds its files, and the installer's own files-in-use dialog names what is open | The window opens again when the installer has finished. A terminal never comes back: quit localcode to run the installer, then start it again. |
 | Windows `.zip`, macOS `.app`, Linux `.deb` | Downloaded, with what to do next | No. |
 
 A Windows MSI update never brings back a terminal. Quit localcode to run the installer. Start it again after installation. The desktop window opens again on its own.
 
 An older MSI installs over a newer one. Windows Installer would otherwise refuse with "a newer version is already installed", which only ever sent people to Add/Remove Programs first — the same outcome with an extra step. The permission lives in the package being installed, so it holds for every version from 0.133.0 on: any of those can be installed over anything newer, and nothing before 0.133.0 can be.
 
-The MSI uses basic UI with a full log beside it. The helper runs the installer after localcode exits, so no process holds the files when it runs. Full UI requires a package-authored dialog that this package does not contain.
+The MSI uses basic UI with a full log beside it. The helper runs the installer after the localcode that asked exits, so that process holds nothing when it runs. Another localcode still open holds its files still, and the installer's own files-in-use dialog names what is open. Full UI requires a package-authored dialog that this package does not contain.
 
 #### Updating from somewhere other than GitHub
 

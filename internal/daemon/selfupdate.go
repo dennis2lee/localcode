@@ -287,7 +287,7 @@ func (d *Daemon) InstallAtStartup(ctx context.Context, running string, forHandof
 		return update.Outcome{}, "", err
 	}
 	if !out.Replaced {
-		// An installer is running, or a package was left on disk for a
+		// An installer is staged, or a package was left on disk for a
 		// package manager. Either way this process is not about to become
 		// the new version, so the caller must not exec into it.
 		return out, "", fmt.Errorf("localcode %s: %s", rel.Version, out.Detail)

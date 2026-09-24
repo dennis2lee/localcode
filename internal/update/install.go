@@ -17,10 +17,10 @@ import (
 // Outcome says what installing did, because it is not the same thing on
 // every platform and the difference is the user's business.
 type Outcome struct {
-	// Started reports that an installer is now running and will replace
-	// this install. Nothing else here is going to happen on its own: the
-	// caller has to let localcode exit, since a running program's files
-	// cannot be replaced while it holds them.
+	// Started reports that an installer is staged and will replace this
+	// install once localcode exits. Nothing else here is going to happen
+	// on its own: the caller has to let localcode exit, since a running
+	// program's files cannot be replaced while it holds them.
 	Started bool `json:"started"`
 	// Replaced reports that this program's own binary has been written
 	// over, so the version now on disk is not the one running. Nothing
