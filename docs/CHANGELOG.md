@@ -1,14 +1,26 @@
 # Changelog
 
-## Unreleased
+## v0.149.0
+
+The Windows install button runs the installer after localcode exits, keeps the old version until the new one is in place, and reports an install that did not land.
 
 **Fixed**
 
-* **A Windows update that removed the old version and installed nothing.** The installer ran while localcode still held its files. It found the window holding them and waited on its files-in-use dialog instead of installing, even after the window had gone. The old product was already removed outside the install transaction, so a failure or a cancel after that point left neither version behind. A helper now runs the installer after localcode exits. The old product is removed after the new files land, inside the transaction. The window opens again when the installer has finished. A terminal is never brought back: the reply tells the person to quit.
-* **A WebView2 bootstrapper lost on every upgrade.** The new product skipped the same-version file, and the early removal of the old product deleted it. Late removal keeps the shared component on disk across the upgrade.
-* **An install reply that promised a restart that never happened.** The reply claimed Windows starts localcode again when the install finishes. The Restart Manager never closed the window that asked for the install. The window reply now says the installer starts when the window closes and LocalCode opens again when it has finished. The terminal reply says the installer starts when localcode exits and the person has to quit it.
-* **A failed install the panel never mentioned.** The update check now reports the last recorded install while its version is newer than the running version, with the version, the installer exit code and its meaning, and the log path. Once the running version catches up, the record says nothing and is cleared.
-* **A failure box that held the relaunched window back.** The helper showed its message box before relaunching the window, and the box is modal. Without the foreground the box sat behind whatever window had it, with a flashing taskbar button, while the relaunch waited behind it. Where the window comes back the helper now relaunches it at once and shows no box, whatever the outcome. The next window or terminal to open says the failure once, at the end of the conversation it opens, with the version, the exit code and its meaning, and the log path. The box stays only where nothing else can say it: a terminal parent, or no window binary left to come back to. It is now system-modal as well.
+* **Windows update that removed the old version and installed nothing**
+  * The installer now runs from a helper under `%LocalAppData%\localcode\updates`, after the localcode that asked for it has exited. The installer no longer stops on a files-in-use dialog for the window that asked. Another localcode still open is named in that dialog.
+  * The MSI removes the old version after the new files are installed, in the same transaction. A failed or cancelled install leaves the old version in place.
+  * The desktop window opens again when the installer finishes. In a terminal, quit localcode to start the installer.
+* **WebView2 bootstrapper kept across upgrades**
+* **Install reply that promised a restart Windows never made**
+* **Install confirm dialog that says what the MSI does**
+
+**Changed**
+
+* **Installer log beside the MSI** (`localcode-<version>-msi.log`)
+* **Failed install said once in the next window or terminal to open**, with the exit code, its meaning and the log path
+* **Failed install listed by the settings panel's check** until the running version catches up
+* **Second install request refused while one is waiting**
+* **MSI build checks for the removal order and the six component GUIDs**
 
 ## v0.148.0
 
