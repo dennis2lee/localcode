@@ -155,7 +155,7 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 	if handoff {
 		out, err = update.ApplyForHandoff(path)
 	} else {
-		out, err = update.Apply(path)
+		out, err = update.ApplyFor(path, d.DesktopWindow)
 	}
 	if err != nil {
 		return "", err

@@ -183,6 +183,20 @@ func (d *Daemon) lastInstallReport() map[string]any {
 	}
 }
 
+// msiTerminalNotice is the daemon-wide notice for an MSI install staged
+// from a terminal or a headless daemon. A recovered error event, which
+// both clients draw as a note that ends nothing: a plain error ends the
+// TUI's turn while the daemon keeps running it, and the Web UI paints it
+// as a failure for the same turn. See case events.TypeError in
+// internal/tui/events.go and the error handler in
+// internal/daemon/static/js/events.js.
+func msiTerminalNotice(detail string) events.Event {
+	return events.Event{
+		Type: events.TypeError,
+		Data: map[string]any{"error": detail, "recovered": true},
+	}
+}
+
 // handleUpdateInstall downloads the release and hands it to the platform's
 // installer.
 func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +222,7 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, updateHTTPStatus(err), err)
 		return
 	}
-	out, err := update.Apply(path)
+	out, err := update.ApplyFor(path, d.DesktopWindow)
 	if err != nil {
 		// A helper still waiting or installing refuses a second one.
 		// 409, not 500: the request was understood and the state, not
@@ -229,21 +243,15 @@ func (d *Daemon) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 	// user does is run the same old build.
 	detail, restarting := restartPlan(out, d.Restart != nil)
 	if out.Started {
-		// The window's reply is the window's: the installer starts when
-		// it closes, and it opens again when the installer has
-		// finished. Everywhere else the person at the terminal has to
-		// quit, so the reply says that instead.
-		detail = update.MSIDetail(rel.Version, d.DesktopWindow)
+		// No rewrite here: the detail already says which case this is,
+		// from the same DesktopWindow value the helper's pending file
+		// got. The browser that clicked is not the only client, and
+		// the person at the terminal is the one who has to quit. Said
+		// on every stream, the way a failed handoff is: the reply
+		// above goes to the browser, and the terminal never sees
+		// it otherwise.
 		if !d.DesktopWindow {
-			// The browser that clicked is not the only client, and the
-			// person at the terminal is the one who has to quit. Said
-			// on every stream, the way a failed handoff is: the reply
-			// above goes to the browser, and the terminal never sees
-			// it otherwise.
-			d.daemonEvents.send(events.Event{
-				Type: events.TypeError,
-				Data: map[string]any{"error": detail},
-			})
+			d.daemonEvents.send(msiTerminalNotice(detail))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

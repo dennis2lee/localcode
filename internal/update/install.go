@@ -65,12 +65,20 @@ func installerArgs(msi, log string) []string {
 // a binary unpacked into somewhere like ~/.local/bin. That one this user
 // already owns, so localcode replaces it itself, and a root-free install
 // updates with a click like every other one.
-func Apply(path string) (Outcome, error) { return apply(path, currentBinary) }
+func Apply(path string) (Outcome, error) { return ApplyFor(path, false) }
 
-// apply is Apply with the running binary's location injected, so a test
-// can exercise the replacement without the test binary being the thing
-// that gets replaced.
-func apply(path string, target func() (string, error)) (Outcome, error) {
+// ApplyFor installs a downloaded release, with window saying whether the
+// asking process is the desktop window. The daemon's DesktopWindow is the
+// only source: the same value builds the reply's detail and the helper's
+// pending file, so the two cannot disagree about what was promised and
+// what will happen. Apply is the same with no window to ask, for the
+// callers that have none.
+func ApplyFor(path string, window bool) (Outcome, error) { return apply(path, currentBinary, window) }
+
+// apply is ApplyFor with the running binary's location injected, so a
+// test can exercise the replacement without the test binary being the
+// thing that gets replaced.
+func apply(path string, target func() (string, error), window bool) (Outcome, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("the downloaded update is not there: %w", err)
@@ -80,25 +88,21 @@ func apply(path string, target func() (string, error)) (Outcome, error) {
 	}
 
 	if strings.EqualFold(filepath.Ext(path), ".msi") && runtime.GOOS == "windows" {
-		if err := startInstaller(path); err != nil {
+		if err := startInstaller(path, window); err != nil {
 			return Outcome{Path: path}, err
 		}
 		// The reply depends on where the parent runs: the window closes
 		// itself and comes back, while a terminal has to be quit by the
-		// person sitting at it. The running executable says which: the
-		// window always runs in localcode-gui.exe.
+		// person sitting at it. window says which, and it is the same
+		// value the pending file above got.
 		version := MSIVersionFromName(path)
 		if version == "" {
 			version = filepath.Base(path)
 		}
-		gui := false
-		if exe, err := target(); err == nil {
-			gui = IsGUIExecutable(exe)
-		}
 		return Outcome{
 			Started: true,
 			Path:    path,
-			Detail:  MSIDetail(version, gui),
+			Detail:  MSIDetail(version, window),
 		}, nil
 	}
 
@@ -173,7 +177,7 @@ func ApplyForHandoff(path string) (Outcome, error) {
 func applyForHandoff(path, goos string, target func() (string, error),
 	writable func(string) bool, cache func() (string, error)) (Outcome, error) {
 	if goos != "windows" {
-		return apply(path, target)
+		return apply(path, target, false)
 	}
 	exe, err := target()
 	if err != nil {

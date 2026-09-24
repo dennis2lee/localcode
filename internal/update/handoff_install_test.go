@@ -111,7 +111,7 @@ func TestApplyForHandoffNamesTheBinary(t *testing.T) {
 	}
 	archive := tarball(t, dir, "localcode-9.9.9-darwin-universal.tar.gz", map[string]string{"localcode": "#!/bin/sh\necho 9.9.9\n"})
 
-	out, err := apply(archive, func() (string, error) { return target, nil })
+	out, err := apply(archive, func() (string, error) { return target, nil }, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}

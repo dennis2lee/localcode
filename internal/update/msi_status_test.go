@@ -70,12 +70,6 @@ func TestMSIHelperNames(t *testing.T) {
 	if got := MSILogPath(filepath.Join(dir, "localcode-0.46.0-windows-amd64.msi"), "0.46.0"); got != filepath.Join(dir, "localcode-0.46.0-msi.log") {
 		t.Errorf("log = %q", got)
 	}
-	if !IsGUIExecutable("C:/Program Files/LocalCode/localcode-gui.exe") {
-		t.Error("the window binary was not recognized")
-	}
-	if IsGUIExecutable("C:/Program Files/LocalCode/localcode.exe") {
-		t.Error("the console binary was mistaken for the window")
-	}
 }
 
 // The exact reply text, pinned. Two sentences, one period each: the old

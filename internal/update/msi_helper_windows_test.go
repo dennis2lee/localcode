@@ -5,9 +5,13 @@ package update
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -286,4 +290,120 @@ func stubAlert(t *testing.T) *bool {
 	defer func(f func(string, string)) { alertMSI = f }(alertMSI)
 	alertMSI = func(title, text string) { *alerted = true }
 	return alerted
+}
+
+// The wait runs against a real process handle: it returns only after
+// the process exits. A stub that ignores its argument cannot see the
+// bug this guards: the helper unset the handle's environment variable
+// before reading it, so every install failed in the wait and msiexec
+// never ran.
+func TestTheWaitBlocksUntilTheParentExits(t *testing.T) {
+	// A child that sleeps about two seconds, the stand-in parent.
+	cmd := exec.Command("cmd", "/c", "ping -n 3 127.0.0.1 >NUL")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start the stand-in parent: %v", err)
+	}
+	// An inheritable duplicate of a handle to the child, the way the
+	// parent passes itself to the helper (see inheritableParentHandle).
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_DUP_HANDLE, false, uint32(cmd.Process.Pid))
+	if err != nil {
+		t.Fatalf("open the stand-in parent: %v", err)
+	}
+	cur := windows.CurrentProcess()
+	var dup windows.Handle
+	if err := windows.DuplicateHandle(cur, h, cur, &dup, 0, true, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		windows.CloseHandle(h)
+		t.Fatalf("duplicate the stand-in parent's handle: %v", err)
+	}
+	windows.CloseHandle(h)
+	defer windows.CloseHandle(dup)
+
+	done := make(chan error, 1)
+	go func() { done <- waitMSIParent(strconv.FormatUint(uint64(dup), 10)) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("the wait returned while the parent was still running: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("the stand-in parent exited uncleanly: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("the wait failed after the parent exited: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the wait did not return after the parent exited")
+	}
+}
+
+// One value decides both the reply and the pending file: the daemon's
+// DesktopWindow, passed in as window. The reply used to be derived from
+// the executable's name while the pending file carried the daemon's
+// flag, so the two could disagree about whether the window comes back.
+func TestApplyForCarriesOneWindowValueToReplyAndPending(t *testing.T) {
+	for _, window := range []bool{true, false} {
+		name := "terminal"
+		if window {
+			name = "window"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			msi := filepath.Join(dir, "localcode-0.46.0-windows-amd64.msi")
+			if err := os.WriteFile(msi, []byte("msi"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			old := msiInstallDir
+			msiInstallDir = func() (string, error) { return dir, nil }
+			defer func() { msiInstallDir = old }()
+			defer func(f func(string, string, windows.Handle) error) { spawnMSIHelper = f }(spawnMSIHelper)
+			spawnMSIHelper = func(helper, pending string, parent windows.Handle) error { return nil }
+
+			out, err := ApplyFor(msi, window)
+			if err != nil {
+				t.Fatalf("ApplyFor: %v", err)
+			}
+			if !out.Started {
+				t.Error("Started = false, want the staged installer")
+			}
+			if want := MSIDetail("0.46.0", window); out.Detail != want {
+				t.Errorf("Detail = %q, want %q", out.Detail, want)
+			}
+			p, err := ReadMSIPending(MSIPendingPath(dir))
+			if err != nil {
+				t.Fatalf("no pending file: %v", err)
+			}
+			if p.GUI != window {
+				t.Errorf("pending GUI = %v, want %v: the reply promises one thing and the helper does the other", p.GUI, window)
+			}
+		})
+	}
+}
+
+// The wait receives the handle value that was put in the environment.
+// The helper unsets its mode so msiexec and the relaunched window do
+// not inherit it, and reading the value after unsetting it waits on
+// nothing and fails every install.
+func TestTheHelperPassesTheEnvironmentHandleToTheWait(t *testing.T) {
+	_, pending := helperFixture(t, true)
+	defer func(f func(string, string) int) { runMSIInstaller = f }(runMSIInstaller)
+	runMSIInstaller = func(msi, log string) int { return 0 }
+	stubRelaunch(t)
+	stubAlert(t)
+
+	const handle = "98765"
+	t.Setenv(EnvMSIParent, handle)
+	var got string
+	defer func(f func(string) error) { waitMSIParent = f }(waitMSIParent)
+	waitMSIParent = func(raw string) error { got = raw; return nil }
+
+	if err := RunMSIHelper(pending); err != nil {
+		t.Fatalf("helper: %v", err)
+	}
+	if got != handle {
+		t.Errorf("the wait got %q, want the handle %q from the environment", got, handle)
+	}
 }

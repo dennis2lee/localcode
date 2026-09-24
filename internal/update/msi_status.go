@@ -152,13 +152,6 @@ func MSIVersionFromName(path string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(base, msiProductPrefix), msiProductSuffix)
 }
 
-// IsGUIExecutable reports whether an executable path is the desktop
-// window's binary. The window always runs in localcode-gui.exe. The
-// console binary never opens a window.
-func IsGUIExecutable(exe string) bool {
-	return strings.EqualFold(filepath.Base(exe), guiExecutableName)
-}
-
 // GUIExecutableBeside returns the window binary beside an executable
 // path: the same directory the parent ran from.
 func GUIExecutableBeside(exe string) string {

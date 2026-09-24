@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"localcode/internal/events"
 	"localcode/internal/update"
 )
 
@@ -253,6 +254,24 @@ func TestTheCheckReportsAFailedInstall(t *testing.T) {
 	}
 	if last["log"] != log {
 		t.Errorf("log = %v, want %q", last["log"], log)
+	}
+}
+
+// The terminal install notice is a recovered error event: both clients
+// draw that as a note that ends nothing. A plain error ends the TUI's
+// turn while the daemon keeps running it, and the Web UI paints it as a
+// failure for the same turn.
+func TestTheTerminalInstallNoticeEndsNothing(t *testing.T) {
+	const detail = "The installer for localcode 0.46.0 starts when localcode exits. Quit localcode to run it."
+	ev := msiTerminalNotice(detail)
+	if ev.Type != events.TypeError {
+		t.Errorf("Type = %q, want the error event both clients already handle", ev.Type)
+	}
+	if errMsg, _ := ev.Data["error"].(string); errMsg != detail {
+		t.Errorf("error = %q, want the install reply", errMsg)
+	}
+	if recovered, _ := ev.Data["recovered"].(bool); !recovered {
+		t.Error("recovered is not true, so the TUI ends its turn while the daemon keeps running it")
 	}
 }
 
