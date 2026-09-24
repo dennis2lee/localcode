@@ -189,13 +189,19 @@ verify_msi Icon 'LocalCodeIcon' 'the application icon is missing from the Icon t
 verify_msi Property 'ARPPRODUCTICON	LocalCodeIcon' 'Add/Remove Programs is not pointed at the application icon'
 
 # Late removal needs the component rules to hold across versions: the old
-# product's files survive its removal only where the new product shares
-# the component, and wixl derives Guid='*' from the key path. So the
-# component names are what keep the GUIDs stable. A renamed component
-# silently mints a new GUID, and the old copy stops being shared.
-verify_msi Component 'MainExecutable' 'the console component is missing or renamed (its GUID would change with it)'
-verify_msi Component 'GuiExecutable' 'the window component is missing or renamed (its GUID would change with it)'
-verify_msi Component 'WebView2BootstrapperFile' 'the bootstrapper component is missing or renamed (its GUID would change with it)'
+# product is removed while the new one is already there, and a file
+# survives that removal only where both products share the component.
+# wixl derives Guid='*' from the key path, so a renamed component (or
+# key file) silently mints a new GUID: the new product's files stop
+# being shared, and the old product's removal deletes them. Checking
+# names alone cannot see that — a GUID that changed while the path stayed
+# the same sails through — so all six components are pinned name and GUID
+# together (see component_guid_ok in build/msi-checks.sh for why).
+if ! msiinfo export "$MSI" Component | component_guid_ok; then
+	echo "MSI verification failed: a component GUID changed or went missing (late removal would delete the new product's files)" >&2
+	msiinfo export "$MSI" Component >&2
+	exit 1
+fi
 
 # The post-processing above must have landed: RemoveExistingProducts
 # between InstallExecute and InstallFinalize. Without it the old product
