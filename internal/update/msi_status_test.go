@@ -115,36 +115,47 @@ func TestMSIRecordRoundTrip(t *testing.T) {
 	}
 }
 
-// The check reports a record unless an installed status is for the
-// running version. Every installed status crossed with the version
-// being equal or not to the running one: an installed record for the
-// running version says nothing and is cleared, or the panel reports
-// that install on every check forever.
+// A record is reported only while its version is newer than the running
+// version. The full cross product: every status against a record older
+// than, equal to, and newer than the running version, plus a dev build,
+// which reports nothing. A failed or cancelled record for a version
+// since installed another way must not keep saying it did not install
+// while that version is running.
 func TestReportMSIRecord(t *testing.T) {
 	log := filepath.Join("c:", "updates", "localcode-0.46.0-msi.log")
-	cases := []struct {
+	codes := []struct {
+		name string
+		code int
+	}{
+		{"installed", 0},
+		{"restart needed", 3010},
+		{"restart started", 1641},
+		{"cancelled", 1602},
+		{"another installation", 1618},
+		{"failed", 1603},
+	}
+	runnings := []struct {
 		name    string
-		code    int
-		running string
+		version string
+		record  string
 		report  bool
 	}{
-		{"installed, older running", 0, "0.45.2", true},
-		{"installed, running", 0, "0.46.0", false},
-		{"restart needed, older running", 3010, "0.45.2", true},
-		{"restart needed, running", 3010, "0.46.0", false},
-		{"restart started, older running", 1641, "0.45.2", true},
-		{"restart started, running", 1641, "0.46.0", false},
-		{"cancelled, older running", 1602, "0.45.2", true},
-		{"cancelled, running", 1602, "0.46.0", true},
-		{"another installation, older running", 1618, "0.45.2", true},
-		{"another installation, running", 1618, "0.46.0", true},
-		{"failed, older running", 1603, "0.45.2", true},
-		{"failed, running", 1603, "0.46.0", true},
+		{"record older than running", "0.46.0", "0.45.0", false},
+		{"record equal to running", "0.46.0", "0.46.0", false},
+		{"record newer than running", "0.45.0", "0.46.0", true},
 	}
-	for _, tc := range cases {
-		rec := MSIRecord{Version: "0.46.0", ExitCode: tc.code, Log: log}
-		if got := ReportMSIRecord(rec, tc.running); got != tc.report {
-			t.Errorf("%s: ReportMSIRecord = %v, want %v", tc.name, got, tc.report)
+	for _, c := range codes {
+		for _, r := range runnings {
+			rec := MSIRecord{Version: r.record, ExitCode: c.code, Log: log}
+			if got := ReportMSIRecord(rec, r.version); got != r.report {
+				t.Errorf("%s, %s: ReportMSIRecord = %v, want %v",
+					c.name, r.name, got, r.report)
+			}
+		}
+		// A dev build reports nothing: no release is newer than it.
+		rec := MSIRecord{Version: "0.46.0", ExitCode: c.code, Log: log}
+		if got := ReportMSIRecord(rec, "dev"); got {
+			t.Errorf("%s, dev running: ReportMSIRecord = true, want false", c.name)
 		}
 	}
 }

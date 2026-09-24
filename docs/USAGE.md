@@ -2885,7 +2885,7 @@ What Windows still cannot do is bring a console program back into the terminal i
 
 The desktop window hands over too, one step indirect. The window owns the loopback listener its page is connected to and never gives it up, so the new version gets a listener of its own and the window serves a proxy onto it; the two routes that open native dialogs stay in the window's process. At startup that is how a staged update runs from the first message. On `/update` the same thing happens mid-session: the new daemon comes up, the old one finishes what it has and retires, the window switches to the proxy, and the page reloads onto the new version's interface. The window stays open throughout. The daemon behind the window watches the same pipe the terminal's does, so closing the window ends it.
 
-The settings window's install button is the one path that closes the window. It stages the MSI and a helper, and the helper waits for localcode to exit before it runs the installer. The installer starts when the window closes. LocalCode opens again when the installer has finished. In a terminal the installer starts when localcode exits, and the person has to quit it. A failed install is reported on the panel with the installer exit code and the log path.
+The settings window's install button is the one path that closes the window. It stages the MSI and a helper, and the helper waits for localcode to exit before it runs the installer. The installer starts when the window closes. LocalCode opens again when the installer has finished. In a terminal the installer starts when localcode exits, and the person has to quit it. A recorded install is reported on the panel with the installer exit code and the log path while its version is newer than the running version. Once the running version catches up, the record says nothing and is cleared.
 
 #### The settings window
 
@@ -2975,7 +2975,7 @@ A remote daemon is not automatically restarted.
 
 Package-managed and bundle installs:
 
-* Windows MSI: stage the MSI and a helper. The helper runs `msiexec /i` with a log after localcode exits, then opens the window again. In a terminal, quit localcode to run the installer. The panel reports a failed install with the exit code and the log path.
+* Windows MSI: stage the MSI and a helper. The helper runs `msiexec /i` with a log after localcode exits, then opens the window again. In a terminal, quit localcode to run the installer. The panel reports a recorded install with the exit code and the log path while its version is newer than the running version, and clears it once the running version catches up.
 * Linux `.deb` or a root-owned `/usr/bin` copy: download and verify, then show `sudo apt install <path>`. LocalCode does not request a password or run the package manager.
 * macOS `LocalCode.app` and Windows ZIP: download the complete distribution and show manual instructions.
 

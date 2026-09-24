@@ -163,10 +163,9 @@ func (d *Daemon) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 var msiRecordDir = updateDir
 
 // lastInstallReport reads the helper's record for the panel. Included
-// when the record did not install the version it was for: cancelled,
-// failed, or still not the running version. Cleared when the running
-// version is what a successful install put there, which is when the
-// record has served its purpose and says nothing.
+// only while the record's version is newer than the running version.
+// Otherwise it says nothing and is cleared: a version since installed
+// another way must not keep being reported as not installed.
 func (d *Daemon) lastInstallReport() map[string]any {
 	dir, err := msiRecordDir()
 	if err != nil {
