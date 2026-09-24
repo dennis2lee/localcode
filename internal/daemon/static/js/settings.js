@@ -374,8 +374,10 @@ function showUpdate(text, warn) {
 // status the daemon sent, not by the code: a record is reported with an
 // installed status when its version is not the running one, for example
 // when a daemon that is still the old version reads it. Only the
-// not-installed statuses say "did not install".
-function lastInstallLine(res) {
+// not-installed statuses say "did not install". Exported for the page
+// load that draws a failed install in the conversation view; the panel
+// keeps its own caller.
+export function lastInstallLine(res) {
   const last = res && res.last_install;
   if (!last || !last.version) return '';
   if (last.status && last.status.startsWith('installed')) {

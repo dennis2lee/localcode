@@ -79,6 +79,10 @@ export const getVersion = () => api('GET', '/api/version');
 // flag on the first one.
 export const checkUpdate = () => api('GET', '/api/update');
 export const installUpdate = () => api('POST', '/api/update/install');
+// The failed-install line the reopened window draws on its first load.
+// A local fact read from the daemon's record file, not a check: it
+// answers with the network down, and only the first load carries it.
+export const getInstallNotice = () => api('GET', '/api/update/install-notice');
 // The workspace is per-session, so which session is asking is part of the
 // question. Without it the daemon can only answer with the default a new
 // session would start in, which is not what the header should be showing.

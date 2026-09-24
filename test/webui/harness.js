@@ -73,6 +73,8 @@ function defaultRoutes() {
       },
     ],
     'GET /api/version': { version: 'test' },
+    // No failed install recorded: the reopened window draws nothing.
+    'GET /api/update/install-notice': { notice: null },
     'POST /api/sessions': { id: 'sess-new', agent: 'general-purpose', workspace: '/tmp/workspace' },
     'POST /api/sessions/*/messages': { status: 202 },
     'POST /api/sessions/*/cancel': { status: 202 },
