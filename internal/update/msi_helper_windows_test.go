@@ -375,8 +375,7 @@ func TestTheHelperStartsBrokenAwayFromTheParentJob(t *testing.T) {
 }
 
 // A job that forbids breakaway refuses with access denied, and then the
-// helper starts without the flag instead: crewed into the job, but
-// running.
+// helper starts without the flag instead: inside the job, but running.
 func TestTheHelperFallsBackInsideAJobThatForbidsBreakaway(t *testing.T) {
 	defer func(f func(string, string, windows.Handle, uint32) error) { startMSIHelperOnce = f }(startMSIHelperOnce)
 	denied := fmt.Errorf("start the install helper: %w", windows.ERROR_ACCESS_DENIED)
@@ -471,13 +470,17 @@ func helperFixture(t *testing.T, gui bool) (dir, pending string) {
 }
 
 // stubHelperSeams fakes the wait and the installer, returning flags that
-// say each ran.
+// say each ran. Restored with t.Cleanup: a defer here would run when
+// this helper returns, undoing every stub before the test body runs,
+// and the test would call the real seams instead.
 func stubHelperSeams(t *testing.T, code int) (waited, installed *bool) {
 	t.Helper()
 	waited, installed = new(bool), new(bool)
-	defer func(f func(string) error) { waitMSIParent = f }(waitMSIParent)
+	oldWait := waitMSIParent
+	t.Cleanup(func() { waitMSIParent = oldWait })
 	waitMSIParent = func(raw string) error { *waited = true; return nil }
-	defer func(f func(string, string) int) { runMSIInstaller = f }(runMSIInstaller)
+	oldRun := runMSIInstaller
+	t.Cleanup(func() { runMSIInstaller = oldRun })
 	runMSIInstaller = func(msi, log string) int { *installed = true; return code }
 	return waited, installed
 }
@@ -485,7 +488,8 @@ func stubHelperSeams(t *testing.T, code int) (waited, installed *bool) {
 func stubRelaunch(t *testing.T) *string {
 	t.Helper()
 	target := new(string)
-	defer func(f func(string, []string) error) { relaunchMSI = f }(relaunchMSI)
+	old := relaunchMSI
+	t.Cleanup(func() { relaunchMSI = old })
 	relaunchMSI = func(got string, args []string) error { *target = got; return nil }
 	return target
 }
@@ -493,7 +497,8 @@ func stubRelaunch(t *testing.T) *string {
 func stubAlert(t *testing.T) *bool {
 	t.Helper()
 	alerted := new(bool)
-	defer func(f func(string, string)) { alertMSI = f }(alertMSI)
+	old := alertMSI
+	t.Cleanup(func() { alertMSI = old })
 	alertMSI = func(title, text string) { *alerted = true }
 	return alerted
 }
