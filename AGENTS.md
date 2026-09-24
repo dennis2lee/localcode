@@ -39,16 +39,21 @@ Project rules for agents working in this repo.
   the attempt's log, and a force-cancelled attempt may keep none at all.
   The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,072 tests
-    over 31 packages. `-count=1` matters: a cached PASS is a statement about a
-    previous run of a previous tree. `-parallel 8` does not: it bounds
-    only the tests that call `t.Parallel()`, of which this repo has ten,
-    all in `internal/config`. The suite's concurrency is `go test` running
-    package binaries side by side, which defaults to the core count.
+  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,245 tests
+    and 624 subtests over 31 packages, two of the tests skipped on macOS.
+    The same suite runs a second time without `-race`
+    (`go test ./... -count=1 -timeout 10m`), because a test whose timing
+    only holds at race-detector speed passes the race lane and fails for
+    anybody who runs `go test ./...`. `-count=1` matters: a cached PASS
+    is a statement about a previous run of a previous tree. `-parallel 8`
+    does not: it bounds only the tests that call `t.Parallel()`, of which
+    this repo has ten, all in `internal/config`. The suite's concurrency
+    is `go test` running package binaries side by side, which defaults to
+    the core count.
     Measured: `-parallel 1` 10s, `-parallel 8` 9s, `-p 1` 61s.
   * `go vet ./...`, `go build -tags gui ./...` plus `go test -tags gui
-    ./internal/gui/` (macOS only, CGo — the package is behind the tag, so
-    the race lane never compiles its tests), and both
+    ./internal/gui/` (14 tests; macOS only, CGo — the package is behind
+    the tag, so the race lane never compiles its tests), and both
     cross-builds — `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
     GOOS=linux GOARCH=amd64`. Windows and Linux are release targets built
     from this machine, so a break in either is a break in the release.
@@ -58,9 +63,9 @@ Project rules for agents working in this repo.
     that is no longer reported. The "written, tested, never called" shape
     has shipped twice (v0.55.0, v0.57.0); `-test=false` is what makes it
     visible, at the cost of listing the functions only tests call.
-  * The Web UI suite (270 tests, deliberately also run by `TestWebUI`,
-    which skips itself when node is absent), the doc-link checker,
-    `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form
+  * The Web UI suite (587 tests in 60 files, deliberately also run by
+    `TestWebUI`, which skips itself when node is absent), the doc-link
+    checker, `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form
     compares against the index and so inspects nothing once changes are
     staged, which is the state a release is cut from.
 * Keep the default build pure Go. The GUI (`internal/gui`) is behind the `gui` build tag and uses CGo; never make a non-tagged package import it.
