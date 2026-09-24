@@ -2854,7 +2854,7 @@ On Windows the same thing happens by a different route, because a Windows proces
 
 The window is never written over, and a folder it could write to does not change that. The zip holds the console `localcode.exe` and only ever that, so under the window's name it leaves a file that opens no window: it reports the new version correctly and starts the terminal interface instead, every time, until the MSI puts the real one back. A build named `localcode-gui` that has no window in it now says so on its first line rather than quietly becoming the terminal interface.
 
-The Program Files copy, and the window shell, are brought up to date by the settings window's install button, which runs the MSI with a UAC prompt; nothing runs `msiexec` unasked.
+The Program Files copy, and the window shell, are brought up to date by the settings window's install button. It downloads the MSI and stages a helper with a UAC prompt. The helper runs the installer after localcode exits. Nothing runs `msiexec` unasked.
 
 #### `/update`
 
@@ -2885,7 +2885,7 @@ What Windows still cannot do is bring a console program back into the terminal i
 
 The desktop window hands over too, one step indirect. The window owns the loopback listener its page is connected to and never gives it up, so the new version gets a listener of its own and the window serves a proxy onto it; the two routes that open native dialogs stay in the window's process. At startup that is how a staged update runs from the first message. On `/update` the same thing happens mid-session: the new daemon comes up, the old one finishes what it has and retires, the window switches to the proxy, and the page reloads onto the new version's interface. The window stays open throughout. The daemon behind the window watches the same pipe the terminal's does, so closing the window ends it.
 
-The settings window's install button is the one path that closes the window, because it runs the MSI and the MSI has to replace the files the window holds. On Windows the window registers with the Restart Manager when it opens, so Windows starts it again when the install finishes. Windows applies its own two rules there: the window must have been open for a minute before the install, and an install that needs a reboot does not restart anything until after it.
+The settings window's install button is the one path that closes the window. It stages the MSI and a helper, and the helper waits for localcode to exit before it runs the installer. The installer starts when the window closes. LocalCode opens again when the installer has finished. In a terminal the installer starts when localcode exits, and the person has to quit it. A failed install is reported on the panel with the installer exit code and the log path.
 
 #### The settings window
 
@@ -2905,14 +2905,14 @@ Update behavior depends on the install format:
 | Install shape | What happens | Comes back on its own |
 |---|---|---|
 | A binary somewhere you can write (`~/.local/bin`, and the same on macOS and Linux tarballs) | localcode writes the new binary over the running one | Yes, in the terminal. It re-executes itself, so the same terminal, the same process id and the same arguments come back. |
-| Windows `.msi` | The installer runs at basic UI. Windows asks the Restart Manager which processes hold the files, its built-in dialog offers to close them, localcode is closed cleanly with the terminal restored, and the install completes | No. Start localcode again. |
+| Windows `.msi` | A helper runs the installer at basic UI after localcode exits, with a full log beside the MSI. Nobody holds the files by then, so there is nothing for the files-in-use dialog to wait on | The window opens again when the installer has finished. A terminal never comes back: quit localcode to run the installer, then start it again. |
 | Windows `.zip`, macOS `.app`, Linux `.deb` | Downloaded, with what to do next | No. |
 
-Windows MSI updates do not restart LocalCode in the original terminal. Start it again after installation.
+A Windows MSI update never brings back a terminal. Quit localcode to run the installer. Start it again after installation. The desktop window opens again on its own.
 
 An older MSI installs over a newer one. Windows Installer would otherwise refuse with "a newer version is already installed", which only ever sent people to Add/Remove Programs first — the same outcome with an extra step. The permission lives in the package being installed, so it holds for every version from 0.133.0 on: any of those can be installed over anything newer, and nothing before 0.133.0 can be.
 
-The MSI uses basic UI so Windows Installer can offer its built-in files-in-use dialog. Full UI requires a package-authored dialog that this package does not contain.
+The MSI uses basic UI with a full log beside it. The helper runs the installer after localcode exits, so no process holds the files when it runs. Full UI requires a package-authored dialog that this package does not contain.
 
 #### Updating from somewhere other than GitHub
 
@@ -2975,7 +2975,7 @@ A remote daemon is not automatically restarted.
 
 Package-managed and bundle installs:
 
-* Windows MSI: run `msiexec /i`; Windows handles elevation and in-use files. LocalCode must close. The desktop window offers to close after the installer starts.
+* Windows MSI: stage the MSI and a helper. The helper runs `msiexec /i` with a log after localcode exits, then opens the window again. In a terminal, quit localcode to run the installer. The panel reports a failed install with the exit code and the log path.
 * Linux `.deb` or a root-owned `/usr/bin` copy: download and verify, then show `sudo apt install <path>`. LocalCode does not request a password or run the package manager.
 * macOS `LocalCode.app` and Windows ZIP: download the complete distribution and show manual instructions.
 

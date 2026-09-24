@@ -177,10 +177,10 @@ func runGUI(configPath string) error {
 		// replaces the program on the machine the daemon runs on, so the
 		// button only exists where that machine is the one being looked at.
 		d.AllowUpdateInstall = true
-		// Whether the installer's close is followed by a return. See
-		// internal/gui/restart_windows.go; the reply to the install button
-		// reads it.
-		d.InstallerRestarts = gui.InstallerRestarts()
+		// The window's install reply promises a return: the installer
+		// starts when the window closes, and the helper starts the
+		// window again when the installer has finished.
+		d.DesktopWindow = true
 
 		// The startup update, where exec is not available. The new version
 		// is started beside this process on a loopback listener of its
@@ -485,14 +485,6 @@ func runSuccessor(configPath string, in inherited) error {
 	d.NoteTakeover()
 	listen := in.ln.Addr().String()
 	d.AllowUpdateInstall = loopbackOnly(listen)
-	// Whether an installer's close is followed by a return. Only the
-	// process with the window knows — it is the one that registered for
-	// it — and after a handoff that process is not this one, so it says
-	// so on the command line. Without it the install reply dropped the
-	// sentence promising Windows would start localcode again, in exactly
-	// the mode where the promise is kept.
-	d.InstallerRestarts = os.Getenv(envInstallerRestarts) == "1"
-
 	srv := &http.Server{Handler: d.Handler()}
 	d.Shutdown = func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

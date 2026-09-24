@@ -53,6 +53,18 @@ func runVersionCommand(args []string) error {
 }
 
 func main() {
+	// The install helper's mode, read before anything else, the way the
+	// handoff successor's is (LOCALCODE_TAKEOVER). An environment
+	// variable rather than a flag: this mode is not user-facing, so it
+	// stays out of the flag roster and the usage text. Before the
+	// desktop window opens anything, and before flags are parsed.
+	if pending := os.Getenv(update.EnvMSIHelper); pending != "" {
+		if err := update.RunMSIHelper(pending); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// The copies an update left beside the binary, cleared now that
 	// nothing holds them. Windows only, and a no-op everywhere else: it
 	// permits renaming a running image and forbids deleting one, so an
@@ -60,6 +72,9 @@ func main() {
 	if exe, err := os.Executable(); err == nil {
 		update.SweepAside(exe)
 	}
+	// A stale install helper copy from an earlier update. A copy in use
+	// refuses removal and is left alone.
+	update.SweepMSIHelper()
 	if len(os.Args) > 1 {
 		if cmd, ok := subcommands[os.Args[1]]; ok {
 			if err := cmd(os.Args[2:]); err != nil {

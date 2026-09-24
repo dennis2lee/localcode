@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+**Fixed**
+
+* **A Windows update that removed the old version and installed nothing.** The installer ran while localcode still held its files. The Restart Manager could not close the window, so the install waited on a files-in-use dialog. The old product was already removed outside the install transaction, so a cancelled install left neither version behind. A helper now runs the installer after localcode exits. The old product is removed after the new files land, inside the transaction. The window opens again when the installer has finished. A terminal is never brought back: the reply tells the person to quit.
+* **A WebView2 bootstrapper lost on every upgrade.** The new product skipped the same-version file, and the early removal of the old product deleted it. Late removal keeps the shared component on disk across the upgrade.
+* **An install reply that promised a restart that never happened.** The reply claimed Windows starts localcode again when the install finishes. The Restart Manager never closed the window that asked for the install. The window reply now says the installer starts when the window closes and LocalCode opens again when it has finished. The terminal reply says the installer starts when localcode exits and the person has to quit it.
+* **A failed install the panel never mentioned.** The update check now reports the last recorded install when it did not install its version, with the version, the installer exit code and its meaning, and the log path. An install that succeeded and is now running says nothing.
+
 ## v0.148.0
 
 Reasoning that a server sends inside the answer is shown as reasoning, a muse model's reasoning blocks come back after a reload, and the terminal ends a turn that the daemon behind a reconnected stream never ran.

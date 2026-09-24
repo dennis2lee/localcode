@@ -113,6 +113,27 @@ wixl -a x64 \
 	-o "$MSI" \
 	build/localcode.wxs
 
+# wixl pins RemoveExistingProducts right after InstallValidate (sequence
+# 1401), so the old product is removed and committed before the new
+# one's transaction starts. A new install that fails or is cancelled
+# after that point rolls back only itself and leaves neither version on
+# the machine. Move the removal to WiX's afterInstallExecute: an
+# InstallExecute action before InstallFinalize, with
+# RemoveExistingProducts right after it. The old product then stays
+# until the new files have landed, inside the same transaction, and a
+# failure rolls back to the old version.
+#
+# The numbers are WiX's own: InstallExecute 6500, InstallFinalize 6600,
+# and the removal between them. They fit the gap wixl leaves between
+# PublishProduct (6400) and InstallFinalize (6600).
+if ! command -v msibuild >/dev/null 2>&1; then
+	echo "error: msibuild not found. Install with: brew install msitools" >&2
+	exit 1
+fi
+echo "==> moving RemoveExistingProducts after InstallExecute"
+msibuild "$MSI" -q "INSERT INTO InstallExecuteSequence (Action, Sequence) VALUES ('InstallExecute', 6500)"
+msibuild "$MSI" -q "UPDATE InstallExecuteSequence SET Sequence=6550 WHERE Action='RemoveExistingProducts'"
+
 # Verify what actually landed in the MSI database rather than trusting that
 # wixl did what the .wxs said. Two things have silently gone wrong here
 # before: a custom action wixl couldn't express at all (it warned but still
@@ -121,6 +142,9 @@ wixl -a x64 \
 #
 # Both produce an MSI that installs but misbehaves, on a platform this build
 # machine can't run — so the checks are the only feedback available.
+#
+# shellcheck disable=SC1091
+source "$ROOT/build/msi-checks.sh"
 echo "==> verifying MSI tables"
 verify_msi() {
 	local table="$1" pattern="$2" what="$3" dump
@@ -163,6 +187,25 @@ verify_msi Shortcut 'LocalCodeDesktopShortcut	DesktopFolder' 'the desktop shortc
 # is the blank Windows one).
 verify_msi Icon 'LocalCodeIcon' 'the application icon is missing from the Icon table'
 verify_msi Property 'ARPPRODUCTICON	LocalCodeIcon' 'Add/Remove Programs is not pointed at the application icon'
+
+# Late removal needs the component rules to hold across versions: the old
+# product's files survive its removal only where the new product shares
+# the component, and wixl derives Guid='*' from the key path. So the
+# component names are what keep the GUIDs stable. A renamed component
+# silently mints a new GUID, and the old copy stops being shared.
+verify_msi Component 'MainExecutable' 'the console component is missing or renamed (its GUID would change with it)'
+verify_msi Component 'GuiExecutable' 'the window component is missing or renamed (its GUID would change with it)'
+verify_msi Component 'WebView2BootstrapperFile' 'the bootstrapper component is missing or renamed (its GUID would change with it)'
+
+# The post-processing above must have landed: RemoveExistingProducts
+# between InstallExecute and InstallFinalize. Without it the old product
+# is removed before the new files land, and a failed install leaves
+# neither version on the machine.
+if ! msiinfo export "$MSI" InstallExecuteSequence | rep_order_ok; then
+	echo "MSI verification failed: RemoveExistingProducts is not between InstallExecute and InstallFinalize" >&2
+	msiinfo export "$MSI" InstallExecuteSequence >&2
+	exit 1
+fi
 
 echo "==> done: $MSI"
 ls -la "$MSI"

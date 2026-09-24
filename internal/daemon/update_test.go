@@ -220,3 +220,62 @@ func TestAnInstallThatReplacedNothingIsNotRestarted(t *testing.T) {
 		}
 	}
 }
+
+// The check reports a recorded install that did not land: the version,
+// the exit code and what it means, and the log path.
+func TestTheCheckReportsAFailedInstall(t *testing.T) {
+	dir := t.TempDir()
+	log := dir + "/localcode-0.46.0-msi.log"
+	if err := update.WriteMSIRecord(dir, update.MSIRecord{Version: "0.46.0", ExitCode: 1602, Log: log}); err != nil {
+		t.Fatal(err)
+	}
+	old := msiRecordDir
+	msiRecordDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { msiRecordDir = old })
+
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+	d.Version = "0.45.2"
+	d.UpdateAPI = githubWith(t, "v0.46.0").URL
+
+	body := checkUpdate(t, d)
+	last, ok := body["last_install"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_install = %v, want the recorded install", body["last_install"])
+	}
+	if last["version"] != "0.46.0" {
+		t.Errorf("version = %v", last["version"])
+	}
+	if last["exit_code"] != float64(1602) {
+		t.Errorf("exit_code = %v", last["exit_code"])
+	}
+	if meaning, _ := last["meaning"].(string); !strings.Contains(meaning, "cancelled") {
+		t.Errorf("meaning = %q, want what 1602 means", meaning)
+	}
+	if last["log"] != log {
+		t.Errorf("log = %v, want %q", last["log"], log)
+	}
+}
+
+// An install that succeeded and is now the running version says nothing,
+// and the record is cleared.
+func TestTheCheckSaysNothingAboutTheRunningInstall(t *testing.T) {
+	dir := t.TempDir()
+	if err := update.WriteMSIRecord(dir, update.MSIRecord{Version: "0.46.0", ExitCode: 0, Log: dir + "/x.log"}); err != nil {
+		t.Fatal(err)
+	}
+	old := msiRecordDir
+	msiRecordDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { msiRecordDir = old })
+
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+	d.Version = "0.46.0"
+	d.UpdateAPI = githubWith(t, "v0.46.0").URL
+
+	body := checkUpdate(t, d)
+	if last, ok := body["last_install"]; ok && last != nil {
+		t.Errorf("last_install = %v, want nothing for the running version", last)
+	}
+	if _, err := update.ReadMSIRecord(dir); err == nil {
+		t.Error("the spent record was kept")
+	}
+}

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"localcode/internal/daemon"
-	"localcode/internal/gui"
 )
 
 // The process side of handing a daemon to a newer version of itself.
@@ -215,11 +214,6 @@ var closeMCPServers = func() {}
 // far as this process knows" branch — which is exactly the case it was
 // not.
 func spawnAndWatch(binary string, ln net.Listener, alive *os.File) (int, error) {
-	// Passed through the environment because the successor has no other
-	// way to learn it: see envInstallerRestarts.
-	if gui.InstallerRestarts() {
-		_ = os.Setenv(envInstallerRestarts, "1")
-	}
 	pid, exited, err := spawnSuccessor(binary, ln, alive)
 	if err != nil {
 		return 0, err
@@ -253,11 +247,6 @@ func releaseMCPBeforeSuccessor(d *daemon.Daemon) {
 	}
 	closeMCPServers()
 }
-
-// envInstallerRestarts tells a successor what only the process with the
-// window can know: that an installer closing this program is followed by
-// Windows starting it again, because that process registered for it.
-const envInstallerRestarts = "LOCALCODE_INSTALLER_RESTARTS"
 
 // successorArgs is the command line the successor is started with: this
 // invocation's own arguments, so --agent, --listen, --config and all come

@@ -206,14 +206,17 @@
       whenever the referenced file's component is not part of the current
       install — which happens on an upgrade, because the bootstrapper is
       already on disk from the previous version and file-versioning rules
-      decide it doesn't need replacing. Retrying then appeared to "work"
-      only because the first attempt had already removed the old product,
-      leaving the file genuinely absent and therefore due for install.
+      decide it doesn't need replacing.
 
-      wixl offers no way out of this from the other direction: it hardcodes
-      RemoveExistingProducts to run right after InstallValidate (WiX's
-      MajorUpgrade/@Schedule is not implemented), so the removal always
-      happens before the new files land.
+      wixl hardcodes RemoveExistingProducts to run right after
+      InstallValidate (WiX's MajorUpgrade/@Schedule is not implemented),
+      so package-msi.sh moves it after the build to WiX's
+      afterInstallExecute: an InstallExecute action before InstallFinalize,
+      with the removal right after it. The old product then stays until
+      the new files have landed, inside the same transaction. That is also
+      what keeps the bootstrapper on disk across an upgrade: the new
+      product skips the same-version file, and the old copy survives the
+      late removal because both products share the component.
 
       Skipping is the correct behavior, not a workaround: if the
       bootstrapper is not being installed, an earlier install already ran

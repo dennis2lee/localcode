@@ -369,6 +369,16 @@ function showUpdate(text, warn) {
   updateNoteEl.className = warn ? 'note warn' : 'note';
 }
 
+// lastInstallLine is the one line for a recorded install that did not
+// land: the version, the exit code and what it means, and the log path.
+// An install that succeeded and is now running says nothing, so neither
+// does this.
+function lastInstallLine(res) {
+  const last = res && res.last_install;
+  if (!last || !last.version) return '';
+  return `Update to ${last.version} did not install: the installer exited ${last.exit_code} (${last.meaning}). Log: ${last.log}.`;
+}
+
 async function checkForUpdate() {
   latest = null;
   updateInstallBtn.hidden = true;
@@ -383,8 +393,10 @@ async function checkForUpdate() {
       showUpdate(`Could not check: ${res.detail}`, true);
       return;
     }
+    const last = lastInstallLine(res);
+    const withLast = (text) => last ? `${text} ${last}` : text;
     if (!res.available) {
-      showUpdate(res.detail || `localcode ${res.current} is the latest release`);
+      showUpdate(withLast(res.detail || `localcode ${res.current} is the latest release`));
       return;
     }
     latest = res;
@@ -406,11 +418,11 @@ async function checkForUpdate() {
       ? ', unverified: plain http, the host was not authenticated' : '';
     const from = rawSource ? ` (from ${rawSource}${unverified})` : '';
     if (res.can_install) {
-      showUpdate(`localcode ${res.latest} is available${from}. This will download ${res.asset}${size} and run the installer.`);
+      showUpdate(withLast(`localcode ${res.latest} is available${from}. This will download ${res.asset}${size} and run the installer.`));
       updateInstallBtn.textContent = `Download and install ${res.latest}`;
       updateInstallBtn.hidden = false;
     } else {
-      showUpdate(`localcode ${res.latest} is available${from}. ${res.detail || ''}`.trim());
+      showUpdate(withLast(`localcode ${res.latest} is available${from}. ${res.detail || ''}`.trim()));
     }
   } catch (err) {
     showUpdate(`Could not check: ${err}`, true);

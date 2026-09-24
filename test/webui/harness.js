@@ -374,7 +374,14 @@ async function load(opts = {}) {
     removeItem: (k) => sessionStored.delete(k),
   };
   harness.sessionStorage = sessionStored;
-  sandbox.confirm = () => (opts.confirm === undefined ? true : opts.confirm);
+  // The confirm messages, kept so a test can pin what was asked: a
+  // boolean stub answers whether, and this list answers in what words.
+  const confirmMessages = [];
+  harness.confirmMessages = confirmMessages;
+  sandbox.confirm = (msg) => {
+    confirmMessages.push(String(msg));
+    return opts.confirm === undefined ? true : opts.confirm;
+  };
   sandbox.prompt = () => (opts.prompt === undefined ? null : opts.prompt);
 
   const mainModule = await linkModuleGraph(ENTRY, context);

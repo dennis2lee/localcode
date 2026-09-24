@@ -44,12 +44,13 @@ type Outcome struct {
 
 // installerArgs is the command line the Windows installer is started with.
 //
-// Here rather than beside startInstaller, which is behind a windows build
-// tag, because the flags are the whole of what makes an update apply and a
-// fact nobody can check from another machine is one that goes wrong
-// quietly. See install_windows.go for what each one is for.
-func installerArgs(path string) []string {
-	return []string{"/i", path, "/qb"}
+// Here rather than beside the helper that runs it, which is behind a
+// windows build tag, because the flags are the whole of what makes an
+// update apply and a fact nobody can check from another machine is one
+// that goes wrong quietly. See msi_helper_windows.go for what each one
+// is for.
+func installerArgs(msi, log string) []string {
+	return []string{"/i", msi, "/qb", "/l*v", log}
 }
 
 // Apply installs a downloaded release.
@@ -82,11 +83,22 @@ func apply(path string, target func() (string, error)) (Outcome, error) {
 		if err := startInstaller(path); err != nil {
 			return Outcome{Path: path}, err
 		}
+		// The reply depends on where the parent runs: the window closes
+		// itself and comes back, while a terminal has to be quit by the
+		// person sitting at it. The running executable says which: the
+		// window always runs in localcode-gui.exe.
+		version := MSIVersionFromName(path)
+		if version == "" {
+			version = filepath.Base(path)
+		}
+		gui := false
+		if exe, err := target(); err == nil {
+			gui = IsGUIExecutable(exe)
+		}
 		return Outcome{
 			Started: true,
 			Path:    path,
-			Detail: "the installer is running and will close localcode to replace its files; " +
-				"start it again when it has finished",
+			Detail:  MSIDetail(version, gui),
 		}, nil
 	}
 

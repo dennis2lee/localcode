@@ -25,21 +25,19 @@ const selfRestartAvailable = false
 // worse answer than not restarting.
 //
 // It costs nothing either, because a restart is no longer how a Windows
-// update lands. The MSI, applied from the settings window, closes
-// localcode through the Restart Manager (see
-// internal/update/install_windows.go); the Restart Manager can put an
-// application back, but it documents that a CONSOLE application is
-// restarted in a new console, which is not the terminal the person is
-// sitting in front of. A custom action in the package and a detached
-// helper process both reach the same place for the same reason: nothing
-// outside a terminal can hand a process back into it.
+// update lands. The MSI, applied from the settings window, is run by a
+// helper after localcode has exited (see
+// internal/update/msi_helper_windows.go). The helper starts the window
+// again, but a CONSOLE application restarted that way lands in a new
+// console, which is not the terminal the person is sitting in front of.
+// Nothing outside a terminal can hand a process back into it.
 //
 // So the terminal never goes that way. "/update" and the update at
 // startup hand the daemon to the new binary instead (handoff.go,
 // startuphandoff.go), and the process in the terminal keeps running.
 // What still ends with localcode closed is the MSI from the settings
-// window, and its panel says so rather than promising a restart it
-// cannot perform.
+// window, and its panel says the installer starts when localcode exits
+// and the person has to quit it.
 func execSelf() error {
 	return fmt.Errorf("localcode cannot restart itself on Windows")
 }

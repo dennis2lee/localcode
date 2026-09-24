@@ -161,7 +161,14 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 		return "", err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "localcode %s installed from %s.\n", rel.Version, d.updateSource())
+	if out.Started {
+		// Staged, not installed: the helper runs the installer after
+		// this process exits. "Installed" would say what has not
+		// happened yet.
+		fmt.Fprintf(&b, "localcode %s installer staged from %s.\n", rel.Version, d.updateSource())
+	} else {
+		fmt.Fprintf(&b, "localcode %s installed from %s.\n", rel.Version, d.updateSource())
+	}
 	if d.updateSourceUnverified() {
 		// The TUI names the source here, so it says the rest here too:
 		// the address alone reads as authenticated, and it was not.
@@ -201,9 +208,6 @@ func (d *Daemon) SelfUpdate(sessionID string) (string, error) {
 
 	detail, restarting := restartPlan(out, d.Restart != nil)
 	b.WriteString(detail)
-	if out.Started && d.InstallerRestarts {
-		b.WriteString(installerRestartsNote)
-	}
 	if restarting {
 		// What a restart does and does not cost, because the version in
 		// the header changing is not by itself an explanation for a
