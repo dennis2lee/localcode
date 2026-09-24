@@ -91,7 +91,7 @@ jobs:
         #   for while it waits.
         # blocked: Windows Installer is turned off by policy, so msiexec
         #   fails; the old version has to stay and the window come back.
-        mode: [close, stay-then-close, blocked]
+        mode: [blocked]
     steps:
       - name: Turn on Windows Installer logging
         timeout-minutes: 2
@@ -260,6 +260,8 @@ jobs:
           Shot 'end'
           if ($again) {
             $b2 = PortOf ($again | Select-Object -First 1).Id
+            Start-Sleep 10
+            Shot 'reopened'
             try { "reopened window reports: $((Invoke-RestMethod "$b2/api/version" -TimeoutSec 5) | ConvertTo-Json -Compress)" } catch { "reopened window did not answer: $($_.Exception.Message)" }
             try {
               $c2 = Invoke-RestMethod "$b2/api/update" -TimeoutSec 60
