@@ -210,6 +210,7 @@ func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("POST /api/daemon/shutdown", d.handleShutdown)
 	d.mux.HandleFunc("GET /api/update", d.handleUpdateCheck)
 	d.mux.HandleFunc("POST /api/update/install", d.handleUpdateInstall)
+	d.mux.HandleFunc("GET /api/update/install-notice", d.handleInstallNotice)
 	d.mux.HandleFunc("GET /api/trace", d.handleTrace)
 	d.mux.HandleFunc("GET /api/usage", d.handleUsage)
 	d.mux.HandleFunc("GET /api/settings", d.handleGetSettings)

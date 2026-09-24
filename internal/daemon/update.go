@@ -191,6 +191,32 @@ func (d *Daemon) lastInstallReport() map[string]any {
 	}
 }
 
+// handleInstallNotice serves the failed-install line the reopened
+// window draws on its first load. It answers from the local record
+// alone: no check runs here, so a window opened with the network down
+// still says what happened. The notice is owed once per record: the
+// first answer carries it and marks it shown, and later loads get
+// nothing until the helper writes a new record. The record itself is
+// untouched, so the settings panel keeps reporting it when somebody
+// clicks Check.
+func (d *Daemon) handleInstallNotice(w http.ResponseWriter, r *http.Request) {
+	body := map[string]any{"notice": nil}
+	if dir, err := msiRecordDir(); err == nil {
+		if rec, ok := update.MSINoticePending(dir, d.Version); ok {
+			status, _ := update.ClassifyMSIExit(rec.ExitCode)
+			body["notice"] = map[string]any{
+				"version":   rec.Version,
+				"exit_code": rec.ExitCode,
+				"status":    status,
+				"meaning":   update.MSIExitMeaning(rec.ExitCode),
+				"log":       rec.Log,
+			}
+			_ = update.MarkMSINoticeShown(dir)
+		}
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
 // msiTerminalNotice is the daemon-wide notice for an MSI install staged
 // from a terminal or a headless daemon. A recovered error event, which
 // both clients draw as a note that ends nothing: a plain error ends the

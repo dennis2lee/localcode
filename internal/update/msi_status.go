@@ -225,10 +225,20 @@ func ReadMSIRecord(dir string) (MSIRecord, error) {
 		return MSIRecord{}, err
 	}
 	var r MSIRecord
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return MSIRecord{}, fmt.Errorf("the recorded install is unreadable: %w", err)
+	if err := readMSIRecordBytes(raw, &r); err != nil {
+		return MSIRecord{}, err
 	}
 	return r, nil
+}
+
+// readMSIRecordBytes decodes record bytes already read, so callers that
+// hold the bytes (the shown-once marker compares them) share the one
+// error for an unreadable record.
+func readMSIRecordBytes(raw []byte, r *MSIRecord) error {
+	if err := json.Unmarshal(raw, r); err != nil {
+		return fmt.Errorf("the recorded install is unreadable: %w", err)
+	}
+	return nil
 }
 
 // ClearMSIRecord drops the record: a new install supersedes it, or the
