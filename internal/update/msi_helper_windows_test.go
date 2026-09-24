@@ -4,6 +4,7 @@ package update
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -280,7 +281,9 @@ func TestATerminalParentStartsNothing(t *testing.T) {
 }
 
 // A second request while a helper is waiting or installing is refused,
-// and starts no second helper.
+// and starts no second helper. Busy means the copy refuses removal
+// while its pending file is there: the pending file is what says a
+// helper is running, not the refusal alone.
 func TestASecondInstallWhileBusyIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.exe")
@@ -293,8 +296,8 @@ func TestASecondInstallWhileBusyIsRefused(t *testing.T) {
 	if _, err := WriteMSIPending(dir, MSIPending{Version: "0.46.0"}); err != nil {
 		t.Fatal(err)
 	}
-	defer func(f func(string) bool) { msiHelperInUse = f }(msiHelperInUse)
-	msiHelperInUse = func(helper string) bool { return true }
+	defer func(f func(string) error) { removeMSIHelper = f }(removeMSIHelper)
+	removeMSIHelper = func(helper string) error { return errors.New("file in use") }
 	spawned := false
 	defer func(f func(string, string, windows.Handle) error) { spawnMSIHelper = f }(spawnMSIHelper)
 	spawnMSIHelper = func(helper, pending string, parent windows.Handle) error {
@@ -312,6 +315,110 @@ func TestASecondInstallWhileBusyIsRefused(t *testing.T) {
 	}
 	if spawned {
 		t.Error("a second helper was started")
+	}
+}
+
+// A copy that refuses removal with no pending file is not a busy
+// helper: an antivirus scan of the freshly written file, or a read-only
+// attribute, refuses too. The request fails saying what failed, rather
+// than telling the person an install is pending when none is.
+func TestARemovalFailureWithoutPendingSaysSo(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.exe")
+	if err := os.WriteFile(src, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(HelperCopyPath(dir, "windows"), []byte("stale"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer func(f func(string) error) { removeMSIHelper = f }(removeMSIHelper)
+	removeMSIHelper = func(helper string) error { return errors.New("access denied") }
+	spawned := false
+	defer func(f func(string, string, windows.Handle) error) { spawnMSIHelper = f }(spawnMSIHelper)
+	spawnMSIHelper = func(helper, pending string, parent windows.Handle) error {
+		spawned = true
+		return nil
+	}
+
+	err := stageMSIInstaller(dir, src, filepath.Join(dir, "x.msi"), "0.47.0", filepath.Join(dir, "localcode.exe"), nil, false)
+	var pending *ErrMSIPending
+	if errors.As(err, &pending) {
+		t.Errorf("second install = %v, want the removal failure rather than a pending refusal", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "remove the stale install helper") {
+		t.Errorf("second install = %v, want it to say what failed", err)
+	}
+	if spawned {
+		t.Error("a helper was started over a copy that refused removal")
+	}
+}
+
+// The helper starts broken away from its parent's job: a parent inside
+// a job that kills its processes when the job closes would otherwise
+// take the helper with it.
+func TestTheHelperStartsBrokenAwayFromTheParentJob(t *testing.T) {
+	defer func(f func(string, string, windows.Handle, uint32) error) { startMSIHelperOnce = f }(startMSIHelperOnce)
+	var flags []uint32
+	startMSIHelperOnce = func(helper, pending string, parent windows.Handle, f uint32) error {
+		flags = append(flags, f)
+		return nil
+	}
+	if err := spawnMSIHelper("helper", "pending", windows.Handle(1234)); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if len(flags) != 1 {
+		t.Fatalf("started %d times, want once", len(flags))
+	}
+	if flags[0]&(detachedProcess|createBreakawayFromJob) != detachedProcess|createBreakawayFromJob {
+		t.Errorf("flags = %#x, want detached and breakaway", flags[0])
+	}
+}
+
+// A job that forbids breakaway refuses with access denied, and then the
+// helper starts without the flag instead: crewed into the job, but
+// running.
+func TestTheHelperFallsBackInsideAJobThatForbidsBreakaway(t *testing.T) {
+	defer func(f func(string, string, windows.Handle, uint32) error) { startMSIHelperOnce = f }(startMSIHelperOnce)
+	denied := fmt.Errorf("start the install helper: %w", windows.ERROR_ACCESS_DENIED)
+	var flags []uint32
+	startMSIHelperOnce = func(helper, pending string, parent windows.Handle, f uint32) error {
+		flags = append(flags, f)
+		if len(flags) == 1 {
+			return denied
+		}
+		return nil
+	}
+	if err := spawnMSIHelper("helper", "pending", windows.Handle(1234)); err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	if len(flags) != 2 {
+		t.Fatalf("started %d times, want the breakaway attempt and the fallback", len(flags))
+	}
+	if flags[0]&createBreakawayFromJob == 0 {
+		t.Errorf("first flags = %#x, want the breakaway attempt first", flags[0])
+	}
+	if flags[1]&createBreakawayFromJob != 0 {
+		t.Errorf("fallback flags = %#x, want the breakaway flag dropped", flags[1])
+	}
+	if flags[1]&detachedProcess == 0 {
+		t.Errorf("fallback flags = %#x, want the helper still detached", flags[1])
+	}
+}
+
+// Any other start failure is returned, not retried without the flag.
+func TestOtherStartFailuresAreNotRetried(t *testing.T) {
+	defer func(f func(string, string, windows.Handle, uint32) error) { startMSIHelperOnce = f }(startMSIHelperOnce)
+	boom := errors.New("boom")
+	starts := 0
+	startMSIHelperOnce = func(helper, pending string, parent windows.Handle, f uint32) error {
+		starts++
+		return boom
+	}
+	if err := spawnMSIHelper("helper", "pending", windows.Handle(1234)); !errors.Is(err, boom) {
+		t.Errorf("spawn = %v, want the start failure", err)
+	}
+	if starts != 1 {
+		t.Errorf("started %d times, want no retry for a failure that is not access denied", starts)
 	}
 }
 

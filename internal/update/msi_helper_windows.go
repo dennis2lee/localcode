@@ -3,6 +3,7 @@
 package update
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -62,15 +63,18 @@ func stageMSIInstaller(dir, srcExe, msi, version, parentExe string, parentArgs [
 	// A helper cannot delete itself while it runs, so a copy that is
 	// still there is either stale or busy. A stale copy removes cleanly
 	// and its pending file with it. A copy that refuses removal is a
-	// helper still waiting or installing, and a second request is
-	// refused rather than starting a second helper.
+	// helper still waiting or installing only when its pending file is
+	// there too, and a second request is refused rather than starting a
+	// second helper. Anything else refusing removal (an antivirus scan
+	// of the freshly written file, a read-only attribute) is said as
+	// what it is: refusing it as "busy" would tell the person an
+	// install is pending when none is.
 	if _, err := os.Stat(helper); err == nil {
-		if msiHelperInUse(helper) {
-			pendingVersion := version
+		if err := removeMSIHelper(helper); err != nil {
 			if p, perr := ReadMSIPending(MSIPendingPath(dir)); perr == nil && p.Version != "" {
-				pendingVersion = p.Version
+				return &ErrMSIPending{Version: p.Version}
 			}
-			return &ErrMSIPending{Version: pendingVersion}
+			return fmt.Errorf("remove the stale install helper: %w", err)
 		}
 		_ = ClearMSIPending(dir)
 	}
@@ -104,12 +108,9 @@ func stageMSIInstaller(dir, srcExe, msi, version, parentExe string, parentArgs [
 	return spawnMSIHelper(helper, pending, parent)
 }
 
-// msiHelperInUse reports whether a helper copy is running: one that
-// refuses removal. A variable so a test can fake a busy helper without
-// running one.
-var msiHelperInUse = func(helper string) bool {
-	return os.Remove(helper) != nil
-}
+// removeMSIHelper removes a leftover helper copy. A variable so a test
+// can fake a copy that refuses removal without running a helper.
+var removeMSIHelper = os.Remove
 
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
@@ -138,12 +139,41 @@ func inheritableParentHandle() (windows.Handle, error) {
 	return dup, nil
 }
 
+// createBreakawayFromJob frees the helper from its parent's job object.
+// A parent inside a job that kills its processes when the job closes
+// would otherwise take the helper with it, and some terminals and
+// launchers set their jobs up exactly that way.
+const createBreakawayFromJob = 0x01000000
+
 // spawnMSIHelper starts the helper copy hidden and detached, with the
 // pending path and the parent handle in its environment. Hidden through
 // HideConsole rather than Hide: Hide's SHOWWINDOW + SW_HIDE is inherited
 // by the first top-level window a GUI child creates, and the helper's
 // failure message box is a window meant to be seen.
+//
+// The first start breaks away from the parent's job. A job that does
+// not allow breakaway refuses with access denied, and then the helper
+// starts without the flag instead: crewed into the job, but running.
 var spawnMSIHelper = func(helper, pending string, parent windows.Handle) error {
+	if err := startMSIHelperOnce(helper, pending, parent, detachedProcess|createBreakawayFromJob); err != nil {
+		if !isAccessDenied(err) {
+			return err
+		}
+		return startMSIHelperOnce(helper, pending, parent, detachedProcess)
+	}
+	return nil
+}
+
+// isAccessDenied reports an access-denied start: the shape a job that
+// forbids breakaway answers with.
+func isAccessDenied(err error) bool {
+	return errors.Is(err, windows.ERROR_ACCESS_DENIED)
+}
+
+// startMSIHelperOnce starts the helper copy a single time with the
+// given creation flags. A variable so a test can fake the start without
+// starting a process.
+var startMSIHelperOnce = func(helper, pending string, parent windows.Handle, flags uint32) error {
 	nul, err := os.OpenFile("NUL", os.O_WRONLY, 0)
 	if err != nil {
 		return err
@@ -160,7 +190,7 @@ var spawnMSIHelper = func(helper, pending string, parent windows.Handle) error {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	cmd.SysProcAttr.CreationFlags |= detachedProcess
+	cmd.SysProcAttr.CreationFlags |= flags
 	cmd.SysProcAttr.AdditionalInheritedHandles = []syscall.Handle{syscall.Handle(parent)}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start the install helper: %w", err)
