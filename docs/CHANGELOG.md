@@ -4,6 +4,8 @@
 
 The Windows install button runs the installer after localcode exits, keeps the old version until the new one is in place, and reports an install that did not land.
 
+**Upgrading to this release on Windows:** the install button of the version you are running is the one that starts this MSI, so the earlier behaviour applies once more. Close localcode and run the downloaded MSI, or press OK on the installer's files-in-use dialog. The next update after this one goes through the new helper.
+
 **Fixed**
 
 * **Windows update that removed the old version and installed nothing**
