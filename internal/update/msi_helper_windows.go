@@ -249,14 +249,18 @@ func RunMSIHelper(pendingPath string) error {
 
 	// Whatever is at the window's path is what the person has, so the
 	// window comes back whether the install succeeded, was cancelled,
-	// or failed. A terminal gets nothing back: a new console is not the
-	// person's terminal. But the parent has exited by now, terminal or
-	// not, so nobody is watching for a sentence on it either: an
-	// outcome that is neither installed nor cancelled (failed, another
-	// installation in progress) says so in a message box first, for a
-	// terminal parent too. Cancelled says nothing, because the person
-	// cancelled it themselves. The box comes before the relaunch, so
-	// the person reads what happened before the window is back.
+	// or failed, and at once: the window says a failure itself, with
+	// one line in the conversation view on its first load, so no box
+	// comes first. A box is modal, and this helper's box does not own
+	// the foreground, so it can sit behind whatever does with a
+	// flashing taskbar button while the relaunch waits behind it. A
+	// terminal gets nothing back: a new console is not the person's
+	// terminal. But the parent has exited by now, terminal or not, so
+	// nobody is watching for a sentence on it either: an outcome that
+	// is neither installed nor cancelled (failed, another installation
+	// in progress) says so in a message box, for a terminal parent.
+	// Cancelled says nothing, because the person cancelled it
+	// themselves.
 	status, installed := ClassifyMSIExit(code)
 	failed := !installed && status != "cancelled"
 	if !p.GUI {
@@ -280,16 +284,15 @@ func RunMSIHelper(pendingPath string) error {
 		alertMSI(title, msiFailureText(p, code))
 		return nil
 	}
-	if failed {
-		alertMSI("LocalCode update failed", msiFailureText(p, code))
-	}
 	return relaunchMSI(target, p.ParentArgs)
 }
 
 // msiFailureText is what the message box names: the version, the exit
 // code and what it means, and the log. The check reports the same
-// record on the panel, but only when somebody clicks Check. This box is
-// the only place the failure is said without anyone asking.
+// record on the panel, but only when somebody clicks Check. Where a
+// window comes back the reopened window draws one line about the
+// failure itself on its first load, so this box is the only channel
+// left: a terminal parent, or no window binary to come back to.
 func msiFailureText(p MSIPending, code int) string {
 	return fmt.Sprintf("LocalCode %s: the installer exited %d (%s). The installer log is at %s.",
 		p.Version, code, MSIExitMeaning(code), p.Log)
@@ -351,11 +354,13 @@ var relaunchMSI = func(target string, args []string) error {
 	return cmd.Process.Release()
 }
 
-// msiAlertFlags is how the message box is shown: an error icon, and
-// brought to the front. The box reports an install that has already
-// happened, behind whatever the person has open since; left behind
-// other windows it is silence with one more click attached.
-const msiAlertFlags = 0x10 | 0x10000 | 0x40000 // MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST
+// msiAlertFlags is how the message box is shown: an error icon,
+// system-modal, and brought to the front. The box reports an install
+// that has already happened, behind whatever the person has open
+// since; left behind other windows it is silence with one more click
+// attached. System-modal is documented as WS_EX_TOPMOST, which is what
+// the topmost flag alone did not achieve without the foreground.
+const msiAlertFlags = 0x10 | 0x1000 | 0x10000 | 0x40000 // MB_ICONERROR | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
 
 // alertMSI shows a message box, for when there is no window left to say
 // what happened.

@@ -114,40 +114,51 @@ func TestTheHelperWaitsRunsAndRecords(t *testing.T) {
 }
 
 // A failed install still brings the window back: whatever is at that
-// path is what the person has. The failure is said in a message box
-// first, because the window comes back over it.
+// path is what the person has. No box comes first: the reopened window
+// says the failure itself, with one line in the conversation view on
+// its first load, and the box is modal, so it would hold the relaunch
+// behind a window nobody can see.
 func TestAFailedInstallStillRelaunches(t *testing.T) {
-	dir, pending := helperFixture(t, true)
-	waited, installed := stubHelperSeams(t, 1603)
-	relaunched := stubRelaunch(t)
-	var title, text string
-	defer func(f func(string, string)) { alertMSI = f }(alertMSI)
-	alertMSI = func(gotTitle, gotText string) { title, text = gotTitle, gotText }
+	for _, code := range []int{1603, 1625, 1} {
+		dir, pending := helperFixture(t, true)
+		waited, installed := stubHelperSeams(t, code)
+		// One log for both seams, so the test sees the order: the
+		// relaunch is the only thing that may run, and nothing modal
+		// runs before it.
+		var order []string
+		oldAlert := alertMSI
+		t.Cleanup(func() { alertMSI = oldAlert })
+		alertMSI = func(title, text string) { order = append(order, "alert") }
+		oldRelaunch := relaunchMSI
+		t.Cleanup(func() { relaunchMSI = oldRelaunch })
+		relaunchMSI = func(target string, args []string) error {
+			order = append(order, "relaunch")
+			return nil
+		}
 
-	if err := RunMSIHelper(pending); err != nil {
-		t.Fatalf("helper: %v", err)
-	}
-	if !*waited || !*installed {
-		t.Error("the helper skipped the wait or the installer")
-	}
-	rec, err := ReadMSIRecord(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rec.ExitCode != 1603 {
-		t.Errorf("record = %+v, want exit 1603", rec)
-	}
-	if title == "" || !strings.Contains(text, "1603") {
-		t.Errorf("alert = %q %q, want the exit code before the window comes back", title, text)
-	}
-	if *relaunched == "" {
-		t.Error("a failed install did not bring the window back")
+		if err := RunMSIHelper(pending); err != nil {
+			t.Fatalf("helper (exit %d): %v", code, err)
+		}
+		if !*waited || !*installed {
+			t.Errorf("helper (exit %d) skipped the wait or the installer", code)
+		}
+		rec, err := ReadMSIRecord(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.ExitCode != code {
+			t.Errorf("record = %+v, want exit %d", rec, code)
+		}
+		if len(order) != 1 || order[0] != "relaunch" {
+			t.Errorf("helper (exit %d) ran %q, want only the relaunch and no box before it", code, order)
+		}
 	}
 }
 
 // Another installation in progress is neither installed nor cancelled,
-// so it says so in a message box, and the window still comes back.
-func TestABusyInstallAlertsAndRelaunches(t *testing.T) {
+// and still only the window says it: the window comes back at once and
+// no box holds it back.
+func TestABusyInstallRelaunchesWithoutABox(t *testing.T) {
 	_, pending := helperFixture(t, true)
 	stubHelperSeams(t, 1618)
 	relaunched := stubRelaunch(t)
@@ -156,8 +167,8 @@ func TestABusyInstallAlertsAndRelaunches(t *testing.T) {
 	if err := RunMSIHelper(pending); err != nil {
 		t.Fatalf("helper: %v", err)
 	}
-	if !*alerted {
-		t.Error("no message box for an install refused by another installation in progress")
+	if *alerted {
+		t.Error("a message box appeared for an install refused by another installation in progress")
 	}
 	if *relaunched == "" {
 		t.Error("the window did not come back")
@@ -226,10 +237,11 @@ func TestATerminalFailureAlerts(t *testing.T) {
 	}
 }
 
-// The message box is an error icon brought to the front. Left behind
-// other windows it is silence with one more click attached.
+// The message box is an error icon, system-modal, and brought to the
+// front. Left behind other windows it is silence with one more click
+// attached.
 func TestTheAlertIsAnErrorBoxInFront(t *testing.T) {
-	const want = 0x10 | 0x10000 | 0x40000 // MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST
+	const want = 0x10 | 0x1000 | 0x10000 | 0x40000 // MB_ICONERROR | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
 	if msiAlertFlags != want {
 		t.Errorf("msiAlertFlags = %#x, want %#x", msiAlertFlags, want)
 	}
