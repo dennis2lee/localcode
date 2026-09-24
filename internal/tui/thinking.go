@@ -107,6 +107,7 @@ func (m *Model) settleThinkingBlock(text string, elapsed time.Duration) {
 	if m.hideThinking || strings.TrimSpace(text) == "" {
 		return
 	}
+	m.skipFoldDeltas = true
 	block := transcriptEntry{
 		kind: entryThinking, text: text, note: "Thought for " + formatElapsed(elapsed), open: m.thinkingExpanded,
 	}

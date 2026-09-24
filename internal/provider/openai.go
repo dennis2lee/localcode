@@ -136,11 +136,13 @@ type oaStreamChunk struct {
 			// and is the difference between seeing a local model think
 			// and watching it run tools in silence.
 			//
-			// It is displayed and then forgotten: broadcast to the
-			// clients, never written to the session log, and never sent
-			// back — toOpenAIMessages has no case for a thinking block,
-			// which is what keeps a reply that reasoned from growing a
-			// field on the way back in.
+			// It is displayed and never sent back: broadcast to the
+			// clients as it streams, and toOpenAIMessages has no case for
+			// a thinking block, which is what keeps a reply that reasoned
+			// from growing a field on the way back in. A muse model's
+			// block is also written to the session log whole, while
+			// fold_thinking is on, for the clients to draw again (see
+			// consumeStream); the model is never sent it.
 			ReasoningContent string `json:"reasoning_content"`
 			Reasoning        string `json:"reasoning"`
 			ToolCalls        []struct {
@@ -426,6 +428,12 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		// Reasoning a server put at the start of the answer, as
 		// <think>…</think>, split off it. See inlineThink.
 		inline := &inlineThink{}
+		// fieldReasoned is whether this reply has carried reasoning in its
+		// own field. A server that does that and also leaves the block in
+		// the content (llama.cpp's deepseek-legacy format) sends the same
+		// reasoning twice, and the inline copy is dropped rather than
+		// shown a second time.
+		fieldReasoned := false
 		emitReasoning := func(s string) bool {
 			if s == "" {
 				return true
@@ -578,6 +586,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			choice := chunk.Choices[0]
 
 			if reasoning := choice.Delta.ReasoningContent + choice.Delta.Reasoning; reasoning != "" {
+				fieldReasoned = true
 				if !emitReasoning(reasoning) {
 					return
 				}
@@ -588,6 +597,9 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			if choice.Delta.Content != "" {
 				var inlineReasoning string
 				inlineReasoning, text = inline.feed(choice.Delta.Content)
+				if fieldReasoned {
+					inlineReasoning = ""
+				}
 				if !emitReasoning(inlineReasoning) {
 					return
 				}
@@ -595,6 +607,9 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			// A tool call ends reasoning the model never closed.
 			if len(choice.Delta.ToolCalls) > 0 && inline.inside() {
 				r, t := inline.flush()
+				if fieldReasoned {
+					r = ""
+				}
 				if !emitReasoning(r) {
 					return
 				}
@@ -649,6 +664,9 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 				// the end of a reasoning block never closed, or a start
 				// that never became a tag.
 				r, t := inline.flush()
+				if fieldReasoned {
+					r = ""
+				}
 				if !emitReasoning(r) {
 					return
 				}
@@ -688,6 +706,9 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		}
 		// And the same for a stream that simply ended.
 		r, t := inline.flush()
+		if fieldReasoned {
+			r = ""
+		}
 		if !emitReasoning(r) {
 			return
 		}

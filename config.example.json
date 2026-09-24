@@ -192,7 +192,7 @@
   "auto_memory_enabled": true,
   "//show_tps": "Whether a tokens-per-second figure rides along with usage for the clients to show under the prompt. On unless set to false. /config show_tps on|off toggles it and saves it here.",
   "show_tps": true,
-  "//show_thinking": "Whether the clients paint the model's reasoning while it arrives. On unless set to false. It is about what is drawn, not about what the model does or what is kept: off hides reasoning rather than deleting anything, and a muse model's reasoning blocks are logged either way. /effort changes how much there is. /thinking on|off toggles it and saves it here.",
+  "//show_thinking": "Whether the clients paint the model's reasoning while it arrives. On unless set to false. It is about what is drawn, not about what the model does or what is kept: off hides reasoning rather than deleting anything, and a muse model's reasoning blocks are still logged while fold_thinking is on. /effort changes how much there is. /thinking on|off toggles it and saves it here.",
   "show_thinking": true,
   "//fold_thinking": "Whether a muse model's reasoning is drawn as a block of its own: labelled Thinking with its running time, and folded to one line once the answer starts, in the Web UI and in the TUI. Click the block, or press Ctrl+O in the TUI, to open it again. On unless set to false. Applies only to models whose id contains \"muse\"; other models keep the drawing they had, and show_thinking still decides whether reasoning is drawn at all. While it is on, each block is also written to the session log, so a reload draws it again; the model is never sent it. /fold-thinking on|off and the settings window's Muse tab toggle it and save it here.",
   "fold_thinking": true,

@@ -7,6 +7,13 @@
 // importer's reference stays valid across a reset.
 
 export const app = {
+  // turnSends moves on every prompt this page sends, and turnMoves at
+  // every turn boundary the stream shows: a prompt arriving from
+  // anywhere, a turn ending. Page-wide rather than per conversation, so
+  // leaving a conversation and coming back does not put either back
+  // where a lost-turn check started from. See resyncAfterReconnect.
+  turnSends: 0,
+  turnMoves: 0,
   agents: [],           // [{name, description, model}]
   customCommands: [],   // [{name, description}]
   skills: [],            // [{name, description}], for completing "/<skill name>"
@@ -110,7 +117,6 @@ export function freshSessionState(id) {
     // the row tool.start created and fill in its result.
     toolRows: new Map(),
     promptQueue: [],   // plain prompts submitted while a turn is in flight
-    turnEpoch: 0,      // moves on every prompt sent, so a lost-turn check started before a send cannot end the turn it began
     // Up/Down prompt recall, mirroring the TUI. Client-side and in-memory:
     // a typing convenience, not session state that outlives the tab.
     // The array itself belongs to the session (see promptHistories) and is

@@ -271,7 +271,7 @@ func (m Model) handleServerEvent(msg eventMsg) (tea.Model, tea.Cmd) {
 	if msg.ev.Type == client.TypeReconnected {
 		cmds = append(cmds, m.fetchAgents())
 		if m.turnInProgress() {
-			cmds = append(cmds, m.scheduleLostTurnCheck(false))
+			cmds = append(cmds, m.scheduleLostTurnCheck())
 		}
 	}
 	// The roster moves when Smart Agent flips, from any client, and the
@@ -497,7 +497,7 @@ func (m Model) handleSessionSwitched(msg sessionSwitchedMsg) (tea.Model, tea.Cmd
 		m.streamCancel = msg.cancel
 		cmds := []tea.Cmd{listenForEvent(m.events, m.streamGen), m.fetchAgents()}
 		if m.turnInProgress() {
-			cmds = append(cmds, m.scheduleLostTurnCheck(false))
+			cmds = append(cmds, m.scheduleLostTurnCheck())
 		}
 		return m, tea.Batch(cmds...)
 	}

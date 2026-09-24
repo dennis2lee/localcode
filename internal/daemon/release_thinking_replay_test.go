@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"localcode/internal/client"
 	"localcode/internal/events"
 )
 
@@ -153,5 +156,111 @@ func TestASessionTheOldDaemonIsFinishingIsListedBusy(t *testing.T) {
 	}
 	if busy["S2"] {
 		t.Errorf("a session nobody is running is listed busy: %v", listed)
+	}
+}
+
+// An invalid ?since= or ?tail= is refused whatever header came with it.
+func TestAnInvalidQueryIsRefusedEvenWithALastEventID(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer model.Close()
+	d := newTestDaemon(t, model.URL)
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+	sess, err := d.Loop.Store.CreateSession("s-bad-"+t.Name(), "", "general-purpose", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"?since=abc", "?tail=-1", "?tail=x"} {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/sessions/"+sess.ID+"/events"+q, nil)
+		req.Header.Set("Last-Event-ID", "1")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s with a Last-Event-ID answered %d, want 400", q, resp.StatusCode)
+		}
+	}
+}
+
+// When the daemon this one took over from lets go of a session, this one
+// re-reads it at once and says so: the list stops calling it busy, every
+// client hears session.activity {busy:false}, and a stream open on it
+// gets what the old daemon wrote after this one loaded it, the turn's end
+// included.
+func TestAReleasedSessionIsReReadAndAnnouncedIdle(t *testing.T) {
+	prev := takeoverPoll
+	takeoverPoll = 20 * time.Millisecond
+	t.Cleanup(func() { takeoverPoll = prev })
+
+	d, store, dir := handoffDaemon(t)
+	for _, id := range []string{"S1", "S2"} {
+		if _, err := store.CreateSession(id, "", "general-purpose", true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := store.Append("S1", events.TypeUserMessage, map[string]any{"text": "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeManifest(t, dir, "S1")
+	d.NoteTakeover()
+	srv := httptest.NewServer(d.Handler())
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := client.New(srv.URL)
+	s1 := c.StreamEvents(ctx, "S1", first.Seq)
+	daemonWide, err := c.SubscribeEvents(ctx, "S2", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// The old daemon finishes the turn, on disk, and lets go.
+	f, err := os.OpenFile(filepath.Join(dir, "S1.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, typ := range []events.Type{events.TypeMessagePartEnd, events.TypeTurnDone} {
+		line, _ := json.Marshal(events.Event{Seq: first.Seq + uint64(i) + 1, Session: "S1", Type: typ, Timestamp: time.Now(), Data: map[string]any{"text": "the old daemon's answer"}})
+		f.Write(append(line, '\n'))
+	}
+	f.Close()
+	if err := os.Remove(filepath.Join(dir, handoffFile)); err != nil {
+		t.Fatal(err)
+	}
+
+	gotDone, gotIdle := false, false
+	for !gotDone || !gotIdle {
+		select {
+		case ev := <-s1:
+			if ev.Type == events.TypeTurnDone {
+				gotDone = true
+			}
+		case ev := <-daemonWide:
+			if ev.Type == events.TypeSessionActivity && ev.Data["session"] == "S1" && ev.Data["busy"] == false {
+				gotIdle = true
+			}
+		case <-ctx.Done():
+			t.Fatalf("after the release: turn.done delivered %v, idle announced %v", gotDone, gotIdle)
+		}
+	}
+	resp, err := http.Get(srv.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var listed []struct {
+		ID   string `json:"id"`
+		Busy bool   `json:"busy"`
+	}
+	json.NewDecoder(resp.Body).Decode(&listed)
+	for _, s := range listed {
+		if s.ID == "S1" && s.Busy {
+			t.Error("the released session is still listed busy")
+		}
 	}
 }

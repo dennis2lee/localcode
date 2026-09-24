@@ -176,20 +176,31 @@ func (m Model) fetchSettings() tea.Cmd {
 // wait.
 var lostTurnGrace = time.Second
 
-// scheduleLostTurnCheck brings a lost-turn check due after the grace.
-func (m Model) scheduleLostTurnCheck(confirm bool) tea.Cmd {
-	msg := lostTurnDueMsg{sessionID: m.sessionID, gen: m.streamGen, epoch: m.turnEpoch, confirm: confirm}
+// scheduleLostTurnCheck brings the first step of a lost-turn check due
+// after the grace.
+func (m Model) scheduleLostTurnCheck() tea.Cmd {
+	msg := lostTurnDueMsg{sessionID: m.sessionID, gen: m.streamGen, epoch: m.turnEpoch}
 	return tea.Tick(lostTurnGrace, func(time.Time) tea.Msg { return msg })
 }
 
-// checkTurn asks the daemon whether this session is running a turn.
+// scheduleLostTurnConfirm brings the confirm step due after the grace,
+// for the check an idle answer came back to.
+func scheduleLostTurnConfirm(answer turnCheckMsg) tea.Cmd {
+	msg := lostTurnDueMsg{sessionID: answer.sessionID, gen: answer.gen, epoch: answer.epoch, marks: answer.marks, confirm: true}
+	return tea.Tick(lostTurnGrace, func(time.Time) tea.Msg { return msg })
+}
+
+// checkTurn asks the daemon whether this session is running a turn, and
+// notes the turn boundaries seen so far: one seen after this moment is
+// a turn beginning or ending that the answer may not describe.
 func (m Model) checkTurn(due lostTurnDueMsg) tea.Cmd {
 	c := m.client
+	marks := m.turnMarks
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
 		defer cancel()
 		busy, found, err := c.SessionBusy(ctx, due.sessionID)
-		return turnCheckMsg{sessionID: due.sessionID, gen: due.gen, epoch: due.epoch, busy: busy, found: found, err: err}
+		return turnCheckMsg{sessionID: due.sessionID, gen: due.gen, epoch: due.epoch, marks: marks, busy: busy, found: found, err: err}
 	}
 }
 

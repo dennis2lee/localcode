@@ -448,8 +448,11 @@ func (l *Loop) routeThinking(sessionID, text string) (bool, error) {
 	// What it does and does not do, because "off" could be read as
 	// asking the model to stop reasoning, which is /effort's job.
 	b.WriteString("\nThis is what the clients paint, not what the model does: turning it off hides reasoning " +
-		"rather than deleting anything, and a muse model's reasoning blocks are still kept in the log. " +
-		"/effort changes how much reasoning there is.")
+		"rather than deleting anything.")
+	if l.FoldThinkingEnabled() {
+		b.WriteString(" A muse model's reasoning blocks are still kept in the log while fold_thinking is on.")
+	}
+	b.WriteString(" /effort changes how much reasoning there is.")
 	b.WriteString(l.persist(func(path string) error { return config.SetShowThinkingInFile(path, want) }))
 
 	// announceConfig tells every client too; a second announcement here

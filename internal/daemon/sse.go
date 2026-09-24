@@ -70,32 +70,44 @@ func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// while it was away; preferring since replayed everything the client
 	// had drawn since it opened. The Go client never sends the header, so
 	// its ?since= decides.
+	//
+	// The query is checked before any of that is decided, so an invalid
+	// ?since= or ?tail= is a 400 whatever header came with it.
+	var sinceQ uint64
+	hasSince := r.URL.Query().Get("since") != ""
+	if hasSince {
+		v, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid since: %w", err))
+			return
+		}
+		sinceQ = v
+	}
+	tailN := -1
+	if q := r.URL.Query().Get("tail"); q != "" {
+		n, err := strconv.Atoi(q)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid tail: %q", q))
+			return
+		}
+		tailN = n
+	}
 	since := uint64(0)
 	lastEventID, lastErr := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
 	switch {
 	case r.Header.Get("Last-Event-ID") != "" && lastErr == nil:
 		since = lastEventID
 
-	case r.URL.Query().Get("since") != "":
-		v, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid since: %w", err))
-			return
-		}
-		since = v
+	case hasSince:
+		since = sinceQ
 
-	case r.URL.Query().Get("tail") != "":
+	case tailN >= 0:
 		// ?tail=N opens a long conversation at its end rather than its
 		// beginning: the client asks for roughly the last N events and
 		// the daemon moves that cut back to a turn boundary. See
 		// Store.TailSince for why the boundary matters as much as the
 		// count.
-		n, err := strconv.Atoi(r.URL.Query().Get("tail"))
-		if err != nil || n < 0 {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid tail: %q", r.URL.Query().Get("tail")))
-			return
-		}
-		v, err := d.Loop.Store.TailSince(id, n)
+		v, err := d.Loop.Store.TailSince(id, tailN)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return

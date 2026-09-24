@@ -111,6 +111,7 @@ const handlers = {
     // turn that ended without saying so, and the next reasoning must not
     // be written into it above this prompt.
     foldThinking(0);
+    app.turnMoves++;
     // Every prompt this session has seen goes into Up/Down recall, whoever
     // typed it and whenever. On the replay that opens a session this is
     // what rebuilds the list, so recall survives a reload and a switch
@@ -169,6 +170,7 @@ const handlers = {
   // The daemon's real turn boundary, emitted after its busy flag is
   // cleared — safe to stop waiting and let the queue drain.
   'turn.done': () => {
+    app.turnMoves++;
     session.runningTool = '';
     setWaiting(false);
     // A reasoning block still open is one whose end never came.
@@ -575,6 +577,7 @@ const handlers = {
     appendTool(`[delegated to ${d.agent || ''}]`);
   },
   'turn.cancelled': () => {
+    app.turnMoves++;
     session.promptQueue = [];
     session.runningTool = '';
     // A cancelled turn is not waiting on an answer. The daemon does send
@@ -609,6 +612,7 @@ const handlers = {
       if (d.history_replaced === true) forgetContextFill();
       return;
     }
+    app.turnMoves++;
     session.runningTool = '';
     setWaiting(false);
     foldThinking(0);
@@ -717,18 +721,28 @@ async function resyncAfterReconnect() {
   // the dropdown is refetched on every reconnect rather than trusted.
   // Unconditional on the turn state below: staleness does not depend on
   // whether a turn was running when the stream went away.
-  await loadAgents();
   // A turn to check: one this page is waiting on, or a reasoning block
-  // still streaming in one it is only watching.
+  // still streaming in one it is only watching. Where things stand is
+  // taken before the first await, so nothing that moves during any of
+  // them goes unseen.
   const inProgress = () => !!session.sessionID && (session.waiting || hasLiveThinking());
-  if (!inProgress()) return;
+  const check = inProgress();
+  const id = session.sessionID;
+  const sends = app.turnSends;
+  await loadAgents();
+  if (!check) return;
   // Each await gives the stream a chance to deliver the backlog the
   // reconnect brought, and a turn.done in it ends the turn by itself.
   // Nothing is declared unless the page is still where it was: the same
-  // conversation, no prompt sent since, and the turn still in progress.
-  const id = session.sessionID;
-  const epoch = session.turnEpoch;
-  const still = () => session.sessionID === id && session.turnEpoch === epoch && inProgress();
+  // conversation, no prompt sent by this page since the check began, the
+  // turn still in progress, and, from the question to the daemon on, no
+  // turn begun or ended on the stream (a prompt from another client, a
+  // turn.done), since the answer may describe the turn before it. Not
+  // before the question: the backlog being replayed can hold the lost
+  // turn's own prompt.
+  const moves = app.turnMoves;
+  const still = () => session.sessionID === id && app.turnSends === sends && app.turnMoves === moves && inProgress();
+  if (!still()) return;
   await loadSessions();
   if (!still()) return;
   const mine = (app.sessions || []).find(s => s.id === id);
@@ -745,9 +759,17 @@ async function resyncAfterReconnect() {
     return;
   }
   // What a cancelled turn gets, since nothing will ever end this one:
-  // the question it held is put away, its running tool rows stop, and
-  // the prompts sent into it are marked as never handed to anybody.
+  // the questions it held are put away, the permission ones queued
+  // behind the one on screen included, and so is a question the model
+  // asked, whose answer would otherwise take the next prompt with it;
+  // its running tool rows stop; and the prompts sent into it or queued
+  // behind it are marked as never handed to anybody, and dropped rather
+  // than sent now.
+  app.turnMoves++;
+  session.pendingPermissionQueue = [];
   settlePermissionRequest(session.pendingPermissionID);
+  session.pendingAsk = null;
+  session.promptQueue = [];
   setWaiting(false);
   if (!session.pendingPermissionID) setInputLocked(false);
   foldThinking(0);

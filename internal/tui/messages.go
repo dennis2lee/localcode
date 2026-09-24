@@ -112,6 +112,9 @@ type lostTurnDueMsg struct {
 	gen       uint64
 	epoch     uint64
 	confirm   bool
+	// marks is turnMarks when the daemon was asked; the confirm step
+	// carries it, and the first step has not asked yet.
+	marks uint64
 }
 
 // turnCheckMsg is the daemon's answer: whether the session is running a
@@ -120,6 +123,7 @@ type turnCheckMsg struct {
 	sessionID string
 	gen       uint64
 	epoch     uint64
+	marks     uint64
 	busy      bool
 	found     bool
 	err       error

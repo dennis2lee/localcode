@@ -259,10 +259,22 @@ type Model struct {
 	// by each reasoning delta, which carries it. A block replayed from
 	// the log is drawn only while it is false.
 	hideThinking bool
-	// turnEpoch moves every time this client sends a prompt, so a check
-	// for a lost turn that was started before the send cannot end the
-	// turn the send began. See lostTurnDueMsg.
+	// turnEpoch moves every time this client sends a prompt, and
+	// turnMarks at every turn boundary the stream shows: a prompt
+	// arriving from anywhere, and a turn ending. A lost-turn check stands
+	// down on a send made at any point after it began, and on a boundary
+	// seen after it asked the daemon: before that, the stream is still
+	// replaying what it missed, which can hold the lost turn's own
+	// prompt. See lostTurnDueMsg.
 	turnEpoch uint64
+	turnMarks uint64
+	// skipFoldDeltas drops reasoning deltas after a block was drawn from
+	// the log with none streaming. A client that connects just as a
+	// block ends gets the logged block from the backlog and then that
+	// same block's last deltas from the live queue, which would otherwise
+	// open it a second time. Cleared by the block's own end, or by
+	// anything that begins the next message.
+	skipFoldDeltas bool
 	// spin/spinning drive the indicator's animation. spinning guards
 	// against starting a second tick loop: one loop keeps rescheduling
 	// itself while the client is busy and dies on its first tick after

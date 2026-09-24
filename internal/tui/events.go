@@ -86,6 +86,8 @@ func (m *Model) endTurn() {
 	m.runningTool = ""
 	m.toolStartedAt = time.Time{}
 	m.thinking = false
+	m.turnMarks++
+	m.skipFoldDeltas = false
 	// A block still open when the turn ends is one whose end never came:
 	// the stream stopped, or the turn was cancelled mid-thought.
 	m.foldThinking(0)
@@ -110,6 +112,8 @@ func (m *Model) applyEvent(ev events.Event) {
 		// a turn that ended without saying so, and the next reasoning
 		// must not be written into it above this prompt.
 		m.foldThinking(0)
+		m.turnMarks++
+		m.skipFoldDeltas = false
 		text, _ := ev.Data["text"].(string)
 		if text != "" {
 			// Every prompt this session has seen goes into Up/Down recall,
@@ -155,6 +159,7 @@ func (m *Model) applyEvent(ev events.Event) {
 			// The answer has started, so the reasoning before it is
 			// over whether or not its end arrived first.
 			m.foldThinking(0)
+			m.skipFoldDeltas = false
 			m.appendModelDelta(text)
 		}
 	case events.TypeMessagePartEnd:
@@ -170,6 +175,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		// output below, which ends a message as well, as the Web UI
 		// has it.
 		m.foldThinking(0)
+		m.skipFoldDeltas = false
 		// Command output the person ran is not something the model said,
 		// so it draws as a status line rather than a model message. The
 		// header names the command; the user message above it already
@@ -252,6 +258,7 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.pendingTools[id] = pendingToolCall{name: name, input: input}
 		}
 		m.foldThinking(0)
+		m.skipFoldDeltas = false
 		m.endModelStream("")
 		if arg := summarizeToolInput(input); arg != "" {
 			m.appendEntry(entryTool, "▸ "+name+"  "+arg)
@@ -417,6 +424,10 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.hideThinking = !v
 		}
 		fold, _ := ev.Data["fold"].(bool)
+		if fold && m.skipFoldDeltas {
+			// The tail of a block already drawn from the log.
+			break
+		}
 		if !fold {
 			// Reasoning the fold does not apply to, while a block is
 			// still open: the next request went to another model with
@@ -445,6 +456,7 @@ func (m *Model) applyEvent(ev events.Event) {
 		}
 	case events.TypeThinkingEnd:
 		m.thinking = false
+		m.skipFoldDeltas = false
 		m.foldThinking(time.Duration(intField(ev.Data, "elapsed_ms")) * time.Millisecond)
 	case events.TypeInputRequest:
 		id, _ := ev.Data["id"].(string)

@@ -224,7 +224,7 @@ var doctorCanaries = []doctorCanary{
 				return true, "replied OK"
 			}
 			if strings.TrimSpace(r.Content) == "" && r.Reasoning != "" {
-				return false, "content was empty; the answer went into reasoning_content"
+				return false, "content was empty; the answer went into " + reasoningWord(r)
 			}
 			return false, "replied " + doctorQuote(r.Content) + " rather than OK"
 		},
@@ -361,8 +361,11 @@ func (l *Loop) runDoctor(ctx context.Context, p *provider.OpenAICompat, provider
 		if run.Server.Fingerprint == "" {
 			run.Server.Fingerprint = reply.Fingerprint
 		}
-		if reply.ReasoningInline {
-			run.Server.ReasoningInline = true
+		switch {
+		case reply.ReasoningInField:
+			run.Server.ReasoningPlacement = "field"
+		case reply.ReasoningInline && run.Server.ReasoningPlacement == "":
+			run.Server.ReasoningPlacement = "inline"
 		}
 		res.FinishReason = reply.FinishReason
 		res.OutputTokens = reply.OutputTokens
@@ -392,7 +395,7 @@ func (l *Loop) runDoctor(ctx context.Context, p *provider.OpenAICompat, provider
 				res.Pass, res.Inconclusive = false, true
 				res.Why = "the same request passed once and failed once: " + doctorFailingWhy(pass1, why1, why2)
 			case inc2 && !inc1:
-				res.Why += "; a second identical request spent its whole budget on reasoning_content"
+				res.Why += "; a second identical request spent its whole budget on " + reasoningWord(second)
 			}
 		}
 		run.Canaries = append(run.Canaries, res)
@@ -411,7 +414,7 @@ func doctorAsk(ctx context.Context, p *provider.OpenAICompat, body []byte) (prov
 // doctorJudgeReply is a canary's verdict on one answer, in three states.
 func doctorJudgeReply(c doctorCanary, r provider.RawReply) (pass, inconclusive bool, why string) {
 	if doctorBudgetGone(r) {
-		return false, true, fmt.Sprintf("the whole %d-token budget went to reasoning_content and the answer never began", doctorMaxTokens)
+		return false, true, fmt.Sprintf("the whole %d-token budget went to %s and the answer never began", doctorMaxTokens, reasoningWord(r))
 	}
 	pass, why = c.judge(r)
 	// An answer that ends of its own accord with nothing in content and
@@ -419,7 +422,14 @@ func doctorJudgeReply(c doctorCanary, r provider.RawReply) (pass, inconclusive b
 	// about: the output channel closed before the answer was written.
 	// It is a finding about the server, not a budget that was too small.
 	if !pass && strings.TrimSpace(r.Content) == "" && r.Reasoning != "" && r.FinishReason != "length" {
-		why = "the turn ended with content empty and the whole answer in reasoning_content: the output channel closed before the answer began"
+		if r.ReasoningInline && !r.ReasoningInField {
+			// Not the parser failure the recipe describes: the server
+			// sent everything as content, and the model stopped inside
+			// or right after its own <think> block.
+			why = "the turn ended with nothing after the model's <think> block: the model stopped before it wrote an answer"
+		} else {
+			why = "the turn ended with content empty and the whole answer in reasoning_content: the output channel closed before the answer began"
+		}
 	}
 	return pass, false, why
 }
@@ -544,7 +554,7 @@ func doctorReport(run doctorRun, base *doctorRun, path string, replays []string,
 	if s.Fingerprint != "" {
 		fmt.Fprintf(&b, "- system_fingerprint: %s\n", s.Fingerprint)
 	}
-	if s.ReasoningInline {
+	if s.ReasoningPlacement == "inline" {
 		b.WriteString("- reasoning: inside the answer as <think>…</think>, not in reasoning_content. localcode splits it off; " +
 			"on LM Studio, the developer setting that separates reasoning_content sends it apart\n")
 	}
@@ -647,8 +657,8 @@ func doctorDiff(run, base doctorRun) []string {
 	if run.Server.Fingerprint != base.Server.Fingerprint {
 		d = append(d, fmt.Sprintf("system_fingerprint %s → %s", orNone(base.Server.Fingerprint, "none"), orNone(run.Server.Fingerprint, "none")))
 	}
-	if run.Server.ReasoningInline != base.Server.ReasoningInline {
-		d = append(d, fmt.Sprintf("reasoning %s → %s", reasoningWhere(base.Server.ReasoningInline), reasoningWhere(run.Server.ReasoningInline)))
+	if placementChanged(base.Server, run.Server) {
+		d = append(d, fmt.Sprintf("reasoning %s → %s", reasoningWhere(base.Server.ReasoningPlacement), reasoningWhere(run.Server.ReasoningPlacement)))
 	}
 	baseBy := map[string]doctorResult{}
 	for _, c := range base.Canaries {
@@ -726,7 +736,7 @@ func doctorVerdict(run doctorRun, base *doctorRun) string {
 		run.Server.Version != base.Server.Version ||
 		run.Server.CacheDtype != base.Server.CacheDtype ||
 		run.Server.Fingerprint != base.Server.Fingerprint ||
-		run.Server.ReasoningInline != base.Server.ReasoningInline
+		placementChanged(base.Server, run.Server)
 
 	var b strings.Builder
 	switch {
@@ -810,9 +820,29 @@ func orNone(s, none string) string {
 
 // reasoningWhere names where a server put the reasoning, for the
 // baseline comparison.
-func reasoningWhere(inline bool) string {
-	if inline {
+func reasoningWhere(placement string) string {
+	if placement == "inline" {
 		return "inside the answer"
 	}
 	return "in its own field"
+}
+
+// placementChanged reports a move of the reasoning between the answer
+// and its own field. Only when both runs saw where it was: a baseline
+// written before the fact was recorded, or a run where no answer
+// carried any reasoning, says nothing about it, and reading that as a
+// move would blame the server for localcode starting to look.
+func placementChanged(base, run provider.ServerFacts) bool {
+	return base.ReasoningPlacement != "" && run.ReasoningPlacement != "" &&
+		base.ReasoningPlacement != run.ReasoningPlacement
+}
+
+// reasoningWord names where a reply's reasoning was, for the wording of
+// a verdict: the server's field, or the <think> block at the start of
+// the answer, which localcode split off itself.
+func reasoningWord(r provider.RawReply) string {
+	if r.ReasoningInline && !r.ReasoningInField {
+		return "the <think> block"
+	}
+	return "reasoning_content"
 }

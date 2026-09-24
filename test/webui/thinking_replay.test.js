@@ -180,3 +180,94 @@ test('a lost turn stops its tool rows and marks what was sent into it', async ()
   assert.doesNotMatch(app.el('transcript').querySelector('.msg-toolcall').className, /running/, 'the tool row still spins');
   assert.match(text, /not sent/, 'what was sent into the lost turn still reads as sent');
 });
+
+// The backlog a reconnect replays can hold the lost turn's own prompt;
+// that is not a new turn, and the check still finds the turn lost.
+test('the lost turn\'s own prompt in the backlog does not stop the check', async () => {
+  const ref = { busy: false };
+  const app = await lostTurnApp(ref);
+  app.el('input').value = 'first';
+  app.el('send').click();
+  await app.settle();
+  app.sse.fail();
+  await app.settle();
+  app.sse.reopen();
+  app.sse.emit({ seq: 9, type: 'message.user', data: { text: 'first' } });
+  await app.settle();
+  await waitFor(app, () => /did not finish/.test(app.el('transcript').textContent));
+  assert.match(app.el('transcript').textContent, /did not finish/);
+});
+
+// A turn another client begins while the check waits is not the lost one.
+test('a prompt from another client during the grace keeps the new turn', async () => {
+  const ref = { busy: false };
+  const app = await lostTurnApp(ref);
+  app.el('input').value = 'first';
+  app.el('send').click();
+  await app.settle();
+  app.sse.fail();
+  await app.settle();
+  app.sse.reopen();
+  await app.settle();
+  // The check has asked and is waiting out its grace.
+  app.sse.emit({ seq: 10, type: 'message.user', data: { text: 'from another window' } });
+  await app.wait(1300);
+  assert.doesNotMatch(app.el('transcript').textContent, /did not finish/);
+});
+
+// The lost turn's questions go with it: a model's question would take
+// the next prompt as its answer, and a queued permission question would
+// be promoted onto the screen.
+test('a lost turn puts away the model\'s question and every permission question', async () => {
+  const ref = { busy: false };
+  const app = await lostTurnApp(ref);
+  app.el('input').value = 'first';
+  app.el('send').click();
+  await app.settle();
+  app.sse.emit({ seq: 1, type: 'message.user', data: { text: 'first' } });
+  app.sse.emit({ seq: 2, type: 'input.request', data: { id: 'q1', question: 'which one?', options: ['a', 'b'] } });
+  app.sse.emit({ seq: 3, type: 'permission.request', data: { id: 'p1', tool: 'bash', description: 'make' } });
+  app.sse.emit({ seq: 4, type: 'permission.request', data: { id: 'p2', tool: 'bash', description: 'make test' } });
+  await app.settle();
+  app.sse.fail();
+  await app.settle();
+  app.sse.reopen();
+  await app.settle();
+  await waitFor(app, () => /did not finish/.test(app.el('transcript').textContent));
+  assert.equal(app.internals.session.pendingAsk, null, 'the model\'s question is still armed');
+  assert.equal(app.state.pendingPermissionID, null, 'a queued permission question was promoted');
+  assert.equal(app.el('input').disabled, false, 'the composer is still locked');
+});
+
+// A queued prompt goes with the lost turn: marked as not sent, and not
+// sent behind the reader's back.
+test('a lost turn drops its queued prompts', async () => {
+  const ref = { busy: false };
+  const app = await lostTurnApp(ref);
+  app.el('input').value = 'first';
+  app.el('send').click();
+  await app.settle();
+  app.internals.session.promptQueue.push('queued');
+  app.sse.fail();
+  await app.settle();
+  app.sse.reopen();
+  await app.settle();
+  await waitFor(app, () => /did not finish/.test(app.el('transcript').textContent));
+  assert.equal(app.internals.session.promptQueue.length, 0, 'the queue survived the lost turn');
+  assert.equal(app.callsTo('POST', '/api/sessions/sess-1/messages').length, 1, 'the queued prompt was sent after the turn was declared lost');
+});
+
+// A page that connects as a block ends gets the logged block and then its
+// last deltas; they do not open it a second time.
+test('a block\'s late deltas after its logged copy are dropped', async () => {
+  const app = await load();
+  app.sse.emit({ seq: 4, type: 'thinking.block', data: { text: 'the whole block', elapsed_ms: 2000 } });
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'block', fold: true } });
+  app.sse.emit({ type: 'thinking.end', data: { fold: true, elapsed_ms: 2000 } });
+  assert.equal(foldBlocks(app).length, 1);
+  app.sse.emit({ seq: 5, type: 'message.part.end', data: { text: 'answer' } });
+  app.sse.emit({ type: 'thinking.delta', data: { text: 'the next request', fold: true } });
+  const blocks = foldBlocks(app);
+  assert.equal(blocks.length, 2);
+  assert.ok(blocks[1].classList.contains('live'), 'the next block did not stream');
+});

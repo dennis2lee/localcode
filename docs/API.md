@@ -169,7 +169,7 @@ implementations.
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
 | `POST /api/sessions` | `{"agent"?}`, default `general-purpose` | `201` the session, stamped with the live workspace | `400` bad body; `409` every session is being deleted; `500` creation failed |
-| `GET /api/sessions` | `?archived=1` for the other list | `200` visible sessions newest first, each with `"busy"` (a turn is running, here or in the daemon this one took over from, which is still finishing it) and `"asking"` (it waits for a person) | none |
+| `GET /api/sessions` | `?archived=1` for the other list | `200` visible sessions newest first, each with `"busy"` (a turn is running here, or the daemon this one took over from is still finishing a turn or a background task in it, which is also why a write to it answers `409` until then; a `session.activity` with `"busy": false` says when it lets go) and `"asking"` (it waits for a person) | none |
 | `GET /api/sessions/{id}` | nothing | `200` the session. No in-tree caller; both clients use the list plus the event stream | `404` unknown session |
 | `DELETE /api/sessions/{id}` | nothing | `204`. Removes the session, the background work it started, and all their logs; the parent's task row is marked deleted | `404` unknown session; `409` a turn is running |
 | `DELETE /api/sessions` | nothing | `204`. Refuses while any session has a turn in flight | `409` naming the busy sessions |

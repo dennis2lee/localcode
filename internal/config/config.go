@@ -104,8 +104,8 @@ type Config struct {
 	// showing different amounts of it is a difference nobody asked for,
 	// and a preference kept in a browser is lost on the next machine.
 	// Turning it off hides reasoning rather than deleting anything: a
-	// muse model's reasoning blocks are logged either way (see
-	// FoldThinking), and other models' reasoning never is.
+	// muse model's reasoning blocks are logged while FoldThinking is on,
+	// whatever this says, and other models' reasoning never is.
 	ShowThinking *bool `json:"show_thinking,omitempty"`
 
 	// FoldThinking draws a muse model's reasoning as a block of its own:
@@ -117,6 +117,8 @@ type Config struct {
 	// question, and an unlabelled block of that sitting open above the
 	// reply read as part of it. Other models keep the drawing they had.
 	// show_thinking still decides whether reasoning is drawn at all.
+	// While it is on, each block is also written to the session log
+	// whole, so a reload draws it again; the model is never sent it.
 	// Toggleable via "/fold-thinking" and the settings window.
 	FoldThinking *bool `json:"fold_thinking,omitempty"`
 

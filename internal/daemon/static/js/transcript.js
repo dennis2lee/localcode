@@ -559,6 +559,13 @@ let thinkingBuffer = '';
 // The fold block streaming now, or null: { wrap, head, marker, label,
 // time, body, since, buffer, stick, timer }.
 let thinkingFold = null;
+// skipFoldDeltas drops reasoning deltas after a block was drawn from the
+// log with none streaming. A page that connects just as a block ends
+// gets the logged block from the backlog and then that same block's last
+// deltas from the live queue, which would otherwise open it a second
+// time. Cleared by the block's own end, or by anything that begins the
+// next message (every caller of foldThinking).
+let skipFoldDeltas = false;
 
 export function appendThinking(text, fold) {
   // The switch is read here rather than at the event handler, so the
@@ -590,6 +597,7 @@ export function appendThinking(text, fold) {
 // the daemon's time from the block's first delta to its end.
 export function endThinking(elapsedMs) {
   foldThinking(elapsedMs);
+  skipFoldDeltas = false;
   thinkingEl = null;
   thinkingBuffer = '';
 }
@@ -603,6 +611,7 @@ export function endThinking(elapsedMs) {
 // shows, not what the conversation says, and telling the bar made it land
 // on its current match again, which opened what had just been folded.
 export function foldThinking(elapsedMs) {
+  skipFoldDeltas = false;
   const f = thinkingFold;
   if (!f) return;
   thinkingFold = null;
@@ -617,6 +626,7 @@ export function foldThinking(elapsedMs) {
 }
 
 function appendFoldedThinking(text) {
+  if (skipFoldDeltas) return;
   // A plain block still open is the next request's reasoning being
   // marked for folding where the last one was not.
   thinkingEl = null;
@@ -656,6 +666,7 @@ export function settleThinkingBlock(text, elapsedMs) {
     return;
   }
   if (!app.showThinking || !said.trim()) return;
+  skipFoldDeltas = true;
   const done = buildFoldedThinking(false);
   done.buffer = said;
   done.body.textContent = said;
@@ -772,6 +783,7 @@ export function clearTranscript() {
   thinkingBuffer = '';
   if (thinkingFold) clearInterval(thinkingFold.timer);
   thinkingFold = null;
+  skipFoldDeltas = false;
   // The find bar's matches were in the conversation being replaced, and
   // a bar left open over a different one counts hits nobody searched for.
   closeFind();

@@ -153,6 +153,9 @@ func TestALostTurnCheckStandsDownWhenSomethingMoved(t *testing.T) {
 		"turn.done arrived": func(m *Model) { m.applyEvent(events.Event{Type: events.TypeTurnDone}) },
 		"a prompt was sent": func(m *Model) { m.turnEpoch++ },
 		"the stream moved":  func(m *Model) { m.streamGen++ },
+		"another turn began": func(m *Model) {
+			m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "from another client"}})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := daemonModel(t, daemonTransport{busy: false})
@@ -367,5 +370,77 @@ func TestATurnThatEndedIsNotAskedAbout(t *testing.T) {
 	m = feed(t, m, due)
 	if asked != 0 {
 		t.Errorf("asked the daemon %d times about a turn that had ended", asked)
+	}
+}
+
+// The backlog a reconnect replays can hold the lost turn's own prompt,
+// logged just before the daemon went away. That is not a new turn, and
+// the check still finds the turn lost.
+func TestTheLostTurnsOwnPromptInTheBacklogDoesNotStopTheCheck(t *testing.T) {
+	m := daemonModel(t, daemonTransport{busy: false})
+	m.waiting = true
+	m.turnEpoch = 1
+	updated, cmd := m.Update(reconnected(m))
+	m = updated.(Model)
+	var due tea.Msg
+	for _, msg := range runCmd(cmd) {
+		if d, ok := msg.(lostTurnDueMsg); ok {
+			due = d
+		}
+	}
+	if due == nil {
+		t.Fatal("no check was scheduled")
+	}
+	m.applyEvent(events.Event{Seq: 9, Type: events.TypeUserMessage, Data: map[string]any{"text": "the lost turn's prompt"}})
+	m = feed(t, m, due)
+	if m.waiting || !strings.Contains(m.transcriptText(), lostLine) {
+		t.Errorf("the replayed prompt stopped the check: waiting=%v\n%s", m.waiting, m.transcriptText())
+	}
+}
+
+// A queued prompt goes with a lost turn the way it goes with a stop:
+// marked as not sent, and not sent behind the reader's back.
+func TestALostTurnDropsItsQueue(t *testing.T) {
+	m := daemonModel(t, daemonTransport{busy: false})
+	m.waiting = true
+	m.queue = []string{"queued after a 409"}
+	m.appendLocal("[queued] queued after a 409")
+	m = feed(t, m, reconnected(m))
+	if len(m.queue) != 0 {
+		t.Errorf("the queue survived the lost turn: %v", m.queue)
+	}
+}
+
+// A line sent into a running turn gives way to the message's own line
+// when the model is given it, so a later stop cannot call it unseen.
+func TestASentLineResolvesWhenTheModelGetsIt(t *testing.T) {
+	m := newTestModel()
+	m.appendSent("[sent — the model will pick this up at its next step] also check the tests")
+	m.applyEvent(events.Event{Type: events.TypeUserMessage, Data: map[string]any{"text": "also check the tests"}})
+	m.abandonPendingUsers()
+	text := m.transcriptText()
+	if strings.Contains(text, "[sent") || strings.Contains(text, "[not sent") {
+		t.Errorf("a message the model was given is still drawn as sent or as not sent:\n%s", text)
+	}
+	if strings.Count(text, "also check the tests") != 1 {
+		t.Errorf("the message is drawn %d times:\n%s", strings.Count(text, "also check the tests"), text)
+	}
+}
+
+// A page that connects just as a block ends gets the logged block and
+// then that block's last deltas: they do not open it a second time.
+func TestABlocksLateDeltasAfterItsLoggedCopyAreDropped(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Seq: 4, Type: events.TypeThinkingBlock, Data: map[string]any{"text": "the whole block", "elapsed_ms": float64(2000)}})
+	m.applyEvent(thinkingDelta("block", true))
+	m.applyEvent(events.Event{Type: events.TypeThinkingEnd, Data: map[string]any{"fold": true, "elapsed_ms": float64(2000)}})
+	if b := m.thinkingEntries(); len(b) != 1 {
+		t.Fatalf("blocks = %#v, want the logged one alone", b)
+	}
+	// The next block streams normally.
+	m.applyEvent(events.Event{Type: events.TypeMessagePartEnd, Data: map[string]any{"text": "answer"}})
+	m.applyEvent(thinkingDelta("the next request", true))
+	if b := m.thinkingEntries(); len(b) != 2 || !b[1].live {
+		t.Errorf("the next block did not stream: %#v", b)
 	}
 }

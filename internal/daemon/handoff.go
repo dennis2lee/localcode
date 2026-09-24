@@ -200,6 +200,56 @@ func (d *Daemon) NoteTakeover() {
 		d.ownedAtStart[id] = true
 	}
 	d.takeoverMu.Unlock()
+	if len(m.Sessions) > 0 {
+		go d.watchTakeover()
+	}
+}
+
+// takeoverPoll is how often a daemon that took over looks at the
+// retiring one's manifest. The retiring daemon rewrites it at about the
+// same rate as its sessions finish. A variable so tests need not wait.
+var takeoverPoll = 250 * time.Millisecond
+
+// watchTakeover follows the retiring daemon's manifest until it has let
+// go of every session it listed at startup, and acts on each release
+// the moment it happens rather than at the next write to the session.
+//
+// Two things were left undone until then. GET /api/sessions lists an
+// owned session as busy, and nothing said when that stopped: a client
+// that loaded the list went on showing it running. And a stream that had
+// reconnected to this daemon during the drain never got what the old one
+// wrote after this one loaded the session, its turn.done included, so a
+// client waiting on that turn waited for good. A release now re-reads
+// the session (takeOwnership, which ends its streams so they resume
+// against the whole log) and tells every client it is idle.
+//
+// It ends when nothing is left owned. The retiring daemon exits after
+// its drain deadline at the latest, and a manifest whose pid is gone
+// counts as released, so this does not outlive the handoff.
+func (d *Daemon) watchTakeover() {
+	d.takeoverMu.Lock()
+	waiting := make(map[string]bool, len(d.ownedAtStart))
+	for id := range d.ownedAtStart {
+		waiting[id] = true
+	}
+	d.takeoverMu.Unlock()
+	for len(waiting) > 0 {
+		time.Sleep(takeoverPoll)
+		owned := d.sessionsOwnedElsewhere()
+		for id := range waiting {
+			if owned[id] {
+				continue
+			}
+			delete(waiting, id)
+			if err := d.takeOwnership(id); err != nil {
+				fmt.Fprintf(os.Stderr, "handoff: could not re-read session %s: %v\n", id, err)
+			}
+			d.daemonEvents.send(events.Event{
+				Type: events.TypeSessionActivity,
+				Data: map[string]any{"session": id, "busy": false},
+			})
+		}
+	}
 }
 
 // claimSession is the check every write path to a session goes through

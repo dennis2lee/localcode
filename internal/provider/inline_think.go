@@ -31,6 +31,10 @@ type inlineThink struct {
 	// start of the reasoning after <think>, and the start of the answer
 	// after </think>, which a model separates with blank lines.
 	trimNext bool
+	// opened is whether the answer began with <think>: a block was found,
+	// whatever it held. An empty block is a block, and splitting it off
+	// is what keeps its tags out of the answer.
+	opened bool
 }
 
 const (
@@ -54,14 +58,18 @@ func (t *inlineThink) feed(s string) (reasoning, text string) {
 		t.held += s
 		rest := strings.TrimLeft(t.held, " \t\r\n")
 		switch {
-		case rest == "" || strings.HasPrefix(thinkOpen, rest):
-			// Whitespace, or the tag so far: wait for more.
-			return "", ""
 		case strings.HasPrefix(rest, thinkOpen):
+			// The whole tag, first: a bare <think> with nothing after it
+			// yet is inside the block already, so a tool call or the
+			// end of the reply closes it as reasoning.
 			t.state = inlineInside
+			t.opened = true
 			t.held = ""
 			t.trimNext = true
 			return t.feed(rest[len(thinkOpen):])
+		case rest == "" || strings.HasPrefix(thinkOpen, rest):
+			// Whitespace, or the tag so far: wait for more.
+			return "", ""
 		default:
 			// An answer with no reasoning in it, passed on as it came.
 			t.state = inlineAnswer

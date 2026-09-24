@@ -79,6 +79,9 @@ func TestInlineThinkLeavesOtherAnswersAlone(t *testing.T) {
 		{"a block never closed is reasoning to the end", []string{"<think>still going", " <"}, "still going <", ""},
 		{"a second think block is answer", []string{"<think>a</think>b<think>c</think>"}, "a", "b<think>c</think>"},
 		{"Korean reasoning", []string{"<think>사용자가 ", "묻는다</thi", "nk>답"}, "사용자가 묻는다", "답"},
+		{"a bare opening tag and nothing after", []string{"<think>"}, "", ""},
+		{"a bare opening tag, one byte at a time", []string{"<", "t", "h", "i", "n", "k", ">"}, "", ""},
+		{"whitespace, then a bare opening tag", []string{"  <think>"}, "", ""},
 	} {
 		if r, a := splitAll(tc.pieces); r != tc.reasoning || a != tc.answer {
 			t.Errorf("%s: reasoning %q answer %q, want %q and %q", tc.name, r, a, tc.reasoning, tc.answer)
@@ -184,6 +187,10 @@ func TestTheDoctorsReplySplitsInlineReasoning(t *testing.T) {
 		{`{"content":"<think>thinking it over</think>\n\n391"}`, "391", "thinking it over", true},
 		{`{"content":"391","reasoning_content":"thinking it over"}`, "391", "thinking it over", false},
 		{`{"content":"391"}`, "391", "", false},
+		// An empty block is still tags in front of the answer.
+		{`{"content":"<think>\n\n</think>\n\nOK"}`, "OK", "", true},
+		// The field's reasoning is kept, and the block is a copy of it.
+		{`{"content":"<think>copy</think>OK","reasoning_content":"R"}`, "OK", "R", true},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -197,5 +204,34 @@ func TestTheDoctorsReplySplitsInlineReasoning(t *testing.T) {
 		if reply.Content != tc.content || reply.Reasoning != tc.reasoning || reply.ReasoningInline != tc.inline {
 			t.Errorf("%s: content %q reasoning %q inline %v", tc.message, reply.Content, reply.Reasoning, reply.ReasoningInline)
 		}
+	}
+}
+
+// A bare opening tag followed by a tool call is closed as reasoning by
+// the call, never drawn as text beside it.
+func TestABareThinkTagBeforeAToolCallIsNotText(t *testing.T) {
+	body := contentChunks("<think>") +
+		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+	evs := streamOf(t, body)
+	if got := textOf(evs); got != "" {
+		t.Errorf("the tag was drawn as text: %q (%v)", got, kinds(evs))
+	}
+	body = contentChunks("<think>") + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n"
+	if got := textOf(streamOf(t, body)); got != "" {
+		t.Errorf("a reply cut after the tag drew it as text: %q", got)
+	}
+}
+
+// A server that sends the reasoning in its own field and leaves the block
+// in the answer as well (llama.cpp's deepseek-legacy format) shows it
+// once: the field's, with the answer free of the copy.
+func TestReasoningSentTwiceIsShownOnce(t *testing.T) {
+	body := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"R\"}}]}\n\n" +
+		contentChunks("<think>R</think>", "OK") +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+	evs := streamOf(t, body)
+	if thinkingText(evs) != "R" || textOf(evs) != "OK" {
+		t.Errorf("reasoning %q answer %q, want R and OK", thinkingText(evs), textOf(evs))
 	}
 }

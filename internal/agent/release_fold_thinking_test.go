@@ -568,21 +568,78 @@ func TestInlineReasoningFromAMuseServerIsFolded(t *testing.T) {
 }
 
 // /llm-doctor says where the server puts the reasoning when it puts it in
-// the answer, and a baseline taken the other way is a difference.
+// the answer, and a baseline taken the other way is a difference; a
+// baseline that never recorded it, or a run that saw no reasoning, is
+// not.
 func TestTheDoctorSaysWhenReasoningIsInline(t *testing.T) {
 	run := doctorRun{Model: "muse", BaseURL: "http://127.0.0.1:1234/v1"}
-	run.Server.ReasoningInline = true
+	run.Server.ReasoningPlacement = "inline"
 	if out := doctorReport(run, nil, "", nil, false); !strings.Contains(out, "reasoning: inside the answer as <think>") {
 		t.Errorf("the report does not say where the reasoning was:\n%s", out)
 	}
-	base := doctorRun{Model: "muse"}
-	found := false
-	for _, d := range doctorDiff(run, base) {
-		if d == "reasoning in its own field → inside the answer" {
-			found = true
+	moved := func(base doctorRun) bool {
+		for _, d := range doctorDiff(run, base) {
+			if strings.HasPrefix(d, "reasoning ") {
+				return true
+			}
+		}
+		return false
+	}
+	field := doctorRun{Model: "muse"}
+	field.Server.ReasoningPlacement = "field"
+	if !moved(field) {
+		t.Errorf("a move from the field into the answer is not a difference: %v", doctorDiff(run, field))
+	}
+	if moved(doctorRun{Model: "muse"}) {
+		t.Error("a baseline that never recorded the placement reads as a move")
+	}
+	quiet := doctorRun{Model: "muse"}
+	if placementChanged(field.Server, quiet.Server) {
+		t.Error("a run that saw no reasoning reads as a move")
+	}
+}
+
+// The verdict's wording follows where the reasoning was: a <think> block
+// localcode split off is not reasoning_content, and a model that stopped
+// inside its block is not a server whose output channel closed.
+func TestTheDoctorWordsInlineReasoningAsTheBlock(t *testing.T) {
+	var exact doctorCanary
+	for _, c := range doctorCanaries {
+		if c.name == "exact_reply" {
+			exact = c
 		}
 	}
-	if !found {
-		t.Errorf("the diff misses the move: %v", doctorDiff(run, base))
+	if exact.name == "" {
+		t.Fatal("no exact_reply canary")
+	}
+	inline := provider.RawReply{Reasoning: "the word is OK", ReasoningInline: true, FinishReason: "stop"}
+	_, _, why := doctorJudgeReply(exact, inline)
+	if strings.Contains(why, "reasoning_content") || strings.Contains(why, "output channel") {
+		t.Errorf("inline reasoning worded as the server's field: %q", why)
+	}
+	inline.FinishReason = "length"
+	if _, inc, why := doctorJudgeReply(exact, inline); !inc || !strings.Contains(why, "<think> block") {
+		t.Errorf("an exhausted inline budget: inconclusive=%v %q", inc, why)
+	}
+	field := provider.RawReply{Reasoning: "the word is OK", ReasoningInField: true, FinishReason: "stop"}
+	if _, _, why := doctorJudgeReply(exact, field); !strings.Contains(why, "reasoning_content") {
+		t.Errorf("field reasoning lost its wording: %q", why)
+	}
+}
+
+// /thinking says a muse model's blocks stay in the log only while that
+// is true: with fold_thinking off nothing is logged, and saying it is
+// would be telling somebody their reasoning is kept when it is not.
+func TestTheThinkingReplySaysWhatIsKept(t *testing.T) {
+	for _, fold := range []bool{true, false} {
+		loop := foldLoop(t, "http://127.0.0.1:1", "muse-glimmer")
+		loop.SetFoldThinkingEnabled(fold)
+		if _, err := loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+			t.Fatal(err)
+		}
+		out := replyTo(t, loop, "s1", "/thinking off")
+		if kept := strings.Contains(out, "kept in the log"); kept != fold {
+			t.Errorf("fold_thinking %v: the reply says the log keeps the blocks = %v:\n%s", fold, kept, out)
+		}
 	}
 }
