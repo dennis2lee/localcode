@@ -1380,6 +1380,7 @@ For a local muse or gemma behind vLLM or another OpenAI-compatible server. When 
 | Step | What it does |
 |---|---|
 | Server facts | `GET /v1/models` for the model id and `max_model_len`. On vLLM, `/version` and `/metrics` for the version, the KV cache dtype, preemptions, cache use, queue depth, and how many requests finished by `stop` against `length`. An endpoint that is not there is reported as not offered. |
+| Reasoning placement | Whether the server put the model's reasoning inside the answer as `<think>…</think>` rather than in `reasoning_content`. The canaries judge the answer with that block split off, and a change against the baseline is reported. |
 | Fingerprint | The `system_fingerprint` on the answer itself, which on vLLM names the build and the parallelism it was started with. It arrives through the chat endpoint, so behind a gateway that routes nothing else it is often the only server fact there is. |
 | Canaries | Four fixed requests, each with a known right answer: a tool call that must come back structured, a one-line code fix, an exact one-word reply, and a count that must stop on its own. Each is sent twice and judged pass, FAIL, or inconclusive. |
 | Sampling | Muse is sent temperature 1.0, `top_p` 0.95 and `top_k` 64, with `Reasoning strength: high` in the system prompt, because that is what its own vLLM recipe asks for and it warns against greedy decoding. Gemma is sent temperature 0 with a seed. The report names the sampling it used. |
@@ -2825,7 +2826,7 @@ Wrapped invocations such as `env python3 x.py` and `xargs python3` are not cover
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
-LocalCode reads local-provider `reasoning_content` and `reasoning` stream fields. The TUI shows `thinking`; the Web UI displays reasoning above the answer. A Muse model's reasoning is a labelled block in both clients that folds when the answer starts (`fold_thinking`).
+LocalCode reads local-provider `reasoning_content` and `reasoning` stream fields, and reasoning a server puts at the start of the answer as `<think>…</think>`. LM Studio does the second with its "separate reasoning_content" developer setting off, and llama.cpp, older Ollama and servers without a reasoning parser do it for models whose templates use think tags. Only a block at the very start of an answer is split off; the tag written later in an answer is left as text. The split reasoning is handled like any other: shown as reasoning, never sent back to the model, and left out of compaction summaries. The TUI shows `thinking`; the Web UI displays reasoning above the answer. A Muse model's reasoning is a labelled block in both clients that folds when the answer starts (`fold_thinking`).
 
 Separate reasoning-stream text is never returned to the model. It is not logged, and a reload removes it, except a Muse model's folded blocks, which are logged and drawn again.
 

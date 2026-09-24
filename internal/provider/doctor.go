@@ -42,6 +42,13 @@ type ServerFacts struct {
 	// hides /version and /metrics it is often the only server fact
 	// there is. The caller fills it from the first answer it gets.
 	Fingerprint string `json:"system_fingerprint,omitempty"`
+
+	// ReasoningInline is whether the server sent the model's reasoning
+	// inside the answer as <think>…</think> rather than in a field of its
+	// own. Filled by the caller from the answers it gets. A setting on
+	// the server, not a property of the model: LM Studio sends it this way
+	// with its "separate reasoning_content" developer setting off.
+	ReasoningInline bool `json:"reasoning_inline,omitempty"`
 }
 
 // ServerFacts collects what the server at BaseURL says about model.
@@ -218,10 +225,13 @@ func (p *OpenAICompat) getText(ctx context.Context, url string) (string, bool) {
 // RawReply is one non-streamed chat completion, read back with as little
 // interpretation as possible.
 type RawReply struct {
-	Content      string
-	Reasoning    string
-	ToolCalls    []RawToolCall
-	FinishReason string
+	Content   string
+	Reasoning string
+	// ReasoningInline is set when Reasoning was split off the start of
+	// the content, where the server put it as <think>…</think>.
+	ReasoningInline bool
+	ToolCalls       []RawToolCall
+	FinishReason    string
 	// Fingerprint is the server's system_fingerprint, if it stamps one.
 	Fingerprint  string
 	PromptTokens int
@@ -305,6 +315,17 @@ func (p *OpenAICompat) RawChat(ctx context.Context, body []byte) (RawReply, erro
 	}
 	if out.Reasoning == "" {
 		out.Reasoning = c.Message.Reasoning
+	}
+	// Reasoning the server put at the start of the answer is split off
+	// it the way the chat stream splits it, so a canary judges the
+	// answer and not the reasoning in front of it.
+	if out.Reasoning == "" {
+		var split inlineThink
+		r, text := split.feed(out.Content)
+		r2, text2 := split.flush()
+		if r+r2 != "" {
+			out.Reasoning, out.Content, out.ReasoningInline = r+r2, text+text2, true
+		}
 	}
 	for _, tc := range c.Message.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, RawToolCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments})

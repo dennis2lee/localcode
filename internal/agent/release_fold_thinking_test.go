@@ -518,3 +518,71 @@ func TestTheDisplaySwitchesAnnounceOnce(t *testing.T) {
 		}
 	}
 }
+
+// A server that puts a muse model's reasoning inside the answer, as
+// <think>…</think> (LM Studio with its separate-reasoning setting off):
+// the reasoning is folded and kept like any other, and the answer that is
+// logged, and later sent back to the model, carries none of it.
+func TestInlineReasoningFromAMuseServerIsFolded(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, c := range []string{
+			`{"choices":[{"delta":{"content":"<think>How to make lookup function with binary search?"}}]}`,
+			`{"choices":[{"delta":{"content":" We need to answer.</think>\n\n"}}]}`,
+			`{"choices":[{"delta":{"content":"Use bisect."}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	t.Cleanup(server.Close)
+	loop := foldLoop(t, server.URL, "Muse-Glimmer-30B")
+	folded := false
+	for _, ev := range streamedEvents(t, loop, "s1") {
+		if ev.Type == events.TypeThinkingDelta && ev.Data["fold"] == true {
+			folded = true
+		}
+	}
+	if !folded {
+		t.Error("the inline reasoning was not streamed as a fold block")
+	}
+	b := loggedBlocks(t, loop, "s1")
+	if len(b) != 1 || b[0].Data["text"] != "How to make lookup function with binary search? We need to answer." {
+		t.Errorf("logged blocks = %#v", b)
+	}
+	logged, _ := loop.Store.Events("s1", 0)
+	for _, ev := range logged {
+		if ev.Type == events.TypeMessagePartEnd && ev.Data["text"] != "Use bisect." {
+			t.Errorf("the logged answer is %q, want the answer alone", ev.Data["text"])
+		}
+	}
+	for _, m := range loop.history("s1") {
+		for _, blk := range m.Content {
+			if blk.Type == provider.BlockText && strings.Contains(blk.Text, "<think>") {
+				t.Errorf("the history the model is sent carries the reasoning: %q", blk.Text)
+			}
+		}
+	}
+}
+
+// /llm-doctor says where the server puts the reasoning when it puts it in
+// the answer, and a baseline taken the other way is a difference.
+func TestTheDoctorSaysWhenReasoningIsInline(t *testing.T) {
+	run := doctorRun{Model: "muse", BaseURL: "http://127.0.0.1:1234/v1"}
+	run.Server.ReasoningInline = true
+	if out := doctorReport(run, nil, "", nil, false); !strings.Contains(out, "reasoning: inside the answer as <think>") {
+		t.Errorf("the report does not say where the reasoning was:\n%s", out)
+	}
+	base := doctorRun{Model: "muse"}
+	found := false
+	for _, d := range doctorDiff(run, base) {
+		if d == "reasoning in its own field → inside the answer" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the diff misses the move: %v", doctorDiff(run, base))
+	}
+}

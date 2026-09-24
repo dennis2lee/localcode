@@ -361,6 +361,9 @@ func (l *Loop) runDoctor(ctx context.Context, p *provider.OpenAICompat, provider
 		if run.Server.Fingerprint == "" {
 			run.Server.Fingerprint = reply.Fingerprint
 		}
+		if reply.ReasoningInline {
+			run.Server.ReasoningInline = true
+		}
 		res.FinishReason = reply.FinishReason
 		res.OutputTokens = reply.OutputTokens
 		res.Reply = doctorClip(reply.Content, 200)
@@ -541,6 +544,10 @@ func doctorReport(run doctorRun, base *doctorRun, path string, replays []string,
 	if s.Fingerprint != "" {
 		fmt.Fprintf(&b, "- system_fingerprint: %s\n", s.Fingerprint)
 	}
+	if s.ReasoningInline {
+		b.WriteString("- reasoning: inside the answer as <think>…</think>, not in reasoning_content. localcode splits it off; " +
+			"on LM Studio, the developer setting that separates reasoning_content sends it apart\n")
+	}
 	switch {
 	case s.VersionOK:
 		fmt.Fprintf(&b, "- vLLM: %s\n", s.Version)
@@ -640,6 +647,9 @@ func doctorDiff(run, base doctorRun) []string {
 	if run.Server.Fingerprint != base.Server.Fingerprint {
 		d = append(d, fmt.Sprintf("system_fingerprint %s → %s", orNone(base.Server.Fingerprint, "none"), orNone(run.Server.Fingerprint, "none")))
 	}
+	if run.Server.ReasoningInline != base.Server.ReasoningInline {
+		d = append(d, fmt.Sprintf("reasoning %s → %s", reasoningWhere(base.Server.ReasoningInline), reasoningWhere(run.Server.ReasoningInline)))
+	}
 	baseBy := map[string]doctorResult{}
 	for _, c := range base.Canaries {
 		baseBy[c.Name] = c
@@ -715,7 +725,8 @@ func doctorVerdict(run doctorRun, base *doctorRun) string {
 		run.Server.MaxModelLen != base.Server.MaxModelLen ||
 		run.Server.Version != base.Server.Version ||
 		run.Server.CacheDtype != base.Server.CacheDtype ||
-		run.Server.Fingerprint != base.Server.Fingerprint
+		run.Server.Fingerprint != base.Server.Fingerprint ||
+		run.Server.ReasoningInline != base.Server.ReasoningInline
 
 	var b strings.Builder
 	switch {
@@ -795,4 +806,13 @@ func orNone(s, none string) string {
 		return none
 	}
 	return s
+}
+
+// reasoningWhere names where a server put the reasoning, for the
+// baseline comparison.
+func reasoningWhere(inline bool) string {
+	if inline {
+		return "inside the answer"
+	}
+	return "in its own field"
 }
