@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.148.0
+
+Reasoning that a server sends inside the answer is shown as reasoning, a muse model's reasoning blocks come back after a reload, and the terminal ends a turn that the daemon behind a reconnected stream never ran.
+
+**Changed**
+
+* **Reasoning a server puts inside the answer is split off as reasoning.** A reasoning model's server can send the reasoning in a field of its own or at the start of the answer, wrapped in `<think>…</think>`. LM Studio does the second with its "separate reasoning_content" developer setting off, and llama.cpp, older Ollama and servers without a reasoning parser do it for models whose templates use think tags. localcode read only the field, so a Muse-Glimmer-30B reply from such a server was drawn as `<think>How to make lookup function…` followed by the reasoning and then the answer. It had no reasoning block to fold, and the reasoning went back to the model on every later request as though the model had said it. The OpenAI-compatible adapter now splits a leading `<think>…</think>` block off the answer as it streams, and the block is drawn, folded and kept like any other reasoning. Only a block at the very start of the answer is split; the tag written later in an answer stays text. A server that sends the reasoning in its field and leaves the block in the answer as well is shown the reasoning once. `/llm-doctor` judges its canaries with the block split off and reports where the server put the reasoning. Conversations recorded before this release keep the tags in their earlier answers.
+* **A muse model's reasoning blocks come back after a reload.** Each block is written to the session log when it ends, whole, with its time. A reload, a reconnect, or a conversation opened later draws it folded where it was, and `/export` writes it as a folded section. A block cut off by an error or a stop is kept as far as it got. The model is never sent it: a history rebuilt after a restart leaves it out, as the live one does. Other models' reasoning, and a muse model's with `/fold-thinking` off, is still not logged.
+* **The TUI ends a turn lost while its stream was away.** The Web UI has asked the daemon since v0.104.0; the terminal waited for a `turn.done` that a restarted or crashed daemon would never send, with the busy line saying "working… esc to cancel" and Esc answering that nothing was running. When its stream comes back with a turn in progress, the TUI now asks whether the session is still busy and, after a one-second grace for a `turn.done` already on its way, ends a turn the daemon is not running. The prompts sent into it and queued behind it are marked as not sent, open questions are put away, a reasoning block folds, and a line says the turn did not finish. A turn the TUI was only watching has its block folded and nothing said. The TUI also asks for the agent list again after a reconnect.
+* **The TUI follows `show_thinking` itself.** It reads the switch from the daemon at start and on a switch, and follows changes to it, so a reasoning block replayed from the log is drawn only while the switch is on.
+
+**Fixed**
+
+* **A stream the browser gave up on no longer draws the end of the conversation twice.** A reply that is not 200, such as a 404 or a 502 during a restart, closes an `EventSource` for good, and the page rebuilds it. It asked for the last 400 events again without clearing what it had drawn, so all of them appeared a second time. It now resumes after the last event it drew. The daemon prefers the `Last-Event-ID` a browser sends on its own reconnects over the `?since=` the stream was opened with, so that stream's later reconnects resume where they got to.
+* **A session the previous daemon is still finishing during an update is not mistaken for a lost turn.** The new daemon listed it idle, so a client whose stream had reconnected to it declared the turn lost while the old daemon was still writing the answer. It is now listed busy until the old daemon lets go of it. The new daemon then reads the session again, so a stream on it receives the old daemon's last writes, including the turn's end, and tells every client the session is idle.
+* **The Web UI's lost-turn check no longer ends a turn begun during its wait,** and it puts away a question the lost turn's model asked, which would otherwise take the next prompt as its answer, and every queued permission question with the one on screen.
+* **The TUI's first event stream is closed on the first switch to another conversation.** It went on receiving the old conversation's events until its buffer filled.
+* **A message sent into a running turn stops reading "[sent — the model will pick this up at its next step]" in the TUI once the model is given it.**
+
 ## v0.147.0
 
 A muse model's reasoning drawn as a block of its own, in both clients, and a settings tab for the switches that apply to muse models only.
