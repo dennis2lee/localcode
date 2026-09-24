@@ -431,7 +431,7 @@ test('a failed install is reported when already up to date', async () => {
       'GET /api/update': {
         ...UP_TO_DATE,
         last_install: {
-          version: '0.45.0', exit_code: 1603, status: 'failed', meaning: 'failed (exit code 1603)',
+          version: '0.45.0', exit_code: 1603, status: 'failed', meaning: 'a fatal error during installation',
           log: '/home/u/.cache/localcode/updates/localcode-0.45.0-msi.log',
         },
       },
@@ -459,7 +459,7 @@ test('the failed line is the exact sentence the stream carries', async () => {
       'GET /api/update': {
         ...UP_TO_DATE,
         last_install: {
-          version: '0.46.0', exit_code: 1625, status: 'failed', meaning: 'failed (exit code 1625)',
+          version: '0.46.0', exit_code: 1625, status: 'failed', meaning: 'blocked by system policy',
           log: 'C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log',
         },
       },
@@ -471,7 +471,7 @@ test('the failed line is the exact sentence the stream carries', async () => {
   await app.settle();
 
   const note = app.el('update-note').textContent;
-  assert.ok(note.includes('Update to 0.46.0 did not install: the installer exited 1625 (failed (exit code 1625)). Log: C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log.'),
+  assert.ok(note.includes('Update to 0.46.0 did not install: the installer exited 1625 (blocked by system policy). Log: C:\\Users\\u\\AppData\\Local\\localcode\\updates\\localcode-0.46.0-msi.log.'),
     'the panel line drifted from the stream line: ' + note);
 });
 

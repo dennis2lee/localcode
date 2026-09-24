@@ -48,6 +48,29 @@ func TestMSIExitClassification(t *testing.T) {
 	}
 }
 
+// Every named meaning exactly, plus one unnamed code. The panel line
+// already names the code, so the default carries no number.
+func TestMSIExitMeaning(t *testing.T) {
+	cases := []struct {
+		code int
+		want string
+	}{
+		{0, "installed"},
+		{3010, "installed, restart needed"},
+		{1641, "installed, restart started"},
+		{1602, "cancelled"},
+		{1618, "another installation in progress"},
+		{1603, "a fatal error during installation"},
+		{1625, "blocked by system policy"},
+		{1, "failed"},
+	}
+	for _, tc := range cases {
+		if got := MSIExitMeaning(tc.code); got != tc.want {
+			t.Errorf("MSIExitMeaning(%d) = %q, want %q", tc.code, got, tc.want)
+		}
+	}
+}
+
 func TestMSIVersionFromName(t *testing.T) {
 	if got := MSIVersionFromName("C:/u/localcode-0.46.0-windows-amd64.msi"); got != "0.46.0" {
 		t.Errorf("version = %q, want 0.46.0", got)

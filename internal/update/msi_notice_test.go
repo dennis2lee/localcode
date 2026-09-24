@@ -116,7 +116,7 @@ func TestMSIFailureLineMatchesThePanel(t *testing.T) {
 		Log:      `C:\Users\u\AppData\Local\localcode\updates\localcode-0.46.0-msi.log`,
 		Time:     time.Now(),
 	}
-	want := `Update to 0.46.0 did not install: the installer exited 1625 (failed (exit code 1625)). Log: C:\Users\u\AppData\Local\localcode\updates\localcode-0.46.0-msi.log.`
+	want := `Update to 0.46.0 did not install: the installer exited 1625 (blocked by system policy). Log: C:\Users\u\AppData\Local\localcode\updates\localcode-0.46.0-msi.log.`
 	if got := MSIFailureLine(rec); got != want {
 		t.Errorf("MSIFailureLine = %q, want %q", got, want)
 	}

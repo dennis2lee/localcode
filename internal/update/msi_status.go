@@ -23,6 +23,8 @@ const (
 	msiRebootInitiated = 1641
 	msiCancelled       = 1602
 	msiBusy            = 1618
+	msiFatalError      = 1603
+	msiBlockedByPolicy = 1625
 )
 
 // ClassifyMSIExit says what an msiexec exit code means. The first word is
@@ -61,8 +63,12 @@ func MSIExitMeaning(code int) string {
 		return "cancelled"
 	case msiBusy:
 		return "another installation in progress"
+	case msiFatalError:
+		return "a fatal error during installation"
+	case msiBlockedByPolicy:
+		return "blocked by system policy"
 	default:
-		return fmt.Sprintf("failed (exit code %d)", code)
+		return "failed"
 	}
 }
 
