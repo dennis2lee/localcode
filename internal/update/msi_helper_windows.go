@@ -159,7 +159,7 @@ const createBreakawayFromJob = 0x01000000
 //
 // The first start breaks away from the parent's job. A job that does
 // not allow breakaway refuses with access denied, and then the helper
-// starts without the flag instead: crewed into the job, but running.
+// starts without the flag instead: inside the job, but running.
 var spawnMSIHelper = func(helper, pending string, parent windows.Handle) error {
 	if err := startMSIHelperOnce(helper, pending, parent, detachedProcess|createBreakawayFromJob); err != nil {
 		if !isAccessDenied(err) {
@@ -287,9 +287,9 @@ func RunMSIHelper(pendingPath string) error {
 }
 
 // msiFailureText is what the message box names: the version, the exit
-// code and what it means, and the log. The panel never shows it — the
-// check reports the same record — so this box is the only place it is
-// said when the window is about to come back over it.
+// code and what it means, and the log. The check reports the same
+// record on the panel, but only when somebody clicks Check. This box is
+// the only place the failure is said without anyone asking.
 func msiFailureText(p MSIPending, code int) string {
 	return fmt.Sprintf("LocalCode %s: the installer exited %d (%s). The installer log is at %s.",
 		p.Version, code, MSIExitMeaning(code), p.Log)
