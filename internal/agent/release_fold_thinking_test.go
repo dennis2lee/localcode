@@ -181,9 +181,10 @@ func TestReasoningCarriesTheDisplaySwitch(t *testing.T) {
 	}
 }
 
-// Reasoning is still never logged: folding it is a way of drawing it,
-// not a reason to keep it.
-func TestFoldedReasoningIsStillNotLogged(t *testing.T) {
+// A fold block is logged once, whole, as one thinking.block with its
+// time, ahead of the answer it came before; the deltas and the end stay
+// broadcast. Other models' reasoning is not logged at all.
+func TestAFoldBlockIsLoggedWholeAndOnce(t *testing.T) {
 	server := reasoningServer(t)
 	loop := foldLoop(t, server.URL, "muse-glimmer")
 	streamedEvents(t, loop, "s1")
@@ -191,10 +192,197 @@ func TestFoldedReasoningIsStillNotLogged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ev := range logged {
-		if ev.Type == events.TypeThinkingDelta || ev.Type == events.TypeThinkingEnd {
+	blocks, blockAt, answerAt := 0, -1, -1
+	for i, ev := range logged {
+		switch ev.Type {
+		case events.TypeThinkingDelta, events.TypeThinkingEnd:
 			t.Errorf("%s was written to the log", ev.Type)
+		case events.TypeThinkingBlock:
+			blocks++
+			blockAt = i
+			if got := ev.Data["text"]; got != "The user asks 17 times 23. That is 391." {
+				t.Errorf("logged text = %q, want the whole reasoning", got)
+			}
+			if ms, ok := ev.Data["elapsed_ms"].(int); !ok || ms < 0 {
+				t.Errorf("elapsed_ms = %#v", ev.Data["elapsed_ms"])
+			}
+		case events.TypeMessagePartEnd:
+			answerAt = i
 		}
+	}
+	if blocks != 1 || blockAt > answerAt {
+		t.Errorf("logged %d blocks at %d with the answer at %d, want one before the answer", blocks, blockAt, answerAt)
+	}
+
+	plain := foldLoop(t, server.URL, "qwen3-30b-a3b")
+	streamedEvents(t, plain, "s1")
+	logged, _ = plain.Store.Events("s1", 0)
+	for _, ev := range logged {
+		if ev.Type == events.TypeThinkingBlock {
+			t.Error("another model's reasoning was logged")
+		}
+	}
+}
+
+// foldScriptProvider streams exactly the events it is given, for the
+// endings a real server does not produce on demand: a stream that dies
+// mid-thought, one that closes with a block open, a block of whitespace.
+type foldScriptProvider struct{ evs []provider.StreamEvent }
+
+func (p foldScriptProvider) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent, len(p.evs))
+	for _, ev := range p.evs {
+		ch <- ev
+	}
+	close(ch)
+	return ch, nil
+}
+
+func foldScriptLoop(t *testing.T, model string, evs ...provider.StreamEvent) *Loop {
+	t.Helper()
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	cfg := &config.Config{
+		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: "http://127.0.0.1:1"}},
+		Profiles:       map[string]config.Profile{"main": {Provider: "local", Model: model}},
+		Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "main"}},
+		DefaultProfile: "main",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return New(store, tools.NewRegistry(nil), map[string]provider.Provider{"local": foldScriptProvider{evs: evs}}, cfg)
+}
+
+func loggedBlocks(t *testing.T, l *Loop, sid string) []events.Event {
+	t.Helper()
+	logged, err := l.Store.Events(sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []events.Event
+	for _, ev := range logged {
+		if ev.Type == events.TypeThinkingBlock {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func thinkingDeltaEv(s string) provider.StreamEvent {
+	return provider.StreamEvent{Type: provider.EventThinkingDelta, ThinkingDelta: s}
+}
+
+// A stream that dies mid-thought records the block as far as it got,
+// before the failure, as it was shown live.
+func TestABlockCutOffByAnErrorIsLoggedAsFarAsItGot(t *testing.T) {
+	l := foldScriptLoop(t, "muse-glimmer",
+		thinkingDeltaEv("half a "),
+		thinkingDeltaEv("thought"),
+		provider.StreamEvent{Type: provider.EventError, Err: fmt.Errorf("connection reset")},
+	)
+	if _, err := l.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.SendMessage(context.Background(), "s1", "general-purpose", "go")
+	b := loggedBlocks(t, l, "s1")
+	if len(b) != 1 || b[0].Data["text"] != "half a thought" {
+		t.Fatalf("blocks = %#v, want the partial block", b)
+	}
+	logged, _ := l.Store.Events("s1", 0)
+	blockAt, errAt := -1, -1
+	for i, ev := range logged {
+		switch ev.Type {
+		case events.TypeThinkingBlock:
+			blockAt = i
+		case events.TypeError:
+			if errAt < 0 {
+				errAt = i
+			}
+		}
+	}
+	if blockAt < 0 || errAt < 0 || blockAt > errAt {
+		t.Errorf("the block at %d is not ahead of the error at %d", blockAt, errAt)
+	}
+}
+
+// A stream that closes with a block open, as a stop mid-thought leaves
+// it, records the block too.
+func TestABlockLeftOpenWhenTheStreamClosesIsLogged(t *testing.T) {
+	l := foldScriptLoop(t, "muse-glimmer",
+		thinkingDeltaEv("still thinking when it stopped"),
+		provider.StreamEvent{Type: provider.EventMessageStop, StopReason: "end_turn"},
+	)
+	if _, err := l.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.SendMessage(context.Background(), "s1", "general-purpose", "go")
+	if b := loggedBlocks(t, l, "s1"); len(b) != 1 || b[0].Data["text"] != "still thinking when it stopped" {
+		t.Fatalf("blocks = %#v", b)
+	}
+}
+
+// Whitespace alone is not a block: neither client draws one, so none is
+// kept.
+func TestWhitespaceReasoningIsNotLogged(t *testing.T) {
+	l := foldScriptLoop(t, "muse-glimmer",
+		thinkingDeltaEv("\n\n"),
+		provider.StreamEvent{Type: provider.EventThinkingEnd},
+		provider.StreamEvent{Type: provider.EventTextDelta, TextDelta: "ok"},
+		provider.StreamEvent{Type: provider.EventMessageStop, StopReason: "end_turn"},
+	)
+	if _, err := l.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	_ = l.SendMessage(context.Background(), "s1", "general-purpose", "go")
+	if b := loggedBlocks(t, l, "s1"); len(b) != 0 {
+		t.Fatalf("whitespace was logged: %#v", b)
+	}
+}
+
+// Reasoning kept in the record never reaches the model: a history rebuilt
+// from the log after a restart holds none, the same as the live one.
+func TestALoggedBlockIsNotRebuiltIntoTheHistory(t *testing.T) {
+	server := reasoningServer(t)
+	loop := foldLoop(t, server.URL, "muse-glimmer")
+	streamedEvents(t, loop, "s1")
+	logged, err := loop.Store.Events("s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range rehydrateHistory(logged) {
+		for _, b := range m.Content {
+			if b.Type == provider.BlockThinking || strings.Contains(b.Text, "The user asks 17 times 23") {
+				t.Errorf("the rebuilt history carries reasoning: %#v", b)
+			}
+		}
+	}
+}
+
+// /export sets the block folded, as the clients draw it.
+func TestExportFoldsALoggedBlock(t *testing.T) {
+	server := reasoningServer(t)
+	loop := foldLoop(t, server.URL, "muse-glimmer")
+	streamedEvents(t, loop, "s1")
+	logged, err := loop.Store.Events("s1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range logged {
+		if logged[i].Type == events.TypeThinkingBlock {
+			logged[i].Data["elapsed_ms"] = 65000
+		}
+	}
+	out := renderTranscript("t", "s1", logged)
+	if !strings.Contains(out, "<details><summary>Thought for 1m5s</summary>") ||
+		!strings.Contains(out, "> The user asks 17 times 23. That is 391.") {
+		t.Errorf("the export does not fold the reasoning:\n%s", out)
+	}
+	if strings.Index(out, "Thought for") > strings.Index(out, "17 times 23 is 391.") {
+		t.Errorf("the reasoning is exported after the answer:\n%s", out)
 	}
 }
 
@@ -310,5 +498,148 @@ func TestFoldThinkingReplyNamesASpecialistsLaneModel(t *testing.T) {
 	}
 	if !strings.Contains(out, "meta/muse-glimmer-30b, which the switch applies to") {
 		t.Errorf("the reply does not name the specialist's lane model:\n%s", out)
+	}
+}
+
+// /thinking and /timestamps tell every client once. announceConfig does,
+// and a second call beside it sent the same snapshot twice, which the TUI
+// answers with a roster request each time.
+func TestTheDisplaySwitchesAnnounceOnce(t *testing.T) {
+	for _, cmd := range []string{"/thinking off", "/timestamps on"} {
+		loop := foldLoop(t, "http://127.0.0.1:1", "qwen3")
+		announced := 0
+		loop.OnSettingsChanged = func() { announced++ }
+		if _, err := loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+			t.Fatal(err)
+		}
+		replyTo(t, loop, "s1", cmd)
+		if announced != 1 {
+			t.Errorf("%s announced %d times, want 1", cmd, announced)
+		}
+	}
+}
+
+// A server that puts a muse model's reasoning inside the answer, as
+// <think>…</think> (LM Studio with its separate-reasoning setting off):
+// the reasoning is folded and kept like any other, and the answer that is
+// logged, and later sent back to the model, carries none of it.
+func TestInlineReasoningFromAMuseServerIsFolded(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, c := range []string{
+			`{"choices":[{"delta":{"content":"<think>How to make lookup function with binary search?"}}]}`,
+			`{"choices":[{"delta":{"content":" We need to answer.</think>\n\n"}}]}`,
+			`{"choices":[{"delta":{"content":"Use bisect."}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		w.(http.Flusher).Flush()
+	}))
+	t.Cleanup(server.Close)
+	loop := foldLoop(t, server.URL, "Muse-Glimmer-30B")
+	folded := false
+	for _, ev := range streamedEvents(t, loop, "s1") {
+		if ev.Type == events.TypeThinkingDelta && ev.Data["fold"] == true {
+			folded = true
+		}
+	}
+	if !folded {
+		t.Error("the inline reasoning was not streamed as a fold block")
+	}
+	b := loggedBlocks(t, loop, "s1")
+	if len(b) != 1 || b[0].Data["text"] != "How to make lookup function with binary search? We need to answer." {
+		t.Errorf("logged blocks = %#v", b)
+	}
+	logged, _ := loop.Store.Events("s1", 0)
+	for _, ev := range logged {
+		if ev.Type == events.TypeMessagePartEnd && ev.Data["text"] != "Use bisect." {
+			t.Errorf("the logged answer is %q, want the answer alone", ev.Data["text"])
+		}
+	}
+	for _, m := range loop.history("s1") {
+		for _, blk := range m.Content {
+			if blk.Type == provider.BlockText && strings.Contains(blk.Text, "<think>") {
+				t.Errorf("the history the model is sent carries the reasoning: %q", blk.Text)
+			}
+		}
+	}
+}
+
+// /llm-doctor says where the server puts the reasoning when it puts it in
+// the answer, and a baseline taken the other way is a difference; a
+// baseline that never recorded it, or a run that saw no reasoning, is
+// not.
+func TestTheDoctorSaysWhenReasoningIsInline(t *testing.T) {
+	run := doctorRun{Model: "muse", BaseURL: "http://127.0.0.1:1234/v1"}
+	run.Server.ReasoningPlacement = "inline"
+	if out := doctorReport(run, nil, "", nil, false); !strings.Contains(out, "reasoning: inside the answer as <think>") {
+		t.Errorf("the report does not say where the reasoning was:\n%s", out)
+	}
+	moved := func(base doctorRun) bool {
+		for _, d := range doctorDiff(run, base) {
+			if strings.HasPrefix(d, "reasoning ") {
+				return true
+			}
+		}
+		return false
+	}
+	field := doctorRun{Model: "muse"}
+	field.Server.ReasoningPlacement = "field"
+	if !moved(field) {
+		t.Errorf("a move from the field into the answer is not a difference: %v", doctorDiff(run, field))
+	}
+	if moved(doctorRun{Model: "muse"}) {
+		t.Error("a baseline that never recorded the placement reads as a move")
+	}
+	quiet := doctorRun{Model: "muse"}
+	if placementChanged(field.Server, quiet.Server) {
+		t.Error("a run that saw no reasoning reads as a move")
+	}
+}
+
+// The verdict's wording follows where the reasoning was: a <think> block
+// localcode split off is not reasoning_content, and a model that stopped
+// inside its block is not a server whose output channel closed.
+func TestTheDoctorWordsInlineReasoningAsTheBlock(t *testing.T) {
+	var exact doctorCanary
+	for _, c := range doctorCanaries {
+		if c.name == "exact_reply" {
+			exact = c
+		}
+	}
+	if exact.name == "" {
+		t.Fatal("no exact_reply canary")
+	}
+	inline := provider.RawReply{Reasoning: "the word is OK", ReasoningInline: true, FinishReason: "stop"}
+	_, _, why := doctorJudgeReply(exact, inline)
+	if strings.Contains(why, "reasoning_content") || strings.Contains(why, "output channel") {
+		t.Errorf("inline reasoning worded as the server's field: %q", why)
+	}
+	inline.FinishReason = "length"
+	if _, inc, why := doctorJudgeReply(exact, inline); !inc || !strings.Contains(why, "<think> block") {
+		t.Errorf("an exhausted inline budget: inconclusive=%v %q", inc, why)
+	}
+	field := provider.RawReply{Reasoning: "the word is OK", ReasoningInField: true, FinishReason: "stop"}
+	if _, _, why := doctorJudgeReply(exact, field); !strings.Contains(why, "reasoning_content") {
+		t.Errorf("field reasoning lost its wording: %q", why)
+	}
+}
+
+// /thinking says a muse model's blocks stay in the log only while that
+// is true: with fold_thinking off nothing is logged, and saying it is
+// would be telling somebody their reasoning is kept when it is not.
+func TestTheThinkingReplySaysWhatIsKept(t *testing.T) {
+	for _, fold := range []bool{true, false} {
+		loop := foldLoop(t, "http://127.0.0.1:1", "muse-glimmer")
+		loop.SetFoldThinkingEnabled(fold)
+		if _, err := loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+			t.Fatal(err)
+		}
+		out := replyTo(t, loop, "s1", "/thinking off")
+		if kept := strings.Contains(out, "kept in the log"); kept != fold {
+			t.Errorf("fold_thinking %v: the reply says the log keeps the blocks = %v:\n%s", fold, kept, out)
+		}
 	}
 }

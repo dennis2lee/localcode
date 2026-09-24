@@ -253,6 +253,28 @@ type Model struct {
 	// thinkingLive says a reasoning block may be streaming; see
 	// liveThinking, which it only lets skip a search.
 	thinkingLive bool
+	// hideThinking is this client's copy of the daemon's show_thinking,
+	// inverted so the zero value is the daemon's default: shown. Read at
+	// start and on every switch, and kept current by settings.changed and
+	// by each reasoning delta, which carries it. A block replayed from
+	// the log is drawn only while it is false.
+	hideThinking bool
+	// turnEpoch moves every time this client sends a prompt, and
+	// turnMarks at every turn boundary the stream shows: a prompt
+	// arriving from anywhere, and a turn ending. A lost-turn check stands
+	// down on a send made at any point after it began, and on a boundary
+	// seen after it asked the daemon: before that, the stream is still
+	// replaying what it missed, which can hold the lost turn's own
+	// prompt. See lostTurnDueMsg.
+	turnEpoch uint64
+	turnMarks uint64
+	// skipFoldDeltas drops reasoning deltas after a block was drawn from
+	// the log with none streaming. A client that connects just as a
+	// block ends gets the logged block from the backlog and then that
+	// same block's last deltas from the live queue, which would otherwise
+	// open it a second time. Cleared by the block's own end, or by
+	// anything that begins the next message.
+	skipFoldDeltas bool
 	// spin/spinning drive the indicator's animation. spinning guards
 	// against starting a second tick loop: one loop keeps rescheduling
 	// itself while the client is busy and dies on its first tick after
@@ -323,6 +345,20 @@ func (m Model) Init() tea.Cmd {
 	// event to replay, so without asking once at the start the footer
 	// named no level until the first switch — on a conversation where one
 	// was in force the whole time.
-	return tea.Batch(listenForEvent(m.events, m.streamGen), m.fetchAgents(), m.fetchCommands(),
-		m.fetchSkills(), m.fetchSlashCommands(), m.fetchReferenceNames(), m.fetchEffort(false))
+	//
+	// The settings before the first event, in sequence rather than beside
+	// it: the replay can hold reasoning blocks, and whether to draw them
+	// is the daemon's show_thinking, which has to be known first.
+	return tea.Batch(tea.Sequence(m.fetchSettings(), listenForEvent(m.events, m.streamGen)), m.fetchAgents(),
+		m.fetchCommands(), m.fetchSkills(), m.fetchSlashCommands(), m.fetchReferenceNames(), m.fetchEffort(false))
+}
+
+// WithStreamCancel hands the model the cancel for the stream it was
+// built with, so the first switch to another conversation closes it the
+// way every later switch closes its own. Without it the first stream
+// outlived the switch, a connection and a goroutine that went on
+// receiving another conversation's events until its buffer filled.
+func (m Model) WithStreamCancel(cancel context.CancelFunc) Model {
+	m.streamCancel = cancel
+	return m
 }

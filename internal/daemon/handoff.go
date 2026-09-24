@@ -118,30 +118,35 @@ func (d *Daemon) publishOwned() error {
 // it changes as the other daemon finishes turns, and caching it would be
 // caching the one fact that is supposed to change.
 func (d *Daemon) ownedElsewhere(sessionID string) bool {
+	return d.sessionsOwnedElsewhere()[sessionID]
+}
+
+// sessionsOwnedElsewhere is every session the daemon this one replaced
+// is still writing, read once. See ownedElsewhere.
+func (d *Daemon) sessionsOwnedElsewhere() map[string]bool {
 	path := d.handoffPath()
 	if path == "" {
-		return false
+		return nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return nil
 	}
 	var m handoffManifest
 	if json.Unmarshal(data, &m) != nil || m.PID == os.Getpid() {
-		return false
+		return nil
 	}
 	if !pidAlive(m.PID) {
 		// A retiring daemon that died mid-drain. Its sessions are nobody's
 		// now, and a file that says otherwise would lock them forever.
 		_ = os.Remove(path)
-		return false
+		return nil
 	}
+	owned := make(map[string]bool, len(m.Sessions))
 	for _, id := range m.Sessions {
-		if id == sessionID {
-			return true
-		}
+		owned[id] = true
 	}
-	return false
+	return owned
 }
 
 // takeOwnership is what the new daemon does the first time it is about
@@ -195,6 +200,63 @@ func (d *Daemon) NoteTakeover() {
 		d.ownedAtStart[id] = true
 	}
 	d.takeoverMu.Unlock()
+	if len(m.Sessions) > 0 {
+		go d.watchTakeover()
+	}
+}
+
+// takeoverPoll is how often a daemon that took over looks at the
+// retiring one's manifest. The retiring daemon rewrites it at about the
+// same rate as its sessions finish. A variable so tests need not wait.
+var takeoverPoll = 250 * time.Millisecond
+
+// watchTakeover follows the retiring daemon's manifest until it has let
+// go of every session it listed at startup, and acts on each release
+// the moment it happens rather than at the next write to the session.
+//
+// Two things were left undone until then. GET /api/sessions lists an
+// owned session as busy, and nothing said when that stopped: a client
+// that loaded the list went on showing it running. And a stream that had
+// reconnected to this daemon during the drain never got what the old one
+// wrote after this one loaded the session, its turn.done included, so a
+// client waiting on that turn waited for good. A release now re-reads
+// the session (takeOwnership, which ends its streams so they resume
+// against the whole log) and tells every client it is idle.
+//
+// It ends when nothing is left owned. The retiring daemon exits after
+// its drain deadline at the latest, and a manifest whose pid is gone
+// counts as released, so this does not outlive the handoff.
+func (d *Daemon) watchTakeover() {
+	d.takeoverMu.Lock()
+	waiting := make(map[string]bool, len(d.ownedAtStart))
+	for id := range d.ownedAtStart {
+		waiting[id] = true
+	}
+	d.takeoverMu.Unlock()
+	for len(waiting) > 0 {
+		time.Sleep(takeoverPoll)
+		owned := d.sessionsOwnedElsewhere()
+		for id := range waiting {
+			if owned[id] {
+				continue
+			}
+			delete(waiting, id)
+			if err := d.takeOwnership(id); err != nil {
+				fmt.Fprintf(os.Stderr, "handoff: could not re-read session %s: %v\n", id, err)
+			}
+			// Not when a turn has already begun here: a write to the
+			// session claims it the moment the old daemon lets go, which
+			// can be before this poll sees the release, and that turn
+			// announced itself busy when it began.
+			if len(d.turns.anyBusy([]string{id})) > 0 {
+				continue
+			}
+			d.daemonEvents.send(events.Event{
+				Type: events.TypeSessionActivity,
+				Data: map[string]any{"session": id, "busy": false},
+			})
+		}
+	}
 }
 
 // claimSession is the check every write path to a session goes through

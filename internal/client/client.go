@@ -120,6 +120,27 @@ func (c *Client) ListSessions(ctx context.Context) ([]session.Session, error) {
 	return out, err
 }
 
+// SessionBusy reports whether the daemon is running a turn in a session
+// now, and whether it knows the session at all. Read off the session
+// list, which is where the daemon says it: the session record itself
+// has no such field, because busy is the daemon's state and not the
+// conversation's.
+func (c *Client) SessionBusy(ctx context.Context, sessionID string) (busy, found bool, err error) {
+	var out []struct {
+		ID   string `json:"id"`
+		Busy bool   `json:"busy"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/api/sessions", nil, &out); err != nil {
+		return false, false, err
+	}
+	for _, s := range out {
+		if s.ID == sessionID {
+			return s.Busy, true, nil
+		}
+	}
+	return false, false, nil
+}
+
 // AgentInfo is one configured agent, as offered by the daemon's agent
 // picker (GET /api/agents) — enough to build a Tab-cycle or dropdown
 // without exposing that agent's system prompt or tool restrictions. Model
@@ -356,15 +377,20 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 	return out.Version, err
 }
 
-// Settings is the daemon's current live "/config" settings.
+// Settings is the daemon's current live "/config" settings, the part of
+// GET /api/settings a Go client reads.
 type Settings struct {
 	AutoCompactEnabled bool `json:"auto_compact_enabled"`
 	ShowTPS            bool `json:"show_tps"`
+	// ShowThinking is whether reasoning is drawn. A pointer, because a
+	// daemon older than the key answers without it, and a plain false
+	// would read that as "hide".
+	ShowThinking *bool `json:"show_thinking,omitempty"`
 }
 
 // GetSettings fetches the daemon's current process-global settings — for
 // a client that just opened to know the current state without waiting for
-// a config.changed event.
+// a settings.changed event.
 func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 	var out Settings
 	err := c.doJSON(ctx, http.MethodGet, "/api/settings", nil, &out)
@@ -515,12 +541,44 @@ func (c *Client) CancelTask(ctx context.Context, taskID string) error {
 // end of the conversation shows a reply that stops halfway and a turn
 // that never finishes.
 func (c *Client) StreamEvents(ctx context.Context, sessionID string, since uint64) <-chan events.Event {
+	return c.streamEvents(ctx, sessionID, since, false)
+}
+
+// TypeReconnected marks the moment a followed stream came back after it
+// had ended or failed to open. It is the client's own event, never the
+// daemon's: Seq 0, no data, delivered in order just before the first
+// event the new connection brings. Declared here rather than in package
+// events because nothing on the wire ever carries it.
+const TypeReconnected events.Type = "client.reconnected"
+
+// StreamEventsMarkingReconnects is StreamEvents with one addition: every
+// time the stream comes back after it had ended or failed to open, it
+// delivers a TypeReconnected event first. That is the one moment a
+// client can know the daemon behind the stream may be a different
+// process, one that never ran the turn the client was waiting on. See
+// the TUI's lost-turn check.
+func (c *Client) StreamEventsMarkingReconnects(ctx context.Context, sessionID string, since uint64) <-chan events.Event {
+	return c.streamEvents(ctx, sessionID, since, true)
+}
+
+func (c *Client) streamEvents(ctx context.Context, sessionID string, since uint64, mark bool) <-chan events.Event {
 	out := make(chan events.Event, 256)
 	go func() {
 		defer close(out)
 		last := since
+		// interrupted is whether the stream has ended or failed since
+		// it was first opened: a connection that opens after that is a
+		// reconnect.
+		interrupted := false
 		for {
 			ch, err := c.SubscribeEvents(ctx, sessionID, last)
+			if err == nil && mark && interrupted {
+				select {
+				case out <- events.Event{Type: TypeReconnected}:
+				case <-ctx.Done():
+					return
+				}
+			}
 			if err == nil {
 				for ev := range ch {
 					if ev.Seq > 0 {
@@ -538,6 +596,7 @@ func (c *Client) StreamEvents(ctx context.Context, sessionID string, since uint6
 			// stream the daemon dropped is exactly the case this exists
 			// for. The pause keeps a hard-down daemon from becoming a
 			// spin loop.
+			interrupted = true
 			select {
 			case <-ctx.Done():
 				return

@@ -21,7 +21,7 @@ import (
 // multi-session sidebar, no scheduled tasks panel, no MCP server monitor,
 // and runs inside the current directory without multi-workspace switching.
 //
-// 18 of the 49 event types are intentionally unhandled here:
+// 17 of the 50 event types are intentionally unhandled here:
 //   - checkpoint: filesystem snapshot for /rewind restoration; read only by
 //     the daemon during rewind, not rendered in the terminal transcript.
 //   - permission.forgotten: daemon log marker for /read-outside and
@@ -51,8 +51,6 @@ import (
 //   - task.progress: transient tool progress ("doing") of background tasks;
 //     displayed in Web UI task indicator, whereas TUI task status only tracks
 //     spawned/status lifecycle.
-//   - settings.changed: daemon-wide settings snapshot; consumed by Web UI
-//     settings modal, whereas TUI does not configure daemon-wide settings.
 //   - workspace.changed: session directory switch; consumed by Web UI
 //     workspace picker, whereas TUI runs within the current terminal directory.
 //   - compacted: history compaction summary event; TUI compaction runs locally
@@ -76,7 +74,6 @@ var tuiIgnoredEventTypes = map[string]string{
 	"schedule.renamed":     "scheduled task title changed; consumed by Web UI schedules panel, whereas TUI has no schedule UI",
 	"schedule.removed":     "scheduled task deleted; consumed by Web UI schedules panel, whereas TUI has no schedule UI",
 	"task.progress":        "transient tool progress of background tasks; displayed in Web UI task indicator, whereas TUI task status only tracks spawned/status lifecycle",
-	"settings.changed":     "daemon-wide settings snapshot; consumed by Web UI settings modal, whereas TUI does not configure daemon-wide settings",
 	"workspace.changed":    "session directory switch; consumed by Web UI workspace picker, whereas TUI runs within the current terminal directory",
 	"config.changed":       "session configuration change; TUI handles /config commands directly in the client rather than consuming broadcast config changes",
 	"permissions.changed":  "session permission flags snapshot; consumed by Web UI permission modal, whereas TUI handles permissions via request modals and local commands",
@@ -103,7 +100,7 @@ var webUIIgnoredEventTypes = map[string]string{
 // event stream (/api/sessions/{taskID}/events?tail=200). It renders transcript lines
 // and tool executions for that subtask.
 //
-// 32 of the 49 event types are deliberately not handled in taskview:
+// 33 of the 50 event types are deliberately not handled in taskview:
 //   - checkpoint: daemon-internal file rewind snapshot; never displayed in subtask transcript modal.
 //   - permission.forgotten: daemon-internal permission reset marker; subtasks do not run interactive permission resets.
 //   - mcp.status: daemon-wide MCP server status; not relevant to a single background task view.
@@ -128,6 +125,7 @@ var webUIIgnoredEventTypes = map[string]string{
 //   - task.progress: subtask tool progress is already rendered in real-time by tool.start and tool.end in the modal.
 //   - thinking.delta: reasoning streaming chunk; suppressed in task modal to keep background task output concise.
 //   - thinking.end: reasoning end marker; suppressed in task modal along with thinking.delta.
+//   - thinking.block: a muse reasoning block as the log keeps it; suppressed in task modal along with thinking.delta and thinking.end.
 //   - input.request: interactive mid-turn user prompt; subtasks run unattended and cannot prompt the user interactively.
 //   - input.resolved: interactive mid-turn response; subtasks run unattended without input prompts.
 //   - plan.updated: checklist plan; subtask transcript shows tool calls directly rather than plan checklists.
@@ -161,6 +159,7 @@ var taskViewIgnoredEventTypes = map[string]string{
 	"task.progress":        "subtask tool progress is already rendered in real-time by tool.start and tool.end in the modal",
 	"thinking.delta":       "reasoning streaming chunk; suppressed in task modal to keep background task output concise",
 	"thinking.end":         "reasoning end marker; suppressed in task modal along with thinking.delta",
+	"thinking.block":       "logged muse reasoning block; suppressed in task modal along with thinking.delta and thinking.end, to keep background task output concise",
 	"input.request":        "interactive mid-turn user prompt; subtasks run unattended and cannot prompt the user interactively",
 	"input.resolved":       "interactive mid-turn response; subtasks run unattended without input prompts",
 	"plan.updated":         "checklist plan; subtask transcript shows tool calls directly rather than plan checklists",
@@ -178,7 +177,7 @@ var taskViewIgnoredEventTypes = map[string]string{
 // model (user messages, completed assistant text, tool calls, tool results,
 // compaction/cleared boundaries, and collapsed debate blocks) belong in this history.
 //
-// 41 of the 49 event types are intentionally ignored here:
+// 42 of the 50 event types are intentionally ignored here:
 //   - UI/display events (thinking, effort, delegated, plan, error, input.request/resolved)
 //   - Intermediate stream chunks (message.part.delta)
 //   - Daemon/session lifecycle events (session.*, mcp.status, daemon.replaced)
@@ -189,6 +188,7 @@ var rehydrateIgnoredEventTypes = map[string]string{
 	"message.part.delta":   "streaming text delta; final assistant message content is captured at message.part.end",
 	"thinking.delta":       "model reasoning tokens; transient broadcast never sent back to LLM providers",
 	"thinking.end":         "reasoning stream boundary; transient broadcast never sent back to LLM providers",
+	"thinking.block":       "muse reasoning logged so the clients draw it folded on replay; never rebuilt into provider history, because the OpenAI-compatible wire takes no reasoning back and a restored history has to size like the live one",
 	"permission.request":   "UI authorization dialog; not part of LLM conversation history",
 	"permission.resolved":  "UI authorization outcome; not part of LLM conversation history",
 	"permission.forgotten": "daemon permission cache eviction; not part of LLM conversation history",

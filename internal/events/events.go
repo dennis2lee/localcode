@@ -49,22 +49,27 @@ const (
 
 	// The model's own reasoning, while it is happening:
 	// {"text","fold","show_thinking"} on each delta, and
-	// {"fold","elapsed_ms"?} when a block ends.
+	// {"fold","elapsed_ms"?} when a block ends. Both broadcast, never
+	// logged: a delta is worth watching live, and a client that is not
+	// looking misses it.
 	//
 	// "fold" is true when the block is to be drawn labelled and folded
 	// once the answer starts: the fold_thinking switch is on and the
-	// model is a muse. "show_thinking" rides along the way show_tps rides
-	// on usage, for a client that keeps no copy of the settings.
-	// "elapsed_ms" is the time from the block's first delta to its end.
-	//
-	// Broadcast, never written to a log, and that is the whole of the
-	// design. Reasoning is worth watching live and is not part of the
-	// conversation afterwards — the API does not want it back on a later
-	// turn, and a transcript that keeps it makes every reply twice as
-	// long to scroll past for something nobody reads twice. A client that
-	// is not looking simply misses it, which is correct.
+	// model is a muse. "show_thinking" rides along with the delta, which
+	// is always current because it is never replayed. "elapsed_ms" is
+	// the time from the block's first delta to its end.
 	TypeThinkingDelta Type = "thinking.delta"
 	TypeThinkingEnd   Type = "thinking.end"
+	// TypeThinkingBlock is a fold block as the record keeps it,
+	// {"text","elapsed_ms"}: the whole of the reasoning and its time,
+	// logged when the block ends (or when the stream stops with it
+	// open), just before the broadcast thinking.end. A client folds the
+	// live block on it, taking the text as authoritative the way
+	// message.part.end is for a reply, and on a reload or reconnect draws
+	// the block folded from it. Only fold blocks are logged; other
+	// models' reasoning stays broadcast only. Never rebuilt into the
+	// history the model is sent.
+	TypeThinkingBlock Type = "thinking.block"
 	// TypeError is {"error","recovered"?,"history_replaced"?,"fallback"?}.
 	// "recovered": true is a notice from a turn that carries on.
 	// "fallback" names the model the turn moved to, on the notice that

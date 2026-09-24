@@ -57,48 +57,57 @@ func collapseFinishedDeltas(evs []events.Event) []events.Event {
 
 func (d *Daemon) handleEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	// Where to start replaying from, in precedence order: an explicit
-	// ?since=, then the Last-Event-ID a reconnecting EventSource sends
-	// back, then ?tail=.
+	// Where to start replaying from, in precedence order: the
+	// Last-Event-ID a reconnecting EventSource sends back, then an
+	// explicit ?since=, then ?tail=.
 	//
-	// Last-Event-ID has to beat ?tail= rather than the other way round,
-	// and the ordering is the whole correctness argument: EventSource
-	// reconnects to the *same URL*, so the ?tail= that opened the stream
-	// is still on it. Preferring tail there would re-cut to the end of
-	// the log on every dropped connection and silently drop everything
-	// the client missed while it was away — which is precisely the
-	// failure the resume machinery exists to prevent.
-	since := uint64(0)
-	switch {
-	case r.URL.Query().Get("since") != "":
+	// Last-Event-ID has to beat both, and the ordering is the whole
+	// correctness argument: EventSource reconnects to the *same URL*, so
+	// the ?tail= or ?since= that opened the stream is still on it, and
+	// says where the stream started rather than where it got to.
+	// Preferring tail there would re-cut to the end of the log on every
+	// dropped connection and silently drop everything the client missed
+	// while it was away; preferring since replayed everything the client
+	// had drawn since it opened. The Go client never sends the header, so
+	// its ?since= decides.
+	//
+	// The query is checked before any of that is decided, so an invalid
+	// ?since= or ?tail= is a 400 whatever header came with it.
+	var sinceQ uint64
+	hasSince := r.URL.Query().Get("since") != ""
+	if hasSince {
 		v, err := strconv.ParseUint(r.URL.Query().Get("since"), 10, 64)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid since: %w", err))
 			return
 		}
-		since = v
-
-	case r.Header.Get("Last-Event-ID") != "":
-		// Browsers' EventSource auto-reconnects on a dropped connection
-		// and resends whatever `id:` value the server last sent, so a
-		// client that never set ?since= explicitly still resumes without
-		// re-fetching what it already has.
-		if v, err := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64); err == nil {
-			since = v
+		sinceQ = v
+	}
+	tailN := -1
+	if q := r.URL.Query().Get("tail"); q != "" {
+		n, err := strconv.Atoi(q)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid tail: %q", q))
+			return
 		}
+		tailN = n
+	}
+	since := uint64(0)
+	lastEventID, lastErr := strconv.ParseUint(r.Header.Get("Last-Event-ID"), 10, 64)
+	switch {
+	case r.Header.Get("Last-Event-ID") != "" && lastErr == nil:
+		since = lastEventID
 
-	case r.URL.Query().Get("tail") != "":
+	case hasSince:
+		since = sinceQ
+
+	case tailN >= 0:
 		// ?tail=N opens a long conversation at its end rather than its
 		// beginning: the client asks for roughly the last N events and
 		// the daemon moves that cut back to a turn boundary. See
 		// Store.TailSince for why the boundary matters as much as the
 		// count.
-		n, err := strconv.Atoi(r.URL.Query().Get("tail"))
-		if err != nil || n < 0 {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid tail: %q", r.URL.Query().Get("tail")))
-			return
-		}
-		v, err := d.Loop.Store.TailSince(id, n)
+		v, err := d.Loop.Store.TailSince(id, tailN)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return

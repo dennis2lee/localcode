@@ -4,7 +4,7 @@ import {
   appendUser, appendTool, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, foldThinking, clearTranscript, showEarlierBanner,
-  abandonPendingUsers,
+  abandonPendingUsers, settleThinkingBlock, hasLiveThinking,
 } from './transcript.js';
 import { findRefresh } from './find.js';
 import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
@@ -111,6 +111,7 @@ const handlers = {
     // turn that ended without saying so, and the next reasoning must not
     // be written into it above this prompt.
     foldThinking(0);
+    app.turnMoves++;
     // Every prompt this session has seen goes into Up/Down recall, whoever
     // typed it and whenever. On the replay that opens a session this is
     // what rebuilds the list, so recall survives a reload and a switch
@@ -118,14 +119,18 @@ const handlers = {
     recordHistoryEntry(d.text);
     appendUser(d.text, d.images);
   },
-  // Reasoning, live. Never replayed, so a reload does not bring it back
-  // and is not meant to: the answer is what the transcript keeps.
+  // Reasoning, live. The deltas are never replayed; a muse model's block
+  // comes back on a reload as the thinking.block the daemon logged.
   // "fold" marks a muse model's stream, which is drawn as a labelled
   // block that folds when the answer starts; see appendThinking.
   'thinking.delta': (d) => {
     if (typeof d.text === 'string') appendThinking(d.text, d.fold === true);
   },
   'thinking.end': (d) => endThinking(typeof d.elapsed_ms === 'number' ? d.elapsed_ms : 0),
+  // A muse model's reasoning block as the log keeps it: live, it folds
+  // the block the deltas drew, with the whole text; on a reload or
+  // reconnect it is the only sign of the block, and draws it folded.
+  'thinking.block': (d) => settleThinkingBlock(d.text, typeof d.elapsed_ms === 'number' ? d.elapsed_ms : 0),
   'message.part.delta': (d) => {
     if (typeof d.text !== 'string') return;
     // The answer has started, so the reasoning before it is over
@@ -140,8 +145,8 @@ const handlers = {
   'message.part.end': (d) => {
     // The message is over, so its reasoning is too. After a reconnect
     // this can be the only sign of the answer: the daemon replays a
-    // finished reply as its end alone, and the reasoning's own end was
-    // never logged.
+    // finished reply as its end alone, and the reasoning's broadcast end
+    // is not replayed.
     foldThinking(0);
     // Command output the person ran is not something the model said, so
     // it draws as a tool line rather than a model message. The header
@@ -165,6 +170,7 @@ const handlers = {
   // The daemon's real turn boundary, emitted after its busy flag is
   // cleared — safe to stop waiting and let the queue drain.
   'turn.done': () => {
+    app.turnMoves++;
     session.runningTool = '';
     setWaiting(false);
     // A reasoning block still open is one whose end never came.
@@ -571,6 +577,7 @@ const handlers = {
     appendTool(`[delegated to ${d.agent || ''}]`);
   },
   'turn.cancelled': () => {
+    app.turnMoves++;
     session.promptQueue = [];
     session.runningTool = '';
     // A cancelled turn is not waiting on an answer. The daemon does send
@@ -605,6 +612,7 @@ const handlers = {
       if (d.history_replaced === true) forgetContextFill();
       return;
     }
+    app.turnMoves++;
     session.runningTool = '';
     setWaiting(false);
     foldThinking(0);
@@ -713,16 +721,67 @@ async function resyncAfterReconnect() {
   // the dropdown is refetched on every reconnect rather than trusted.
   // Unconditional on the turn state below: staleness does not depend on
   // whether a turn was running when the stream went away.
+  // A turn to check: one this page is waiting on, or a reasoning block
+  // still streaming in one it is only watching. Where things stand is
+  // taken before the first await, so nothing that moves during any of
+  // them goes unseen.
+  const inProgress = () => !!session.sessionID && (session.waiting || hasLiveThinking());
+  const check = inProgress();
+  const id = session.sessionID;
+  const sends = app.turnSends;
   await loadAgents();
-  if (!session.waiting || !session.sessionID) return;
+  if (!check) return;
+  // Each await gives the stream a chance to deliver the backlog the
+  // reconnect brought, and a turn.done in it ends the turn by itself.
+  // Nothing is declared unless the page is still where it was: the same
+  // conversation, no prompt sent by this page since the check began, the
+  // turn still in progress, and, from the question to the daemon on, no
+  // turn begun or ended on the stream (a prompt from another client, a
+  // turn.done), since the answer may describe the turn before it. Not
+  // before the question: the backlog being replayed can hold the lost
+  // turn's own prompt.
+  const moves = app.turnMoves;
+  const still = () => session.sessionID === id && app.turnSends === sends && app.turnMoves === moves && inProgress();
+  if (!still()) return;
   await loadSessions();
-  const mine = (app.sessions || []).find(s => s.id === session.sessionID);
+  if (!still()) return;
+  const mine = (app.sessions || []).find(s => s.id === id);
   if (!mine || mine.busy) return;
+  // The daemon clears a session's busy flag just before it writes
+  // turn.done, so an idle answer can overtake the end of a turn that did
+  // finish. One more wait before declaring anything.
+  await new Promise((resolve) => setTimeout(resolve, lostTurnGraceMs));
+  if (!still()) return;
+  if (!session.waiting) {
+    // A turn this page was only watching: its block folds, and nothing
+    // is said, since it was not this page's turn.
+    foldThinking(0);
+    return;
+  }
+  // What a cancelled turn gets, since nothing will ever end this one:
+  // the questions it held are put away, the permission ones queued
+  // behind the one on screen included, and so is a question the model
+  // asked, whose answer would otherwise take the next prompt with it;
+  // its running tool rows stop; and the prompts sent into it or queued
+  // behind it are marked as never handed to anybody, and dropped rather
+  // than sent now.
+  app.turnMoves++;
+  session.pendingPermissionQueue = [];
+  settlePermissionRequest(session.pendingPermissionID);
+  session.pendingAsk = null;
+  session.promptQueue = [];
   setWaiting(false);
+  if (!session.pendingPermissionID) setInputLocked(false);
   foldThinking(0);
+  abandonRunningToolCalls('did not finish');
+  abandonPendingUsers();
   appendTool('[the localcode running this turn is no longer running it; the turn did not finish]');
   renderCommDot();
 }
+
+// lostTurnGraceMs is the wait resyncAfterReconnect takes before it
+// declares a turn lost; see there.
+const lostTurnGraceMs = 1000;
 
 // EventSource.CLOSED, spelled out: the constant is on the constructor,
 // which a test double does not have to provide.
@@ -750,19 +809,34 @@ function scheduleReconnect() {
   if (reconnectTimer !== null) return;
   const wait = reconnectDelay;
   reconnectDelay = Math.min(reconnectDelay * 2, reconnectMaxDelay);
+  const id = session.sessionID;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     // Not if the page has moved on to another conversation in the
-    // meantime: that switch opened a stream of its own.
-    if (session.sessionID) connectEvents();
+    // meantime: that switch opened a stream of its own. And resuming
+    // from where this page got to, not from the tail: the transcript
+    // already holds the tail, and asking for it again drew all of it a
+    // second time.
+    if (session.sessionID && session.sessionID === id) connectEvents({ resume: true });
   }, wait);
 }
 
-export function connectEvents() {
+// lastSeenSeq is the newest logged event this page has drawn from the
+// stream it has open, for a stream rebuilt after the browser gave up on
+// it to resume from. A browser that reconnects on its own sends the
+// same thing as Last-Event-ID; a new EventSource cannot, so the rebuilt
+// one asks with ?since=.
+let lastSeenSeq = 0;
+
+export function connectEvents(opts = {}) {
+  const resume = opts.resume === true && lastSeenSeq > 0;
   if (eventSource) eventSource.close();
   cancelReconnect();
   setConnected(false);
-  sawFirstSeq = false;
+  if (!resume) {
+    lastSeenSeq = 0;
+    sawFirstSeq = false;
+  }
   // ?tail= so opening a long conversation shows its end straight away
   // rather than rebuilding the whole thing first. The daemon moves the
   // cut back to a turn boundary, and a reconnect ignores it in favour of
@@ -772,9 +846,16 @@ export function connectEvents() {
   // banner does, and it is the only way the browser has ever had to see
   // past the cut: the record is complete on disk and this is the request
   // that fetches all of it.
-  const url = wantWholeTranscript
-    ? `/api/sessions/${session.sessionID}/events`
-    : `/api/sessions/${session.sessionID}/events?tail=${TRANSCRIPT_TAIL}`;
+  //
+  // A resumed stream asks with ?since=. When the browser later reconnects
+  // that stream on its own it resends the same URL with a Last-Event-ID,
+  // and the daemon prefers the Last-Event-ID, which is where the stream
+  // got to rather than where it started.
+  const url = resume
+    ? `/api/sessions/${session.sessionID}/events?since=${lastSeenSeq}`
+    : wantWholeTranscript
+      ? `/api/sessions/${session.sessionID}/events`
+      : `/api/sessions/${session.sessionID}/events?tail=${TRANSCRIPT_TAIL}`;
   eventSource = new EventSource(url);
   eventSource.onopen = () => {
     // Up again: the next failure starts its own backoff from the bottom.
@@ -789,6 +870,7 @@ export function connectEvents() {
     if (setConnected(true)) resyncAfterReconnect();
     try {
       const ev = JSON.parse(e.data);
+      if (typeof ev.seq === 'number' && ev.seq > lastSeenSeq) lastSeenSeq = ev.seq;
       noticeTruncation(ev);
       applyEvent(ev);
     } catch (err) { console.error('bad event', err); }

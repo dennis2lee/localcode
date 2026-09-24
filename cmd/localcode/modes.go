@@ -557,12 +557,18 @@ func runTUIClient(serverURL, agentName string, prog *atomic.Pointer[tea.Program]
 	// StreamEvents, not SubscribeEvents: the daemon ends a stream that has
 	// fallen behind rather than skipping events on it, so a client that
 	// does not reconnect and resume would sit on a half-finished reply.
-	eventCh := c.StreamEvents(ctx, sess.ID, 0)
+	// The marking variant, so the TUI knows when the stream came back and
+	// can ask about a turn the daemon behind it may never have run. Its
+	// own context, handed to the model, so the first switch to another
+	// conversation closes it.
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	eventCh := c.StreamEventsMarkingReconnects(streamCtx, sess.ID, 0)
 
 	// The mouse is the terminal's own, so the switch comes from the
 	// config on this machine rather than from the daemon over there —
 	// which, over --server, may be on another machine entirely.
-	model := tui.New(c, sess.ID, sess.Agent, eventCh, localMouseEnabled(tuiLocalConfigPath))
+	model := tui.New(c, sess.ID, sess.Agent, eventCh, localMouseEnabled(tuiLocalConfigPath)).WithStreamCancel(streamCancel)
+	defer streamCancel()
 	p := tea.NewProgram(model)
 	if prog != nil {
 		prog.Store(p)

@@ -280,7 +280,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Unverified: the accepted Bedrock parameter name. The implementation uses Anthropic's name based on working `anthropic_beta` passthrough behavior.
     * Rejection messages identify the setting and how to disable it. The parameter name is defined by one constant.
     * Unverified: Bedrock support for `adaptive`, which newer families accept through the direct API.
-    * Reasoning is streamed but not stored. Reload loses it, and `/context` does not account for its cost.
+    * Reasoning is streamed but not stored. Reload loses it, and `/context` does not account for its cost. Partly done in v0.148.0: a muse model's reasoning blocks are stored and drawn again after a reload while `fold_thinking` is on. Other models' reasoning is still not stored, and `/context` still does not count it.
 
 33. **CI test enforcement. Open for commits; enforced for releases.**
 

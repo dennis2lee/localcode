@@ -44,6 +44,7 @@ func (m *Model) dequeue() tea.Cmd {
 	next := m.queue[0]
 	m.queue = m.queue[1:]
 	m.waiting = true
+	m.turnEpoch++
 	return m.sendMessage(next)
 }
 
@@ -102,6 +103,7 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 			// actually given it; until then this says it was accepted,
 			// since that wait can be minutes.
 			m.appendSent(fmt.Sprintf("[sent — the model will pick this up at its next step] %s", text))
+			m.turnEpoch++
 			return m, m.sendMessage(text)
 		} else {
 			// Commands can't be queued (replaying one later via
@@ -131,5 +133,6 @@ func handleEnter(m Model) (tea.Model, tea.Cmd) {
 	// exactly what a live one did.
 	m.appendPendingUser(text)
 	m.waiting = true
+	m.turnEpoch++
 	return m, tea.Batch(m.sendMessage(text), m.startSpin())
 }

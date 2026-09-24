@@ -42,6 +42,15 @@ type ServerFacts struct {
 	// hides /version and /metrics it is often the only server fact
 	// there is. The caller fills it from the first answer it gets.
 	Fingerprint string `json:"system_fingerprint,omitempty"`
+
+	// ReasoningPlacement is where the server put the model's reasoning:
+	// "inline" inside the answer as <think>…</think>, "field" in
+	// reasoning_content or reasoning, or "" when no answer showed either,
+	// which a baseline written before this existed also reads as. A
+	// setting on the server, not a property of the model: LM Studio sends
+	// it inline with its "separate reasoning_content" developer setting
+	// off. Filled by the caller from the answers it gets.
+	ReasoningPlacement string `json:"reasoning_placement,omitempty"`
 }
 
 // ServerFacts collects what the server at BaseURL says about model.
@@ -218,10 +227,17 @@ func (p *OpenAICompat) getText(ctx context.Context, url string) (string, bool) {
 // RawReply is one non-streamed chat completion, read back with as little
 // interpretation as possible.
 type RawReply struct {
-	Content      string
-	Reasoning    string
-	ToolCalls    []RawToolCall
-	FinishReason string
+	Content   string
+	Reasoning string
+	// ReasoningInline is set when the content began with a <think> block
+	// that was split off it, and Reasoning, if the server sent none in its
+	// own field, is that block.
+	ReasoningInline bool
+	// ReasoningInField is set when the server sent reasoning in
+	// reasoning_content or reasoning.
+	ReasoningInField bool
+	ToolCalls        []RawToolCall
+	FinishReason     string
 	// Fingerprint is the server's system_fingerprint, if it stamps one.
 	Fingerprint  string
 	PromptTokens int
@@ -305,6 +321,24 @@ func (p *OpenAICompat) RawChat(ctx context.Context, body []byte) (RawReply, erro
 	}
 	if out.Reasoning == "" {
 		out.Reasoning = c.Message.Reasoning
+	}
+	out.ReasoningInField = out.Reasoning != ""
+	// Reasoning the server put at the start of the answer is split off
+	// it the way the chat stream splits it, so a canary judges the
+	// answer and not the reasoning in front of it. Decided by whether
+	// the answer began with a block, not by whether the block held
+	// anything: an empty one is still tags in front of the answer. A
+	// server that also sent the reasoning in its own field sent the
+	// block as a copy, and the field's is kept.
+	var split inlineThink
+	r, text := split.feed(out.Content)
+	r2, text2 := split.flush()
+	if split.opened {
+		out.Content = text + text2
+		out.ReasoningInline = true
+		if !out.ReasoningInField {
+			out.Reasoning = r + r2
+		}
 	}
 	for _, tc := range c.Message.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, RawToolCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments})

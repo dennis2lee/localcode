@@ -7,6 +7,13 @@
 // importer's reference stays valid across a reset.
 
 export const app = {
+  // turnSends moves on every prompt this page sends, and turnMoves at
+  // every turn boundary the stream shows: a prompt arriving from
+  // anywhere, a turn ending. Page-wide rather than per conversation, so
+  // leaving a conversation and coming back does not put either back
+  // where a lost-turn check started from. See resyncAfterReconnect.
+  turnSends: 0,
+  turnMoves: 0,
   agents: [],           // [{name, description, model}]
   customCommands: [],   // [{name, description}]
   skills: [],            // [{name, description}], for completing "/<skill name>"

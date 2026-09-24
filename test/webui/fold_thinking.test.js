@@ -203,6 +203,7 @@ test('a turn lost on reconnect folds its block, and the next turn gets its own',
   busy = false;
   app.sse.reopen();
   await app.settle();
+  for (let i = 0; i < 40 && !/did not finish/.test(app.el('transcript').textContent); i++) await app.wait(100);
   assert.match(app.el('transcript').textContent, /did not finish/);
   const [old] = foldBlocks(app);
   assert.equal(old.classList.contains('live'), false, 'the lost turn\'s block still says it is thinking');

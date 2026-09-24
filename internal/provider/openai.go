@@ -136,11 +136,13 @@ type oaStreamChunk struct {
 			// and is the difference between seeing a local model think
 			// and watching it run tools in silence.
 			//
-			// It is displayed and then forgotten: broadcast to the
-			// clients, never written to the session log, and never sent
-			// back — toOpenAIMessages has no case for a thinking block,
-			// which is what keeps a reply that reasoned from growing a
-			// field on the way back in.
+			// It is displayed and never sent back: broadcast to the
+			// clients as it streams, and toOpenAIMessages has no case for
+			// a thinking block, which is what keeps a reply that reasoned
+			// from growing a field on the way back in. A muse model's
+			// block is also written to the session log whole, while
+			// fold_thinking is on, for the clients to draw again (see
+			// consumeStream); the model is never sent it.
 			ReasoningContent string `json:"reasoning_content"`
 			Reasoning        string `json:"reasoning"`
 			ToolCalls        []struct {
@@ -423,6 +425,38 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 		flushed := false
 		// Whether reasoning is currently open, so it can be closed once.
 		reasoned := false
+		// Reasoning a server put at the start of the answer, as
+		// <think>…</think>, split off it. See inlineThink.
+		inline := &inlineThink{}
+		// fieldReasoned is whether this reply has carried reasoning in its
+		// own field. A server that does that and also leaves the block in
+		// the content (llama.cpp's deepseek-legacy format) sends the same
+		// reasoning twice, and the inline copy is dropped rather than
+		// shown a second time.
+		fieldReasoned := false
+		emitReasoning := func(s string) bool {
+			if s == "" {
+				return true
+			}
+			reasoned = true
+			select {
+			case out <- StreamEvent{Type: EventThinkingDelta, ThinkingDelta: s}:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		emitText := func(s string) bool {
+			if s == "" {
+				return true
+			}
+			select {
+			case out <- StreamEvent{Type: EventTextDelta, TextDelta: s}:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 
 		// endReasoning closes the reasoning block. No text travels with
 		// it: the deltas were the whole of it, and the block a thinking
@@ -552,12 +586,34 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			choice := chunk.Choices[0]
 
 			if reasoning := choice.Delta.ReasoningContent + choice.Delta.Reasoning; reasoning != "" {
-				reasoned = true
-				select {
-				case out <- StreamEvent{Type: EventThinkingDelta, ThinkingDelta: reasoning}:
-				case <-ctx.Done():
+				fieldReasoned = true
+				if !emitReasoning(reasoning) {
 					return
 				}
+			}
+
+			// The answer's text, less any reasoning at its start.
+			var text string
+			if choice.Delta.Content != "" {
+				var inlineReasoning string
+				inlineReasoning, text = inline.feed(choice.Delta.Content)
+				if fieldReasoned {
+					inlineReasoning = ""
+				}
+				if !emitReasoning(inlineReasoning) {
+					return
+				}
+			}
+			// A tool call ends reasoning the model never closed.
+			if len(choice.Delta.ToolCalls) > 0 && inline.inside() {
+				r, t := inline.flush()
+				if fieldReasoned {
+					r = ""
+				}
+				if !emitReasoning(r) {
+					return
+				}
+				text += t
 			}
 
 			// The reasoning is over the moment anything else arrives.
@@ -567,19 +623,15 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			// call is the signal. Closing it matters to the clients: the
 			// TUI's status line says "thinking" until it is told
 			// otherwise, and the Web UI leaves the block open.
-			if reasoned && (choice.Delta.Content != "" || len(choice.Delta.ToolCalls) > 0) {
+			if reasoned && (text != "" || len(choice.Delta.ToolCalls) > 0) {
 				reasoned = false
 				if !endReasoning() {
 					return
 				}
 			}
 
-			if choice.Delta.Content != "" {
-				select {
-				case out <- StreamEvent{Type: EventTextDelta, TextDelta: choice.Delta.Content}:
-				case <-ctx.Done():
-					return
-				}
+			if !emitText(text) {
+				return
 			}
 
 			for _, tc := range choice.Delta.ToolCalls {
@@ -608,6 +660,16 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			}
 
 			if choice.FinishReason != "" {
+				// What the inline split was still holding is placed now:
+				// the end of a reasoning block never closed, or a start
+				// that never became a tag.
+				r, t := inline.flush()
+				if fieldReasoned {
+					r = ""
+				}
+				if !emitReasoning(r) {
+					return
+				}
 				// A reply that reasoned and then stopped without saying
 				// anything closes here. Rare, and the cost of missing it
 				// is a status line stuck on "thinking" for the rest of
@@ -617,6 +679,9 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 					if !endReasoning() {
 						return
 					}
+				}
+				if !emitText(t) {
+					return
 				}
 				hadCalls := flushCalls()
 				// A reply that asked for tools asked for tools, whatever
@@ -640,11 +705,21 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 			return
 		}
 		// And the same for a stream that simply ended.
+		r, t := inline.flush()
+		if fieldReasoned {
+			r = ""
+		}
+		if !emitReasoning(r) {
+			return
+		}
 		if reasoned {
 			reasoned = false
 			if !endReasoning() {
 				return
 			}
+		}
+		if !emitText(t) {
+			return
 		}
 		// The stream ended without a finish_reason ever arriving. Whatever
 		// the server meant by that, the tool calls it streamed are still

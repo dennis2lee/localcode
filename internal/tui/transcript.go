@@ -124,9 +124,18 @@ func (m *Model) appendPendingUser(text string) {
 // resolvePendingUser drops the oldest echo of text, and reports whether it
 // found one. Oldest first: the same prompt can be sent twice, and each send
 // owns one echo.
+//
+// A line sent into a running turn is an echo too: "[sent — …] text"
+// stands for the message until the model is given it, and then the
+// message's own line is drawn. Left in place, it said "will pick this
+// up" about a message already picked up, and a later stop or lost turn
+// relabelled it as never seen.
 func (m *Model) resolvePendingUser(text string) bool {
 	for i, e := range m.transcript {
-		if e.kind != entryPending || e.text != text {
+		switch {
+		case e.kind == entryPending && e.text == text:
+		case e.kind == entrySent && sentText(e.text) == text:
+		default:
 			continue
 		}
 		m.transcript = append(m.transcript[:i:i], m.transcript[i+1:]...)
@@ -278,4 +287,13 @@ func (m *Model) refreshViewport() {
 	if atBottom {
 		m.viewport.GotoBottom()
 	}
+}
+
+// sentText is the message an entrySent line stands for, less its
+// "[sent — …] " prefix.
+func sentText(line string) string {
+	if _, rest, found := strings.Cut(line, "] "); found {
+		return rest
+	}
+	return line
 }

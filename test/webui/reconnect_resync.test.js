@@ -45,6 +45,9 @@ test('a turn whose daemon went away stops being reported as running', async () =
   busy = false;
   app.sse.reopen();
   await app.settle();
+  // The verdict waits out a grace for a turn.done still on its way, so
+  // it is waited for rather than slept past.
+  for (let i = 0; i < 40 && app.state.waiting; i++) await app.wait(100);
 
   assert.equal(app.state.waiting, false, 'the page went on claiming a turn that no daemon is running');
   assert.equal(app.el('stop-btn').hidden, true, 'a stop button was still offered for a turn that is gone');
