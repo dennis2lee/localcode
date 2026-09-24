@@ -264,3 +264,42 @@ func TestAReleasedSessionIsReReadAndAnnouncedIdle(t *testing.T) {
 		}
 	}
 }
+
+// A turn that began on the released session before the watcher saw the
+// release is not announced idle after it announced itself busy.
+func TestAReleaseDoesNotAnnounceIdleOverATurnThatBegan(t *testing.T) {
+	prev := takeoverPoll
+	takeoverPoll = 150 * time.Millisecond
+	t.Cleanup(func() { takeoverPoll = prev })
+
+	d, store, dir := handoffDaemon(t)
+	if _, err := store.CreateSession("S1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest(t, dir, "S1")
+	d.NoteTakeover()
+	ch, unsub := d.daemonEvents.subscribe()
+	defer unsub()
+
+	if err := os.Remove(filepath.Join(dir, handoffFile)); err != nil {
+		t.Fatal(err)
+	}
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !d.turns.begin("S1", cancel) {
+		t.Fatal("could not begin a turn")
+	}
+	defer d.turns.end("S1")
+
+	deadline := time.After(600 * time.Millisecond)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == events.TypeSessionActivity && ev.Data["session"] == "S1" && ev.Data["busy"] == false {
+				t.Fatal("the running turn was announced idle")
+			}
+		case <-deadline:
+			return
+		}
+	}
+}

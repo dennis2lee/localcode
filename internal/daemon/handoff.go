@@ -244,6 +244,13 @@ func (d *Daemon) watchTakeover() {
 			if err := d.takeOwnership(id); err != nil {
 				fmt.Fprintf(os.Stderr, "handoff: could not re-read session %s: %v\n", id, err)
 			}
+			// Not when a turn has already begun here: a write to the
+			// session claims it the moment the old daemon lets go, which
+			// can be before this poll sees the release, and that turn
+			// announced itself busy when it began.
+			if len(d.turns.anyBusy([]string{id})) > 0 {
+				continue
+			}
 			d.daemonEvents.send(events.Event{
 				Type: events.TypeSessionActivity,
 				Data: map[string]any{"session": id, "busy": false},
