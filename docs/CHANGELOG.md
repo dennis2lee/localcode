@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+The two macOS apps carry the application icon.
+
+**Fixed**
+
+* **`LocalCode.app` and the desktop-window app were drawn with the generic application icon**
+  * Neither bundle carried an icon file or named one in `Info.plist`, so Finder, the Dock and Launchpad drew the default.
+  * `build/package-mac.sh` and `build/package-mac-gui.sh` copy `build/icon/localcode.icns` into `Contents/Resources` and name it with `CFBundleIconFile`.
+  * The icon is the Windows icon's artwork, with the same split by size: the 16px image is drawn from `icon-16.svg`, the 32px image from `icon-small.svg`, and larger images from `icon.svg`.
+  * `build/icon/make-icns.sh` renders the file from the SVGs. The file is committed, so a release needs no renderer.
+  * `cmd/localcode/macicon_test.go` fails when a script stops installing the icon, and when the file is cut short, lacks a size, has an opaque corner, or no longer matches the artwork's colour.
+
 ## v0.150.0
 
 A link a model writes opens in the system's default browser in the Windows window, groups in the session panel can be reordered by dragging, the model's question is drawn at the size of its replies, and the Agents tab says what its switches do.

@@ -44,6 +44,15 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$OUT/${BIN_NAME}" "$APP/Contents/MacOS/${BIN_NAME}-bin"
 
+# The icon. A bundle with no icon file and no CFBundleIconFile in its
+# Info.plist is drawn with the generic application icon by Finder, the Dock
+# and Launchpad, which is what both macOS apps did before this. The .icns is
+# committed; build/icon/make-icns.sh renders it from the SVGs, and
+# cmd/localcode/macicon_test.go fails if this step goes missing. A missing
+# file stops the build here (set -e) rather than shipping a plain icon.
+mkdir -p "$APP/Contents/Resources"
+cp "$ROOT/build/icon/localcode.icns" "$APP/Contents/Resources/AppIcon.icns"
+
 # This is a TUI app: launching the raw binary via Finder attaches no
 # terminal, so the bundle's entry point opens Terminal.app and runs the
 # real binary inside it instead of executing it directly.
@@ -69,6 +78,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<string>${VERSION}</string>
 	<key>CFBundleExecutable</key>
 	<string>${BIN_NAME}</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSMinimumSystemVersion</key>
