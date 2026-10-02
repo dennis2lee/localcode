@@ -184,3 +184,70 @@ test('sending a message with an attached image sends image payload and renders i
   assert.equal(userImgs.length, 1);
   assert.equal(userImgs[0].src, `data:image/png;base64,${SAMPLE_PNG_B64}`);
 });
+
+function makeDropFile(type = 'image/png', size = 512, base64 = SAMPLE_PNG_B64, name = 'screenshot.png') {
+  return { type, size, base64, name };
+}
+
+test('dropping a PNG attaches it as an image, not as a file path', async () => {
+  const app = await load();
+  const input = app.el('input');
+
+  input.fire('drop', {
+    dataTransfer: { files: [makeDropFile('image/png', 512, SAMPLE_PNG_B64, 'screenshot.png')] },
+  });
+  await app.settle();
+
+  const images = app.internals.getAttachedImages();
+  assert.equal(images.length, 1, 'dropped PNG should be attached as an image');
+  assert.equal(images[0].mediaType, 'image/png');
+  assert.equal(images[0].data, SAMPLE_PNG_B64);
+  assert.equal(input.value, '', 'no file-path text should be inserted for an image');
+
+  const container = app.el('center').querySelector('.composer-attachments');
+  assert.ok(container, 'composer-attachments element should exist');
+  assert.equal(container.querySelectorAll('.attachment-thumb').length, 1);
+});
+
+test('dropping a non-image still uploads it and names it by path', async () => {
+  let uploaded = null;
+  const app = await load({
+    routes: {
+      'POST /api/sessions/*/uploads': (body) => {
+        uploaded = body;
+        return { path: '/uploads/sess-1/notes.txt' };
+      },
+    },
+  });
+  const input = app.el('input');
+
+  input.fire('drop', {
+    dataTransfer: { files: [{ type: 'text/plain', size: 5, name: 'notes.txt' }] },
+  });
+  await app.settle();
+
+  assert.equal(app.internals.getAttachedImages().length, 0, 'text file must not become an image');
+  assert.ok(input.value.includes('[attached file: /uploads/sess-1/notes.txt]'), 'text file keeps the path reference: ' + input.value);
+});
+
+test('a dropped image sends through the image wire, like a pasted one', async () => {
+  const app = await load();
+  const input = app.el('input');
+
+  input.fire('drop', {
+    dataTransfer: { files: [makeDropFile('image/png', 512, SAMPLE_PNG_B64, 'screenshot.png')] },
+  });
+  await app.settle();
+
+  app.type('what is in this image');
+  await app.el('send').click();
+  await app.settle();
+
+  const calls = app.callsTo('POST', '/api/sessions/sess-1/messages');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, 'what is in this image');
+  assert.ok(Array.isArray(calls[0].body.images));
+  assert.equal(calls[0].body.images.length, 1);
+  assert.equal(calls[0].body.images[0].media_type, 'image/png');
+  assert.equal(calls[0].body.images[0].data, SAMPLE_PNG_B64);
+});

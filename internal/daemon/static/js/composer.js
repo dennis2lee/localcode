@@ -445,22 +445,29 @@ export async function handlePaste(e) {
 
   e.preventDefault();
 
-  let rawType = (imageItem.type || '').toLowerCase().trim();
+  const file = typeof imageItem.getAsFile === 'function' ? imageItem.getAsFile() : (imageItem.file || imageItem);
+  if (!file) return;
+  await addImageFile(file, 'pasted-image');
+}
+
+// addImageFile puts one image file on the composer, through the same path
+// pasted images take: type check, size check, base64 read, thumbnail row.
+// Dropped files arrive here from main.js; pasted ones from handlePaste
+// above. One path so a PNG behaves the same however it reached the box.
+export async function addImageFile(file, fallbackName) {
+  let rawType = ((file.type || '') + '').toLowerCase().trim();
   if (rawType === 'image/jpg') rawType = 'image/jpeg';
 
   if (!SUPPORTED_IMAGE_TYPES.has(rawType)) {
-    appendError(`unsupported image type "${imageItem.type}": only PNG, JPEG, GIF, and WEBP are supported`);
-    return;
+    appendError(`unsupported image type "${file.type}": only PNG, JPEG, GIF, and WEBP are supported`);
+    return false;
   }
-
-  const file = typeof imageItem.getAsFile === 'function' ? imageItem.getAsFile() : (imageItem.file || imageItem);
-  if (!file) return;
 
   const currentTotal = attachedImages.reduce((sum, img) => sum + (img.size || 0), 0);
   const fileSize = file.size || 0;
   if (fileSize + currentTotal > MAX_IMAGE_BYTES) {
     appendError(`image exceeds the 10MB limit (${fileSize} bytes)`);
-    return;
+    return false;
   }
 
   try {
@@ -469,11 +476,13 @@ export async function handlePaste(e) {
       mediaType: rawType,
       data: b64,
       size: fileSize || (b64 ? Math.floor(b64.length * 0.75) : 0),
-      name: file.name || 'pasted-image',
+      name: file.name || fallbackName || 'image',
     });
     renderAttachments();
+    return true;
   } catch (err) {
-    appendError(`could not read pasted image: ${err}`);
+    appendError(`could not read image: ${err}`);
+    return false;
   }
 }
 

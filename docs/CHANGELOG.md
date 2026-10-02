@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.153.0
+
+Dropped images reach the model as images.
+
+**Fixed**
+
+* **A dropped PNG arrived as a file path, not as an image**
+  * Dragging a file onto the prompt box uploaded everything and inserted `[attached file: path]` text. Images went down that same path, so the model received a path string instead of an image block. Pasted images were unaffected because they take a separate image wire.
+  * Dropped images now join the composer through the same path pasted ones take, with the same type and size checks and thumbnail row. Other files upload and name by path as before.
+
 ## v0.152.0
 
 Shorter feature reference, a model quick pick, and smaller source files.

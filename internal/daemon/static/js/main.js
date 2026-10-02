@@ -21,7 +21,7 @@ import { renderTasks, renderStatusBar } from './render.js';
 import {
   sendMessage, cancelTurn, detachChild, autoResizeInput, insertAtCursor,
   atInputStart, atInputEnd, historyPrev, historyNext,
-  navigatingHistory, endHistoryNavigation,
+  navigatingHistory, endHistoryNavigation, addImageFile,
 } from './composer.js';
 import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent, resetMCPServers } from './loaders.js';
 import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, wireSessionDragGuard, loadArchived, rememberedOpenSession, renderSessionList, promptCreateGroup } from './sessions.js';
@@ -85,6 +85,13 @@ inputEl.addEventListener('drop', async (e) => {
   const files = e.dataTransfer && e.dataTransfer.files;
   if (!files || files.length === 0 || !session.sessionID) return;
   for (const file of files) {
+    // An image goes on the composer as an image, the same way a pasted one
+    // does, so the model receives it as an image block. Anything else is
+    // uploaded and named by path, as before: the model reads it as text.
+    if (((file.type || '') + '').toLowerCase().startsWith('image/')) {
+      await addImageFile(file);
+      continue;
+    }
     try {
       const path = await uploadFile(session.sessionID, file);
       insertAtCursor(inputEl, `[attached file: ${path}]\n`);
