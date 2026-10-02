@@ -235,6 +235,86 @@ func TestUnansweredFailStopsTheRun(t *testing.T) {
 	}
 }
 
+// A repeat_until stage runs again while its field is false, carrying the
+// earlier rounds in {{input}}, and the report says which round settled it.
+func TestARepeatStageRunsAgainUntilItsFieldHolds(t *testing.T) {
+	var calls int32
+	m := &scriptedModel{}
+	m.reply = func(prompt string) (string, map[string]any) {
+		n := atomic.AddInt32(&calls, 1)
+		if n < 3 {
+			return "", map[string]any{"done": false}
+		}
+		return "", map[string]any{"done": true}
+	}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	report := runPlanJSON(t, loop, `{"goal":"g","stages":[
+	  {"name":"work","kind":"step","agent":"oracle","prompt":"do it",
+	   "returns":{"done":"bool"},"repeat_until":"done","max_rounds":5}]}`)
+
+	if report.stopped != "" {
+		t.Fatalf("the run did not finish: %s", report.stopped)
+	}
+	s := report.stages[0]
+	if s.rounds != 3 {
+		t.Errorf("rounds = %d, want 3: two false rounds, then the settling one", s.rounds)
+	}
+	if !s.settled {
+		t.Error("the stage is not marked settled after its field came back true")
+	}
+	if report.launched != 3 {
+		t.Errorf("launched %d agents, want 3: one per round", report.launched)
+	}
+	// The third round saw what the first two tried.
+	seen := m.seen()
+	if len(seen) != 3 {
+		t.Fatalf("%d prompts reached the model, want 3", len(seen))
+	}
+	// A rerun carries the earlier rounds in {{input}}. The prompt has no
+	// {{input}} of its own, so the third round's brief holds them under
+	// their own heading.
+	if !strings.Contains(seen[2], "earlier rounds") {
+		t.Errorf("the third round did not carry the earlier rounds:\n%s", seen[2])
+	}
+	// Every answer is labelled by round, so three identical answers do not
+	// print as three identical lines.
+	out := report.String()
+	for _, want := range []string{"(round 1)", "(round 2)", "(round 3)", "settled after 3 round(s)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say %q:\n%s", want, out)
+		}
+	}
+}
+
+// A loop that never settles stops at max_rounds, not past it, and the
+// report says so rather than claiming success.
+func TestAnUnsettledLoopStopsAtMaxRounds(t *testing.T) {
+	m := &scriptedModel{reply: func(string) (string, map[string]any) {
+		return "", map[string]any{"done": false}
+	}}
+	loop := orchestrateLoop(t, m.server(t).URL)
+	report := runPlanJSON(t, loop, `{"goal":"g","stages":[
+	  {"name":"work","kind":"step","agent":"oracle","prompt":"do it",
+	   "returns":{"done":"bool"},"repeat_until":"done","max_rounds":3}]}`)
+
+	if report.stopped != "" {
+		t.Fatalf("the run did not finish: %s", report.stopped)
+	}
+	s := report.stages[0]
+	if s.rounds != 3 {
+		t.Errorf("rounds = %d, want 3: the stage must use every round it was given", s.rounds)
+	}
+	if s.settled {
+		t.Error("the stage is marked settled though its field never held true")
+	}
+	if report.launched != 3 {
+		t.Errorf("launched %d agents, want 3: max_rounds bounds the loop", report.launched)
+	}
+	if out := report.String(); !strings.Contains(out, "3 round(s) without settling") {
+		t.Errorf("the report does not admit the loop never settled:\n%s", out)
+	}
+}
+
 // Every stage is a synchronous child, which is what makes Esc reach the
 // whole run rather than only the loop driving it.
 func TestCancellingTheTurnStopsTheRun(t *testing.T) {

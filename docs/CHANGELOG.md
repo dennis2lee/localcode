@@ -2,7 +2,7 @@
 
 ## v0.151.0
 
-Session rename, delete confirmations, and the other name and confirm prompts work in the macOS desktop window.
+Session rename and the other prompts work in the macOS desktop window, Cmd+C and Cmd+V work there too, and orchestration stages can repeat until done.
 
 **Fixed**
 
@@ -10,6 +10,13 @@ Session rename, delete confirmations, and the other name and confirm prompts wor
   * Session rename, session delete, group create, rename and delete, scheduled task naming, and two settings confirmations asked through the browser native dialogs (`window.prompt` and `window.confirm`). The macOS window renders the Web UI in a WKWebView whose dialog handlers the webview binding does not implement, so these calls never resolved and the buttons silently did nothing. The Windows window was unaffected because its engine provides native dialogs, and the daemon API was unaffected throughout.
   * Every one of these prompts is now an in-page dialog with the same message, the same cancel behavior, and the same follow-up. It works identically in browsers and in both desktop windows.
   * `test/webui/prompt.test.js` covers the new dialog: the OK path, the Cancel and Escape paths with no API call, and the prefilled initial value on rename.
+* **Cmd+C and Cmd+V did nothing in the macOS desktop window**
+  * The window had no menu bar, and on macOS the editing key equivalents live in the menu. It now installs a standard Edit menu, so copying transcript text and pasting into the prompt box work.
+
+**Changed**
+
+* **Orchestration stages can repeat until a condition holds**
+  * A stage with `repeat_until` naming one of its returned fields runs again while that field is false or empty, up to a required `max_rounds`. Reruns carry the earlier rounds in `{{input}}`. The report says after how many rounds the stage settled, or that it did not.
 
 ## v0.150.1
 

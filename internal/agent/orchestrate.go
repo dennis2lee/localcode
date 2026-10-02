@@ -138,6 +138,24 @@ type Stage struct {
 	// whichever is chosen has to be the plan author's choice and has to be
 	// named in the report.
 	Unanswered string `json:"unanswered,omitempty"`
+
+	// RepeatUntil runs this stage again while the named field is false or
+	// empty, up to MaxRounds rounds in total. One round is the stage as
+	// written; a second round runs the same units with the earlier rounds
+	// carried in {{input}}, so the agent sees what it already tried.
+	//
+	// A model told to "repeat until nothing new turns up" stops at the
+	// third round, which is the failure this exists for: the stopping rule
+	// is data the runner enforces, not a sentence the agent remembers.
+	// The field must be one the stage returns, and it is checked with the
+	// same truthiness as Keep.
+	RepeatUntil string `json:"repeat_until,omitempty"`
+
+	// MaxRounds bounds a RepeatUntil stage: how many times it may run in
+	// total, including the first. Mandatory when RepeatUntil is set, at
+	// least 2, and counted against the run's agent ceiling like any other
+	// launches. A loop without a bound is a plan that cannot be priced.
+	MaxRounds int `json:"max_rounds,omitempty"`
 }
 
 var (
@@ -178,7 +196,6 @@ func (p Plan) Validate(l Limits) error {
 		agents[a] = true
 	}
 
-	launches := 0
 	for i, s := range p.Stages {
 		where := fmt.Sprintf("stage %d", i+1)
 		if s.Name != "" {
@@ -219,7 +236,6 @@ func (p Plan) Validate(l Limits) error {
 			return fmt.Errorf("%s: copies is %d, and must be between 1 and %d", where, s.Copies, maxCopies)
 		}
 
-		n := copies
 		switch s.Kind {
 		case "fanout":
 			if len(s.Over) == 0 {
@@ -257,7 +273,6 @@ func (p Plan) Validate(l Limits) error {
 				if len(s.Over) > maxFanout {
 					return fmt.Errorf("%s: over has %d items; the limit is %d", where, len(s.Over), maxFanout)
 				}
-				n *= len(s.Over)
 			}
 		default:
 			if len(s.Over) > 0 {
@@ -267,7 +282,6 @@ func (p Plan) Validate(l Limits) error {
 				return fmt.Errorf("%s: copies belongs to a fanout, and this stage is a %s", where, s.Kind)
 			}
 		}
-		launches += n
 
 		if len(s.Returns) > maxReturnFields {
 			return fmt.Errorf("%s: returns declares %d fields; the limit is %d, and flat and small is what a model reliably fills in",
@@ -290,15 +304,68 @@ func (p Plan) Validate(l Limits) error {
 		if s.Unanswered != "" && !unanswered[s.Unanswered] {
 			return fmt.Errorf("%s: unanswered is %q, and must be one of skip, keep, fail", where, s.Unanswered)
 		}
+		if s.RepeatUntil != "" {
+			if _, ok := s.Returns[s.RepeatUntil]; !ok {
+				return fmt.Errorf("%s: repeat_until names %q, which this stage does not return (it returns %s)",
+					where, s.RepeatUntil, fieldList(s.Returns))
+			}
+			if s.MaxRounds < 2 {
+				return fmt.Errorf("%s: repeat_until needs max_rounds of at least 2, got %d", where, s.MaxRounds)
+			}
+			if s.Kind == "barrier" {
+				return fmt.Errorf("%s: repeat_until belongs to a step or a fanout, and this stage is a barrier", where)
+			}
+		} else if s.MaxRounds != 0 {
+			return fmt.Errorf("%s: max_rounds without repeat_until repeats nothing", where)
+		}
 
 		known[s.Name] = s
 	}
 
+	launches := launchesCap(p.Stages, 1)
 	if launches > maxRunAgents {
 		return fmt.Errorf("this plan would launch up to %d agents; the limit is %d. Narrow a fanout, or lower copies",
 			launches, maxRunAgents)
 	}
 	return nil
+}
+
+// launchesCap is the worst case this plan can cost, in agent turns: every
+// stage once, and every repeat_until stage up to its max_rounds. Shared by
+// validation and the run report, so the number refused on and the number
+// asked about are never two numbers.
+func launchesCap(stages []Stage, refFanout int) int {
+	launches := 0
+	for _, s := range stages {
+		n := stageLaunches(s, refFanout)
+		if s.RepeatUntil != "" {
+			n *= s.MaxRounds
+		}
+		launches += n
+	}
+	return launches
+}
+
+// stageLaunches is one run of one stage, in agent turns. A reference
+// fanout's width is unknown until the run, so the caller says what to price
+// it at: validation passes 1, because pricing it at the ceiling would refuse
+// the plan this feature exists for (the runner caps the real width against
+// what the run has left and reports what it dropped); the permission prompt
+// passes maxFanout, because there the honest number is the widest it could
+// be. One function with an explicit parameter, so the two meanings cannot
+// drift into two copies.
+func stageLaunches(s Stage, refFanout int) int {
+	n := s.Copies
+	if n == 0 {
+		n = 1
+	}
+	if s.Kind == "fanout" {
+		if _, isRef := planRef(s.Over); isRef {
+			return n * refFanout
+		}
+		n *= len(s.Over)
+	}
+	return n
 }
 
 // Launches is the worst case this plan can cost, in agent turns, and never
@@ -311,22 +378,7 @@ func (p Plan) Validate(l Limits) error {
 // the person to approve "up to 35 agent turns" in a runner that stops at
 // 32, which is a number that cannot happen being used to get a yes.
 func (p Plan) Launches() int {
-	total := 0
-	for _, s := range p.Stages {
-		n := s.Copies
-		if n == 0 {
-			n = 1
-		}
-		if s.Kind == "fanout" {
-			if _, isRef := planRef(s.Over); isRef {
-				n *= maxFanout
-			} else {
-				n *= len(s.Over)
-			}
-		}
-		total += n
-	}
-	return min(total, maxRunAgents)
+	return min(launchesCap(p.Stages, maxFanout), maxRunAgents)
 }
 
 // planRef reports whether a fanout's Over is a reference rather than a

@@ -142,6 +142,76 @@ func TestLaunchesIsTheWorstCase(t *testing.T) {
 	}
 }
 
+// A loop without a bound is a plan that cannot be priced, so it is refused
+// before anything runs like every other ceiling.
+func TestRepeatUntilNeedsABound(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		plan string
+		want string
+	}{
+		{"no max_rounds", `{"goal":"g","stages":[
+			{"name":"a","kind":"step","agent":"oracle","prompt":"x","returns":{"done":"bool"},"repeat_until":"done"}]}`,
+			"max_rounds of at least 2"},
+		{"max_rounds of 1", `{"goal":"g","stages":[
+			{"name":"a","kind":"step","agent":"oracle","prompt":"x","returns":{"done":"bool"},"repeat_until":"done","max_rounds":1}]}`,
+			"max_rounds of at least 2"},
+		{"unknown field", `{"goal":"g","stages":[
+			{"name":"a","kind":"step","agent":"oracle","prompt":"x","returns":{"done":"bool"},"repeat_until":"other","max_rounds":3}]}`,
+			`repeat_until names "other"`},
+		{"on a barrier", `{"goal":"g","stages":[
+			{"name":"a","kind":"barrier","agent":"oracle","prompt":"x","returns":{"done":"bool"},"repeat_until":"done","max_rounds":3}]}`,
+			"this stage is a barrier"},
+		{"max_rounds alone", `{"goal":"g","stages":[
+			{"name":"a","kind":"step","agent":"oracle","prompt":"x","max_rounds":3}]}`,
+			"without repeat_until"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := planOf(t, tc.plan).Validate(roster("oracle"))
+			if err == nil {
+				t.Fatal("the plan was accepted")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not contain %q", err, tc.want)
+			}
+		})
+	}
+
+	// A bounded loop validates, and its worst case counts every round.
+	p := planOf(t, `{"goal":"g","stages":[
+		{"name":"a","kind":"step","agent":"oracle","prompt":"x","returns":{"done":"bool"},"repeat_until":"done","max_rounds":3}]}`)
+	if err := p.Validate(roster("oracle")); err != nil {
+		t.Fatalf("a bounded loop was refused: %v", err)
+	}
+	if got := p.Launches(); got != 3 {
+		t.Errorf("Launches() = %d, want 3 (one step times three rounds)", got)
+	}
+}
+
+// The stopping rule is data the runner enforces: true settles, false or
+// empty runs again, and no kept evidence at all settles nothing.
+func TestRepeatSettledNeedsEvidence(t *testing.T) {
+	stage := Stage{Name: "a", Returns: map[string]string{"done": "bool"}, RepeatUntil: "done"}
+	if repeatSettled(stage, nil) {
+		t.Error("no results settled the loop")
+	}
+	if repeatSettled(stage, []outcome{{data: map[string]any{"done": false}}}) {
+		t.Error("a false field settled the loop")
+	}
+	if repeatSettled(stage, []outcome{{data: map[string]any{"other": true}}}) {
+		t.Error("a result missing the field settled the loop")
+	}
+	if !repeatSettled(stage, []outcome{{data: map[string]any{"done": true}}}) {
+		t.Error("a true field did not settle the loop")
+	}
+	if repeatSettled(stage, []outcome{
+		{data: map[string]any{"done": true}},
+		{data: map[string]any{"done": false}},
+	}) {
+		t.Error("one false copy should keep the loop running: every kept result must agree")
+	}
+}
+
 // The Answer tool's schema is the stage's declaration, rendered.
 func TestAStageRendersItsOwnAnswerSchema(t *testing.T) {
 	s := Stage{Returns: map[string]string{"survives": "bool", "why": "string", "refs": "strings", "n": "number"}}

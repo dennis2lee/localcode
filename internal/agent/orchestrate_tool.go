@@ -74,6 +74,8 @@ func (t *OrchestrateTool) InputSchemaFor(ctx context.Context) json.RawMessage {
  "copies":{"type":"integer","description":"fanout only: independent agents per item, default 1"},
  "returns":{"type":"object","additionalProperties":{"type":"string","enum":%s},"description":"field name to type; what this stage must answer with"},
  "keep":{"type":"string","description":"one returned field; results where it is false or empty are dropped"},
+ "repeat_until":{"type":"string","description":"one returned field; while it is false or empty the stage runs again, up to max_rounds"},
+ "max_rounds":{"type":"integer","description":"required with repeat_until: how many times the stage may run in total, at least 2"},
  "unanswered":{"type":"string","enum":%s}
 },
 "required":["name","kind","agent","prompt"]
@@ -202,6 +204,13 @@ func (r runReport) String() string {
 		if s.dropped > 0 {
 			fmt.Fprintf(&b, ", %d item(s) not run because the run's %d-agent ceiling was reached", s.dropped, maxRunAgents)
 		}
+		if s.rounds > 0 {
+			if s.settled {
+				fmt.Fprintf(&b, ", settled after %d round(s)", s.rounds)
+			} else {
+				fmt.Fprintf(&b, ", %d round(s) without settling", s.rounds)
+			}
+		}
 		b.WriteString("\n")
 		for _, o := range s.answers {
 			label := o.agent
@@ -210,6 +219,9 @@ func (r runReport) String() string {
 			}
 			if o.copy > 1 {
 				label += fmt.Sprintf(" (copy %d)", o.copy)
+			}
+			if o.round > 0 {
+				label += fmt.Sprintf(" (round %d)", o.round)
 			}
 			switch {
 			case o.err != nil:

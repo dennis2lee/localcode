@@ -126,6 +126,10 @@ type outcome struct {
 	// the report can say how many were dropped rather than only how many
 	// survived.
 	kept bool
+	// round is which run of a repeat_until stage produced this, starting
+	// at 1. Zero on every other stage, so reports of ordinary stages read
+	// exactly as before.
+	round int
 }
 
 // runReport is what the tool hands back to the orchestrating model. Written
@@ -150,6 +154,10 @@ type stageReport struct {
 	dropped int
 	// merged is how many repeats of an item an earlier stage returned.
 	merged int
+	// rounds is how many times a repeat_until stage ran, and settled says
+	// whether its field came back true. Zero on every other stage.
+	rounds  int
+	settled bool
 	// answers is what a stage produced, in launch order.
 	answers []outcome
 }
@@ -222,31 +230,73 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 		report.launched += len(units)
 
 		sr := stageReport{name: stage.Name, kind: stage.Kind, agent: stage.Agent, launched: len(units), dropped: dropped, merged: merged}
-		var kept []outcome
-		for _, o := range got {
-			switch {
-			case o.err != nil:
-				sr.failed++
-			case len(stage.Returns) > 0 && o.data == nil:
-				sr.unanswered++
-				if stage.Unanswered == "fail" {
-					report.stages = append(report.stages, sr)
-					report.stopped = fmt.Sprintf("stopped in %s: an agent did not answer in the shape the stage declared, and the stage says unanswered: fail", stage.Name)
-					return report
-				}
-				if stage.Unanswered == "keep" {
-					o.kept = true
-					kept = append(kept, o)
-				}
-			default:
-				if stage.Keep == "" || truthy(o.data[stage.Keep]) {
-					o.kept = true
-					kept = append(kept, o)
-				}
-			}
-			sr.answers = append(sr.answers, o)
+		// Round 1 is stamped only on a repeat_until stage: on an ordinary
+		// stage every outcome stays at round 0 and the report reads as
+		// before, while a repeated stage labels every round including the
+		// first, so identical answers do not print as identical lines.
+		first := 0
+		if stage.RepeatUntil != "" {
+			first = 1
+		}
+		kept, stopped := applyStageOutcome(stage, first, got, &sr)
+		if stopped != "" {
+			report.stages = append(report.stages, sr)
+			report.stopped = stopped
+			return report
 		}
 		sr.kept = len(kept)
+
+		// A repeat_until stage runs again while its field is false or
+		// empty. Each round reruns the same units with the rounds so far
+		// carried in {{input}}, inside the same agent ceiling and the same
+		// run deadline. The report says which round settled it, because a
+		// loop that does not name its stopping round cannot be debugged.
+		round := 1
+		for stage.RepeatUntil != "" && round < stage.MaxRounds && !repeatSettled(stage, kept) {
+			if err := ctx.Err(); err != nil {
+				report.stages = append(report.stages, sr)
+				report.stopped = "the run was cancelled or ran out of time before " + stage.Name + " finished its repeats"
+				return report
+			}
+			if report.launched+len(units) > maxRunAgents {
+				sr.rounds = round
+				report.stages = append(report.stages, sr)
+				report.stopped = fmt.Sprintf("stopped in %s: round %d settled nothing and the run had launched %d agents, past the limit of %d",
+					stage.Name, round+1, report.launched, maxRunAgents)
+				return report
+			}
+			round++
+			l.Store.Append(sessionID, events.TypeTaskStatus, map[string]any{
+				"task_id": "orchestrate:" + stage.Name,
+				"status":  "running",
+				"stage":   stage.Name,
+				"agents":  len(units),
+				"round":   round,
+			})
+			brief = l.carriedInput(p, stage, resultsWith(results, stage.Name, kept))
+			got = l.runStage(ctx, sessionID, p, stage, units, brief)
+			report.launched += len(units)
+			sr.launched += len(units)
+			kept, stopped = applyStageOutcome(stage, round, got, &sr)
+			if stopped != "" {
+				sr.rounds = round
+				report.stages = append(report.stages, sr)
+				report.stopped = stopped
+				return report
+			}
+			sr.kept = len(kept)
+			l.Store.Append(sessionID, events.TypeTaskStatus, map[string]any{
+				"task_id": "orchestrate:" + stage.Name,
+				"status":  "completed",
+				"stage":   stage.Name,
+				"kept":    len(kept),
+				"round":   round,
+			})
+		}
+		if stage.RepeatUntil != "" {
+			sr.rounds = round
+			sr.settled = repeatSettled(stage, kept)
+		}
 		report.stages = append(report.stages, sr)
 		results[stage.Name] = kept
 
@@ -258,6 +308,65 @@ func (l *Loop) runPlan(ctx context.Context, sessionID string, p Plan) runReport 
 		})
 	}
 	return report
+}
+
+// applyStageOutcome sorts one round of units into the stage report: failed,
+// unanswered, and kept. It returns the kept outcomes, plus why the run must
+// stop when the stage says unanswered: fail. Every outcome is stamped with
+// its round, so a repeated stage's answers do not print as identical lines.
+func applyStageOutcome(stage Stage, round int, got []outcome, sr *stageReport) ([]outcome, string) {
+	var kept []outcome
+	for _, o := range got {
+		o.round = round
+		switch {
+		case o.err != nil:
+			sr.failed++
+		case len(stage.Returns) > 0 && o.data == nil:
+			sr.unanswered++
+			if stage.Unanswered == "fail" {
+				return nil, fmt.Sprintf("stopped in %s: an agent did not answer in the shape the stage declared, and the stage says unanswered: fail", stage.Name)
+			}
+			if stage.Unanswered == "keep" {
+				o.kept = true
+				kept = append(kept, o)
+			}
+		default:
+			if stage.Keep == "" || truthy(o.data[stage.Keep]) {
+				o.kept = true
+				kept = append(kept, o)
+			}
+		}
+		sr.answers = append(sr.answers, o)
+	}
+	return kept, ""
+}
+
+// repeatSettled reports whether a repeat_until stage is done: every kept
+// result carries the field holding it true. An empty kept set settles
+// nothing, and one false copy keeps the loop running: settling on a
+// majority would declare done work one agent says is not.
+func repeatSettled(stage Stage, kept []outcome) bool {
+	if len(kept) == 0 {
+		return false
+	}
+	for _, o := range kept {
+		v, ok := o.data[stage.RepeatUntil]
+		if !ok || !truthy(v) {
+			return false
+		}
+	}
+	return true
+}
+
+// resultsWith is the carried-input view with one stage's results replaced:
+// the next round of a repeat_until stage sees the rounds so far.
+func resultsWith(results map[string][]outcome, stage string, kept []outcome) map[string][]outcome {
+	out := make(map[string][]outcome, len(results)+1)
+	for k, v := range results {
+		out[k] = v
+	}
+	out[stage] = kept
+	return out
 }
 
 // runStage launches one stage's units, at most maxParallel at a time, and
@@ -333,6 +442,12 @@ func stagePrompt(p Plan, stage Stage, item, carried string) string {
 	if !strings.Contains(stage.Prompt, "{{task}}") {
 		body = "The run's goal: " + p.Goal + "\n\n" + body
 	}
+	// A rerun carries the rounds so far even when the prompt never asked
+	// for {{input}}, for the same reason: without them the next round
+	// works blind, repeating whatever the last one tried.
+	if carried != "" && !strings.Contains(stage.Prompt, "{{input}}") {
+		body += "\n\nEarlier rounds:\n" + carried
+	}
 	return body
 }
 
@@ -383,35 +498,53 @@ func (l *Loop) stageItems(stage Stage, results map[string][]outcome) ([]string, 
 // labelled by the stage that produced it.
 //
 // Composed by localcode rather than by a model, and capped, because it is
-// the one part of a stage's prompt whose size nobody chose.
+// the one part of a stage's prompt whose size nobody chose. A rerun of a
+// repeat_until stage always carries the rounds so far, even when the
+// prompt never asked for {{input}}: without that the next round works
+// blind, repeating whatever the last one tried.
 func (l *Loop) carriedInput(p Plan, stage Stage, results map[string][]outcome) string {
-	if !strings.Contains(stage.Prompt, "{{input}}") && stage.Kind != "barrier" {
+	repeat := stage.RepeatUntil != "" && len(results[stage.Name]) > 0
+	if !strings.Contains(stage.Prompt, "{{input}}") && stage.Kind != "barrier" && !repeat {
 		return ""
 	}
 	var b strings.Builder
 	for _, s := range p.Stages {
 		if s.Name == stage.Name {
+			if repeat {
+				writeKept(&b, s, results[s.Name], "earlier rounds")
+			}
 			break
 		}
 		kept := results[s.Name]
 		if len(kept) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "## %s (%s, %d kept)\n", s.Name, s.Agent, len(kept))
-		for _, o := range kept {
-			if o.data != nil {
-				enc, _ := json.Marshal(o.data)
-				b.Write(enc)
-				b.WriteByte('\n')
-				continue
-			}
-			b.WriteString(strings.TrimSpace(o.text))
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
+		writeKept(&b, s, kept, "")
 	}
 	return truncateMiddle(b.String(), carriedInputLimit,
 		"earlier stages produced more than fits in one prompt")
+}
+
+// writeKept appends one stage's kept results under its heading. Tag names
+// the section when it is not the ordinary carried input: the earlier rounds
+// of the stage being rerun.
+func writeKept(b *strings.Builder, s Stage, kept []outcome, tag string) {
+	heading := fmt.Sprintf("## %s (%s, %d kept)", s.Name, s.Agent, len(kept))
+	if tag != "" {
+		heading += " " + tag
+	}
+	b.WriteString(heading + "\n")
+	for _, o := range kept {
+		if o.data != nil {
+			enc, _ := json.Marshal(o.data)
+			b.Write(enc)
+			b.WriteByte('\n')
+			continue
+		}
+		b.WriteString(strings.TrimSpace(o.text))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 }
 
 // carriedInputLimit bounds what one stage is handed from the stages before
