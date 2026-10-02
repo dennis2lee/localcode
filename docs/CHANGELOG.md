@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.175.0
+
+A prompt the model books for later reaches the run as text when it fires, not as a command you typed.
+
+**Fixed**
+
+* A scheduled prompt the model booked, through the Schedule tool or a `/schedule` line the Command tool ran, treated as typed when it fired: a `!` line ran in the shell with no permission rule asked, and a `/` command changed a setting. A prompt you book with `/schedule` or the **schedule** button still runs as written
+* A scheduled run booking its own successor in its own conversation through a `/schedule` line the Command tool ran, past the per-conversation limit
+* A booking made before this release: no recorded author, so it runs as written, the model's included; `/show-scheduled-task` lists them
+
 ## v0.174.0
 
 Every web address the model writes is a link that opens in your own browser, and a permission decision can no longer stall every later one.

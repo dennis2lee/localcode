@@ -211,7 +211,9 @@ const (
 	// reload — the same reason a background task's row is built from
 	// task.spawned rather than from whatever the client happens to hold.
 	//
-	// TypeScheduleCreated: {"id","at","prompt","agent"}.
+	// TypeScheduleCreated: {"id","at","prompt","agent","by"}. "by" is
+	// "person" or "model", whose words the prompt holds; absent in a log
+	// written before it existed, and read as a person's.
 	// TypeScheduleStatus: {"id","status","run_session","error"}.
 	// TypeScheduleSeen: {"id"} — somebody read the result, which is the
 	// third state of the row's light.

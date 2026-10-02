@@ -22,7 +22,13 @@ type commandRunKey struct{}
 
 // withCommandRun marks every turn a booked command produces, so the tool
 // can refuse to book another from inside one.
+//
+// It also drops the mark of a booked prompt. A run the scheduler fired
+// carries the text it was booked with, and the model in it may call the
+// Command tool: that line is a different message from the prompt even when
+// the two read the same, and it is the one the allowlist already decided.
 func withCommandRun(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, modelWrittenPromptKey{}, "")
 	return context.WithValue(ctx, commandRunKey{}, true)
 }
 

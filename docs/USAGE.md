@@ -1387,7 +1387,7 @@ The `` !`cmd` `` splice is one of two readings of `!`. The other is the [shell e
 
 ### Shell escape
 
-Typing `!` followed by a shell command runs it in the session's workspace and puts its output in the conversation, without reaching a model on the way in: `!git status`, `!cat ~/abc.txt`. The model sees the output on the next turn, with the transcript showing you ran it. This is a shell escape, the thing an editor has always had: a person typing in their own window runs what they could have run in their own terminal. So it does not consult the permission rules, including a `deny`. That is a deliberate hole in an otherwise closed surface. A model can never cause one: a delegated or model-composed prompt starting with `!` is answered as text, never executed.
+Typing `!` followed by a shell command runs it in the session's workspace and puts its output in the conversation, without reaching a model on the way in: `!git status`, `!cat ~/abc.txt`. The model sees the output on the next turn, with the transcript showing you ran it. This is a shell escape, the thing an editor has always had: a person typing in their own window runs what they could have run in their own terminal. So it does not consult the permission rules, including a `deny`. That is a deliberate hole in an otherwise closed surface. A model can never cause one. A delegated task, a prompt the model books with the `Schedule` tool, and the prompt in a `/schedule` line the model runs through the `Command` tool are answered as text when they start with `!`, never executed. See [Scheduled tasks](#scheduled-tasks).
 
 Start with `!!` to send an ordinary message beginning with `!`. A lone `!` says what to run instead. Empty output shows `(no output)`. A failure shows its exit status, so a typo never reads as an empty answer. Output is capped. The `bash` tool keeps at most 4 MiB of what a command prints: the first half and the last half. The conversation keeps at most 128,000 bytes of that: the start and the end, with a note in the middle saying how many bytes were left out. `!find /` therefore shows the start and the end of its output, not all of it. A command past the `bash` tool's timeout is reported as killed after it.
 
@@ -1572,6 +1572,8 @@ Commands containing `` !`shell command` `` cannot be model-invocable. The substi
 > The model can select commands based on untrusted file contents, command output, or MCP results. Enable only commands whose automatic execution is acceptable. The switch and allowlist are not a prompt-injection guarantee.
 
 A model-invoked command cannot invoke another command.
+
+`/schedule` is held to two more rules when the model runs it. The prompt it books is sent to the scheduled run as text. Booking with it is refused inside a scheduled run. See [Scheduled tasks](#scheduled-tasks).
 
 ### `/usage` totals
 
@@ -2321,7 +2323,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and one-step plans are refused. The model is also told never to move a step from `pending` straight to `completed`, but that is guidance in the tool description rather than a refusal: the tool records the list it is given and does not compare it with the last one. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
 | `ask_user` | No | Ask the user one question mid-turn and wait for the answer, without ending the turn. 2 to 4 short options, most recommended first; the user can answer in their own words instead. Once per turn. Offered only with [Smart Agent](#smart-agent) on, and only where somebody is watching: never in a one-shot run, a scheduled run, or a delegated sub agent. |
 | `Debate` | Yes, always | Book a debate: this session's agent writes, another agent reviews, round after round. Called instead of doing the work; the first round is where the work happens. Confirmation shows the parsed task, reviewers, rounds, and maximum model turns before execution. Not offered inside a debate, in an unattended turn, or to a delegated sub agent. See [Debate](#debate). |
-| `Schedule` | Yes, always | Book a prompt to run at a parsed future time in this conversation. The daemon has to still be running then. See [Scheduled tasks](#scheduled-tasks). |
+| `Schedule` | Yes, always | Book a prompt to run at a parsed future time in this conversation. The daemon has to still be running then. The prompt reaches the run as plain text: a leading `/` or `!` does not run a command. Refused inside a scheduled run. See [Scheduled tasks](#scheduled-tasks). |
 | `Command` | No | Run one of this session's own commands as a turn of its own, immediately after the current one ends. Offered only with [`/model-invocable`](#model-invocable) on, only for what has opted in (built-ins named in config.json's `model_commands`, plus custom commands and skills with `model_invocable: true` in their frontmatter), and never inside a command run: one command cannot book another. There is no wildcard. |
 
 The loop ends when the model stops requesting tools. `Verdict` and `Answer` also end the turn after a valid completion result. With `/repeat-limit` on, consecutive steps containing only previously repeated tool calls end the turn, after the configured number of them, with a transcript notice that names the repeated calls. The guard is off by default. A step is one model reply; a repeat is a call with the same tool and the same arguments as one already made this turn, so alternating between two earlier reads counts. A new edit between repeated checks counts as progress. `/repeat-limit <steps>` moves the ceiling and `/repeat-limit off` removes it; the settings window has the same control. See [A model that repeats itself](#a-model-that-repeats-itself).
@@ -3239,6 +3241,16 @@ Review the full parsed time and task in the confirmation.
 Each scheduled run uses a separate session with the booking conversation's workspace and four permission switches. Confirmation names the workspace.
 
 Scheduled permission requests appear in the booking conversation and expire after five minutes. Expiry stops the run and names the blocked tool. Configure `/permission-skip-tools`, `/read-outside`, and `/write-outside` in advance if unattended access is required.
+
+Who wrote the prompt decides how it runs:
+
+| Booked by | The prompt runs |
+|---|---|
+| You, with `/schedule` or the **schedule** button | As you wrote it. A leading `/` or `!` is a command, as when you type it. `/schedule in 1 hour !make test` runs the [shell escape](#shell-escape), which does not consult the permission rules. |
+| The model, with the `Schedule` tool or a `/schedule` line it runs through the `Command` tool | As plain text. A leading `/` or `!` does not run a command, whatever `/model-invocable` is set to. The model is told so when it books such a prompt. |
+| An earlier version | As written. A booking made before the author was recorded has no author on record, including one the model made. `/show-scheduled-task` lists them. |
+
+To run a command later, book it yourself with `/schedule`. The model cannot book from inside a scheduled run: the `Schedule` tool and a `/schedule` line run through the `Command` tool both refuse.
 
 | Where | What you get |
 |---|---|

@@ -354,7 +354,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `rewound` | `{"from_seq", "turn_text", "restored", "skipped", "created"}` |
 | `redone` | `{"rewind_seq", "turn_text", "written", "skipped"}` |
 | `checkpoint` | `{"tool", "path", "sha256", "mode", "existed", "too_large"}`; bytes live content-addressed beside the log, not here |
-| `schedule.created` | `{"id", "at", "prompt", "agent"}` |
+| `schedule.created` | `{"id", "at", "prompt", "agent", "by"?}`. `by` is `"person"` or `"model"`: whose words the prompt holds, which decides whether a leading `/` or `!` in it runs as a command when it fires (a person's does, a model's is sent as text). Absent in logs written before it existed, and read as a person's |
 | `schedule.status` | `{"id", "status", "run_session"?, "error"?}` |
 | `schedule.seen` | `{"id"}` |
 | `schedule.renamed` | `{"id", "name"}` |

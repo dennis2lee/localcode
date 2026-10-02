@@ -746,7 +746,13 @@ func (l *Loop) routeResetSkills(sessionID, text string) (bool, error) {
 // echoes what was read. That echo is the whole reason parsing is allowed
 // to guess at all: a misread time is caught here, before the work is
 // booked, rather than by the work not happening.
-func (l *Loop) routeSchedule(sessionID, agentName, text string) (bool, error) {
+//
+// A line the Command tool runs is the one way the model's words reach this
+// route, and the prompt in it is the model's as much as one passed to the
+// Schedule tool is. It is booked the same way, as text, and refused from a
+// scheduled turn for the same reason: see ScheduleTool.Execute. A line a
+// person typed is neither.
+func (l *Loop) routeSchedule(ctx context.Context, sessionID, agentName, text string) (bool, error) {
 	arg, ok := matchToggleCommand(text, "/schedule")
 	if !ok {
 		return false, nil
@@ -785,6 +791,11 @@ func (l *Loop) routeSchedule(sessionID, agentName, text string) (bool, error) {
 		return true, l.replyText(sessionID, fmt.Sprintf("no scheduled task %q in this conversation", id))
 	}
 
+	byModel := inCommandRun(ctx)
+	if byModel && Unattended(ctx) {
+		return true, l.replyText(sessionID, scheduledTurnCannotBook)
+	}
+
 	now := time.Now()
 	at, rule, prompt, err := when.Parse(arg, now)
 	if err != nil {
@@ -801,7 +812,12 @@ func (l *Loop) routeSchedule(sessionID, agentName, text string) (bool, error) {
 	if err != nil {
 		return true, l.replyText(sessionID, err.Error())
 	}
-	entry, err := l.Schedules.Add(sessionID, agentName, prompt, at, opts)
+	var entry Scheduled
+	if byModel {
+		entry, err = l.Schedules.AddByModel(sessionID, agentName, prompt, at, opts)
+	} else {
+		entry, err = l.Schedules.Add(sessionID, agentName, prompt, at, opts)
+	}
 	if err != nil {
 		return true, l.replyText(sessionID, err.Error())
 	}
@@ -820,6 +836,9 @@ func (l *Loop) routeSchedule(sessionID, agentName, text string) (bool, error) {
 		"\nlocalcode is closed at that moment, the task is reported as missed rather than" +
 		"\nrun late. It will work in " + l.SessionDir(sessionID) + " under this conversation's" +
 		"\npermission settings.")
+	if byModel && commandShaped(prompt) {
+		b.WriteString("\n\n" + sentAsText)
+	}
 	// No separate announcement: Add already wrote schedule.created to
 	// this conversation's log, which is where a client's row comes from.
 	return true, l.replyText(sessionID, b.String())
