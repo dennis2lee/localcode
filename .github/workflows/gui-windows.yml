@@ -180,6 +180,18 @@ jobs:
           CGO_ENABLED: '1'
         run: go build -tags gui -ldflags "-s -w -H windowsgui -X main.version=$env:LC_VERSION" -o localcode-gui.exe ./cmd/localcode
 
+      # The window package's own tests, on Windows, under the tag that
+      # builds it. The local gate runs them on macOS only, and they include
+      # the checks that the new-window hook's COM slot numbers and its read of
+      # webview_go's private struct still match the pinned library. The hook
+      # itself is a Windows-only file, so nothing but this step compiles it
+      # under test conditions.
+      - name: Test the window package
+        timeout-minutes: 10
+        env:
+          CGO_ENABLED: '1'
+        run: go test -tags gui -timeout 5m ./internal/gui/
+
       # Proves the CGo binary actually links and runs on Windows. Because
       # the binary is GUI-subsystem, PowerShell does not wait for it and its
       # stdout goes nowhere — Start-Process -Wait is what makes the exit

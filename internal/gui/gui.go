@@ -62,6 +62,9 @@ func Launch(title string, start func(progress func(string), setVersion func(stri
 	w := webview.New(false)
 	defer w.Destroy()
 	w.SetTitle(title)
+	// A link asking for a window of its own opens in the system's default
+	// browser, not in a popup of this window's runtime. See newwindow.go.
+	routeNewWindows(w)
 	w.Navigate(dataURL(splashHTML()))
 	setWindowIcon(uintptr(w.Window()))
 	hideTitleBar(uintptr(w.Window()))

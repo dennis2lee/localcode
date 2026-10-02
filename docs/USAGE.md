@@ -177,9 +177,20 @@ Window chrome:
 | macOS | Transparent native title bar with hidden title text. Native drag and window controls remain available. |
 | Windows | Frameless window with a 28px drag area, six-pixel resize edges, double-click maximize, and page-provided window buttons. Alt+F4 and taskbar Close remain available. |
 
+Links in the window:
+
+| Platform | Behavior |
+|---|---|
+| Windows | A link a model writes (and any other request for a new window) opens in the system's default browser, the one chosen under Default apps for `http` and `https`. Only `http` and `https` addresses are handed over. Anything else is dropped without opening a window. |
+| macOS | Not changed by this feature. The window installs no new-window handler, and what WKWebView does with a link that asks for a window is not verified. |
+
+On Windows a dropped link shows nothing in the window. An address is dropped when it is empty, longer than 8192 bytes, not `http` or `https`, without a host, or when it contains a space, a control character, a double quote, `<` or `>`. A `%` that does not start an escape (`/50%off`) is not a reason to drop an address: it is handed over as `%25`, which the Windows shell can open and which a server reads the same way. `gui-frame.log` records the rule that dropped it and the scheme, never the rest of the address.
+
+Windows asks the default browser through the shell, the same way any other program does, so changing the default browser changes where links open without restarting the window. When the hook cannot be installed, the window falls back to the earlier behavior (an Edge-engine popup) and `%LOCALAPPDATA%\localcode\gui-frame.log` says why.
+
 Build an MSI containing the GUI with `make dist-msi VERSION=x.y.z GUI_EXE=path/to/localcode-gui.exe`.
 
-Windows writes `%LOCALAPPDATA%\localcode\gui-frame.log` on every launch. The file records frame removal, window-style changes, and drag or resize messages. It is replaced on each launch.
+Windows writes `%LOCALAPPDATA%\localcode\gui-frame.log` on every launch. The file records frame removal, window-style changes, drag or resize messages, whether the new-window hook was installed, and links that were dropped or failed to open. It is replaced on each launch.
 
 For Windows frame, drag, resize, or button problems, enable the standard title bar:
 
