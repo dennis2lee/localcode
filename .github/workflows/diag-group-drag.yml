@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ref: [integrate/0.150.0]
+        ref: [main]
     steps:
       - uses: actions/checkout@v4
         with:
