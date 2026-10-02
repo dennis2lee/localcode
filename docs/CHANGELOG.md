@@ -14,7 +14,7 @@ A link a model writes opens in the system's default browser in the Windows windo
 * **Groups in the session panel can be reordered by dragging their headers**
   * A group lands above the group it is dropped on when it came from below, and under that group's last card when it came from above. A line shows the edge.
   * Only the list of groups is saved. The cards keep their order.
-  * A move is not saved when another window has added or removed a group since this one loaded. The window says so and reads the panel back.
+  * A move is not saved when the daemon's groups differ from the window's, for example after another window added or removed one. The window says so and reads the panel back.
   * Neither cards nor groups can be dragged while a filter is on.
 * **The question the model asks when it stops a turn is drawn at the size of its replies**
   * It follows the Reading text-size setting and keeps its muted, italic look. The answer echo and every other tool line keep their size.

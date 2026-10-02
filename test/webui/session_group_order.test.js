@@ -830,10 +830,12 @@ const THREE = [row('u'), row('a', 'g'), row('b', 'g'), row('c', 'h'), row('d', '
 // wholesale the way the real one does. holdGet makes the next listing of the
 // groups wait, postHolds[n] makes the nth save wait, and failPosts holds the
 // numbers of the saves that are refused (after their hold, if they have one).
+// getQueue holds functions that answer the next listings of the groups instead.
 function groupDaemon(names, sessions = THREE) {
-  const d = { names: names.slice(), posts: [], holdGet: null, postHolds: [], failPosts: new Set() };
+  const d = { names: names.slice(), posts: [], holdGet: null, getQueue: [], postHolds: [], failPosts: new Set() };
   d.routes = routesFor(sessions, {
     'GET /api/sessions/groups': async () => {
+      if (d.getQueue.length) return d.getQueue.shift()();
       const answer = { names: d.names.slice() };
       if (d.holdGet) {
         const hold = d.holdGet;
@@ -1397,4 +1399,210 @@ test('after a refused group move was put back, a card lands on the side its line
     await app.settle();
   });
   assert.deepEqual(wrong, []);
+});
+
+// ---- the save is checked against the daemon and kept in order -------
+
+// Compared by name, not by how many: a group renamed in another window, or one
+// deleted while another was made, leaves the count as it was.
+for (const [what, daemonNames, regroup] of [
+  ['renamed', ['g2', 'h', 'k'], { g: 'g2' }],
+  ['deleted while another was made', ['h', 'k', 'z'], { g: '' }],
+]) {
+  test(`a group ${what} in another window is not overwritten by a move from a window that has not heard`, async () => {
+    const sessions = THREE.map(s => ({ ...s }));
+    const d = groupDaemon(GROUPS, sessions);
+    const app = await load({ routes: d.routes });
+    d.names = daemonNames;
+    for (const s of sessions) if (s.group in regroup) s.group = regroup[s.group];
+
+    dragGroup(app, 'h', 'k');
+    await app.settle();
+
+    assert.deepEqual(d.posts, []);
+    assert.deepEqual(d.names, daemonNames);
+    assert.deepEqual(app.app.sessionGroups, daemonNames, 'the panel was not read back');
+  });
+}
+
+test('a group dropped on a header whose group was deleted meanwhile moves nothing', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+  startGroup(app, 'k');
+  d.names = ['g', 'k'];
+  emit(app, 'session.renamed', { session: 'u' });
+  await app.settle();
+  assert.deepEqual(app.app.sessionGroups, ['g', 'k'], 'the refresh reached the page');
+
+  header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+  header(app, 'h').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.deepEqual(d.posts, []);
+});
+
+for (const [what, answer] of [['nothing', () => ({ status: 204 })], ['an object without names', () => ({})]]) {
+  test(`a listing of the groups that answers ${what} saves nothing and reports a failed save`, async () => {
+    const d = groupDaemon(GROUPS);
+    const app = await load({ routes: d.routes });
+    d.getQueue.push(answer);
+
+    dragGroup(app, 'g', 'h');
+    await app.settle();
+
+    assert.deepEqual(d.posts, []);
+    assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', '[h]', 'c', 'd', '[k]', 'e']);
+    assert.match(app.el('transcript').textContent, /could not save the group order: Error: the daemon sent no list of groups/);
+  });
+}
+
+// A read-back that cannot reach the daemon must not leave a move on screen
+// that was not saved.
+test('a refused stale move stays off the screen when the read-back cannot list the groups', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+  d.names = [...GROUPS, 'm'];
+  d.getQueue.push(() => ({ names: [...GROUPS, 'm'] }), () => ({ status: 500, body: { error: 'down' } }));
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+  await app.settle();
+
+  assert.deepEqual(d.posts, []);
+  assert.deepEqual(app.app.sessionGroups, GROUPS, 'the page holds a move that was not saved');
+  assert.match(app.el('transcript').textContent, /was not saved/);
+});
+
+// Each drop reads the daemon's list before it sends its own. The lists still
+// have to arrive in the order of the drops, or the daemon ends on an older
+// order than the one on screen.
+test('two group drops reach the daemon in the order they were made when the first read is slow', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+  const slow = gate();
+  d.holdGet = slow.promise;
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+  dragGroup(app, 'k', 'h');
+  await app.settle();
+  slow.open();
+  await app.settle();
+  await app.settle();
+
+  assert.deepEqual(d.posts, [{ names: ['h', 'g', 'k'] }, { names: ['k', 'h', 'g'] }]);
+  assert.deepEqual(d.names, app.app.sessionGroups, 'the daemon and the panel disagree');
+  assert.doesNotMatch(app.el('transcript').textContent, /Error/);
+});
+
+// Installed before load(), because the harness copies the routes when it
+// starts. arm() makes the next listing of the sessions wait for open();
+// breakIt() makes every listing after it answer something that is not a list.
+function listingGate(d) {
+  const hold = gate();
+  const state = { armed: false, broken: false };
+  const inner = d.routes['GET /api/sessions'];
+  d.routes['GET /api/sessions'] = async (...args) => {
+    const answer = typeof inner === 'function' ? await inner(...args) : inner;
+    if (state.armed) {
+      state.armed = false;
+      await hold.promise;
+    }
+    return state.broken ? { not: 'a list' } : answer;
+  };
+  return { arm() { state.armed = true; }, open: hold.open, breakIt() { state.broken = true; } };
+}
+
+// The person is told why the panel is changing before the read-back is done.
+test('the message that a move was not saved is on screen while the panel is being read back', async () => {
+  const d = groupDaemon(GROUPS);
+  const slow = listingGate(d);
+  const app = await load({ routes: d.routes });
+  d.names = [...GROUPS, 'm'];
+  slow.arm();
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+
+  assert.match(app.el('transcript').textContent, /changed in another window/);
+  slow.open();
+  await app.settle();
+});
+
+test('a refusal that overlapped another drop says so while the panel is being read back', async () => {
+  const d = groupDaemon(GROUPS);
+  const slow = listingGate(d);
+  const app = await load({ routes: d.routes });
+  const first = gate();
+  d.postHolds[0] = first.promise;
+  d.failPosts.add(0);
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+  dragGroup(app, 'g', 'k');
+  await app.settle();
+  slow.arm();
+  first.open();
+  await app.settle();
+
+  assert.match(app.el('transcript').textContent, /could not save the group order/);
+  slow.open();
+  await app.settle();
+});
+
+test('dropGroupOn finishes only after the panel has been read back', async () => {
+  const d = groupDaemon(GROUPS);
+  const slow = listingGate(d);
+  const app = await load({ routes: d.routes });
+  d.names = [...GROUPS, 'm'];
+  slow.arm();
+
+  let done = false;
+  const dropped = app.dropGroupOn('g', 'h').then(() => { done = true; });
+  await app.settle();
+  assert.equal(done, false, 'it finished before the read-back answered');
+  slow.open();
+  await dropped;
+
+  assert.deepEqual(app.app.sessionGroups, [...GROUPS, 'm']);
+});
+
+test('a read-back that cannot be drawn says so', async () => {
+  const d = groupDaemon(GROUPS);
+  const slow = listingGate(d);
+  const app = await load({ routes: d.routes });
+  d.names = [...GROUPS, 'm'];
+  slow.breakIt();
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+
+  assert.match(app.el('transcript').textContent, /could not read the session list back/);
+});
+
+// ---- the line and what the browser is told ----------------------------
+
+test('moving a carried group between two headers it lands above leaves one line', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  startGroup(app, 'k');
+  header(app, 'g').fire('dragover', { dataTransfer: transfer() });
+  assert.ok(header(app, 'g').classList.contains('group-drop-before'));
+
+  header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+
+  assert.ok(header(app, 'h').classList.contains('group-drop-before'));
+  assert.ok(!header(app, 'g').classList.contains('group-drop-before'), 'two lines at once');
+  header(app, 'k').fire('dragend');
+});
+
+test('a carried group says it is a move, and a header it is over says it takes a move', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  const out = transfer();
+  header(app, 'g').fire('dragstart', { dataTransfer: out });
+  assert.equal(out.effectAllowed, 'move');
+
+  const over = transfer();
+  header(app, 'h').fire('dragover', { dataTransfer: over });
+  assert.equal(over.dropEffect, 'move');
+  header(app, 'g').fire('dragend');
 });

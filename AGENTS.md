@@ -64,7 +64,7 @@ Project rules for agents working in this repo.
     that is no longer reported. The "written, tested, never called" shape
     has shipped twice (v0.55.0, v0.57.0); `-test=false` is what makes it
     visible, at the cost of listing the functions only tests call.
-  * The Web UI suite (698 tests in 63 files, deliberately also run by
+  * The Web UI suite (711 tests in 63 files, deliberately also run by
     `TestWebUI`, which skips itself when node is absent), the doc-link
     checker, `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form
     compares against the index and so inspects nothing once changes are

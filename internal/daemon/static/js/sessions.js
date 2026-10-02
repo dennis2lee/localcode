@@ -715,12 +715,18 @@ export function groupLandsBelow(names, fromName, toName) {
   return from >= 0 && to >= 0 && from < to;
 }
 
+// Group saves reach the daemon one at a time, in the order of the drops. Each
+// one reads the daemon's list before it sends its own, and without a queue
+// the lists would arrive in the order those reads happen to be answered in,
+// leaving the daemon on an older order than the panel shows.
+let groupSaves = Promise.resolve();
+
 // sameNames says whether two lists of group names hold the same groups,
 // whatever order they are in.
 function sameNames(a, b) {
-  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  if (a.length !== b.length) return false;
   const have = new Set(a);
-  return have.size === a.length && b.every(name => have.has(name));
+  return b.every(name => have.has(name));
 }
 
 // dropGroupOn moves a group to where another one is, on screen first and
@@ -754,20 +760,30 @@ export async function dropGroupOn(fromName, toName) {
   const mark = savesStarted + 1;
   let failure = null;
   let stale = false;
-  await trackSave(async () => {
-    try {
-      const held = await apiClient.getGroups();
-      if (!sameNames(held && held.names, before)) {
-        stale = true;
-        return;
+  await trackSave(() => {
+    const turn = groupSaves.then(async () => {
+      try {
+        const held = await apiClient.getGroups();
+        if (!held || !Array.isArray(held.names)) throw new Error('the daemon sent no list of groups');
+        if (!sameNames(held.names, before)) {
+          stale = true;
+          return;
+        }
+        await apiClient.setGroups(names);
+      } catch (err) {
+        failure = err;
       }
-      await apiClient.setGroups(names);
-    } catch (err) {
-      failure = err;
-    }
+    });
+    groupSaves = turn;
+    return turn;
   });
   if (stale) {
+    // Back to the list the panel had, so that if the read-back cannot reach
+    // the daemon either, the panel does not keep a move that was not saved.
     appendError('the groups were changed in another window, so the move was not saved');
+    app.sessionGroups = before;
+    app.sessions = panelOrder(app.sessions, before);
+    renderSessionList();
     await readBack();
     return;
   }

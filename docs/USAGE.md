@@ -1772,7 +1772,7 @@ Sessions can be put into named groups. Which groups exist, what order they are d
 
 While a filter is on, neither cards nor groups can be dragged: the panel shows only part of the list, and a move among some of the rows would have no clear meaning for the rest. Like a card, a group is not redrawn while it is carried.
 
-A group move is saved only if the daemon's list holds the same groups as the window's. The daemon deletes a group that a submitted list leaves out, so a window that has not heard of a group made in another window would delete it. When the lists differ, nothing is saved, the window says that the groups were changed in another window, and the panel is read back.
+A group move is saved only if the daemon's list holds the same groups as the window's list. The daemon deletes a group that a submitted list leaves out. A window that has not heard of a group made in another window would therefore delete that group. When the lists differ, nothing is saved. The window then says that the groups were changed in another window and reads the panel back. The check and the save are two requests, so a group made between them is still deleted. Creating, renaming and deleting a group send the window's list without this check. Group moves are sent one at a time, in the order they were made.
 
 Ungrouped sessions are drawn first, above every group and with no header of their own, so a person who has made no groups sees the panel exactly as it was before groups existed.
 
