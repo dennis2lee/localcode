@@ -589,6 +589,12 @@ Completed findings remain in this list to preserve item numbers and release hist
     * **Per-item pipelining in Orchestrate.** Declined, and likewise already settled in the code itself: `internal/agent/orchestrate.go:66-69` states the tradeoff and the decision — "pipelining an item through the remaining stages on its own buys wall clock and costs a per-item state machine, and it is deliberately not in this version."
     * The pattern in the last two is worth naming: both were listed as open work in this file while the decision against them sat in a source comment and a design document. A record that does not know what the code already decided will keep proposing it.
 
+64. **Desktop window: links and drags on macOS are unverified. Open.**
+
+    * v0.150.0 answers WebView2's new-window request, so a link opens in the system's default browser on Windows (`internal/gui/newwindow_windows.go`). The macOS window installs no handler. What WKWebView does with a `target="_blank"` link is not verified.
+    * Card and group drags were driven with a real mouse in WebView2 on a Windows runner, by a workflow on a `diag/` branch that is not part of the release checks, and in a Chromium pane. A request to drive the macOS window was declined, so no drag has been tried in WKWebView.
+    * The Windows hook reads an unexported field of `webview_go` and calls COM through hand-built tables. `internal/gui/newwindow_test.go` pins the library version and checks every slot number against its header. Bumping the module means repeating a real click on Windows.
+
 ## UI ideas
 
 ### Web UI

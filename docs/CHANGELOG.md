@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.150.0
+
+A link a model writes opens in the system's default browser in the Windows window, groups in the session panel can be reordered by dragging, the model's question is drawn at the size of its replies, and the Agents tab says what its switches do.
+
+**Changed**
+
+* **Links in the Windows desktop window open in the system's default browser**
+  * A left, middle or ctrl click, `window.open` and the right-click menu's "Open link in new window" go to the browser chosen under Default apps. Each opened an Edge-engine popup before.
+  * Only `http` and `https` addresses are opened. Anything else is dropped without a window.
+  * An address with a `%` that starts no escape (`/50%off`) is opened with the `%` spelled `%25`, the spelling the Windows shell can open.
+  * `gui-frame.log` records whether the hook was installed and why a link was dropped.
+* **Groups in the session panel can be reordered by dragging their headers**
+  * A group lands above the group it is dropped on when it came from below, and under that group's last card when it came from above. A line shows the edge.
+  * Only the list of groups is saved. The cards keep their order.
+  * Neither cards nor groups can be dragged while a filter is on.
+* **The question the model asks when it stops a turn is drawn at the size of its replies**
+  * It follows the Reading text-size setting and keeps its muted, italic look. The answer echo and every other tool line keep their size.
+* **The Agents tab describes what its switches gate**
+  * Smart Agent names the plan and ask tools and says what is left when it is off. Orchestration states the two-agent requirement and the limits, with the timeout per agent turn.
+  * The `Orchestrate` tool description says a fanout runs four at a time. The comparison pages give the timeout per agent turn.
+* **The session panel waits to redraw while a card or a group is being dragged**
+  * A refresh that arrives while a drop is being saved waits for the save.
+  * A drag whose `dragend` never arrives is ended by a page-level guard.
+  * The drop line marks the edge the card lands against, stays on while the pointer crosses the card's contents, and is drawn in Windows High Contrast.
+  * The archive header no longer stays lit after a cancelled drag.
+
 ## v0.149.0
 
 The Windows install button runs the installer after localcode exits, keeps the old version until the new one is in place, and reports an install that did not land.

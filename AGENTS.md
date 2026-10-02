@@ -39,8 +39,8 @@ Project rules for agents working in this repo.
   the attempt's log, and a force-cancelled attempt may keep none at all.
   The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,245 tests
-    and 624 subtests over 31 packages, two of the tests skipped on macOS.
+  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,275 tests
+    and 629 subtests over 31 packages, two of the tests skipped on macOS.
     The same suite runs a second time without `-race`
     (`go test ./... -count=1 -timeout 10m`), because a test whose timing
     only holds at race-detector speed passes the race lane and fails for
@@ -52,8 +52,9 @@ Project rules for agents working in this repo.
     the core count.
     Measured: `-parallel 1` 10s, `-parallel 8` 9s, `-p 1` 61s.
   * `go vet ./...`, `go build -tags gui ./...` plus `go test -tags gui
-    ./internal/gui/` (14 tests; macOS only, CGo — the package is behind
-    the tag, so the race lane never compiles its tests), and both
+    ./internal/gui/` (26 tests; CGo — the package is behind the tag, so
+    the race lane never compiles its tests; the gate runs them on macOS
+    and `gui-windows.yml` runs them on Windows), and both
     cross-builds — `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
     GOOS=linux GOARCH=amd64`. Windows and Linux are release targets built
     from this machine, so a break in either is a break in the release.
@@ -63,7 +64,7 @@ Project rules for agents working in this repo.
     that is no longer reported. The "written, tested, never called" shape
     has shipped twice (v0.55.0, v0.57.0); `-test=false` is what makes it
     visible, at the cost of listing the functions only tests call.
-  * The Web UI suite (587 tests in 60 files, deliberately also run by
+  * The Web UI suite (682 tests in 63 files, deliberately also run by
     `TestWebUI`, which skips itself when node is absent), the doc-link
     checker, `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form
     compares against the index and so inspects nothing once changes are
