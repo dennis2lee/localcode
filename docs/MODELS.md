@@ -10,6 +10,22 @@ Choose a provider, configure a model profile, and assign that profile to an agen
 
 See [USAGE.md](USAGE.md#config-file-configjson) for configuration field definitions.
 
+## Quick pick
+
+The shipped `config.example.json` is the recommended starting shape: three profiles in three cost classes, with the specialists routed between them when Smart Agent is on.
+
+| Profile | For | Example |
+|---|---|---|
+| `smart-deep` | The conversation itself, and judgement work (`plan`, `oracle`, `librarian`) | Bedrock Claude Opus, or Anthropic Claude Sonnet |
+| `smart-balanced` | Self-contained changes (`implement`) | Anthropic Claude Sonnet |
+| `smart-quick` | Searching and builds (`explore`, `verify`) | A local 30B model over an OpenAI-compatible endpoint |
+
+With one profile everything runs on it. That works, and costs the same everywhere. With two, keep the conversation on the stronger model and point the quick category at the cheaper one. Copy the file and replace the three model entries with what you can reach; the routing, fallbacks, and agent map need no other change.
+
+* A local model needs no AWS files and no Claude installation, even when the config retains an unused Bedrock entry.
+* A local 30B muse over LM Studio is a tested quick-class choice. It benefits from `keep_going`, which carries the turn on when the model stops with work unfinished. See [A local model that stops mid-task](#a-local-model-that-stops-mid-task).
+* Bedrock needs model access enabled in the region first. Skipping that makes every call fail with `AccessDeniedException`. See [Amazon Bedrock](#amazon-bedrock).
+
 Use `localcode login <bedrock|anthropic>` for cloud authentication. See [USAGE.md, authenticating with localcode login](USAGE.md#authenticating-with-localcode-login).
 
 claude.ai Pro and Max subscriptions are not supported. That sign in flow requires a private OAuth client issued for Claude Code. localcode does not reproduce those credentials because of the Anthropic terms of service risk.
