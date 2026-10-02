@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.152.0
+
+Shorter feature reference, a model quick pick, and smaller source files.
+
+**Changed**
+
+* **FEATURES.md cells are one line each again, with links into the manual**
+  * Twenty-four cells had grown past 300 characters, against the header's own promise. Each is a summary with a USAGE.md link now. No behavior changed.
+* **MODELS.md gains a Quick pick section**
+  * The three-profile shape from `config.example.json` as the recommended start: deep, balanced, and quick classes, what each is for, and how to shrink to one or two profiles.
+* **Large files are split by job, moved only**
+  * `turn.go`, `commands.go`, `sessions.go`, and `orchestrate_run.go` each held several jobs in one file. Each job has its own file now. No logic changed.
+
 ## v0.151.0
 
 Session rename and the other prompts work in the macOS desktop window, Cmd+C and Cmd+V work there too, and orchestration stages can repeat until done.
