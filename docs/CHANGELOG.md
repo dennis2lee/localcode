@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.150.1
 
 The two macOS apps carry the application icon.
 
