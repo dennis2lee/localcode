@@ -1766,11 +1766,13 @@ Sessions can be put into named groups. Which groups exist, what order they are d
 | Reorder inside a group | Drag the card onto another card of the same group, or onto the group's header to put it first | `POST /api/sessions/order` with the whole list. The group is not sent. |
 | Take it out again | Drag the card up among the ungrouped rows above the first group | `POST /api/sessions/{id}/group` with `{"group": ""}` |
 | Rename a group | **rename** on the group's header | `POST /api/sessions/groups` with the new list *and* `{"rename": {"from", "to"}}` |
-| Reorder the groups | Drag a group's header onto another group's header. It lands above that group when it came from below and below it, after its last card, when it came from above. A line shows which. | `POST /api/sessions/groups` with the whole list in the new order. Cards keep the order they had. |
+| Reorder the groups | Drag a group's header onto another group's header. It lands above that group when it came from below and below it, after its last card, when it came from above. A line shows which. | `GET /api/sessions/groups` to compare, then `POST /api/sessions/groups` with the whole list in the new order. Cards keep the order they had. |
 | Delete a group | **delete** on the group's header | `POST /api/sessions/groups` with the list minus that name |
 | Fold one shut | Click the group's header | Browser-local; nothing is sent |
 
 While a filter is on, neither cards nor groups can be dragged: the panel shows only part of the list, and a move among some of the rows would have no clear meaning for the rest. Like a card, a group is not redrawn while it is carried.
+
+A group move is saved only if the daemon's list holds the same groups as the window's. The daemon deletes a group that a submitted list leaves out, so a window that has not heard of a group made in another window would delete it. When the lists differ, nothing is saved, the window says that the groups were changed in another window, and the panel is read back.
 
 Ungrouped sessions are drawn first, above every group and with no header of their own, so a person who has made no groups sees the panel exactly as it was before groups existed.
 

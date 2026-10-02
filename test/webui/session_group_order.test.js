@@ -826,13 +826,27 @@ test('a card dropped on the header of an empty group goes into it', async () => 
 // u above the groups; g = [a, b], h = [c, d], k = [e].
 const THREE = [row('u'), row('a', 'g'), row('b', 'g'), row('c', 'h'), row('d', 'h'), row('e', 'k')];
 
-// A daemon that keeps the list of groups it is given.
+// A daemon that keeps the list of groups it is given, and replaces it
+// wholesale the way the real one does. holdGet makes the next listing of the
+// groups wait, postHolds[n] makes the nth save wait, and failPosts holds the
+// numbers of the saves that are refused (after their hold, if they have one).
 function groupDaemon(names, sessions = THREE) {
-  const d = { names: names.slice(), posts: [] };
+  const d = { names: names.slice(), posts: [], holdGet: null, postHolds: [], failPosts: new Set() };
   d.routes = routesFor(sessions, {
-    'GET /api/sessions/groups': () => ({ names: d.names }),
-    'POST /api/sessions/groups': (body) => {
+    'GET /api/sessions/groups': async () => {
+      const answer = { names: d.names.slice() };
+      if (d.holdGet) {
+        const hold = d.holdGet;
+        d.holdGet = null;
+        await hold;
+      }
+      return answer;
+    },
+    'POST /api/sessions/groups': async (body) => {
+      const n = d.posts.length;
       d.posts.push(body);
+      if (d.postHolds[n]) await d.postHolds[n];
+      if (d.failPosts.has(n)) return { status: 500, body: { error: 'disk full' } };
       d.names = body.names;
       return { status: 200, body: { names: d.names } };
     },
@@ -1106,3 +1120,281 @@ test('in forced colors the group lines are still drawn', () => {
   assert.match(css, /\.group-drop-after\s*\{\s*box-shadow:\s*0\s+2px/);
 });
 
+// ---- what a header drag must not get wrong ---------------------------
+
+// The daemon deletes a group that the list it is sent leaves out, so a drag
+// in a window that has not heard of a group must not send its list.
+test('a window that has not heard of a new group does not save its list over the daemon\'s', async () => {
+  const sessions = THREE.map(s => ({ ...s }));
+  const d = groupDaemon(GROUPS, sessions);
+  const app = await load({ routes: d.routes });
+  // Another window makes group m and puts a session in it. Nothing tells this page.
+  d.names = [...GROUPS, 'm'];
+  sessions.push(row('x', 'm'));
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+
+  assert.deepEqual(d.posts, [], 'the list this page holds would have deleted m');
+  assert.deepEqual(d.names, [...GROUPS, 'm']);
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', '[h]', 'c', 'd', '[k]', 'e', '[m]', 'x'], 'the panel was read back');
+  assert.match(app.el('transcript').textContent, /changed in another window/);
+});
+
+test('a carried group that was deleted in another window moves nothing when it is dropped', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+  startGroup(app, 'g');
+  d.names = ['h', 'k'];
+  emit(app, 'session.renamed', { session: 'u' });
+  await app.settle();
+
+  header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+  header(app, 'h').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.deepEqual(d.posts, []);
+  assert.deepEqual(app.app.sessionGroups, ['h', 'k']);
+});
+
+// A listing of the groups asked for before a drop and answered after it
+// describes the panel as it was before the drop.
+async function dropWhileGroupsAreBeingListed(d) {
+  const app = await load({ routes: d.routes });
+  const get = gate();
+  const post = gate();
+  d.holdGet = get.promise;
+  d.postHolds[0] = post.promise;
+  const loading = app.loadSessions();
+  await app.settle();
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+  return { app, get, post, loading };
+}
+
+test('a listing of the groups that was on its way when a group drop began does not undo it', async () => {
+  const { app, get, post, loading } = await dropWhileGroupsAreBeingListed(groupDaemon(GROUPS));
+
+  get.open();
+  await app.settle();
+  assert.deepEqual(app.app.sessionGroups, ['h', 'g', 'k'], 'the old list came back');
+  emit(app, 'session.activity', { session: 'e', busy: true });
+  await app.settle();
+  assert.deepEqual(shown(app), ['u', '[h]', 'c', 'd', '[g]', 'a', 'b', '[k]', 'e'], 'a redraw painted the old order');
+  post.open();
+  await loading;
+});
+
+test('a second group move made while that listing was on its way is computed from the first', async () => {
+  const d = groupDaemon(GROUPS);
+  const { app, get, post, loading } = await dropWhileGroupsAreBeingListed(d);
+
+  get.open();
+  await app.settle();
+  dragGroup(app, 'k', 'h');
+  await app.settle();
+  post.open();
+  await loading;
+  await app.settle();
+
+  assert.deepEqual(d.posts[1], { names: ['k', 'h', 'g'] });
+});
+
+// Each move is put back to what the panel held before it, which is only the
+// right thing when no other move overlapped it.
+test('a refused move does not undo a later move that was accepted', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+  const first = gate();
+  d.postHolds[0] = first.promise;
+  d.failPosts.add(0);
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+  dragGroup(app, 'g', 'k');
+  await app.settle();
+  first.open();
+  await app.settle();
+
+  assert.deepEqual(d.names, ['h', 'k', 'g']);
+  assert.deepEqual(app.app.sessionGroups, d.names, 'the page and the daemon disagree');
+  assert.match(app.el('transcript').textContent, /could not save the group order/);
+});
+
+// Reading the panel back asks the daemon, and a daemon that cannot save is
+// often one that cannot answer either: that must not blank the panel.
+test('a move that fails because the daemon is gone puts the groups back and keeps the panel', async () => {
+  const d = groupDaemon(GROUPS);
+  let down = false;
+  for (const key of ['GET /api/sessions', 'GET /api/sessions/groups', 'POST /api/sessions/groups']) {
+    const answer = d.routes[key];
+    d.routes[key] = (...args) => {
+      if (down) return { status: 500, body: { error: 'down' } };
+      return typeof answer === 'function' ? answer(...args) : answer;
+    };
+  }
+  const app = await load({ routes: d.routes });
+  down = true;
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', '[h]', 'c', 'd', '[k]', 'e']);
+  assert.match(app.el('transcript').textContent, /could not save the group order/);
+});
+
+test('two refused moves leave the page on the order the daemon holds', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+  const first = gate();
+  const second = gate();
+  d.postHolds[0] = first.promise;
+  d.postHolds[1] = second.promise;
+  d.failPosts.add(0).add(1);
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+  dragGroup(app, 'g', 'k');
+  await app.settle();
+  first.open();
+  await app.settle();
+  second.open();
+  await app.settle();
+
+  assert.deepEqual(d.names, GROUPS);
+  assert.deepEqual(app.app.sessionGroups, GROUPS, 'the page shows an order the daemon never held');
+});
+
+// A dragend that never arrives must not decide what the next drag is.
+test('a card drag that starts after a group drag that never ended is a card drag', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+
+  startGroup(app, 'g');
+  start(app, 'a');
+  header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+  header(app, 'h').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.deepEqual(d.posts, [], 'the card drop was saved as a group move');
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/a/group').map(c => c.body), [{ group: 'h' }]);
+});
+
+test('a group drag that starts after a card drag that never ended is a group drag', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+
+  start(app, 'a');
+  startGroup(app, 'g');
+  const over = card(app, 'c').fire('dragover', { dataTransfer: transfer() });
+
+  assert.equal(over.defaultPrevented, false, 'a card row took a group');
+});
+
+// ---- the browser decides from dragover, not from drop ---------------
+
+// A drop is only sent to an element whose dragover was cancelled, and the
+// fake DOM sends it regardless. So the cancelling is asserted itself.
+test('the header under a carried group cancels dragover, or no browser sends the drop', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  startGroup(app, 'g');
+
+  const over = header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+  assert.equal(over.defaultPrevented, true);
+  header(app, 'g').fire('dragend');
+});
+
+test('the carried header refuses its own dragover and draws no line on itself', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  startGroup(app, 'h');
+
+  const self = header(app, 'h');
+  assert.equal(self.fire('dragover', { dataTransfer: transfer() }).defaultPrevented, false);
+  assert.ok(!self.classList.contains('group-drop-before') && !self.classList.contains('group-drop-after'));
+  self.fire('dragend');
+});
+
+test('the strip above the groups, when it is on screen, refuses a carried group', async () => {
+  const everyone = [row('a', 'g'), row('b', 'g'), row('c', 'h')];
+  const app = await load({ routes: groupDaemon(['g', 'h'], everyone).routes });
+  const strip = (app.el('session-list').children || []).find(c => c.classList.contains('session-group-ungrouped-drop'));
+  assert.ok(strip, 'every session is in a group, so the strip is drawn');
+
+  startGroup(app, 'g');
+  assert.equal(strip.fire('dragover', { dataTransfer: transfer() }).defaultPrevented, false);
+  header(app, 'g').fire('dragend');
+});
+
+test('a header drag puts data on the transfer, because some browsers start no drag without it', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  const t = transfer();
+
+  header(app, 'g').fire('dragstart', { dataTransfer: t });
+
+  assert.equal(t.getData('text/plain'), 'g');
+  header(app, 'g').fire('dragend');
+});
+
+test('a carried card is accepted over a header, the strip and the archive, and a drop on a header is cancelled', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  start(app, 'a');
+  assert.equal(header(app, 'h').fire('dragover', { dataTransfer: transfer() }).defaultPrevented, true, 'header');
+  assert.equal(app.el('archive-toggle').fire('dragover', { dataTransfer: transfer() }).defaultPrevented, true, 'archive');
+  assert.equal(header(app, 'k').fire('drop', { dataTransfer: transfer() }).defaultPrevented, true, 'drop on a header');
+  await app.settle();
+
+  const everyone = [row('a', 'g'), row('b', 'g'), row('c', 'h')];
+  const other = await load({ routes: groupDaemon(['g', 'h'], everyone).routes });
+  const strip = (other.el('session-list').children || []).find(c => c.classList.contains('session-group-ungrouped-drop'));
+  start(other, 'b');
+  assert.equal(strip.fire('dragover', { dataTransfer: transfer() }).defaultPrevented, true, 'strip');
+  card(other, 'b').fire('dragend');
+
+  startGroup(app, 'g');
+  header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+  assert.equal(header(app, 'h').fire('drop', { dataTransfer: transfer() }).defaultPrevented, true, 'group dropped on a header');
+  await app.settle();
+});
+
+// After a group has moved, or a move was refused and put back, the order
+// app.sessions is in is what decides which side a card lands on, so it has to
+// be the order the rows are drawn in.
+async function cardsLandWhereTheLineIs(prepare) {
+  const wrong = [];
+  for (const from of ['a', 'b', 'c', 'd', 'e']) {
+    for (const to of ['a', 'b', 'c', 'd', 'e']) {
+      if (from === to) continue;
+      const d = groupDaemon(GROUPS);
+      const app = await load({ routes: d.routes });
+      await prepare(app, d);
+      const order = rowIDs(app);
+      start(app, from);
+      const target = card(app, to);
+      target.fire('dragover', { dataTransfer: transfer() });
+      const lineBelow = target.classList.contains('drop-after');
+      target.fire('drop', { dataTransfer: transfer() });
+      await app.settle();
+      const after = rowIDs(app);
+      const landedBelow = after.indexOf(from) > after.indexOf(to);
+      const fromAbove = order.indexOf(from) < order.indexOf(to);
+      if (lineBelow !== landedBelow || fromAbove !== landedBelow) wrong.push(`${from} onto ${to}`);
+    }
+  }
+  return wrong;
+}
+
+test('after a group move, a card lands on the side its line shows', async () => {
+  const wrong = await cardsLandWhereTheLineIs(async (app) => {
+    dragGroup(app, 'g', 'h');
+    await app.settle();
+  });
+  assert.deepEqual(wrong, []);
+});
+
+test('after a refused group move was put back, a card lands on the side its line shows', async () => {
+  const wrong = await cardsLandWhereTheLineIs(async (app, d) => {
+    d.failPosts.add(0);
+    dragGroup(app, 'g', 'h');
+    await app.settle();
+  });
+  assert.deepEqual(wrong, []);
+});

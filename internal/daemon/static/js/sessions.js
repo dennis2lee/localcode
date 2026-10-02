@@ -36,7 +36,9 @@ export async function loadSessions() {
     try {
       const res = await apiClient.getGroups();
       if (res && Array.isArray(res.names)) {
-        app.sessionGroups = res.names;
+        // Held back for the reason the listing is: a group drop that began
+        // meanwhile has already rewritten this list.
+        if (started === savesStarted) app.sessionGroups = res.names;
         groupsAreCurrent = true;
       }
     } catch {
@@ -508,6 +510,7 @@ function wireGroupHeaderDrag(header, groupName) {
   header.setAttribute('draggable', 'true');
   header.addEventListener('dragstart', (e) => {
     draggingGroup = groupName;
+    draggingID = null;
     header.classList.add('dragging');
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
@@ -555,7 +558,9 @@ let draggingID = null;
 // drags have different places to land: a card can land on a row, on a
 // header, on the strip above the groups and on the archive, and a group can
 // land only on another group's header. Everything that holds work back
-// while a drag is in progress asks dragging(), which is either.
+// while a drag is in progress asks dragging(), which is either. Each
+// dragstart clears the other one, so state left behind by a dragend that
+// never came cannot turn the next drag into the other kind of move.
 let draggingGroup = null;
 function dragging() {
   return Boolean(draggingID) || Boolean(draggingGroup);
@@ -625,6 +630,7 @@ function makeDraggable(div, id) {
 
   div.addEventListener('dragstart', (e) => {
     draggingID = id;
+    draggingGroup = null;
     div.classList.add('dragging');
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
@@ -709,10 +715,25 @@ export function groupLandsBelow(names, fromName, toName) {
   return from >= 0 && to >= 0 && from < to;
 }
 
+// sameNames says whether two lists of group names hold the same groups,
+// whatever order they are in.
+function sameNames(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  const have = new Set(a);
+  return have.size === a.length && b.every(name => have.has(name));
+}
+
 // dropGroupOn moves a group to where another one is, on screen first and
 // then in the daemon, the way a card moves. The list of groups is all that
 // is saved: the order the groups are drawn in is the order of that list, and
 // the cards in each group keep the order they had.
+//
+// The daemon replaces its list with the one it is sent, and a group the list
+// leaves out is deleted with its place in every session. So a window that has
+// not heard about a group made in another window must not send its list: the
+// daemon's list is read first and compared by name (the order is what this
+// move changes), and if the two differ nothing is sent and the panel is read
+// back.
 export async function dropGroupOn(fromName, toName) {
   const before = (app.sessionGroups || []).slice();
   const from = before.indexOf(fromName);
@@ -726,15 +747,35 @@ export async function dropGroupOn(fromName, toName) {
   app.sessions = panelOrder(app.sessions, names);
   renderSessionList();
 
+  // A refused move is put back to the list it started from only when no
+  // other drop began while it was being saved. Otherwise the panel also holds
+  // that drop's move, which this snapshot would undo even if the daemon
+  // accepted it, so the panel is read back instead.
+  const mark = savesStarted + 1;
   let failure = null;
+  let stale = false;
   await trackSave(async () => {
     try {
+      const held = await apiClient.getGroups();
+      if (!sameNames(held && held.names, before)) {
+        stale = true;
+        return;
+      }
       await apiClient.setGroups(names);
     } catch (err) {
       failure = err;
     }
   });
+  if (stale) {
+    appendError('the groups were changed in another window, so the move was not saved');
+    await readBack();
+    return;
+  }
   if (failure === null) return;
+  if (savesStarted !== mark) {
+    await resyncAfterPartialSave(failure, 'could not save the group order');
+    return;
+  }
   appendError(`could not save the group order: ${failure}`);
   app.sessionGroups = before;
   app.sessions = panelOrder(app.sessions, before);
@@ -776,6 +817,12 @@ function snapshot(sessions) {
 // happened. So it asks. One request, and the panel shows what is true.
 async function resyncAfterPartialSave(err, what) {
   appendError(`${what}: ${err}`);
+  await readBack();
+}
+
+// readBack asks the daemon what the panel should show, for the cases where
+// the page cannot work that out for itself.
+async function readBack() {
   try {
     await loadSessions();
   } catch (reloadErr) {
