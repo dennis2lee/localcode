@@ -39,13 +39,14 @@ func (t *OrchestrateTool) DescriptionFor(ctx context.Context) string {
 
 Use it when the shape of the work is known in advance and the value is in actually doing all of it: reviewing one change along several independent dimensions, checking each finding with agents that cannot see each other, surveying a subsystem several ways at once. For one question, use Task; a plan is not cheaper than a single delegation, it is more thorough than a model choosing step by step.
 
-A stage is one of three kinds. "step" runs its agent once. "fanout" runs it once per item in over, times copies, all at once, where over is either a list you write or one reference of the form $earlierstage.field. "barrier" runs once and is handed everything the stages before it kept.
+A stage is one of three kinds. "step" runs its agent once. "fanout" runs it once per item in over, times copies, at most %d at a time, where over is either a list you write or one reference of the form $earlierstage.field. "barrier" runs once and is handed everything the stages before it kept.
 
 A stage that declares returns gets an Answer tool in that exact shape, and only what it declares can be referred to or filtered on later. keep names one returned field and drops every result where it is false or empty: a stage of skeptics declaring {"survives":"bool"} and keeping "survives" is an adversarial filter with no expression language involved. unanswered says what to do when an agent does not answer in the declared shape: skip (the default), keep, or fail.
 
 Prompts take three substitutions and no others: {{task}}, {{item}} inside a fanout, and {{input}} for what earlier stages kept.
 
-Ceilings, all refusals at validation rather than truncations while running: %d stages, %d items per fanout, %d copies, %d agents in a whole run, %d declared fields per stage. A stage gets %s and the run gets %s. Everything runs while you wait, and Esc stops all of it.`,
+Ceilings, all refusals at validation rather than truncations while running: %d stages, %d items per fanout, %d copies, %d agents in a whole run, %d declared fields per stage. Each agent turn gets %s and the run gets %s. Everything runs while you wait, and Esc stops all of it.`,
+		maxParallel,
 		maxStages, maxFanout, maxCopies, maxRunAgents, maxReturnFields,
 		stageTimeout, runTimeout)
 }
@@ -131,7 +132,7 @@ func (t *OrchestrateTool) Describe(input json.RawMessage) string {
 	}
 	sort.Strings(names)
 
-	return fmt.Sprintf("run an orchestration: %q, %d stages, at most %d agent turns across %s, %s per stage and %s for the run",
+	return fmt.Sprintf("run an orchestration: %q, %d stages, at most %d agent turns across %s, %s per agent turn and %s for the run",
 		firstLine(p.Goal), len(p.Stages), p.Launches(), strings.Join(names, ", "), stageTimeout, runTimeout)
 }
 

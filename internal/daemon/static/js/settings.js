@@ -211,15 +211,16 @@ async function applyRepeatLimit() {
 // full of knobs would put that back.
 //
 // The note below it carries the part that cannot be written into the
-// page, because it depends on the daemon's build and on which profiles
-// this config has: which specialists exist, and that they cost money.
+// page, because it comes from the daemon: which specialists the build
+// ships, and that they cost money. With the switch off it says what
+// delegation is left with, which is only the agents config.json declares.
 
 function renderSmartAgent(warning) {
   smartAgentCheckbox.checked = !!app.smartAgent;
   smartAgentWarnEl.textContent = warning || '';
   smartAgentWarnEl.hidden = !warning;
   if (!app.smartAgent) {
-    smartAgentNoteEl.textContent = 'Off. One model, one context.';
+    smartAgentNoteEl.textContent = 'Off. Delegation uses only the agents declared in config.json.';
     return;
   }
   const roster = (app.smartAgentRoster || []).join(', ');
@@ -230,26 +231,30 @@ function renderSmartAgent(warning) {
 // Orchestration.
 //
 // A separate switch from Smart Agent, and the note carries why: a plan
-// needs somewhere to delegate its stages to, so with one agent configured
-// this is on and inert. The daemon reports the roster alongside both
-// switches, which is what lets the panel say so instead of the endpoint
-// refusing.
+// needs somewhere to delegate its stages to, so with fewer than two agents
+// this is on and inert. The panel does not count agents: app.agents can
+// lag a Smart Agent flip, and a count taken from it would sometimes say
+// "nobody" about a config that has agents. It states the requirement
+// whenever Smart Agent is off instead, which is true in every state.
+//
+// The note states the two ceilings that bound what a run can spend. The
+// timeouts are in the permission prompt each run asks with, and all of
+// them are in docs/USAGE.md. The numbers are the constants in
+// internal/agent/orchestrate*.go, written out here by hand.
+// TestTheSettingsNoteCeilingsAreTheRealOnes reads this function, so
+// changing one side alone fails the build.
 
 function renderOrchestrate(warning) {
   orchestrateCheckbox.checked = !!app.orchestrate;
   orchestrateWarnEl.textContent = warning || '';
   orchestrateWarnEl.hidden = !warning;
   if (!app.orchestrate) {
-    orchestrateNoteEl.textContent = 'Off. One delegation at a time.';
+    orchestrateNoteEl.textContent = 'Off. The model cannot run multi-stage plans.';
     return;
   }
-  const roster = (app.smartAgentRoster || []).length;
-  if (!app.smartAgent && roster) {
-    orchestrateNoteEl.textContent = 'On, but nobody to delegate to. Turn on Smart Agent for the built-in roster.';
-    return;
-  }
+  const needs = app.smartAgent ? '' : 'Needs two or more agents: declare them in config.json, or turn on Smart Agent. ';
   orchestrateNoteEl.textContent =
-    'On. Every run asks first. Limits: 8 stages and 32 agent turns, 10 minutes a stage, 30 a run.';
+    `On. ${needs}Each run asks first unless pre-approved. Up to 8 stages and 32 agent turns.`;
 }
 
 // The model running commands.

@@ -406,3 +406,30 @@ func TestEverySlashCommandIsDocumented(t *testing.T) {
 		}
 	}
 }
+
+// The reply to "/orchestrate on" says what the settings window says: a run
+// asks first, but only by default. skip_all, skip_tools and an allow rule
+// all authorize the tool, so "every run asks" was a promise the code does
+// not keep.
+func TestTurningOrchestrationOnSaysARunAsksUnlessPreApproved(t *testing.T) {
+	loop := newSmartLoop(t, "http://127.0.0.1:1")
+	loop.SetSmartAgentEnabled(true)
+	loop.SetOrchestrateEnabled(false)
+	const sid = "s1"
+	if _, err := loop.Store.CreateSession(sid, "", "general-purpose", true); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	out := replyTo(t, loop, sid, "/orchestrate on")
+	if !loop.OrchestrateEnabled() {
+		t.Fatal("orchestration did not turn on")
+	}
+	for _, want := range []string{"asks first", "pre-approved"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("reply = %q, want it to contain %q", out, want)
+		}
+	}
+	if strings.Contains(out, "Every run asks") {
+		t.Errorf("reply = %q, still promises that every run asks", out)
+	}
+}

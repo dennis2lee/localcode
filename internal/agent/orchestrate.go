@@ -79,7 +79,8 @@ type Stage struct {
 	// Kind is "step", "fanout" or "barrier".
 	//
 	//   step    one agent, once.
-	//   fanout  one agent per item of Over, times Copies, all at once.
+	//   fanout  one agent per item of Over, times Copies, at most
+	//           maxParallel at a time.
 	//   barrier one agent, once, given every kept result so far.
 	//
 	// The difference between step and barrier is only what the prompt is

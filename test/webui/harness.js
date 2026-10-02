@@ -508,4 +508,15 @@ async function load(opts = {}) {
   });
 }
 
-module.exports = { load, settle, defaultRoutes };
+// labelText is the text of the <label for="id"> in the shipped index.html,
+// on one line. The settings sentences beside the checkboxes are static
+// markup rather than something js/*.js writes, so a test that wants to hold
+// one to what the code does has to read it from the page source.
+function labelText(id) {
+  const html = fs.readFileSync(path.join(STATIC_DIR, 'index.html'), 'utf8');
+  const m = new RegExp(`<label for="${id}">([\\s\\S]*?)</label>`).exec(html);
+  if (!m) throw new Error(`index.html has no <label for="${id}">`);
+  return m[1].replace(/\s+/g, ' ').trim();
+}
+
+module.exports = { load, settle, defaultRoutes, labelText };

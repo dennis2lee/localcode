@@ -106,7 +106,7 @@ func (l *Loop) routeOrchestrate(sessionID, text string) (bool, error) {
 		if n := len(l.delegatableAgents(context.Background())); n < 2 {
 			b.WriteString("\n(there is only one agent configured, so a plan would have nobody to delegate a stage to: turn on Smart Agent for the built-in roster, or declare agents in config.json)")
 		} else {
-			fmt.Fprintf(&b, "\nThe Orchestrate tool is offered now: a plan of up to %d stages and %d agent turns, run by localcode rather than step by step by the model. Every run asks before it starts.", maxStages, maxRunAgents)
+			fmt.Fprintf(&b, "\nThe Orchestrate tool is offered now: a plan of up to %d stages and %d agent turns, run by localcode rather than step by step by the model. Each run asks first unless permission is pre-approved.", maxStages, maxRunAgents)
 		}
 	}
 	b.WriteString(l.persist(func(path string) error { return config.SetOrchestrateInFile(path, want) }))

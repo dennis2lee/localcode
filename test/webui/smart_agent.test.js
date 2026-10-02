@@ -10,7 +10,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { load } = require('./harness');
+const { load, labelText } = require('./harness');
 
 async function openSettings(app) {
   app.el('settings-btn').click();
@@ -168,4 +168,68 @@ test('the persistence warning clears on the next successful change', async () =>
 
   assert.equal(app.el('smart-agent-warn').hidden, true);
   assert.equal(app.el('smart-agent-warn').textContent, '');
+});
+
+// What the switch says it does, in the sentence beside the box.
+//
+// The sentence is static markup, so nothing keeps it true except a test
+// that names what the switch gates today. Each pattern below stands for
+// something the code does with the switch on and not with it off (the Go
+// tests next to that code are the proof; this holds the sentence to the
+// same list). The things it must not claim are as much of the contract:
+// the workspace boundary stopped depending on this switch in v0.63.0, and
+// a sentence that still promises it sends someone to turn Smart Agent on
+// for a guard they already have.
+//
+// It is a summary. The effects are grouped in one line and the rest is
+// left to docs/USAGE.md, so it is held to a length: an enumeration of
+// every effect reached 158 characters, the longest sentence in the dialog.
+test('the sentence beside the box names what the switch gates, in one short line', () => {
+  const label = labelText('smart-agent-checkbox');
+  for (const [what, pattern] of [
+    ['the specialist roster', /specialist sub-agents/],
+    ['the plan and ask tools', /plan and ask tools/],
+    ['model fallback', /model fallback/],
+    ['prompt caching', /prompt caching/],
+    ['the turn log', /turn log/],
+  ]) {
+    assert.match(label, pattern, `the sentence does not mention ${what}`);
+  }
+  assert.doesNotMatch(label, /workspace|boundary/i,
+    'the workspace boundary is not gated by Smart Agent');
+  assert.doesNotMatch(label, /[\u2013\u2014]/, 'an em dash or en dash in a settings sentence');
+  assert.ok(label.length <= 120, `${label.length} characters is long-winded for a summary`);
+});
+
+// Off is not "one model": Task is offered whenever the config declares two
+// agents, with the switch or without it. What the switch adds is the
+// built-in six, so what is left is the agents config.json declares.
+test('off, the note says delegation is limited to the agents in config.json', async () => {
+  const app = await load();
+  await openSettings(app);
+
+  const note = app.el('smart-agent-note').textContent;
+  assert.match(note, /^Off\./);
+  assert.match(note, /config\.json/);
+  assert.doesNotMatch(note, /one model/i);
+});
+
+test('on, the note names the roster, the cost and where the turn log goes', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/settings': {
+        auto_compact_enabled: true, show_tps: true, auto_delegate: false,
+        auto_delegate_agent: '', auto_delegate_match: [],
+        smart_agent: true, smart_agent_roster: ['explore', 'oracle'],
+        skip_permissions: false, permission_rules: {}, can_edit_permissions: true,
+      },
+    },
+  });
+  await openSettings(app);
+
+  const note = app.el('smart-agent-note').textContent;
+  assert.match(note, /^On\./);
+  assert.match(note, /explore, oracle/);
+  assert.match(note, /more model calls/i);
+  assert.match(note, /~\/\.localcode\/trace/);
 });

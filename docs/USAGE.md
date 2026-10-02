@@ -2031,7 +2031,7 @@ A stage is one of three kinds:
 | Kind | What it does |
 |---|---|
 | `step` | Its agent runs once. |
-| `fanout` | Its agent runs once per item in `over`, times `copies`, all at once. |
+| `fanout` | Its agent runs once per item in `over`, times `copies`, at most four at a time. |
 | `barrier` | Its agent runs once, handed everything the stages before it kept. |
 
 | Stage field | Meaning |
@@ -2072,7 +2072,7 @@ A stage is one of three kinds:
 | Constraint | Behavior |
 |---|---|
 | Ceilings | 8 stages, 16 items per fanout, 8 copies, 32 agent turns per run, 5 declared fields per stage, 4 agents at once. Every one is a refusal at validation, not a truncation while running. |
-| Timeouts | 10 minutes per stage; 30 minutes per run. |
+| Timeouts | 10 minutes per agent turn; 30 minutes per run. |
 | Cancellation | Every stage is a synchronous child, so Esc stops the whole run including the stage in flight. |
 | Permission | Confirmation before each run. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. |
 | Repeats | Fanout items from prior results are deduplicated after case and whitespace normalization. The report includes the duplicate count. |
@@ -2109,7 +2109,9 @@ Specialist delegation can add model calls and token usage. Enable it explicitly 
 | [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by retrying the same endpoint with a bounded backoff, then moving to the next profile, re-deriving the prompt for the model it moved to. |
 | [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
 | [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas, the system prompt and the tail of the conversation are marked, so the provider can serve the unchanged part of every request from cache. |
-| [File-access checks](#secrets-and-the-workspace-boundary) | Credential-path denial and resolved workspace-boundary checks. |
+| [File-access checks](#secrets-and-the-workspace-boundary) | Credential-path denial for `read_file`, `write_file`, and `edit`. The workspace boundary applies with Smart Agent off as well. |
+| `update_plan` and `ask_user` | A checklist the model keeps while it works, and a question put to the person without ending the turn. Neither is offered with Smart Agent off. See [Available tools](#available-tools). |
+| Prompt additions | The verify policy, the tokens left in the window, and a compaction note naming what the summary replaced. See [`/context`](#context). |
 | [A trust boundary](#the-trust-boundary) | The system prompt states which sources are instructions and which are data, and MCP output arrives framed as data. |
 
 #### What the roster needs from your config

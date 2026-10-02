@@ -324,11 +324,89 @@ func TestTheDocumentedCeilingsAreTheRealOnes(t *testing.T) {
 		fmt.Sprintf("%d agent turns per run", maxRunAgents),
 		fmt.Sprintf("%d declared fields per stage", maxReturnFields),
 		fmt.Sprintf("%d agents at once", maxParallel),
-		fmt.Sprintf("%d minutes per stage", int(stageTimeout.Minutes())),
+		fmt.Sprintf("%d minutes per agent turn", int(stageTimeout.Minutes())),
 		fmt.Sprintf("%d minutes per run", int(runTimeout.Minutes())),
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("USAGE.md does not say %q, so the documented ceiling is not the enforced one", want)
 		}
+	}
+}
+
+// The limits the settings window states are the limits the code enforces.
+//
+// The note is a string literal in a JavaScript file, so nothing but this
+// test connects it to the constants. It names each ceiling with the unit a
+// reader would take away, which is why the wanted strings are written out
+// here instead of being built from one shared phrase.
+//
+// The note states two ceilings, the two that bound what a run can spend.
+// The timeouts are in the permission prompt and every limit is in
+// USAGE.md. The note must not state a timeout with a unit that is not the
+// code's, so it states none.
+func TestTheSettingsNoteCeilingsAreTheRealOnes(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "daemon", "static", "js", "settings.js"))
+	if err != nil {
+		t.Fatalf("read settings.js: %v", err)
+	}
+	body := string(src)
+	for _, want := range []string{
+		fmt.Sprintf("%d stages", maxStages),
+		fmt.Sprintf("%d agent turns", maxRunAgents),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("settings.js does not say %q, so the limit the settings window states is not the enforced one", want)
+		}
+	}
+	for _, stale := range []string{"minutes a stage", "minutes per stage"} {
+		if strings.Contains(body, stale) {
+			t.Errorf("settings.js gives a timeout per stage (%q): it applies to each agent turn", stale)
+		}
+	}
+}
+
+// The comparison pages restate the limits table the permission prompt
+// shows. They said the timeout was per stage, which it never was: every
+// agent in a fanout gets its own, so a stage of sixteen items is not a
+// ten-minute stage. USAGE.md, the tool description and the prompt were
+// corrected and these two were not, because nothing read them.
+func TestTheComparisonPagesStateTheTimeoutPerAgentTurn(t *testing.T) {
+	for _, tc := range []struct {
+		page, row, stale string
+		minutes          string
+	}{
+		{"where-localcode-differs.html", "Wall time per agent turn", "Wall time per stage", "%d min"},
+		{"where-localcode-differs.ko.html", "에이전트 턴당 소요 시간", "단계당 소요 시간", "%d분"},
+	} {
+		src, err := os.ReadFile(filepath.Join("..", "..", "docs", tc.page))
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.page, err)
+		}
+		body := string(src)
+		want := fmt.Sprintf(`<tr><td>%s</td><td class="num">`+tc.minutes+`</td></tr>`, tc.row, int(stageTimeout.Minutes()))
+		if !strings.Contains(body, want) {
+			t.Errorf("%s does not have the row %q, so it does not state the enforced per-agent-turn timeout", tc.page, want)
+		}
+		if strings.Contains(body, tc.stale) {
+			t.Errorf("%s still gives the timeout per stage (%q)", tc.page, tc.stale)
+		}
+		wantRun := fmt.Sprintf(`<td class="num">`+tc.minutes+`</td></tr>`, int(runTimeout.Minutes()))
+		if !strings.Contains(body, wantRun) {
+			t.Errorf("%s does not state the %d-minute run limit", tc.page, int(runTimeout.Minutes()))
+		}
+	}
+}
+
+// The description the model reads when it writes a plan says how wide a
+// fanout runs. It said "all at once" while the scheduler held a
+// semaphore of maxParallel, so a model sizing a plan believed sixteen
+// reviewers ran together.
+func TestTheToolDescriptionStatesHowWideAFanoutRuns(t *testing.T) {
+	desc := NewOrchestrateTool(nil).DescriptionFor(context.Background())
+	if want := fmt.Sprintf("at most %d at a time", maxParallel); !strings.Contains(desc, want) {
+		t.Errorf("the description does not say %q:\n%s", want, desc)
+	}
+	if strings.Contains(desc, "all at once") {
+		t.Error("the description still says a fanout runs all at once")
 	}
 }
