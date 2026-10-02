@@ -71,17 +71,43 @@ test('renaming a session updates the header, not just the panel', async () => {
       'GET /api/sessions': () => [{ id: 'sess-1', title, agent: 'general-purpose' }],
       'POST /api/sessions/*/rename': (body) => { title = body.title; return { id: 'sess-1', title }; },
     },
-    prompt: 'renamed by hand',
   });
   assert.equal(app.el('session-id').textContent, 'original');
 
   buttonLabelled(app.el('session-list'), 'rename').click();
   await app.settle();
 
+  // The in-page dialog asks instead of window.prompt, which never
+  // resolves in the Mac desktop window. The current name is prefilled.
+  assert.equal(app.el('prompt-input').value, 'original');
+  app.el('prompt-input').value = 'renamed by hand';
+  app.el('prompt-ok').click();
+  await app.settle();
+
   assert.equal(app.el('session-id').textContent, 'renamed by hand');
   assert.match(app.el('session-list').innerHTML, /renamed by hand/);
   // The id is still reachable — a bug report needs it.
   assert.equal(app.el('session-id').title, 'sess-1');
+});
+
+// Cancelling the rename dialog sends nothing: the daemon never hears
+// about a name nobody confirmed.
+test('cancelling the rename dialog leaves the session alone', async () => {
+  const app = await load({
+    routes: {
+      'GET /api/sessions': [{ id: 'sess-1', title: 'original', agent: 'general-purpose' }],
+      'POST /api/sessions/*/rename': { id: 'sess-1', title: 'should not happen' },
+    },
+  });
+
+  buttonLabelled(app.el('session-list'), 'rename').click();
+  await app.settle();
+
+  app.el('prompt-cancel').click();
+  await app.settle();
+
+  assert.equal(app.callsTo('POST', '/api/sessions/sess-1/rename').length, 0);
+  assert.equal(app.el('session-id').textContent, 'original');
 });
 
 // A rename from another client arrives as an event, which reloads the

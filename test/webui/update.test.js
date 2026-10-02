@@ -88,13 +88,15 @@ test('a daemon that cannot install offers the release page instead', async () =>
 test('installing asks first, and declining downloads nothing', async () => {
   const app = await load({
     routes: { 'GET /api/update': AVAILABLE, 'POST /api/update/install': { started: true } },
-    confirm: false,
   });
   await settingsOpen(app);
   app.el('update-check-btn').click();
   await app.settle();
 
   app.el('update-install-btn').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Decline it.
+  app.el('prompt-cancel').click();
   await app.settle();
 
   assert.equal(app.callsTo('POST', '/api/update/install').length, 0);
@@ -115,6 +117,9 @@ test('installing reports what the daemon did', async () => {
   await app.settle();
 
   app.el('update-install-btn').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
   await app.settle();
 
   assert.equal(app.callsTo('POST', '/api/update/install').length, 1);
@@ -159,6 +164,9 @@ test('a restart is reported and no second install is offered', async () => {
   await app.settle();
 
   app.el('update-install-btn').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
   await app.settle();
 
   assert.match(app.el('update-note').textContent, /restarting localcode now/);
@@ -228,6 +236,9 @@ test('installing from an http mirror states the unverified source', async () => 
 
   app.el('update-install-btn').click();
   await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
+  await app.settle();
 
   assert.match(app.el('update-note').textContent, /unverified/);
   assert.match(app.el('update-note').textContent, /could not be verified/);
@@ -249,6 +260,9 @@ test('installing from an https mirror states no unverified source', async () => 
 
   app.el('update-install-btn').click();
   await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
+  await app.settle();
 
   assert.doesNotMatch(app.el('update-note').textContent, /unverified/);
 });
@@ -269,6 +283,9 @@ test('an install with no restart tells the user to restart', async () => {
 
   app.el('update-install-btn').click();
   await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
+  await app.settle();
 
   assert.match(app.el('update-note').textContent, /restart localcode to run the new version/);
 });
@@ -282,7 +299,6 @@ test('an install with no restart tells the user to restart', async () => {
 test('installing an MSI in the window asks in MSI words', async () => {
   const app = await load({
     routes: { 'GET /api/update': AVAILABLE },
-    confirm: false,
     globals: { lcWindowCommand: () => {} },
   });
   await settingsOpen(app);
@@ -292,15 +308,17 @@ test('installing an MSI in the window asks in MSI words', async () => {
   app.el('update-install-btn').click();
   await app.settle();
 
-  assert.equal(app.confirmMessages.length, 1);
-  assert.match(app.confirmMessages[0], /The window closes and the installer runs/);
-  assert.match(app.confirmMessages[0], /opens again when the installer has finished/);
+  // The in-page dialog carries the wording window.confirm used to.
+  const asked = app.el('prompt-message').textContent;
+  assert.match(asked, /The window closes and the installer runs/);
+  assert.match(asked, /opens again when the installer has finished/);
+  app.el('prompt-cancel').click();
+  await app.settle();
 });
 
 test('installing an MSI outside the window asks in MSI words', async () => {
   const app = await load({
     routes: { 'GET /api/update': AVAILABLE },
-    confirm: false,
   });
   await settingsOpen(app);
   app.el('update-check-btn').click();
@@ -308,10 +326,11 @@ test('installing an MSI outside the window asks in MSI words', async () => {
 
   app.el('update-install-btn').click();
   await app.settle();
-
-  assert.equal(app.confirmMessages.length, 1);
-  assert.match(app.confirmMessages[0], /The installer starts when localcode exits/);
-  assert.match(app.confirmMessages[0], /Quit localcode to run it/);
+  const asked = app.el('prompt-message').textContent;
+  assert.match(asked, /The installer starts when localcode exits/);
+  assert.match(asked, /Quit localcode to run it/);
+  app.el('prompt-cancel').click();
+  await app.settle();
 });
 
 // A tarball replaces the binary and restarts rather than closing a
@@ -320,7 +339,6 @@ test('installing an MSI outside the window asks in MSI words', async () => {
 test('installing a non-MSI asset in the window asks in generic words', async () => {
   const app = await load({
     routes: { 'GET /api/update': { ...AVAILABLE, asset: 'localcode-0.46.0-linux-amd64.tar.gz' } },
-    confirm: false,
     globals: { lcWindowCommand: () => {} },
   });
   await settingsOpen(app);
@@ -329,16 +347,16 @@ test('installing a non-MSI asset in the window asks in generic words', async () 
 
   app.el('update-install-btn').click();
   await app.settle();
-
-  assert.equal(app.confirmMessages.length, 1);
-  assert.match(app.confirmMessages[0], /localcode restarts, or closes for an installer to replace its files/);
-  assert.doesNotMatch(app.confirmMessages[0], /The window closes and the installer runs/);
+  const asked = app.el('prompt-message').textContent;
+  assert.match(asked, /localcode restarts, or closes for an installer to replace its files/);
+  assert.doesNotMatch(asked, /The window closes and the installer runs/);
+  app.el('prompt-cancel').click();
+  await app.settle();
 });
 
 test('installing a non-MSI asset outside the window asks in generic words', async () => {
   const app = await load({
     routes: { 'GET /api/update': { ...AVAILABLE, asset: 'localcode-0.46.0-linux-amd64.tar.gz' } },
-    confirm: false,
   });
   await settingsOpen(app);
   app.el('update-check-btn').click();
@@ -346,10 +364,11 @@ test('installing a non-MSI asset outside the window asks in generic words', asyn
 
   app.el('update-install-btn').click();
   await app.settle();
-
-  assert.equal(app.confirmMessages.length, 1);
-  assert.match(app.confirmMessages[0], /localcode restarts, or closes for an installer to replace its files/);
-  assert.doesNotMatch(app.confirmMessages[0], /The installer starts when localcode exits/);
+  const asked = app.el('prompt-message').textContent;
+  assert.match(asked, /localcode restarts, or closes for an installer to replace its files/);
+  assert.doesNotMatch(asked, /The installer starts when localcode exits/);
+  app.el('prompt-cancel').click();
+  await app.settle();
 });
 
 // In the desktop window the installer starts when the window closes,
@@ -369,6 +388,9 @@ test('a window install says it starts on close and comes back', async () => {
   await app.settle();
 
   app.el('update-install-btn').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
   await app.settle();
 
   assert.match(app.el('update-note').textContent, /starts when this window closes/);
@@ -392,6 +414,9 @@ test('a terminal install says it starts on exit and must be quit', async () => {
   await app.settle();
 
   app.el('update-install-btn').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
   await app.settle();
 
   assert.match(app.el('update-note').textContent, /starts when localcode exits/);
@@ -543,6 +568,9 @@ test('a started window install says when it closes and closes it', async () => {
   await app.settle();
 
   app.el('update-install-btn').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
   await app.settle();
 
   assert.match(app.el('update-note').textContent, /This window closes in 3 seconds\./);

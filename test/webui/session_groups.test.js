@@ -335,12 +335,15 @@ test('deleting a group forgets that it was folded', async () => {
       'POST /api/sessions/groups': { names: ['personal'] },
     },
     localStorage: { 'localcode.collapsedGroups': JSON.stringify(['work', 'personal']) },
-    confirm: true,
   });
 
   // A daemon that took the delete answers the next read with the new list.
   app.routes['GET /api/sessions/groups'] = { names: ['personal'] };
-  await app.internals.promptDeleteGroup('work');
+  const answered = app.internals.promptDeleteGroup('work');
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
+  await answered;
   await app.settle();
 
   assert.deepEqual(
@@ -360,11 +363,17 @@ test('renaming a group keeps it folded, under the new name', async () => {
       'POST /api/sessions/groups': { names: ['job', 'personal'] },
     },
     localStorage: { 'localcode.collapsedGroups': JSON.stringify(['work']) },
-    prompt: 'job',
   });
 
   app.routes['GET /api/sessions/groups'] = { names: ['job', 'personal'] };
-  await app.internals.promptRenameGroup('work');
+  const answered = app.internals.promptRenameGroup('work');
+  await app.settle();
+  // The in-page dialog asks instead of window.prompt. The old name is
+  // prefilled; replace it.
+  assert.equal(app.el('prompt-input').value, 'work');
+  app.el('prompt-input').value = 'job';
+  app.el('prompt-ok').click();
+  await answered;
   await app.settle();
 
   const kept = JSON.parse(app.storage.get('localcode.collapsedGroups'));

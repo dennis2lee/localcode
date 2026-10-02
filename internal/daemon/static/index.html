@@ -352,6 +352,27 @@
   <button class="pill" id="settings-btn" title="settings"><svg class="ico ico-13"><use href="#i-sliders"/></svg>settings</button>
 </div>
 
+<!--
+  The in-page dialog behind every question the page asks.
+
+  window.prompt and window.confirm silently never resolve in the Mac
+  desktop window, whose web view implements the file picker and none of
+  the JavaScript dialog panels. This dialog asks those questions in the
+  page instead, so it behaves the same in a browser and in both desktop
+  windows. See js/prompt.js.
+-->
+<div id="prompt-modal">
+  <div class="box">
+    <h3 id="prompt-title"></h3>
+    <p class="note" id="prompt-message"></p>
+    <input type="text" id="prompt-input" autocomplete="off">
+    <div class="close-row">
+      <button id="prompt-cancel">Cancel</button>
+      <button id="prompt-ok">OK</button>
+    </div>
+  </div>
+</div>
+
 <div id="schedule-modal">
   <div class="box">
     <h3>Schedule a prompt</h3>

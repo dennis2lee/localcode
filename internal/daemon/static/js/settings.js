@@ -18,6 +18,7 @@ import {
   updateCheckBtn, updateInstallBtn, updateNoteEl,
 } from './dom.js';
 import { Modal } from './modal.js';
+import { askConfirm } from './prompt.js';
 import { app } from './state.js';
 import * as apiClient from './api.js';
 import { wireTypography, renderTypography } from './typography.js';
@@ -464,7 +465,7 @@ async function installUpdate() {
   } else {
     confirmText = `Download and install localcode ${latest.latest}?\n\nThe installer starts when localcode exits. Quit localcode to run it.`;
   }
-  if (!window.confirm(confirmText)) return;
+  if (!await askConfirm(`Install localcode ${latest.latest}?`, confirmText)) return;
 
   updateInstallBtn.disabled = true;
   updateCheckBtn.disabled = true;

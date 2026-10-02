@@ -42,6 +42,7 @@ import {
   browseWorkspace, revealWorkspace, stopBlockingTurns,
 } from './modals.js';
 import { closeTaskView, cancelOpenTask, deleteOpenTask, taskView } from './taskview.js';
+import { wirePromptDialog, askText, askConfirm, anyPromptOpen } from './prompt.js';
 import { initResizers } from './resize.js';
 import { tryComplete, resetCompletion } from './complete.js';
 import { initSettings, settings } from './settings.js';
@@ -179,8 +180,9 @@ document.addEventListener('keydown', (e) => {
   // so; the settings window says it now for the same reason, and it is
   // the stronger case: somebody who opened settings mid-turn, changed
   // nothing, and pressed Escape to put the window away has not asked to
-  // throw the turn away with it.
-  if (e.key === 'Escape' && e.target !== inputEl && !permissionRequest.isOpen && !settings.isOpen) {
+  // throw the turn away with it. A question dialog says it too: Escape
+  // answers "no", and answering a question is not stopping the work.
+  if (e.key === 'Escape' && e.target !== inputEl && !permissionRequest.isOpen && !settings.isOpen && !anyPromptOpen()) {
     cancelTurn();
     return;
   }
@@ -312,6 +314,7 @@ async function init() {
   initWindowControls();
   initResizers();
   initSettings();
+  wirePromptDialog();
   renderTasks();
   // Independent GETs against the same daemon — each one writes its own
   // slice of app state and renders its own pane, so there is no ordering
@@ -405,3 +408,4 @@ export {
 } from './find.js';
 export { resetMCPServers, mcpResetConfirmText } from './loaders.js';
 export { wireZoom, applyZoom } from './zoom.js';
+export { wirePromptDialog, askText, askConfirm, anyPromptOpen } from './prompt.js';

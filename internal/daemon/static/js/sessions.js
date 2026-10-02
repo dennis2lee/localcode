@@ -8,6 +8,7 @@ import { setWaiting, setInputLocked, renderCommDot, autoResizeInput } from './co
 import { connectEvents, resetTranscriptWindow } from './events.js';
 import { loadWorkspace } from './loaders.js';
 import { loadSessionPermissions, loadEffort } from './modals.js';
+import { askText, askConfirm } from './prompt.js';
 import { loadSchedules } from './schedules.js';
 import { permissionRequest } from './modals.js';
 
@@ -996,7 +997,7 @@ export async function dropSessionToUngroupedTop(fromID) {
 }
 
 export async function promptCreateGroup() {
-  const name = window.prompt('New group name:');
+  const name = await askText('New group', 'New group name:', '', 'Create');
   if (name === null) return;
   const trimmed = name.trim();
   if (!trimmed) {
@@ -1018,7 +1019,7 @@ export async function promptCreateGroup() {
 }
 
 export async function promptRenameGroup(oldName) {
-  const newName = window.prompt('Rename group:', oldName);
+  const newName = await askText('Rename group', 'Rename group:', oldName, 'Rename');
   if (newName === null || newName === oldName) return;
   const trimmed = newName.trim();
   if (!trimmed) {
@@ -1049,7 +1050,8 @@ export async function promptRenameGroup(oldName) {
 }
 
 export async function promptDeleteGroup(groupName) {
-  if (!window.confirm(`Delete group "${groupName}"? Sessions in this group will become ungrouped.`)) return;
+  const ok = await askConfirm('Delete group', `Delete group "${groupName}"? Sessions in this group will become ungrouped.`, { okLabel: 'Delete', danger: true });
+  if (!ok) return;
   const next = (app.sessionGroups || []).filter(g => g !== groupName);
   try {
     await apiClient.setGroups(next);
@@ -1078,7 +1080,7 @@ export async function forkSession(s) {
 }
 
 export async function renameSessionPrompt(s) {
-  const newTitle = window.prompt('New session name:', s.title || '');
+  const newTitle = await askText('Rename session', 'New session name:', s.title || '', 'Rename');
   if (newTitle === null) return;
   try {
     await apiClient.renameSession(s.id, newTitle);
@@ -1089,7 +1091,8 @@ export async function renameSessionPrompt(s) {
 }
 
 export async function deleteSessionConfirm(s) {
-  if (!window.confirm(`Delete session "${s.title || s.id}"? This cannot be undone.`)) return;
+  const ok = await askConfirm('Delete session', `Delete session "${s.title || s.id}"? This cannot be undone.`, { okLabel: 'Delete', danger: true });
+  if (!ok) return;
   try {
     await apiClient.deleteSession(s.id);
     // The conversation is gone; its recall list has nothing left to be
@@ -1206,7 +1209,7 @@ export async function deleteAllSessions() {
   // is where things go precisely so they are not lost. Somebody who put
   // ten conversations away and then cleared the list is entitled to know
   // that before the click, not after it.
-  if (!window.confirm('Delete ALL sessions, including archived ones? This cannot be undone.')) return;
+  if (!await askConfirm('Delete ALL sessions', 'Delete ALL sessions, including archived ones? This cannot be undone.', { okLabel: 'Delete', danger: true })) return;
   try {
     await apiClient.deleteAllSessions();
   } catch (err) {

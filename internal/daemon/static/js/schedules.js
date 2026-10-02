@@ -9,6 +9,7 @@ import {
   scheduleDetailsOpenBtn,
 } from './dom.js';
 import { Modal } from './modal.js';
+import { askText } from './prompt.js';
 import * as apiClient from './api.js';
 import { openTaskView } from './taskview.js';
 
@@ -294,10 +295,10 @@ export async function openSchedule(s) {
   }
 }
 
-// renameSchedulePrompt asks for the label, the same window.prompt the
+// renameSchedulePrompt asks for the label, the same in-page dialog the
 // session list uses for the same job.
 export async function renameSchedulePrompt(s) {
-  const name = window.prompt('Name for this scheduled task (empty to clear):', s.name || '');
+  const name = await askText('Rename scheduled task', 'Name for this scheduled task (empty to clear):', s.name || '', 'Rename');
   if (name === null) return;
   try {
     const updated = await apiClient.renameSchedule(session.sessionID, s.id, name);

@@ -2,6 +2,7 @@ import { agentSelectEl, appVersionEl } from './dom.js';
 import { app, session } from './state.js';
 import * as apiClient from './api.js';
 import { appendError } from './transcript.js';
+import { askConfirm } from './prompt.js';
 import { renderStatusBar, renderPermissionStatus, renderAutoDelegate, renderWorkspace, renderMCPServers } from './render.js';
 
 export async function loadAgents() {
@@ -180,7 +181,7 @@ export async function resetMCPServers() {
     appendError('no session is open to send /reset-mcp from');
     return;
   }
-  if (!window.confirm(mcpResetConfirmText)) return;
+  if (!await askConfirm('Reconnect MCP servers?', mcpResetConfirmText)) return;
   try {
     await apiClient.sendChatMessage(session.sessionID, '/reset-mcp');
   } catch (err) {

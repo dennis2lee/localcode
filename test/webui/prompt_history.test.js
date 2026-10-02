@@ -101,7 +101,6 @@ test('an arriving prompt does not interrupt a walk', async () => {
 
 test('deleting a session forgets its history', async () => {
   const app = await load({
-    confirm: true,
     routes: { 'DELETE /api/sessions/sess-1': { status: 204 } },
   });
 
@@ -109,7 +108,11 @@ test('deleting a session forgets its history', async () => {
   await app.el('send').click();
   await app.settle();
 
-  await app.deleteSessionConfirm({ id: 'sess-1', title: 'first session' });
+  const answered = app.deleteSessionConfirm({ id: 'sess-1', title: 'first session' });
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
+  await answered;
   await app.settle();
 
   app.selectSession('sess-1', 'general-purpose', '');

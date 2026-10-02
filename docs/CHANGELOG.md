@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.151.0
+
+Session rename, delete confirmations, and the other name and confirm prompts work in the macOS desktop window.
+
+**Fixed**
+
+* **Session rename and the other prompts did nothing in the macOS desktop window**
+  * Session rename, session delete, group create, rename and delete, scheduled task naming, and two settings confirmations asked through the browser native dialogs (`window.prompt` and `window.confirm`). The macOS window renders the Web UI in a WKWebView whose dialog handlers the webview binding does not implement, so these calls never resolved and the buttons silently did nothing. The Windows window was unaffected because its engine provides native dialogs, and the daemon API was unaffected throughout.
+  * Every one of these prompts is now an in-page dialog with the same message, the same cancel behavior, and the same follow-up. It works identically in browsers and in both desktop windows.
+  * `test/webui/prompt.test.js` covers the new dialog: the OK path, the Cancel and Escape paths with no API call, and the prefilled initial value on rename.
+
 ## v0.150.1
 
 The two macOS apps carry the application icon.

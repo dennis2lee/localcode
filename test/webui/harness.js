@@ -245,8 +245,6 @@ async function linkModuleGraph(entryPath, context) {
  *
  * @param {object} [opts]
  * @param {object} [opts.routes]  route overrides, merged over defaultRoutes()
- * @param {boolean} [opts.confirm] what window.confirm returns (default true)
- * @param {string|null} [opts.prompt] what window.prompt returns (default null)
  * @param {boolean} [opts.init] run init() to completion before returning
  *                              (default true)
  */
@@ -374,16 +372,13 @@ async function load(opts = {}) {
     removeItem: (k) => sessionStored.delete(k),
   };
   harness.sessionStorage = sessionStored;
-  // The confirm messages, kept so a test can pin what was asked: a
-  // boolean stub answers whether, and this list answers in what words.
-  const confirmMessages = [];
-  harness.confirmMessages = confirmMessages;
-  sandbox.confirm = (msg) => {
-    confirmMessages.push(String(msg));
-    return opts.confirm === undefined ? true : opts.confirm;
-  };
-  sandbox.prompt = () => (opts.prompt === undefined ? null : opts.prompt);
-
+  // Questions the page asks used to go through window.prompt and
+  // window.confirm, stubbed here. They go through the in-page dialog
+  // (js/prompt.js) now, which those panels cannot answer in the Mac
+  // desktop window. Tests drive that dialog through the DOM instead:
+  // set prompt-input and click prompt-ok, or click prompt-cancel. No
+  // stub stays behind to answer them: a call reaching for a native
+  // panel must fail loudly here rather than pass quietly.
   const mainModule = await linkModuleGraph(ENTRY, context);
   const internals = mainModule.namespace;
 

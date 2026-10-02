@@ -887,18 +887,18 @@ aside h2 {
 /* Booking a prompt for later. Two fields, because at a prompt the split
    between the moment and the request has to be guessed from one string,
    and here there is nothing to guess. */
-#schedule-modal, #debate-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10; }
-#schedule-modal.open, #debate-modal.open { display: flex; }
-#schedule-modal .box, #debate-modal .box {
+#schedule-modal, #debate-modal, #prompt-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10; }
+#schedule-modal.open, #debate-modal.open, #prompt-modal.open { display: flex; }
+#schedule-modal .box, #debate-modal .box, #prompt-modal .box {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--r-ctl);
   padding: 20px;
   width: min(560px, calc(90vw / var(--zoom, 1)));
 }
-#schedule-modal h3, #debate-modal h3 { margin-top: 0; }
+#schedule-modal h3, #debate-modal h3, #prompt-modal h3 { margin-top: 0; }
 #schedule-modal .field-label, #debate-modal .field-label, #settings-modal .field-label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: var(--t-ui); }
-#schedule-modal input, #schedule-modal textarea, #debate-modal input, #debate-modal textarea {
+#schedule-modal input, #schedule-modal textarea, #debate-modal input, #debate-modal textarea, #prompt-modal input {
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -909,10 +909,10 @@ aside h2 {
   font-size: var(--t-code);
 }
 #schedule-modal textarea, #debate-modal textarea { resize: vertical; }
-#schedule-modal .note, #debate-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 6px; min-height: 1em; }
+#schedule-modal .note, #debate-modal .note, #prompt-modal .note { color: var(--muted); font-size: var(--t-fine); margin-top: 6px; min-height: 1em; white-space: pre-wrap; }
 #schedule-modal .note.err, #debate-modal .note.err { color: var(--err); }
 #schedule-modal .note.ok, #debate-modal .note.ok { color: var(--ok); }
-#schedule-modal .close-row, #debate-modal .close-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+#schedule-modal .close-row, #debate-modal .close-row, #prompt-modal .close-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
 /* The debate form's own three. The checkbox must not stretch to the
    width every other field in a dialog takes, and neither must the round

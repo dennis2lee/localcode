@@ -309,7 +309,6 @@ test('deleting an archived conversation takes it off the list and out of the cou
         query.get('archived') ? archived : [{ id: 's1', title: 'here', agent: 'general-purpose', workspace: '/w' }],
       'DELETE /api/sessions/s-old': () => { archived = archived.filter(s => s.id !== 's-old'); return { status: 204 }; },
     },
-    confirm: true,
   });
 
   await app.el('archive-toggle').click();
@@ -320,6 +319,9 @@ test('deleting an archived conversation takes it off the list and out of the cou
   const row = Array.from(rows).find(el => (el.textContent || '').includes('last month'));
   assert.ok(row, 'the archived conversation is not on the list');
   await buttonIn(row, 'delete').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
   await app.settle();
 
   assert.equal(app.el('archive-toggle').textContent, 'Archive (1)',
@@ -339,11 +341,13 @@ test('delete all empties the archive header as well', async () => {
       'DELETE /api/sessions': () => { archived = []; return { status: 204 }; },
       'POST /api/sessions': { id: 's2', agent: 'general-purpose', workspace: '/w' },
     },
-    confirm: true,
   });
 
   assert.equal(app.el('archive-toggle').textContent, 'Archive (1)');
   await app.el('delete-all-sessions-btn').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
   await app.settle();
   assert.equal(app.el('archive-toggle').textContent, 'Archive',
     'the archive header still counts conversations delete-all removed');

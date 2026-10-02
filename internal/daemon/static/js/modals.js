@@ -21,6 +21,7 @@ import { Modal } from './modal.js';
 import { usageView } from './usage.js';
 import { settings } from './settings.js';
 import { taskView } from './taskview.js';
+import { anyPromptOpen } from './prompt.js';
 // Circular with sessions.js, which imports permissionRequest from here —
 // safe for the same reason as the events.js/modals.js pair: both
 // references are only ever called from a function body at runtime, never
@@ -723,5 +724,6 @@ export async function stopBlockingTurns() {
 // forgetting it is silent.
 export function anyModalOpen() {
   return permissionRequest.isOpen || permissionSettings.isOpen || delegate.isOpen ||
-    workspace.isOpen || settings.isOpen || taskView.isOpen || effort.isOpen || usageView.isOpen;
+    workspace.isOpen || settings.isOpen || taskView.isOpen || effort.isOpen || usageView.isOpen ||
+    anyPromptOpen();
 }

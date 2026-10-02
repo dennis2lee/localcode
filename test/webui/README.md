@@ -80,8 +80,11 @@ test('a turn ends on turn.done', async () => {
 | `routes` | overrides the fake daemon per test (see below) |
 | `globals` | extra globals in the page's sandbox |
 | `localStorage` | the stored values the page starts with |
-| `confirm` / `prompt` | answers for the browser dialogs the page opens |
 | `init` | run before the modules are evaluated, for a page condition that has to exist at load time |
+
+Questions the page asks go through the in-page dialog (js/prompt.js),
+driven like any other element: set `prompt-input` and click `prompt-ok`,
+or click `prompt-cancel`. There are no stubbed browser dialogs.
 
 A route value is either a JSON body (answered `200`) or `{status, body}`, and
 a route may be a function taking `{method, path, query}`:

@@ -45,10 +45,13 @@ test('the confirmation names the machine-wide reset before anything is sent', as
 // Confirming sends the slash command to the open conversation as a chat
 // message, which the daemon routes to its reset handler.
 test('confirming the reconnect sends /reset-mcp to the current session', async () => {
-  const app = await load({ confirm: true });
+  const app = await load();
   assert.equal(app.state.sessionID, 'sess-1');
 
   app.el('mcp-reset-btn').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
   await app.settle();
 
   const posts = app.callsTo('POST', '/api/sessions/sess-1/messages');
@@ -60,9 +63,11 @@ test('confirming the reconnect sends /reset-mcp to the current session', async (
 // confirmation is the only thing between a misclick and a machine-wide
 // reconnect.
 test('cancelling the confirmation sends nothing', async () => {
-  const app = await load({ confirm: false });
+  const app = await load();
 
   app.el('mcp-reset-btn').click();
+  await app.settle();
+  app.el('prompt-cancel').click();
   await app.settle();
 
   assert.equal(app.callsTo('POST', '/api/sessions/sess-1/messages').length, 0);
@@ -72,13 +77,15 @@ test('cancelling the confirmation sends nothing', async () => {
 // left looking as though it happened.
 test('a refused reset is reported', async () => {
   const app = await load({
-    confirm: true,
     routes: {
       'POST /api/sessions/*/messages': { status: 500, body: { error: 'turn in progress' } },
     },
   });
 
   app.el('mcp-reset-btn').click();
+  await app.settle();
+  // The in-page dialog asks instead of window.confirm. Answer yes.
+  app.el('prompt-ok').click();
   await app.settle();
 
   assert.equal(app.callsTo('POST', '/api/sessions/sess-1/messages').length, 1);
