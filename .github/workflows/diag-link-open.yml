@@ -1,0 +1,235 @@
+# Diagnostic, not part of the release: opens the desktop window on a
+# Windows runner, has a stand-in model answer with a hyperlink, clicks
+# the link with a real mouse press, and records which program opens it.
+# The default browser is replaced by a logging stand-in, so the run says
+# whether the link went through the system's default-browser choice.
+# Runs on pushes to diag/* branches only.
+name: diag-link-open
+
+on:
+  push:
+    branches: ['diag/**']
+
+permissions:
+  contents: read
+
+jobs:
+  click:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      - name: Build the window
+        timeout-minutes: 12
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: go build -tags gui -ldflags "-s -w -H windowsgui -X main.version=0.0.1" -o localcode-gui.exe ./cmd/localcode
+
+      - name: Make the default browser a logging stand-in
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          foreach ($scheme in 'http', 'https') {
+            $k = "HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\$scheme\UserChoice"
+            "$scheme default ProgId: $((Get-ItemProperty $k -ErrorAction SilentlyContinue).ProgId)"
+          }
+          New-Item -ItemType Directory C:\lc-fake-browser -Force | Out-Null
+          Set-Content C:\lc-fake-browser\fakebrowser.cmd -Value '@echo %* >> C:\lc-fake-browser\opened.txt'
+          # The class the default points at, overridden for this user only.
+          $key = 'HKCU:\Software\Classes\MSEdgeHTM\shell\open\command'
+          New-Item -Path $key -Force | Out-Null
+          Set-ItemProperty -Path $key -Name '(default)' -Value '"C:\lc-fake-browser\fakebrowser.cmd" "%1"'
+          New-PSDrive -Name HKCR -PSProvider Registry -Root HKEY_CLASSES_ROOT | Out-Null
+          "merged HKCR\MSEdgeHTM open command: $((Get-ItemProperty 'HKCR:\MSEdgeHTM\shell\open\command').'(default)')"
+          # Does the shell itself reach the stand-in?
+          Start-Process 'https://example.com/lc-shell-check'
+          Start-Sleep 5
+          "opened.txt after a plain Start-Process:"
+          Get-Content C:\lc-fake-browser\opened.txt -ErrorAction SilentlyContinue
+
+      - name: Click a link in the window
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          Set-Content -Encoding utf8 fakemodel.py -Value @'
+          import http.server, json
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                  self.wfile.write(b'{"object":"list","data":[{"id":"test-model","object":"model"}]}')
+              def do_POST(self):
+                  n = int(self.headers.get('Content-Length', 0)); self.rfile.read(n)
+                  self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+                  def chunk(delta, finish=None, extra=None):
+                      obj = {"id": "x", "object": "chat.completion.chunk", "model": "test-model",
+                             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+                      if extra: obj.update(extra)
+                      self.wfile.write(("data: " + json.dumps(obj) + "\n\n").encode()); self.wfile.flush()
+                  chunk({"role": "assistant", "content": ""})
+                  chunk({"content": "Read [the lc repro docs](https://example.com/lc-link-repro?a=1&b=2) for details, and [the percent link](https://example.com/lc-percent/50%off?x=1) too."})
+                  chunk({}, "stop", {"usage": {"prompt_tokens": 5, "completion_tokens": 9, "total_tokens": 14}})
+                  self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush()
+              def log_message(self, *a): pass
+          http.server.ThreadingHTTPServer(('127.0.0.1', 9111), H).serve_forever()
+          '@
+          Start-Process python -ArgumentList 'fakemodel.py' -RedirectStandardError fakemodel-err.txt -RedirectStandardOutput fakemodel-out.txt
+          Start-Sleep 2
+
+          New-Item -ItemType Directory "$env:USERPROFILE\.localcode" -Force | Out-Null
+          @"
+          {
+            "auto_update": false,
+            "providers": { "local": { "type": "openai-compat", "base_url": "http://127.0.0.1:9111/v1" } },
+            "profiles": { "main": { "provider": "local", "model": "test-model" } },
+            "agents": { "general-purpose": { "profile": "main" } },
+            "default_profile": "main"
+          }
+          "@ | Set-Content -Encoding utf8 "$env:USERPROFILE\.localcode\config.json"
+
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class M {
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
+            public static void Click() { mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero); mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero); }
+            public static void MiddleClick() { mouse_event(0x0020, 0, 0, 0, UIntPtr.Zero); mouse_event(0x0040, 0, 0, 0, UIntPtr.Zero); }
+            public static void RightClick() { mouse_event(0x0008, 0, 0, 0, UIntPtr.Zero); mouse_event(0x0010, 0, 0, 0, UIntPtr.Zero); }
+            [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+            public static void CtrlClick() { keybd_event(0x11, 0, 0, UIntPtr.Zero); Click(); keybd_event(0x11, 0, 2, UIntPtr.Zero); }
+          }
+          "@
+          New-Item -ItemType Directory shots -Force | Out-Null
+          function Shot($name) {
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save("shots\$name.png")
+            $g.Dispose(); $bmp.Dispose()
+          }
+          function Procs() {
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(msedge|chrome|firefox|brave|opera|iexplore|cmd)\.exe$' } |
+              Where-Object { $_.CommandLine -notmatch 'GitHub|hostedtoolcache|runner' } |
+              ForEach-Object { "  $($_.ProcessId) $($_.Name) :: $($_.CommandLine)" }
+          }
+          function Windows() {
+            Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { "  $($_.Id) $($_.ProcessName) '$($_.MainWindowTitle)'" }
+          }
+
+          $app = Start-Process "$PWD\localcode-gui.exe" -PassThru
+          $base = $null
+          for ($i = 0; $i -lt 90 -and -not $base; $i++) {
+            $ports = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $app.Id } | ForEach-Object { $_.LocalPort }
+            foreach ($port in $ports) {
+              try { Invoke-RestMethod "http://127.0.0.1:$port/api/version" -TimeoutSec 2 | Out-Null; $base = "http://127.0.0.1:$port"; break } catch {}
+            }
+            if (-not $base) { Start-Sleep 1 }
+          }
+          "window pid $($app.Id), daemon at $base"
+          if (-not $base) { exit 1 }
+          Start-Sleep 4
+          $sessions = Invoke-RestMethod "$base/api/sessions"
+          $sid = $sessions[0].id
+          "session $sid"
+          "message: $(Invoke-RestMethod -Method Post "$base/api/sessions/$sid/messages" -ContentType 'application/json' -Body '{"text":"link please"}' | ConvertTo-Json -Compress)"
+          Start-Sleep 6
+          Add-Type -AssemblyName Microsoft.VisualBasic
+          try { [Microsoft.VisualBasic.Interaction]::AppActivate($app.Id) } catch { "activate: $($_.Exception.Message)" }
+          Start-Sleep 2
+
+          $root = [System.Windows.Automation.AutomationElement]::RootElement
+          $pidCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $app.Id)
+          $linkCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Hyperlink)
+          $link = $null
+          for ($i = 0; $i -lt 40 -and -not $link; $i++) {
+            $win = $root.FindFirst('Children', $pidCond)
+            if ($win) { $link = $win.FindFirst('Descendants', $linkCond) }
+            if (-not $link) { Start-Sleep 1 }
+          }
+          Shot 'before-click'
+          if (-not $link) {
+            "no hyperlink found in the accessibility tree; names seen:"
+            if ($win) { $win.FindAll('Descendants', [System.Windows.Automation.Condition]::TrueCondition) | Select-Object -First 60 | ForEach-Object { "  $($_.Current.ControlType.ProgrammaticName) '$($_.Current.Name)'" } }
+            exit 1
+          }
+          $rect = $link.Current.BoundingRectangle
+          $nameCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'the percent link')
+          $link2 = $win.FindFirst('Descendants', $nameCond)
+          if ($link2) { $rect2 = $link2.Current.BoundingRectangle; "percent link '$($link2.Current.Name)' at $($rect2.X),$($rect2.Y) size $($rect2.Width)x$($rect2.Height)" } else { 'percent link not found in the tree' }
+          "link '$($link.Current.Name)' at $($rect.X),$($rect.Y) size $($rect.Width)x$($rect.Height)"
+
+          "processes before the click:"; Procs
+          "windows before the click:"; Windows
+          Remove-Item C:\lc-fake-browser\opened.txt -ErrorAction SilentlyContinue
+
+          function Scenario([string]$name, [scriptblock]$act) {
+            Remove-Item C:\lc-fake-browser\opened.txt -ErrorAction SilentlyContinue
+            try { [Microsoft.VisualBasic.Interaction]::AppActivate($app.Id) } catch {}
+            Start-Sleep -Milliseconds 700
+            & $act
+            Start-Sleep 7
+            $log = if (Test-Path C:\lc-fake-browser\opened.txt) { (Get-Content C:\lc-fake-browser\opened.txt) -join ' | ' } else { '(nothing)' }
+            $popups = @(Get-Process | Where-Object { $_.ProcessName -eq 'msedgewebview2' -and $_.MainWindowTitle } | ForEach-Object { "'$($_.MainWindowTitle)'" })
+            $pop = if ($popups.Count) { $popups -join ',' } else { 'none' }
+            "RESULT $name :: default-browser log: $log :: popup windows: $pop"
+            Shot "after-$name"
+          }
+          $cx = [int]($rect.X + $rect.Width / 2)
+          $cy = [int]($rect.Y + $rect.Height / 2)
+
+          Scenario 'percent-link' {
+            if (-not $link2) { return }
+            [M]::SetCursorPos([int]($rect2.X + $rect2.Width / 2), [int]($rect2.Y + $rect2.Height / 2)) | Out-Null
+            Start-Sleep -Milliseconds 400
+            [M]::Click()
+          }
+          Scenario 'left-click' {
+            [M]::SetCursorPos($cx, $cy) | Out-Null
+            Start-Sleep -Milliseconds 400
+            [M]::Click()
+          }
+          Scenario 'middle-click' {
+            [M]::SetCursorPos($cx, $cy) | Out-Null
+            Start-Sleep -Milliseconds 400
+            [M]::MiddleClick()
+          }
+          Scenario 'ctrl-click' {
+            [M]::SetCursorPos($cx, $cy) | Out-Null
+            Start-Sleep -Milliseconds 400
+            [M]::CtrlClick()
+          }
+          Scenario 'context-menu-new-window' {
+            [M]::SetCursorPos($cx, $cy) | Out-Null
+            Start-Sleep -Milliseconds 400
+            [M]::RightClick()
+            Start-Sleep 2
+            Shot 'context-menu'
+            # The menu is not in the accessibility tree this run can reach, so it is
+            # driven by keyboard: Down selects the first item, which is "Open link in
+            # new window" (the screenshot above shows the order), and Enter takes it.
+            [System.Windows.Forms.SendKeys]::SendWait('{DOWN}')
+            Start-Sleep -Milliseconds 600
+            Shot 'context-menu-first-item'
+            [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+          }
+
+          "the window's own log:"
+          Get-Content "$env:LOCALAPPDATA\localcode\gui-frame.log" -ErrorAction SilentlyContinue | Select-Object -First 20
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: link-open-shots
+          path: shots
+          if-no-files-found: warn

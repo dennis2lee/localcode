@@ -1,0 +1,192 @@
+# Diagnostic, not part of the release: drags a session row inside a group in
+# the real desktop window on a Windows runner, with a real mouse, on main and
+# on the branch under test, once undisturbed and once with the list redrawn
+# by a server event while the button is down.
+# Runs on pushes to diag/* branches only.
+name: diag-group-drag
+
+on:
+  push:
+    branches: ['diag/**']
+
+permissions:
+  contents: read
+
+jobs:
+  drag:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [integrate/0.150.0]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      - name: Build the window
+        timeout-minutes: 12
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: go build -tags gui -ldflags "-s -w -H windowsgui -X main.version=0.0.1" -o localcode-gui.exe ./cmd/localcode
+
+      - name: Drag rows inside a group
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory "$env:USERPROFILE\.localcode" -Force | Out-Null
+          @"
+          {
+            "auto_update": false,
+            "providers": { "local": { "type": "openai-compat", "base_url": "http://127.0.0.1:9/v1" } },
+            "profiles": { "main": { "provider": "local", "model": "test-model" } },
+            "agents": { "general-purpose": { "profile": "main" } },
+            "default_profile": "main"
+          }
+          "@ | Set-Content -Encoding utf8 "$env:USERPROFILE\.localcode\config.json"
+
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          Add-Type -AssemblyName Microsoft.VisualBasic
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class M {
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
+            public static void Down() { mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero); }
+            public static void Up() { mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero); }
+          }
+          "@
+          New-Item -ItemType Directory shots -Force | Out-Null
+          function Shot($name) {
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save("shots\$name.png")
+            $g.Dispose(); $bmp.Dispose()
+          }
+
+          $app = Start-Process "$PWD\localcode-gui.exe" -PassThru
+          $base = $null
+          for ($i = 0; $i -lt 90 -and -not $base; $i++) {
+            $ports = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -eq $app.Id } | ForEach-Object { $_.LocalPort }
+            foreach ($port in $ports) {
+              try { Invoke-RestMethod "http://127.0.0.1:$port/api/version" -TimeoutSec 2 | Out-Null; $base = "http://127.0.0.1:$port"; break } catch {}
+            }
+            if (-not $base) { Start-Sleep 1 }
+          }
+          "ref ${{ matrix.ref }}: window pid $($app.Id), daemon at $base"
+          if (-not $base) { exit 1 }
+          Start-Sleep 3
+
+          # Sessions are created oldest first, and the panel lists newest first:
+          # Alpha will read blue, green, red from the top.
+          $json = @{ 'Content-Type' = 'application/json' }
+          function Api($method, $path, $body) {
+            if ($null -ne $body) { Invoke-RestMethod -Method $method "$base$path" -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) }
+            else { Invoke-RestMethod -Method $method "$base$path" }
+          }
+          $ids = @{}
+          foreach ($t in 'red', 'green', 'blue', 'cyan') {
+            $s = Api Post '/api/sessions' @{}
+            $ids[$t] = $s.id
+            Api Post "/api/sessions/$($s.id)/rename" @{ title = $t } | Out-Null
+            Start-Sleep -Milliseconds 120
+          }
+          foreach ($s in (Api Get '/api/sessions')) { if (-not $s.title) { Api Post "/api/sessions/$($s.id)/rename" @{ title = 'plain' } | Out-Null } }
+          Api Post '/api/sessions/groups' @{ names = @('Alpha', 'Beta') } | Out-Null
+          foreach ($t in 'red', 'green', 'blue') { Api Post "/api/sessions/$($ids[$t])/group" @{ group = 'Alpha' } | Out-Null }
+          Api Post "/api/sessions/$($ids['cyan'])/group" @{ group = 'Beta' } | Out-Null
+          function Order() {
+            (Api Get '/api/sessions') | ForEach-Object { "$($_.title)$(if ($_.group) { '@' + $_.group })" }
+          }
+          function Reload() {
+            [Microsoft.VisualBasic.Interaction]::AppActivate($app.Id)
+            Start-Sleep -Milliseconds 500
+            [System.Windows.Forms.SendKeys]::SendWait('{F5}')
+            Start-Sleep 4
+          }
+          Reload
+          "seeded: $((Order) -join ', ')"
+
+          $root = [System.Windows.Automation.AutomationElement]::RootElement
+          $pidCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $app.Id)
+          function Rect($name) {
+            $win = $root.FindFirst('Children', $pidCond)
+            $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name)
+            $el = $null
+            for ($i = 0; $i -lt 30 -and -not $el; $i++) {
+              $el = $win.FindFirst('Descendants', $cond)
+              if (-not $el) { Start-Sleep -Milliseconds 500 }
+            }
+            if (-not $el) { return $null }
+            return $el.Current.BoundingRectangle
+          }
+          function Drag($from, $to, [scriptblock]$midway) {
+            $a = Rect $from; $b = Rect $to
+            if (-not $a -or -not $b) { "cannot find '$from' or '$to' in the accessibility tree"; return }
+            "dragging '$from' at $([int]$a.X),$([int]$a.Y) to '$to' at $([int]$b.X),$([int]$b.Y)"
+            $x1 = [int]($a.X + 12); $y1 = [int]($a.Y + $a.Height / 2)
+            $x2 = [int]($b.X + 12); $y2 = [int]($b.Y + $b.Height / 2)
+            try { [Microsoft.VisualBasic.Interaction]::AppActivate($app.Id) } catch {}
+            Start-Sleep -Milliseconds 500
+            [M]::SetCursorPos($x1, $y1) | Out-Null
+            Start-Sleep -Milliseconds 400
+            [M]::Down()
+            Start-Sleep -Milliseconds 250
+            $steps = 16
+            for ($i = 1; $i -le $steps; $i++) {
+              [M]::SetCursorPos([int]($x1 + ($x2 - $x1) * $i / $steps), [int]($y1 + ($y2 - $y1) * $i / $steps)) | Out-Null
+              Start-Sleep -Milliseconds 70
+              if ($midway -and ($i -eq 4 -or $i -eq 8 -or $i -eq 12)) { & $midway; Start-Sleep -Milliseconds 250 }
+            }
+            Start-Sleep -Milliseconds 400
+            Shot "mid-$from-$to"
+            [M]::Up()
+            Start-Sleep 2
+          }
+
+          function AlphaOrder() { (Order) | Where-Object { $_ -like '*@Alpha' } | ForEach-Object { $_ -replace '@Alpha', '' } }
+
+          "--- A: red onto blue, nothing else happening"
+          $before = (AlphaOrder) -join ','
+          Drag 'red' 'blue' $null
+          $after = (AlphaOrder) -join ','
+          "RESULT undisturbed (${{ matrix.ref }}): Alpha $before -> $after :: moved=$($before -ne $after)"
+          Shot 'after-undisturbed'
+
+          "--- B: green onto the new first row; turns start and end in another session (activity events) while the button is down"
+          $first = ((AlphaOrder) -split ',')[0]
+          $before = (AlphaOrder) -join ','
+          Drag 'green' $first { Api Post "/api/sessions/$($ids['cyan'])/messages" @{ text = 'hi' } | Out-Null }
+          $after = (AlphaOrder) -join ','
+          "RESULT redrawn-mid-drag (${{ matrix.ref }}): Alpha $before -> $after :: moved=$($before -ne $after)"
+          Shot 'after-disturbed'
+
+          "--- C: the Beta group's header onto the Alpha group's header"
+          function GroupNames() { ((Api Get '/api/sessions/groups').names) -join ',' }
+          $before = GroupNames
+          Drag 'Beta' 'Alpha' $null
+          $after = GroupNames
+          "RESULT group-header (${{ matrix.ref }}): groups $before -> $after :: moved=$($before -ne $after)"
+          Shot 'after-groups'
+          "cards after: $((Order) -join ', ')"
+
+          "final order: $((Order) -join ', ')"
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: group-drag-shots-${{ strategy.job-index }}
+          path: shots
+          if-no-files-found: warn
