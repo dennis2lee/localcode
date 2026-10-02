@@ -68,6 +68,9 @@ func Launch(title string, start func(progress func(string), setVersion func(stri
 	w.Navigate(dataURL(splashHTML()))
 	setWindowIcon(uintptr(w.Window()))
 	hideTitleBar(uintptr(w.Window()))
+	// The Edit menu the macOS window needs for Cmd+C and Cmd+V. A no-op
+	// everywhere else, which is where the editing bindings already exist.
+	installEditMenu()
 
 	// Where the OS frame has been taken away, the page draws the buttons
 	// that went with it and works them through here. Bound before the
