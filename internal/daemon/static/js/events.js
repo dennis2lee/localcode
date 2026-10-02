@@ -1,7 +1,7 @@
 import { inputEl } from './dom.js';
 import { app, session } from './state.js';
 import {
-  appendUser, appendTool, appendError, appendModelText, endModelText,
+  appendUser, appendTool, appendAsk, appendError, appendModelText, endModelText,
   appendToolCall, finishToolCall, resolvePendingUser, abandonRunningToolCalls,
   appendReview, appendThinking, endThinking, foldThinking, clearTranscript, showEarlierBanner,
   abandonPendingUsers, settleThinkingBlock, hasLiveThinking,
@@ -234,7 +234,7 @@ const handlers = {
   'input.request': (d) => {
     session.pendingAsk = d.id;
     const opts = Array.isArray(d.options) ? d.options : [];
-    appendTool([`[the model is asking] ${d.question}`,
+    appendAsk([`[the model is asking] ${d.question}`,
       ...opts.map((o, i) => `  ${i + 1}. ${o}`),
       '  (reply in the box below, in your own words or with a number)'].join('\n'));
   },

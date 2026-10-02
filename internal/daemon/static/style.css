@@ -472,6 +472,12 @@ mark.find-hit.current {
   #transcript .msg-user.landed { animation: none; }
 }
 #transcript .msg-tool { color: var(--muted); font-style: italic; }
+/* The model stopping to ask you something. A tool line (muted, italic,
+   pre-wrap) at the size of the answer it interrupts: a question the turn
+   is blocked on should not be the smallest text on the page. The same
+   token as .msg-model, so it moves with the Reading trim and not the
+   Interface one. */
+#transcript .msg-ask { font-size: var(--t-read); }
 #transcript .msg-error { color: var(--err); font-weight: 600; }
 /* The notice at the top of a transcript that opened at its end, with the
    control that fetches the rest. Quiet: it is a statement about the view

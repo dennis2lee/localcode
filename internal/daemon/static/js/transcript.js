@@ -244,6 +244,12 @@ export function jumpToTurn(direction) {
   return true;
 }
 export function appendTool(text) { return appendDiv('msg-tool', text); }
+// The model stopping a turn to ask the person something (ask_user). A tool
+// line in every respect (muted, italic, pre-wrap) except its size, which is
+// the answer's: see "#transcript .msg-ask" in style.css. The class goes on
+// before the line is inserted, so the scroll follower measures and scrolls
+// with the height the line will keep.
+export function appendAsk(text) { return appendDiv('msg-tool msg-ask', text); }
 export function appendError(err) { return appendDiv('msg-error', 'Error: ' + String(err)); }
 
 // showEarlierBanner puts a line at the very top of the transcript saying
