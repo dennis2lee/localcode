@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -365,5 +366,81 @@ func TestGroupRefusalStatusSeparatesTheDiskFromTheRequest(t *testing.T) {
 				t.Errorf("groupRefusalStatus(%v) = %d, want %d", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// Dragging a card inside a group sends nothing but the order, and the group
+// of every session comes back as it was. This walks the three requests the
+// panel makes (make the group, put sessions in it, save a permuted order)
+// and reads the list back, which is all a reload does.
+func TestReorderInsideAGroupOverHTTPKeepsEveryGroup(t *testing.T) {
+	d := newTestDaemon(t, "http://127.0.0.1:1")
+
+	post := func(path, body string) int {
+		req := httptest.NewRequest("POST", path, bytes.NewBufferString(body))
+		rec := httptest.NewRecorder()
+		d.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	type listed struct {
+		ID    string `json:"id"`
+		Group string `json:"group"`
+		Order int    `json:"order"`
+	}
+	list := func() []listed {
+		req := httptest.NewRequest("GET", "/api/sessions", nil)
+		rec := httptest.NewRecorder()
+		d.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/sessions = %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+		var out []listed
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("unmarshal sessions: %v", err)
+		}
+		return out
+	}
+	ids := func(rows []listed) []string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.ID)
+		}
+		return out
+	}
+
+	if code := post("/api/sessions/groups", `{"names":["g"]}`); code != http.StatusOK {
+		t.Fatalf("POST groups = %d, want 200", code)
+	}
+	for _, id := range []string{"u", "a", "b", "c"} {
+		if _, err := d.Loop.Store.CreateSession(id, "", "general-purpose", true); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if code := post("/api/sessions/"+id+"/group", `{"group":"g"}`); code != http.StatusOK {
+			t.Fatalf("POST %s/group = %d, want 200", id, code)
+		}
+	}
+
+	// c dragged onto a, inside g.
+	if code := post("/api/sessions/order", `{"ids":["u","c","a","b"]}`); code != http.StatusNoContent {
+		t.Fatalf("POST order = %d, want 204", code)
+	}
+
+	rows := list()
+	if got, want := ids(rows), []string{"u", "c", "a", "b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("listing after the reorder = %v, want %v", got, want)
+	}
+	for _, r := range rows {
+		wantGroup := "g"
+		if r.ID == "u" {
+			wantGroup = ""
+		}
+		if r.Group != wantGroup {
+			t.Errorf("%s group = %q, want %q", r.ID, r.Group, wantGroup)
+		}
+		if r.Order == 0 {
+			t.Errorf("%s has no saved order after the reorder", r.ID)
+		}
 	}
 }

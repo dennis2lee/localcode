@@ -1,0 +1,1108 @@
+'use strict';
+
+// Reordering by drag inside a group. The panel keeps one flat list in
+// drawn order (ungrouped rows, then each group in turn), so a drag inside
+// a group is the same gesture as a drag anywhere else: the card takes the
+// target row's place and the daemon is told the whole order. These tests
+// pin that for rows that share a group, the line that shows where the
+// card will land, and what a drag does and does not tolerate while it is
+// in progress.
+
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { load } = require('./harness');
+
+function transfer() {
+  const data = new Map();
+  return {
+    effectAllowed: '',
+    dropEffect: '',
+    setData: (k, v) => data.set(k, v),
+    getData: (k) => data.get(k) || '',
+  };
+}
+
+function row(id, group) {
+  const s = { id, title: id, agent: 'general-purpose', workspace: '/w' };
+  if (group) s.group = group;
+  return s;
+}
+
+// u above the groups, g = [a, b, c], h = [d, e].
+const PANEL = [row('u'), row('a', 'g'), row('b', 'g'), row('c', 'g'), row('d', 'h'), row('e', 'h')];
+
+function routesFor(sessions, extra = {}) {
+  return {
+    'GET /api/sessions': sessions,
+    'GET /api/sessions/groups': { names: ['g', 'h'] },
+    'POST /api/sessions/order': { status: 204 },
+    'POST /api/sessions/*/group': { status: 200 },
+    ...extra,
+  };
+}
+
+// The rows on screen, by id, with each group's header named after it.
+function shown(app) {
+  return (app.el('session-list').children || []).map((el) => {
+    if (el.classList.contains('session-group-header')) return `[${el.querySelector('.group-name').textContent}]`;
+    return el.title.split('\n')[0];
+  });
+}
+
+// Just the session rows, in the order they are drawn.
+function rowIDs(app) {
+  return (app.el('session-list').children || [])
+    .filter((el) => el.classList.contains('session-item'))
+    .map((el) => el.title.split('\n')[0]);
+}
+
+function card(app, id) {
+  const el = (app.el('session-list').children || []).find((c) => c.title && c.title.split('\n')[0] === id);
+  assert.ok(el, `no row for ${id}`);
+  return el;
+}
+
+function header(app, name) {
+  const el = (app.el('session-list').children || []).find(
+    (c) => c.classList.contains('session-group-header') && c.querySelector('.group-name').textContent === name,
+  );
+  assert.ok(el, `no header for ${name}`);
+  return el;
+}
+
+function ledOf(app, id) {
+  const led = card(app, id).querySelector('.session-led');
+  return led ? led.className.replace('session-led ', '') : null;
+}
+
+function start(app, id) {
+  card(app, id).fire('dragstart', { dataTransfer: transfer() });
+}
+
+function drag(app, fromID, toID) {
+  start(app, fromID);
+  const target = card(app, toID);
+  target.fire('dragover', { dataTransfer: transfer() });
+  target.fire('drop', { dataTransfer: transfer() });
+}
+
+function emit(app, type, data) {
+  app.sse.emit({ seq: 1, type, data });
+}
+
+function sameRows(app, before) {
+  const now = app.el('session-list').children;
+  return now.length === before.length && now.every((el, i) => el === before[i]);
+}
+
+// A daemon that remembers what it was told, the way SetOrder and
+// SetSessionGroup do, and lists sessions in the order it holds. A held
+// promise makes a request wait, so a test can decide when it lands.
+function fakeDaemon(initial) {
+  const sessions = initial.map((s) => ({ ...s }));
+  const d = {
+    saved: null,
+    holdOrder: null,
+    holdGroup: null,
+    holdNextGet: null,
+    listing() {
+      if (!d.saved) return sessions.map((s) => ({ ...s }));
+      const pos = new Map(d.saved.map((id, i) => [id, i]));
+      return sessions.map((s) => ({ ...s })).sort((a, b) => pos.get(a.id) - pos.get(b.id));
+    },
+  };
+  d.routes = routesFor(null, {
+    'GET /api/sessions': async () => {
+      const answer = d.listing();
+      if (d.holdNextGet) {
+        const hold = d.holdNextGet;
+        d.holdNextGet = null;
+        await hold;
+      }
+      return answer;
+    },
+    'POST /api/sessions/order': async (body) => {
+      if (d.holdOrder) await d.holdOrder;
+      // One hold per request, in the order they arrive, for a test that
+      // needs the first save to land while a later one is still waiting.
+      const hold = d.orderHolds && d.orderHolds.shift();
+      if (hold) await hold;
+      d.saved = body.ids;
+      return { status: 204 };
+    },
+    'POST /api/sessions/*/group': async (body, { path }) => {
+      if (d.holdGroup) await d.holdGroup;
+      sessions.find((s) => s.id === path.split('/')[3]).group = body.group;
+      return { status: 200 };
+    },
+  });
+  return d;
+}
+
+function gate() {
+  let open;
+  const promise = new Promise((resolve) => { open = resolve; });
+  return { promise, open };
+}
+
+// ---- the move itself ------------------------------------------------
+
+test('dragging a card up inside a group moves it above the row it was dropped on', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', 'c', '[h]', 'd', 'e']);
+
+  drag(app, 'c', 'a');
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[g]', 'c', 'a', 'b', '[h]', 'd', 'e']);
+  const posts = app.callsTo('POST', '/api/sessions/order');
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0].body.ids, ['u', 'c', 'a', 'b', 'd', 'e']);
+  assert.equal(app.callsTo('POST', /\/api\/sessions\/[^/]+\/group$/).length, 0, 'the group is not touched');
+});
+
+test('dragging a card down inside a group moves it below the row it was dropped on', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  drag(app, 'a', 'c');
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[g]', 'b', 'c', 'a', '[h]', 'd', 'e']);
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/order')[0].body.ids, ['u', 'b', 'c', 'a', 'd', 'e']);
+  assert.equal(app.callsTo('POST', /\/api\/sessions\/[^/]+\/group$/).length, 0);
+});
+
+test('two neighbours in a group swap', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  drag(app, 'a', 'b');
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[g]', 'b', 'a', 'c', '[h]', 'd', 'e']);
+});
+
+test('reordering one group leaves the others where they were, and saves the whole panel', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  drag(app, 'e', 'd');
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', 'c', '[h]', 'e', 'd']);
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/order')[0].body.ids, ['u', 'a', 'b', 'c', 'e', 'd']);
+});
+
+test('a reordered group is still in that order after a reload', async () => {
+  const daemon = fakeDaemon(PANEL);
+  const app = await load({ routes: daemon.routes });
+
+  drag(app, 'c', 'a');
+  await app.settle();
+  assert.deepEqual(rowIDs(app), ['u', 'c', 'a', 'b', 'd', 'e']);
+
+  // A new page against the same daemon: nothing carried over but what the
+  // daemon was told.
+  const again = await load({ routes: daemon.routes });
+  assert.deepEqual(shown(again), ['u', '[g]', 'c', 'a', 'b', '[h]', 'd', 'e']);
+  assert.equal(card(again, 'c').draggable, true);
+});
+
+test('rows inside a group are draggable, and stop being while a filter is on', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  for (const id of ['a', 'b', 'c']) {
+    const el = card(app, id);
+    assert.equal(el.draggable, true, `${id} should be draggable`);
+    assert.equal(el.getAttribute('draggable'), 'true');
+    assert.match(el.title, /drag/);
+  }
+
+  const filter = app.el('session-filter');
+  filter.value = 'b';
+  filter.fire('input');
+  await app.settle();
+
+  const b = card(app, 'b');
+  assert.equal(b.draggable, false);
+  assert.doesNotMatch(b.title, /drag/);
+  start(app, 'b');
+  const over = b.fire('dragover', { dataTransfer: transfer() });
+  assert.equal(over.defaultPrevented, false, 'a filtered row is not a drop target either');
+});
+
+test('a folded group is reordered around, and still takes a card on its header', async () => {
+  const app = await load({
+    routes: routesFor(PANEL),
+    localStorage: { 'localcode.collapsedGroups': JSON.stringify(['h']) },
+  });
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', 'c', '[h]']);
+
+  drag(app, 'a', 'c');
+  await app.settle();
+  assert.deepEqual(shown(app), ['u', '[g]', 'b', 'c', 'a', '[h]']);
+  assert.deepEqual(
+    app.callsTo('POST', '/api/sessions/order')[0].body.ids,
+    ['u', 'b', 'c', 'a', 'd', 'e'],
+    'the rows hidden by the fold are still in the order that is saved',
+  );
+
+  start(app, 'a');
+  header(app, 'h').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/a/group').map((c) => c.body), [{ group: 'h' }]);
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/order')[1].body.ids, ['u', 'b', 'c', 'a', 'd', 'e']);
+  assert.deepEqual(shown(app), ['u', '[g]', 'b', 'c', '[h]']);
+});
+
+// ---- the line that shows where the card lands -----------------------
+
+test('the drop line is on the bottom edge for a card from above and the top edge for one from below', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  start(app, 'a');
+  const c = card(app, 'c');
+  c.fire('dragover', { dataTransfer: transfer() });
+  assert.ok(c.classList.contains('drop-target'));
+  assert.ok(c.classList.contains('drop-after'), 'a card from above lands below the row');
+  c.fire('dragleave');
+  assert.ok(!c.classList.contains('drop-target'));
+  assert.ok(!c.classList.contains('drop-after'), 'leaving the row takes the line away');
+
+  // The same row, from the other side.
+  card(app, 'a').fire('dragend');
+  start(app, 'c');
+  const a = card(app, 'a');
+  a.fire('dragover', { dataTransfer: transfer() });
+  assert.ok(a.classList.contains('drop-target'));
+  assert.ok(!a.classList.contains('drop-after'), 'a card from below lands above the row');
+});
+
+test('the line is on the side the card lands, for every pair of rows', async () => {
+  const ids = PANEL.map((s) => s.id);
+  for (const from of ids) {
+    for (const to of ids) {
+      if (from === to) continue;
+      const app = await load({ routes: routesFor(PANEL) });
+      start(app, from);
+      const target = card(app, to);
+      target.fire('dragover', { dataTransfer: transfer() });
+      assert.ok(target.classList.contains('drop-target'), `${from} over ${to}`);
+      const lineBelow = target.classList.contains('drop-after');
+      target.fire('drop', { dataTransfer: transfer() });
+      await app.settle();
+
+      const order = rowIDs(app);
+      assert.equal(
+        order.indexOf(from) > order.indexOf(to),
+        lineBelow,
+        `${from} onto ${to}: the line says ${lineBelow ? 'below' : 'above'} and the card landed ${order.join(',')}`,
+      );
+    }
+  }
+});
+
+test('ending or cancelling a drag takes the line off every row', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  start(app, 'a');
+  const c = card(app, 'c');
+  c.fire('dragover', { dataTransfer: transfer() });
+  assert.ok(c.classList.contains('drop-after'));
+  card(app, 'a').fire('dragend');
+
+  assert.ok(!c.classList.contains('drop-target'));
+  assert.ok(!c.classList.contains('drop-after'));
+  assert.ok(!card(app, 'a').classList.contains('dragging'));
+});
+
+// The class is toggled by the script and drawn by the stylesheet, and the
+// fake DOM draws nothing: this is what ties the two together.
+test('the stylesheet draws the line above a row by default and below it for drop-after', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', 'internal', 'daemon', 'static', 'style.css'), 'utf8');
+  const offset = (selector) => {
+    const at = css.indexOf(`${selector} {`);
+    assert.ok(at >= 0, `${selector} has no rule`);
+    const m = css.slice(at, css.indexOf('}', at)).match(/box-shadow:\s*0\s+(-?\d+)px/);
+    assert.ok(m, `${selector} draws no line`);
+    return Number(m[1]);
+  };
+  assert.ok(offset('.session-item.drop-target') < 0, 'the plain line belongs on the top edge');
+  assert.ok(offset('.session-item.drop-target.drop-after') > 0, 'drop-after belongs on the bottom edge');
+});
+
+test('landsBelow compares positions: from above is below, from below is above', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+  const list = PANEL;
+
+  assert.equal(app.landsBelow(list, 'a', 'c'), true);
+  assert.equal(app.landsBelow(list, 'c', 'a'), false);
+  assert.equal(app.landsBelow(list, 'b', 'b'), false, 'a row is not below itself');
+  assert.equal(app.landsBelow(list, 'nope', 'a'), false);
+  assert.equal(app.landsBelow(list, 'a', 'nope'), false);
+});
+
+// The documented way to put a card last in a group above it: a card from
+// below lands above the row it is dropped on, so it takes a second drop.
+test('a card from a lower group takes two drops to be last in a higher group', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  drag(app, 'd', 'c');
+  await app.settle();
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', 'd', 'c', '[h]', 'e']);
+
+  drag(app, 'd', 'c');
+  await app.settle();
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', 'c', 'd', '[h]', 'e']);
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/d/group').map((c) => c.body), [{ group: 'g' }]);
+});
+
+// ---- a card dropped on the header of the group it is already in -----
+
+test('a card dropped on its own group header goes first and only the order is saved', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  start(app, 'c');
+  header(app, 'g').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[g]', 'c', 'a', 'b', '[h]', 'd', 'e']);
+  assert.equal(app.callsTo('POST', /\/api\/sessions\/[^/]+\/group$/).length, 0, 'it is already in the group');
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/order')[0].body.ids, ['u', 'c', 'a', 'b', 'd', 'e']);
+});
+
+test('a card that is already first in its group sends nothing when dropped on the header', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+  const before = app.calls.length;
+
+  start(app, 'a');
+  header(app, 'g').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.equal(app.calls.length, before, 'no request at all');
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', 'c', '[h]', 'd', 'e']);
+});
+
+test('a refused order after a header drop on the own group says so and puts the panel back', async () => {
+  const app = await load({
+    routes: routesFor(PANEL, { 'POST /api/sessions/order': { status: 500, body: { error: 'disk full' } } }),
+  });
+
+  start(app, 'c');
+  header(app, 'g').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', 'c', '[h]', 'd', 'e']);
+  assert.match(app.transcript(), /could not save the session order/);
+  assert.doesNotMatch(app.transcript(), /moved group/);
+});
+
+test('a refused order inside a group puts the rows back and reads nothing back', async () => {
+  const app = await load({
+    routes: routesFor(PANEL, { 'POST /api/sessions/order': { status: 500, body: { error: 'disk full' } } }),
+  });
+  const reads = app.callsTo('GET', '/api/sessions').length;
+
+  drag(app, 'c', 'a');
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', 'c', '[h]', 'd', 'e']);
+  assert.match(app.transcript(), /could not save the session order/);
+  assert.equal(app.callsTo('GET', '/api/sessions').length, reads);
+});
+
+// ---- the panel is not redrawn under a card that is being carried ----
+
+test('activity in another session mid-drag changes the data and leaves the rows alone', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+  const before = app.el('session-list').children.slice();
+
+  start(app, 'c');
+  emit(app, 'session.activity', { session: 'd', busy: true });
+  await app.settle();
+
+  assert.ok(sameRows(app, before), 'the panel was rebuilt under the dragged row');
+  assert.ok(card(app, 'c').classList.contains('dragging'), 'the dragged row kept its look');
+  assert.equal(app.app.sessions.find((s) => s.id === 'd').busy, true, 'the data is current');
+
+  card(app, 'a').fire('dragover', { dataTransfer: transfer() });
+  card(app, 'a').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.deepEqual(rowIDs(app), ['u', 'c', 'a', 'b', 'd', 'e']);
+  assert.equal(ledOf(app, 'd'), 'running', 'and the light is drawn once the drag is over');
+});
+
+test('a drag that is cancelled draws what was held back, and the panel works again', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+  const before = app.el('session-list').children.slice();
+
+  start(app, 'c');
+  emit(app, 'session.activity', { session: 'd', busy: true });
+  await app.settle();
+  assert.ok(sameRows(app, before));
+
+  card(app, 'c').fire('dragend');
+  assert.ok(!sameRows(app, before), 'the held-back redraw is owed once the drag is over');
+  assert.equal(ledOf(app, 'd'), 'running');
+
+  const over = card(app, 'a').fire('dragover', { dataTransfer: transfer() });
+  assert.equal(over.defaultPrevented, false, 'nothing is being dragged any more');
+
+  const now = app.el('session-list').children.slice();
+  emit(app, 'session.activity', { session: 'd', busy: false });
+  await app.settle();
+  assert.ok(!sameRows(app, now), 'and the next change is drawn straight away');
+  assert.equal(ledOf(app, 'd'), 'unread', 'a turn that finished out of sight leaves its light on');
+});
+
+// A native drag sends the page no mouse events, so any of these means the
+// pointer is back in the page's hands, whether or not dragend ever came.
+for (const [name, fire] of [
+  ['a mouse move with no button down', (app) => app.doc.fire('mousemove', { buttons: 0 })],
+  ['a mouse press', (app) => app.doc.fire('mousedown', { buttons: 1 })],
+  ['a pointer press', (app) => app.doc.fire('pointerdown', { buttons: 1 })],
+  ['a drop that no row took', (app) => app.doc.fire('drop')],
+  ['a dragend that reached the page', (app) => app.doc.fire('dragend')],
+]) {
+  test(`a drag whose dragend never came is ended by ${name}`, async () => {
+    const app = await load({ routes: routesFor(PANEL) });
+    const before = app.el('session-list').children.slice();
+
+    start(app, 'c');
+    emit(app, 'session.activity', { session: 'd', busy: true });
+    await app.settle();
+    assert.ok(sameRows(app, before));
+
+    fire(app);
+    assert.ok(!sameRows(app, before), 'the held-back redraw was never drawn');
+    assert.equal(ledOf(app, 'd'), 'running');
+    const over = card(app, 'a').fire('dragover', { dataTransfer: transfer() });
+    assert.equal(over.defaultPrevented, false, 'the drag state was left set');
+  });
+}
+
+test('a mouse move with the button still down does not end a drag', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  start(app, 'c');
+  app.doc.fire('mousemove', { buttons: 1 });
+  const over = card(app, 'a').fire('dragover', { dataTransfer: transfer() });
+
+  assert.equal(over.defaultPrevented, true);
+});
+
+test('a stale drag cannot archive anything', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+  const toggle = app.el('archive-toggle');
+
+  start(app, 'c');
+  app.doc.fire('mousemove', { buttons: 0 });
+
+  const over = toggle.fire('dragover', { dataTransfer: {} });
+  assert.equal(over.defaultPrevented, false);
+  toggle.fire('drop');
+  await app.settle();
+  assert.equal(app.calls.filter((c) => /\/archive$/.test(c.path)).length, 0);
+});
+
+test('a refresh mid-drag leaves the rows alone, and the drop lands on the refreshed list', async () => {
+  let current = PANEL;
+  const app = await load({ routes: routesFor(null, { 'GET /api/sessions': () => current }) });
+  const before = app.el('session-list').children.slice();
+
+  start(app, 'c');
+  current = [...PANEL, row('z')];
+  emit(app, 'session.renamed', { session: 'u' });
+  await app.settle();
+  assert.ok(sameRows(app, before), 'the refresh rebuilt the panel under the dragged row');
+
+  card(app, 'a').fire('dragover', { dataTransfer: transfer() });
+  card(app, 'a').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/order')[0].body.ids, ['u', 'z', 'c', 'a', 'b', 'd', 'e']);
+});
+
+test('a card that disappears mid-drag is not moved, and nothing is sent', async () => {
+  let current = PANEL;
+  const app = await load({ routes: routesFor(null, { 'GET /api/sessions': () => current }) });
+
+  start(app, 'c');
+  current = PANEL.filter((s) => s.id !== 'c');
+  emit(app, 'session.renamed', { session: 'u' });
+  await app.settle();
+
+  card(app, 'a').fire('dragover', { dataTransfer: transfer() });
+  card(app, 'a').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.equal(app.callsTo('POST', '/api/sessions/order').length, 0);
+  assert.deepEqual(rowIDs(app), ['u', 'a', 'b', 'd', 'e'], 'the panel shows the refreshed list');
+});
+
+// ---- a refresh does not undo a drop that is still being saved -------
+
+test('a refresh asked for while a drop is being saved waits for it', async () => {
+  const daemon = fakeDaemon(PANEL);
+  const app = await load({ routes: daemon.routes });
+  const hold = gate();
+  daemon.holdOrder = hold.promise;
+
+  drag(app, 'c', 'a');
+  await app.settle();
+  assert.deepEqual(rowIDs(app), ['u', 'c', 'a', 'b', 'd', 'e'], 'the drop is on screen at once');
+
+  const reads = app.callsTo('GET', '/api/sessions').length;
+  const loading = app.loadSessions();
+  await app.settle();
+  assert.equal(app.callsTo('GET', '/api/sessions').length, reads, 'the listing was asked for before the save landed');
+  assert.deepEqual(rowIDs(app), ['u', 'c', 'a', 'b', 'd', 'e']);
+
+  hold.open();
+  await loading;
+  await app.settle();
+  assert.equal(app.callsTo('GET', '/api/sessions').length, reads + 1);
+  assert.deepEqual(rowIDs(app), ['u', 'c', 'a', 'b', 'd', 'e'], 'and what it read is the new order');
+});
+
+test('a listing that was already on its way when a drop began does not undo it', async () => {
+  const daemon = fakeDaemon(PANEL);
+  const app = await load({ routes: daemon.routes });
+  const hold = gate();
+
+  // The daemon answers this one now, from before the drop, and the answer
+  // is delayed.
+  daemon.holdNextGet = hold.promise;
+  const loading = app.loadSessions();
+  await app.settle();
+
+  drag(app, 'u', 'b');
+  await app.settle();
+  assert.deepEqual(daemon.saved, ['a', 'b', 'u', 'c', 'd', 'e'], 'the drop was saved');
+  const reads = app.callsTo('GET', '/api/sessions').length;
+
+  hold.open();
+  await loading;
+  await app.settle();
+
+  assert.ok(app.callsTo('GET', '/api/sessions').length > reads, 'the old answer was asked for again');
+  assert.deepEqual(rowIDs(app), ['a', 'b', 'u', 'c', 'd', 'e']);
+  assert.equal(app.app.sessions.find((s) => s.id === 'u').group, 'g');
+});
+
+test('an old listing arriving between the two requests of a drop does not change what is saved', async () => {
+  const daemon = fakeDaemon(PANEL);
+  const app = await load({ routes: daemon.routes });
+  const holdGet = gate();
+  const holdGroup = gate();
+
+  daemon.holdNextGet = holdGet.promise;
+  const loading = app.loadSessions();
+  await app.settle();
+
+  // u joins g: the group request is held, so the order request is not
+  // built until the old listing has arrived and been dealt with.
+  daemon.holdGroup = holdGroup.promise;
+  drag(app, 'u', 'b');
+  await app.settle();
+  holdGet.open();
+  await app.settle();
+  holdGroup.open();
+  await loading;
+  await app.settle();
+
+  assert.deepEqual(daemon.saved, ['a', 'b', 'u', 'c', 'd', 'e'], 'the order that was saved is the drop\'s');
+  assert.deepEqual(rowIDs(app), ['a', 'b', 'u', 'c', 'd', 'e']);
+});
+
+// ---- the other places a card can be dropped end the drag too --------
+
+test('a card dropped on the strip above the groups leaves its group and the panel shows it', async () => {
+  const sessions = [row('a', 'g'), row('b', 'g'), row('d', 'h')];
+  const app = await load({ routes: routesFor(sessions) });
+  const strip = app.el('session-list').children.find((c) => c.classList.contains('session-group-ungrouped-drop'));
+  assert.ok(strip, 'every session is in a group, so the strip is drawn');
+
+  start(app, 'b');
+  strip.fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['b', '[g]', 'a', '[h]', 'd']);
+  assert.deepEqual(app.callsTo('POST', '/api/sessions/b/group').map((c) => c.body), [{ group: '' }]);
+  const over = card(app, 'a').fire('dragover', { dataTransfer: transfer() });
+  assert.equal(over.defaultPrevented, false, 'the drag is over');
+});
+
+test('a card that is already ungrouped sends no group request when dropped on the strip', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  await app.dropSessionToUngroupedTop('u');
+
+  assert.equal(app.callsTo('POST', /\/api\/sessions\/[^/]+\/group$/).length, 0);
+  assert.equal(app.callsTo('POST', '/api/sessions/order').length, 1);
+});
+
+test('a card dropped on the archive leaves the panel at once and the drag is over', async () => {
+  let current = PANEL;
+  const app = await load({
+    routes: routesFor(null, {
+      'GET /api/sessions': (body, { query }) => (query.get('archived') ? [] : current),
+      'POST /api/sessions/c/archive': () => {
+        current = PANEL.filter((s) => s.id !== 'c');
+        return { status: 200, body: {} };
+      },
+    }),
+  });
+
+  start(app, 'c');
+  app.el('archive-toggle').fire('drop', {});
+  await app.settle();
+
+  assert.deepEqual(rowIDs(app), ['u', 'a', 'b', 'd', 'e']);
+  const over = card(app, 'a').fire('dragover', { dataTransfer: transfer() });
+  assert.equal(over.defaultPrevented, false, 'the drag is over');
+});
+
+// The line is switched off by dragleave, which fires on every border the
+// pointer crosses, including the ones between a card and the title or
+// buttons inside it. Crossing those must not flicker it off.
+test('moving the pointer onto something inside the target row keeps its line', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  start(app, 'a');
+  const c = card(app, 'c');
+  c.fire('dragover', { dataTransfer: transfer() });
+  const inside = c.querySelector('.title') || c.children[0];
+  assert.ok(inside, 'the row has nothing inside it to move onto');
+
+  c.fire('dragleave', { relatedTarget: inside });
+  assert.ok(c.classList.contains('drop-target'), 'the line went out while the pointer was still on the row');
+  assert.ok(c.classList.contains('drop-after'));
+
+  c.fire('dragleave', { relatedTarget: card(app, 'b') });
+  assert.ok(!c.classList.contains('drop-target'), 'the line stayed after the pointer left the row');
+  assert.ok(!c.classList.contains('drop-after'));
+
+  c.fire('dragover', { dataTransfer: transfer() });
+  c.fire('dragleave', {});
+  assert.ok(!c.classList.contains('drop-target'), 'an engine that does not say where the pointer went must still clear the line');
+});
+
+test('a group header keeps its outline while the pointer is on its name', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  start(app, 'a');
+  const h = header(app, 'h');
+  h.fire('dragover', { dataTransfer: transfer() });
+  assert.ok(h.classList.contains('drop-target'));
+
+  h.fire('dragleave', { relatedTarget: h.querySelector('.group-name') });
+  assert.ok(h.classList.contains('drop-target'));
+  h.fire('dragleave', { relatedTarget: card(app, 'd') });
+  assert.ok(!h.classList.contains('drop-target'));
+});
+
+// The archive header changes its border and its words while a card is over
+// it, and puts both back on dragleave. A drag that ends over it by any
+// other road (Escape, the watchdog) sends no dragleave.
+test('a drag that ends over the archive header puts the header back', async () => {
+  for (const end of [
+    (app) => card(app, 'c').fire('dragend'),
+    (app) => app.doc.fire('mousemove', { buttons: 0 }),
+  ]) {
+    const app = await load({ routes: routesFor(PANEL) });
+    const toggle = app.el('archive-toggle');
+    const idle = toggle.textContent;
+
+    start(app, 'c');
+    toggle.fire('dragover', { dataTransfer: transfer() });
+    assert.equal(toggle.textContent, 'drop to archive');
+    assert.ok(toggle.classList.contains('drag-over'));
+
+    end(app);
+    assert.ok(!toggle.classList.contains('drag-over'), 'the archive header kept its drag highlight');
+    assert.equal(toggle.textContent, idle, 'the archive header kept saying it would take the drop');
+  }
+});
+
+// A cancelled drag leaves the carried card faded unless the end of the
+// drag restores it, and the watchdog is the road where the row's own
+// dragend never runs.
+test('a drag ended by the watchdog brings the carried card back to full strength', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+
+  start(app, 'c');
+  assert.ok(card(app, 'c').classList.contains('dragging'));
+  app.doc.fire('mousemove', { buttons: 0 });
+
+  assert.ok(!card(app, 'c').classList.contains('dragging'), 'the card stayed faded after the drag was over');
+});
+
+// High contrast removes box-shadow, which is how the line is drawn.
+test('in forced colors the target row is still marked', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', 'internal', 'daemon', 'static', 'style.css'), 'utf8');
+  const at = css.indexOf('@media (forced-colors: active)');
+  assert.ok(at >= 0, 'no forced-colors rule: the drop line disappears in Windows High Contrast');
+  const block = css.slice(at, css.indexOf('\n}', at));
+  assert.match(block, /\.session-item\.drop-target[^}]*outline:\s*2px solid Highlight/);
+});
+
+// The guard's drop listener must run after the row's own, or it ends the
+// drag before the row reads who was dragged. In a browser that is the
+// bubble phase; the fake DOM cannot tell the two apart, so the
+// registration is read instead.
+test('the page-level drag guard listens in the bubble phase', async () => {
+  const app = await load({ routes: routesFor(PANEL) });
+  const registered = [];
+  const add = app.doc.addEventListener.bind(app.doc);
+  app.doc.addEventListener = (type, fn, opts) => {
+    registered.push([type, opts]);
+    return add(type, fn, opts);
+  };
+  const { wireSessionDragGuard } = app.internals;
+  assert.equal(typeof wireSessionDragGuard, 'function', 'the guard is not reachable from the test');
+  wireSessionDragGuard();
+
+  const drop = registered.find(([type]) => type === 'drop');
+  assert.ok(drop, 'the guard listens for no drop');
+  const capture = drop[1] === true || Boolean(drop[1] && typeof drop[1] === 'object' && drop[1].capture === true);
+  assert.equal(capture, false, 'a capture-phase drop listener ends the drag before any row can read it');
+});
+
+// Two cards dropped one after the other, with a refresh in between, must
+// both survive on screen and in what was saved. The first save lands while
+// the second is still waiting, which is the moment a refresh that waited
+// only for the first save would ask the daemon and paint an old order.
+test('a refresh between two quick drops waits for both and keeps both', async () => {
+  const d = fakeDaemon(PANEL);
+  let releaseFirst;
+  let releaseSecond;
+  d.orderHolds = [
+    new Promise((resolve) => { releaseFirst = resolve; }),
+    new Promise((resolve) => { releaseSecond = resolve; }),
+  ];
+  const app = await load({ routes: d.routes });
+
+  drag(app, 'c', 'a');
+  emit(app, 'session.renamed', { session: 'u' });
+  drag(app, 'd', 'e');
+  await app.settle();
+
+  releaseFirst();
+  await app.settle();
+  assert.deepEqual(rowIDs(app), ['u', 'c', 'a', 'b', 'e', 'd'],
+    'the refresh painted the daemon\'s order while the second drop was still being saved');
+
+  releaseSecond();
+  await app.settle();
+  await app.settle();
+  assert.deepEqual(rowIDs(app), ['u', 'c', 'a', 'b', 'e', 'd'], 'a drop was lost on screen');
+  assert.deepEqual(d.saved, ['u', 'c', 'a', 'b', 'e', 'd'], 'a drop was lost in what was saved');
+});
+
+// The header of a group nobody is in is a drop target like any other.
+test('a card dropped on the header of an empty group goes into it', async () => {
+  const app = await load({
+    routes: routesFor(PANEL, { 'GET /api/sessions/groups': { names: ['g', 'h', 'empty'] } }),
+  });
+
+  start(app, 'a');
+  const h = header(app, 'empty');
+  h.fire('dragover', { dataTransfer: transfer() });
+  h.fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  const g = app.callsTo('POST', /\/a\/group$/);
+  assert.equal(g.length, 1);
+  assert.deepEqual(g[0].body, { group: 'empty' });
+});
+
+// Dragging a group by its header. The panel draws the groups in the order of
+// the daemon's list of names, so moving a group is a change to that list and
+// nothing else: the cards keep the order they had inside it.
+
+// u above the groups; g = [a, b], h = [c, d], k = [e].
+const THREE = [row('u'), row('a', 'g'), row('b', 'g'), row('c', 'h'), row('d', 'h'), row('e', 'k')];
+
+// A daemon that keeps the list of groups it is given.
+function groupDaemon(names, sessions = THREE) {
+  const d = { names: names.slice(), posts: [] };
+  d.routes = routesFor(sessions, {
+    'GET /api/sessions/groups': () => ({ names: d.names }),
+    'POST /api/sessions/groups': (body) => {
+      d.posts.push(body);
+      d.names = body.names;
+      return { status: 200, body: { names: d.names } };
+    },
+  });
+  return d;
+}
+
+function startGroup(app, name) {
+  header(app, name).fire('dragstart', { dataTransfer: transfer() });
+}
+
+function dragGroup(app, from, to) {
+  startGroup(app, from);
+  const target = header(app, to);
+  target.fire('dragover', { dataTransfer: transfer() });
+  target.fire('drop', { dataTransfer: transfer() });
+}
+
+const GROUPS = ['g', 'h', 'k'];
+
+test('a group dragged down onto another lands below it, with its cards, and the list is saved', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[h]', 'c', 'd', '[g]', 'a', 'b', '[k]', 'e']);
+  assert.deepEqual(d.posts, [{ names: ['h', 'g', 'k'] }]);
+  assert.equal(app.callsTo('POST', '/api/sessions/order').length, 0, 'the order of the cards did not change');
+});
+
+test('a group dragged up onto another lands above it', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+
+  dragGroup(app, 'k', 'g');
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[k]', 'e', '[g]', 'a', 'b', '[h]', 'c', 'd']);
+  assert.deepEqual(d.posts, [{ names: ['k', 'g', 'h'] }]);
+});
+
+test('a group moved across two others, in either direction', async () => {
+  for (const [from, to, want] of [['g', 'k', ['h', 'k', 'g']], ['k', 'g', ['k', 'g', 'h']]]) {
+    const d = groupDaemon(GROUPS);
+    const app = await load({ routes: d.routes });
+    dragGroup(app, from, to);
+    await app.settle();
+    assert.deepEqual(d.posts, [{ names: want }], `${from} onto ${to}`);
+  }
+});
+
+test('a group dropped on itself, or let go over nothing, saves nothing', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+
+  dragGroup(app, 'h', 'h');
+  startGroup(app, 'g');
+  header(app, 'g').fire('dragend');
+  await app.settle();
+
+  assert.equal(d.posts.length, 0);
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', '[h]', 'c', 'd', '[k]', 'e']);
+});
+
+test('the new order is what a reload draws', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+
+  dragGroup(app, 'g', 'k');
+  await app.settle();
+  emit(app, 'session.renamed', { session: 'u' });
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[h]', 'c', 'd', '[k]', 'e', '[g]', 'a', 'b']);
+});
+
+// The line says where the group will land. Under a group is the edge between
+// it and the next one, which is under its last card, not under its header.
+test('the line is above the target for a group from below and under its last card for one from above', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+
+  startGroup(app, 'g');
+  header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+  assert.ok(card(app, 'd').classList.contains('group-drop-after'), 'the line belongs under the last card of the group it lands after');
+  assert.ok(!header(app, 'h').classList.contains('group-drop-before'));
+  assert.ok(!header(app, 'h').classList.contains('drop-target'), 'a group landing is not a card going into the group');
+
+  header(app, 'k').fire('dragover', { dataTransfer: transfer() });
+  assert.ok(card(app, 'e').classList.contains('group-drop-after'));
+  assert.ok(!card(app, 'd').classList.contains('group-drop-after'), 'only one line at a time');
+
+  header(app, 'g').fire('dragend');
+  for (const id of ['a', 'b', 'c', 'd', 'e']) assert.ok(!card(app, id).classList.contains('group-drop-after'));
+
+  startGroup(app, 'k');
+  header(app, 'g').fire('dragover', { dataTransfer: transfer() });
+  assert.ok(header(app, 'g').classList.contains('group-drop-before'));
+  header(app, 'k').fire('dragend');
+  assert.ok(!header(app, 'g').classList.contains('group-drop-before'));
+});
+
+test('a folded group has its line on its header', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  header(app, 'h').fire('click');
+  await app.settle();
+
+  startGroup(app, 'g');
+  header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+
+  assert.ok(header(app, 'h').classList.contains('group-drop-after'));
+  header(app, 'g').fire('dragend');
+});
+
+test('the line goes when the pointer leaves the header, and stays while it is on its name', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  startGroup(app, 'g');
+  const h = header(app, 'h');
+  h.fire('dragover', { dataTransfer: transfer() });
+
+  h.fire('dragleave', { relatedTarget: h.querySelector('.group-name') });
+  assert.ok(card(app, 'd').classList.contains('group-drop-after'));
+  h.fire('dragleave', { relatedTarget: card(app, 'a') });
+  assert.ok(!card(app, 'd').classList.contains('group-drop-after'));
+  header(app, 'g').fire('dragend');
+});
+
+test('the carried header fades and comes back', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  startGroup(app, 'g');
+  assert.ok(header(app, 'g').classList.contains('dragging'));
+  header(app, 'g').fire('dragend');
+  assert.ok(!header(app, 'g').classList.contains('dragging'));
+});
+
+// A group goes where a group is, and nowhere else.
+test('rows, the strip above the groups and the archive take no group', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  startGroup(app, 'g');
+
+  const targets = [
+    card(app, 'c'),
+    (app.el('session-list').children || []).find((c) => c.classList.contains('session-group-ungrouped-drop')),
+    app.el('archive-toggle'),
+  ].filter(Boolean);
+  assert.ok(targets.length >= 2, 'the test found too few places to drop on');
+  for (const el of targets) {
+    const over = el.fire('dragover', { dataTransfer: transfer() });
+    assert.equal(over.defaultPrevented, false, 'a group was accepted where only a card goes');
+  }
+  app.el('archive-toggle').fire('drop');
+  await app.settle();
+  assert.equal(app.calls.filter((c) => /\/archive$/.test(c.path)).length, 0);
+  header(app, 'g').fire('dragend');
+});
+
+test('a card dropped on a group header still goes into that group', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+
+  start(app, 'a');
+  const h = header(app, 'h');
+  h.fire('dragover', { dataTransfer: transfer() });
+  assert.ok(h.classList.contains('drop-target'), 'the outline for a card going in');
+  assert.ok(!h.classList.contains('group-drop-before'));
+  h.fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.equal(d.posts.length, 0, 'no group list was saved');
+  assert.equal(app.callsTo('POST', /\/a\/group$/).length, 1);
+});
+
+test('a group is not draggable while a filter is on', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  assert.equal(header(app, 'g').draggable, true);
+
+  const filter = app.el('session-filter');
+  filter.value = 'a';
+  filter.fire('input');
+  await app.settle();
+
+  assert.notEqual(header(app, 'g').draggable, true);
+});
+
+test('activity in another session mid-drag leaves the panel alone until the group is dropped', async () => {
+  const d = groupDaemon(GROUPS);
+  const app = await load({ routes: d.routes });
+  const before = app.el('session-list').children.slice();
+
+  startGroup(app, 'g');
+  emit(app, 'session.activity', { session: 'e', busy: true });
+  await app.settle();
+  assert.ok(sameRows(app, before), 'the panel was rebuilt under the carried header');
+
+  header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+  header(app, 'h').fire('drop', { dataTransfer: transfer() });
+  await app.settle();
+
+  assert.deepEqual(d.posts, [{ names: ['h', 'g', 'k'] }]);
+  assert.equal(ledOf(app, 'e'), 'running', 'what was held back is drawn once the drag is over');
+});
+
+test('a stale group drag is ended by the page-level guard', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  const before = app.el('session-list').children.slice();
+
+  startGroup(app, 'g');
+  emit(app, 'session.activity', { session: 'e', busy: true });
+  await app.settle();
+  assert.ok(sameRows(app, before));
+
+  app.doc.fire('mousemove', { buttons: 0 });
+  assert.ok(!sameRows(app, before), 'the held-back redraw was never drawn');
+  const over = header(app, 'h').fire('dragover', { dataTransfer: transfer() });
+  assert.equal(over.defaultPrevented, false, 'the drag state was left set');
+});
+
+test('a refused save puts the groups back, says so, and saves nothing else', async () => {
+  const d = groupDaemon(GROUPS);
+  d.routes['POST /api/sessions/groups'] = () => ({ status: 500, body: { error: 'disk full' } });
+  const app = await load({ routes: d.routes });
+
+  dragGroup(app, 'g', 'h');
+  await app.settle();
+
+  assert.deepEqual(shown(app), ['u', '[g]', 'a', 'b', '[h]', 'c', 'd', '[k]', 'e']);
+  assert.match(app.el('transcript').textContent, /could not save the group order/);
+});
+
+test('a refresh while the list is being saved waits for it', async () => {
+  const d = groupDaemon(GROUPS);
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const post = d.routes['POST /api/sessions/groups'];
+  d.routes['POST /api/sessions/groups'] = async (body) => {
+    await held;
+    return post(body);
+  };
+  const app = await load({ routes: d.routes });
+
+  dragGroup(app, 'g', 'h');
+  emit(app, 'session.renamed', { session: 'u' });
+  await app.settle();
+  assert.deepEqual(shown(app), ['u', '[h]', 'c', 'd', '[g]', 'a', 'b', '[k]', 'e'],
+    'the refresh painted the daemon\'s old list over the drop');
+
+  release();
+  await app.settle();
+  await app.settle();
+  assert.deepEqual(shown(app), ['u', '[h]', 'c', 'd', '[g]', 'a', 'b', '[k]', 'e']);
+});
+
+test('groupLandsBelow compares positions in the list of groups', async () => {
+  const app = await load({ routes: groupDaemon(GROUPS).routes });
+  const { groupLandsBelow } = app.internals;
+  assert.equal(groupLandsBelow(GROUPS, 'g', 'h'), true);
+  assert.equal(groupLandsBelow(GROUPS, 'k', 'g'), false);
+  assert.equal(groupLandsBelow(GROUPS, 'g', 'g'), false);
+  assert.equal(groupLandsBelow(GROUPS, 'g', 'nope'), false);
+  assert.equal(groupLandsBelow(undefined, 'g', 'h'), false);
+});
+
+test('in forced colors the group lines are still drawn', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', 'internal', 'daemon', 'static', 'style.css'), 'utf8');
+  const at = css.indexOf('@media (forced-colors: active)');
+  assert.ok(at >= 0);
+  const block = css.slice(at, css.indexOf('\n}', at));
+  assert.match(block, /\.group-drop-before[^}]*outline:\s*2px solid Highlight/);
+  assert.match(css, /\.group-drop-before\s*\{\s*box-shadow:\s*0\s+-2px/);
+  assert.match(css, /\.group-drop-after\s*\{\s*box-shadow:\s*0\s+2px/);
+});
+

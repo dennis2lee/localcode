@@ -24,7 +24,7 @@ import {
   navigatingHistory, endHistoryNavigation,
 } from './composer.js';
 import { loadAgents, loadCommands, loadSkills, loadSlashCommands, loadSettings, loadWorkspace, loadMCPServers, loadVersion, cycleAgent, resetMCPServers } from './loaders.js';
-import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, loadArchived, rememberedOpenSession, renderSessionList, promptCreateGroup } from './sessions.js';
+import { loadSessions, selectSession, createNewSession, deleteAllSessions, wireArchiveDrop, wireSessionDragGuard, loadArchived, rememberedOpenSession, renderSessionList, promptCreateGroup } from './sessions.js';
 import { wireZoom, applyZoom } from './zoom.js';
 import {
   openScheduleDialog, closeScheduleDialog, saveSchedule, previewWhen,
@@ -337,6 +337,7 @@ async function init() {
   // out of the way. What it does not do any more is stay unloaded, for
   // the reason two lines below.
   wireArchiveDrop();
+  wireSessionDragGuard();
   // Before anything is measured, so the first layout is at the size the
   // person left it rather than at 100% for a frame.
   wireZoom();
@@ -397,7 +398,7 @@ export { forkSession } from './sessions.js';
 export { setPanelWidth } from './resize.js';
 export { taskView, openTaskView, closeTaskView } from './taskview.js';
 export { settings, openSettings } from './settings.js';
-export { loadSessions, renderSessionList, selectSession, deleteSessionConfirm, reorderList, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
+export { loadSessions, renderSessionList, selectSession, deleteSessionConfirm, reorderList, landsBelow, groupLandsBelow, dropGroupOn, wireSessionDragGuard, dropSessionOn, sessionMatchesFilter, dropSessionOnGroupHeader, dropSessionToUngroupedTop, promptCreateGroup, promptRenameGroup, promptDeleteGroup, readCollapsedGroups, writeCollapsedGroups } from './sessions.js';
 export {
   openFind, closeFind, findIsOpen, stepFind, runFind, findRefresh,
   findMatches, markRange, unmark, searchableBlocks,

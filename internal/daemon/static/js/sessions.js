@@ -12,24 +12,40 @@ import { loadSchedules } from './schedules.js';
 import { permissionRequest } from './modals.js';
 
 export async function loadSessions() {
-  try {
-    app.sessions = await apiClient.getSessions();
-  } catch (err) {
-    app.sessions = [];
-  }
-  let groupsAreCurrent = false;
-  try {
-    const res = await apiClient.getGroups();
-    if (res && Array.isArray(res.names)) {
-      app.sessionGroups = res.names;
-      groupsAreCurrent = true;
+  // A listing that was asked for before a drop was saved describes the
+  // panel as it was before the drop, and painting it would undo the drop
+  // on screen. So wait for the saves in flight (see trackSave) and, if one
+  // began while the answer was on its way, ask again. It ends when the
+  // drops do: a person cannot drop faster than the daemon answers.
+  let groupsAreCurrent;
+  let started;
+  do {
+    while (savesInFlight.size) await Promise.allSettled([...savesInFlight]);
+    started = savesStarted;
+    groupsAreCurrent = false;
+    let listing;
+    try {
+      listing = await apiClient.getSessions();
+    } catch (err) {
+      listing = [];
     }
-  } catch {
-    // A daemon that does not know about groups, or a request that failed:
-    // leave whatever we had. An empty list is the flat panel, which is the
-    // right thing to show when we cannot find out.
-    if (!app.sessionGroups) app.sessionGroups = [];
-  }
+    // Held in a local until it is known to be current: a drop that began
+    // meanwhile has already rewritten app.sessions, and its request sends
+    // that list, so overwriting it here would save the old order.
+    if (started === savesStarted) app.sessions = listing;
+    try {
+      const res = await apiClient.getGroups();
+      if (res && Array.isArray(res.names)) {
+        app.sessionGroups = res.names;
+        groupsAreCurrent = true;
+      }
+    } catch {
+      // A daemon that does not know about groups, or a request that failed:
+      // leave whatever we had. An empty list is the flat panel, which is the
+      // right thing to show when we cannot find out.
+      if (!app.sessionGroups) app.sessionGroups = [];
+    }
+  } while (started !== savesStarted);
   // Both halves are in hand here and nowhere else, so this is where the
   // list is put into the order it will be drawn in, and where folds for
   // groups that are gone are dropped.
@@ -250,6 +266,17 @@ function renderSessionCard(s, filtering) {
 }
 
 export function renderSessionList() {
+  // Not while a card is being carried. The panel is rebuilt from scratch,
+  // so a redraw mid-drag takes the dragged row out of the document: some
+  // engines then never send it a dragend, and the drag state below is
+  // left set. The data is already current (the callers update app.sessions
+  // before they get here), so only the drawing waits, and endDrag draws it
+  // the moment the drag is over.
+  if (dragging()) {
+    redrawWanted = true;
+    return;
+  }
+  redrawWanted = false;
   sessionListEl.innerHTML = '';
   if (!app.sessions || app.sessions.length === 0) {
     sessionListEl.innerHTML = '<div style="color:var(--muted)">no sessions</div>';
@@ -303,14 +330,15 @@ export function renderSessionList() {
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
       topDrop.classList.add('drop-target');
     });
-    topDrop.addEventListener('dragleave', () => topDrop.classList.remove('drop-target'));
+    topDrop.addEventListener('dragleave', (e) => {
+      if (leftElement(topDrop, e)) topDrop.classList.remove('drop-target');
+    });
     topDrop.addEventListener('drop', (e) => {
       e.preventDefault();
       e.stopPropagation();
       topDrop.classList.remove('drop-target');
       const from = draggingID;
-      draggingID = null;
-      clearDropMarkers();
+      endDrag();
       if (from) dropSessionToUngroupedTop(from);
     });
     sessionListEl.appendChild(topDrop);
@@ -423,6 +451,7 @@ export function renderSessionList() {
     });
 
     if (!filtering) {
+      wireGroupHeaderDrag(header, groupName);
       wireGroupHeaderDrop(header, groupName);
     }
 
@@ -438,36 +467,157 @@ export function renderSessionList() {
 
 function wireGroupHeaderDrop(header, groupName) {
   header.addEventListener('dragover', (e) => {
+    if (draggingGroup) {
+      // Another group is being carried: this header is where it lands, on
+      // the side it would end up on.
+      if (draggingGroup === groupName) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      markGroupDrop(header, groupLandsBelow(app.sessionGroups, draggingGroup, groupName));
+      return;
+    }
     if (!draggingID) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
     header.classList.add('drop-target');
   });
-  header.addEventListener('dragleave', () => header.classList.remove('drop-target'));
+  header.addEventListener('dragleave', (e) => {
+    if (!leftElement(header, e)) return;
+    header.classList.remove('drop-target');
+    if (draggingGroup) clearGroupMarkers();
+  });
   header.addEventListener('drop', (e) => {
     e.preventDefault();
     e.stopPropagation();
     header.classList.remove('drop-target');
+    const group = draggingGroup;
     const from = draggingID;
-    draggingID = null;
-    clearDropMarkers();
+    endDrag();
+    if (group) {
+      if (group !== groupName) dropGroupOn(group, groupName);
+      return;
+    }
     if (from) dropSessionOnGroupHeader(from, groupName);
   });
 }
 
-// Dragging a session card up or down the panel.
-//
-// The panel is ordered newest-first, which is the right default and the
-// wrong permanent arrangement: the conversation someone is living in for a
-// week sinks below every throwaway one started since. So the order is
-// theirs to set, and the daemon remembers it — an arrangement that had to
-// be redone after every restart would not be worth making.
-//
+// Dragging a group by its header. The header already folds on a click, and a
+// drag does not click, so the two do not meet.
+function wireGroupHeaderDrag(header, groupName) {
+  header.draggable = true;
+  header.setAttribute('draggable', 'true');
+  header.addEventListener('dragstart', (e) => {
+    draggingGroup = groupName;
+    header.classList.add('dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      // Some browsers start no drag at all without data on the transfer.
+      try { e.dataTransfer.setData('text/plain', groupName); } catch { /* not fatal */ }
+    }
+  });
+  header.addEventListener('dragend', () => {
+    header.classList.remove('dragging');
+    endDrag();
+  });
+}
+
+function clearGroupMarkers() {
+  for (const el of sessionListEl.children || []) {
+    el.classList.remove('group-drop-before');
+    el.classList.remove('group-drop-after');
+  }
+}
+
+// markGroupDrop draws the line where the carried group would land
+// relative to the group whose header is under the pointer: above that header
+// when the group comes from below, and under the last row of that group's
+// block when it comes from above, which is the edge between that group and
+// the next one. A line under the header itself would read as "inside".
+function markGroupDrop(header, below) {
+  clearGroupMarkers();
+  let target = header;
+  if (below) {
+    const kids = Array.from(sessionListEl.children);
+    for (let i = kids.indexOf(header) + 1; i > 0 && i < kids.length && kids[i].classList.contains('session-item'); i++) {
+      target = kids[i];
+    }
+  }
+  target.classList.add(below ? 'group-drop-after' : 'group-drop-before');
+}
+
 // draggingID is module state rather than something carried on the event,
 // because the dataTransfer payload is not readable during dragover in every
 // browser, and dragover is where a row has to decide whether it is a
 // possible drop target at all.
 let draggingID = null;
+
+// A group header being carried, by name. Not draggingID, because the two
+// drags have different places to land: a card can land on a row, on a
+// header, on the strip above the groups and on the archive, and a group can
+// land only on another group's header. Everything that holds work back
+// while a drag is in progress asks dragging(), which is either.
+let draggingGroup = null;
+function dragging() {
+  return Boolean(draggingID) || Boolean(draggingGroup);
+}
+
+// A redraw that was asked for while a card was being carried, and is owed
+// when the drag ends. See renderSessionList.
+let redrawWanted = false;
+
+// endDrag is the one place a drag stops being one: a drop on any target, a
+// dragend on the source, or the document watchdog below. It clears the
+// drag state first and draws what was held back second, so the redraw
+// sees a panel with nothing in flight.
+function endDrag() {
+  draggingID = null;
+  draggingGroup = null;
+  clearDropMarkers();
+  // The archive header lights up and renames itself while a card is over
+  // it, and it only puts itself back on dragleave. A drag that ends there
+  // (cancelled with Escape, or by the watchdog) never sends one.
+  if (archiveToggleEl.classList.contains('drag-over')) {
+    archiveToggleEl.classList.remove('drag-over');
+    renderArchiveList();
+  }
+  if (redrawWanted) renderSessionList();
+}
+
+// leftElement says whether a dragleave took the pointer out of el, as
+// opposed to into something inside it. The event fires on every border
+// crossed, so moving across a card's title and buttons would otherwise
+// switch the drop line off and let the next dragover switch it back on.
+// Engines that do not report where the pointer went (relatedTarget is
+// null) get the old answer: it left.
+function leftElement(el, e) {
+  const to = e && e.relatedTarget;
+  return !(to && typeof el.contains === 'function' && el.contains(to));
+}
+
+// The page-level backstop for a drag that never announced its end.
+//
+// A redraw is held back while draggingID is set, so a dragend that never
+// arrives (the window lost focus mid-drag, an engine that drops it) would
+// leave the panel frozen, and would leave the archive header accepting
+// anything that is dropped on it. Nothing the page can see says "the drag
+// is over" in that case, but something does say "no drag is going on": a
+// native drag sends the page no mouse events at all, so a press, or a
+// move with no button down, means the pointer is back in the page's hands.
+//
+// Bubble phase on purpose. A capture listener on the document would run
+// before the row's own drop handler and clear draggingID before it reads
+// it; this one only ever sees a drop that no row, header or strip took,
+// because those stop propagation.
+export function wireSessionDragGuard() {
+  document.addEventListener('dragend', endDrag);
+  document.addEventListener('drop', endDrag);
+  for (const type of ['mousedown', 'pointerdown']) {
+    document.addEventListener(type, () => { if (dragging()) endDrag(); });
+  }
+  document.addEventListener('mousemove', (e) => {
+    if (dragging() && e.buttons === 0) endDrag();
+  });
+}
 
 function makeDraggable(div, id) {
   div.draggable = true;
@@ -483,9 +633,8 @@ function makeDraggable(div, id) {
     }
   });
   div.addEventListener('dragend', () => {
-    draggingID = null;
     div.classList.remove('dragging');
-    clearDropMarkers();
+    endDrag();
   });
   div.addEventListener('dragover', (e) => {
     if (!draggingID || draggingID === id) return;
@@ -494,14 +643,18 @@ function makeDraggable(div, id) {
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
     div.classList.add('drop-target');
+    // The line is on the edge the card will land against: the bottom edge
+    // when it comes from above, the top edge when it comes from below.
+    div.classList.toggle('drop-after', landsBelow(app.sessions, draggingID, id));
   });
-  div.addEventListener('dragleave', () => div.classList.remove('drop-target'));
+  div.addEventListener('dragleave', (e) => {
+    if (leftElement(div, e)) div.classList.remove('drop-target', 'drop-after');
+  });
   div.addEventListener('drop', (e) => {
     e.preventDefault();
     e.stopPropagation();
     const from = draggingID;
-    draggingID = null;
-    clearDropMarkers();
+    endDrag();
     if (from && from !== id) dropSessionOn(from, id);
   });
 }
@@ -510,6 +663,9 @@ function clearDropMarkers() {
   for (const el of sessionListEl.childNodes || []) {
     if (el.classList) {
       el.classList.remove('drop-target');
+      el.classList.remove('drop-after');
+      el.classList.remove('group-drop-before');
+      el.classList.remove('group-drop-after');
       el.classList.remove('dragging');
     }
   }
@@ -528,6 +684,61 @@ export function reorderList(sessions, fromID, toID) {
   const [moved] = out.splice(from, 1);
   out.splice(to, 0, moved);
   return out;
+}
+
+// landsBelow says which side of toID a card dragged from fromID ends up
+// on: below it when the card comes from above, above it when it comes from
+// below. That is reorderList's own rule (remove, then reinsert at the
+// target's old index) read as a comparison, so the line drawn while
+// dragging and the place the card lands cannot disagree. It compares
+// positions in the array the panel was drawn from, which is why that array
+// has to stay in drawn order (see panelOrder).
+export function landsBelow(sessions, fromID, toID) {
+  const from = sessions.findIndex(s => s.id === fromID);
+  const to = sessions.findIndex(s => s.id === toID);
+  return from >= 0 && to >= 0 && from < to;
+}
+
+// groupLandsBelow is landsBelow for groups: a group carried down onto another
+// ends up below it, one carried up ends up above it, the same rule that
+// moves a card. Compared by position in the list of group names, which is
+// the order the panel draws them in.
+export function groupLandsBelow(names, fromName, toName) {
+  const from = (names || []).indexOf(fromName);
+  const to = (names || []).indexOf(toName);
+  return from >= 0 && to >= 0 && from < to;
+}
+
+// dropGroupOn moves a group to where another one is, on screen first and
+// then in the daemon, the way a card moves. The list of groups is all that
+// is saved: the order the groups are drawn in is the order of that list, and
+// the cards in each group keep the order they had.
+export async function dropGroupOn(fromName, toName) {
+  const before = (app.sessionGroups || []).slice();
+  const from = before.indexOf(fromName);
+  const to = before.indexOf(toName);
+  if (from < 0 || to < 0 || from === to) return;
+
+  const names = before.slice();
+  const [moved] = names.splice(from, 1);
+  names.splice(to, 0, moved);
+  app.sessionGroups = names;
+  app.sessions = panelOrder(app.sessions, names);
+  renderSessionList();
+
+  let failure = null;
+  await trackSave(async () => {
+    try {
+      await apiClient.setGroups(names);
+    } catch (err) {
+      failure = err;
+    }
+  });
+  if (failure === null) return;
+  appendError(`could not save the group order: ${failure}`);
+  app.sessionGroups = before;
+  app.sessions = panelOrder(app.sessions, before);
+  renderSessionList();
 }
 
 // dropSessionOn applies the move on screen first and tells the daemon
@@ -572,6 +783,66 @@ async function resyncAfterPartialSave(err, what) {
   }
 }
 
+// A drop is saved in up to two requests, and a listing fetched while they
+// are in flight can be answered from before either landed. Painting that
+// listing would put the card back where it was, while the daemon (a moment
+// later) holds the new place. So the requests of a drop are tracked:
+// loadSessions waits for them before it asks, and asks again if a drop
+// began while it was waiting for the answer.
+//
+// savesStarted counts the drops, which is all "did a drop begin since I
+// asked" needs: a listing is never requested while a save is in flight, so
+// a save cannot end during one.
+const savesInFlight = new Set();
+let savesStarted = 0;
+
+// trackSave runs work as one tracked save. work must not reject: the drop
+// functions catch their own failures, and settle the panel after this
+// returns, outside the tracked region, because settling can be a
+// loadSessions and that waits for every tracked save, itself included.
+function trackSave(work) {
+  savesStarted++;
+  const run = work().finally(() => savesInFlight.delete(run));
+  savesInFlight.add(run);
+  return run;
+}
+
+// saveMove tells the daemon what a drop did, after the panel already shows
+// it: the card's new group when that changed (group is undefined when it
+// did not), then the whole order. A refused group change saved nothing, so
+// the panel goes back to before. A refused order after a saved group
+// change is the one half-saved outcome, and the panel is read back instead
+// (see resyncAfterPartialSave). A refused order on its own saved nothing.
+async function saveMove(fromID, group, before, groupFailed, placeFailed) {
+  let stage = '';
+  let failure = null;
+  await trackSave(async () => {
+    if (group !== undefined) {
+      try {
+        await apiClient.setSessionGroup(fromID, group);
+      } catch (err) {
+        stage = 'group';
+        failure = err;
+        return;
+      }
+    }
+    try {
+      await apiClient.reorderSessions(app.sessions.map(s => s.id));
+    } catch (err) {
+      stage = 'order';
+      failure = err;
+    }
+  });
+  if (stage === '') return;
+  if (stage === 'order' && group !== undefined) {
+    await resyncAfterPartialSave(failure, placeFailed);
+    return;
+  }
+  appendError(`${stage === 'group' ? groupFailed : 'could not save the session order'}: ${failure}`);
+  app.sessions = before;
+  renderSessionList();
+}
+
 export async function dropSessionOn(fromID, toID) {
   const fromIndex = app.sessions.findIndex(s => s.id === fromID);
   const toIndex = app.sessions.findIndex(s => s.id === toID);
@@ -588,37 +859,29 @@ export async function dropSessionOn(fromID, toID) {
   app.sessions = panelOrder(next, app.sessionGroups);
   renderSessionList();
 
-  try {
-    if (groupChanged) {
-      await apiClient.setSessionGroup(fromID, targetGroup);
-    }
-  } catch (err) {
-    // Nothing was saved, so the panel goes back exactly as it was.
-    appendError(`could not move the session into that group: ${err}`);
-    app.sessions = before;
-    renderSessionList();
-    return;
-  }
-  try {
-    await apiClient.reorderSessions(app.sessions.map(s => s.id));
-  } catch (err) {
-    if (groupChanged) {
-      await resyncAfterPartialSave(err, 'the session moved group but its place could not be saved');
-      return;
-    }
-    appendError(`could not save the session order: ${err}`);
-    app.sessions = before;
-    renderSessionList();
-  }
+  await saveMove(
+    fromID,
+    groupChanged ? targetGroup : undefined,
+    before,
+    'could not move the session into that group',
+    'the session moved group but its place could not be saved',
+  );
 }
 
 // Dropping a card on a group's header puts it in that group, at the top.
 // The header is the one drop target a collapsed group still offers, and
 // "the top" is the only position it can mean — the rows it would be placed
 // among are not on screen.
+//
+// A card that is already in the group is only reordered: no group request
+// is sent for a group it is in, and a card that is already first has
+// nothing to save at all.
 export async function dropSessionOnGroupHeader(fromID, groupName) {
   const fromIndex = app.sessions.findIndex(s => s.id === fromID);
   if (fromIndex < 0) return;
+
+  const groupChanged = (app.sessions[fromIndex].group || '') !== groupName;
+  if (!groupChanged && app.sessions.find(s => s.group === groupName).id === fromID) return;
 
   const before = snapshot(app.sessions);
   const next = snapshot(app.sessions);
@@ -633,19 +896,13 @@ export async function dropSessionOnGroupHeader(fromID, groupName) {
   app.sessions = panelOrder(next, app.sessionGroups);
   renderSessionList();
 
-  try {
-    await apiClient.setSessionGroup(fromID, groupName);
-  } catch (err) {
-    appendError(`could not move the session into that group: ${err}`);
-    app.sessions = before;
-    renderSessionList();
-    return;
-  }
-  try {
-    await apiClient.reorderSessions(app.sessions.map(s => s.id));
-  } catch (err) {
-    await resyncAfterPartialSave(err, 'the session moved group but its place could not be saved');
-  }
+  await saveMove(
+    fromID,
+    groupChanged ? groupName : undefined,
+    before,
+    'could not move the session into that group',
+    'the session moved group but its place could not be saved',
+  );
 }
 
 // Dropping a card on the strip above the first group takes it out of
@@ -666,27 +923,13 @@ export async function dropSessionToUngroupedTop(fromID) {
   app.sessions = panelOrder(next, app.sessionGroups);
   renderSessionList();
 
-  try {
-    if (oldGroup !== '') {
-      await apiClient.setSessionGroup(fromID, '');
-    }
-  } catch (err) {
-    appendError(`could not take the session out of its group: ${err}`);
-    app.sessions = before;
-    renderSessionList();
-    return;
-  }
-  try {
-    await apiClient.reorderSessions(app.sessions.map(s => s.id));
-  } catch (err) {
-    if (oldGroup !== '') {
-      await resyncAfterPartialSave(err, 'the session left its group but its place could not be saved');
-      return;
-    }
-    appendError(`could not save the session order: ${err}`);
-    app.sessions = before;
-    renderSessionList();
-  }
+  await saveMove(
+    fromID,
+    oldGroup !== '' ? '' : undefined,
+    before,
+    'could not take the session out of its group',
+    'the session left its group but its place could not be saved',
+  );
 }
 
 export async function promptCreateGroup() {
@@ -1096,9 +1339,8 @@ export function wireArchiveDrop() {
     e.preventDefault();
     e.stopPropagation();
     const id = draggingID;
-    draggingID = null;
     archiveToggleEl.classList.remove('drag-over');
-    clearDropMarkers();
+    endDrag();
     const s = (app.sessions || []).find((x) => x.id === id);
     if (s) archiveSessionNow(s);
     else renderArchiveList();

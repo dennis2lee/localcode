@@ -985,9 +985,30 @@ aside h2 {
 /* Dragging a card to a new place in the panel. The card being carried
    fades, and the row it would land on shows the edge it would land
    against — a highlight around the whole target row reads as "this row is
-   selected", which is not what is about to happen to it. */
+   selected", which is not what is about to happen to it. The edge is the
+   top when the card comes from below and the bottom (drop-after) when it
+   comes from above. A shadow rather than a border, so the row does not
+   change size under the pointer, and drawn in the gap between rows, so
+   it stays visible on the current row, whose border is this colour. */
 .session-item.dragging { opacity: 0.45; }
-.session-item.drop-target { border-top: 2px solid var(--select); }
+.session-item.drop-target { box-shadow: 0 -2px 0 var(--select); }
+.session-item.drop-target.drop-after { box-shadow: 0 2px 0 var(--select); }
+/* A group being carried by its header, and the edge it would land against:
+   above the target header when it comes from below, under the target group's
+   last row when it comes from above. Lines like the cards' own, and a
+   different class, so a group landing is never mistaken for a card going
+   into one. */
+.session-group-header.dragging { opacity: 0.45; }
+.group-drop-before { box-shadow: 0 -2px 0 var(--select); }
+.group-drop-after { box-shadow: 0 2px 0 var(--select); }
+/* Forced colors (Windows High Contrast) removes box-shadow, which would
+   leave a card being dragged with no sign of where it lands. An outline
+   survives; it marks the whole row rather than an edge, which is the less
+   precise of the two and the only one still drawn. */
+@media (forced-colors: active) {
+  .session-item.drop-target { box-shadow: none; outline: 2px solid Highlight; outline-offset: -2px; }
+  .group-drop-before, .group-drop-after { box-shadow: none; outline: 2px solid Highlight; outline-offset: -2px; }
+}
 .session-item.active { border-color: var(--select); background: var(--panel); cursor: default; }
 .session-item .title {
   color: var(--text);

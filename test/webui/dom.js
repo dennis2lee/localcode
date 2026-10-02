@@ -312,6 +312,13 @@ class Element {
   // rather than returning null, because a selector that silently matches
   // nothing is a test that passes while asserting nothing — which is the
   // one failure mode a fake DOM must not have.
+  // contains is the DOM's: true for the element itself and for anything
+  // below it.
+  contains(node) {
+    for (let n = node; n; n = n.parentNode) if (n === this) return true;
+    return false;
+  }
+
   querySelector(selector) {
     return this.querySelectorAll(selector)[0] || null;
   }

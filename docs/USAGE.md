@@ -1739,7 +1739,7 @@ Every session on the daemon, newest first. Each card shows:
 
 Click a card to switch its transcript, agent, workspace, and status bar. Rename and delete act on the card without switching. **+ new** creates a session. Deletion controls ask for confirmation.
 
-Drag cards to reorder sessions. The daemon saves order through `POST /api/sessions/order` and session metadata. All clients use the same order. New sessions appear at the top.
+Drag cards to reorder sessions, among ungrouped rows and inside a group. A card dropped on another card takes that card's place: it lands above the card when it came from below and below the card when it came from above. A line on the top or bottom edge of the card under the pointer shows which. The panel is not redrawn while a card is being dragged, so a change in another session's state is drawn when the drag ends. The daemon saves order through `POST /api/sessions/order` and session metadata. All clients use the same order. New sessions appear at the top.
 
 Cards show the session's current workspace. Sessions without a recorded workspace show `(workspace not recorded)`.
 
@@ -1752,12 +1752,18 @@ Sessions can be put into named groups. Which groups exist, what order they are d
 | Make a group | **+ group** in the panel header | `POST /api/sessions/groups` with the whole list, including the new name |
 | Read the list | — | `GET /api/sessions/groups` |
 | Put a session in a group | Drag the card onto the group's header, or among its rows | `POST /api/sessions/{id}/group` with `{"group": "<name>"}` |
+| Reorder inside a group | Drag the card onto another card of the same group, or onto the group's header to put it first | `POST /api/sessions/order` with the whole list. The group is not sent. |
 | Take it out again | Drag the card up among the ungrouped rows above the first group | `POST /api/sessions/{id}/group` with `{"group": ""}` |
 | Rename a group | **rename** on the group's header | `POST /api/sessions/groups` with the new list *and* `{"rename": {"from", "to"}}` |
+| Reorder the groups | Drag a group's header onto another group's header. It lands above that group when it came from below and below it, after its last card, when it came from above. A line shows which. | `POST /api/sessions/groups` with the whole list in the new order. Cards keep the order they had. |
 | Delete a group | **delete** on the group's header | `POST /api/sessions/groups` with the list minus that name |
 | Fold one shut | Click the group's header | Browser-local; nothing is sent |
 
+While a filter is on, neither cards nor groups can be dragged: the panel shows only part of the list, and a move among some of the rows would have no clear meaning for the rest. Like a card, a group is not redrawn while it is carried.
+
 Ungrouped sessions are drawn first, above every group and with no header of their own, so a person who has made no groups sees the panel exactly as it was before groups existed.
+
+The order inside a group is the saved panel order restricted to that group. There is no separate order per group, so it survives a restart like any other order. A card dragged up from a lower group lands above the row it is dropped on. To put it last in a higher group, drop it on that group's last row, then drag it down onto the same row.
 
 The list of groups and the sessions in them are two records of the same thing, and at startup the second one wins where they disagree: a group some session is still in is put back into the list even if the file has lost it. So a `groups.json` that goes missing or cannot be read costs you the order the groups were drawn in and any group that was empty, and nothing else — localcode says at startup when it has had to do this. The one thing it will not put back is a name it would refuse to create, which can only have been written by hand; that session is taken out of the group instead.
 
