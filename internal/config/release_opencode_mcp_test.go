@@ -388,3 +388,66 @@ func TestReleaseClaudeCodeRegressionGuard(t *testing.T) {
 		t.Errorf("Validate() = %v, want nil", err)
 	}
 }
+
+// Claude Code spells the block "mcpServers", in .mcp.json and in
+// ~/.claude.json. A file listed under "include" is how those servers
+// arrive, so the spelling has to become mcp_servers like opencode's does.
+func TestMCPServersIsAnotherSpellingOfMCPServers(t *testing.T) {
+	norm, err := NormalizeOpencode([]byte(`{"mcpServers":{"files":{"command":"npx","args":["-y","x"]}}}`))
+	if err != nil {
+		t.Fatalf("mcpServers was refused: %v", err)
+	}
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(norm.JSON, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := out["mcpServers"]; ok {
+		t.Error("mcpServers was left in the document")
+	}
+	if _, ok := out["mcp_servers"]; !ok {
+		t.Error("mcp_servers was not produced")
+	}
+}
+
+// Both spellings are two halves of one list, unless a server is in both.
+func TestMCPServersJoinsMCPServersAndMcp(t *testing.T) {
+	norm, err := NormalizeOpencode([]byte(`{
+	  "mcp": {"a": {"command": "a"}},
+	  "mcpServers": {"b": {"command": "b"}},
+	  "mcp_servers": {"c": {"command": "c"}}
+	}`))
+	if err != nil {
+		t.Fatalf("three spellings with three different servers were refused: %v", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(norm.JSON, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		if _, ok := cfg.MCPServers[name]; !ok {
+			t.Errorf("server %q did not arrive: %v", name, cfg.MCPServers)
+		}
+	}
+}
+
+func TestAServerInBothMCPServersAndMCPServersIsRefusedByName(t *testing.T) {
+	_, err := NormalizeOpencode([]byte(`{
+	  "mcpServers": {"files": {"command": "one"}},
+	  "mcp_servers": {"files": {"command": "two"}}
+	}`))
+	if err == nil {
+		t.Fatal("one server named in both spellings was accepted, so one of them would be read by nobody")
+	}
+	for _, want := range []string{`"files"`, `"mcpServers"`, `"mcp_servers"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %s: %v", want, err)
+		}
+	}
+}
+
+func TestMCPServersThatIsNotAnObjectIsRefused(t *testing.T) {
+	_, err := NormalizeOpencode([]byte(`{"mcpServers":"nope","mcp_servers":{"a":{"command":"a"}}}`))
+	if err == nil || !strings.Contains(err.Error(), "mcpServers and mcp_servers are both there") {
+		t.Errorf("err = %v, want a refusal naming both spellings", err)
+	}
+}

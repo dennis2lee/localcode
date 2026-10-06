@@ -114,25 +114,30 @@ func TestStartupLoadsCommandsFromTheWorkspaceNotTheStartDirectory(t *testing.T) 
 	}
 }
 
-// The root chain still behaves at startup: .claude beats .opencode beats
-// .localcode, an empty winner still wins, and the project and home roots
-// are resolved independently.
-func TestStartupKeepsTheRootChain(t *testing.T) {
+// The roots at startup: skills from every one of them, commands from the
+// first that exists, and the project and the home resolved independently.
+func TestStartupMergesSkillsAndKeepsTheCommandChain(t *testing.T) {
 	home := t.TempDir()
 	write(t, filepath.Join(home, ".localcode", "skills", "home-skill", "SKILL.md"),
 		"---\nname: home-skill\ndescription: the home skill\n---\n\nhome\n")
 
 	workspace := t.TempDir()
-	// .opencode holds a skill, but the empty .claude beside it wins, so
-	// the skill must not load.
-	write(t, filepath.Join(workspace, ".opencode", "skills", "shadowed", "SKILL.md"),
-		"---\nname: shadowed\ndescription: never reached\n---\n\nno\n")
+	// .opencode holds a skill and the .claude beside it is empty. A
+	// skill is read from every root, so the empty winner no longer hides
+	// it: that is the rule being asserted here.
+	write(t, filepath.Join(workspace, ".opencode", "skills", "from-opencode", "SKILL.md"),
+		"---\nname: from-opencode\ndescription: read though .claude comes first\n---\n\nyes\n")
+	write(t, filepath.Join(workspace, ".localcode", "skills", "from-localcode", "SKILL.md"),
+		"---\nname: from-localcode\ndescription: read too\n---\n\nyes\n")
 	if err := os.MkdirAll(filepath.Join(workspace, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Commands are the other rule. The empty .claude is the winner, so
+	// this one is not read.
+	write(t, filepath.Join(workspace, ".opencode", "commands", "never.md"), "no\n")
 
 	registry := startupTestRegistry(t)
-	_, _, _, skillList, _, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
+	_, _, _, skillList, cmdList, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -140,34 +145,15 @@ func TestStartupKeepsTheRootChain(t *testing.T) {
 	for _, sk := range skillList {
 		names[sk.Name] = true
 	}
-	if names["shadowed"] {
-		t.Error("a skill from a shadowed .opencode root loaded; the empty .claude winner must still win")
+	for _, want := range []string{"from-opencode", "from-localcode", "home-skill"} {
+		if !names[want] {
+			t.Errorf("skills = %v, want %q: every root is read, and the home resolves independently of the project", names, want)
+		}
 	}
-	if !names["home-skill"] {
-		t.Error("the home root stopped resolving independently of the project root")
-	}
-
-	// Without any .claude, .opencode answers: the chain beyond the first
-	// root still works.
-	workspace2 := t.TempDir()
-	write(t, filepath.Join(workspace2, ".opencode", "skills", "op-skill", "SKILL.md"),
-		"---\nname: op-skill\ndescription: opencode skill\n---\n\nop\n")
-	write(t, filepath.Join(workspace2, ".localcode", "skills", "lc-shadowed", "SKILL.md"),
-		"---\nname: lc-shadowed\ndescription: never reached\n---\n\nno\n")
-	registry2 := startupTestRegistry(t)
-	_, _, _, skillList2, _, _, err := buildSystemPrompt(startupTestConfig(), registry2, workspace2, home)
-	if err != nil {
-		t.Fatalf("buildSystemPrompt: %v", err)
-	}
-	names2 := map[string]bool{}
-	for _, sk := range skillList2 {
-		names2[sk.Name] = true
-	}
-	if !names2["op-skill"] {
-		t.Error(".opencode did not answer when .claude is absent")
-	}
-	if names2["lc-shadowed"] {
-		t.Error(".localcode leaked through a present .opencode root")
+	for _, cmd := range cmdList {
+		if cmd.Name == "never" {
+			t.Error("a command from a shadowed .opencode root loaded; the empty .claude winner must still win for commands")
+		}
 	}
 }
 

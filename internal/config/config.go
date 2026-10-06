@@ -27,6 +27,23 @@ type Config struct {
 	MCPServers         map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Instructions       []string                   `json:"instructions,omitempty"`
 
+	// Include lists files written for another program that this file
+	// asks to have read: opencode's opencode.json or opencode.jsonc,
+	// Claude Code's .mcp.json or ~/.claude.json. localcode reads no such
+	// file unless one is named here. An entry is a path: "~/" means the
+	// home directory, a relative path is relative to the directory of the
+	// file that names it, and an entry that is empty after {env:} is
+	// replaced is skipped, so "{env:OPENCODE_CONFIG:-}" names opencode's
+	// override file only when the variable is set.
+	//
+	// Each file is laid under the file that names it, in the order listed,
+	// so nothing read this way can change what this file already says. A
+	// listed file that is missing, cannot be parsed, or carries a key
+	// localcode cannot honour is said out loud and set aside, and localcode
+	// starts without it. This is the loader's input and not a setting: it
+	// is consumed when the file is read, and a merged Config carries none.
+	Include []string `json:"include,omitempty"`
+
 	// Shell is the program every bash tool call, hook and custom command
 	// runs under. Empty is the default: sh on macOS and Linux, and on
 	// Windows whichever POSIX sh is installed, falling back to cmd.exe.
@@ -869,12 +886,25 @@ func (c *Config) EgressPolicy() egress.Policy {
 	return egress.Policy{Allow: append([]string(nil), e.Allow...), Enforced: e.Enforced}
 }
 
+// opencodeProfileHint follows a reference to a profile that is not there,
+// when the name is one localcode writes out of an opencode file. Those
+// profiles exist only while such a file is read, and a file is read only
+// when a config.json lists it under "include". It used to be read on every
+// start, so a default_profile or an agent written against one of them
+// worked, and the same line now fails with a name that looks like a typo.
+func opencodeProfileHint(name string) string {
+	if !strings.HasPrefix(name, reservedProfilePrefix) {
+		return ""
+	}
+	return `. Profiles named "opencode:" are written from an opencode file, and an opencode file is read only when a config.json lists it under "include"`
+}
+
 // Validate checks that all cross-references (agent -> profile -> provider)
 // resolve, so the daemon fails fast at startup rather than mid-task.
 func (c *Config) Validate() error {
 	if c.DefaultProfile != "" {
 		if _, ok := c.Profiles[c.DefaultProfile]; !ok {
-			return fmt.Errorf("default_profile %q not found in profiles", c.DefaultProfile)
+			return fmt.Errorf("default_profile %q not found in profiles%s", c.DefaultProfile, opencodeProfileHint(c.DefaultProfile))
 		}
 	}
 
@@ -994,7 +1024,7 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("profile %q lists itself in fallback, which would retry the endpoint that just failed", name)
 			}
 			if _, ok := c.Profiles[fb]; !ok {
-				return fmt.Errorf("profile %q has fallback %q, which is not a profile", name, fb)
+				return fmt.Errorf("profile %q has fallback %q, which is not a profile%s", name, fb, opencodeProfileHint(fb))
 			}
 		}
 	}
@@ -1037,7 +1067,7 @@ func (c *Config) Validate() error {
 			continue
 		}
 		if _, ok := c.Profiles[agent.Profile]; !ok {
-			return fmt.Errorf("agent %q references unknown profile %q", name, agent.Profile)
+			return fmt.Errorf("agent %q references unknown profile %q%s", name, agent.Profile, opencodeProfileHint(agent.Profile))
 		}
 	}
 

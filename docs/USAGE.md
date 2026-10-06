@@ -301,27 +301,61 @@ Rules:
 
 Use placeholders for portable configuration without embedded secrets. [`localcode login`](#authenticating-with-localcode-login) stores Anthropic and Bedrock credentials outside config.json.
 
-#### Reading a config written for opencode
+#### Reading a config written for opencode or Claude Code
 
-localcode reads [opencode](https://opencode.ai)'s config file where opencode keeps it, and merges it under its own. The files, in the order each is laid over the one before it:
+localcode reads two config files by default, `~/.localcode/config.json` and the project's `.localcode/config.json`. It reads no file written for another program unless one of those two lists it under `include`.
 
-| File | Whose |
+| File | Read |
 |---|---|
-| `~/.config/opencode/opencode.json` | opencode's global |
-| whatever `OPENCODE_CONFIG` names | opencode's override |
-| `~/.localcode/config.json` | localcode's global |
-| `<project>/opencode.json` | opencode's project file, at the project root |
-| `<project>/.localcode/config.json` | localcode's project file |
+| `~/.localcode/config.json` | Always |
+| `<project>/.localcode/config.json` | Always, laid over the global file |
+| Any other file | Only when `include` in one of the two files above lists it |
 
-An opencode file always sits under the localcode file of the same scope, which is the guarantee worth stating plainly: **nothing read from an opencode file can change what your config.json already said.** Everything localcode writes — "always allow", `/smart-agent`, `localcode mcp add` — still goes to `~/.localcode/config.json`, and opencode's files are only ever read. `opencode.jsonc` is read as well; both spellings in one directory is refused, since one of them would be read by nobody.
+Before v0.154.0 localcode also read `~/.config/opencode/opencode.json`, the file `OPENCODE_CONFIG` names, and `<project>/opencode.json` on every start, and no setting turned that off. It no longer does. To keep reading them, list them in `~/.localcode/config.json`:
 
-opencode's spellings also work written directly into a localcode `config.json`: `mcp` for `mcp_servers`, `tools` for `permission`, `autoupdate` for `auto_update`, `compaction.auto` for `auto_compact_enabled`, `provider` for `providers`, `agent` for `agents`, and `model` as one `provider/model` string. A `model` is split at its first slash, the left half naming a provider the same file defines — localcode never reaches a model catalogue, so a provider it has not been given an endpoint and a credential for is refused by name rather than guessed at.
+```json
+{
+  "include": [
+    "~/.config/opencode/opencode.jsonc",
+    "{env:OPENCODE_CONFIG:-}"
+  ]
+}
+```
+
+A project lists its own in `<project>/.localcode/config.json`:
+
+```json
+{ "include": ["../opencode.json"] }
+```
+
+Each entry is a path:
+
+| Entry | Meaning |
+|---|---|
+| `~/x.json` | `x.json` in the home directory |
+| `../opencode.json` | Relative to the directory of the file that lists it, wherever localcode was started |
+| `/etc/shared.json`, `C:\shared.json` | That file |
+| `{env:OPENCODE_CONFIG:-}` | The file the variable names, and nothing when it is not set |
+
+An entry that is empty after `{env:}` is replaced is skipped without a message. An entry is the exact file: `opencode.json` and `opencode.jsonc` are different entries.
+
+The files are read in the order listed. Each is laid over the one before it, and all of them sit under the file that lists them. A project file's list sits over the home file's list and under the project file itself. That is the guarantee worth stating plainly: **nothing read from a listed file can change what your config.json already said.** Everything localcode writes (always allow, `/smart-agent`, `localcode mcp add`) still goes to `~/.localcode/config.json`, and listed files are only ever read.
+
+A listed file that is missing, cannot be parsed, or holds a key localcode cannot honour is named on stderr and left out, and localcode starts without it. A listed file's own `include` is not followed, so the list in your config.json is the one place that shows what was read. `--config <file>` reads that file and the files it lists, and nothing else.
+
+The merged result is checked as a whole, because a listed file may lean on a provider that another file defines. A listed file that makes the result invalid, such as a profile naming a provider nothing defines, stops localcode, and the error names the profile and the files read from `include`.
+
+A `default_profile`, an agent's `profile` or a `fallback` that names an `opencode:` profile stops localcode while no listed file defines that profile. The error says that an opencode file is read only when it is listed.
+
+Claude Code keeps MCP servers under `mcpServers` in `.mcp.json` and in `~/.claude.json`. List either file and the servers arrive, because localcode accepts `mcpServers` as a spelling of `mcp_servers`. Other keys in those files are ignored. `~/.claude/settings.json` is written in another shape and is not meant to be listed. `localcode mcp import-claude` copies the servers into your config.json instead of listing the file.
+
+opencode's spellings also work written directly into a localcode `config.json`: `mcp` (and Claude Code's `mcpServers`) for `mcp_servers`, `tools` for `permission`, `autoupdate` for `auto_update`, `compaction.auto` for `auto_compact_enabled`, `provider` for `providers`, `agent` for `agents`, and `model` as one `provider/model` string. A `model` is split at its first slash, the left half naming a provider the same file defines. localcode never reaches a model catalogue, so a provider it has not been given an endpoint and a credential for is refused by name rather than guessed at. `localcode mcp add` and `localcode mcp remove` treat `mcp` and `mcpServers` as `mcp_servers` and write the servers back under `mcp_servers`. A file with comments in it is refused for that change, with a message to edit it by hand.
 
 What localcode cannot honour it refuses, naming the key and saying what will not happen — `lsp`, `formatter`, `plugin`, `server`, `share` and the rest. What changes nothing it accepts and names on stderr. A file that is half obeyed should say which half.
 
 One thing a `tools` block does that is worth knowing before you write one. opencode has two vocabularies for tool names: in a `permission` block `edit` means every file modification and there is no `write` key, while in a `tools` block `write` and `edit` are separate tools. localcode keeps them apart — `"tools": {"write": false}` takes away `write_file` and leaves `edit` — with one seam: a tools entry becomes a permission rule, so `"tools": {"edit": false}` takes away `write_file` as well, because that is what `edit` means where the rule ends up. It is the stricter reading of the two, and it is the only one available while both land in the same block.
 
-Whose file it is decides what a refusal does. A key localcode cannot honour in **your own** `config.json`, or in a file you named with `--config`, stops it starting: you wrote that for localcode, and finding out at startup beats finding out from behaviour. The same key in an **opencode** file is said out loud and that file is set aside — localcode went looking for it, it was written for another program, and another program's config is not a reason this one cannot start.
+Whose file it is decides what a refusal does. A key localcode cannot honour in **your own** `config.json`, or in a file you named with `--config`, stops it starting: you wrote that for localcode, and finding out at startup beats finding out from behaviour. The same key in a **listed** file is said out loud and that file is set aside: it was written for another program, and another program's config is not a reason this one cannot start.
 
 Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_providers` / `disabled_providers`, are checked against the profiles in the same file: a profile added by a *different* file is not checked against them, because by then the lists are gone. And an agent that carries a `temperature` or `top_p` but no `model` has nothing to attach them to, since each file is read on its own and the default it would inherit may be in another one; the agent still runs on the default profile, and the settings that could not be applied are named on stderr.
 
@@ -334,6 +368,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. Opencode spelling `agent` (and deprecated `mode`) is also accepted. |
 | `default_agent` | Default agent role when `--agent` is omitted. An explicitly passed `--agent` flag overrides it. Must resolve to an entry in `agents`, or `general-purpose`. See [Default agent](#default-agent). |
 | `instructions` | Additional instruction files and glob patterns appended to workspace rules. Relative paths resolve against the project directory and must remain within it. Remote addresses are refused at load. See [Additional instruction files](#additional-instruction-files). |
+| `include` | Files written for another program that localcode reads, such as opencode's `opencode.jsonc` or Claude Code's `.mcp.json`. localcode reads none of them unless they are listed here. Each is laid under the file that lists it, in the order listed. See [Reading a config written for opencode or Claude Code](#reading-a-config-written-for-opencode-or-claude-code). |
 | `shell` | The program every bash tool call, hook and custom command runs under. Unset means `sh`, or on a Windows machine with no `sh` installed, `cmd.exe`. Naming a shell localcode does not know to be POSIX turns every bash `allow` rule into a prompt, because the rule is decided by splitting the command at POSIX operators and that split is only the shell's where the shell reads them the POSIX way. See [Naming the shell](#naming-the-shell). |
 | `subagent_depth` | Maximum nesting depth for subagent delegation. Unset means 3, which is the limit localcode has always had. 1 lets a session delegate but stops a subagent from delegating again, and 0 turns delegation off. opencode defaults this key to 1, so a file written there that does not set it means something different here. See [Subagent delegation depth](#subagent-delegation-depth). |
 | `max_concurrent_tasks` | Maximum concurrent background tasks. Default: 1. Synchronous `Task` calls do not consume slots. Provider-specific limits are acquired first so waiting on one endpoint does not occupy a daemon-wide slot. |
@@ -809,7 +844,7 @@ Project rules, skills, and auto memory supply reusable context. Rules load each 
 
 ### Skills
 
-Put a skill at `<project>/.localcode/skills/<name>/SKILL.md` for a project scoped one, which wins on a name collision. The entry may be a symlink to a directory elsewhere. Both the project and the home directory are searched through the root chain; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from).
+Put a skill at `<project>/.localcode/skills/<name>/SKILL.md` for a project scoped one, which wins on a name collision. The entry may be a symlink to a directory elsewhere. Every root under the project and under the home directory is searched, and the skills are merged; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from).
 
 ```markdown
 ---
@@ -830,17 +865,21 @@ Run a skill directly by its own name with `/<skill name>`. To run a file without
 
 ### Where skills, commands and global rules are read from
 
-Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. The first directory that exists wins outright:
+Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. There are three roots, in this order:
 
-| Order | Root | Reads |
+| Order | Root | Holds |
 |---|---|---|
 | 1 | `.claude` | `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md`, `CLAUDE.md` |
 | 2 | `.opencode` | the same |
 | 3 | `.localcode` | the same |
 
-The chain runs twice, independently: once under the project directory and once under the home directory. A project skill still wins over a global one of the same name, as before. A repo that keeps its skills in `.claude` and a home that keeps its own in `.localcode` is an ordinary arrangement, not a conflict. An entry in a skills directory may be a symlink to a directory elsewhere. A link that points nowhere, or at a file rather than a directory, is skipped silently; it does not stop the other skills from loading. A directory holding a `SKILL.md` that will not parse is skipped with one log line naming its path and the reason; a directory with no `SKILL.md` at all stays silent, since it may be something else living beside the skills. A malformed skill never stops startup and never drops the skills beside it.
+Skills are merged. Every `skills` directory that exists in any root is read, and the first skill of a name wins. The project's directories come before the home's, so a project skill wins over a global one of the same name, and inside each of those the order is `.claude`, `.opencode`, `.localcode`. A skill that exists only in `~/.opencode/skills` is available beside the ones in `~/.claude/skills`, with nothing to configure. A directory reached under two names, such as `~/.opencode/skills` linked to `~/.claude/skills`, is read once.
 
-Nothing is merged across roots. A home with `~/.claude` reads that root and never looks at the other two, including when they hold skills of their own. An empty winner still wins: `~/.claude` with no `skills` directory means no global skills rather than a fall through, and a repo whose `.claude` holds only settings shadows its own `.localcode/skills` the same way. In any root, `command/` is read when `commands/` does not exist, since opencode names that directory in the singular; `commands/` wins where a root has both. Startup logs both roots whenever either one is not `.localcode`, and `/reset-skills` always names every directory it read.
+The roots run twice, independently: once under the project directory and once under the home directory. An entry in a skills directory may be a symlink to a directory elsewhere. A link that points nowhere, or at a file rather than a directory, is skipped silently; it does not stop the other skills from loading. A skills directory that cannot be read, such as a file where `skills` should be or a directory without permission, is skipped with one log line naming it and the reason, and does not stop startup. A directory holding a `SKILL.md` that will not parse is skipped with one log line naming its path and the reason; a directory with no `SKILL.md` at all stays silent, since it may be something else living beside the skills. A malformed skill never stops startup and never drops the skills beside it.
+
+Commands and global rules are not merged. The first root that exists answers for them outright, and nothing is read from the other two, including when they hold commands of their own. An empty winner still wins: `~/.claude` with no `commands` directory means no global commands rather than a fall through. In any root, `command/` is read when `commands/` does not exist, since opencode names that directory in the singular; `commands/` wins where a root has both.
+
+Startup logs every skills directory it reads whenever one of them is outside `.localcode`, logs the roots commands and global rules come from whenever either is not `.localcode`, and says when a root holding commands lost to an earlier one. `/reset-skills` names every skills directory it searched.
 
 The project directory is the session's workspace: the directory the daemon started in, until the workspace is switched. Switching the default workspace reloads that project's skills and custom commands automatically, and `/reset-skills` re-reads them from the live workspace on demand, so opening a project on the desktop picks up its assets without a restart. Per-session workspaces share the one daemon-wide list; a session moved into another project keeps the current list until the next reload.
 

@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.154.0
+
+localcode reads only its own config files unless a config lists others, and skills are read from every root.
+
+**Changed**
+
+* **opencode and Claude Code config files are read only when a localcode config lists them**
+  * localcode read `~/.config/opencode/opencode.json`, the file `OPENCODE_CONFIG` names and `<project>/opencode.json` on every start, and no setting turned that off. It now reads `~/.localcode/config.json` and the project's `.localcode/config.json`, and nothing else by default.
+  * A new `include` key lists other files. They are read in the order listed, each laid under the file that lists it, so nothing read from them can change what that file says.
+  * `{env:OPENCODE_CONFIG:-}` names opencode's override file only when the variable is set. An entry that is empty after `{env:}` is replaced is skipped.
+  * A listed file that is missing, cannot be parsed or holds a key localcode cannot honour is named on stderr and left out. localcode starts without it. A listed file's own `include` is not followed.
+  * `--config <file>` reads that file and the files it lists.
+  * An entry written `~\x` means the same as `~/x` on every platform.
+  * A merged result that does not validate names the files read from `include`. A listed file is not checked on its own, because it may lean on a provider that another file defines.
+  * A `default_profile`, an agent's profile or a fallback that names an `opencode:` profile nothing defines says that an opencode file is read only when it is listed.
+  * To keep the old behaviour, add `"include": ["~/.config/opencode/opencode.jsonc"]` to `~/.localcode/config.json`. The "no config found" error names `include`.
+  * `mcpServers`, Claude Code's spelling, is accepted for `mcp_servers`, so a `.mcp.json` or `~/.claude.json` can be listed. `localcode mcp add` and `mcp remove` see servers written under it.
+  * `docs/coding-agent-benchmark.html` says what a rerun with this version needs.
+* **Skills are read from every root and merged**
+  * Skills in `.claude`, `.opencode` and `.localcode` are all available, under the project and under the home. The first skill of a name wins: the project before the home, and `.claude` before `.opencode` before `.localcode`, so a name that resolved to a skill before still does.
+  * A skills directory reached under two names, such as `~/.opencode/skills` linked to `~/.claude/skills`, is read once.
+  * Commands and the global `AGENTS.md` and `CLAUDE.md` still come from the first root that exists.
+  * The startup log names every skills directory it reads, once each when the project is the home directory or a link to it. The line about a root that lost concerns commands only.
+  * A skills directory that cannot be read is skipped with one log line and does not stop startup.
+
+**Fixed**
+
+* **An empty `model_commands` list now replaces one from a file under it**
+  * `"model_commands": []` was read as no answer, so a global list survived a project that had turned the commands off.
+* **`localcode mcp add` and `mcp remove` could not see servers written as `mcp`**
+  * A server under opencode's `mcp` spelling in config.json could not be removed, and `add` started a second block beside it. Both now fold `mcp` into `mcp_servers` when the file is written.
+
 ## v0.153.0
 
 Dropped images reach the model as images.

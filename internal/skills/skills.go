@@ -7,7 +7,9 @@
 package skills
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -45,10 +47,10 @@ type frontmatter struct {
 // project-local skill dirs before the global one so a project can
 // override a global skill.
 //
-// A skill that cannot be read or parsed is skipped with one log line
-// naming its path and the reason, rather than failing the load: one bad
-// file must not take down startup, but silence about it has cost people
-// afternoons. See LoadAllWithWarnings for the same load with the warnings
+// A skill that cannot be read or parsed, and a skills directory that cannot
+// be listed, is skipped with one log line naming its path and the reason,
+// rather than failing the load: one bad file must not take down startup,
+// but silence about it has cost people afternoons. See LoadAllWithWarnings for the same load with the warnings
 // returned instead of logged.
 func LoadAll(dirs ...string) ([]Skill, error) {
 	list, warnings, err := LoadAllWithWarnings(dirs...)
@@ -63,7 +65,9 @@ func LoadAll(dirs ...string) ([]Skill, error) {
 // was not loaded, each naming the path and the reason. An attempt is a
 // directory holding a SKILL.md file that fails to read or parse —
 // frontmatter that does not start with "---" (a BOM, a blank first line)
-// included. A directory with no SKILL.md is not an attempt: it may be
+// included. A skills directory that cannot be listed at all is one warning
+// for the whole directory, naming it and the reason. A directory with no
+// SKILL.md is not an attempt: it may be
 // something else living beside the skills. Neither is a non-directory
 // entry, a dangling symlink, or a name that loses to an earlier
 // directory, which loaded fine from the winner.
@@ -80,20 +84,41 @@ func LoadAllWithWarnings(dirs ...string) ([]Skill, []string, error) {
 	// gathered before that check and so were reported twice: seven skills
 	// that could not be read became fourteen lines, each one blaming the
 	// same file for the same thing.
+	//
+	// Judged by where the directory really is, not by what it is called.
+	// Every root is read now, and ~/.opencode/skills linked to
+	// ~/.claude/skills is the ordinary way to share one set of skills
+	// between two agents: the same files under two names, which without
+	// this were read twice and reported twice.
 	readDirs := map[string]bool{}
 
 	for _, dir := range dirs {
-		if key := filepath.Clean(dir); readDirs[key] {
-			continue
-		} else {
-			readDirs[key] = true
+		key := filepath.Clean(dir)
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			key = real
 		}
+		if readDirs[key] {
+			continue
+		}
+		readDirs[key] = true
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, nil, fmt.Errorf("read skills dir %s: %w", dir, err)
+			// A directory that cannot be listed loses its own skills and
+			// nothing else: a file where "skills" should be, a mode that
+			// forbids it, a link that loops. Every root is read, so one of
+			// these may be in a root that used to be ignored, and a
+			// leftover there must not take startup down. Said once, with
+			// the reason the system gave and not the path again.
+			var pe *fs.PathError
+			reason := err.Error()
+			if errors.As(err, &pe) {
+				reason = pe.Err.Error()
+			}
+			warnings = append(warnings, fmt.Sprintf("%s: the skills directory cannot be read: %s", dir, reason))
+			continue
 		}
 
 		for _, e := range entries {

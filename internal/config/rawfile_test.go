@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -91,5 +93,116 @@ func TestUpdateRawConfigRoundTripsThroughRename(t *testing.T) {
 	}
 	if cfg.DefaultProfile != "main" {
 		t.Errorf("DefaultProfile = %q, want main", cfg.DefaultProfile)
+	}
+}
+
+// The loader reads "mcp" and "mcpServers" as one list with mcp_servers, so
+// the writer has to. Otherwise "mcp remove" cannot find a server the loader
+// sees, and "mcp add" starts a second block beside it.
+func TestTheMCPWriterSeesServersWrittenUnderAnotherSpelling(t *testing.T) {
+	for _, spelling := range []string{"mcp", "mcpServers"} {
+		t.Run(spelling, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			body := `{"keep":"me","` + spelling + `":{"old":{"command":"old-cmd"},"other":{"command":"other-cmd"}}}`
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			// remove a server that lives under the other spelling
+			if err := UpdateMCPServersInFile(path, func(servers map[string]MCPServerConfig) error {
+				if _, ok := servers["old"]; !ok {
+					return errors.New("old is not in the list the writer sees")
+				}
+				delete(servers, "old")
+				servers["new"] = MCPServerConfig{Command: "new-cmd"}
+				return nil
+			}); err != nil {
+				t.Fatalf("UpdateMCPServersInFile: %v", err)
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]json.RawMessage
+			if err := json.Unmarshal(data, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if _, still := doc[spelling]; still {
+				t.Errorf("the %q block is still there beside mcp_servers: %s", spelling, data)
+			}
+			if string(doc["keep"]) != `"me"` {
+				t.Errorf("another key was changed: %s", data)
+			}
+			var servers map[string]MCPServerConfig
+			if err := json.Unmarshal(doc["mcp_servers"], &servers); err != nil {
+				t.Fatal(err)
+			}
+			if len(servers) != 2 || servers["other"].Command != "other-cmd" || servers["new"].Command != "new-cmd" {
+				t.Errorf("servers = %+v, want other and new only", servers)
+			}
+		})
+	}
+}
+
+func TestTheMCPWriterRefusesAServerNamedUnderTwoSpellings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	before := `{"mcp_servers":{"same":{"command":"a"}},"mcpServers":{"same":{"command":"b"}}}`
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := UpdateMCPServersInFile(path, func(map[string]MCPServerConfig) error { return nil })
+	if err == nil {
+		t.Fatal("one server named under two spellings was accepted, so one of them would be dropped")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != before {
+		t.Errorf("the file was changed by a refused write: %s", after)
+	}
+}
+
+// A rewrite that changes nothing must not change what the loader sees. The
+// entries below are what each program writes: opencode's command array and
+// environment map, Claude Code's type "http" with headers, and localcode's
+// own shape. They are read from one spelling and written under mcp_servers,
+// so a field the writer did not carry across would be a server that starts
+// differently after "mcp add" on some other server.
+func TestTheMCPWriterRewritesEveryShapeWithoutChangingWhatTheLoaderSees(t *testing.T) {
+	blocks := map[string]string{
+		"mcp": `{"files":{"type":"local","command":["npx","-y","pkg","--flag"],"environment":{"K":"V"},"enabled":false},` +
+			`"docs":{"type":"remote","url":"https://example.test/mcp","headers":{"Authorization":"Bearer x"},"timeout":4000}}`,
+		"mcpServers": `{"files":{"command":"npx","args":["-y","pkg"],"env":{"K":"V"}},` +
+			`"docs":{"type":"http","url":"https://example.test/mcp","headers":{"Authorization":"Bearer x"}},` +
+			`"events":{"type":"sse","url":"https://example.test/sse"}}`,
+		"mcp_servers": `{"files":{"command":"npx","args":["-y","pkg"],"env":{"K":"V"},"cwd":"/work","enabled":true}}`,
+	}
+	for spelling, block := range blocks {
+		t.Run(spelling, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			body := strings.TrimSuffix(workingLocalcode, "}") + `,"` + spelling + `":` + block + `}`
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before, _, err := Load(path)
+			if err != nil {
+				t.Fatalf("the file does not load before the rewrite: %v", err)
+			}
+			if len(before.MCPServers) == 0 {
+				t.Fatalf("no servers were read from %q", spelling)
+			}
+
+			if err := UpdateMCPServersInFile(path, func(map[string]MCPServerConfig) error { return nil }); err != nil {
+				t.Fatalf("UpdateMCPServersInFile: %v", err)
+			}
+			after, _, err := Load(path)
+			if err != nil {
+				data, _ := os.ReadFile(path)
+				t.Fatalf("the file does not load after the rewrite: %v\n%s", err, data)
+			}
+			if !reflect.DeepEqual(before.MCPServers, after.MCPServers) {
+				data, _ := os.ReadFile(path)
+				t.Errorf("the rewrite changed the servers\nbefore: %+v\nafter:  %+v\nfile:   %s", before.MCPServers, after.MCPServers, data)
+			}
+		})
 	}
 }

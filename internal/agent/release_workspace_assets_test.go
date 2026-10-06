@@ -33,7 +33,7 @@ func wireWorkspaceReload(t *testing.T, loop *Loop, home string) {
 	loop.ReloadSkills = func() (string, error) {
 		project := userdirs.At(loop.GetProjectDir())
 		global := userdirs.At(home)
-		list, err := skills.LoadAll(project.Skills, global.Skills)
+		list, err := skills.LoadAll(userdirs.SkillDirs(loop.GetProjectDir(), home)...)
 		if err != nil {
 			return "", err
 		}

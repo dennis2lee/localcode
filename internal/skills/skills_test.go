@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -329,6 +330,114 @@ func TestOneDirectoryGivenTwiceIsReadOnce(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].Name != "good" {
 		t.Errorf("loaded %d skill(s), want the one that reads", len(list))
+	}
+}
+
+// Every root is read now, so a root that used to lose is read too, and what
+// is in it is anybody's guess: a leftover file where "skills" should be, a
+// directory somebody made unreadable, a link that goes round in a circle.
+// Each of those costs that directory its skills and nothing else, with one
+// line saying which directory and why. None of them stops the load.
+func TestADirectoryThatCannotBeListedIsOneWarningAndNothingElse(t *testing.T) {
+	root := t.TempDir()
+	good := filepath.Join(root, "good")
+	writeSkill(t, good, "fine", "name: fine\ndescription: still loads", "body")
+
+	file := filepath.Join(root, "a-file")
+	if err := os.WriteFile(file, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	list, warnings, err := LoadAllWithWarnings(file, good)
+	if err != nil {
+		t.Fatalf("a file where a skills directory should be stopped the load: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "fine" {
+		t.Errorf("loaded %+v, want the skill from the directory that can be read", list)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], file) || !strings.Contains(warnings[0], "cannot be read") {
+		t.Errorf("warnings = %v, want one naming %s", warnings, file)
+	}
+	if strings.Count(warnings[0], file) != 1 {
+		t.Errorf("the path is said twice in %q", warnings[0])
+	}
+}
+
+func TestAnUnreadableSkillsDirectoryIsOneWarning(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("a directory mode cannot be made to refuse here")
+	}
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	writeSkill(t, locked, "hidden", "name: hidden\ndescription: behind a mode", "body")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	good := filepath.Join(root, "good")
+	writeSkill(t, good, "fine", "name: fine\ndescription: still loads", "body")
+
+	list, warnings, err := LoadAllWithWarnings(locked, good)
+	if err != nil {
+		t.Fatalf("a directory that cannot be read stopped the load: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "fine" || len(warnings) != 1 {
+		t.Errorf("loaded %+v with warnings %v", list, warnings)
+	}
+}
+
+func TestALinkThatGoesRoundIsOneWarning(t *testing.T) {
+	root := t.TempDir()
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	if err := os.Symlink(b, a); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	good := filepath.Join(root, "good")
+	writeSkill(t, good, "fine", "name: fine\ndescription: still loads", "body")
+
+	list, warnings, err := LoadAllWithWarnings(a, good)
+	if err != nil {
+		t.Fatalf("a link that loops stopped the load: %v", err)
+	}
+	if len(list) != 1 || len(warnings) != 1 {
+		t.Errorf("loaded %+v with warnings %v", list, warnings)
+	}
+}
+
+// Every root is read now, and the ordinary way to share one set of skills
+// between two agents is to link one root's directory to the other's. The
+// same files under two names were read twice and reported twice, so the
+// directory is judged by where it is, not by what it is called.
+func TestADirectoryReachedByALinkIsReadOnce(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "claude", "skills")
+	linked := filepath.Join(root, "opencode", "skills")
+	writeSkill(t, real, "good", "name: good\ndescription: fine", "body")
+	if err := os.MkdirAll(filepath.Join(real, "bad"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "bad", "SKILL.md"), []byte("# no frontmatter at all\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(linked), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, linked); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+
+	list, warnings, err := LoadAllWithWarnings(real, linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 {
+		t.Errorf("one unreadable skill, reached under two names, produced %d warnings: %v", len(warnings), warnings)
+	}
+	if len(list) != 1 || list[0].Name != "good" {
+		t.Errorf("loaded %+v, want the one skill that reads, once", list)
 	}
 }
 

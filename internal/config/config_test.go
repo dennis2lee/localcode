@@ -289,7 +289,12 @@ func TestMergeFieldsGuard(t *testing.T) {
 		"Instructions":  true,
 		"SubagentDepth": true,
 	}
-	intentionallyNotMerged := map[string]bool{}
+	intentionallyNotMerged := map[string]bool{
+		// The loader's input and not a setting: it is consumed when the file
+		// that holds it is read, laid under that file, and cleared. A merged
+		// Config carries no list, so there is nothing for merge() to copy.
+		"Include": true,
+	}
 
 	typ := reflect.TypeOf(Config{})
 	for i := 0; i < typ.NumField(); i++ {

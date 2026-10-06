@@ -39,18 +39,19 @@ const workingLocalcode = `{"providers":{"a":{"type":"anthropic","api_key":"k"}},
 	`"profiles":{"main":{"provider":"a","model":"claude-x"}},"default_profile":"main"}`
 
 // A machine with opencode installed, whose opencode config carries keys
-// localcode cannot honour, and a working localcode config beside it.
+// localcode cannot honour, listed by a working localcode config.
 //
 // This stopped localcode starting. The localcode file was fine; the
-// refusal came from a file written for another program, which localcode
-// had gone looking for on its own.
+// refusal came from a file written for another program. It was found on
+// its own then and is listed now, and either way another program's file is
+// not a reason this one cannot start.
 func TestSomebodyElsesConfigDoesNotStopLocalcodeStarting(t *testing.T) {
 	home, repo := homeAndRepo(t)
-	writeAt(t, filepath.Join(home, ".config", "opencode"), "opencode.json",
+	oc := writeAt(t, filepath.Join(home, ".config", "opencode"), "opencode.json",
 		`{"lsp":{"go":{"command":["gopls"]}},"formatter":{"gofmt":{}},"share":"manual"}`)
-	writeAt(t, filepath.Join(home, ".localcode"), "config.json", workingLocalcode)
+	writeAt(t, filepath.Join(home, ".localcode"), "config.json", withInclude(t, workingLocalcode, oc))
 
-	cfg, notes, err := loadMergedFrom(configSources(home, repo, ""))
+	cfg, notes, err := loadAt(home, repo)
 	if err != nil {
 		t.Fatalf("localcode would not start because another program's config has keys it cannot honour: %v", err)
 	}
@@ -68,8 +69,15 @@ func TestARefusalInLocalcodesOwnFileStillStops(t *testing.T) {
 	home, repo := homeAndRepo(t)
 	writeAt(t, filepath.Join(home, ".localcode"), "config.json",
 		strings.TrimSuffix(workingLocalcode, "}")+`,"lsp":{"go":{}}}`)
-	if _, _, err := loadMergedFrom(configSources(home, repo, "")); err == nil {
+	_, _, err := loadAt(home, repo)
+	if err == nil {
 		t.Fatal("a key localcode cannot honour, written into localcode's own config, was accepted")
+	}
+	// The refusal itself, naming the key. Setting the file aside instead
+	// would also end in an error, "no config found", which says nothing
+	// about the key that was the problem.
+	if !strings.Contains(err.Error(), "lsp") || strings.Contains(err.Error(), "no config found") {
+		t.Errorf("the error is not the file's own refusal: %v", err)
 	}
 }
 
@@ -172,8 +180,9 @@ func TestAnAgentThatNamesNoModelTakesTheDefault(t *testing.T) {
 	home, repo := homeAndRepo(t)
 	writeAt(t, filepath.Join(home, ".localcode"), "config.json", workingLocalcode)
 	writeAt(t, repo, "opencode.json", `{"agent":{"worker":{"prompt":"help"}}}`)
+	writeAt(t, filepath.Join(repo, ".localcode"), "config.json", withInclude(t, "{}", "../opencode.json"))
 
-	cfg, _, err := loadMergedFrom(configSources(home, repo, ""))
+	cfg, _, err := loadAt(home, repo)
 	if err != nil {
 		t.Fatalf("an ordinary opencode agent stopped the config loading: %v", err)
 	}
@@ -193,8 +202,9 @@ func TestAnAgentSettingWithNothingToAttachToIsReported(t *testing.T) {
 	home, repo := homeAndRepo(t)
 	writeAt(t, filepath.Join(home, ".localcode"), "config.json", workingLocalcode)
 	writeAt(t, repo, "opencode.json", `{"agent":{"writer":{"temperature":0.7,"prompt":"x"}}}`)
+	writeAt(t, filepath.Join(repo, ".localcode"), "config.json", withInclude(t, "{}", "../opencode.json"))
 
-	cfg, notes, err := loadMergedFrom(configSources(home, repo, ""))
+	cfg, notes, err := loadAt(home, repo)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -284,36 +294,17 @@ func TestAnEnvironmentVariableWorksInAValueTheNormaliserReads(t *testing.T) {
 	}
 }
 
-// Two spellings of the file in somebody's opencode directory is theirs to
-// sort out, not a reason localcode cannot start.
-func TestTwoSpellingsInTheirDirectoryDoNotStopLocalcodeStarting(t *testing.T) {
-	home, repo := homeAndRepo(t)
-	dir := filepath.Join(home, ".config", "opencode")
-	writeAt(t, dir, "opencode.json", `{"model":"a/m"}`)
-	writeAt(t, dir, "opencode.jsonc", `{"model":"a/m"}`)
-	writeAt(t, filepath.Join(home, ".localcode"), "config.json", workingLocalcode)
-
-	cfg, notes, err := loadMergedFrom(configSources(home, repo, ""))
-	if err != nil {
-		t.Fatalf("localcode would not start because their directory has two spellings: %v", err)
-	}
-	if cfg.DefaultProfile != "main" {
-		t.Errorf("default_profile = %q, want the localcode file's", cfg.DefaultProfile)
-	}
-	if !strings.Contains(strings.Join(notes, " "), "set aside") {
-		t.Errorf("nothing said about the pair that was set aside: %v", notes)
-	}
-}
-
 // The ordinary opencode layout: providers and credentials in the global
 // file, and a repository carrying only the model it wants.
 func TestAProjectFileMayNameAProviderDefinedInAnotherFile(t *testing.T) {
 	home, repo := homeAndRepo(t)
-	writeAt(t, filepath.Join(home, ".config", "opencode"), "opencode.json",
+	global := writeAt(t, filepath.Join(home, ".config", "opencode"), "opencode.json",
 		`{"provider":{"anthropic":{"npm":"@ai-sdk/anthropic","options":{"apiKey":"k"}}}}`)
 	writeAt(t, repo, "opencode.json", `{"model":"anthropic/claude-sonnet-4-5"}`)
+	writeAt(t, filepath.Join(home, ".localcode"), "config.json", withInclude(t, "{}", global))
+	writeAt(t, filepath.Join(repo, ".localcode"), "config.json", withInclude(t, "{}", "../opencode.json"))
 
-	cfg, notes, err := loadMergedFrom(configSources(home, repo, ""))
+	cfg, notes, err := loadAt(home, repo)
 	if err != nil {
 		t.Fatalf("a project file naming a provider from the global file was refused: %v", err)
 	}
@@ -328,7 +319,8 @@ func TestAProjectFileMayNameAProviderDefinedInAnotherFile(t *testing.T) {
 	home2, repo2 := homeAndRepo(t)
 	writeAt(t, filepath.Join(home2, ".localcode"), "config.json", workingLocalcode)
 	writeAt(t, repo2, "opencode.json", `{"model":"nowhere/some-model"}`)
-	if _, notes, err := loadMergedFrom(configSources(home2, repo2, "")); err == nil &&
+	writeAt(t, filepath.Join(repo2, ".localcode"), "config.json", withInclude(t, "{}", "../opencode.json"))
+	if _, notes, err := loadAt(home2, repo2); err == nil &&
 		!strings.Contains(strings.Join(notes, " "), "set aside") {
 		t.Error("a model naming a provider nothing defines was accepted everywhere")
 	}
@@ -337,10 +329,10 @@ func TestAProjectFileMayNameAProviderDefinedInAnotherFile(t *testing.T) {
 // A file that was set aside is a line about a file, not about a key.
 func TestASetAsideFileIsNotReportedAsAnIgnoredKey(t *testing.T) {
 	home, repo := homeAndRepo(t)
-	writeAt(t, filepath.Join(home, ".config", "opencode"), "opencode.json", `{"lsp":{"go":{}}}`)
-	writeAt(t, filepath.Join(home, ".localcode"), "config.json", workingLocalcode)
+	oc := writeAt(t, filepath.Join(home, ".config", "opencode"), "opencode.json", `{"lsp":{"go":{}}}`)
+	writeAt(t, filepath.Join(home, ".localcode"), "config.json", withInclude(t, workingLocalcode, oc))
 
-	_, notes, err := loadMergedFrom(configSources(home, repo, ""))
+	_, notes, err := loadAt(home, repo)
 	if err != nil {
 		t.Fatal(err)
 	}

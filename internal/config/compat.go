@@ -197,40 +197,50 @@ func NormalizeOpencode(raw []byte) (Normalized, error) {
 	var synthesised []string
 	changed := false
 
-	// Step 1: mcp -> mcp_servers
-	// Both present -> refuse naming both.
-	// Only mcp present -> rename to mcp_servers.
-	rawMCP, hasMCP := root["mcp"]
-	rawMCPServers, hasMCPServers := root["mcp_servers"]
-	if hasMCP && hasMCPServers {
-		// Two spellings of one block, and unlike a scalar key they can
-		// hold different things: "mcp" naming one server and
-		// "mcp_servers" another is two halves of one list rather than a
-		// contradiction, so they are joined. What is not joinable is a
-		// server named in both — that is the file saying two things about
-		// one server, and picking a winner would leave the other read by
-		// nobody.
-		merged, clash, ok := mergeServerBlocks(rawMCP, rawMCPServers)
+	// Step 1: mcp, mcpServers -> mcp_servers
+	//
+	// opencode spells the block "mcp" and Claude Code spells it
+	// "mcpServers", in .mcp.json and in ~/.claude.json, and the entries
+	// have the shape mcp_servers takes. A file listed under "include" is
+	// where a Claude Code user's servers arrive from, so its spelling has
+	// to be one this accepts.
+	//
+	// Either one beside mcp_servers, or both beside each other, is two
+	// spellings of one block. Unlike a scalar key they can hold different
+	// things: "mcp" naming one server and "mcp_servers" another is two
+	// halves of one list rather than a contradiction, so they are joined.
+	// What is not joinable is a server named in both — that is the file
+	// saying two things about one server, and picking a winner would leave
+	// the other read by nobody.
+	for _, spelling := range []string{"mcp", "mcpServers"} {
+		raw, has := root[spelling]
+		if !has {
+			continue
+		}
+		existing, hasServers := root["mcp_servers"]
+		if !hasServers {
+			root["mcp_servers"] = raw
+			delete(root, spelling)
+			changed = true
+			continue
+		}
+		merged, clash, ok := mergeServerBlocks(raw, existing)
 		switch {
 		case !ok:
 			refusals = append(refusals, refusal{
-				path: "mcp",
-				msg:  `mcp and mcp_servers are both there and at least one of them is not an object of servers; keep one of them`,
+				path: spelling,
+				msg:  fmt.Sprintf(`%s and mcp_servers are both there and at least one of them is not an object of servers; keep one of them`, spelling),
 			})
 		case clash != "":
 			refusals = append(refusals, refusal{
-				path: "mcp." + clash,
-				msg:  fmt.Sprintf(`server %q is in both "mcp" and "mcp_servers"; keep one of them`, clash),
+				path: spelling + "." + clash,
+				msg:  fmt.Sprintf(`server %q is in both %q and "mcp_servers"; keep one of them`, clash, spelling),
 			})
 		default:
 			root["mcp_servers"] = merged
-			delete(root, "mcp")
+			delete(root, spelling)
 			changed = true
 		}
-	} else if hasMCP {
-		root["mcp_servers"] = root["mcp"]
-		delete(root, "mcp")
-		changed = true
 	}
 
 	// Step 1: tools -> permission

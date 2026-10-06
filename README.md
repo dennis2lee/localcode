@@ -43,7 +43,7 @@ Twenty-five SWE-bench Verified instances, one model, four agents. Claude Code re
 
 ## It reads what you already have
 
-`CLAUDE.md` and `AGENTS.md` with `@path` imports; skills and commands from `.claude`, `.opencode` or `.localcode`; your Claude Code MCP servers via `localcode mcp import-claude`; an `opencode.json` as it is. One daemon serves a terminal client, a browser client and a native window at once — run it on the box with the GPU, attach from a laptop.
+`CLAUDE.md` and `AGENTS.md` with `@path` imports; skills from `.claude`, `.opencode` and `.localcode`, all merged, and commands from the first of them; your Claude Code MCP servers via `localcode mcp import-claude` or by listing `.mcp.json`; an `opencode.json` as it is, when you list it under `include`. One daemon serves a terminal client, a browser client and a native window at once. Run it on the box with the GPU, attach from a laptop.
 
 ## Install
 

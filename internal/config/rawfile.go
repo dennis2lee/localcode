@@ -136,14 +136,39 @@ func updateRawSection(path, key string, update func(block map[string]json.RawMes
 func UpdateMCPServersInFile(path string, update func(servers map[string]MCPServerConfig) error) error {
 	return updateRawConfig(path, func(raw map[string]json.RawMessage) error {
 		servers := map[string]MCPServerConfig{}
-		if rawServers, ok := raw["mcp_servers"]; ok {
-			if err := json.Unmarshal(rawServers, &servers); err != nil {
-				return fmt.Errorf("parse mcp_servers in %s: %w", path, err)
+		// "mcp" (opencode's) and "mcpServers" (Claude Code's) are other
+		// spellings of the same block, and the loader reads all three as one
+		// list. So this does: the servers are the union, and what is written
+		// back goes under mcp_servers with the other spellings removed.
+		// Working on mcp_servers alone left "mcp remove" unable to find a
+		// server the loader sees under another spelling, and made "mcp add"
+		// start a second block beside it.
+		var otherSpellings []string
+		for _, key := range []string{"mcp_servers", "mcp", "mcpServers"} {
+			rawBlock, ok := raw[key]
+			if !ok {
+				continue
+			}
+			var block map[string]MCPServerConfig
+			if err := json.Unmarshal(rawBlock, &block); err != nil {
+				return fmt.Errorf("parse %s in %s: %w", key, path, err)
+			}
+			for name, sc := range block {
+				if _, twice := servers[name]; twice {
+					return fmt.Errorf("server %q is in %q and in another spelling of mcp_servers in %s; keep one of them", name, key, path)
+				}
+				servers[name] = sc
+			}
+			if key != "mcp_servers" {
+				otherSpellings = append(otherSpellings, key)
 			}
 		}
 
 		if err := update(servers); err != nil {
 			return err
+		}
+		for _, key := range otherSpellings {
+			delete(raw, key)
 		}
 
 		if len(servers) == 0 {

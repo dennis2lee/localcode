@@ -13,23 +13,34 @@ func mk(t *testing.T, parts ...string) {
 	}
 }
 
-// The first root that exists wins whole, and reading a config written for
-// opencode makes a repository carrying both .opencode and .localcode an
-// ordinary arrangement rather than an odd one. So the case this reports is
-// about to become common: somebody runs opencode once in their own
-// repository, and from then on localcode reads .opencode and their
-// .localcode/skills is unread with nothing saying so.
-func TestARootWithAssetsSaysSoWhenItLoses(t *testing.T) {
+// The first root that exists wins whole for commands, and a repository
+// carrying both .opencode and .localcode is an ordinary arrangement. So the
+// case this reports is not rare: somebody runs opencode once in their own
+// repository, and from then on localcode reads .opencode's commands and
+// their .localcode/commands is unread with nothing saying so.
+func TestARootWithCommandsSaysSoWhenItLoses(t *testing.T) {
 	dir := t.TempDir()
 	mk(t, dir, ".opencode")
-	mk(t, dir, ".localcode", "skills")
+	mk(t, dir, ".localcode", "commands")
 
 	got := At(dir)
 	if got.Chosen != ".opencode" {
 		t.Fatalf("chosen = %q, want .opencode — first existing root wins", got.Chosen)
 	}
 	if len(got.Shadowed) != 1 || got.Shadowed[0] != ".localcode" {
-		t.Errorf("shadowed = %v, want [.localcode], which has skills in it and is not read", got.Shadowed)
+		t.Errorf("shadowed = %v, want [.localcode], which has commands in it and is not read", got.Shadowed)
+	}
+}
+
+// Skills are never lost to a root that comes first, since every root is
+// read, so a skills directory is not a reason to say anything.
+func TestARootWithOnlySkillsLosesNothing(t *testing.T) {
+	dir := t.TempDir()
+	mk(t, dir, ".opencode", "commands")
+	mk(t, dir, ".localcode", "skills")
+
+	if got := At(dir); len(got.Shadowed) != 0 {
+		t.Errorf("shadowed = %v, want none: the loser had skills only, and those are read", got.Shadowed)
 	}
 }
 
@@ -38,18 +49,18 @@ func TestARootWithAssetsSaysSoWhenItLoses(t *testing.T) {
 // learn to skip past.
 func TestARootWithNothingInItIsNotWorthAWord(t *testing.T) {
 	dir := t.TempDir()
-	mk(t, dir, ".opencode", "skills")
+	mk(t, dir, ".opencode", "commands")
 	mk(t, dir, ".localcode")
 
 	if got := At(dir); len(got.Shadowed) != 0 {
-		t.Errorf("shadowed = %v, want none: the loser had no skills and no commands", got.Shadowed)
+		t.Errorf("shadowed = %v, want none: the loser had no commands", got.Shadowed)
 	}
 }
 
 // opencode names its commands directory in the singular, and that counts.
 func TestTheSingularCommandDirectoryCounts(t *testing.T) {
 	dir := t.TempDir()
-	mk(t, dir, ".claude", "skills")
+	mk(t, dir, ".claude", "commands")
 	mk(t, dir, ".opencode", "command")
 
 	got := At(dir)
@@ -65,7 +76,7 @@ func TestTheSingularCommandDirectoryCounts(t *testing.T) {
 // lost, nothing said.
 func TestOneRootShadowsNothing(t *testing.T) {
 	dir := t.TempDir()
-	mk(t, dir, ".localcode", "skills")
+	mk(t, dir, ".localcode", "commands")
 	if got := At(dir); len(got.Shadowed) != 0 {
 		t.Errorf("shadowed = %v, want none", got.Shadowed)
 	}

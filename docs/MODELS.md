@@ -287,7 +287,7 @@ Set `-1` to disable a model's default continuation behavior. See [USAGE.md](USAG
 
 Set `base_url` to the OpenAI-compatible server that provides `/chat/completions`. For authentication, set `providers.<name>.api_key`. localcode sends it as `Authorization: Bearer <key>`. Confirm that any reverse proxy and firewall permit the connection.
 
-For an existing LiteLLM or similar proxy in opencode's `opencode.jsonc`, copy the `@ai-sdk/openai-compatible` provider's `baseURL` and `apiKey` values to `base_url` and `api_key`:
+For an existing LiteLLM or similar proxy in opencode's `opencode.jsonc`, copy the `@ai-sdk/openai-compatible` provider's `baseURL` and `apiKey` values to `base_url` and `api_key`, or list the file under `include` in your config.json to have it read as it stands (see [Reading a config written for opencode or Claude Code](USAGE.md#reading-a-config-written-for-opencode-or-claude-code)):
 
 ```json
 {
