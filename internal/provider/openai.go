@@ -68,8 +68,13 @@ type oaImageURL struct {
 // string is not the same thing to all of them. LiteLLM rewrites "" in an
 // assistant turn into a placeholder sentence before passing it to an
 // Anthropic-shaped backend, which would put that sentence into every
-// tool-calling turn of the history. With no tool calls there is nothing
-// for null to stand beside, so it is "".
+// tool-calling turn of the history.
+//
+// "" everywhere else. Without tool calls, null is not a value the API
+// allows, and Ollama refuses it ("invalid message content type"). The one
+// assistant turn that gets "" is one that held only reasoning, which is
+// rare, and LiteLLM gives it the placeholder sentence: Anthropic refuses
+// an empty assistant turn, so something has to stand there.
 func (m oaMessage) MarshalJSON() ([]byte, error) {
 	var content any = m.Content
 	switch {
@@ -291,7 +296,13 @@ func toOpenAIMessages(system string, msgs []Message) []oaMessage {
 				case BlockToolUse:
 					tc := oaToolCall{ID: b.ToolUseID, Type: "function"}
 					tc.Function.Name = b.ToolName
+					// "{}" for no input, as the Anthropic and Bedrock
+					// encoders send it. arguments is a JSON string, and ""
+					// is not JSON: Ollama and LiteLLM both parse it.
 					tc.Function.Arguments = string(b.ToolInput)
+					if len(b.ToolInput) == 0 {
+						tc.Function.Arguments = "{}"
+					}
 					calls = append(calls, tc)
 				}
 			}

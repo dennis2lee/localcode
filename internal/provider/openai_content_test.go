@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +69,10 @@ func TestEveryMessageOnTheOpenAIWireCarriesContent(t *testing.T) {
 		{Role: RoleAssistant, Content: []Block{thinking("nothing was said after this")}},
 		{Role: RoleUser, Content: []Block{TextBlock("what is in this picture"), ImageBlock("image/png", []byte{0x89, 'P', 'N', 'G'})}},
 		{Role: RoleAssistant, Content: []Block{TextBlock("A logo.")}},
+		{Role: RoleUser, Content: []Block{ImageBlock("image/png", []byte{0x89, 'P', 'N', 'G'})}},
+		{Role: RoleAssistant, Content: []Block{toolUse("tooluse_c", "list_tasks", "")}},
+		{Role: RoleUser, Content: []Block{ToolResultBlock("tooluse_c", "none", false)}},
+		{Role: RoleAssistant, Content: []Block{TextBlock("An image alone.")}},
 		{Role: RoleUser, Content: []Block{TextBlock("go on")}},
 	}
 	got := sentMessages(t, history)
@@ -82,8 +87,12 @@ func TestEveryMessageOnTheOpenAIWireCarriesContent(t *testing.T) {
 		{"assistant", `"Reading the README."`},
 		{"tool", `""`},
 		{"assistant", `""`},
-		{"user", ""}, // an array of parts, checked below
+		{"user", "parts:2"}, // the text and the image
 		{"assistant", `"A logo."`},
+		{"user", "parts:1"}, // the image alone
+		{"assistant", `null`},
+		{"tool", `"none"`},
+		{"assistant", `"An image alone."`},
 		{"user", `"go on"`},
 	}
 	if len(got) != len(want) {
@@ -102,10 +111,10 @@ func TestEveryMessageOnTheOpenAIWireCarriesContent(t *testing.T) {
 			t.Errorf("message %d (%s) has no \"content\" key: %s", i, role, raw)
 			continue
 		}
-		if w.content == "" {
+		if n, isParts := strings.CutPrefix(w.content, "parts:"); isParts {
 			var parts []oaContentPart
-			if err := json.Unmarshal(content, &parts); err != nil || len(parts) != 2 {
-				t.Errorf("message %d: content %s, want the text and the image as two parts", i, content)
+			if err := json.Unmarshal(content, &parts); err != nil || fmt.Sprint(len(parts)) != n {
+				t.Errorf("message %d: content %s, want %s part(s)", i, content, n)
 			}
 			continue
 		}
@@ -115,11 +124,16 @@ func TestEveryMessageOnTheOpenAIWireCarriesContent(t *testing.T) {
 	}
 
 	// The tool calls are still there beside the null, and the turn that
-	// had text kept both.
-	for _, i := range []int{2, 4} {
+	// had text kept both. A call with no input sends "{}", which is JSON,
+	// as every server parsing arguments needs it to be.
+	for i, args := range map[int]string{2: `{"command":"ls"}`, 4: `{"path":"README.md"}`, 10: `{}`} {
 		var calls []oaToolCall
 		if err := json.Unmarshal(got[i]["tool_calls"], &calls); err != nil || len(calls) != 1 {
 			t.Errorf("message %d: tool_calls %s, want one call", i, got[i]["tool_calls"])
+			continue
+		}
+		if calls[0].Function.Arguments != args {
+			t.Errorf("message %d: arguments %q, want %q", i, calls[0].Function.Arguments, args)
 		}
 	}
 }
@@ -141,6 +155,7 @@ func TestTheContentOfEachMessageShape(t *testing.T) {
 		{"an empty tool result is an empty string", oaMessage{Role: "tool", ToolCallID: "c1"}, `""`},
 		{"text is text", oaMessage{Role: "user", Content: "hi"}, `"hi"`},
 		{"parts are an array", oaMessage{Role: "user", Content: "hi", MultiContent: []oaContentPart{{Type: "text", Text: "hi"}}}, `[{"type":"text","text":"hi"}]`},
+		{"an image with no text is still an array", oaMessage{Role: "user", MultiContent: []oaContentPart{{Type: "image_url", ImageURL: &oaImageURL{URL: "data:image/png;base64,AA=="}}}}, `[{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

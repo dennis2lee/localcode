@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -567,8 +568,27 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// session's life. sendableHistory would drop it anyway; not
 		// recording it keeps the in-memory history honest, and matches
 		// what rehydrateHistory already reconstructs from the log.
+		// Calls this reply makes that will not be run, for one of the two
+		// reasons below. Each is answered with a result saying so, the way
+		// a cancelled call is, because every provider refuses a history
+		// holding a tool call with no result after it. These were left
+		// unanswered, and every request after the reply failed, on every
+		// provider, for the rest of the session.
+		//
+		// A call from a reply cut off mid-write may also carry arguments
+		// that stop partway, which is not JSON. The Anthropic adapter
+		// cannot encode that, and a server parsing OpenAI arguments
+		// refuses it. Its input goes into the history as "{}", and the
+		// result says the arguments did not arrive whole.
+		notRun, notRunWhy := callsNotRun(toolUses, forceTextOnly, stopReason)
+		if len(notRun) > 0 {
+			assistantBlocks = withSendableInputs(assistantBlocks, notRun)
+		}
 		if len(assistantBlocks) > 0 {
 			l.appendHistory(sessionID, provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})
+		}
+		if len(notRun) > 0 {
+			l.answerCallsNotRun(sessionID, notRun, notRunWhy)
 		}
 
 		// A reply that asked for tools is answered by running them,
@@ -794,6 +814,69 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 			return nil
 		}
 	}
+}
+
+// callsNotRun is the tool calls in a reply that the turn will not run, and
+// the result each one gets instead. Nothing for a reply that will run its
+// calls.
+//
+// The two cases are the ones the turn below drops: a reply cut off by
+// max_tokens, whose last call may be half written, and a reply that came
+// after the agent's step limit, when the request offered no tools and the
+// server sent calls anyway.
+func callsNotRun(toolUses []provider.Block, forceTextOnly bool, stopReason string) ([]provider.Block, string) {
+	switch {
+	case len(toolUses) == 0:
+		return nil, ""
+	case forceTextOnly:
+		return toolUses, "not run: this agent had reached its limit of tool-using steps for the turn"
+	case stopReason == "max_tokens":
+		return toolUses, "not run: the reply was cut off at its max_tokens limit, so the arguments may not have arrived whole"
+	}
+	return nil, ""
+}
+
+// withSendableInputs is blocks with the input of each call in calls made
+// sendable: "{}" in place of anything that is not JSON. The slice is
+// copied, so the reply as it arrived is not changed under anyone else.
+func withSendableInputs(blocks, calls []provider.Block) []provider.Block {
+	ids := make(map[string]bool, len(calls))
+	for _, c := range calls {
+		ids[c.ToolUseID] = true
+	}
+	out := make([]provider.Block, len(blocks))
+	copy(out, blocks)
+	for i, b := range out {
+		if b.Type == provider.BlockToolUse && ids[b.ToolUseID] {
+			out[i].ToolInput = sendableInput(b.ToolInput)
+		}
+	}
+	return out
+}
+
+func sendableInput(raw json.RawMessage) json.RawMessage {
+	if json.Valid(raw) {
+		return raw
+	}
+	return json.RawMessage("{}")
+}
+
+// answerCallsNotRun gives each call a result that says it was not run,
+// in the history and in the log, the way runTools answers a call after a
+// cancel. The log entry is what lets a restarted daemon rebuild the same
+// pair: rehydrateHistory keeps a call only once its tool.end has arrived.
+func (l *Loop) answerCallsNotRun(sessionID string, calls []provider.Block, why string) {
+	results := make([]provider.Block, 0, len(calls))
+	for _, tu := range calls {
+		l.Store.Append(sessionID, events.TypeToolEnd, map[string]any{
+			"tool_use_id": tu.ToolUseID,
+			"content":     why,
+			"is_error":    true,
+			"input":       string(sendableInput(tu.ToolInput)),
+		})
+		results = append(results, provider.ToolResultBlock(tu.ToolUseID, why, true))
+	}
+	l.appendHistory(sessionID, provider.Message{Role: provider.RoleUser, Content: results})
 }
 
 func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provider.Block, allowedTools []string, window int) (blocks []provider.Block, refused, ended bool) {

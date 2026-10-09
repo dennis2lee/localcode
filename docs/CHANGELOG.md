@@ -2,15 +2,22 @@
 
 ## v0.154.1
 
-A conversation moved to an OpenAI-compatible endpoint behind a LiteLLM proxy keeps going.
+A conversation keeps going after it moves to an OpenAI-compatible endpoint behind a LiteLLM proxy, and after a reply that was cut off in the middle of a tool call.
 
 **Fixed**
 
 * **A LiteLLM proxy refused a conversation that had called tools, with `AnthropicException - 'content'`**
-  * The OpenAI-compatible adapter left `content` out of every message with no text: an assistant turn that only called tools, a tool result that came back empty, and an assistant turn that held only reasoning. A LiteLLM proxy forwarding to an Anthropic-shaped backend answered 400 naming the missing key: its tool-result conversion reads `content` without checking that it is there. A session started on Bedrock or the Anthropic API and switched to such an endpoint carried many of these turns.
+  * The OpenAI-compatible adapter left `content` out of every message with no text: an assistant turn that only called tools, a tool result that came back empty, and an assistant turn that held only reasoning.
+  * A LiteLLM proxy forwarding to an Anthropic-shaped backend answered 400 naming the missing key. Its tool-result conversion reads `content` without checking that it is there.
+  * A session started on Bedrock or the Anthropic API and switched to such an endpoint carried many of these turns.
   * Every message now carries `content`. An assistant turn that only calls tools sends `null`, which is what OpenAI returns for such a turn. A tool result or an assistant turn with nothing in it sends `""`.
-  * `null` rather than `""` for tool calls alone, because LiteLLM rewrites an empty assistant `content` into a placeholder sentence before an Anthropic-shaped backend sees it.
-  * llama.cpp refused the turn that held only reasoning, with "Expected 'content' or 'tool_calls'". It reads the same fix.
+  * Tool calls alone send `null` and not `""`, because LiteLLM rewrites an empty assistant `content` into a placeholder sentence before an Anthropic-shaped backend sees it.
+  * llama.cpp refused the assistant turn that held only reasoning, with "Expected 'content' or 'tool_calls'". It accepts the turn now.
+* **A reply cut off in the middle of a tool call broke the session on every provider**
+  * A reply that ran into `max_tokens` left its tool calls in the history without results. Anthropic, Bedrock and OpenAI-compatible servers all refuse that, so every later request failed until the daemon was restarted.
+  * The same happened to tool calls a server sent after the agent's step limit, when the request had offered no tools.
+  * Each such call now gets a result saying it was not run and why. The call is still not run.
+  * A call cut off in the middle of its arguments goes into the history with `{}` as its input, because the half-written arguments are not JSON.
 
 ## v0.154.0
 
