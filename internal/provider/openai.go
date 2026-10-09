@@ -32,7 +32,7 @@ func NewOpenAICompat(baseURL, apiKey string) *OpenAICompat {
 
 type oaMessage struct {
 	Role         string          `json:"role"`
-	Content      string          `json:"content,omitempty"`
+	Content      string          `json:"content"`
 	MultiContent []oaContentPart `json:"-"`
 	ToolCalls    []oaToolCall    `json:"tool_calls,omitempty"`
 	ToolCallID   string          `json:"tool_call_id,omitempty"`
@@ -48,23 +48,42 @@ type oaImageURL struct {
 	URL string `json:"url"`
 }
 
+// MarshalJSON writes "content" on every message, and null for an assistant
+// turn that is only tool calls.
+//
+// The key used to be left out whenever the text was empty: every assistant
+// turn that did nothing but call a tool, every tool result that came back
+// empty, and every assistant turn that held only reasoning. The API allows
+// the first. A LiteLLM proxy forwarding to a model in Anthropic's shape
+// did not: it answered 400 with "AnthropicException - 'content'", the name
+// of the missing key, and the session could not go on. Its tool-result
+// conversion reads the key without checking that it is there. A
+// conversation started on Bedrock and moved to such an endpoint carried
+// dozens of these turns. llama.cpp refuses the last shape, an assistant
+// turn with neither content nor tool_calls.
+//
+// Null for tool calls alone, because that is what OpenAI itself returns
+// for such a turn, so every server that takes its own replies back takes
+// it: LiteLLM, vLLM, llama.cpp and Ollama read null as no text. An empty
+// string is not the same thing to all of them. LiteLLM rewrites "" in an
+// assistant turn into a placeholder sentence before passing it to an
+// Anthropic-shaped backend, which would put that sentence into every
+// tool-calling turn of the history. With no tool calls there is nothing
+// for null to stand beside, so it is "".
 func (m oaMessage) MarshalJSON() ([]byte, error) {
-	if len(m.MultiContent) > 0 {
-		type wireMultiMessage struct {
-			Role       string          `json:"role"`
-			Content    []oaContentPart `json:"content"`
-			ToolCalls  []oaToolCall    `json:"tool_calls,omitempty"`
-			ToolCallID string          `json:"tool_call_id,omitempty"`
-		}
-		return json.Marshal(wireMultiMessage{
-			Role:       m.Role,
-			Content:    m.MultiContent,
-			ToolCalls:  m.ToolCalls,
-			ToolCallID: m.ToolCallID,
-		})
+	var content any = m.Content
+	switch {
+	case len(m.MultiContent) > 0:
+		content = m.MultiContent
+	case m.Content == "" && len(m.ToolCalls) > 0:
+		content = nil
 	}
-	type plain oaMessage
-	return json.Marshal(plain(m))
+	return json.Marshal(struct {
+		Role       string       `json:"role"`
+		Content    any          `json:"content"`
+		ToolCalls  []oaToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string       `json:"tool_call_id,omitempty"`
+	}{m.Role, content, m.ToolCalls, m.ToolCallID})
 }
 
 type oaToolCall struct {
