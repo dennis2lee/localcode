@@ -712,9 +712,11 @@ type Profile struct {
 	// it is done, even the question is a request spent after every task.
 	KeepGoing int `json:"keep_going,omitempty"`
 
-	// Vision says whether this model is sent images: offered view_image,
-	// which attaches an image file to the conversation. Nil means "a
-	// Claude model can, anything else cannot"; see ViewsImages.
+	// Vision says whether this model is sent images: the ones a person
+	// pastes, the ones already in the conversation, and view_image's,
+	// which it is offered only when this is true. A model that is not
+	// sent images gets a note where each one was. Nil means "a Claude
+	// model can, anything else cannot"; see ViewsImages.
 	//
 	// A setting rather than a guess for everything else, because an image
 	// sent to a model that cannot take one is not a wrong answer, it is a

@@ -428,6 +428,9 @@ func TestAutoCompactionDoesNotProbeForAnEmptyConversation(t *testing.T) {
 // one does.
 func TestTheMeasuredImagesSurviveARestart(t *testing.T) {
 	loop, sid := scriptedLoop(t, &scriptedProvider{turns: [][]provider.StreamEvent{cachedCall("seen")}}, tools.NewRegistry(nil))
+	// A model that is sent images, or the request measured has none.
+	sees := true
+	loop.Config.Profiles["balanced"] = config.Profile{Provider: "local", Model: "m", Vision: &sees}
 	img := provider.Block{Type: provider.BlockImage, MediaType: "image/png", Data: []byte("png")}
 	if err := loop.SendMessage(context.Background(), sid, "general-purpose", "look", img, img); err != nil {
 		t.Fatalf("turn: %v", err)

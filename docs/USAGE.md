@@ -413,7 +413,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `top_p` | Nucleus sampling threshold, above 0 and at most 1. `1.0` truncates nothing. Omit the key to send nothing at all. Reaches OpenAI-compatible, Anthropic, and Bedrock. Dropped while a Claude model is reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
 | `top_k` | Only sample from the top K candidates at each step. `0` is no limit on vLLM. Omit the key to send nothing at all. Native on Anthropic, in `additionalModelRequestFields` on Bedrock, and a vLLM extension on OpenAI-compatible servers. Dropped while reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
 | `effort` | How hard this model is asked to think. Unset sends nothing at all. See [Effort](#effort). |
-| `vision` | Whether this model is sent images, which offers it `view_image`. Unset means true for a model whose id contains `claude` and false for every other. Set `true` on a local model that can see. A model that cannot see is never offered the tool and never sent a tool's image, because its server would refuse the image on every later request. |
+| `vision` | Whether this model is sent images: pasted ones, the ones already in the conversation, and `view_image`'s, which it is offered only when this is true. Unset means true for a model whose id contains `claude` and false for every other. Set `true` on any other model that can see. A model that is not sent images gets a note where each image was, so a conversation moved to it goes on. See [Pasting an image](#pasting-an-image). |
 | `keep_going` | Per-profile budget: maximum automatic continuations for Muse models. Zero or unset: 3. `-1`: disabled. Ignored for other model families. This numeric per-profile setting is different from the daemon-wide top-level `keep_going` switch. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
 | `fallback` | Other profile names to try, in order, when a request to this one fails for a reason another model could survive. Read only with [Smart Agent](#smart-agent) on. See [Fallback chains](#fallback-chains-when-a-model-will-not-answer). |
 | `context_window` | Total input and output limit. Discovery uses `GET /v1/models` or llama.cpp `/props`, then model-ID matching, then 128k. An explicit value overrides discovery. Do not exceed the model's actual limit. |
@@ -1853,7 +1853,11 @@ Pasting an image into the prompt box attaches it to the message, and the model r
 
 PNG, JPEG, GIF and WEBP, and **ten megabytes for one message** counting every image in it together. Both are checked as you paste, naming the type or the limit, rather than after a turn has started. The bytes are sent as pasted — nothing is resized or re-encoded.
 
-The model has to be able to see. Which models can is not something localcode can know in advance — a list would be wrong the day a new model ships, and what a Bedrock account allows is not published anywhere localcode can read — so the image is sent and a refusal is reported as one: the turn fails saying that model appears not to accept images and suggesting `/model`. Nothing needs to be declared in `config.json`.
+The model has to be sent images, which the profile's `vision` key decides. A Claude model is sent images unless its profile says `"vision": false`. Any other model is sent images only with `"vision": true`.
+
+* **A model that is not sent images:** each image is replaced by a note to the model saying an image was there. The transcript shows a notice naming the model and the profile to change.
+* **Images already in the conversation:** the same rule applies on every request. A conversation moved with `/model` to a model that cannot see goes on, and moving back sends the images again.
+* **A model that is sent images and refuses them:** the turn fails with a hint to set `"vision": false` on its profile or to switch with `/model`. Sending the message again does not help, because the image is in the conversation.
 
 A pasted image is stored in the conversation, so it is still there after a restart, which is also why a session log with images is much larger than one without. [Compaction](#compact) drops them: an image cannot go into a text summary, so the summary says how many were omitted and the model keeps knowing a picture was discussed without still holding it.
 

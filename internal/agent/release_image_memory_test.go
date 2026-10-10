@@ -28,12 +28,15 @@ func (v *validatingProvider) Chat(ctx context.Context, req provider.ChatRequest)
 }
 
 func newTestLoop(store *session.Store, p provider.Provider) *Loop {
+	// A model that is sent images, which every test here is about: one that
+	// is not gets a note where each image was. See requestHistory.
+	sees := true
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{
 			"mock": {Type: config.ProviderOpenAICompat},
 		},
 		Profiles: map[string]config.Profile{
-			"default": {Provider: "mock", Model: "mock-model"},
+			"default": {Provider: "mock", Model: "mock-model", Vision: &sees},
 		},
 		Agents: map[string]config.AgentConfig{
 			"general-purpose": {Profile: "default"},

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.155.1
+
+A conversation moved to a model that cannot see goes on.
+
+**Fixed**
+
+* Every request refused after a conversation with images moved to a model that cannot see, by `/model` or by fallback
+
+**Changed**
+
+* Images sent only to a model with `vision` on (the default for Claude); any other model gets a note in place of each image, and the transcript a notice
+  * For a non-Claude model that can see, set `"vision": true` on its profile.
+
 ## v0.155.0
 
 Delegation belongs to orchestration, a model that can see opens image files, and a sub-agent no longer hands its task back to itself.

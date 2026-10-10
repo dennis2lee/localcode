@@ -449,6 +449,11 @@ func TestVisionRefusalClassifierDistinguishesRefusals(t *testing.T) {
 				if !strings.Contains(s, "/model") {
 					t.Errorf("wrapped error %q missing '/model' hint", s)
 				}
+				// The image stays in the conversation, so the setting that
+				// leaves it out is the fix, not sending again without it.
+				if !strings.Contains(s, `"vision": false`) {
+					t.Errorf("wrapped error %q does not name the vision setting", s)
+				}
 			} else {
 				// For non-refusal errors, error must be returned unmodified.
 				if tc.err == nil {

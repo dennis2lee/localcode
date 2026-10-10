@@ -253,9 +253,22 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	toolSteps := 0
 	forceTextOnly := false
 
+	// The images the person attached to this turn's message, and whether
+	// they have been told those did not reach the model. Asked on every
+	// request rather than once, because a fallback can move the turn to a
+	// model that is not sent images after the first one was.
+	attachedImages := countImages([]provider.Message{{Content: openingImages}})
+	imagesNoticed := false
+
 	for {
-		history := l.history(sessionID)
-		messages := sendableHistory(history)
+		messages := l.requestHistory(ctx, sessionID)
+		if attachedImages > 0 && !viewsImages(ctx) && !imagesNoticed {
+			imagesNoticed = true
+			l.Store.Append(sessionID, events.TypeError, map[string]any{
+				"error":     imagesLeftOutNotice(run, attachedImages),
+				"recovered": true,
+			})
+		}
 		// Sized once, and kept: a notice about how this reply ended has to
 		// describe this request, and recomputing it after the reply would
 		// count the reply as input. See requestSizing.

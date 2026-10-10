@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"localcode/internal/config"
 )
 
 // A pasted image reaches the model as an image, through the real route.
@@ -21,6 +23,43 @@ import (
 // carries. A test that stops at the JSON would pass while the bytes went
 // nowhere, so this one reads what the model was actually sent.
 func TestAPastedImageReachesTheModel(t *testing.T) {
+	sees := true
+	sent := pasteThroughDaemon(t, &sees)
+
+	// base64 of the PNG header, which is what an OpenAI-compatible
+	// endpoint carries inside a data: URL.
+	const want = "iVBORw0KGgo"
+	if !strings.Contains(sent, "image_url") {
+		t.Errorf("the request carries no image block:\n%.400s", sent)
+	}
+	if !strings.Contains(sent, want) {
+		t.Errorf("the request does not carry the pasted bytes (%s):\n%.400s", want, sent)
+	}
+	if !strings.Contains(sent, "what is this") {
+		t.Errorf("the text that came with the image is missing:\n%.400s", sent)
+	}
+}
+
+// The same route to a model that is not sent images carries a note where
+// the image was, and the text that came with it.
+func TestAPastedImageIsLeftOutForAModelThatCannotSee(t *testing.T) {
+	sent := pasteThroughDaemon(t, nil)
+	if strings.Contains(sent, "image_url") || strings.Contains(sent, "iVBORw0KGgo") {
+		t.Errorf("a model that cannot see was sent the image:\n%.400s", sent)
+	}
+	if !strings.Contains(sent, "It was left out: this model is not sent images.") {
+		t.Errorf("no note where the image was:\n%.400s", sent)
+	}
+	if !strings.Contains(sent, "what is this") {
+		t.Errorf("the text that came with the image is missing:\n%.400s", sent)
+	}
+}
+
+// pasteThroughDaemon posts a message with a pasted PNG to a daemon whose
+// model has the given vision setting, and returns the first request body
+// the model received.
+func pasteThroughDaemon(t *testing.T, vision *bool) string {
+	t.Helper()
 	var mu sync.Mutex
 	var bodies []string
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,11 +72,12 @@ func TestAPastedImageReachesTheModel(t *testing.T) {
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
-	defer model.Close()
+	t.Cleanup(model.Close)
 
 	d := newTestDaemon(t, model.URL)
+	d.Loop.Config.Profiles["balanced"] = config.Profile{Provider: "local", Model: "test-model", Vision: vision}
 	srv := httptest.NewServer(d.Handler())
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	var sess struct {
 		ID string `json:"id"`
@@ -79,23 +119,9 @@ func TestAPastedImageReachesTheModel(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-
 	mu.Lock()
-	sent := bodies[0]
-	mu.Unlock()
-
-	// base64 of the PNG header, which is what an OpenAI-compatible
-	// endpoint carries inside a data: URL.
-	const want = "iVBORw0KGgo"
-	if !strings.Contains(sent, "image_url") {
-		t.Errorf("the request carries no image block:\n%.400s", sent)
-	}
-	if !strings.Contains(sent, want) {
-		t.Errorf("the request does not carry the pasted bytes (%s):\n%.400s", want, sent)
-	}
-	if !strings.Contains(sent, "what is this") {
-		t.Errorf("the text that came with the image is missing:\n%.400s", sent)
-	}
+	defer mu.Unlock()
+	return bodies[0]
 }
 
 // An unsupported type is refused by the route, naming the type, rather

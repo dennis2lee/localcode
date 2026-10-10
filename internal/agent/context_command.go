@@ -118,7 +118,7 @@ func (l *Loop) handleContextCommand(ctx context.Context, sessionID, agentName, d
 	// definitions, and the sources already in the history this session
 	// would send. A preview that named only the tools described a
 	// request missing every tool result the conversation is carrying.
-	history := sendableHistory(l.history(sessionID))
+	history := l.requestHistory(ctx, sessionID)
 	env.Manifest = env.Manifest.WithRuntimeEntries(
 		append(toolEntries(specs), historyEntries(history, l.isDelegatedSession(sessionID))...)...)
 	// The same adapter lowering the real request records, through the

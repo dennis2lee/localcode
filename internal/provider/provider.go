@@ -430,10 +430,15 @@ func isVisionRefusal(err error) bool {
 // wrapVisionRefusal turns an endpoint's refusal into the sentence
 // somebody can act on: which model would not take the image, and what to
 // do instead. Every other error passes through untouched.
+//
+// Sending the message again without the image is not one of the things to
+// do: the image is in the conversation and goes with every request after
+// it, to a model whose profile says it is sent images. The profile is what
+// changes that.
 func wrapVisionRefusal(err error, model string) error {
 	if !isVisionRefusal(err) {
 		return err
 	}
-	return fmt.Errorf("%w\n\nhint: %s appears not to accept images. Switch to a model with vision using "+
-		"\"/model\", or send the message without the image", err, model)
+	return fmt.Errorf("%w\n\nhint: %s appears not to accept images. Set \"vision\": false on its profile "+
+		"so images are left out of its requests, or switch to a model with vision using \"/model\"", err, model)
 }

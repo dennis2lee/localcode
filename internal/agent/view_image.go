@@ -11,11 +11,12 @@ import (
 )
 
 // Whether the model a turn runs on is sent images. Decided once per turn
-// from its profile (config.Profile.ViewsImages), and read by the two
-// places that act on it: hiddenTools, which offers view_image only to a
-// model that can use it, and takeImages, which keeps an image out of a
-// history that cannot carry one even when an agent's own tool list named
-// the tool.
+// from its profile (config.Profile.ViewsImages), and read by the places
+// that act on it: hiddenTools, which offers view_image only to a model
+// that can use it; takeImages, which keeps an image out of a history that
+// cannot carry one even when an agent's own tool list named the tool; and
+// requestHistory, which leaves the images already in the history out of a
+// request to a model that cannot take them.
 type viewsImagesKey struct{}
 
 func withViewsImages(ctx context.Context, yes bool) context.Context {
@@ -79,6 +80,67 @@ func takeImages(ctx context.Context, res *tools.Result, used *int) []provider.Bl
 	}
 	res.Images = kept
 	return kept
+}
+
+// requestHistory is the session's history as a request carries it: in a
+// shape every provider accepts (sendableHistory), and with its images only
+// for a model that is sent them.
+//
+// An image stays in the history for the rest of a session. A conversation
+// that pasted a screenshot on a model that can see and then moved to one
+// that cannot sent that screenshot on every request after the move, and a
+// server that takes no images refuses the whole request, so the session
+// could not go on even about something else. The model is told where each
+// image was instead, and the history keeps the image itself, so moving
+// back to a model that can see sends it again.
+func (l *Loop) requestHistory(ctx context.Context, sessionID string) []provider.Message {
+	msgs := sendableHistory(l.history(sessionID))
+	if viewsImages(ctx) {
+		return msgs
+	}
+	return imagesAsText(msgs)
+}
+
+// imagesAsText is msgs with each image replaced by a sentence saying it was
+// left out. A message holding an image gets a new block slice: the old one
+// is the stored history's.
+func imagesAsText(msgs []provider.Message) []provider.Message {
+	out := make([]provider.Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = m
+		var content []provider.Block
+		for j, b := range m.Content {
+			if b.Type != provider.BlockImage {
+				continue
+			}
+			if content == nil {
+				content = append([]provider.Block(nil), m.Content...)
+			}
+			content[j] = provider.TextBlock(fmt.Sprintf(
+				"[An image (%s) was here. It was left out: this model is not sent images.]", b.MediaType))
+		}
+		if content != nil {
+			out[i].Content = content
+		}
+	}
+	return out
+}
+
+// imagesLeftOutNotice tells the person that the images they attached did
+// not reach the model, and what makes them reach it. The model is told too,
+// but a person who pasted a screenshot should not have to learn from the
+// answer that it was never seen.
+func imagesLeftOutNotice(run modelRun, n int) string {
+	what := "the image attached to this message was"
+	if n > 1 {
+		what = fmt.Sprintf("the %d images attached to this message were", n)
+	}
+	fix := `set "vision": true on its profile`
+	if run.profileName != "" {
+		fix = fmt.Sprintf(`set "vision": true on profile %q`, run.profileName)
+	}
+	return fmt.Sprintf("%s is not sent images, so %s left out of the request. If the model can see images, %s.",
+		describeRun(run), what, fix)
 }
 
 // eventImages is images in the form the log records them, which is the
