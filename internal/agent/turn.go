@@ -107,6 +107,10 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// request no longer advertises.
 	allowedTools := l.toolsForTurn(ctx, agentCfg)
 	advertised := l.Tools.NamesFor(ctx, allowedTools)
+	// The list this turn started with. A fallback to a model that cannot
+	// see narrows it and a later one to a model that can puts it back, so
+	// each is derived from this rather than from the one before.
+	turnTools := allowedTools
 
 	run, err := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, profileName, profile, modelOverride, 0, advertised)
 	if err != nil {
@@ -478,9 +482,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				// A model that cannot see is not offered view_image, here
 				// as at the start of a turn, and before the prompt for it
 				// is assembled from the tools on offer.
-				if !profileViewsImages(next.profile, modelOverride) {
-					allowedTools, advertised = withoutViewImage(l.Tools, allowedTools), withoutName(advertised, tools.ViewImageName)
-				}
+				allowedTools, advertised = l.fallbackTools(ctx, turnTools, profileViewsImages(next.profile, modelOverride))
 				if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 					l.reportFallback(sessionID, run, newRun, err)
 					fallbacks++
@@ -540,9 +542,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					return err
 				}
 				if next, ok := l.nextFallback(chain, &chainAt, err); ok {
-					if !profileViewsImages(next.profile, modelOverride) {
-						allowedTools, advertised = withoutViewImage(l.Tools, allowedTools), withoutName(advertised, tools.ViewImageName)
-					}
+					allowedTools, advertised = l.fallbackTools(ctx, turnTools, profileViewsImages(next.profile, modelOverride))
 					if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 						l.reportFallback(sessionID, run, newRun, err)
 						fallbacks++

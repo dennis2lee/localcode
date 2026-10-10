@@ -140,3 +140,32 @@ func TestReadAtMostRefusesAFileThatGrew(t *testing.T) {
 		t.Errorf("a file at the limit: %d bytes, %v", len(data), err)
 	}
 }
+
+// shrunkInfo reports a smaller size than the file has, which is what a
+// file being written looks like to a stat taken before it grew.
+type shrunkInfo struct{ os.FileInfo }
+
+func (shrunkInfo) Size() int64 { return 10 }
+
+// Execute reads through the cap, not around it: a file that passed the
+// size check and then grew is refused rather than attached past the limit.
+func TestViewImageRefusesAFileThatGrewAfterItsSizeWasChecked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "growing.png")
+	if err := os.WriteFile(path, append(pngBytes, make([]byte, MaxViewImageBytes)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	real := statImage
+	statImage = func(p string) (os.FileInfo, error) {
+		info, err := real(p)
+		if err != nil {
+			return nil, err
+		}
+		return shrunkInfo{info}, nil
+	}
+	t.Cleanup(func() { statImage = real })
+
+	res := viewImage(t, context.Background(), path)
+	if !res.IsError || len(res.Images) != 0 || !strings.Contains(res.Content, "grew past") {
+		t.Errorf("a file that grew after the check was not refused: error %v, %d images, %q", res.IsError, len(res.Images), res.Content)
+	}
+}

@@ -76,7 +76,7 @@ func (ViewImage) Execute(ctx context.Context, input json.RawMessage) Result {
 		return Result{Content: "path is required", IsError: true}
 	}
 	path := resolve(ctx, args.Path)
-	info, err := os.Stat(path)
+	info, err := statImage(path)
 	if err != nil {
 		return Result{Content: fmt.Sprintf("view %s: %v", args.Path, err), IsError: true}
 	}
@@ -116,6 +116,10 @@ func (ViewImage) Execute(ctx context.Context, input json.RawMessage) Result {
 		Images:  []provider.Block{provider.ImageBlock(mediaType, data)},
 	}
 }
+
+// statImage is os.Stat, replaced by a test that needs the size check and
+// the read to see two different files.
+var statImage = os.Stat
 
 // readAtMost reads a file that the size check let through, and refuses it
 // if it is longer by the time it is read: the stat and the read are two

@@ -31,3 +31,14 @@ func TestViewImageRefusesAPipe(t *testing.T) {
 		t.Fatal("view_image blocked on a pipe with no writer")
 	}
 }
+
+// A device is not a regular file either: /dev/zero never ends, and
+// /dev/null is nothing. Both are refused before they are read.
+func TestViewImageRefusesADevice(t *testing.T) {
+	for _, path := range []string{"/dev/null", "/dev/zero"} {
+		res := viewImage(t, context.Background(), path)
+		if !res.IsError || len(res.Images) != 0 || !strings.Contains(res.Content, "not a regular file") {
+			t.Errorf("%s was not refused as a device: %+v", path, res)
+		}
+	}
+}

@@ -161,3 +161,34 @@ func TestAFallbackAfterADeadStreamIsNotOfferedTheTool(t *testing.T) {
 		t.Error("the fallback model, which cannot see, was offered view_image after a dead stream")
 	}
 }
+
+// A second fallback, to a model that can see, has the tool back: each
+// fallback's list is the turn's own, narrowed for the model it moves to,
+// not the last fallback's list narrowed again.
+func TestASecondFallbackToAModelThatCanSeeHasTheToolBack(t *testing.T) {
+	reg := tools.NewRegistry(nil)
+	reg.Register(tools.ReadFile{})
+	reg.Register(tools.ViewImage{})
+	dead := []provider.StreamEvent{{Type: provider.EventError, Err: fmt.Errorf("openai-compat endpoint returned 404: model not found")}}
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{dead, dead, textReply("answered")}}
+	loop, sessionID := scriptedLoop(t, p, reg)
+	yes := true
+	loop.Config.Profiles["primary"] = config.Profile{Provider: "local", Model: "claude-opus-5", Fallback: []string{"blind", "seeing"}}
+	loop.Config.Profiles["blind"] = config.Profile{Provider: "local", Model: "qwen3-coder-30b"}
+	loop.Config.Profiles["seeing"] = config.Profile{Provider: "local", Model: "qwen2.5-vl-72b", Vision: &yes}
+	loop.Config.Agents["general-purpose"] = config.AgentConfig{Profile: "primary"}
+	loop.SetSmartAgentEnabled(true)
+
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "look"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	reqs := requestsOf(p)
+	if len(reqs) != 3 {
+		t.Fatalf("%d requests, want three models in turn", len(reqs))
+	}
+	for i, want := range []bool{true, false, true} {
+		if got := offersTool(reqs[i], tools.ViewImageName); got != want {
+			t.Errorf("request %d (%s): view_image offered = %v, want %v", i, reqs[i].Model, got, want)
+		}
+	}
+}
