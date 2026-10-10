@@ -53,7 +53,7 @@ export const app = {
   // would be forgotten. Loaded lazily, when the section is first opened.
   archivedSessions: [],
   archiveOpen: false,
-  smartAgentRoster: [],       // the specialist names the daemon build ships
+  orchestrateRoster: [],      // the specialist names the daemon build ships
   // The daemon default for skip_all, from config.json. What a new
   // conversation starts with; see sessionPermissions for the open one.
   skipPermissions: false,

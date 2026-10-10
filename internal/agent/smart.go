@@ -83,22 +83,33 @@ func (l *Loop) OrchestrateEnabled() bool     { return l.Config.OrchestrateLive()
 func (l *Loop) SetOrchestrateEnabled(v bool) { l.Config.SetOrchestrateRuntime(v) }
 
 // SetSmartAgentEnabled changes the live Smart Agent setting. It takes
-// effect on the next turn: the specialists, the orchestration prompt and
-// the background delegation tools all appear and disappear together.
+// effect on the next turn.
 func (l *Loop) SetSmartAgentEnabled(v bool) { l.Config.SetSmartAgentRuntime(v) }
 
-// smartAgents is the built-in roster as it stands right now — empty when
-// Smart Agent is off, and never containing a name the user's own config
+// orchestrating is the orchestration setting this unit of work runs
+// under, pinned at admission the way smartOn is.
+func (l *Loop) orchestrating(ctx context.Context) bool { return config.OrchestrateFor(ctx, l.Config) }
+
+// specialists is the built-in roster as it stands right now: empty when
+// orchestration is off, and never containing a name the user's own config
 // already defines.
-func (l *Loop) smartAgents(ctx context.Context) map[string]config.AgentConfig {
-	if !l.smartOn(ctx) {
+//
+// Orchestration's, not Smart Agent's. Smart Agent is how one agent works:
+// the prompts it is given, the tools it holds, what happens when its model
+// will not answer. Handing work to other agents is orchestration, and it
+// has its own switch. The roster used to come with Smart Agent, and with it
+// a prompt telling the model it was "the orchestrator" of a team, so
+// turning on a better way of working also turned on delegation that
+// nobody had asked for.
+func (l *Loop) specialists(ctx context.Context) map[string]config.AgentConfig {
+	if !l.orchestrating(ctx) {
 		return nil
 	}
 	return smart.Agents(l.Config)
 }
 
 // DelegatableAgents is every agent the Task tools may target: the user's
-// own, plus the built-in specialists when Smart Agent is on.
+// own, plus the built-in specialists when orchestration is on.
 //
 // Exported because the Task tool asks for it on every call rather than
 // being handed a snapshot at startup — that snapshot is exactly what
@@ -115,7 +126,7 @@ func (l *Loop) DelegatableAgents(ctx context.Context) map[string]config.AgentCon
 }
 
 func (l *Loop) delegatableAgents(ctx context.Context) map[string]config.AgentConfig {
-	smartOnes := l.smartAgents(ctx)
+	smartOnes := l.specialists(ctx)
 	if len(smartOnes) == 0 {
 		return l.Config.Agents
 	}
@@ -136,7 +147,7 @@ func (l *Loop) agentConfig(ctx context.Context, agentName string) config.AgentCo
 	if a, ok := l.Config.Agents[agentName]; ok {
 		return a
 	}
-	return l.smartAgents(ctx)[agentName]
+	return l.specialists(ctx)[agentName]
 }
 
 // profileFor resolves the model profile a turn running as agentName uses.
@@ -170,7 +181,7 @@ func (l *Loop) profileFor(ctx context.Context, sessionID, agentName string) (str
 		}
 	}
 	if _, mine := l.Config.Agents[agentName]; !mine {
-		if sa, ok := l.smartAgents(ctx)[agentName]; ok {
+		if sa, ok := l.specialists(ctx)[agentName]; ok {
 			if p, ok := l.Config.Profiles[sa.Profile]; ok {
 				return sa.Profile, p, nil
 			}
@@ -319,15 +330,17 @@ func matchToolSwitch(switchName, registeredTool string) bool {
 
 // hiddenTools names the tools that should not be offered on this turn.
 //
-// Three separate reasons, and they hide different amounts:
+// The reasons hide different amounts. Among them:
 //
-//   - Nowhere to delegate. A config with one agent and Smart Agent off has
-//     no second role to hand work to, so Task would be an expensive way
-//     for a model to call itself. This is the pre-existing rule, which
-//     used to be enforced by simply not registering the tool.
-//   - Smart Agent off. Background delegation is part of the bundle rather
-//     than a general capability: launching work that runs unattended, in
-//     a session nobody is looking at, is the thing a user opts into.
+//   - Orchestration off. Every delegation tool is hidden: handing work to
+//     another agent is what that switch opts into, and nothing else
+//     turns it on. See specialists.
+//   - Nowhere to delegate. A config with one agent has no second role to
+//     hand work to, so Task would be an expensive way for a model to call
+//     itself. This is the pre-existing rule, which used to be enforced by
+//     simply not registering the tool.
+//   - Smart Agent off. The checklist and the mid-turn question are ways
+//     of working, and the bundle is where ways of working live.
 //   - Always, for the verdict. It belongs to one role in one situation:
 //     the reviewer in a debate, which is given it explicitly. Offered to
 //     anyone else it is a model handed a way to declare its own work
@@ -355,12 +368,17 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 		hidden[debateToolName] = true
 	}
 	if !l.smartOn(ctx) {
-		hidden[smart.ToolSpawn] = true
-		hidden[smart.ToolCollect] = true
 		// A checklist is a way of working rather than a capability, and
 		// the bundle is where ways of working live.
 		hidden[updatePlanToolName] = true
 		hidden[askUserToolName] = true
+	}
+	// Delegation is orchestration. With it off the model does the work
+	// itself, whatever agents config.json declares. See specialists.
+	if !l.orchestrating(ctx) {
+		for _, name := range smart.DelegationTools {
+			hidden[name] = true
+		}
 	}
 	// A question needs somebody to answer it. A scheduled run and a
 	// one-shot in a pipe have nobody at the keyboard, and a delegated
@@ -457,10 +475,10 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 //   - There is nobody to delegate to. Without a second agent the prompt
 //     describes a Task tool the model has not been given.
 func (l *Loop) orchestrationFor(ctx context.Context, sessionID, agentName, model string) string {
-	if !l.smartOn(ctx) {
+	if !l.orchestrating(ctx) {
 		return ""
 	}
-	if _, specialist := l.smartAgents(ctx)[agentName]; specialist {
+	if _, specialist := l.specialists(ctx)[agentName]; specialist {
 		return ""
 	}
 	if l.Store != nil {
@@ -475,6 +493,28 @@ func (l *Loop) orchestrationFor(ctx context.Context, sessionID, agentName, model
 	// every specialist resolves to this same model, delegation is the
 	// model handing work to itself. See smart.Solo.
 	return smart.OrchestrationPrompt(model, smart.Solo(l.Config))
+}
+
+// workPolicyFor is Smart Agent's own prompt for the turn a person is
+// having: the order to work in, with no delegation in it. "" when Smart
+// Agent is off, for a delegated turn, and for a turn that orchestrates,
+// whose policy already states the same order with delegation added.
+func (l *Loop) workPolicyFor(ctx context.Context, sessionID, agentName, model string) string {
+	if !l.smartOn(ctx) {
+		return ""
+	}
+	if _, specialist := l.specialists(ctx)[agentName]; specialist {
+		return ""
+	}
+	if l.Store != nil {
+		if sess, err := l.Store.Get(sessionID); err == nil && sess.ParentID != "" {
+			return ""
+		}
+	}
+	if l.orchestrationFor(ctx, sessionID, agentName, model) != "" {
+		return ""
+	}
+	return smart.WorkPolicy(model)
 }
 
 // planPolicyFor is what this turn is told about the Orchestrate tool, or
@@ -494,7 +534,7 @@ func (l *Loop) planPolicyFor(ctx context.Context, sessionID, agentName, model st
 	if !config.OrchestrateFor(ctx, l.Config) || inOrchestration(ctx) {
 		return ""
 	}
-	if _, specialist := l.smartAgents(ctx)[agentName]; specialist {
+	if _, specialist := l.specialists(ctx)[agentName]; specialist {
 		return ""
 	}
 	if l.Store != nil {

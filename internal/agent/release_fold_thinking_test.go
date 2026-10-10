@@ -478,7 +478,8 @@ func TestFoldThinkingReplyNamesASpecialistsLaneModel(t *testing.T) {
 	server := reasoningServer(t)
 	loop := foldLoop(t, server.URL, "qwen3-30b-a3b")
 	loop.Config.Profiles["smart-deep"] = config.Profile{Provider: "local", Model: "meta/muse-glimmer-30b"}
-	loop.SetSmartAgentEnabled(true)
+	// The specialists, and their lanes, come with orchestration.
+	loop.SetOrchestrateEnabled(true)
 	const sid = "s1"
 	if _, err := loop.Store.CreateSession(sid, "", "oracle", true); err != nil {
 		t.Fatalf("create session: %v", err)

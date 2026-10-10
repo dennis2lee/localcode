@@ -90,13 +90,22 @@ func TestADelegatedAgentCannotHandItsTaskToItself(t *testing.T) {
 		t.Fatalf("%d requests, want 4: the parent, the child twice, the parent again", len(reqs))
 	}
 
-	// The person's own turn keeps its whole roster, itself included.
-	if got, _ := offeredTo(reqs[0]); !reflect.DeepEqual(got, []string{"explore", "general-purpose", "vision"}) {
-		t.Errorf("the top-level turn was offered %v", got)
+	// The person's own turn keeps its whole roster, itself included: the
+	// declared agents and the built-in specialists orchestration brings.
+	all := agentNamesOf(loop.DelegatableAgents(context.Background()))
+	if got, _ := offeredTo(reqs[0]); !reflect.DeepEqual(got, all) {
+		t.Errorf("the top-level turn was offered %v, want %v", got, all)
 	}
-	// The delegated one is not offered itself or the agent above it.
-	if got, _ := offeredTo(reqs[1]); !reflect.DeepEqual(got, []string{"explore"}) {
-		t.Errorf("the vision sub-agent was offered %v, want only explore", got)
+	// The delegated one is not offered itself or the agent above it, and
+	// is offered everyone else.
+	var others []string
+	for _, name := range all {
+		if name != "general-purpose" && name != "vision" {
+			others = append(others, name)
+		}
+	}
+	if got, _ := offeredTo(reqs[1]); !reflect.DeepEqual(got, others) {
+		t.Errorf("the vision sub-agent was offered %v, want %v", got, others)
 	}
 	// And calling it anyway is refused, with what to do instead.
 	res, ok := resultFor(reqs[2].Messages, "c2")
@@ -114,31 +123,29 @@ func TestADelegatedAgentCannotHandItsTaskToItself(t *testing.T) {
 	}
 }
 
-// With nothing else to offer, the delegation tools are not offered.
+// With nothing else to offer, the delegation tools are not offered. The
+// built-in specialists come with orchestration, so a delegated turn runs
+// out of names only when its chain holds the whole roster.
 func TestADelegatedAgentWithNobodyElseIsNotOfferedDelegation(t *testing.T) {
-	loop, p, sessionID := delegationLoop(t, [][]provider.StreamEvent{
-		toolCall("c1", "Task", `{"agent":"vision","prompt":"look at fig.png"}`),
-		textReply("done"),
-		textReply("done"),
-	}, "general-purpose", "vision")
-
-	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "look"); err != nil {
-		t.Fatalf("SendMessage: %v", err)
-	}
-	p.mu.Lock()
-	reqs := append([]provider.ChatRequest(nil), p.requests...)
-	p.mu.Unlock()
-	if len(reqs) < 2 {
-		t.Fatalf("%d requests", len(reqs))
-	}
-	if _, offered := offeredTo(reqs[0]); !offered {
-		t.Error("the top-level turn lost Task")
-	}
-	for _, tool := range reqs[1].Tools {
-		switch tool.Name {
-		case "Task", "TaskBackground", "TaskCollect":
-			t.Errorf("the sub-agent was offered %s with nobody to hand work to", tool.Name)
+	loop, _, sessionID := delegationLoop(t, nil, "general-purpose", "vision")
+	ctx := config.WithOrchestrate(WithSessionID(context.Background(), sessionID), true)
+	for i, name := range agentNamesOf(loop.DelegatableAgents(ctx)) {
+		if i > 0 {
+			ctx = withTaskDepth(ctx, i)
 		}
+		ctx = withAgentInChain(ctx, name)
+	}
+	hidden := loop.hiddenTools(ctx)
+	for _, name := range []string{"Task", "TaskBackground", "TaskCollect"} {
+		if !hidden[name] {
+			t.Errorf("%s was offered to a turn whose chain is the whole roster", name)
+		}
+	}
+	// One name short of the whole roster, it is still offered.
+	ctx = WithSessionID(config.WithOrchestrate(context.Background(), true), sessionID)
+	ctx = withAgentInChain(withTaskDepth(withAgentInChain(ctx, "general-purpose"), 1), "vision")
+	if loop.hiddenTools(ctx)["Task"] {
+		t.Error("Task was hidden from a sub-agent that still has the specialists to hand work to")
 	}
 }
 

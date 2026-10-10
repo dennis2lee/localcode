@@ -39,8 +39,8 @@ Project rules for agents working in this repo.
   the attempt's log, and a force-cancelled attempt may keep none at all.
   The 44-minute hang above is still undiagnosed for exactly this reason.
 * What it runs, and why each is in it rather than left to memory:
-  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,324 tests
-    and 651 subtests over 31 packages, two of the tests skipped on macOS.
+  * `go test ./... -race -parallel 8 -count=1 -timeout 20m` — 2,342 tests
+    and 663 subtests over 31 packages, two of the tests skipped on macOS.
     The same suite runs a second time without `-race`
     (`go test ./... -count=1 -timeout 10m`), because a test whose timing
     only holds at race-detector speed passes the race lane and fails for
@@ -64,7 +64,7 @@ Project rules for agents working in this repo.
     that is no longer reported. The "written, tested, never called" shape
     has shipped twice (v0.55.0, v0.57.0); `-test=false` is what makes it
     visible, at the cost of listing the functions only tests call.
-  * The Web UI suite (724 tests in 64 files, deliberately also run by
+  * The Web UI suite (726 tests in 64 files, deliberately also run by
     `TestWebUI`, which skips itself when node is absent), the doc-link
     checker, `gofmt`, and `git diff --check HEAD` — `HEAD` because the bare form
     compares against the index and so inspects nothing once changes are

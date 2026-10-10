@@ -550,6 +550,7 @@ func TestTheJSONUsageCountsTheSubAgents(t *testing.T) {
 	  "providers": {"local": {"type": "openai-compat", "base_url": %q}},
 	  "profiles": {"balanced": {"provider": "local", "model": "m"}},
 	  "default_profile": "balanced",
+	  "orchestrate": true,
 	  "agents": {
 	    "general-purpose": {"profile": "balanced"},
 	    "helper": {"profile": "balanced", "description": "Looks things up."}

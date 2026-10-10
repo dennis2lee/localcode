@@ -37,7 +37,7 @@ func (d *Daemon) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"orchestrate":          d.Loop.OrchestrateEnabled(),
 		"model_invocable":      d.Loop.ModelInvocableEnabled(),
 		"model_commands":       d.Loop.ModelCommandNames(),
-		"smart_agent_roster":   smart.Names(),
+		"orchestrate_roster":   smart.Names(),
 		"show_tps":             d.Loop.ShowTPS(),
 		"show_thinking":        d.Loop.ShowThinking(),
 		"show_timestamps":      d.Loop.ShowTimestamps(),

@@ -205,38 +205,30 @@ async function applyRepeatLimit() {
 
 // Smart Agent.
 //
-// The switch is the whole control. What it turns on — the specialist
-// roster, the orchestration prompt, the background delegation tools — is
-// not configurable from here on purpose: the point of the feature is that
-// it works without anyone writing six agent blocks by hand, and a panel
-// full of knobs would put that back.
-//
-// The note below it carries the part that cannot be written into the
-// page, because it comes from the daemon: which specialists the build
-// ships, and that they cost money. With the switch off it says what
-// delegation is left with, which is only the agents config.json declares.
+// How one agent works: its prompt, its tools, fallback, caching, the turn
+// log. It delegates nothing; handing work to other agents is
+// orchestration, below. The switch is the whole control, and the note says
+// where the turn log is, which is the one thing it adds that a person
+// goes looking for.
 
 function renderSmartAgent(warning) {
   smartAgentCheckbox.checked = !!app.smartAgent;
   smartAgentWarnEl.textContent = warning || '';
   smartAgentWarnEl.hidden = !warning;
   if (!app.smartAgent) {
-    smartAgentNoteEl.textContent = 'Off. Delegation uses only the agents declared in config.json.';
+    smartAgentNoteEl.textContent = 'Off.';
     return;
   }
-  const roster = (app.smartAgentRoster || []).join(', ');
-  const agents = roster ? `Agents: ${roster}. ` : '';
-  smartAgentNoteEl.textContent = `On. ${agents}More model calls per request. Turn log in ~/.localcode/trace.`;
+  smartAgentNoteEl.textContent = 'On. Turn log in ~/.localcode/trace.';
 }
 
 // Orchestration.
 //
-// A separate switch from Smart Agent, and the note carries why: a plan
-// needs somewhere to delegate its stages to, so with fewer than two agents
-// this is on and inert. The panel does not count agents: app.agents can
-// lag a Smart Agent flip, and a count taken from it would sometimes say
-// "nobody" about a config that has agents. It states the requirement
-// whenever Smart Agent is off instead, which is true in every state.
+// Everything that hands work to another agent: the built-in specialists,
+// Task and the background pair, and the Orchestrate tool's plans. The note
+// carries the part that cannot be written into the page, because it comes
+// from the daemon: which specialists the build ships, and that delegation
+// costs model calls.
 //
 // The note states the two ceilings that bound what a run can spend. The
 // timeouts are in the permission prompt each run asks with, and all of
@@ -250,12 +242,13 @@ function renderOrchestrate(warning) {
   orchestrateWarnEl.textContent = warning || '';
   orchestrateWarnEl.hidden = !warning;
   if (!app.orchestrate) {
-    orchestrateNoteEl.textContent = 'Off. The model cannot run multi-stage plans.';
+    orchestrateNoteEl.textContent = 'Off. The model does the work itself and delegates to no agent.';
     return;
   }
-  const needs = app.smartAgent ? '' : 'Needs two or more agents: declare them in config.json, or turn on Smart Agent. ';
+  const roster = (app.orchestrateRoster || []).join(', ');
+  const agents = roster ? `Specialists: ${roster}. ` : '';
   orchestrateNoteEl.textContent =
-    `On. ${needs}Each run asks first unless pre-approved. Up to 8 stages and 32 agent turns.`;
+    `On. ${agents}More model calls per request. Each plan asks first unless pre-approved. Up to 8 stages and 32 agent turns.`;
 }
 
 // The model running commands.

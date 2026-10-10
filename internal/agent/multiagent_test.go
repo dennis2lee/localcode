@@ -145,6 +145,8 @@ func newMultiAgentLoop(t *testing.T, modelURL string) *Loop {
 			},
 		},
 		DefaultProfile: "strong",
+		// Delegation is orchestration's.
+		Orchestrate: func() *bool { on := true; return &on }(),
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("invalid config: %v", err)

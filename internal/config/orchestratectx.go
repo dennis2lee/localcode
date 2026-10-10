@@ -33,5 +33,11 @@ func OrchestrateFor(ctx context.Context, cfg *Config) bool {
 	if on, ok := OrchestratePinned(ctx); ok {
 		return on
 	}
+	// As SmartAgentFor: a caller with no config has no switch to read,
+	// which is off. The task manager asks for the pin of every task it
+	// spawns, including from a loop built without one.
+	if cfg == nil {
+		return false
+	}
 	return cfg.OrchestrateLive()
 }

@@ -24,7 +24,7 @@ import (
 type TaskTool struct {
 	manager *TaskManager
 	// agents is asked on every call rather than captured once, because
-	// the roster changes at runtime: turning Smart Agent on adds six
+	// the roster changes at runtime: turning orchestration on adds six
 	// specialists, and a tool holding a startup snapshot would go on
 	// advertising an enum that no longer describes what exists.
 	agents func(context.Context) map[string]config.AgentConfig

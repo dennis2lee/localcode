@@ -609,7 +609,7 @@ func (l *Loop) activationFor(ctx context.Context, sessionID, resolveAgent string
 	smartOn := l.smartOn(ctx)
 
 	role := prompt.RoleOrchestrator
-	if _, specialist := l.smartAgents(ctx)[resolveAgent]; specialist {
+	if _, specialist := l.specialists(ctx)[resolveAgent]; specialist {
 		role = prompt.RoleSpecialist
 	} else if l.Store != nil {
 		// A session with a parent is somebody's child, whatever its
@@ -656,6 +656,7 @@ func (l *Loop) activationFor(ctx context.Context, sessionID, resolveAgent string
 		Flags: map[string]bool{
 			"auto_compact":     l.AutoCompactEnabled(),
 			"skip_permissions": l.Config.PermissionsSkipped(),
+			"orchestrate":      l.orchestrating(ctx),
 		},
 		Values: map[string]string{
 			valBaseSystem:   l.SystemPrompt,
@@ -665,6 +666,7 @@ func (l *Loop) activationFor(ctx context.Context, sessionID, resolveAgent string
 			valProjectRules: rules,
 			valAgentPrompt:  agentCfg.Prompt,
 			valOrchestrator: l.orchestrationFor(ctx, sessionID, resolveAgent, profile.Model),
+			valWorkPolicy:   l.workPolicyFor(ctx, sessionID, resolveAgent, profile.Model),
 			valPlanPolicy:   l.planPolicyFor(ctx, sessionID, resolveAgent, profile.Model),
 			valModelQuirk:   modelNoteFor(profile.Model, l.effortFor(sessionID, profile)),
 			valVerifyPolicy: l.verifyPolicyFor(advertisedTools),

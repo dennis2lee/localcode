@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.155.0
+
+Delegation belongs to orchestration, a model that can see opens image files, and a sub-agent no longer hands its task back to itself.
+
+**Changed**
+
+* Delegation is orchestration's: the six specialists, `Task`, `TaskBackground`, `TaskCollect` and the delegation prompt come with `orchestrate`, not `smart_agent`
+  * To keep delegating, set `"orchestrate": true`. With it off the model delegates to no agent, including agents declared in config.json.
+* Smart Agent gives the model an order of work and delegates nothing
+
+**Added**
+
+* `view_image` tool, offered to models that can see, and the `vision` profile key (on by default for Claude models)
+
+**Fixed**
+
+* A sub-agent handing its task to itself or back up the chain
+* Task dialog showing "cancelling" after the task had ended
+
 ## v0.154.1
 
 Fixes for a conversation moved to an OpenAI-compatible endpoint, and for a reply cut off in the middle of a tool call.

@@ -120,9 +120,9 @@ func TestGetSettingsReportsSmartAgent(t *testing.T) {
 	if s["smart_agent"] != false {
 		t.Errorf("smart_agent = %v, want false", s["smart_agent"])
 	}
-	roster, _ := s["smart_agent_roster"].([]any)
+	roster, _ := s["orchestrate_roster"].([]any)
 	if len(roster) == 0 {
-		t.Error("the roster is empty, so a client cannot say what the switch adds")
+		t.Error("the roster is empty, so a client cannot say what orchestration adds")
 	}
 
 	d.Loop.SetSmartAgentEnabled(true)

@@ -64,14 +64,6 @@ func (l *Loop) handleConfigCommand(sessionID, displayText, arg string) error {
 		case "smart_agent":
 			l.SetSmartAgentEnabled(enabled)
 			text = fmt.Sprintf("smart_agent: %s", onOff(enabled))
-			// Turning it on with nothing to route to is legal and inert:
-			// the specialists need a profile to run on, and without one
-			// there is no roster and no orchestration prompt.
-			if enabled && len(l.smartAgents(context.Background())) == 0 {
-				text += "\n(no profiles configured, so no specialist agents could be created — see docs/USAGE.md)"
-			} else if enabled {
-				text += "\n(available: " + strings.Join(agentNamesOf(l.smartAgents(context.Background())), ", ") + ")"
-			}
 		default:
 			text = fmt.Sprintf("unknown setting %q. usage: /config, /config auto_compact on|off, /config show_tps on|off, /config auto_delegate on|off, /config smart_agent on|off", fields[0])
 		}
@@ -108,18 +100,8 @@ func (l *Loop) configSummary() string {
 	} else {
 		delegate += " (not configured)"
 	}
-	// The roster is the useful part of the smart_agent line, for the same
-	// reason the target agent is for auto_delegate: "on" alone does not
-	// say what it turned on, and the answer depends on the profiles this
-	// config happens to have.
-	smartLine := onOff(l.SmartAgentEnabled())
-	if names := agentNamesOf(l.smartAgents(context.Background())); len(names) > 0 {
-		smartLine += " (" + strings.Join(names, ", ") + ")"
-	} else if l.SmartAgentEnabled() {
-		smartLine += " (no profiles to run specialists on)"
-	}
 	return fmt.Sprintf("auto_compact: %s\nshow_tps: %s\nauto_delegate: %s\nsmart_agent: %s",
-		onOff(l.AutoCompactEnabled()), onOff(l.ShowTPS()), delegate, smartLine)
+		onOff(l.AutoCompactEnabled()), onOff(l.ShowTPS()), delegate, onOff(l.SmartAgentEnabled()))
 }
 
 func onOff(v bool) string {

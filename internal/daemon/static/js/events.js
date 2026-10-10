@@ -407,10 +407,11 @@ const handlers = {
     forgetContextFill();
   },
   'config.changed': (d) => {
-    // Turning Smart Agent on or off changes which agents exist, so a
-    // flip here means the dropdown is stale. Compared before applying,
-    // because the snapshot carries every switch on every change.
-    const rosterMayHaveChanged = typeof d.smart_agent === 'boolean' && d.smart_agent !== app.smartAgent;
+    // Turning orchestration on or off changes which agents exist (the
+    // built-in specialists come with it), so a flip here means the
+    // dropdown is stale. Compared before applying, because the snapshot
+    // carries every switch on every change.
+    const rosterMayHaveChanged = typeof d.orchestrate === 'boolean' && d.orchestrate !== app.orchestrate;
     if (typeof d.auto_compact_enabled === 'boolean') app.autoCompactEnabled = d.auto_compact_enabled;
     if (typeof d.show_tps === 'boolean') app.showTPS = d.show_tps;
     if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
@@ -426,11 +427,11 @@ const handlers = {
     // chosen once, not a thing to flip between messages.
     if (typeof d.orchestrate === 'boolean') {
       app.orchestrate = d.orchestrate;
+      refreshOrchestrateIfOpen();
     }
     if (typeof d.smart_agent === 'boolean') {
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
-      refreshOrchestrateIfOpen();
     }
     if (rosterMayHaveChanged) loadAgents();
   },
@@ -445,8 +446,8 @@ const handlers = {
   // another session, which is where the old state used to sit.
   'settings.changed': (d) => {
     // Same roster rule as config.changed above: the snapshot always
-    // carries smart_agent, so only an actual flip refetches.
-    const rosterMayHaveChanged = typeof d.smart_agent === 'boolean' && d.smart_agent !== app.smartAgent;
+    // carries orchestrate, so only an actual flip refetches.
+    const rosterMayHaveChanged = typeof d.orchestrate === 'boolean' && d.orchestrate !== app.orchestrate;
     if (typeof d.auto_compact_enabled === 'boolean') app.autoCompactEnabled = d.auto_compact_enabled;
     if (typeof d.show_tps === 'boolean') app.showTPS = d.show_tps;
     if (typeof d.show_thinking === 'boolean') app.showThinking = d.show_thinking;
@@ -458,11 +459,11 @@ const handlers = {
     }
     if (typeof d.orchestrate === 'boolean') {
       app.orchestrate = d.orchestrate;
+      refreshOrchestrateIfOpen();
     }
     if (typeof d.smart_agent === 'boolean') {
       app.smartAgent = d.smart_agent;
       refreshSmartAgentIfOpen();
-      refreshOrchestrateIfOpen();
     }
     if (typeof d.keep_going === 'boolean') {
       app.keepGoing = d.keep_going;

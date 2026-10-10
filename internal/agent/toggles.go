@@ -69,14 +69,6 @@ func (l *Loop) routeSmartAgent(sessionID, text string) (bool, error) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "smart_agent: %s", onOff(want))
-	// The roster is the useful half: "on" alone does not say what it
-	// turned on, and the answer depends on which profiles this config
-	// happens to have.
-	if names := agentNamesOf(l.smartAgents(context.Background())); len(names) > 0 {
-		fmt.Fprintf(&b, " (%s)", strings.Join(names, ", "))
-	} else if want {
-		b.WriteString("\n(no profiles configured, so no specialist agents could be created; see docs/USAGE.md)")
-	}
 	b.WriteString(l.persist(func(path string) error { return config.SetSmartAgentInFile(path, want) }))
 
 	l.announceConfig(sessionID)
@@ -99,14 +91,17 @@ func (l *Loop) routeOrchestrate(sessionID, text string) (bool, error) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "orchestrate: %s", onOff(want))
-	// Turning it on with nowhere to delegate is inert, and saying so beats
-	// letting it read as a change that took effect. The same courtesy the
-	// other two switches already pay.
+	// Who can be delegated to is the useful half: "on" alone does not say
+	// what it turned on, and the built-in specialists need a profile to
+	// run on. Turning it on with nowhere to delegate is inert, and saying
+	// so beats letting it read as a change that took effect.
 	if want {
-		if n := len(l.delegatableAgents(context.Background())); n < 2 {
-			b.WriteString("\n(there is only one agent configured, so a plan would have nobody to delegate a stage to: turn on Smart Agent for the built-in roster, or declare agents in config.json)")
+		agents := l.delegatableAgents(context.Background())
+		if len(agents) < 2 {
+			b.WriteString("\n(no profiles configured, so no specialist agents could be created, and there is nobody to delegate to; see docs/USAGE.md)")
 		} else {
-			fmt.Fprintf(&b, "\nThe Orchestrate tool is offered now: a plan of up to %d stages and %d agent turns, run by localcode rather than step by step by the model. Each run asks first unless permission is pre-approved.", maxStages, maxRunAgents)
+			fmt.Fprintf(&b, " (%s)", strings.Join(agentNamesOf(agents), ", "))
+			fmt.Fprintf(&b, "\nDelegation is offered now: Task for one question, TaskBackground and TaskCollect for several at once, and Orchestrate for a plan of up to %d stages and %d agent turns. Each plan asks first unless permission is pre-approved.", maxStages, maxRunAgents)
 		}
 	}
 	b.WriteString(l.persist(func(path string) error { return config.SetOrchestrateInFile(path, want) }))

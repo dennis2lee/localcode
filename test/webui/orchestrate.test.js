@@ -2,10 +2,10 @@
 
 // The Orchestration switch in the settings window.
 //
-// A second switch beside Smart Agent, and the reason there are two is the
-// reason these tests exist: the two are different sizes. Smart Agent lets
-// the model hand one question to a specialist; this lets it commit to a
-// shape and spend up to thirty-two agent turns on it. So they have to move
+// A second switch beside Smart Agent, and the two answer different
+// questions. Smart Agent is how one agent works; this is everything that
+// hands work to another agent: the six built-in specialists, Task and the
+// background pair, and plans of up to thirty-two agent turns. So they move
 // independently, and the panel has to be able to show one on and the other
 // off without asking the daemon twice.
 
@@ -17,7 +17,7 @@ const { load, labelText } = require('./harness');
 const SETTINGS = {
   auto_compact_enabled: true, show_tps: true, auto_delegate: false,
   auto_delegate_agent: '', auto_delegate_match: [],
-  smart_agent: false, smart_agent_roster: ['explore', 'oracle'],
+  smart_agent: false, orchestrate_roster: ['explore', 'oracle'],
   orchestrate: false,
   skip_permissions: false, permission_rules: {}, can_edit_permissions: true,
 };
@@ -37,33 +37,30 @@ test('the switch is off, and says what that means', async () => {
     'opening the panel changed a setting');
 });
 
-// Off is a statement about the Orchestrate tool and nothing else. The old
-// note, "One delegation at a time", was false the moment Smart Agent was
-// on, because TaskBackground launches several. Any sentence about how
-// many delegations run is the same claim reworded, so the whole word is
-// refused, not one phrasing of it.
-test('off, the note says the model cannot run plans, and nothing about delegation', async () => {
+// Off means no delegation at all now, so that is what the note says. The
+// old "One delegation at a time" was a claim about how many ran; this is a
+// claim that none do, which is true with the switch off whatever the
+// config declares.
+test('off, the note says the model delegates to no agent', async () => {
   const app = await load({ routes: { 'GET /api/settings': SETTINGS } });
   await openSettings(app);
 
   const note = app.el('orchestrate-note').textContent;
   assert.match(note, /^Off\./);
-  assert.match(note, /cannot run/);
-  assert.doesNotMatch(note, /delegat/i);
-  assert.doesNotMatch(note, /one at a time|one agent|sequential/i);
+  assert.match(note, /delegates to no agent/);
+  assert.doesNotMatch(note, /one at a time|sequential/i);
 });
 
-// The sentence beside the box. A plan has stages and the agents inside a
-// stage run together, which is the shape the old "several sub-agents at
-// once" blurred: a step stage runs one agent, and a fanout runs at most
-// four at a time. The sentence does not give the four; the permission
-// prompt and USAGE.md do.
-test('the sentence beside the box says a plan has stages and agents run in parallel inside one', () => {
+// The sentence beside the box names both halves of what the switch gates:
+// delegation, with the built-in specialists, and plans. How a plan runs
+// (stages, four at a time in a fanout) is for the permission prompt and
+// USAGE.md.
+test('the sentence beside the box names delegation, the specialists and plans', () => {
   const label = labelText('orchestrate-checkbox');
-  assert.match(label, /multi-stage plan/);
-  assert.match(label, /sub-agents/);
-  assert.match(label, /in parallel within a stage/);
-  assert.doesNotMatch(label, /at once/, 'the phrase this sentence replaced');
+  assert.match(label, /delegate to sub-agents/);
+  assert.match(label, /six built-in specialists/);
+  assert.match(label, /multi-stage plans/);
+  assert.doesNotMatch(label, /at once/, 'the phrase an earlier sentence replaced');
   assert.doesNotMatch(label, /[\u2013\u2014]/, 'an em dash or en dash in a settings sentence');
   assert.ok(label.split(' ').length <= 20, `${label.split(' ').length} words is long-winded`);
 });
@@ -91,73 +88,38 @@ test('on, it names what a run can cost, with the unit of every limit', async () 
   // allow rule all authorize the tool, so the note must not promise it.
   assert.match(note, /asks first unless pre-approved/);
   assert.doesNotMatch(note, /every run asks/i);
-  // With Smart Agent on the built-in roster is there, so no requirement
-  // to state.
-  assert.doesNotMatch(note, /two or more agents/);
-  assert.ok(note.length <= 90, `${note.length} characters is long for one line: ${note}`);
-});
-
-// A plan needs somewhere to delegate its stages to: two or more agents,
-// declared in config.json or supplied by Smart Agent. The panel cannot
-// count them, so with Smart Agent off it states the requirement, which is
-// true in every state, rather than claiming nobody is there. The old note
-// did claim it for every config with Smart Agent off, including one that
-// declares agents of its own (the default routes here declare two),
-// because the roster it looked at was the built-in six and not the agents
-// the config has.
-test('on with Smart Agent off, it states the two-agent requirement and still shows the limits', async () => {
-  const app = await load({
-    routes: { 'GET /api/settings': { ...SETTINGS, smart_agent: false, orchestrate: true } },
-  });
-  await openSettings(app);
-
-  const note = app.el('orchestrate-note').textContent;
-  assert.match(note, /^On\./);
-  assert.match(note, /Needs two or more agents/);
-  assert.match(note, /config\.json/);
-  assert.match(note, /turn on Smart Agent/);
-  assert.match(note, /8 stages/);
-  assert.doesNotMatch(note, /nobody/i);
-  // The requirement is the one thing this state adds, and it must not
-  // carry the note past two lines: it was 211 characters with the
-  // timeouts in it.
+  // The specialists it brings, which the page cannot know, and that they
+  // cost model calls.
+  assert.match(note, /Specialists: explore, oracle\./);
+  assert.match(note, /more model calls/i);
+  // Two lines at most.
   assert.ok(note.length <= 170, `${note.length} characters is long for two lines: ${note}`);
 });
 
-// The note follows Smart Agent while the panel is open: "/config smart_agent
-// on" typed in the TUI, or the box ticked in another window, removes the
-// requirement from the sentence without a reload.
-test('Smart Agent turned on elsewhere drops the requirement from an open note', async () => {
+// Orchestration brings its own roster, so its note does not depend on
+// Smart Agent: the same with Smart Agent off as on, and unchanged when
+// Smart Agent moves while the panel is open. The note used to tell a
+// person with Smart Agent off to turn it on for somebody to delegate to.
+test('the note is the same whether Smart Agent is on or off', async () => {
+  const notes = [];
+  for (const smartAgent of [false, true]) {
+    const app = await load({
+      routes: { 'GET /api/settings': { ...SETTINGS, smart_agent: smartAgent, orchestrate: true } },
+    });
+    await openSettings(app);
+    notes.push(app.el('orchestrate-note').textContent);
+  }
+  assert.equal(notes[0], notes[1]);
+  assert.doesNotMatch(notes[0], /Smart Agent|two or more agents/);
+
   const app = await load({
     routes: { 'GET /api/settings': { ...SETTINGS, smart_agent: false, orchestrate: true } },
   });
   await openSettings(app);
-  assert.match(app.el('orchestrate-note').textContent, /Needs two or more agents/);
-
-  app.sse.emit({ type: 'settings.changed', data: { smart_agent: true, orchestrate: true } });
-  await app.settle();
-
-  assert.doesNotMatch(app.el('orchestrate-note').textContent, /Needs two or more agents/);
-  assert.match(app.el('orchestrate-note').textContent, /8 stages/);
-});
-
-// "/config smart_agent on" typed into this conversation, in the TUI or in
-// another client on the same session, emits config.changed and no
-// settings.changed: the command appends to the session and never reaches
-// the daemon's settings announcement. So the session-scoped handler has to
-// redraw the note on its own.
-test('Smart Agent turned on by a /config line in the session drops the requirement too', async () => {
-  const app = await load({
-    routes: { 'GET /api/settings': { ...SETTINGS, smart_agent: false, orchestrate: true } },
-  });
-  await openSettings(app);
-  assert.match(app.el('orchestrate-note').textContent, /Needs two or more agents/);
-
+  const before = app.el('orchestrate-note').textContent;
   app.sse.emit({ type: 'config.changed', data: { smart_agent: true } });
   await app.settle();
-
-  assert.doesNotMatch(app.el('orchestrate-note').textContent, /Needs two or more agents/);
-  assert.match(app.el('orchestrate-note').textContent, /8 stages/);
+  assert.equal(app.el('orchestrate-note').textContent, before);
 });
 
 test('ticking it tells the daemon', async () => {

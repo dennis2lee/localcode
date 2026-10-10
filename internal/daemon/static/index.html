@@ -509,19 +509,17 @@
     <!--
       Smart Agent.
 
-      A single switch, off by default, because what it turns on is a way
-      of working rather than a preference: one request can become half a
-      dozen model calls against half a dozen contexts. The sentence beside
-      the box groups what the switch gates today into one line and leaves
-      the rest to docs/USAGE.md. The note under it names the specialists it
-      adds, which the daemon supplies and the page cannot know.
+      A single switch, off by default: how one agent works, its prompt,
+      tools, fallback, caching and turn log. It delegates nothing. The
+      sentence beside the box groups what the switch gates into one line
+      and leaves the rest to docs/USAGE.md.
     -->
     <h4 class="settings-section">Smart Agent</h4>
 
     <div class="settings-field">
       <div class="check-row">
         <input type="checkbox" id="smart-agent-checkbox">
-        <label for="smart-agent-checkbox">Delegate to specialist sub-agents, with plan and ask tools, model fallback, prompt caching and a turn log</label>
+        <label for="smart-agent-checkbox">Work in a set order, with plan and ask tools, model fallback, prompt caching and a turn log</label>
       </div>
       <p class="note" id="smart-agent-note"></p>
       <!-- Whether the change reached config.json, which is a different
@@ -534,19 +532,17 @@
 
     <!--
       Orchestration.
-      Its own section under Smart Agent rather than a line inside it,
-      because the thing being opted into is a different size: Smart Agent
-      lets the model hand one question to a specialist, this lets it
-      commit to a shape and spend up to 32 agent turns on it. It needs two
-      or more agents to delegate to, which is why it sits under that
-      switch, and the note states the requirement while Smart Agent is off.
+      Everything that hands work to another agent: the built-in
+      specialists, Task, the background pair, and plans of up to 32 agent
+      turns. The note under it names the specialists, which the daemon
+      supplies and the page cannot know.
     -->
     <h4 class="settings-section">Orchestration</h4>
 
     <div class="settings-field">
       <div class="check-row">
         <input type="checkbox" id="orchestrate-checkbox">
-        <label for="orchestrate-checkbox">Let the model run a multi-stage plan of sub-agents, in parallel within a stage</label>
+        <label for="orchestrate-checkbox">Let the model delegate to sub-agents, including the six built-in specialists, and run multi-stage plans</label>
       </div>
       <p class="note" id="orchestrate-note"></p>
       <p class="note warn" id="orchestrate-warn" hidden></p>

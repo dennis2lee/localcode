@@ -16,8 +16,9 @@ type AgentInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Model       string `json:"model,omitempty"`
-	// Builtin marks one of the Smart Agent specialists rather than an
-	// agent somebody declared. They come and go with the switch, which
+	// Builtin marks one of the built-in specialists rather than an agent
+	// somebody declared. They come and go with the orchestration switch,
+	// which
 	// is worth a client saying rather than leaving a name to vanish out
 	// of a list with no explanation.
 	Builtin bool `json:"builtin,omitempty"`

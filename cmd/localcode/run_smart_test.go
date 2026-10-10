@@ -56,17 +56,18 @@ func smartHome(t *testing.T, modelURL string, extra string) string {
 
 const smartOn = `, "smart_agent": true`
 
-// The whole of the report: smart_agent was on and the model was handed no
-// way to delegate.
+// The whole of the report: delegation was on and the model was handed no
+// way to delegate. Delegation is orchestration's switch; see the test below
+// for Smart Agent alone.
 func TestSmartAgentGivesAOneShotRunSomewhereToDelegate(t *testing.T) {
 	f := &fakeModel{}
-	smartHome(t, f.server(t).URL, smartOn)
+	smartHome(t, f.server(t).URL, orchestrateOn)
 	if _, err := doRun(t, runOptions{format: formatText, agent: "general-purpose"}, "x"); err != nil {
 		t.Fatal(err)
 	}
 	got := f.sawTools()
 	if !contains(got, "Task") {
-		t.Errorf("smart_agent is on and the run offered no Task tool.\noffered: %v", got)
+		t.Errorf("orchestrate is on and the run offered no Task tool.\noffered: %v", got)
 	}
 }
 
@@ -76,7 +77,7 @@ func TestSmartAgentGivesAOneShotRunSomewhereToDelegate(t *testing.T) {
 // delegation that cannot happen.
 func TestTheOrchestrationPromptAndTheToolArriveTogether(t *testing.T) {
 	f := &fakeModel{}
-	smartHome(t, f.server(t).URL, smartOn)
+	smartHome(t, f.server(t).URL, orchestrateOn)
 	if _, err := doRun(t, runOptions{format: formatText, agent: "general-purpose"}, "x"); err != nil {
 		t.Fatal(err)
 	}
@@ -86,21 +87,28 @@ func TestTheOrchestrationPromptAndTheToolArriveTogether(t *testing.T) {
 		t.Errorf("the prompt talks about delegating = %v, but the Task tool was offered = %v", saidSo, hasIt)
 	}
 	if !saidSo {
-		t.Error("smart_agent is on and nothing in the prompt tells the model it can delegate")
+		t.Error("orchestrate is on and nothing in the prompt tells the model it can delegate")
 	}
 }
 
-// Off is still off. The roster is the whole reason there is anyone to
-// delegate to, so without it a single-agent config has nowhere to send
-// work and Task would be an expensive way for a model to call itself.
+// Off is still off, and Smart Agent is not delegation. With orchestration
+// off a run has nowhere to send work, whatever else is on, and nothing in
+// its prompt says it could.
 func TestWithoutSmartAgentAOneShotStillHasNowhereToDelegate(t *testing.T) {
-	f := &fakeModel{}
-	smartHome(t, f.server(t).URL, "")
-	if _, err := doRun(t, runOptions{format: formatText, agent: "general-purpose"}, "x"); err != nil {
-		t.Fatal(err)
-	}
-	if got := f.sawTools(); contains(got, "Task") {
-		t.Errorf("a single-agent config with smart_agent off was offered Task anyway: %v", got)
+	for _, extra := range []string{"", smartOn} {
+		f := &fakeModel{}
+		smartHome(t, f.server(t).URL, extra)
+		if _, err := doRun(t, runOptions{format: formatText, agent: "general-purpose"}, "x"); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"Task", "TaskBackground", "TaskCollect"} {
+			if contains(f.sawTools(), name) {
+				t.Errorf("config extra %q, orchestration off: %s was offered: %v", extra, name, f.sawTools())
+			}
+		}
+		if strings.Contains(f.sawSystem(), "sub-agent") {
+			t.Errorf("config extra %q, orchestration off: the prompt talks about sub-agents", extra)
+		}
 	}
 }
 
@@ -111,7 +119,7 @@ func TestWithoutSmartAgentAOneShotStillHasNowhereToDelegate(t *testing.T) {
 // one paragraph further down.
 func TestAOneShotCanDelegateInParallel(t *testing.T) {
 	f := &fakeModel{}
-	smartHome(t, f.server(t).URL, smartOn)
+	smartHome(t, f.server(t).URL, orchestrateOn)
 	if _, err := doRun(t, runOptions{format: formatText, agent: "general-purpose"}, "x"); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +213,7 @@ func (d *delegatingModel) server(t *testing.T) *httptest.Server {
 // the model was under way.
 func TestARunWaitsForTheSubAgentsItLaunched(t *testing.T) {
 	d := &delegatingModel{}
-	smartHome(t, d.server(t).URL, smartOn)
+	smartHome(t, d.server(t).URL, orchestrateOn)
 
 	if _, err := doRun(t, runOptions{format: formatText, agent: "general-purpose"}, "x"); err != nil {
 		t.Fatal(err)
@@ -294,7 +302,7 @@ func (d *delegatingSyncModel) server(t *testing.T) *httptest.Server {
 // the same as the delegation working, and only the first was covered.
 func TestAOneShotDelegatesAndGetsTheAnswerBack(t *testing.T) {
 	d := &delegatingSyncModel{}
-	smartHome(t, d.server(t).URL, smartOn)
+	smartHome(t, d.server(t).URL, orchestrateOn)
 
 	if _, err := doRun(t, runOptions{format: formatText, agent: "general-purpose"}, "where is it?"); err != nil {
 		t.Fatal(err)

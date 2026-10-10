@@ -142,12 +142,18 @@ func TestWithSmartAgentOffNothingChanges(t *testing.T) {
 			t.Errorf("%s was offered with Smart Agent off and one agent configured", name)
 		}
 	}
-	if strings.Contains(reqs[0].system, "Smart Agent is on") {
-		t.Error("the orchestration prompt was sent with the feature off")
+	for _, said := range []string{"Smart Agent is on", "Orchestration is on"} {
+		if strings.Contains(reqs[0].system, said) {
+			t.Errorf("%q was in the system prompt with both switches off", said)
+		}
 	}
 }
 
-func TestTurningItOnAddsTheRosterAndTheOrchestrationPrompt(t *testing.T) {
+// Smart Agent is how one agent works, and it delegates nothing. It used to
+// bring the six specialists, the delegation tools and a prompt calling the
+// model "the orchestrator" of a team, so turning on a better way of working
+// turned on delegation nobody had asked for. Delegation is orchestration's.
+func TestSmartAgentAloneDelegatesNothing(t *testing.T) {
 	srv, recorded := smartServer(t)
 	defer srv.Close()
 	loop := newSmartLoop(t, srv.URL)
@@ -159,13 +165,46 @@ func TestTurningItOnAddsTheRosterAndTheOrchestrationPrompt(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("got %d requests, want 1", len(reqs))
 	}
-	for _, name := range []string{"Task", "TaskBackground", "TaskCollect"} {
-		if !reqs[0].toolset[name] {
-			t.Errorf("%s was not offered with Smart Agent on", name)
+	for _, name := range []string{"Task", "TaskBackground", "TaskCollect", "Orchestrate"} {
+		if reqs[0].toolset[name] {
+			t.Errorf("%s was offered with Smart Agent on and orchestration off", name)
 		}
 	}
-	if !strings.Contains(reqs[0].system, "Smart Agent is on") {
+	if !strings.Contains(reqs[0].system, "Smart Agent is on for this session. Work in this order.") {
+		t.Error("Smart Agent's own prompt was not added")
+	}
+	for _, said := range []string{"Orchestration is on", "orchestrator", "sub-agent", "Task tool"} {
+		if strings.Contains(reqs[0].system, said) {
+			t.Errorf("the system prompt mentions %q with orchestration off", said)
+		}
+	}
+	if _, ok := loop.DelegatableAgents(context.Background())["explore"]; ok {
+		t.Error("the built-in specialists exist with orchestration off")
+	}
+}
+
+func TestTurningOnOrchestrationAddsTheRosterAndTheDelegationPrompt(t *testing.T) {
+	srv, recorded := smartServer(t)
+	defer srv.Close()
+	loop := newSmartLoop(t, srv.URL)
+	loop.SetOrchestrateEnabled(true)
+
+	sendOne(t, loop, "s1", "general-purpose")
+
+	reqs := recorded()
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	for _, name := range []string{"Task", "TaskBackground", "TaskCollect"} {
+		if !reqs[0].toolset[name] {
+			t.Errorf("%s was not offered with orchestration on", name)
+		}
+	}
+	if !strings.Contains(reqs[0].system, "Orchestration is on") {
 		t.Error("the orchestration prompt was not added to the system prompt")
+	}
+	if strings.Contains(reqs[0].system, "Smart Agent is on") {
+		t.Error("Smart Agent's prompt was sent with Smart Agent off")
 	}
 	// The roster reaches the model through the Task tool's description, so
 	// a specialist that is not named there cannot be delegated to.
@@ -182,6 +221,61 @@ func TestTurningItOnAddsTheRosterAndTheOrchestrationPrompt(t *testing.T) {
 	}
 }
 
+// Agents a person declared are not delegated to with orchestration off
+// either. Two of them used to be enough for Task, with no switch at all;
+// delegation is what the orchestration switch opts into, whoever the
+// agents are.
+func TestDeclaredAgentsAreNotDelegatedToWithOrchestrationOff(t *testing.T) {
+	srv, recorded := smartServer(t)
+	defer srv.Close()
+	loop := newSmartLoop(t, srv.URL)
+	loop.Config.Agents = map[string]config.AgentConfig{
+		"general-purpose": {Profile: "strong"},
+		"vision":          {Profile: "cheap", Description: "Looks at images."},
+	}
+
+	sendOne(t, loop, "s1", "general-purpose")
+	loop.SetOrchestrateEnabled(true)
+	sendOne(t, loop, "s1", "general-purpose")
+
+	reqs := recorded()
+	if len(reqs) != 2 {
+		t.Fatalf("got %d requests, want 2", len(reqs))
+	}
+	for _, name := range []string{"Task", "TaskBackground", "TaskCollect"} {
+		if reqs[0].toolset[name] {
+			t.Errorf("%s was offered with two declared agents and orchestration off", name)
+		}
+		if !reqs[1].toolset[name] {
+			t.Errorf("%s was not offered once orchestration was on", name)
+		}
+	}
+}
+
+// A turn that orchestrates is told the order of work once. The delegation
+// policy carries the same steps as Smart Agent's work policy, with
+// delegation in them, so sending both says it twice in two voices.
+func TestATurnThatOrchestratesGetsOnePolicy(t *testing.T) {
+	srv, recorded := smartServer(t)
+	defer srv.Close()
+	loop := newSmartLoop(t, srv.URL)
+	loop.SetSmartAgentEnabled(true)
+	loop.SetOrchestrateEnabled(true)
+
+	sendOne(t, loop, "s1", "general-purpose")
+
+	reqs := recorded()
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	if !strings.Contains(reqs[0].system, "Orchestration is on") {
+		t.Error("the delegation policy was not sent with orchestration on")
+	}
+	if strings.Contains(reqs[0].system, "Work in this order.") && strings.Contains(reqs[0].system, "Smart Agent is on for this session") {
+		t.Error("Smart Agent's work policy was sent beside the delegation policy")
+	}
+}
+
 // The roster is derived per turn rather than merged into the config at
 // startup, because the switch is live. This is the test that says so: no
 // restart, no reload, and the next turn sees the change.
@@ -191,9 +285,9 @@ func TestTheSwitchTakesEffectOnTheNextTurn(t *testing.T) {
 	loop := newSmartLoop(t, srv.URL)
 
 	sendOne(t, loop, "s1", "general-purpose")
-	loop.SetSmartAgentEnabled(true)
+	loop.SetOrchestrateEnabled(true)
 	sendOne(t, loop, "s1", "general-purpose")
-	loop.SetSmartAgentEnabled(false)
+	loop.SetOrchestrateEnabled(false)
 	sendOne(t, loop, "s1", "general-purpose")
 
 	reqs := recorded()
@@ -219,6 +313,7 @@ func TestASpecialistIsNotGivenTheOrchestrationPrompt(t *testing.T) {
 	defer srv.Close()
 	loop := newSmartLoop(t, srv.URL)
 	loop.SetSmartAgentEnabled(true)
+	loop.SetOrchestrateEnabled(true)
 
 	sendOne(t, loop, "child", "explore")
 
@@ -226,8 +321,10 @@ func TestASpecialistIsNotGivenTheOrchestrationPrompt(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("got %d requests, want 1", len(reqs))
 	}
-	if strings.Contains(reqs[0].system, "Smart Agent is on") {
-		t.Error("the explore agent was told to orchestrate")
+	for _, said := range []string{"Orchestration is on", "Smart Agent is on"} {
+		if strings.Contains(reqs[0].system, said) {
+			t.Errorf("the explore agent was given %q, which is the conversation's prompt and not its own", said)
+		}
 	}
 	if !strings.Contains(reqs[0].system, "You are the explore agent") {
 		t.Error("the explore agent did not get its own prompt")
@@ -255,6 +352,7 @@ func TestAChildSessionIsNotGivenTheOrchestrationPrompt(t *testing.T) {
 	defer srv.Close()
 	loop := newSmartLoop(t, srv.URL)
 	loop.SetSmartAgentEnabled(true)
+	loop.SetOrchestrateEnabled(true)
 
 	if _, err := loop.Store.CreateSession("parent", "", "general-purpose", true); err != nil {
 		t.Fatalf("create parent: %v", err)
@@ -270,8 +368,10 @@ func TestAChildSessionIsNotGivenTheOrchestrationPrompt(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("got %d requests, want 1", len(reqs))
 	}
-	if strings.Contains(reqs[0].system, "Smart Agent is on") {
-		t.Error("a child session was told to orchestrate")
+	for _, said := range []string{"Orchestration is on", "Smart Agent is on"} {
+		if strings.Contains(reqs[0].system, said) {
+			t.Errorf("a child session was given %q", said)
+		}
 	}
 }
 
@@ -283,7 +383,7 @@ func TestASpecialistThatCallsADelegationToolIsRefused(t *testing.T) {
 	srv, _ := smartServer(t)
 	defer srv.Close()
 	loop := newSmartLoop(t, srv.URL)
-	loop.SetSmartAgentEnabled(true)
+	loop.SetOrchestrateEnabled(true)
 
 	if _, err := loop.Store.CreateSession("child", "", "explore", true); err != nil {
 		t.Fatalf("create session: %v", err)

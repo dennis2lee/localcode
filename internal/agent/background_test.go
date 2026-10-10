@@ -74,6 +74,9 @@ func newBackgroundLoop(t *testing.T, modelURL string) (*Loop, *TaskManager) {
 		DefaultProfile: "only",
 	}
 	loop := New(store, registry, map[string]provider.Provider{"local": provider.NewOpenAICompat(modelURL, "")}, cfg)
+	// Delegation, and the specialists it delegates to, are orchestration's.
+	// Smart Agent too, for the turn log some of these tests read.
+	loop.SetOrchestrateEnabled(true)
 	loop.SetSmartAgentEnabled(true)
 	tasks := NewTaskManager(context.Background(), loop, 5)
 	registry.Register(NewTaskBackgroundTool(tasks, loop.DelegatableAgents))
@@ -437,8 +440,8 @@ func TestACancelledCollectionByIDStaysOutstanding(t *testing.T) {
 	}
 }
 
-// SA3, the delegation half. A background task is admitted while Smart
-// Agent is on, and may sit on the semaphore for as long as the queue
+// SA3, the delegation half. A background task is admitted while
+// orchestration is on, and may sit on the semaphore for as long as the queue
 // takes. What it must not do is resolve its agent again on the way in: an
 // "explore" specialist admitted with a read-only allowlist would otherwise
 // start with the full tool set, including write and shell, because the
@@ -456,11 +459,11 @@ func TestAQueuedSpecialistKeepsTheStateItWasAdmittedUnder(t *testing.T) {
 	child := tasks.childContext(launchCtx, "")
 
 	// Between admission and the task starting, the switch goes off.
-	loop.SetSmartAgentEnabled(false)
+	loop.SetOrchestrateEnabled(false)
 
 	cfg := loop.agentConfig(child, "explore")
 	if len(cfg.Tools) == 0 {
-		t.Fatal("the queued explore task resolved to an unrestricted agent after Smart Agent was turned off")
+		t.Fatal("the queued explore task resolved to an unrestricted agent after orchestration was turned off")
 	}
 	allowed := loop.toolsForTurn(child, cfg)
 	for _, name := range []string{"write_file", "edit", "bash"} {
@@ -475,7 +478,7 @@ func TestAQueuedSpecialistKeepsTheStateItWasAdmittedUnder(t *testing.T) {
 	// which is what "live" is supposed to mean.
 	fresh := loop.pinSmart(context.Background())
 	if len(loop.agentConfig(fresh, "explore").Tools) != 0 {
-		t.Error("a new turn still sees the specialists after Smart Agent was turned off")
+		t.Error("a new turn still sees the specialists after orchestration was turned off")
 	}
 }
 
@@ -497,10 +500,10 @@ func TestSynchronousDelegationPinsAtAdmissionNotAtArrival(t *testing.T) {
 	// An unpinned context, which is what an auto-delegated turn and a
 	// direct SpawnSync both arrive with.
 	admitted := loop.pinSmart(context.Background())
-	loop.SetSmartAgentEnabled(false)
+	loop.SetOrchestrateEnabled(false)
 
-	if !loop.smartOn(admitted) {
-		t.Fatal("work admitted while Smart Agent was on lost its state when the switch went off")
+	if !loop.orchestrating(admitted) {
+		t.Fatal("work admitted while orchestration was on lost its state when the switch went off")
 	}
 	if len(loop.agentConfig(admitted, "explore").Tools) == 0 {
 		t.Error("the specialist admitted under the old state resolved to an unrestricted agent")

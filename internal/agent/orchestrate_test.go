@@ -306,12 +306,17 @@ func TestThePlanPolicyFollowsItsOwnSwitch(t *testing.T) {
 		t.Error("a stage inside a run was told to write plans")
 	}
 
-	// Not with nobody to delegate to.
+	// One declared agent is not nobody to delegate to: orchestration
+	// brings the built-in specialists, so a plan has stages to give them.
 	solo := orchestrateLoop(t, m.server(t).URL)
 	solo.Config.Agents = map[string]config.AgentConfig{"only": {Profile: "m"}}
 	solo.SetOrchestrateEnabled(true)
-	if got := solo.planPolicyFor(solo.pinSmart(context.Background()), "main", "only", "m"); got != "" {
-		t.Error("a config with one agent was told to write plans anyway")
+	soloCtx := solo.pinSmart(context.Background())
+	if _, ok := solo.delegatableAgents(soloCtx)["explore"]; !ok {
+		t.Fatal("orchestration did not bring the specialists")
+	}
+	if got := solo.planPolicyFor(soloCtx, "main", "only", "m"); got == "" {
+		t.Error("a config with one declared agent and the specialists was told nothing about plans")
 	}
 }
 

@@ -17,7 +17,7 @@ const { load } = require('./harness');
 const SETTINGS = {
   auto_compact_enabled: true, show_tps: true, auto_delegate: false,
   auto_delegate_agent: '', auto_delegate_match: [],
-  smart_agent: false, smart_agent_roster: ['explore', 'oracle'],
+  smart_agent: false, orchestrate_roster: ['explore', 'oracle'],
   orchestrate: false, model_invocable: false, model_commands: [],
   skip_permissions: false, permission_rules: {}, can_edit_permissions: true,
 };

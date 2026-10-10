@@ -179,7 +179,7 @@ func (t *OrchestrateTool) refusal(ctx context.Context) string {
 		return "not inside a debate."
 	}
 	if len(t.loop.DelegatableAgents(ctx)) < 2 {
-		return "there is only one agent configured, so there is nobody to delegate a stage to. Turn on Smart Agent for the built-in roster, or declare agents in config.json."
+		return "there is nobody to delegate a stage to: the built-in specialists need a profile in config.json to run on, and at most one agent is declared."
 	}
 	return ""
 }

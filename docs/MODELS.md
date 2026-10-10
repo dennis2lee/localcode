@@ -12,7 +12,7 @@ See [USAGE.md](USAGE.md#config-file-configjson) for configuration field definiti
 
 ## Quick pick
 
-The shipped `config.example.json` is the recommended starting shape: three profiles in three cost classes, with the specialists routed between them when Smart Agent is on.
+The shipped `config.example.json` is the recommended starting shape: three profiles in three cost classes, with the specialists routed between them when orchestration is on.
 
 | Profile | For | Example |
 |---|---|---|

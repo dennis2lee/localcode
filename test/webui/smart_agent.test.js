@@ -36,7 +36,7 @@ test('a daemon with it already on opens with the box ticked', async () => {
       'GET /api/settings': {
         auto_compact_enabled: true, show_tps: true, auto_delegate: false,
         auto_delegate_agent: '', auto_delegate_match: [],
-        smart_agent: true, smart_agent_roster: ['explore', 'oracle'],
+        smart_agent: true, orchestrate_roster: ['explore', 'oracle'],
         skip_permissions: false, permission_rules: {}, can_edit_permissions: true,
       },
     },
@@ -44,9 +44,9 @@ test('a daemon with it already on opens with the box ticked', async () => {
   await openSettings(app);
 
   assert.equal(app.el('smart-agent-checkbox').checked, true);
-  // The roster is the part the page cannot know for itself: it depends on
-  // the daemon's build and on which profiles the config has.
-  assert.match(app.el('smart-agent-note').textContent, /explore, oracle/);
+  // The specialists are orchestration's, so this note does not name them.
+  assert.match(app.el('smart-agent-note').textContent, /^On\./);
+  assert.doesNotMatch(app.el('smart-agent-note').textContent, /explore|oracle/);
 });
 
 test('ticking it tells the daemon', async () => {
@@ -73,7 +73,7 @@ test('unticking it tells the daemon too', async () => {
       'GET /api/settings': {
         auto_compact_enabled: true, show_tps: true, auto_delegate: false,
         auto_delegate_agent: '', auto_delegate_match: [],
-        smart_agent: true, smart_agent_roster: ['explore'],
+        smart_agent: true, orchestrate_roster: ['explore'],
         skip_permissions: false, permission_rules: {}, can_edit_permissions: true,
       },
       'POST /api/settings/smart-agent': { smart_agent: false, applied: true, persisted: true },
@@ -173,7 +173,9 @@ test('the persistence warning clears on the next successful change', async () =>
 // What the switch says it does, in the sentence beside the box.
 //
 // The sentence is static markup, so nothing keeps it true except a test
-// that names what the switch gates today. Each pattern below stands for
+// that names what the switch gates today, and what it no longer does:
+// delegation moved to orchestration, and a sentence still promising
+// sub-agents sends someone to the wrong switch. Each pattern below stands for
 // something the code does with the switch on and not with it off (the Go
 // tests next to that code are the proof; this holds the sentence to the
 // same list). The things it must not claim are as much of the contract:
@@ -187,7 +189,6 @@ test('the persistence warning clears on the next successful change', async () =>
 test('the sentence beside the box names what the switch gates, in one short line', () => {
   const label = labelText('smart-agent-checkbox');
   for (const [what, pattern] of [
-    ['the specialist roster', /specialist sub-agents/],
     ['the plan and ask tools', /plan and ask tools/],
     ['model fallback', /model fallback/],
     ['prompt caching', /prompt caching/],
@@ -197,30 +198,29 @@ test('the sentence beside the box names what the switch gates, in one short line
   }
   assert.doesNotMatch(label, /workspace|boundary/i,
     'the workspace boundary is not gated by Smart Agent');
+  assert.doesNotMatch(label, /delegat|sub-agent|specialist/i,
+    'delegation is gated by orchestration, not Smart Agent');
   assert.doesNotMatch(label, /[\u2013\u2014]/, 'an em dash or en dash in a settings sentence');
   assert.ok(label.length <= 120, `${label.length} characters is long-winded for a summary`);
 });
 
-// Off is not "one model": Task is offered whenever the config declares two
-// agents, with the switch or without it. What the switch adds is the
-// built-in six, so what is left is the agents config.json declares.
-test('off, the note says delegation is limited to the agents in config.json', async () => {
+// Off says nothing about delegation, which this switch no longer touches.
+test('off, the note says nothing about delegation', async () => {
   const app = await load();
   await openSettings(app);
 
   const note = app.el('smart-agent-note').textContent;
   assert.match(note, /^Off\./);
-  assert.match(note, /config\.json/);
-  assert.doesNotMatch(note, /one model/i);
+  assert.doesNotMatch(note, /delegat|agent/i);
 });
 
-test('on, the note names the roster, the cost and where the turn log goes', async () => {
+test('on, the note says where the turn log goes and nothing about delegation', async () => {
   const app = await load({
     routes: {
       'GET /api/settings': {
         auto_compact_enabled: true, show_tps: true, auto_delegate: false,
         auto_delegate_agent: '', auto_delegate_match: [],
-        smart_agent: true, smart_agent_roster: ['explore', 'oracle'],
+        smart_agent: true, orchestrate_roster: ['explore', 'oracle'],
         skip_permissions: false, permission_rules: {}, can_edit_permissions: true,
       },
     },
@@ -229,7 +229,6 @@ test('on, the note names the roster, the cost and where the turn log goes', asyn
 
   const note = app.el('smart-agent-note').textContent;
   assert.match(note, /^On\./);
-  assert.match(note, /explore, oracle/);
-  assert.match(note, /more model calls/i);
   assert.match(note, /~\/\.localcode\/trace/);
+  assert.doesNotMatch(note, /explore|oracle|delegat|more model calls/i);
 });

@@ -25,7 +25,7 @@ func TestThePromptInventoryIsWellFormed(t *testing.T) {
 	// or the constant is a lie that compiles.
 	for _, id := range []string{
 		AssetBaseSystem, AssetProjectRules, AssetAgentPrompt,
-		AssetOrchestration, AssetTrustBoundary, AssetModelQuirk,
+		AssetOrchestration, AssetWorkPolicy, AssetTrustBoundary, AssetModelQuirk,
 	} {
 		if _, ok := r.Get(id); !ok {
 			t.Errorf("%s is named in code but not registered", id)
@@ -44,6 +44,7 @@ func TestAssemblyReproducesTheConcatenationItReplaced(t *testing.T) {
 		Role:       prompt.RoleOrchestrator,
 		Model:      "gemma-3-27b",
 		Family:     modelFamily("gemma-3-27b"),
+		Flags:      map[string]bool{"orchestrate": true},
 		Values: map[string]string{
 			valBaseSystem:   "BASE",
 			valSkillsIndex:  "SKILLS",
@@ -72,9 +73,10 @@ func TestAssemblyReproducesTheConcatenationItReplaced(t *testing.T) {
 	}
 }
 
-// Smart Agent off means the bundle's own assets are not in the request,
-// and the manifest says so with the reason rather than leaving them
-// silently absent.
+// Each switch's assets are absent while it is off, and the manifest says
+// which switch with the reason rather than leaving them silently absent.
+// The orchestration policy follows orchestration and not Smart Agent: it
+// is the one that talks about delegating.
 func TestSmartAgentAssetsAreAbsentAndExplainedWhenOff(t *testing.T) {
 	actx := prompt.ActivationContext{
 		SmartAgent: false,
@@ -84,21 +86,36 @@ func TestSmartAgentAssetsAreAbsentAndExplainedWhenOff(t *testing.T) {
 		Values: map[string]string{
 			valBaseSystem:   "BASE",
 			valOrchestrator: "ORCHESTRATION",
+			valWorkPolicy:   "WORK",
 		},
 	}
 	env := prompt.Assemble(promptRegistry(), actx)
 
-	if strings.Contains(env.SystemText(), smart.TrustBoundary) {
-		t.Error("the trust boundary reached a request with smart agent off")
+	for _, text := range []string{smart.TrustBoundary, "ORCHESTRATION", "WORK"} {
+		if strings.Contains(env.SystemText(), text) {
+			t.Errorf("%.40q reached a request with both switches off", text)
+		}
+	}
+	for id, reason := range map[string]string{
+		AssetTrustBoundary: "smart agent is off",
+		AssetWorkPolicy:    "smart agent is off",
+		AssetOrchestration: "orchestration is off",
+	} {
+		why, ok := env.Manifest.Explain(id)
+		if !ok || !strings.Contains(why, reason) {
+			t.Errorf("Explain(%s) = %q, want it excluded because %s", id, why, reason)
+		}
+	}
+
+	// Smart Agent on and orchestration off: the work policy, never the
+	// delegation policy.
+	actx.SmartAgent = true
+	env = prompt.Assemble(promptRegistry(), actx)
+	if !strings.Contains(env.SystemText(), "WORK") {
+		t.Error("Smart Agent's work policy was not sent with Smart Agent on")
 	}
 	if strings.Contains(env.SystemText(), "ORCHESTRATION") {
-		t.Error("the orchestration policy reached a request with smart agent off")
-	}
-	for _, id := range []string{AssetTrustBoundary, AssetOrchestration} {
-		why, ok := env.Manifest.Explain(id)
-		if !ok || !strings.Contains(why, "smart agent is off") {
-			t.Errorf("Explain(%s) = %q, want it excluded for the stated reason", id, why)
-		}
+		t.Error("the delegation policy was sent with orchestration off")
 	}
 }
 
@@ -113,6 +130,7 @@ func TestASpecialistGetsTheBoundaryButNotTheOrchestrationPolicy(t *testing.T) {
 		Agent:      "explore",
 		Role:       prompt.RoleSpecialist,
 		Model:      "claude-opus-5",
+		Flags:      map[string]bool{"orchestrate": true},
 		Values: map[string]string{
 			valBaseSystem:   "BASE",
 			valAgentPrompt:  "find things",
@@ -253,6 +271,7 @@ func TestTheInventoryAssemblesInTheGoldenOrder(t *testing.T) {
 		Role:       prompt.RoleOrchestrator,
 		Model:      "gemma-3-27b",
 		Family:     modelFamily("gemma-3-27b"),
+		Flags:      map[string]bool{"orchestrate": true},
 		Values: map[string]string{
 			valBaseSystem: "b", valSkillsIndex: "s", valMemoryPolicy: "mp", valMemoryIndex: "m",
 			valProjectRules: "r", valAgentPrompt: "a", valOrchestrator: "o",
@@ -269,6 +288,17 @@ func TestTheInventoryAssemblesInTheGoldenOrder(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("assembly order:\n got %v\nwant %v", got, want)
 	}
+
+	// A turn that does the work itself has the work policy in the same
+	// place.
+	actx.Flags = nil
+	actx.Values[valOrchestrator] = ""
+	actx.Values[valWorkPolicy] = "w"
+	want[6] = AssetWorkPolicy
+	got = prompt.Assemble(promptRegistry(), actx).Manifest.SelectedIDs()
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("assembly order without orchestration:\n got %v\nwant %v", got, want)
+	}
 }
 
 // SW-05 over the whole inventory: with Smart Agent off, no asset that
@@ -284,12 +314,12 @@ func TestNoSmartAgentAssetSurvivesTheSwitchBeingOff(t *testing.T) {
 		Family:     modelFamily("gemma-3-27b"),
 		Values: map[string]string{
 			valBaseSystem: "b", valSkillsIndex: "s", valMemoryPolicy: "mp", valMemoryIndex: "m",
-			valProjectRules: "r", valAgentPrompt: "a", valOrchestrator: "o",
+			valProjectRules: "r", valAgentPrompt: "a", valOrchestrator: "o", valWorkPolicy: "w",
 			valModelQuirk: quirkNote("gemma-3-27b"),
 		},
 	}
 	m := prompt.Assemble(promptRegistry(), actx).Manifest
-	smartOnly := map[string]bool{AssetOrchestration: true, AssetTrustBoundary: true}
+	smartOnly := map[string]bool{AssetWorkPolicy: true, AssetTrustBoundary: true}
 	for _, id := range m.SelectedIDs() {
 		if smartOnly[id] {
 			t.Errorf("%s reached a request with smart agent off", id)
@@ -384,11 +414,11 @@ func TestFixedScenarioContextComparison(t *testing.T) {
 		return m
 	}
 
-	main := scenario("main", prompt.ActivationContext{SmartAgent: true, Agent: "general-purpose",
+	main := scenario("main", prompt.ActivationContext{SmartAgent: true, Agent: "general-purpose", Flags: map[string]bool{"orchestrate": true},
 		Role: prompt.RoleOrchestrator, Model: "gemma-3-27b", Family: modelFamily("gemma-3-27b"), Lifecycle: prompt.LifecycleTurn})
-	child := scenario("specialist", prompt.ActivationContext{SmartAgent: true, Agent: "explore",
+	child := scenario("specialist", prompt.ActivationContext{SmartAgent: true, Agent: "explore", Flags: map[string]bool{"orchestrate": true},
 		Role: prompt.RoleSpecialist, Model: "gemma-3-27b", Family: modelFamily("gemma-3-27b"), Lifecycle: prompt.LifecycleTurn})
-	fb := scenario("fallback", prompt.ActivationContext{SmartAgent: true, Agent: "general-purpose",
+	fb := scenario("fallback", prompt.ActivationContext{SmartAgent: true, Agent: "general-purpose", Flags: map[string]bool{"orchestrate": true},
 		Role: prompt.RoleOrchestrator, Model: "claude-opus-5", Family: modelFamily("claude-opus-5"), FallbackIndex: 1, Lifecycle: prompt.LifecycleTurn})
 	compact := scenario("compaction", prompt.ActivationContext{SmartAgent: true, Lifecycle: prompt.LifecycleCompaction})
 	off := scenario("smart-off", prompt.ActivationContext{SmartAgent: false, Agent: "general-purpose",

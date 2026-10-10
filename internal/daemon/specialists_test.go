@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Choosing a Smart Agent specialist by hand.
+// Choosing a built-in specialist by hand.
 //
 // The six specialists were delegatable and not selectable: GET
 // /api/agents listed Config.Agents alone, so Tab, the Web UI menu and
@@ -31,20 +31,22 @@ func agentNames(t *testing.T, d *Daemon) []AgentInfo {
 	return out
 }
 
-// With the switch on, the specialists are in the list; with it off they
-// are not, which is the same rule delegation has always followed.
+// With orchestration on, the specialists are in the list; with it off they
+// are not, which is the same rule delegation follows. Smart Agent alone does
+// not bring them: it is how one agent works, not a team.
 func TestTheSpecialistsAreOfferedWhileSmartAgentIsOn(t *testing.T) {
 	d := newTestDaemon(t, "http://127.0.0.1:1")
 
-	d.Loop.SetSmartAgentEnabled(false)
+	d.Loop.SetSmartAgentEnabled(true)
+	d.Loop.SetOrchestrateEnabled(false)
 	off := agentNames(t, d)
 	for _, a := range off {
 		if a.Builtin {
-			t.Errorf("%q is offered with Smart Agent off", a.Name)
+			t.Errorf("%q is offered with orchestration off and Smart Agent on", a.Name)
 		}
 	}
 
-	d.Loop.SetSmartAgentEnabled(true)
+	d.Loop.SetOrchestrateEnabled(true)
 	on := agentNames(t, d)
 	if len(on) <= len(off) {
 		t.Fatalf("%d agents with the switch on, %d with it off; the specialists are still missing", len(on), len(off))
@@ -71,7 +73,7 @@ func TestTheSpecialistsAreOfferedWhileSmartAgentIsOn(t *testing.T) {
 // And a name the listing just offered can actually be chosen.
 func TestASpecialistCanBeSwitchedTo(t *testing.T) {
 	d := newTestDaemon(t, "http://127.0.0.1:1")
-	d.Loop.SetSmartAgentEnabled(true)
+	d.Loop.SetOrchestrateEnabled(true)
 
 	var specialist string
 	for _, a := range agentNames(t, d) {
@@ -81,7 +83,7 @@ func TestASpecialistCanBeSwitchedTo(t *testing.T) {
 		}
 	}
 	if specialist == "" {
-		t.Skip("this configuration produces no specialists")
+		t.Fatal("orchestration is on and no specialist is listed")
 	}
 
 	if _, err := d.Loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {

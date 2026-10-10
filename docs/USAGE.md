@@ -84,8 +84,8 @@ The prompt may be an argument or stdin. Use stdin for prompts that contain newli
 | `--bare` | Loads only the base system prompt, workspace, and tools. Excludes `AGENTS.md`, `CLAUDE.md`, skills, memory, custom commands, and hooks. Creates no memory-index directory. Suitable for controlled comparisons. |
 | Permission request | Refused immediately because no interactive client can answer it. `--skip-permissions` is equivalent to `/permission-skip-all` for the run. |
 | Failure | Non-zero exit status. JSON output includes an `error` field. |
-| Smart Agent | Supports the six specialists plus `Task`, `TaskBackground`, `TaskCollect`, and `update_plan` when `smart_agent` is enabled. |
-| Orchestration | Available when `orchestrate` is enabled, but every plan requires permission, and there is nobody here to ask. Without one of the following settings the tool is not offered at all, so the model does not orchestrate rather than being refused after planning. |
+| Smart Agent | Supports `update_plan` and the rest of Smart Agent when `smart_agent` is enabled. |
+| Orchestration | The six specialists plus `Task`, `TaskBackground` and `TaskCollect` when `orchestrate` is enabled. The `Orchestrate` tool is available too, but every plan requires permission, and there is nobody here to ask. Without one of the following settings the tool is not offered at all, so the model does not orchestrate rather than being refused after planning. |
 
 ```
 localcode run --skip-permissions "..."
@@ -255,7 +255,7 @@ Configuration uses a global file plus an optional project override. Use `config.
 
 | File | What it is |
 |---|---|
-| `config.example.json` | Complete key reference plus a working orchestration setup with three providers, three `smart-*` profiles, Smart Agent, and six specialist definitions. |
+| `config.example.json` | Complete key reference plus a working setup with three providers, three `smart-*` profiles, Smart Agent, and six specialist definitions for when orchestration is on. |
 
 #### Comments: the file is JSONC
 
@@ -381,7 +381,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `write_outside_workspace` | The daemon default for `write_outside`. |
 | `hooks` | Shell commands run at lifecycle points. See [Hooks](#hooks). |
 | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
-| `smart_agent` | Turns on the built-in specialist roster and the orchestration prompt. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
+| `smart_agent` | Turns on the work-order prompt, enhanced tools, fallback, the turn log, cache markers and credential-path checks. It delegates nothing. Off unless set to true; also `/config smart_agent` and the settings window. See [Smart Agent](#smart-agent). |
 | `model_invocable` | The switch for whether the model may run commands itself. Off unless set; `/model-invocable` toggles it. On opens nothing by itself: each built-in must be named in `model_commands`, and each custom command or skill must opt in from its own frontmatter. See [/model-invocable](#model-invocable). |
 | `model_commands` | Which built-in commands the model may run, each with its leading slash. Empty, the default, means none. Inert while `model_invocable` is off. |
 | `auto_compact_enabled` | Automatic compaction past the threshold. Opencode spelling `compaction.auto` is also accepted. On unless set to false; `/auto-compact` toggles it. |
@@ -1160,7 +1160,7 @@ Settings that can be toggled while running. They apply daemon wide rather than p
 | `/config auto_compact on\|off` | Automatic compaction; `/auto-compact` is the fuller command, with a threshold |
 | `/config show_tps on\|off` | The tokens per second reading under the prompt |
 | `/config auto_delegate on\|off` | Sending matching prompts to a cheaper sub agent, see [Auto delegation](#auto-delegation) |
-| `/config smart_agent on\|off` | The built-in specialist roster and the orchestration prompt, see [Smart Agent](#smart-agent). Reports the roster it turned on, or says why it is empty. |
+| `/config smart_agent on\|off` | Smart Agent, see [Smart Agent](#smart-agent). |
 | `/orchestrate on\|off` | Enable or disable validated stage plans. Default: off. Requires delegation targets. See [Orchestration](#orchestration). |
 
 Each change records a `config.changed` event on that session and the Web UI updates its status bar right away. A newly opened client reads current values from `GET /api/settings`.
@@ -1487,8 +1487,8 @@ The following daemon commands work in both clients.
 
 | Command | Setting | What it does |
 |---|---|---|
-| `/smart-agent` | `smart_agent` | The specialist roster, the fallback chain, the trace, the prompt cache markers and the guards. See [Smart Agent](#smart-agent). |
-| `/orchestrate` | `orchestrate` | The Orchestrate tool. Needs at least two agents to delegate to, so in practice Smart Agent as well. See [Orchestration](#orchestration). |
+| `/smart-agent` | `smart_agent` | The work-order prompt, the fallback chain, the trace, the prompt cache markers and the guards. See [Smart Agent](#smart-agent). |
+| `/orchestrate` | `orchestrate` | Delegation: the specialist roster, `Task`, the background pair, the delegation policy and the Orchestrate tool. Reports the agents it can delegate to, or says why there are none. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Muse tab. |
 | `/fold-thinking` | `fold_thinking` | A Muse model's reasoning as a labelled block that folds when the answer starts. See [What the transcript shows](#what-the-transcript-shows). Also on the settings Muse tab. |
@@ -1515,7 +1515,7 @@ Toggle commands accept no argument to invert the current value, or `on` and `off
 
 Dedicated daemon-wide commands save to config.json. Per-conversation commands save with the session. `/config` changes apply only to the running daemon. If persistence fails, the runtime change still applies and the response reports the failure.
 
-Replies report inactive configurations, such as Smart Agent without profiles or auto-delegation without a configured target. `/permission-skip-all on` warns that shell commands and external paths no longer prompt. Explicit `deny` rules still apply.
+Replies report inactive configurations, such as orchestration without profiles for the specialists or auto-delegation without a configured target. `/permission-skip-all on` warns that shell commands and external paths no longer prompt. Explicit `deny` rules still apply.
 
 `/config` still works and still lists all four settings including `auto_compact`.
 
@@ -1955,7 +1955,7 @@ If the turn happens to finish in the instant between your pressing Enter and the
 
 ## Part 7. Agents and automation
 
-Agents select models and tool scopes. Smart Agent adds built-in specialists. Orchestration runs explicit stage plans. Scheduled and repeating tasks require the daemon to remain running.
+Agents select models and tool scopes. Smart Agent changes how one agent works. Orchestration adds the built-in specialists, delegation and explicit stage plans. Scheduled and repeating tasks require the daemon to remain running.
 
 ### Available tools
 
@@ -1972,9 +1972,9 @@ Agents select models and tool scopes. Smart Agent adds built-in specialists. Orc
 | `check` | No | Run this project's own `verify_command` and report its output and exit status. Registered only when that key is set. One run at a time per directory, so a concurrent panel of reviewers does not start several copies of your test suite in one tree; a call that queued says so. |
 | `session_read` | No | Read another conversation on this daemon: `mode=summary` for what it concluded and which files it touched, `mode=transcript` for its messages a page at a time. Not offered to a delegated sub agent. See [Referring to another conversation](#referring-to-another-conversation-with-name) |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server. Never in a turn `localcode run` builds itself, which connects no MCP servers; a `--session` turn routed to a running daemon has the daemon's. |
-| `Task` | No | Delegate to another named agent and wait for its result. Offered only when there are 2 or more agents to delegate to, which [Smart Agent](#smart-agent) is one way to arrange. |
-| `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [Smart Agent](#smart-agent) on. |
-| `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [Smart Agent](#smart-agent) on. |
+| `Task` | No | Delegate to another named agent and wait for its result. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
+| `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [orchestration](#orchestration) on. |
+| `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [orchestration](#orchestration) on. |
 | `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. In a turn with nobody to ask — `localcode run` or a scheduled prompt — it is not offered at all unless something already authorizes it: `skip_all`, `skip_tools`, or an `"Orchestrate": "allow"` rule. A background task is not one of those turns: its permission question is mirrored into the conversation that started it and answered there, so with the switch on and two agents to delegate to it is offered the tool with nothing pre-authorizing it. A delegated sub-agent keeps the tool but is not given the orchestration prompt. It asks on every call and a run is up to 32 agent turns, so a turn that would have to ask loses the tool rather than building a whole plan and being refused at the last step. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 | `Verdict` | No | Report a review's result as a boolean plus findings. Offered only to a reviewer inside a debate. See [Debate](#debate). |
@@ -2021,7 +2021,7 @@ An explicit agent definition replaces the built-in specialist with the same name
 | `permission` | Per-agent permission overrides. Maps tool names or glob patterns to `allow`, `ask`, or `deny`. Agent rules take precedence over global permissions. |
 | `steps` | Turn iteration cap. Limits the number of tool execution rounds for this agent in a single turn. When reached, localcode logs a notice and requests a final text response without tools. Accepts `maxSteps` as an alias. Negative values are rejected. |
 
-**The `Task` tool** registers automatically once `agents` has 2 or more entries. When the model calls `Task({"agent":"explore","prompt":"..."})`:
+**The `Task` tool** is offered while [orchestration](#orchestration) is on and there are 2 or more agents to delegate to. With orchestration off the agents declared here can still be chosen by hand, and none of them is delegated to. When the model calls `Task({"agent":"explore","prompt":"..."})`:
 
 1. A new `explore` session is created, recording `task.spawned` on the parent. It does not queue: `max_concurrent_tasks` bounds background fan out, and a synchronous delegation cannot fan out.
 2. One turn runs **synchronously** with `explore`'s profile, prompt, and tools. Unlike [background tasks](#background-tasks), the delegating agent's turn waits for this.
@@ -2052,7 +2052,7 @@ Under a shell that reads the line differently the pieces are not the shell's pie
 
 ### Orchestration
 
-Orchestration runs a validated multi-stage plan. It is disabled by default and has three equivalent controls:
+Orchestration is everything that hands work to another agent. It is disabled by default. With it off the model delegates to no agent, including agents declared in config.json. It has three equivalent controls:
 
 | Control | Location or effect |
 |---|---|
@@ -2060,7 +2060,17 @@ Orchestration runs a validated multi-stage plan. It is disabled by default and h
 | Settings window | The Orchestration section, under Smart Agent. |
 | `"orchestrate": true` | In config.json. |
 
-At least two delegation targets are required. Enabling orchestration without them is allowed but has no effect. The UI and command response report this condition.
+With it on:
+
+| Added | Detail |
+|---|---|
+| Six specialist agents | `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. They exist without being configured, and disappear again when the switch is turned off. See [What the roster needs from your config](#what-the-roster-needs-from-your-config). |
+| `Task` | Delegate one request to an agent and wait for its answer. Offered while there are two or more agents to delegate to. |
+| `TaskBackground` and `TaskCollect` | Launch several agents at once and pick up the answers together. See [Running several at once](#running-several-at-once). |
+| A delegation policy | Added to the system prompt of top level sessions. It tells the model to work out what is being asked, send wide reading to a sub agent, do the narrow work itself, verify before reporting, and say what it checked. |
+| `Orchestrate` | A validated multi-stage plan of delegated stages, described below. |
+
+Delegation adds model calls and token usage. The specialists need at least one profile in config.json. With no profile for them and at most one declared agent there is nobody to delegate to, and `/orchestrate on` says so.
 
 `Task` delegates one request at a time. `Orchestrate` declares stage order, fanout, result types, and limits before execution.
 
@@ -2068,7 +2078,7 @@ The model submits a plan through `Orchestrate`. LocalCode validates agent names,
 
 #### What the model is told
 
-An orchestration policy is added to top-level turns when the feature is enabled.
+Two policies are added to top-level turns while the feature is on: the delegation policy in the table above, and a plan policy saying when a plan is worth its cost.
 
 Use orchestration for independent review dimensions, per-item checks, or structured surveys. Use `Task` for one delegated question.
 
@@ -2147,42 +2157,9 @@ A stage is one of three kinds:
 
 Unsupported: per-item pipelining between stages, resuming runs, and saved plans.
 
-### Smart Agent
-
-Smart Agent enables specialist delegation, enhanced tools, fallback, tracing, cache markers, and credential-path checks. It is disabled by default. Use the settings window, `/smart-agent on|off`, `/config smart_agent on|off`, or `"smart_agent": true`.
-
-Each admitted turn retains its initial Smart Agent setting:
-
-| Unit of work | Sees the change |
-|---|---|
-| A message not yet sent | Yes, immediately |
-| A turn already running | No. Its agent roster, tool allowlist, the delegation roster its `Task` and `TaskBackground` schemas advertise, fallback chain, cache markers, credential guards and turn log all stay as they were when it started, even if it is in a long tool loop |
-| A sub agent started by `Task` | No. It runs under the state its parent turn was admitted with |
-| A background task launched with `TaskBackground` | No, including while it is waiting for a free slot. A specialist admitted with a read only tool list starts with that list whenever it eventually runs |
-
-If the settings window cannot write config.json it says so beside the switch: the change is applied to the running daemon either way, and the warning is only about whether it will survive a restart.
-
-Specialist delegation can add model calls and token usage. Enable it explicitly for workloads that benefit from separate contexts.
-
-#### What it adds
-
-| Added | Detail |
-|---|---|
-| Six specialist agents | `explore`, `librarian`, `oracle`, `plan`, `implement`, `verify`. They exist without being configured, and disappear again when the switch is turned off. See [What the roster needs from your config](#what-the-roster-needs-from-your-config). |
-| An orchestration prompt | Appended to the system prompt of top level sessions only. It tells the model to work out what is being asked, send wide reading to a sub agent, do the narrow work itself, verify before reporting, and say what it checked. |
-| `TaskBackground` and `TaskCollect` | Launch several specialists at once and pick up the answers together, instead of waiting for each in turn. |
-| [File and search behavior](#file-and-search-behavior) | Paged reads, bounded search with explicit notices, and edit diagnostics. Grep completeness fixes apply in both modes. |
-| [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by retrying the same endpoint with a bounded backoff, then moving to the next profile, re-deriving the prompt for the model it moved to. |
-| [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
-| [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas, the system prompt and the tail of the conversation are marked, so the provider can serve the unchanged part of every request from cache. |
-| [File-access checks](#secrets-and-the-workspace-boundary) | Credential-path denial for `read_file`, `write_file`, and `edit`. The workspace boundary applies with Smart Agent off as well. |
-| `update_plan` and `ask_user` | A checklist the model keeps while it works, and a question put to the person without ending the turn. Neither is offered with Smart Agent off. See [Available tools](#available-tools). |
-| Prompt additions | The verify policy, the tokens left in the window, and a compaction note naming what the summary replaced. See [`/context`](#context). |
-| [A trust boundary](#the-trust-boundary) | The system prompt states which sources are instructions and which are data, and MCP output arrives framed as data. |
-
 #### What the roster needs from your config
 
-Smart Agent creates six specialists from available profiles. Explicit specialist declarations are optional.
+Orchestration creates six specialists from available profiles. Explicit specialist declarations are optional.
 
 The roster uses three profile categories:
 
@@ -2221,6 +2198,69 @@ Specialists are instructed to return fewer than 300 words, with file paths and l
 
 Explicit definitions under specialist names remain unchanged.
 
+#### Which model each specialist runs on
+
+Specialists select a capability class from configured profiles, not a hard-coded model.
+
+| Class | Wants | Matched from the model id by |
+|---|---|---|
+| `quick` | Low-latency lookup | `haiku`, `mini`, `flash`, `nano`, `lite`, `small`, `turbo`, and small parameter counts such as `-8b` |
+| `balanced` | Implementation | `sonnet`, `coder`, `medium`, `gpt-4`, and mid parameter counts such as `-30b` |
+| `deep` | Complex analysis | `opus`, `gpt-5`, `pro`, `ultra`, `thinking`, `-r1`, and large parameter counts such as `-70b` |
+
+The lightest matching class wins. For example, `gpt-5-mini` is `quick`. Missing classes fall back to the nearest class, then `default_profile`. A single configured profile serves all specialists.
+
+Use explicit profile names to override classification:
+
+```json
+"profiles": {
+  "smart-quick": { "provider": "local", "model": "whatever-my-server-loaded" },
+  "smart-deep":  { "provider": "bedrock", "model": "us.anthropic.claude-opus-4-6-v1" }
+}
+```
+
+#### Running several at once
+
+Use `TaskBackground` and `TaskCollect` for independent work:
+
+1. `TaskBackground({"agent":"explore","prompt":"..."})` three times. Each returns a task id straight away and the orchestrator keeps working.
+2. `TaskCollect({})` once. It waits for all of them and returns the answers in the order they were launched, so the model can match each answer to what it asked. `TaskCollect({"task_id":"..."})` takes just one and leaves the rest outstanding.
+
+Stopping collection does not cancel tasks. Unfinished tasks remain available for later collection. `TaskCollect` reports how many remain running.
+
+Maximum eight uncollected tasks per session. Further launches are refused until results are collected.
+
+Background tasks appear in the Web UI's right panel while they run, the same as tasks started through the API.
+
+### Smart Agent
+
+Smart Agent changes how one agent works: a work-order prompt, enhanced tools, fallback, tracing, cache markers, and credential-path checks. It delegates nothing: handing work to another agent is [Orchestration](#orchestration). It is disabled by default. Use the settings window, `/smart-agent on|off`, `/config smart_agent on|off`, or `"smart_agent": true`.
+
+Each admitted turn retains its initial Smart Agent setting:
+
+| Unit of work | Sees the change |
+|---|---|
+| A message not yet sent | Yes, immediately |
+| A turn already running | No. Its tool allowlist, fallback chain, cache markers, credential guards and turn log all stay as they were when it started, even if it is in a long tool loop. The orchestration switch is held the same way, so the delegation roster its `Task` and `TaskBackground` schemas advertise does not change mid-turn either |
+| A sub agent started by `Task` | No. It runs under the state its parent turn was admitted with |
+| A background task launched with `TaskBackground` | No, including while it is waiting for a free slot. A specialist admitted with a read only tool list starts with that list whenever it eventually runs |
+
+If the settings window cannot write config.json it says so beside the switch: the change is applied to the running daemon either way, and the warning is only about whether it will survive a restart.
+
+#### What it adds
+
+| Added | Detail |
+|---|---|
+| A work-order prompt | Appended to the system prompt of top level sessions that do not orchestrate. It tells the model to work out what is being asked, look narrowly, do the work itself, verify before reporting, and say what it checked. It names no sub agent. With orchestration on, the delegation policy states the same order instead. |
+| [File and search behavior](#file-and-search-behavior) | Paged reads, bounded search with explicit notices, and edit diagnostics. Grep completeness fixes apply in both modes. |
+| [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by retrying the same endpoint with a bounded backoff, then moving to the next profile, re-deriving the prompt for the model it moved to. |
+| [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
+| [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas, the system prompt and the tail of the conversation are marked, so the provider can serve the unchanged part of every request from cache. |
+| [File-access checks](#secrets-and-the-workspace-boundary) | Credential-path denial for `read_file`, `write_file`, and `edit`. The workspace boundary applies with Smart Agent off as well. |
+| `update_plan` and `ask_user` | A checklist the model keeps while it works, and a question put to the person without ending the turn. Neither is offered with Smart Agent off. See [Available tools](#available-tools). |
+| Prompt additions | The verify policy, the tokens left in the window, and a compaction note naming what the summary replaced. See [`/context`](#context). |
+| [A trust boundary](#the-trust-boundary) | The system prompt states which sources are instructions and which are data, and MCP output arrives framed as data. |
+
 <a id="the-tools-get-sharper-too"></a>
 
 #### File and search behavior
@@ -2258,40 +2298,6 @@ These grep behaviors apply with Smart Agent enabled or disabled.
 Notices name up to three affected paths, then report the remaining count.
 
 Complete searches retain the ordinary `file:line:text` format.
-
-#### Which model each specialist runs on
-
-Specialists select a capability class from configured profiles, not a hard-coded model.
-
-| Class | Wants | Matched from the model id by |
-|---|---|---|
-| `quick` | Low-latency lookup | `haiku`, `mini`, `flash`, `nano`, `lite`, `small`, `turbo`, and small parameter counts such as `-8b` |
-| `balanced` | Implementation | `sonnet`, `coder`, `medium`, `gpt-4`, and mid parameter counts such as `-30b` |
-| `deep` | Complex analysis | `opus`, `gpt-5`, `pro`, `ultra`, `thinking`, `-r1`, and large parameter counts such as `-70b` |
-
-The lightest matching class wins. For example, `gpt-5-mini` is `quick`. Missing classes fall back to the nearest class, then `default_profile`. A single configured profile serves all specialists.
-
-Use explicit profile names to override classification:
-
-```json
-"profiles": {
-  "smart-quick": { "provider": "local", "model": "whatever-my-server-loaded" },
-  "smart-deep":  { "provider": "bedrock", "model": "us.anthropic.claude-opus-4-6-v1" }
-}
-```
-
-#### Running several at once
-
-Use `TaskBackground` and `TaskCollect` for independent work:
-
-1. `TaskBackground({"agent":"explore","prompt":"..."})` three times. Each returns a task id straight away and the orchestrator keeps working.
-2. `TaskCollect({})` once. It waits for all of them and returns the answers in the order they were launched, so the model can match each answer to what it asked. `TaskCollect({"task_id":"..."})` takes just one and leaves the rest outstanding.
-
-Stopping collection does not cancel tasks. Unfinished tasks remain available for later collection. `TaskCollect` reports how many remain running.
-
-Maximum eight uncollected tasks per session. Further launches are refused until results are collected.
-
-Background tasks appear in the Web UI's right panel while they run, the same as tasks started through the API.
 
 #### Fallback chains: when a model will not answer
 
@@ -2454,7 +2460,7 @@ Tool restrictions are enforced both when schemas are exposed and before executio
 
 | Client | How to switch |
 |---|---|
-| TUI | **Tab** cycles through the selectable agents, the Smart Agent specialists included while that switch is on. The status line under the input box always shows `agent: <name>  ·  model: <model id>`, plus effort, context use and tok/s when those have an answer. |
+| TUI | **Tab** cycles through the selectable agents, the built-in specialists included while orchestration is on. The status line under the input box always shows `agent: <name>  ·  model: <model id>`, plus effort, context use and tok/s when those have an answer. |
 | Web UI | The header dropdown |
 | Both | `/agent` to list, `/agent <name>` to switch |
 
@@ -2462,7 +2468,7 @@ Switching posts to `POST /api/sessions/{id}/agent`. On success an `agent.switche
 
 Use `plan` for analysis, then switch to a writable agent. `config.example.json` defines `implement` for this purpose.
 
-Selectable names are the ones a client was just shown: your own `agents` map, plus the six Smart Agent specialists while `/smart-agent` is on. Anything else is refused. Checking the configured map alone is what used to make the specialists reachable by delegation and not by hand — turning the switch off while a specialist is selected leaves a name that no longer resolves.
+Selectable names are the ones a client was just shown: your own `agents` map, plus the six built-in specialists while `/orchestrate` is on. Anything else is refused. Checking the configured map alone is what used to make the specialists reachable by delegation and not by hand — turning the switch off while a specialist is selected leaves a name that no longer resolves.
 
 ### Auto delegation
 

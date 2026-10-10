@@ -223,8 +223,10 @@ func TestATurnKeepsTheSmartAgentStateItStartedUnder(t *testing.T) {
 			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
 			fmt.Fprint(w, "data: [DONE]\n\n")
 			w.(http.Flusher).Flush()
-			// Off, while the turn is still running.
+			// Off, while the turn is still running: both switches, the
+			// turn log's and the roster's.
 			loop.SetSmartAgentEnabled(false)
+			loop.SetOrchestrateEnabled(false)
 			return
 		}
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n")
@@ -236,6 +238,7 @@ func TestATurnKeepsTheSmartAgentStateItStartedUnder(t *testing.T) {
 
 	loop = newSmartLoop(t, srv.URL)
 	loop.SetSmartAgentEnabled(true)
+	loop.SetOrchestrateEnabled(true)
 	tw := withTracing(t, loop)
 
 	sendOne(t, loop, "s1", "general-purpose")

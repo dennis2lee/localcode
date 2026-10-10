@@ -4,12 +4,16 @@ import "strings"
 
 // The orchestration prompt.
 //
-// This is the half of Smart Agent that does not fit in a config file. The
-// specialists in smart.go are capability; this is the instruction to use
-// them, and without it nothing changes: a model handed six delegation
+// This is the half of orchestration that does not fit in a config file.
+// The specialists in smart.go are capability; this is the instruction to
+// use them, and without it nothing changes: a model handed six delegation
 // targets and no policy about when to delegate will do what it has always
 // done, which is everything itself, in one context, until the context
 // runs out.
+//
+// Behind the orchestration switch, not Smart Agent's. Smart Agent is how
+// one agent works, and its own prompt is WorkPolicy below: the same order
+// of work, done by the agent itself.
 //
 // What it asks for, in order, is the thing the multi-agent harnesses this
 // is modelled on all converge on: work out what is actually being asked,
@@ -21,7 +25,7 @@ import "strings"
 
 // baseOrchestration is the default, written for models that follow a
 // policy stated once. Everything else in this file is a variant of it.
-const baseOrchestration = `Smart Agent is on for this session. You are the orchestrator: a technical lead with a team of specialist sub-agents, not a lone coder.
+const baseOrchestration = `Orchestration is on for this session. You are the orchestrator: a technical lead with a team of specialist sub-agents, not a lone coder.
 
 Work in this order.
 
@@ -81,7 +85,7 @@ Be concrete about when to delegate: if answering would mean opening more than ab
 // launch/collect flow is dropped entirely: it is the part these models get
 // wrong most often, and a background task launched and never collected is
 // worse than one that was never launched.
-const localVariant = `Smart Agent is on. You have specialist sub-agents available through the Task tool, and you are the one deciding when to use them.
+const localVariant = `Orchestration is on. You have specialist sub-agents available through the Task tool, and you are the one deciding when to use them.
 
 Rules:
 * Searching the codebase to find where something is: use Task with the explore agent. Do not grep the whole project yourself.
@@ -117,7 +121,7 @@ Before you say a task is done, verify it: run the build or the test and look at 
 // Selected by the shape of the roster rather than by the model id, which
 // is the other half of the fix: the id says which family a model is from,
 // and the question here is who else is on the team.
-const soloVariant = `Smart Agent is on. You have specialist sub-agents available through the Task tool, and you are the one deciding when to use them.
+const soloVariant = `Orchestration is on. You have specialist sub-agents available through the Task tool, and you are the one deciding when to use them.
 
 Every agent you can delegate to runs the same model you are running. So delegating buys exactly one thing: a context this conversation does not have to pay for. It does not buy a second opinion, a faster worker, or a better reader.
 
@@ -170,6 +174,42 @@ var promptVariants = []struct {
 	{"muse", localVariant},
 	{"devstral", localVariant},
 	{"granite", localVariant},
+}
+
+// The work policy.
+//
+// Smart Agent's own instruction, for a turn that does the work itself: the
+// orchestration prompt's order of work with the delegation taken out.
+// Understand, look narrowly, do it, check it, say what happened. Whether to
+// hand any of it to another agent is orchestration's question, behind its
+// own switch, and a model told it is "the orchestrator" of a team it was
+// never given delegates to nobody or narrates doing so.
+
+const baseWorkPolicy = `Smart Agent is on for this session. Work in this order.
+
+1. Understand. Say in one or two lines what is actually being asked, and what "done" looks like. If the request is genuinely ambiguous in a way that changes the work, ask before starting rather than guessing.
+2. Look narrowly. Search before you read, and read the parts that answer the question rather than a whole subsystem.
+3. Do the work. Make the changes and the decisions yourself.
+4. Verify. Before you say something is done, check it: run the build, run the tests, re-read the file you edited. Never report success you have not observed.
+5. Report. Say what changed, what you checked, and what you did not do.`
+
+// localWorkPolicy is the same for the smaller open-weight models, shorter
+// and flatter for the reason localVariant is.
+const localWorkPolicy = `Smart Agent is on.
+
+* Find what you need with glob and grep before reading files, and read the parts that answer the question.
+* Make the changes and the decisions yourself.
+* Before you say a task is done, verify it: run the build or the test and look at the result. Do not report success you have not seen.
+* Say what changed, what you checked, and what you did not do.`
+
+// WorkPolicy is Smart Agent's system prompt addition for a model, chosen
+// by the same family table as OrchestrationPrompt: a model that gets the
+// local orchestration variant gets the local work policy.
+func WorkPolicy(model string) string {
+	if OrchestrationPrompt(model, false) == localVariant {
+		return localWorkPolicy
+	}
+	return baseWorkPolicy
 }
 
 // OrchestrationPrompt is the orchestrator's system prompt addition for a

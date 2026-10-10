@@ -130,6 +130,7 @@ func runModelHome(t *testing.T, modelURL string) {
 	  "profiles": {"balanced": {"provider": "local", "model": "m"}},
 	  "default_profile": "balanced",
 	  "smart_agent": true,
+	  "orchestrate": true,
 	  "agents": {
 	    "general-purpose": {"profile": "balanced"},
 	    "helper": {"profile": "balanced", "description": "Looks things up."}

@@ -210,6 +210,10 @@ func (tm *TaskManager) childContext(launchCtx context.Context, traceID string) c
 	// And who launched it, for the same reason as the depth: without it a
 	// background child could hand its task straight back to its parent.
 	ctx = withChainFrom(ctx, launchCtx)
+	// The orchestration pin as well as Smart Agent's: the specialist
+	// roster follows orchestration, and a task queued as a read-only
+	// specialist must start as one even if the switch moved meanwhile.
+	ctx = config.WithOrchestrate(ctx, config.OrchestrateFor(launchCtx, tm.loop.Config))
 	return config.WithSmartAgent(ctx, tm.loop.Config.SmartAgentFor(launchCtx))
 }
 

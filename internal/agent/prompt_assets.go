@@ -48,9 +48,16 @@ const (
 	AssetProjectRules = "project.rules"
 	// AssetAgentPrompt is the role's own instructions from config.
 	AssetAgentPrompt = "agent.prompt"
-	// AssetOrchestration is the Smart Agent policy, for the turn that is
-	// doing the orchestrating and no other.
-	AssetOrchestration = "smart.orchestration"
+	// AssetOrchestration is the delegation policy, for the turn that is
+	// doing the orchestrating and no other. Orchestration's, behind its
+	// switch: see Loop.specialists for why it is not Smart Agent's.
+	AssetOrchestration = "orchestration.policy"
+
+	// AssetWorkPolicy is Smart Agent's own instruction: the order to work
+	// in, with no delegation in it. For the turn a person is having when
+	// it does not orchestrate; a turn that does gets the same order inside
+	// AssetOrchestration instead.
+	AssetWorkPolicy = "smart.work_policy"
 
 	// AssetPlanPolicy is what a turn is told about the Orchestrate tool:
 	// when a plan is worth its cost, and when Task is the answer instead.
@@ -106,6 +113,7 @@ const (
 	valProjectRules = "project_rules"
 	valAgentPrompt  = "agent_prompt"
 	valOrchestrator = "orchestration"
+	valWorkPolicy   = "work_policy"
 	valPlanPolicy   = "plan_policy"
 	valModelQuirk   = "model_quirk"
 	valVerifyPolicy = "verify_policy"
@@ -286,6 +294,33 @@ func promptRegistry() *prompt.Registry {
 		Render: func(a prompt.ActivationContext) string { return a.Value(valAgentPrompt) },
 	})
 
+	// Smart Agent's order of work, where the turn does not orchestrate.
+	// Before the orchestration policy's slot, which it never shares a
+	// request with.
+	r.Add(prompt.Asset{
+		ID:         AssetWorkPolicy,
+		Kind:       prompt.KindModeInstruction,
+		Provenance: prompt.FromProduct,
+		Trust:      prompt.TrustSystem,
+		Placement:  prompt.PlaceSystem,
+		Cache:      prompt.CacheSessionDynamic,
+		Order:      39,
+		Version:    "1",
+		Active: func(a prompt.ActivationContext) (bool, string) {
+			if !a.SmartAgent {
+				return false, "smart agent is off for this turn"
+			}
+			if a.Role != prompt.RoleOrchestrator {
+				return false, "this turn is a " + string(a.Role) + ", which follows its own prompt"
+			}
+			if a.Value(valWorkPolicy) == "" {
+				return false, "this turn orchestrates, and the orchestration policy states the same order"
+			}
+			return true, "smart agent is on and this turn does the work itself"
+		},
+		Render: func(a prompt.ActivationContext) string { return a.Value(valWorkPolicy) },
+	})
+
 	// After the agent's own prompt, deliberately: a specialist's
 	// instructions are never overridden by the orchestration policy, and
 	// a specialist does not receive it at all.
@@ -297,10 +332,10 @@ func promptRegistry() *prompt.Registry {
 		Placement:  prompt.PlaceSystem,
 		Cache:      prompt.CacheSessionDynamic,
 		Order:      40,
-		Version:    "1",
+		Version:    "2",
 		Active: func(a prompt.ActivationContext) (bool, string) {
-			if !a.SmartAgent {
-				return false, "smart agent is off for this turn"
+			if !a.Flags["orchestrate"] {
+				return false, "orchestration is off for this turn"
 			}
 			if a.Role != prompt.RoleOrchestrator {
 				return false, "this turn is a " + string(a.Role) + ", which does not orchestrate"
@@ -313,9 +348,8 @@ func promptRegistry() *prompt.Registry {
 		Render: func(a prompt.ActivationContext) string { return a.Value(valOrchestrator) },
 	})
 
-	// After the orchestration policy, and gated separately. A turn can
-	// orchestrate without being allowed to plan, which is the ordinary
-	// case: Smart Agent on, orchestrate off.
+	// After the orchestration policy, and gated separately: the plan
+	// policy also needs a turn that is not itself a stage.
 	r.Add(prompt.Asset{
 		ID:         AssetPlanPolicy,
 		Kind:       prompt.KindModeInstruction,

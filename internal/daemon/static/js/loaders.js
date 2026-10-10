@@ -98,7 +98,7 @@ export async function loadSettings() {
     app.orchestrate = !!s.orchestrate;
     app.modelInvocable = !!s.model_invocable;
     app.modelCommands = Array.isArray(s.model_commands) ? s.model_commands : [];
-    app.smartAgentRoster = s.smart_agent_roster || [];
+    app.orchestrateRoster = s.orchestrate_roster || [];
     app.skipPermissions = !!s.skip_permissions;
     app.keepGoing = s.keep_going !== false;
     app.foldThinking = s.fold_thinking !== false;

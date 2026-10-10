@@ -312,9 +312,9 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 
 	// Somewhere to delegate to.
 	//
-	// Smart Agent is a roster of sub-agents plus a prompt telling the model
-	// to use them, and the prompt was already being sent from here: a run
-	// with smart_agent on was told to send its wide reading to a Task tool
+	// Orchestration is a roster of sub-agents plus a prompt telling the
+	// model to use them, and the prompt was already being sent from here: a
+	// run with the roster on was told to send its wide reading to a Task tool
 	// this process had never registered. That is worse than not shipping
 	// the feature at all — a policy describing a tool the model was not
 	// given is a turn spent looking for it, which is exactly what it looked

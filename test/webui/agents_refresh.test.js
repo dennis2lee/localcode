@@ -5,7 +5,7 @@
 //
 // The roster moves: an update handoff or a restart under an open window can
 // change which agents exist and which models their labels name, and turning
-// Smart Agent on or off adds or removes the six specialists. The page used
+// orchestration on or off adds or removes the six specialists. The page used
 // to fetch /api/agents once at startup and never again, so the dropdown
 // could offer an agent the daemon now refuses, or omit one it would accept.
 
@@ -55,14 +55,14 @@ test('after the stream reconnects, the dropdown offers what the daemon now offer
   );
 });
 
-test('a Smart Agent flip announced by the daemon reloads the dropdown', async () => {
+test('an orchestration flip announced by the daemon reloads the dropdown', async () => {
   let roster = V1;
   const app = await load({ routes: { 'GET /api/agents': () => roster } });
   const atLoad = agentCalls(app);
 
-  // Smart Agent turned on somewhere else: the specialists now exist.
+  // Orchestration turned on somewhere else: the specialists now exist.
   roster = V2;
-  app.sse.emit({ type: 'settings.changed', data: { smart_agent: true } });
+  app.sse.emit({ type: 'settings.changed', data: { orchestrate: true } });
   await app.settle();
 
   assert.equal(agentCalls(app), atLoad + 1, 'a roster-changing switch must refetch the roster');
@@ -77,8 +77,8 @@ test('the same switch announced without a flip refetches nothing', async () => {
   const app = await load();
   const atLoad = agentCalls(app);
 
-  // Every settings.changed snapshot carries smart_agent, flipped or not.
-  app.sse.emit({ type: 'settings.changed', data: { smart_agent: false } });
+  // Every settings.changed snapshot carries orchestrate, flipped or not.
+  app.sse.emit({ type: 'settings.changed', data: { orchestrate: false } });
   await app.settle();
 
   assert.equal(agentCalls(app), atLoad, 'an unchanged switch must not cost a roster fetch');
@@ -89,10 +89,10 @@ test('a flip arriving on the session-scoped channel reloads the dropdown too', a
   const app = await load({ routes: { 'GET /api/agents': () => roster } });
   const atLoad = agentCalls(app);
 
-  // "/config smart_agent on" typed at a prompt reaches this window as
+  // "/orchestrate on" typed at a prompt reaches this window as
   // config.changed rather than settings.changed.
   roster = V2;
-  app.sse.emit({ type: 'config.changed', data: { smart_agent: true } });
+  app.sse.emit({ type: 'config.changed', data: { orchestrate: true } });
   await app.settle();
 
   assert.equal(agentCalls(app), atLoad + 1);
@@ -100,4 +100,18 @@ test('a flip arriving on the session-scoped channel reloads the dropdown too', a
     dropdownLabels(app),
     ['general-purpose (test-model-9)', 'explore (test-model-3)'],
   );
+});
+
+// Smart Agent no longer brings the specialists, so flipping it changes no
+// agent and costs no roster fetch.
+test('a Smart Agent flip refetches nothing', async () => {
+  const app = await load();
+  const atLoad = agentCalls(app);
+
+  app.sse.emit({ type: 'settings.changed', data: { smart_agent: true } });
+  await app.settle();
+  app.sse.emit({ type: 'config.changed', data: { smart_agent: false } });
+  await app.settle();
+
+  assert.equal(agentCalls(app), atLoad, 'a switch that changes no agent must not cost a roster fetch');
 });
