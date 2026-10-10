@@ -475,6 +475,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				return fmt.Errorf("chat request: %w", err)
 			}
 			if next, ok := l.nextFallback(chain, &chainAt, err); ok {
+				// A model that cannot see is not offered view_image, here
+				// as at the start of a turn, and before the prompt for it
+				// is assembled from the tools on offer.
+				if !profileViewsImages(next.profile, modelOverride) {
+					allowedTools, advertised = withoutViewImage(l.Tools, allowedTools), withoutName(advertised, tools.ViewImageName)
+				}
 				if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 					l.reportFallback(sessionID, run, newRun, err)
 					fallbacks++
@@ -534,6 +540,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					return err
 				}
 				if next, ok := l.nextFallback(chain, &chainAt, err); ok {
+					if !profileViewsImages(next.profile, modelOverride) {
+						allowedTools, advertised = withoutViewImage(l.Tools, allowedTools), withoutName(advertised, tools.ViewImageName)
+					}
 					if newRun, berr := l.buildRun(ctx, sessionID, resolveAgent, agentCfg, next.name, next.profile, modelOverride, chainAt, advertised); berr == nil {
 						l.reportFallback(sessionID, run, newRun, err)
 						fallbacks++

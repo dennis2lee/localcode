@@ -91,3 +91,23 @@ func eventImages(blocks []provider.Block) []events.Image {
 	}
 	return out
 }
+
+// withoutViewImage is a turn's tool allowlist with view_image taken out,
+// for a fallback that moves the turn to a model that cannot see. nil means
+// every registered tool, so it is spelled out before one is removed.
+func withoutViewImage(reg *tools.Registry, allowed []string) []string {
+	if allowed == nil && reg != nil {
+		allowed = reg.Names()
+	}
+	return withoutName(allowed, tools.ViewImageName)
+}
+
+func withoutName(names []string, drop string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if n != drop {
+			out = append(out, n)
+		}
+	}
+	return out
+}

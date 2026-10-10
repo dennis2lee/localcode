@@ -115,7 +115,7 @@ A session object in answers is `{"id", "agent", "title", "workspace",
 state instead of merging events: `auto_compact_enabled`,
 `auto_compact_percent`, `keep_going`, `fold_thinking`, `muse_profiles`,
 `repeat_limit`, `smart_agent`, `orchestrate`, `model_invocable`,
-`model_commands`, `smart_agent_roster`, `show_tps`, `show_thinking`,
+`model_commands`, `orchestrate_roster`, `show_tps`, `show_thinking`,
 `show_timestamps`, `auto_delegate`, `auto_delegate_agent`,
 `auto_delegate_match`, `skip_permissions`, `permission_rules`,
 `can_edit_permissions`. `muse_profiles` lists the profiles whose model ID

@@ -340,8 +340,10 @@ var IgnoredOpencodeTools = []string{
 // file modifications, which in localcode are split between "edit" and
 // "write_file").
 var ToolAliases = map[string][]string{
-	"edit":  {"edit", "write_file"},
-	"read":  {"read_file"},
+	"edit": {"edit", "write_file"},
+	// opencode's read opens images as well as text, which localcode
+	// splits between read_file and view_image.
+	"read":  {"read_file", "view_image"},
 	"task":  {"Task", "TaskBackground", "TaskCollect"},
 	"skill": {"Skill"},
 	"bash":  {"bash"},
@@ -370,7 +372,7 @@ var ToolSwitchNames = map[string][]string{
 	// edit. Its older spelling is apply_patch.
 	"patch":       {"edit"},
 	"apply_patch": {"edit"},
-	"read":        {"read_file"},
+	"read":        {"read_file", "view_image"},
 	"task":        {"Task", "TaskBackground", "TaskCollect"},
 	"skill":       {"Skill"},
 	"bash":        {"bash"},
@@ -686,7 +688,7 @@ var secretPatterns = []string{
 // one. The shell is governed by its own rules, which is what
 // resolveShellCommand is for.
 var secretGuardedTools = map[string]bool{
-	"read_file": true, "write_file": true, "edit": true,
+	"read_file": true, "write_file": true, "edit": true, "view_image": true,
 }
 
 // secretGuard reports a shipped deny for a path that looks like a secret.

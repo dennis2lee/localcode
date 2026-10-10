@@ -20,7 +20,8 @@ func TestSecretsAreRefusedWithSmartAgentOn(t *testing.T) {
 		"/home/u/.aws/credentials", "/home/u/.kube/config",
 		"service-account-prod.json", "/home/u/.npmrc",
 	} {
-		for _, tool := range []string{"read_file", "write_file", "edit"} {
+		// view_image takes a path as well, so the same guard covers it.
+		for _, tool := range []string{"read_file", "write_file", "edit", "view_image"} {
 			if got := cfg.ResolvePermission(tool, path, false); got != DecisionDeny {
 				t.Errorf("%s %s = %q, want deny", tool, path, got)
 			}

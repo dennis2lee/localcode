@@ -131,6 +131,10 @@ func TestReleaseOpencodePermission_ReadAliasDeniesReadFile(t *testing.T) {
 	if got := cfg.ResolvePermission("read_file", "main.go", false); got != DecisionDeny {
 		t.Errorf("ResolvePermission(read_file) = %q, want %q", got, DecisionDeny)
 	}
+	// opencode's read opens images too, which here is view_image.
+	if got := cfg.ResolvePermission("view_image", "fig.png", false); got != DecisionDeny {
+		t.Errorf("ResolvePermission(view_image) = %q, want %q", got, DecisionDeny)
+	}
 }
 
 // TestReleaseOpencodePermission_PrecedenceExplicitToolBeatsAliasBothDirections tests

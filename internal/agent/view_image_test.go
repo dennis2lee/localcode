@@ -224,3 +224,19 @@ func TestTheAgentListSaysWhoCanViewImages(t *testing.T) {
 		t.Fatalf("no vision line in %q", desc)
 	}
 }
+
+// opencode's read opens images, so an agent whose tools block switches
+// read off has view_image switched off with it.
+func TestSwitchingReadOffSwitchesViewImageOff(t *testing.T) {
+	loop, _, _ := imageLoop(t, "claude-sonnet-5-5", nil)
+	// A tool the switch leaves alone, as every real registry has one: an
+	// allowlist with nothing left in it reads as no restriction at all.
+	loop.Tools.Register(tools.Glob{})
+	ctx := withViewsImages(context.Background(), true)
+	allowed := loop.toolsForTurn(ctx, config.AgentConfig{Profile: "balanced", ToolSwitches: map[string]bool{"read": false}})
+	for _, name := range []string{"read_file", tools.ViewImageName} {
+		if tools.IsAllowed(allowed, name) {
+			t.Errorf("%s is allowed for an agent that switched read off", name)
+		}
+	}
+}

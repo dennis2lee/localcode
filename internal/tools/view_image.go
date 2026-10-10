@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -82,6 +83,11 @@ func (ViewImage) Execute(ctx context.Context, input json.RawMessage) Result {
 	if info.IsDir() {
 		return Result{Content: fmt.Sprintf("%s is a directory, not an image file", args.Path), IsError: true}
 	}
+	// A pipe or a device has no size to check and may never end: opening a
+	// FIFO with no writer blocks, and reading one reads whatever arrives.
+	if !info.Mode().IsRegular() {
+		return Result{Content: fmt.Sprintf("%s is not a regular file", args.Path), IsError: true}
+	}
 	if info.Size() > MaxViewImageBytes {
 		return Result{
 			Content: fmt.Sprintf("%s is %d bytes, over the %d byte limit for an image. "+
@@ -90,7 +96,7 @@ func (ViewImage) Execute(ctx context.Context, input json.RawMessage) Result {
 			IsError: true,
 		}
 	}
-	data, err := os.ReadFile(path)
+	data, err := readAtMost(path, MaxViewImageBytes)
 	if err != nil {
 		return Result{Content: fmt.Sprintf("view %s: %v", args.Path, err), IsError: true}
 	}
@@ -109,4 +115,23 @@ func (ViewImage) Execute(ctx context.Context, input json.RawMessage) Result {
 		Content: fmt.Sprintf("%s: %s, %d bytes. The image follows.", args.Path, mediaType, len(data)),
 		Images:  []provider.Block{provider.ImageBlock(mediaType, data)},
 	}
+}
+
+// readAtMost reads a file that the size check let through, and refuses it
+// if it is longer by the time it is read: the stat and the read are two
+// moments, and a file being written grows between them.
+func readAtMost(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("it grew past the %d byte limit while it was being read", max)
+	}
+	return data, nil
 }

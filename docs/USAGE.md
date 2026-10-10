@@ -660,7 +660,7 @@ Permission switches belong to each conversation. Configuration values provide th
 |---|---|---|
 | `skip_all` | `/permission-skip-all` | Everything, the workspace boundary included |
 | `skip_tools` | `/permission-skip-tools` | Every tool prompt, and **not** a path that leaves the workspace |
-| `read_outside` | `/read-outside` | Reading outside the workspace (`read_file`, `grep`, `glob`) |
+| `read_outside` | `/read-outside` | Reading outside the workspace (`read_file`, `view_image`, `grep`, `glob`) |
 | `write_outside` | `/write-outside` | Writing outside the workspace (`write_file`, `edit`) |
 
 Use `skip_tools` to suppress tool prompts while retaining workspace-boundary prompts.
@@ -1975,7 +1975,7 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
 | `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [orchestration](#orchestration) on. |
 | `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [orchestration](#orchestration) on. |
-| `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. In a turn with nobody to ask — `localcode run` or a scheduled prompt — it is not offered at all unless something already authorizes it: `skip_all`, `skip_tools`, or an `"Orchestrate": "allow"` rule. A background task is not one of those turns: its permission question is mirrored into the conversation that started it and answered there, so with the switch on and two agents to delegate to it is offered the tool with nothing pre-authorizing it. A delegated sub-agent keeps the tool but is not given the orchestration prompt. It asks on every call and a run is up to 32 agent turns, so a turn that would have to ask loses the tool rather than building a whole plan and being refused at the last step. |
+| `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. In a turn with nobody to ask (`localcode run` or a scheduled prompt) it is not offered at all unless something already authorizes it: `skip_all`, `skip_tools`, or an `"Orchestrate": "allow"` rule. A background task is not one of those turns: its permission question is mirrored into the conversation that started it and answered there, so with the switch on and two agents to delegate to it is offered the tool with nothing pre-authorizing it. A delegated sub-agent keeps the tool but is not given the orchestration prompt. It asks on every call and a run is up to 32 agent turns, so a turn that would have to ask loses the tool rather than building a whole plan and being refused at the last step. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 | `Verdict` | No | Report a review's result as a boolean plus findings. Offered only to a reviewer inside a debate. See [Debate](#debate). |
 | `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and one-step plans are refused. The model is also told never to move a step from `pending` straight to `completed`, but that is guidance in the tool description rather than a refusal: the tool records the list it is given and does not compare it with the last one. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
@@ -2256,7 +2256,7 @@ If the settings window cannot write config.json it says so beside the switch: th
 | [Fallback chains](#fallback-chains-when-a-model-will-not-answer) | A turn survives a rate limit or an outage by retrying the same endpoint with a bounded backoff, then moving to the next profile, re-deriving the prompt for the model it moved to. |
 | [A turn log](#the-turn-log) | One JSON line per thing that happened, correlated across sub agents by a trace id. |
 | [Cache breakpoints](#prompt-cache-breakpoints) | The tool schemas, the system prompt and the tail of the conversation are marked, so the provider can serve the unchanged part of every request from cache. |
-| [File-access checks](#secrets-and-the-workspace-boundary) | Credential-path denial for `read_file`, `write_file`, and `edit`. The workspace boundary applies with Smart Agent off as well. |
+| [File-access checks](#secrets-and-the-workspace-boundary) | Credential-path denial for `read_file`, `view_image`, `write_file`, and `edit`. The workspace boundary applies with Smart Agent off as well. |
 | `update_plan` and `ask_user` | A checklist the model keeps while it works, and a question put to the person without ending the turn. Neither is offered with Smart Agent off. See [Available tools](#available-tools). |
 | Prompt additions | The verify policy, the tokens left in the window, and a compaction note naming what the summary replaced. See [`/context`](#context). |
 | [A trust boundary](#the-trust-boundary) | The system prompt states which sources are instructions and which are data, and MCP output arrives framed as data. |
@@ -2375,7 +2375,7 @@ Each specialist has its own session prefix and cache.
 
 The credential-path check requires Smart Agent. Explicit tool rules can override it. The workspace boundary is always enabled and requires separate outside-access approval.
 
-Smart Agent denies `read_file`, `write_file`, and `edit` for credential-like paths. The full list is `secretPatterns` in `internal/config/rules.go`; it covers `.env` and `*.env.*`, SSH keys (`*id_rsa*`, `*id_ed25519*`, `*id_ecdsa*`, `*id_dsa*`, `~/.ssh`), certificate and keystore files (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`), `~/.aws/credentials` and `~/.aws/config`, `~/.gnupg`, `~/.kube/config`, `~/.docker/config.json`, `~/.npmrc`, `~/.pypirc`, `*credentials.json`, `*service-account*.json`, `.netrc`, and `*.htpasswd`.
+Smart Agent denies `read_file`, `view_image`, `write_file`, and `edit` for credential-like paths. The full list is `secretPatterns` in `internal/config/rules.go`; it covers `.env` and `*.env.*`, SSH keys (`*id_rsa*`, `*id_ed25519*`, `*id_ecdsa*`, `*id_dsa*`, `~/.ssh`), certificate and keystore files (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`), `~/.aws/credentials` and `~/.aws/config`, `~/.gnupg`, `~/.kube/config`, `~/.docker/config.json`, `~/.npmrc`, `~/.pypirc`, `*credentials.json`, `*service-account*.json`, `.netrc`, and `*.htpasswd`.
 
 `skip_permissions` does not override a denial. To permit a credential path, add an explicit rule:
 
@@ -2468,7 +2468,7 @@ Switching posts to `POST /api/sessions/{id}/agent`. On success an `agent.switche
 
 Use `plan` for analysis, then switch to a writable agent. `config.example.json` defines `implement` for this purpose.
 
-Selectable names are the ones a client was just shown: your own `agents` map, plus the six built-in specialists while `/orchestrate` is on. Anything else is refused. Checking the configured map alone is what used to make the specialists reachable by delegation and not by hand — turning the switch off while a specialist is selected leaves a name that no longer resolves.
+Selectable names are the ones a client was just shown: your own `agents` map, plus the six built-in specialists while `/orchestrate` is on. Anything else is refused. Checking the configured map alone is what used to make the specialists reachable by delegation and not by hand. Turning the switch off while a specialist is selected leaves a name that no longer resolves.
 
 ### Auto delegation
 

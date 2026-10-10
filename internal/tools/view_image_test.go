@@ -122,3 +122,21 @@ func TestViewImageIsAReadOfAPath(t *testing.T) {
 		t.Error("viewing an image asks where reading a file does not")
 	}
 }
+
+// The size is checked before the read, and a file being written grows in
+// between. The read is capped too, so what is attached is never past the
+// limit the check stated.
+func TestReadAtMostRefusesAFileThatGrew(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "growing.png")
+	if err := os.WriteFile(path, make([]byte, 101), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readAtMost(path, 100); err == nil || !strings.Contains(err.Error(), "grew past") {
+		t.Errorf("a file one byte past the limit was read: %v", err)
+	}
+	data, err := readAtMost(path, 101)
+	if err != nil || len(data) != 101 {
+		t.Errorf("a file at the limit: %d bytes, %v", len(data), err)
+	}
+}
