@@ -75,6 +75,12 @@ type Result struct {
 	// tools package does not know what a sub-agent is and does not need
 	// to.
 	Sources []ResultSource
+	// Images go to the model after the tool results of the step that
+	// produced them, as image blocks, the way a pasted image goes with
+	// the message it was pasted into. A tool result itself carries only
+	// text on one of the three wires (OpenAI's), so the images ride
+	// beside the results rather than inside one. See view_image.go.
+	Images []provider.Block
 }
 
 // ResultSource is one contributor's material inside a Result's Content:

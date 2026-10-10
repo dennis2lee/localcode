@@ -24,6 +24,8 @@ export const taskView = new Modal(taskModal);
 
 let stream = null;
 let openTaskID = '';
+// The status last shown for the open task, kept by showTaskButtons.
+let openTaskStatus = '';
 
 // A task's own transcript follows the newest output on the same terms as
 // the main one: only while the reader is at the bottom of it. See
@@ -260,16 +262,29 @@ function closeTaskStream() {
   openTaskID = '';
 }
 
+// Says "cancelling" before the request rather than after it. The task can
+// end while the request is in flight, and its status arrives through
+// refreshTaskViewStatus; written after the reply, "cancelling" went back
+// over a task that had already finished, beside the Delete button only a
+// finished task gets. For the same reason a refusal is shown only while
+// the task is still running: a stop refused because the work had already
+// ended is not a failure to report.
 export async function cancelOpenTask() {
   if (!openTaskID) return;
+  const id = openTaskID;
   taskCancelBtn.disabled = true;
+  taskModalNote.textContent = 'status: cancelling…';
   try {
-    await apiClient.cancelTask(openTaskID);
-    taskModalNote.textContent = 'status: cancelling…';
+    await apiClient.cancelTask(id);
   } catch (err) {
+    if (openTaskID !== id || !isRunningStatus(openTaskStatus)) return;
     taskModalNote.textContent = `could not stop this task: ${err}`;
     taskCancelBtn.disabled = false;
   }
+}
+
+function isRunningStatus(status) {
+  return status === 'running' || status === 'spawned';
 }
 
 // showTaskButtons offers exactly one of the two, because they are the
@@ -278,7 +293,8 @@ export async function cancelOpenTask() {
 // useful at the other's moment, and both at once would put a Delete
 // beside a Stop for work still going on.
 function showTaskButtons(status) {
-  const running = status === 'running' || status === 'spawned';
+  openTaskStatus = status;
+  const running = isRunningStatus(status);
   taskCancelBtn.style.display = running ? '' : 'none';
   taskCancelBtn.disabled = false;
   // Not for a task with no status at all: that is a window opened on

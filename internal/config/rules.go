@@ -303,6 +303,7 @@ var RegisteredToolNames = []string{
 	"glob",
 	"grep",
 	"read_file",
+	"view_image",
 	"write_file",
 	"Skill",
 	"Task",

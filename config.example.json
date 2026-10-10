@@ -54,7 +54,9 @@
       "//top_k": "Only sample from the top K candidates at each step; 0, as here, is no limit on vLLM. Omit the key entirely to send nothing at all. Native on Anthropic, sent in additionalModelRequestFields on Bedrock, and sent as a vLLM extension to OpenAI-compatible servers. Dropped while reasoning. See docs/USAGE.md.",
       "top_k": 0,
       "//keep_going": "How many times one turn may be told to carry on after the model stops with the task unfinished. Only ever applies to muse models (any id containing 'muse'); on them 0 (the default) means 3 out of the box and -1 forces it off. /keep-going toggles the whole feature. See docs/USAGE.md.",
-      "keep_going": 0
+      "keep_going": 0,
+      "//vision": "Whether this model is sent images, which is what offers it the view_image tool. Unset means true for a Claude model and false for anything else. Set it to true on a local model that can see; an image sent to a model that cannot is refused by its server, and on every turn after.",
+      "vision": false
     }
   },
   "//default_profile": "The profile your own turns run on: the model that talks to you and, with smart_agent on, decides what to delegate. An agent with no profile of its own falls back to this one.",

@@ -207,6 +207,9 @@ var spawnBarrier func()
 func (tm *TaskManager) childContext(launchCtx context.Context, traceID string) context.Context {
 	ctx := trace.WithID(tm.rootCtx, traceID)
 	ctx = withTaskDepth(ctx, taskDepthFromContext(launchCtx)+1)
+	// And who launched it, for the same reason as the depth: without it a
+	// background child could hand its task straight back to its parent.
+	ctx = withChainFrom(ctx, launchCtx)
 	return config.WithSmartAgent(ctx, tm.loop.Config.SmartAgentFor(launchCtx))
 }
 

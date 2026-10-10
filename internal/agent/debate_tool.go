@@ -58,7 +58,7 @@ func (t DebateTool) DescriptionFor(ctx context.Context) string {
 		"this tool's arguments, and repeating them in `task` makes you run the loop a second time.\n" +
 		"Call this instead of doing the work, then end your turn: the first round is where the work happens.\n" +
 		"Available reviewers:\n")
-	writeAgentList(&b, t.loop.DelegatableAgents(ctx))
+	writeAgentList(&b, t.loop.DelegatableAgents(ctx), nil)
 	return b.String()
 }
 

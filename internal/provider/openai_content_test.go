@@ -183,3 +183,28 @@ func TestTheContentOfEachMessageShape(t *testing.T) {
 		})
 	}
 }
+
+// An image a tool attached rides in the message of results, after them.
+// OpenAI's tool message carries text only, so the image becomes a user
+// message after the tool messages, which is the order the model sees it
+// in on the other two wires as well.
+func TestAToolsImageFollowsTheToolMessage(t *testing.T) {
+	got := sentMessages(t, []Message{
+		{Role: RoleUser, Content: []Block{TextBlock("what is in fig.png?")}},
+		{Role: RoleAssistant, Content: []Block{toolUse("c1", "view_image", `{"path":"fig.png"}`)}},
+		{Role: RoleUser, Content: []Block{ToolResultBlock("c1", "fig.png: image/png", false), ImageBlock("image/png", []byte{0x89, 'P', 'N', 'G'})}},
+	})
+	if len(got) != 5 {
+		t.Fatalf("%d messages, want system, user, assistant, tool, user: %v", len(got), got)
+	}
+	var role string
+	_ = json.Unmarshal(got[3]["role"], &role)
+	if role != "tool" {
+		t.Errorf("message 3 is %q, want the tool result", role)
+	}
+	_ = json.Unmarshal(got[4]["role"], &role)
+	var parts []oaContentPart
+	if err := json.Unmarshal(got[4]["content"], &parts); err != nil || role != "user" || len(parts) != 1 || parts[0].Type != "image_url" {
+		t.Errorf("message 4 is %q with %s, want a user message holding the image", role, got[4]["content"])
+	}
+}

@@ -195,3 +195,66 @@ test('deleting a finished task removes its conversation and its row', async () =
   app.sse.emit({ seq: 4, type: 'task.status', data: { task_id: 'task-1', status: 'deleted' } });
   assert.match(app.el('tasks').innerHTML, /none/, 'the row outlived the conversation');
 });
+
+// The task can end while the stop request is in flight. Its status lands
+// first and the reply after it, and the reply used to write "cancelling"
+// over the status that had already arrived, beside a Delete button that
+// only a finished task gets. A task that showed "status: cancelling…"
+// forever had in fact stopped.
+test('a task that ends while the stop request is in flight shows how it ended', async () => {
+  let answer;
+  const app = await load({ routes: {
+    'POST /api/tasks/task-1/cancel': () => new Promise((resolve) => { answer = resolve; }),
+  } });
+  spawnTask(app);
+  app.el('tasks').children[0].click();
+  await app.settle();
+
+  app.el('task-cancel').click();
+  await app.settle();
+  assert.match(app.el('task-modal-note').textContent, /cancelling/);
+
+  app.sse.emit({ seq: 3, type: 'task.status', data: { task_id: 'task-1', status: 'cancelled' } });
+  await app.settle();
+  answer({ status: 202 });
+  await app.settle();
+
+  assert.match(app.el('task-modal-note').textContent, /status: cancelled/);
+  assert.equal(app.el('task-delete').style.display, '');
+});
+
+// And a stop the daemon refuses because the work already ended is not a
+// failure to report over the status that says it ended.
+test('a stop refused because the task already ended leaves its status', async () => {
+  let answer;
+  const app = await load({ routes: {
+    'POST /api/tasks/task-1/cancel': () => new Promise((resolve) => { answer = resolve; }),
+  } });
+  spawnTask(app);
+  app.el('tasks').children[0].click();
+  await app.settle();
+
+  app.el('task-cancel').click();
+  await app.settle();
+  app.sse.emit({ seq: 3, type: 'task.status', data: { task_id: 'task-1', status: 'completed' } });
+  await app.settle();
+  answer({ status: 404, body: { error: 'no such task' } });
+  await app.settle();
+
+  assert.match(app.el('task-modal-note').textContent, /status: completed/);
+});
+
+// While it is still running, a refusal is said, and the button comes back.
+test('a stop refused while the task runs says so', async () => {
+  const app = await load({ routes: {
+    'POST /api/tasks/task-1/cancel': { status: 500, body: { error: 'boom' } },
+  } });
+  spawnTask(app);
+  app.el('tasks').children[0].click();
+  await app.settle();
+
+  app.el('task-cancel').click();
+  await app.settle();
+  assert.match(app.el('task-modal-note').textContent, /could not stop this task/);
+  assert.equal(app.el('task-cancel').disabled, false);
+});

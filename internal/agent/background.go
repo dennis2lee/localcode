@@ -328,7 +328,7 @@ func (t TaskBackgroundTool) DescriptionFor(ctx context.Context) string {
 		"Use this to run two or more independent pieces of investigation at once, then call TaskCollect to " +
 		"get the answers. For a single question, use Task instead: it is the same thing without the " +
 		"bookkeeping. Available agents:\n")
-	writeAgentList(&b, t.agents(ctx))
+	writeAgentList(&b, offeredAgents(ctx, t.agents(ctx)), imageViewers(ctx, t.manager))
 	return b.String()
 }
 
@@ -337,7 +337,7 @@ func (t TaskBackgroundTool) InputSchema() json.RawMessage {
 }
 
 func (t TaskBackgroundTool) InputSchemaFor(ctx context.Context) json.RawMessage {
-	return delegationSchema(agentNamesOf(t.agents(ctx)))
+	return delegationSchema(agentNamesOf(offeredAgents(ctx, t.agents(ctx))))
 }
 
 func (t TaskBackgroundTool) depthLimit() int {
@@ -366,6 +366,9 @@ func (t TaskBackgroundTool) Execute(ctx context.Context, input json.RawMessage) 
 			Content: fmt.Sprintf("unknown agent %q. Available: %s", args.Agent, strings.Join(agentNamesOf(agents), ", ")),
 			IsError: true,
 		}
+	}
+	if why := delegationRefusal(ctx, args.Agent); why != "" {
+		return tools.Result{Content: why, IsError: true}
 	}
 	// The same depth guard the synchronous Task tool applies. Without it,
 	// background delegation would be the way around it: a sub-agent that
@@ -504,14 +507,30 @@ func delegationSchema(names []string) json.RawMessage {
 
 // writeAgentList renders the name/description list both delegation tools
 // put in their description.
-func writeAgentList(b *strings.Builder, agents map[string]config.AgentConfig) {
+//
+// sees, when not nil, says which agents are sent images. A model that
+// cannot look at a figure has to hand it to one that can, and the agents'
+// descriptions are written by people who may not have said.
+func writeAgentList(b *strings.Builder, agents map[string]config.AgentConfig, sees func(string) bool) {
 	for _, name := range agentNamesOf(agents) {
 		desc := agents[name].Description
 		if desc == "" {
 			desc = "(no description)"
 		}
+		if sees != nil && sees(name) {
+			desc += " Can view image files: give it the file's path."
+		}
 		fmt.Fprintf(b, "- %s: %s\n", name, desc)
 	}
+}
+
+// imageViewers is writeAgentList's sees for a delegation tool, or nil
+// without a manager to ask.
+func imageViewers(ctx context.Context, tm *TaskManager) func(string) bool {
+	if tm == nil || tm.loop == nil {
+		return nil
+	}
+	return func(name string) bool { return tm.loop.agentViewsImages(ctx, name) }
 }
 
 func agentNamesOf(agents map[string]config.AgentConfig) []string {

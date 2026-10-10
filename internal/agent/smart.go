@@ -386,6 +386,11 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	if Unattended(ctx) && l.Tools != nil && l.Tools.Decide(ctx, orchestrateToolName) != tools.DecisionAllow {
 		hidden[orchestrateToolName] = true
 	}
+	// An image in the history of a model that cannot take one is a request
+	// its server refuses, and every request after it. See view_image.go.
+	if !viewsImages(ctx) {
+		hidden[tools.ViewImageName] = true
+	}
 	// Answer belongs to one role in one situation: a stage that declared
 	// what it returns, which is given it explicitly through the pinned
 	// allowlist. Offered to anyone else it is a tool that can only refuse.
@@ -426,7 +431,9 @@ func (l *Loop) hiddenTools(ctx context.Context) map[string]bool {
 	if !config.OrchestrateFor(ctx, l.Config) || inOrchestration(ctx) {
 		hidden[orchestrateToolName] = true
 	}
-	if len(l.delegatableAgents(ctx)) < 2 {
+	// And for a delegated turn whose roster is only the agents already
+	// working on its task: every name it could pick would be refused.
+	if roster := l.delegatableAgents(ctx); len(roster) < 2 || len(offeredAgents(ctx, roster)) == 0 {
 		for _, name := range smart.DelegationTools {
 			hidden[name] = true
 		}

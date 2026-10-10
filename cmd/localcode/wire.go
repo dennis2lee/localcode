@@ -497,6 +497,9 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker, store *se
 	registry.Register(tools.Bash{})
 	registry.Register(tools.Glob{})
 	registry.Register(tools.Grep{})
+	// Offered per turn, only to a model that is sent images: see
+	// hiddenTools and config.Profile.Vision.
+	registry.Register(tools.ViewImage{})
 	// Only when the project has said how it is checked. Registering it
 	// regardless would advertise a tool whose every call is an error, and
 	// the model would keep trying it.

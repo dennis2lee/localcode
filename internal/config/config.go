@@ -711,6 +711,32 @@ type Profile struct {
 	// budget for unrecognised models is zero: on a model that stops when
 	// it is done, even the question is a request spent after every task.
 	KeepGoing int `json:"keep_going,omitempty"`
+
+	// Vision says whether this model is sent images: offered view_image,
+	// which attaches an image file to the conversation. Nil means "a
+	// Claude model can, anything else cannot"; see ViewsImages.
+	//
+	// A setting rather than a guess for everything else, because an image
+	// sent to a model that cannot take one is not a wrong answer, it is a
+	// request the server refuses, and the image stays in the history, so
+	// every request after it is refused too. Local servers name their
+	// models whatever they like, and a name says nothing about whether the
+	// weights behind it were trained on images.
+	Vision *bool `json:"vision,omitempty"`
+}
+
+// ViewsImages reports whether this profile's model is sent images.
+//
+// Unset means true for a Claude model, which every Claude model since the
+// third generation is, through every provider localcode reaches it by,
+// and false for everything else: a model that can see is set to true in
+// one line, and a model that cannot is never sent what would break its
+// session.
+func (p Profile) ViewsImages() bool {
+	if p.Vision != nil {
+		return *p.Vision
+	}
+	return strings.Contains(strings.ToLower(p.Model), "claude")
 }
 
 // maxKeepGoing caps keep_going. Ten is already far past the point where a

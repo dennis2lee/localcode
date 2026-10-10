@@ -413,6 +413,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `top_p` | Nucleus sampling threshold, above 0 and at most 1. `1.0` truncates nothing. Omit the key to send nothing at all. Reaches OpenAI-compatible, Anthropic, and Bedrock. Dropped while a Claude model is reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
 | `top_k` | Only sample from the top K candidates at each step. `0` is no limit on vLLM. Omit the key to send nothing at all. Native on Anthropic, in `additionalModelRequestFields` on Bedrock, and a vLLM extension on OpenAI-compatible servers. Dropped while reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
 | `effort` | How hard this model is asked to think. Unset sends nothing at all. See [Effort](#effort). |
+| `vision` | Whether this model is sent images, which offers it `view_image`. Unset means true for a model whose id contains `claude` and false for every other. Set `true` on a local model that can see. A model that cannot see is never offered the tool and never sent a tool's image, because its server would refuse the image on every later request. |
 | `keep_going` | Per-profile budget: maximum automatic continuations for Muse models. Zero or unset: 3. `-1`: disabled. Ignored for other model families. This numeric per-profile setting is different from the daemon-wide top-level `keep_going` switch. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
 | `fallback` | Other profile names to try, in order, when a request to this one fails for a reason another model could survive. Read only with [Smart Agent](#smart-agent) on. See [Fallback chains](#fallback-chains-when-a-model-will-not-answer). |
 | `context_window` | Total input and output limit. Discovery uses `GET /v1/models` or llama.cpp `/props`, then model-ID matching, then 128k. An explicit value overrides discovery. Do not exceed the model's actual limit. |
@@ -1961,6 +1962,7 @@ Agents select models and tool scopes. Smart Agent adds built-in specialists. Orc
 | Tool | Needs permission | Purpose |
 |---|---|---|
 | `read_file` | No | Read a file with line numbers |
+| `view_image` | No | Attach an image file (PNG, JPEG, GIF or WebP, up to 3.75 MB) so the model sees it as it sees a pasted image. Offered only to a model that is sent images: see `vision` under [Profile fields](#profile-fields). |
 | `glob` | No | Find files by pattern, `**` supported |
 | `grep` | No | Search file contents by regex. Stops at 200 matches and says so; names any file it could not open or could not finish reading. See [Grep completeness reporting](#grep-completeness-reporting) |
 | `write_file` | Yes | Create or overwrite a file |
@@ -2026,6 +2028,10 @@ An explicit agent definition replaces the built-in specialist with the same name
 3. `explore`'s final answer text is returned as the tool result, and the delegating agent continues from it.
 
 Delegation deeper than 3 levels is refused automatically, so agents cannot recurse into each other forever. The depth travels with the delegation, including into a background task, so no mixture of `Task` and `TaskBackground` gets a fresh allowance.
+
+A sub agent cannot hand its task to itself or to an agent above it in the chain. Those agents are left out of the list it is offered, and a call naming one is refused with the chain. The conversation a person is having is not a delegation and keeps its whole list.
+
+The agent list in `Task` and `TaskBackground` marks each agent whose model is sent images. A model that cannot see an image can hand the file's path to one of those, which opens it with `view_image`.
 
 ### Default agent
 

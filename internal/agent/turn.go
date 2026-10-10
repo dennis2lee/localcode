@@ -81,6 +81,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// absence, and runTools setting it again is the same value.
 	ctx = WithSessionID(ctx, sessionID)
 	ctx = config.WithAgent(ctx, resolveAgent)
+	// Who is working on this, for the delegation tools: see
+	// delegation_chain.go.
+	ctx = withAgentInChain(ctx, resolveAgent)
 
 	profileName, profile, err := l.profileFor(ctx, sessionID, resolveAgent)
 	if err != nil {
@@ -92,6 +95,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	// (agent not found, or found with no Prompt/Tools set) is a no-op:
 	// same behavior as before per-agent config existed.
 	agentCfg := l.agentConfig(ctx, resolveAgent)
+	// Whether this model is sent images, before the tool list is built:
+	// view_image is offered only when it is. See view_image.go.
+	ctx = withViewsImages(ctx, profileViewsImages(profile, modelOverride))
 
 	// The tool allowlist for this turn, resolved before the prompt is
 	// assembled rather than after, so the assembly can condition on the
@@ -478,6 +484,9 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 					})
 					l.runRetryHook(ctx, sessionID, run, newRun, err)
 					run = newRun
+					// A model that cannot see is sent no image from here
+					// on. One already in the history stays there.
+					ctx = withViewsImages(ctx, run.profile.ViewsImages())
 					// A new endpoint gets its own retry allowance, and
 					// any retry still pending belonged to the old one.
 					sameTries = 0
@@ -534,6 +543,7 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 						})
 						l.runRetryHook(ctx, sessionID, run, newRun, err)
 						run = newRun
+						ctx = withViewsImages(ctx, run.profile.ViewsImages())
 						sameTries = 0
 						trimBudget = l.contextWindow(ctx, run.profile) / 2
 						continue
@@ -888,6 +898,11 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 	// is simply a second context.
 	ctx = tools.WithWorkingDir(ctx, l.SessionDir(sessionID))
 	results := make([]provider.Block, 0, len(toolUses))
+	// Images go after every result of the step, not beside their own:
+	// Anthropic requires a message's tool results to come first in it.
+	// See tools.Result.Images.
+	var images []provider.Block
+	imageBytes := 0
 	for _, tu := range toolUses {
 		var res tools.Result
 		// A model can ask for several tools in one step, and Esc during the
@@ -956,7 +971,9 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		// size nobody chose, and one `cat` of a log file could exceed the
 		// whole window in a single message. See capToolResult.
 		res.Content = capToolResult(res.Content, window)
-		l.Store.Append(sessionID, events.TypeToolEnd, map[string]any{
+		attached := takeImages(ctx, &res, &imageBytes)
+		images = append(images, attached...)
+		endData := map[string]any{
 			"tool_use_id": tu.ToolUseID,
 			"content":     res.Content,
 			"is_error":    res.IsError,
@@ -970,7 +987,13 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 			// the rebuilt history describes the same sources the live
 			// one did rather than one anonymous answer.
 			"sources": res.Sources,
-		})
+		}
+		// The images, for the same reason as the input: the log is the
+		// only place a restart can find them.
+		if len(attached) > 0 {
+			endData["images"] = eventImages(attached)
+		}
+		l.Store.Append(sessionID, events.TypeToolEnd, endData)
 		// The result is part of what every later request says, and it
 		// is the least trusted text in any of them. Nothing is recorded
 		// here: the manifest derives it from the tool_use block this
@@ -998,7 +1021,7 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 			ended = true
 		}
 	}
-	return results, refused, ended
+	return append(results, images...), refused, ended
 }
 
 // firstLine is a tool result cut down to something a log line can carry:

@@ -74,7 +74,10 @@ func (l *Loop) delegatePrompt(ctx context.Context, sessionID, targetAgent, text 
 	l.Store.Append(sessionID, events.TypeUserMessage, map[string]any{"text": text})
 	l.Store.Append(sessionID, events.TypeDelegated, map[string]any{"agent": targetAgent, "prompt": text})
 
-	answer, err := l.Tasks.SpawnSync(ctx, sessionID, targetAgent, text)
+	// One level deeper, as a Task call is. The child is a delegated turn,
+	// and at depth zero it would count as the conversation itself: free
+	// to hand the prompt to its own agent again. See delegation_chain.go.
+	answer, err := l.Tasks.SpawnSync(withTaskDepth(ctx, taskDepthFromContext(ctx)+1), sessionID, targetAgent, text)
 	if err != nil {
 		failure := fmt.Sprintf("delegation to %q failed: %v", targetAgent, err)
 		l.Store.Append(sessionID, events.TypeError, map[string]any{"error": failure})

@@ -52,14 +52,14 @@ func (t TaskTool) Description() string { return t.DescriptionFor(context.Backgro
 func (t TaskTool) DescriptionFor(ctx context.Context) string {
 	var b strings.Builder
 	b.WriteString("Delegate a self-contained piece of work to a specialized sub-agent and wait for its final answer. Available agents:\n")
-	writeAgentList(&b, t.agents(ctx))
+	writeAgentList(&b, offeredAgents(ctx, t.agents(ctx)), imageViewers(ctx, t.manager))
 	return b.String()
 }
 
 func (t TaskTool) InputSchema() json.RawMessage { return t.InputSchemaFor(context.Background()) }
 
 func (t TaskTool) InputSchemaFor(ctx context.Context) json.RawMessage {
-	return delegationSchema(agentNamesOf(t.agents(ctx)))
+	return delegationSchema(agentNamesOf(offeredAgents(ctx, t.agents(ctx))))
 }
 
 // RequiresPermission is false: delegating itself has no side effects — any
@@ -82,6 +82,10 @@ func (t TaskTool) Execute(ctx context.Context, input json.RawMessage) tools.Resu
 			Content: fmt.Sprintf("unknown agent %q. Available: %s", args.Agent, strings.Join(agentNamesOf(agents), ", ")),
 			IsError: true,
 		}
+	}
+
+	if why := delegationRefusal(ctx, args.Agent); why != "" {
+		return tools.Result{Content: why, IsError: true}
 	}
 
 	depth := taskDepthFromContext(ctx)

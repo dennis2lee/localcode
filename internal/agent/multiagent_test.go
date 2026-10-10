@@ -250,9 +250,19 @@ func TestTaskToolDepthGuard(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		hasToolResult := false
+		next := ""
 		for _, m := range body.Messages {
 			if m["role"] == "tool" {
 				hasToolResult = true
+			}
+			// Each agent's prompt names it, and it hands the work to
+			// the next one down the line.
+			if text, _ := m["content"].(string); m["role"] == "system" {
+				for i := 0; i < 5; i++ {
+					if strings.Contains(text, fmt.Sprintf("You are a%d.", i)) {
+						next = fmt.Sprintf("a%d", i+1)
+					}
+				}
 			}
 		}
 
@@ -270,7 +280,7 @@ func TestTaskToolDepthGuard(t *testing.T) {
 				`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
 			}
 		} else {
-			args := `{\"agent\":\"loopy\",\"prompt\":\"go deeper\"}`
+			args := `{\"agent\":\"` + next + `\",\"prompt\":\"go deeper\"}`
 			chunks = []string{
 				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"Task","arguments":""}}]}}]}`,
 				`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"` + args + `"}}]}}]}`,
@@ -295,8 +305,17 @@ func TestTaskToolDepthGuard(t *testing.T) {
 	cfg := &config.Config{
 		Providers: map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL}},
 		Profiles:  map[string]config.Profile{"p": {Provider: "local", Model: "m"}},
+		// A line of different agents, each handing the work to the next.
+		// An agent handing work to itself, or back up the line, is
+		// refused at the first step by another rule (see
+		// delegation_chain.go), so only a line this long reaches the
+		// depth limit.
 		Agents: map[string]config.AgentConfig{
-			"loopy": {Profile: "p", Description: "delegates to itself"},
+			"a0": {Profile: "p", Description: "first", Prompt: "You are a0."},
+			"a1": {Profile: "p", Description: "second", Prompt: "You are a1."},
+			"a2": {Profile: "p", Description: "third", Prompt: "You are a2."},
+			"a3": {Profile: "p", Description: "fourth", Prompt: "You are a3."},
+			"a4": {Profile: "p", Description: "fifth", Prompt: "You are a4."},
 		},
 		DefaultProfile: "p",
 	}
@@ -309,11 +328,11 @@ func TestTaskToolDepthGuard(t *testing.T) {
 	tasks := NewTaskManager(context.Background(), loop, 10)
 	registry.Register(NewTaskTool(tasks, loop.DelegatableAgents))
 
-	if _, err := store.CreateSession("s1", "", "loopy", true); err != nil {
+	if _, err := store.CreateSession("s1", "", "a0", true); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if err := loop.SendMessage(context.Background(), "s1", "loopy", "start"); err != nil {
+	if err := loop.SendMessage(context.Background(), "s1", "a0", "start"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
 

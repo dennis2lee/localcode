@@ -109,12 +109,18 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 	// Per-iteration accumulator, reset by flush.
 	var pendingText string
 	var textSet bool
-	var pendingToolOrder []string              // tool_use_ids started this iteration, in order
-	toolName := map[string]string{}            // tool_use_id -> name, persists across the whole log
-	toolInputs := map[string]string{}          // tool_use_id -> raw JSON input, filled at tool.end
-	toolResults := map[string]provider.Block{} // tool_use_id -> tool_result block, filled at tool.end
-	var toolsDone []string                     // tool_use_ids whose tool.end has arrived this iteration, in order
-	var pendingInjected []string               // messages typed mid-turn, riding out with this iteration's tool results
+	var pendingToolOrder []string               // tool_use_ids started this iteration, in order
+	toolName := map[string]string{}             // tool_use_id -> name, persists across the whole log
+	toolInputs := map[string]string{}           // tool_use_id -> raw JSON input, filled at tool.end
+	toolResults := map[string]provider.Block{}  // tool_use_id -> tool_result block, filled at tool.end
+	toolImages := map[string][]provider.Block{} // tool_use_id -> the images a call attached, filled at tool.end
+	var toolsDone []string                      // tool_use_ids whose tool.end has arrived this iteration, in order
+	var pendingInjected []string                // messages typed mid-turn, riding out with this iteration's tool results
+
+	// Images in the history since the last compaction, user messages' and
+	// tools' alike, so the summary that replaces them can say how many it
+	// left out.
+	var droppedImages int
 
 	flush := func() {
 		if !textSet && len(toolsDone) == 0 {
@@ -137,6 +143,12 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 				ToolInput: json.RawMessage(input),
 			})
 			resultBlocks = append(resultBlocks, toolResults[id])
+		}
+		// After every result, as runTools sends them. See
+		// tools.Result.Images.
+		for _, id := range toolsDone {
+			resultBlocks = append(resultBlocks, toolImages[id]...)
+			droppedImages += len(toolImages[id])
 		}
 		if len(content) > 0 {
 			out = append(out, provider.Message{Role: provider.RoleAssistant, Content: content})
@@ -177,7 +189,6 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 	// in a log being rebuilt has ended; what this replays is the collapse
 	// that ended it. See collapsedDebate.
 	debateMark, debateTask, inDebate := 0, "", false
-	var droppedImages int
 
 	for _, ev := range evs {
 		switch ev.Type {
@@ -375,6 +386,9 @@ func rehydrateHistory(evs []events.Event) []provider.Message {
 			// one anonymous child answer where there were four.
 			block.Sources = append(block.Sources, dataSources(ev.Data, "sources")...)
 			toolResults[id] = block
+			if imgs := dataImages(ev.Data, "images"); len(imgs) > 0 {
+				toolImages[id] = imgs
+			}
 			toolsDone = append(toolsDone, id)
 			if len(toolsDone) == len(pendingToolOrder) {
 				flush()
