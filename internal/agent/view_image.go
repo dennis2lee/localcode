@@ -94,7 +94,12 @@ func takeImages(ctx context.Context, res *tools.Result, used *int) []provider.Bl
 // image was instead, and the history keeps the image itself, so moving
 // back to a model that can see sends it again.
 func (l *Loop) requestHistory(ctx context.Context, sessionID string) []provider.Message {
-	msgs := sendableHistory(l.history(sessionID))
+	return asSent(ctx, sendableHistory(l.history(sessionID)))
+}
+
+// asSent is msgs as the model of ctx's turn is sent them: as they are, or
+// with a note in place of each image.
+func asSent(ctx context.Context, msgs []provider.Message) []provider.Message {
 	if viewsImages(ctx) {
 		return msgs
 	}

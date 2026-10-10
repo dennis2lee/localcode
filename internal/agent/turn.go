@@ -254,21 +254,12 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 	forceTextOnly := false
 
 	// The images the person attached to this turn's message, and whether
-	// they have been told those did not reach the model. Asked on every
-	// request rather than once, because a fallback can move the turn to a
-	// model that is not sent images after the first one was.
+	// they have been told those did not reach the model that answered.
 	attachedImages := countImages([]provider.Message{{Content: openingImages}})
 	imagesNoticed := false
 
 	for {
 		messages := l.requestHistory(ctx, sessionID)
-		if attachedImages > 0 && !viewsImages(ctx) && !imagesNoticed {
-			imagesNoticed = true
-			l.Store.Append(sessionID, events.TypeError, map[string]any{
-				"error":     imagesLeftOutNotice(run, attachedImages),
-				"recovered": true,
-			})
-		}
 		// Sized once, and kept: a notice about how this reply ended has to
 		// describe this request, and recomputing it after the reply would
 		// count the reply as input. See requestSizing.
@@ -447,8 +438,17 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 				// measure as comfortably fitting on this side, and a
 				// budget derived from the window alone would then cut
 				// nothing and lose the turn.
-				trimBudget = shrinkBudget(trimBudget, run.system, sendableHistory(l.history(sessionID)))
-				trimmed, changed := forceFit(run.system, l.history(sessionID), trimBudget)
+				//
+				// Measured, and cut, as this model is sent it. A model that
+				// is not sent images was charged 1,600 tokens for each one
+				// still in the history, which made the text around an image
+				// in the newest message, the one that cannot be dropped,
+				// the part cut to make room for it. What a trim keeps then
+				// carries the notes rather than the images: it is the
+				// rescue of last resort, and it cuts into text as well.
+				toTrim := asSent(ctx, l.history(sessionID))
+				trimBudget = shrinkBudget(trimBudget, run.system, sendableHistory(toTrim))
+				trimmed, changed := forceFit(run.system, toTrim, trimBudget)
 				if changed {
 					l.setHistory(sessionID, trimmed)
 					// "history_replaced" because the trim goes through
@@ -578,6 +578,19 @@ func (l *Loop) sendWithModelText(ctx context.Context, sessionID, agentName, disp
 		// with its own retry allowance rather than a continuation of the
 		// last one.
 		sameTries = 0
+		// Said once an answer has come, not when the request went: a
+		// fallback can still move the turn from a model that is not sent
+		// images to one that is, and the notice would then describe a
+		// request nobody answered. A reply with nothing in it, which is
+		// what a turn cancelled before its first token reads as, is not
+		// an answer either.
+		if attachedImages > 0 && !viewsImages(ctx) && !imagesNoticed && len(assistantBlocks) > 0 {
+			imagesNoticed = true
+			l.Store.Append(sessionID, events.TypeError, map[string]any{
+				"error":     imagesLeftOutNotice(run, attachedImages),
+				"recovered": true,
+			})
+		}
 		if usage.hasUsage {
 			// estimateTokens over the messages this count describes and
 			// the reply about to join them, which together are what the

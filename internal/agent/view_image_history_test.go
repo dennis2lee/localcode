@@ -105,6 +105,13 @@ func TestMovingToAModelThatCannotSeeLeavesTheImagesOut(t *testing.T) {
 	if n := leftOutNotes(reqs[1]); n != 1 {
 		t.Errorf("%d notes where the image was, want 1", n)
 	}
+	for _, m := range reqs[1].Messages {
+		for _, b := range m.Content {
+			if strings.Contains(b.Text, "left out") && !strings.Contains(b.Text, "image/png") {
+				t.Errorf("the note %q does not say what kind of image was there", b.Text)
+			}
+		}
+	}
 	// Back on the model that can see, it is sent again: the history kept it.
 	if n := imagesIn(reqs[2]); n != 1 {
 		t.Errorf("moved back to the model that can see, it was sent %d images, want the one pasted", n)
@@ -201,8 +208,36 @@ func TestImagesPastedForAModelThatCannotSeeAreLeftOutAndSaid(t *testing.T) {
 	}
 }
 
+// Once a turn, however many steps it takes, and only for a reply that
+// says something: a turn cancelled before its first token reads as an
+// empty reply.
+func TestTheNoticeIsSaidOnceForATurnThatAnswered(t *testing.T) {
+	img := provider.ImageBlock("image/png", testPNG)
+	loop, _, sessionID := imageLoop(t, "deepseek-v4.1-flash", nil,
+		toolCall("c1", "read_file", `{"path":"missing.txt"}`),
+		toolCall("c2", "read_file", `{"path":"also-missing.txt"}`),
+		textReply("No such files."),
+	)
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "read these", img); err != nil {
+		t.Fatal(err)
+	}
+	if got := imageNotices(t, loop, sessionID); len(got) != 1 {
+		t.Errorf("a turn of three steps wrote %d notices, want 1: %q", len(got), got)
+	}
+
+	empty := []provider.StreamEvent{{Type: provider.EventMessageStop, StopReason: "end_turn"}}
+	loop, _, sessionID = imageLoop(t, "deepseek-v4.1-flash", nil, empty)
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "look", img); err != nil {
+		t.Fatal(err)
+	}
+	if got := imageNotices(t, loop, sessionID); len(got) != 0 {
+		t.Errorf("a reply with nothing in it wrote notices %q", got)
+	}
+}
+
 // A fallback within a turn moves it to another model, and what that model
-// is sent is decided for that model. The person is told once.
+// is sent is decided for that model. The person is told once, about the
+// model that answered.
 func TestAFallbackToAModelThatCannotSeeIsSentNoImages(t *testing.T) {
 	reg := tools.NewRegistry(nil)
 	reg.Register(tools.ReadFile{})
@@ -228,8 +263,113 @@ func TestAFallbackToAModelThatCannotSeeIsSentNoImages(t *testing.T) {
 		}
 	}
 	notices := imageNotices(t, loop, sessionID)
-	if len(notices) != 1 || !strings.Contains(notices[0], "qwen3-coder-30b") {
-		t.Errorf("notices = %q, want one, naming the first model that was not sent it", notices)
+	if len(notices) != 1 || !strings.Contains(notices[0], "deepseek-v4.1-flash") {
+		t.Errorf("notices = %q, want one, naming the model that answered", notices)
+	}
+}
+
+// The other way round: a model that is not sent images fails, and the
+// turn falls back to one that is. The images reached the model that
+// answered, so there is nothing to tell the person. (Found by review: the
+// notice was written before the request, and named a model a fallback
+// then replaced.)
+func TestAFallbackToAModelThatCanSeeSaysNothingWasLeftOut(t *testing.T) {
+	reg := tools.NewRegistry(nil)
+	reg.Register(tools.ReadFile{})
+	dead := []provider.StreamEvent{{Type: provider.EventError, Err: fmt.Errorf("openai-compat endpoint returned 404: model not found")}}
+	p := &scriptedProvider{turns: [][]provider.StreamEvent{dead, textReply("A bar chart.")}}
+	loop, sessionID := scriptedLoop(t, p, reg)
+	loop.Config.Profiles["blind"] = config.Profile{Provider: "local", Model: "deepseek-v4.1-flash", Fallback: []string{"seeing"}}
+	loop.Config.Profiles["seeing"] = config.Profile{Provider: "local", Model: "claude-sonnet-5-5"}
+	loop.Config.Agents["general-purpose"] = config.AgentConfig{Profile: "blind"}
+	loop.SetSmartAgentEnabled(true)
+
+	if err := loop.SendMessage(context.Background(), sessionID, "general-purpose", "look", provider.ImageBlock("image/png", testPNG)); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	reqs := requestsOf(p)
+	if len(reqs) != 2 || imagesIn(reqs[0]) != 0 || imagesIn(reqs[1]) != 1 {
+		t.Fatalf("%d requests; want the first without the image and the fallback with it", len(reqs))
+	}
+	if notices := imageNotices(t, loop, sessionID); len(notices) != 0 {
+		t.Errorf("notices %q, though the model that answered was sent the image", notices)
+	}
+}
+
+// The forced trim, the rescue of last resort for a conversation that no
+// longer fits, cuts the history as the model is sent it. A model that is
+// not sent images was charged 1,600 tokens for each one still in the
+// history, and when they were in the newest message, which the trim never
+// drops, it dropped that much more of the conversation before it.
+func TestAForcedTrimMeasuresTheHistoryAsTheModelIsSentIt(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		n := len(bodies)
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+		switch n {
+		case 0:
+			http.Error(w, `{"error":{"message":"This model's maximum context length is 32768 tokens"}}`, http.StatusBadRequest)
+		case 1:
+			// The summary fails too, so the same rescue goes on to trim.
+			http.Error(w, `{"error":{"message":"summarizer unavailable"}}`, http.StatusInternalServerError)
+		default:
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answered\"}}]}\n\n")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+		}
+	}))
+	defer srv.Close()
+
+	store, err := session.NewStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	cfg := &config.Config{
+		Providers:      map[string]config.ProviderConfig{"local": {Type: config.ProviderOpenAICompat, BaseURL: srv.URL}},
+		Profiles:       map[string]config.Profile{"onprem": {Provider: "local", Model: "deepseek-v4.1-flash", ContextWindow: 32768}},
+		Agents:         map[string]config.AgentConfig{"general-purpose": {Profile: "onprem"}},
+		DefaultProfile: "onprem",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	loop := New(store, tools.NewRegistry(nil), map[string]provider.Provider{"local": provider.NewOpenAICompat(srv.URL, "")}, cfg)
+	if _, err := store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		loop.appendHistory("s1", provider.Message{Role: provider.RoleUser, Content: []provider.Block{
+			provider.TextBlock(fmt.Sprintf("message %d: %s", i, strings.Repeat("x", 4000))),
+		}})
+		loop.appendHistory("s1", provider.Message{Role: provider.RoleAssistant, Content: []provider.Block{provider.TextBlock("ok")}})
+	}
+	img := provider.ImageBlock("image/png", testPNG)
+	if err := loop.SendMessage(context.Background(), "s1", "general-purpose", "carry on", img, img, img); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 3 {
+		t.Fatalf("%d requests, want the refused one, the failed summary and the one after the trim", len(bodies))
+	}
+	last := bodies[2]
+	// The trim cuts about a third of what is sent. Of five long messages,
+	// the newest two are well inside the two thirds kept; charged for the
+	// three images, only the newest one was.
+	for _, want := range []string{"message 4:", "message 3:", "carry on"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("the request after the trim lost %q", want)
+		}
+	}
+	if strings.Contains(last, "image_url") {
+		t.Error("the trimmed request carries an image")
 	}
 }
 
