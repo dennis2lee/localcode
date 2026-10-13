@@ -1,10 +1,15 @@
 import {
-  tasksEl, mcpServersEl, statusTextEl, statusBarEl, agentSelectEl,
+  tasksEl, tasksDeleteAllBtn, mcpServersEl, statusTextEl, statusBarEl, agentSelectEl,
   permissionStatusBtn, autoDelegateBtn, workspaceBtn, workspaceRevealBtn, stopBtn, detachBtn, inputEl, effortBtn,
 } from './dom.js';
 import { app, session, turnInFlight } from './state.js';
 import { completionHint } from './complete.js';
-import { openTaskView } from './taskview.js';
+import { openTaskView, deleteTask, isRunningStatus } from './taskview.js';
+
+// Each drawn row's "doing" line, by task id, so progress can be written
+// into the row on screen rather than redrawing the list. See
+// renderTaskProgress.
+const doingEls = new Map();
 
 // renderTasks builds each row with createElement/textContent rather than an
 // innerHTML template string — t.agent and t.status come straight from SSE
@@ -12,6 +17,8 @@ import { openTaskView } from './taskview.js';
 // file that spliced such values into innerHTML unescaped (bug B5).
 export function renderTasks() {
   tasksEl.innerHTML = '';
+  doingEls.clear();
+  tasksDeleteAllBtn.style.display = session.tasks.size > 0 ? '' : 'none';
   if (session.tasks.size === 0) {
     tasksEl.innerHTML = '<div style="color:var(--muted)">none</div>';
     return;
@@ -36,13 +43,13 @@ export function renderTasks() {
 
     // What it is doing right now. A status of "running" for twenty
     // minutes says nothing about whether anything is happening; the name
-    // of the tool it is in says quite a lot.
-    if (t.doing) {
-      const doing = document.createElement('div');
-      doing.className = 'doing';
-      doing.textContent = t.doing;
-      div.appendChild(doing);
-    }
+    // of the tool it is in says quite a lot. Drawn empty when there is
+    // nothing yet, and hidden by the stylesheet until there is.
+    const doing = document.createElement('div');
+    doing.className = 'doing';
+    doing.textContent = t.doing || '';
+    div.appendChild(doing);
+    doingEls.set(id, doing);
 
     // The whole row opens the task's own conversation. A task is a
     // session, so there is a full transcript behind these three words —
@@ -61,8 +68,48 @@ export function renderTasks() {
     div.title = 'click to watch this task';
     div.addEventListener('click', () => openTaskView(id));
 
+    // Why the last delete did not go through, until the next one.
+    if (t.deleteError) {
+      const err = document.createElement('div');
+      err.className = 'err';
+      err.textContent = t.deleteError;
+      div.appendChild(err);
+    }
+
+    // Removing a row without opening it, finished or not. A running
+    // task is stopped first, which is why that one asks. The click stops
+    // here, or it would also open the window on the row it sits in.
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const delBtn = document.createElement('button');
+    delBtn.textContent = 'delete';
+    delBtn.className = 'danger-btn';
+    delBtn.title = isRunningStatus(t.status)
+      ? 'stop this task and delete it, transcript included'
+      : 'delete this task and its transcript';
+    delBtn.disabled = !!t.deleting;
+    delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteTask(id); });
+    actions.appendChild(delBtn);
+    div.appendChild(actions);
+
     tasksEl.appendChild(div);
   }
+}
+
+// renderTaskProgress writes what one task is doing into its row.
+//
+// In place, because progress arrives with every tool call a task makes,
+// and redrawing the list for each one replaced the buttons under the
+// pointer: a click that started on one row's delete and ended on its
+// replacement went nowhere.
+export function renderTaskProgress(id) {
+  const t = session.tasks.get(id);
+  const el = doingEls.get(id);
+  if (!t || !el) {
+    renderTasks();
+    return;
+  }
+  el.textContent = t.doing || '';
 }
 
 // Each row gets a light: green for connected, blinking green while
@@ -164,7 +211,7 @@ export function renderStatusBar() {
     if (session.promptQueue.length > 0) busyText += ` (${session.promptQueue.length} queued)`;
     parts.push(busyText);
   }
-  const activeTasks = [...session.tasks.values()].filter(t => t.status === 'spawned' || t.status === 'running').length;
+  const activeTasks = [...session.tasks.values()].filter(t => isRunningStatus(t.status)).length;
   if (activeTasks > 0) parts.push(`${activeTasks} background task${activeTasks > 1 ? 's' : ''}`);
 
   // While a "/name" is being typed, the line also says what the right

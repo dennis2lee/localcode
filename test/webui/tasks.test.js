@@ -177,7 +177,7 @@ test('a finished task offers a delete button, and a running one does not', async
 });
 
 test('deleting a finished task removes its conversation and its row', async () => {
-  const app = await load({ routes: { 'DELETE /api/sessions/task-1': { status: 204 } } });
+  const app = await load({ routes: { 'DELETE /api/sessions/sess-1/tasks/task-1': { status: 204 } } });
   spawnTask(app);
   app.sse.emit({ seq: 3, type: 'task.status', data: { task_id: 'task-1', status: 'completed' } });
   app.el('tasks').children[0].click();
@@ -186,7 +186,9 @@ test('deleting a finished task removes its conversation and its row', async () =
   app.el('task-delete').click();
   await app.settle();
 
-  assert.equal(app.callsTo('DELETE', '/api/sessions/task-1').length, 1);
+  // Through the conversation's task route, which also removes a row
+  // whose session is already gone.
+  assert.equal(app.callsTo('DELETE', '/api/sessions/sess-1/tasks/task-1').length, 1);
   assert.equal(app.taskView.isOpen, false, 'the window has nothing left to show');
 
   // The row is built from this session's own task.spawned, so it comes

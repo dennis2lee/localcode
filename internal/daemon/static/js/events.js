@@ -7,7 +7,7 @@ import {
   abandonPendingUsers, settleThinkingBlock, hasLiveThinking,
 } from './transcript.js';
 import { findRefresh } from './find.js';
-import { renderStatusBar, renderTasks, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
+import { renderStatusBar, renderTasks, renderTaskProgress, setCurrentAgent, renderAutoDelegate, renderMCPServers, renderPermissionStatus, renderWorkspace } from './render.js';
 import { setWaiting, setConnected, setInputLocked, renderCommDot, recordHistoryEntry } from './composer.js';
 import {
   refreshDelegatePanelIfOpen, refreshPermissionSettingsIfOpen,
@@ -17,7 +17,7 @@ import {
 } from './modals.js';
 import { applyScheduleEvent } from './schedules.js';
 import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen } from './settings.js';
-import { refreshTaskViewStatus } from './taskview.js';
+import { refreshTaskViewStatus, taskDeleted } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
 // only ever called from inside a function body, never read at module-
@@ -301,6 +301,9 @@ const handlers = {
     if (d.status === 'deleted') {
       session.tasks.delete(d.task_id);
       renderTasks();
+      // And the window on it, if one is open: it would go on showing a
+      // transcript that no longer exists, with a Stop for nothing.
+      taskDeleted(d.task_id);
       return;
     }
     // Stage progress is a transcript line, not a task row. Filing it as
@@ -323,7 +326,7 @@ const handlers = {
     const t = session.tasks.get(d.task_id);
     if (!t) return;
     t.doing = d.doing || '';
-    renderTasks();
+    renderTaskProgress(d.task_id);
   },
   // Just update the state the status bar already renders every time — no
   // transcript line here. A line on every single switch would leave a

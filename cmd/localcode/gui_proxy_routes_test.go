@@ -133,6 +133,9 @@ func TestEveryRouteThePageCallsWorksThroughTheWindowProxy(t *testing.T) {
 			ok: only(200, 204, 400, 404, 409), note: "no such question"},
 		{method: "POST", path: "/api/tasks/t-nope/cancel", body: `{}`,
 			ok: only(200, 204, 400, 404), note: "no such task"},
+		{method: "DELETE", path: "/api/sessions/" + sid + "/tasks/t-nope",
+			ok: only(204, 404), note: "no such row in the task panel"},
+		{method: "DELETE", path: "/api/sessions/" + sid + "/tasks", ok: only(200), note: "a panel with no rows"},
 
 		// Reachable and refused is a pass: it proves the route is the
 		// daemon's rather than something the window ate. This daemon is

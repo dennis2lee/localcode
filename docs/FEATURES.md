@@ -90,7 +90,7 @@ The full reference: every capability localcode ships, one line each, grouped by 
 | Readouts | `/status` names every MCP server with its connection state and last error, then skills, commands, agents, and workspace. `/debug` prints one unstyled block for bug reports. `/workspace` shows the conversation directory and moves it. |
 | Desktop window | Experimental native Web UI without a separate browser or visible server. Optional `-tags gui` build. `LocalCode.app` on macOS and `localcode-gui.exe` in the Windows MSI. On Windows, links open in the system's default browser. See [USAGE.md](USAGE.md#desktop-window-experimental). |
 | Prompt box | Unsent drafts per conversation, `/name` completion, Alt+Up/Down turn jumps, IME composition. See [USAGE.md](USAGE.md#screen-controls). |
-| Running work | A transcript entry per tool call with arguments and output. `/tasks` inspects background work. See [USAGE.md](USAGE.md#background-tasks). |
+| Running work | A transcript entry per tool call with arguments and output. `/tasks` inspects background work. In the Web UI each background task row has a delete, and the panel a delete all. See [USAGE.md](USAGE.md#background-tasks). |
 | Stable scroll | Manual upward scrolling disables automatic movement in both clients and task windows. User turns have a full height left border. |
 
 ### Running and packaging

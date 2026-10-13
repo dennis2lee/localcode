@@ -548,14 +548,33 @@ func (l *Loop) claimSessionTree(sessionID string) ([]string, func()) {
 // the tasks it had launched kept running, in sessions nothing lists,
 // writing to a parent that no longer existed. See TaskManager.StopSession.
 func (l *Loop) StopSessionTree(sessionID string) ([]string, func()) {
-	ids, release := l.claimSessionTree(sessionID)
+	return l.StopSessionTrees([]string{sessionID})
+}
+
+// StopSessionTrees is StopSessionTree for several trees at once: every
+// tree is claimed first, then every task in all of them is told to stop,
+// and only then is each waited for. Deleting a conversation's background
+// tasks one tree at a time made the wait the sum of every task's
+// unwinding rather than the longest of them.
+func (l *Loop) StopSessionTrees(roots []string) ([]string, func()) {
+	var ids []string
+	releases := make([]func(), 0, len(roots))
+	for _, root := range roots {
+		tree, release := l.claimSessionTree(root)
+		ids = append(ids, tree...)
+		releases = append(releases, release)
+	}
 	if l.Tasks != nil {
 		l.Tasks.StopSession(ids)
 	}
 	for _, id := range ids {
 		l.ClearSessionState(id)
 	}
-	return ids, release
+	return ids, func() {
+		for _, release := range releases {
+			release()
+		}
+	}
 }
 
 // StopEverything is StopSessionTree for the whole daemon: it refuses every

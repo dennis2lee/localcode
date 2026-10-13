@@ -280,6 +280,12 @@
     <div class="side-section">
       <h2>Background tasks</h2>
       <div id="tasks"></div>
+      <!--
+        Under the rows, like "reconnect all" under the MCP servers: it acts
+        on the whole list. Shown only while there is a row to remove.
+      -->
+      <button class="icon-btn danger-btn" id="tasks-delete-all-btn" style="display:none"
+              title="stop every running task of this conversation and delete every task, transcripts included">delete all tasks</button>
     </div>
     <!--
       Work booked for later. Rows in the same shape as the background

@@ -565,9 +565,15 @@ func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 			"status":  "deleted",
 		})
 	}
-	// A child session can have unanswered permission prompts of its own,
-	// and work booked for later that must not fire into a conversation
-	// that is gone.
+	d.forgetDeleted(ids)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// forgetDeleted drops what the daemon still holds for sessions that have
+// just been deleted, and tells every client. A session can have
+// unanswered permission prompts of its own, and work booked for later
+// that must not fire into a conversation that is gone.
+func (d *Daemon) forgetDeleted(ids []string) {
 	for _, sid := range ids {
 		d.Broker.ForgetSession(sid)
 		if d.Loop.Schedules != nil {
@@ -575,7 +581,6 @@ func (d *Daemon) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	d.announceDeleted(ids...)
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleDeleteAllSessions wipes every session (visible and background-task

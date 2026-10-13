@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.156.0
+
+Background tasks can be deleted from the Web UI's task panel, one row at a time or all at once.
+
+**Added**
+
+* A delete button on each background task row; a running task asks first and is stopped
+* "delete all tasks" under the rows, which asks and says how many are still running
+* `DELETE /api/sessions/{id}/tasks/{taskId}` and `DELETE /api/sessions/{id}/tasks`
+
+**Fixed**
+
+* A row whose task session was already gone could not be removed
+* A deleted task listed in the TUI's `/tasks` with status "deleted"
+* A detached sub-agent not counted as running in either client
+* A turn collecting a deleted task told that its own conversation was deleted
+
 ## v0.155.1
 
 A conversation moved to a model that cannot see goes on.

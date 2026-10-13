@@ -71,3 +71,26 @@ func TestOrdinaryTasksStillBuildRows(t *testing.T) {
 		t.Errorf("the row lost the task's own fields: %+v", got)
 	}
 }
+
+// A task whose conversation was deleted, from the Web UI's panel or any
+// other client, leaves /tasks too. Kept as a status, it went on being
+// listed as a task called "deleted".
+func TestADeletedTaskLeavesTheTaskList(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypeTaskSpawned, Data: map[string]any{"task_id": "t1", "agent": "explore"}})
+	m.applyEvent(events.Event{Type: events.TypeTaskStatus, Data: map[string]any{"task_id": "t1", "status": "completed"}})
+	m.applyEvent(events.Event{Type: events.TypeTaskStatus, Data: map[string]any{"task_id": "t1", "status": "deleted"}})
+	if _, ok := m.tasks["t1"]; ok {
+		t.Fatalf("a deleted task is still listed: %+v", m.tasks["t1"])
+	}
+}
+
+// A sub-agent its turn let go of is still working.
+func TestADetachedTaskCountsAsRunning(t *testing.T) {
+	m := newTestModel()
+	m.applyEvent(events.Event{Type: events.TypeTaskSpawned, Data: map[string]any{"task_id": "t1", "agent": "explore"}})
+	m.applyEvent(events.Event{Type: events.TypeTaskStatus, Data: map[string]any{"task_id": "t1", "status": "detached"}})
+	if m.activeTasks() != 1 {
+		t.Errorf("a detached task is not counted as running")
+	}
+}

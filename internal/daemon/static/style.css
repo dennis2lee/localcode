@@ -883,6 +883,12 @@ aside h2 {
 /* What the task is doing right now, so the panel itself says something
    about progress without the window having to be opened. */
 .task .doing { color: var(--muted); font-size: var(--t-fine); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task .doing:empty { display: none; }
+/* The row's own delete, on its own line the way a scheduled task's is,
+   and the reason a delete failed, under it. */
+.task .actions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.task .actions button { padding: 3px 8px; font-size: var(--t-fine); }
+.task .err { color: var(--err); font-size: var(--t-fine); }
 
 /* Booking a prompt for later. Two fields, because at a prompt the split
    between the moment and the request has to be guessed from one string,
@@ -1176,7 +1182,7 @@ aside h2 {
 /* The reconnect control sits under the server rows it acts on, full width
    like the delete-all line under the session list: a panel-wide action,
    which is what keeps it from reading as a per-row retry. */
-#mcp-reset-btn { width: 100%; margin-top: 2px; }
+#mcp-reset-btn, #tasks-delete-all-btn { width: 100%; margin-top: 2px; }
 /* The composer is under the column it writes into and as wide as it.
    What you type becomes the first thing in the transcript, so the two
    share two verticals: the box begins where the text begins, and Send

@@ -52,8 +52,13 @@ type taskOutcome struct {
 	err  error
 }
 
-// errTaskDetached is the outcome of a task whose parent session was
-// deleted out from under it.
+// errTaskDetached is the outcome of a task that was deleted before its
+// answer was collected: with the session that launched it, or on its own
+// from the task panel while that session waited to collect it.
+//
+// Said so the model waiting on it can tell, whichever it was: the message
+// used to say the launching session was deleted, and a turn whose own
+// task had been deleted from the panel was told its conversation was gone.
 //
 // It exists because a waiter can be woken by two different things and the
 // caller has to be able to tell them apart. Cleanup used to close the
@@ -61,7 +66,7 @@ type taskOutcome struct {
 // as a zero value: empty text, no error, collected. A collection could
 // therefore report "finished without an answer" for a task that was never
 // asked and never ran, which reads as a task that had nothing to say.
-var errTaskDetached = errors.New("the session that launched this task was deleted")
+var errTaskDetached = errors.New("this task was deleted before its answer was collected")
 
 // errSessionClosing is what an admission gets when the tree it is trying
 // to join is being deleted. A refusal rather than a wait: the caller asked

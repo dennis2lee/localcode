@@ -1838,8 +1838,23 @@ The current agent appears in the header selector and [status bar](#status-bar-un
 
 | Section | Contents |
 |---|---|
-| Background tasks | Live status of subtasks started by the `Task` tool or the background task API |
+| Background tasks | Live status of subtasks started by the `Task` tool or the background task API. Each row has a **delete** button, and **delete all tasks** under the rows removes every row. See [Deleting background tasks](#deleting-background-tasks). |
 | MCP servers | Names of currently connected servers, from `GET /api/mcp-servers`. Configured servers that failed to connect are absent here and logged as a daemon warning. |
+
+#### Deleting background tasks
+
+A deleted task is gone with its transcript and everything it delegated. The conversation that started it stays.
+
+| Control | Finished task | Running task |
+|---|---|---|
+| **delete** on a row | Deleted at once | Asks first, then stops the task and deletes it |
+| **delete all tasks** | Asks first, with the number of rows | Same question, which also says how many are still running |
+| **Delete this task** in the task window | Offered | Not offered: **Stop this task** is |
+
+* **Every client:** the removal is recorded in the conversation's own log, so the row stays gone after a reload and leaves every other open window, the TUI's `/tasks` included.
+* **A row with no transcript left:** deleted the same way. Such a row comes from a task whose session was removed some other way.
+* **Refused:** a task whose own session has a turn in progress is not deleted, and **delete all tasks** then deletes nothing. A refused or failed delete says why under the row or in the transcript.
+* A `detached` task (a sub-agent its turn let go of) counts as running.
 
 ### Drag and drop file attach
 
@@ -2846,7 +2861,7 @@ Click a task in the right panel to view its complete session:
 | The end | Finished or cancelled marker. Incomplete tool calls are marked as unfinished. |
 | Errors and compaction | A line each. |
 
-Running tasks provide **Stop this task**. Finished tasks provide **Delete this task**, which removes the child session and its row. The parent log records deletion so the row stays removed after reload.
+Running tasks provide **Stop this task**. Finished tasks provide **Delete this task**, which removes the child session and its row. The parent log records deletion so the row stays removed after reload. The rows themselves can be deleted without opening them: see [Deleting background tasks](#deleting-background-tasks).
 
 ### Switching models
 

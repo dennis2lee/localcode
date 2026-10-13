@@ -7,6 +7,7 @@ export const transcriptEl = document.getElementById('transcript');
 export const centerEl = document.getElementById('center');
 export const jumpBottomBtn = document.getElementById('jump-bottom');
 export const tasksEl = document.getElementById('tasks');
+export const tasksDeleteAllBtn = document.getElementById('tasks-delete-all-btn');
 export const sessionIdEl = document.getElementById('session-id');
 export const inputEl = document.getElementById('input');
 export const sendBtn = document.getElementById('send');

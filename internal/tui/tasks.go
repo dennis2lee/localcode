@@ -10,12 +10,16 @@ import (
 // from the parent session's events.
 type taskState struct {
 	agent  string
-	status string // spawned | running | completed | failed | cancelled
+	status string // spawned | running | detached | completed | failed | cancelled
 	prompt string
 }
 
-// active reports whether the task is still doing work.
-func (t taskState) active() bool { return t.status == "spawned" || t.status == "running" }
+// active reports whether the task is still doing work. "detached" is a
+// synchronous sub-agent its turn let go of: it goes on working in the
+// background until it reports how it ended.
+func (t taskState) active() bool {
+	return t.status == "spawned" || t.status == "running" || t.status == "detached"
+}
 
 // orchestrateStage reports whether a task id is an orchestration stage
 // progress report rather than a task. The daemon reports stage progress

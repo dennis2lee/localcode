@@ -1,11 +1,13 @@
 import {
-  taskModal, taskModalTitle, taskModalBody, taskModalNote, taskCancelBtn, taskDeleteBtn,
+  taskModal, taskModalTitle, taskModalBody, taskModalNote, taskCancelBtn, taskDeleteBtn, tasksDeleteAllBtn,
 } from './dom.js';
 import { createFollower } from './scroll.js';
 import { session } from './state.js';
 import * as apiClient from './api.js';
 import { Modal } from './modal.js';
-import { summarizeInput } from './transcript.js';
+import { summarizeInput, appendError } from './transcript.js';
+import { askConfirm } from './prompt.js';
+import { renderTasks } from './render.js';
 
 // A window on a background task.
 //
@@ -283,8 +285,11 @@ export async function cancelOpenTask() {
   }
 }
 
-function isRunningStatus(status) {
-  return status === 'running' || status === 'spawned';
+// "detached" is a synchronous sub-agent its turn let go of: it carries on
+// in the background until it reports how it ended, and it can be stopped
+// like any other running task.
+export function isRunningStatus(status) {
+  return status === 'running' || status === 'spawned' || status === 'detached';
 }
 
 // showTaskButtons offers exactly one of the two, because they are the
@@ -317,21 +322,122 @@ export function refreshTaskViewStatus(taskID, status) {
 // deleteOpenTask removes a finished task's conversation for good.
 //
 // The work is over and its transcript is the only thing left, so this is
-// the one way to be rid of a row that has served its purpose. It goes
-// through the ordinary session delete, because a task is a session; the
-// daemon records the removal on the parent's log, which is where the row
-// in the panel comes from, so it does not come back on the next reload.
+// one way to be rid of a row that has served its purpose; the row's own
+// delete button is the other. Both go through the conversation's task
+// route, which deletes the task's session and records the removal on the
+// parent's log, where the row in the panel comes from, so it does not
+// come back on the next reload.
 export async function deleteOpenTask() {
   if (!openTaskID) return;
   const id = openTaskID;
+  const sessionID = session.sessionID;
   taskDeleteBtn.disabled = true;
   try {
-    await apiClient.deleteSession(id);
-    // The row goes on the task.status event the daemon just recorded,
-    // and this window has nothing left to show.
-    closeTaskView();
+    await apiClient.deleteTask(sessionID, id);
   } catch (err) {
-    taskModalNote.textContent = `could not delete this task: ${err}`;
-    taskDeleteBtn.disabled = false;
+    if (!isGone(err)) {
+      taskModalNote.textContent = `could not delete this task: ${err}`;
+      taskDeleteBtn.disabled = false;
+      return;
+    }
+    dropTaskRow(sessionID, id);
+  }
+  // This window has nothing left to show. The row goes on the
+  // task.status "deleted" the daemon has just recorded.
+  closeTaskView();
+}
+
+// isGone is the daemon saying there is no such task in this conversation:
+// another window or client deleted it first. The row is out of date, not
+// the delete wrong, so it goes.
+function isGone(err) {
+  return err instanceof apiClient.ApiError && err.status === 404;
+}
+
+// dropTaskRow takes a row the daemon no longer has off the panel, if the
+// panel is still showing the conversation it belonged to. Only for that:
+// a row that was deleted goes on the daemon's task.status "deleted", which
+// arrives after anything else the task had to say. Taken off here instead,
+// on the reply, a status still on its way (the "cancelled" of a task the
+// delete stopped) drew the row again until the "deleted" behind it came.
+function dropTaskRow(sessionID, taskID) {
+  if (session.sessionID !== sessionID) return;
+  if (session.tasks.delete(taskID)) renderTasks();
+}
+
+// taskDeleted closes the task window if it is showing a task that has
+// just been deleted, from this window's own buttons or anywhere else.
+export function taskDeleted(taskID) {
+  if (taskView.isOpen && taskID === openTaskID) closeTaskView();
+}
+
+// deleteTask removes one row from the panel: the task's conversation,
+// everything it delegated in turn, and the row itself. A finished task
+// goes on the click, the way a scheduled task's row does. A running one
+// is stopped first and loses whatever it had not finished, so that one
+// asks.
+export async function deleteTask(taskID) {
+  const sessionID = session.sessionID;
+  const t = session.tasks.get(taskID);
+  if (!t || t.deleting) return;
+  if (isRunningStatus(t.status)) {
+    const name = t.agent ? `The ${t.agent} task` : 'This task';
+    const ok = await askConfirm('Delete running task',
+      `${name} (${taskID}) is still running. Stop it and delete it? Its transcript is deleted too. This cannot be undone.`,
+      { okLabel: 'Stop and delete', danger: true });
+    if (!ok) return;
+  }
+  // Read again after the question: the row can have gone, or the panel
+  // moved to another conversation, while it was on screen.
+  const row = session.sessionID === sessionID ? session.tasks.get(taskID) : null;
+  if (!row || row.deleting) return;
+  // Disabled until the row goes, which is when the daemon's record of the
+  // removal arrives, so a second click cannot send a second delete.
+  row.deleting = true;
+  row.deleteError = '';
+  renderTasks();
+  try {
+    await apiClient.deleteTask(sessionID, taskID);
+  } catch (err) {
+    if (isGone(err)) {
+      taskDeleted(taskID);
+      dropTaskRow(sessionID, taskID);
+      return;
+    }
+    row.deleting = false;
+    row.deleteError = `could not delete: ${err.message || err}`;
+    if (session.sessionID === sessionID && session.tasks.get(taskID) === row) renderTasks();
+  }
+}
+
+// deleteAllTasks empties the panel. Always asked, because it is every row
+// at once, and the question says how many are still working.
+export async function deleteAllTasks() {
+  const sessionID = session.sessionID;
+  // Not the rows already on their way out: a delete of each is in flight.
+  const rows = [...session.tasks.values()].filter((t) => !t.deleting);
+  const count = rows.length;
+  if (count === 0) return;
+  const running = rows.filter((t) => isRunningStatus(t.status)).length;
+  const what = count === 1 ? 'the 1 background task' : `all ${count} background tasks`;
+  const stopping = running === 0 ? ''
+    : (running === 1 ? ' 1 is still running and will be stopped.' : ` ${running} are still running and will be stopped.`);
+  const ok = await askConfirm('Delete all background tasks',
+    `Delete ${what} of this conversation?${stopping} Their transcripts are deleted too. This cannot be undone.`,
+    { okLabel: 'Delete all', danger: true });
+  if (!ok || session.sessionID !== sessionID) return;
+  // The rows go one by one as the daemon records each removal. Until then
+  // their own buttons are off, as a single delete's is.
+  for (const t of rows) t.deleting = true;
+  tasksDeleteAllBtn.disabled = true;
+  renderTasks();
+  try {
+    await apiClient.deleteAllTasks(sessionID);
+  } catch (err) {
+    for (const t of rows) t.deleting = false;
+    if (session.sessionID === sessionID) renderTasks();
+    appendError(`could not delete the background tasks: ${err.message || err}`);
+  } finally {
+    tasksDeleteAllBtn.disabled = false;
   }
 }

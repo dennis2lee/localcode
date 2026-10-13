@@ -108,6 +108,12 @@ export const switchAgent = (sessionID, agent) => api('POST', `/api/sessions/${se
 export const sendChatMessage = (sessionID, text, images) =>
   api('POST', `/api/sessions/${sessionID}/messages`, (images && images.length) ? { text, images } : { text });
 export const cancelTask = (taskID) => api('POST', `/api/tasks/${taskID}/cancel`, {});
+// Removing a row from a conversation's task panel: the task is stopped if
+// it is still running, and its conversation is deleted with everything
+// under it. The second removes every row the panel has.
+export const deleteTask = (sessionID, taskID) =>
+  api('DELETE', `/api/sessions/${encodeURIComponent(sessionID)}/tasks/${encodeURIComponent(taskID)}`);
+export const deleteAllTasks = (sessionID) => api('DELETE', `/api/sessions/${encodeURIComponent(sessionID)}/tasks`);
 export const revealWorkspace = (sessionID) =>
   api('POST', '/api/workspace/reveal' + (sessionID ? `?session=${encodeURIComponent(sessionID)}` : ''), {});
 export const cancelSessionTurn = (sessionID) => api('POST', `/api/sessions/${sessionID}/cancel`, {});

@@ -343,6 +343,13 @@ func (m *Model) applyEvent(ev events.Event) {
 			m.appendTool(stageLine(stage, status, ev.Data))
 			break
 		}
+		// The daemon's record that the task's conversation is gone, from
+		// any client's delete. Kept as a status, the row went on
+		// appearing in /tasks as a task called "deleted".
+		if status == "deleted" {
+			delete(m.tasks, taskID)
+			break
+		}
 		t := m.tasks[taskID]
 		t.status = status
 		m.tasks[taskID] = t

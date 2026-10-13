@@ -65,8 +65,9 @@ with the daemon, via `internal/client`) and the Web UI (via
   the model from `model.changed` events), the update check and install
   (page; the TUI updates through `/update`), task spawn/list/output
   (TUI commands and the model's own tools; the page reads task state
-  from `task.spawned`/`task.status` events and cancels through `POST
-  /api/tasks/{taskId}/cancel`), `GET /api/usage` (page: the usage
+  from `task.spawned`/`task.status` events, cancels through `POST
+  /api/tasks/{taskId}/cancel`, and removes rows through `DELETE
+  /api/sessions/{id}/tasks[/{taskId}]`), `GET /api/usage` (page: the usage
   window; the TUI prints `/usage all` instead).
 * Used by `localcode run`: `GET /api/sessions/{id}/usage`, for the usage
   a run through a daemon reports.
@@ -250,12 +251,19 @@ the session log.
 ### Background tasks
 
 A task is a child session: `task.spawned` and `task.status` in the
-parent's log are the panel rows, which is why they survive a reload.
+parent's log are the panel rows, which is why they survive a reload. A
+`task.status` of `"deleted"` removes a row. A row can outlive its
+session, so the two `DELETE` routes work from the rows: a row whose
+session is gone, or belongs to another conversation, gets the `"deleted"`
+record and no session is touched. A child session with no row, such as a
+scheduled run, is not a task here and is never deleted by them.
 
 | Method and path | Takes | Answers | Errors |
 |---|---|---|---|
 | `POST /api/sessions/{id}/tasks` | `{"agent", "prompt"}`; both required | `201 {"task_id"}` | `400` bad body or a field missing; `403` archived; `500` spawn failed |
 | `GET /api/sessions/{id}/tasks` | nothing | `200` the session's tasks | none (unknown session reads as no tasks) |
+| `DELETE /api/sessions/{id}/tasks/{taskId}` | nothing | `204`; stops the task if it runs, deletes its session with everything under it, and appends `task.status` `"deleted"` to `{id}` | `404` unknown session, or `taskId` is not a row of its panel; `409` a turn is running in the task's own session; `500` the session could not be deleted |
+| `DELETE /api/sessions/{id}/tasks` | nothing | `200 {"deleted"}`: the number of rows removed, running tasks included; `{id}` itself stays | `404` unknown session; `409` a turn is running in one of the task sessions, and nothing is deleted; `500` a session could not be deleted, and its row stays |
 | `POST /api/sessions/{id}/cancel` | nothing | `200 {"cancelled"}`; false when nothing was running, which is not an error | none |
 | `POST /api/sessions/{id}/detach` | nothing | `200 {"detached", "task_id"}`; lets go of the sub-agent blocking the turn so both carry on | none (`detached: false` with no task manager) |
 | `POST /api/tasks/{taskId}/cancel` | nothing | `200 {"cancelled"}` | none |

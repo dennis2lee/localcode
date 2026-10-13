@@ -566,9 +566,12 @@ func (tm *TaskManager) spawnSync(ctx context.Context, parentSessionID, childID, 
 	// the provider is therefore the number of concurrent top-level turns,
 	// which was never gated by this semaphore either. Background
 	// delegation is the one that fans out, and it still queues here.
+	// The status before the release, as on every other way out: the
+	// release is what a deletion waits on, and a status written after it
+	// lands behind the deletion's own record and brings the row back.
 	if err := parentCtx.Err(); err != nil {
-		release()
 		tm.loop.Store.Append(parentSessionID, events.TypeTaskStatus, map[string]any{"task_id": taskID, "status": "cancelled"})
+		release()
 		return taskID, "", err
 	}
 
