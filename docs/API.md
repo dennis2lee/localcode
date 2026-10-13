@@ -48,7 +48,8 @@ client to the same release when both are yours.
     operation failed mid-way. `501` shutdown is not wired in this daemon.
 * A write whose path is not canonical (a `.` or `..` segment, or a
   doubled slash) is answered `400` rather than redirected
-  (`canonicalWrites` in `internal/daemon/canonical.go`). A client follows
+  (`CanonicalWrites` in `internal/daemon/canonical.go`, in front of the
+  daemon and of the desktop window's proxy). A client follows
   a redirect with the method it started with, so
   `DELETE /api/sessions/{id}/tasks/..` reached `DELETE /api/sessions/{id}`.
   Reads are still redirected to the cleaned path.

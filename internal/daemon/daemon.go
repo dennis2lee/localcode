@@ -208,7 +208,7 @@ func New(loop *agent.Loop, broker *agent.PermissionBroker, tasks *agent.TaskMana
 	return d
 }
 
-func (d *Daemon) Handler() http.Handler { return canonicalWrites(d.ownershipGate(d.mux)) }
+func (d *Daemon) Handler() http.Handler { return CanonicalWrites(d.ownershipGate(d.mux)) }
 
 func (d *Daemon) routes(webFS fs.FS) {
 	d.mux.HandleFunc("GET /api/version", d.handleVersion)
