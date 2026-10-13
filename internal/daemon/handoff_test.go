@@ -80,6 +80,7 @@ func TestSessionIDInPath(t *testing.T) {
 		"/api/workspace":                    "",
 		"/api/sessions%2FS1/rename":         "",
 		"/api/sessions/S%201/messages":      "S 1",
+		"/api/sessions/%zz/messages":        "",
 	}
 	for path, want := range cases {
 		if got := sessionIDInPath(path); got != want {

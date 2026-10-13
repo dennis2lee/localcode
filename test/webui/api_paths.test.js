@@ -128,3 +128,14 @@ test('the shapes the page sends are not refused', async () => {
     assert.equal(sent.length, 1, p);
   }
 });
+
+// An id is one segment: a slash, question mark or hash in it is encoded
+// rather than becoming part of the route or the query.
+test('a task id is encoded as one path segment', async () => {
+  const { api, sent } = await load();
+  await api.deleteTask('S', 'a/b?c#d');
+  assert.equal(sent[0].url, '/api/sessions/S/tasks/a%2Fb%3Fc%23d');
+  sent.length = 0;
+  await api.deleteAllTasks('s/x');
+  assert.equal(sent[0].url, '/api/sessions/s%2Fx/tasks');
+});
