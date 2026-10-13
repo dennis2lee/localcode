@@ -16,7 +16,7 @@ Background tasks can be deleted from the Web UI's task panel, one row at a time 
 * A deleted task listed in the TUI's `/tasks` with status "deleted"
 * A detached sub-agent not counted as running in either client
 * A turn collecting a deleted task told that its own conversation was deleted
-* A write to a path with a `..` segment redirected to the route above it, so `DELETE /api/sessions/{id}/tasks/..` deleted the conversation; such writes now get `400`
+* A write to a path with a `..` segment redirected to the route above it, so `DELETE /api/sessions/{id}/tasks/..` deleted the conversation; such writes now get `400`, and the Web UI sends no request whose path a browser would resolve elsewhere
 
 ## v0.155.1
 

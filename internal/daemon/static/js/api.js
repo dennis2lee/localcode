@@ -30,7 +30,27 @@ export const isHeld = (err) => err instanceof ApiError && err.status === 409 &&
 export const isBusy = (err) => err instanceof ApiError && err.status === 409 &&
   !(err.data && err.data.held);
 
+// refuseResolvablePath stops a request whose path a URL would change
+// before it is sent. A path segment of "." or ".." (in any spelling a
+// browser reads as one: "%2e" is a dot, and a backslash is a slash) is
+// resolved away, and an empty segment is a missing id. Either sends the request to
+// another route: DELETE /api/sessions/{id}/tasks/.. is DELETE
+// /api/sessions/{id}, which deletes the conversation. Checked here, for
+// every request whatever built its path, so a wrapper that put an id in
+// unencoded cannot do it. (Found by review, for the schedule routes after
+// the task routes were closed.)
+function refuseResolvablePath(path) {
+  const segments = String(path).split(/[?#]/, 1)[0].split(/[/\\]/);
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i].toLowerCase().replace(/%2e/g, '.');
+    if (seg === '' || seg === '.' || seg === '..') {
+      throw new ApiError(400, `refusing to send ${path}: a path segment in it would be resolved away`);
+    }
+  }
+}
+
 export async function api(method, path, body) {
+  refuseResolvablePath(path);
   const resp = await fetch(path, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
@@ -53,9 +73,11 @@ export async function api(method, path, body) {
 // separate "attachment" wire concept. Kept out of api() proper: multipart
 // bodies skip the JSON content-type/encoding that every other call needs.
 export async function uploadFile(sessionID, file) {
+  const path = `/api/sessions/${sessionID}/uploads`;
+  refuseResolvablePath(path);
   const form = new FormData();
   form.append('file', file, file.name);
-  const resp = await fetch(`/api/sessions/${sessionID}/uploads`, { method: 'POST', body: form });
+  const resp = await fetch(path, { method: 'POST', body: form });
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
     throw new ApiError(resp.status, `${resp.status} ${text}`);
@@ -108,19 +130,12 @@ export const switchAgent = (sessionID, agent) => api('POST', `/api/sessions/${se
 export const sendChatMessage = (sessionID, text, images) =>
   api('POST', `/api/sessions/${sessionID}/messages`, (images && images.length) ? { text, images } : { text });
 export const cancelTask = (taskID) => api('POST', `/api/tasks/${taskID}/cancel`, {});
-// pathSegment is an id as one segment of a URL path.
-//
-// encodeURIComponent leaves "." alone, and a URL resolves "." and ".."
-// segments before the request is sent: a task id of ".." turned
-// DELETE /api/sessions/{id}/tasks/.. into DELETE /api/sessions/{id},
-// which deletes the conversation. Such an id is refused here rather than
-// sent anywhere.
+// pathSegment is an id as one segment of a URL path. Encoding keeps a
+// slash or a question mark in an id from becoming part of the route; a
+// dot segment, which encoding leaves alone, is refused by
+// refuseResolvablePath like any other.
 function pathSegment(id) {
-  const s = encodeURIComponent(String(id ?? ''));
-  if (s === '' || s === '.' || s === '..') {
-    throw new ApiError(400, `refusing to put ${JSON.stringify(String(id ?? ''))} in a URL path`);
-  }
-  return s;
+  return encodeURIComponent(String(id ?? ''));
 }
 
 // Removing a row from a conversation's task panel: the task is stopped if

@@ -54,6 +54,7 @@ func TestAWriteToANonCanonicalPathIsRefusedNotRedirected(t *testing.T) {
 func TestCleanPathIsTheMuxRule(t *testing.T) {
 	for in, want := range map[string]string{
 		"":                         "/",
+		"/":                        "/",
 		"/api/sessions":            "/api/sessions",
 		"/api/sessions/":           "/api/sessions/",
 		"/api/sessions/x/tasks/..": "/api/sessions/x",
@@ -64,5 +65,90 @@ func TestCleanPathIsTheMuxRule(t *testing.T) {
 		if got := cleanPath(in); got != want {
 			t.Errorf("cleanPath(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func rawRequest(t *testing.T, method, url string) (*http.Response, error) {
+	t.Helper()
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The redirect itself is what some of these ask about.
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return client.Do(req)
+}
+
+func claimed(d *Daemon, id string) bool {
+	d.takeoverMu.Lock()
+	defer d.takeoverMu.Unlock()
+	return d.tookOver[id]
+}
+
+// The guard stands in front of the ownership gate, which takes the session
+// in a write's path over from the daemon this one replaced: a write refused
+// for its path must not have done that first. (Found by review.)
+func TestARefusedWriteDoesNotTakeTheSessionOver(t *testing.T) {
+	d, srv, done := plainDaemon(t)
+	defer done()
+	if _, err := d.Loop.Store.CreateSession("parent", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := deleteRequest(t, srv.URL+"/api/sessions/parent/tasks/.."); code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", code)
+	}
+	if claimed(d, "parent") {
+		t.Error("a write refused for its path took the session over")
+	}
+}
+
+// The gate reads the session id from the path the mux routes on. Read
+// from the decoded path, a write the mux had no route for still took a
+// session over. (Found by review.)
+func TestTheGateNamesTheSessionTheMuxWouldRouteTo(t *testing.T) {
+	d, srv, done := plainDaemon(t)
+	defer done()
+	if _, err := d.Loop.Store.CreateSession("parent", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := rawRequest(t, http.MethodPost, srv.URL+"/api/sessions%2Fparent/rename")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: there is no such route", resp.StatusCode)
+	}
+	if claimed(d, "parent") {
+		t.Error("a request routed nowhere took session parent over")
+	}
+}
+
+// HEAD is a read: redirected as before, as the docs say.
+func TestAHeadToANonCanonicalPathIsStillRedirected(t *testing.T) {
+	_, srv, done := plainDaemon(t)
+	defer done()
+	resp, err := rawRequest(t, http.MethodHead, srv.URL+"/api/sessions/parent/tasks/..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode < 300 || resp.StatusCode > 399 || resp.Header.Get("Location") != "/api/sessions/parent" {
+		t.Errorf("HEAD answered %d at %q, want a redirect to /api/sessions/parent", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+// The root is its own clean form, so a write to it is not refused as
+// non-canonical.
+func TestAWriteToTheRootIsNotRefusedForItsPath(t *testing.T) {
+	_, srv, done := plainDaemon(t)
+	defer done()
+	resp, err := rawRequest(t, http.MethodPost, srv.URL+"/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusBadRequest {
+		t.Error("POST / was refused as non-canonical")
 	}
 }

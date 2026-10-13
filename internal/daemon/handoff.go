@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -455,7 +456,7 @@ func (d *Daemon) handleShutdown(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) ownershipGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if id := sessionIDInPath(r.URL.Path); id != "" {
+			if id := sessionIDInPath(r.URL.EscapedPath()); id != "" {
 				if err := d.claimSession(id); err != nil {
 					if errors.Is(err, ErrOwnedElsewhere) {
 						writeJSON(w, http.StatusConflict, map[string]any{
@@ -474,6 +475,11 @@ func (d *Daemon) ownershipGate(next http.Handler) http.Handler {
 
 // sessionIDInPath is the {id} of a session route, or "" for any other
 // path.
+//
+// Given the escaped path, which is what the mux routes on, and unescaped
+// here. Read from the decoded path, "/api/sessions%2Fparent/rename" named
+// session "parent" while the mux had no route for it: a write answered
+// 404 still took that session over. (Found by review.)
 func sessionIDInPath(path string) string {
 	const prefix = "/api/sessions/"
 	if !strings.HasPrefix(path, prefix) {
@@ -483,5 +489,9 @@ func sessionIDInPath(path string) string {
 	if i := strings.IndexByte(rest, '/'); i >= 0 {
 		rest = rest[:i]
 	}
-	return rest
+	id, err := url.PathUnescape(rest)
+	if err != nil {
+		return ""
+	}
+	return id
 }
