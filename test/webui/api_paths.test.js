@@ -95,3 +95,36 @@ test('the ids that become dot segments are refused, not sent', async () => {
     assert.equal(sent.length, 0);
   }
 });
+
+// A URL drops a tab, newline or carriage return anywhere in it, and
+// spaces and control characters at either end, before reading the path:
+// ".\t." is "..". (Found by review.)
+test('a path a URL would read differently once it drops characters is never sent', async () => {
+  const { api, sent } = await load();
+  for (const raw of [
+    '/api/sessions/s-1/.\t.', '/api/sessions/s-1/.\n.', '/api/sessions/s-1/.\r.',
+    '/api/sessions/s-1/%2\te%2e', '/api/sessions/s-1/schedules/\t..', '/\t/elsewhere.example/x',
+    '/api/sessions/s-1/.. ', ' /api/sessions', '/api/sessions/s-1\u0000/x',
+  ]) {
+    sent.length = 0;
+    await assert.rejects(api.api('DELETE', raw), (err) => err.status === 400, JSON.stringify(raw));
+    assert.equal(sent.length, 0, JSON.stringify(raw));
+  }
+  for (const [name, call] of Object.entries(calls(api, '.\t.'))) {
+    sent.length = 0;
+    try { await call(); } catch { continue; }
+    assert.equal(resolved(sent[0].url), sent[0].url, `${name} sent ${JSON.stringify(sent[0].url)}`);
+  }
+});
+
+// What the page does send is not refused: query strings carry anything,
+// and the root is its own clean form.
+test('the shapes the page sends are not refused', async () => {
+  const { api, sent } = await load();
+  for (const p of ['/api/sessions', '/api/usage?window=week', '/api/workspace?session=a%2Fb%23c%2e',
+    '/api/sessions/s-1/events?tail=200', '/api/x?next=/a/../b#/..', '/']) {
+    sent.length = 0;
+    await api.api('GET', p);
+    assert.equal(sent.length, 1, p);
+  }
+});

@@ -30,22 +30,29 @@ export const isHeld = (err) => err instanceof ApiError && err.status === 409 &&
 export const isBusy = (err) => err instanceof ApiError && err.status === 409 &&
   !(err.data && err.data.held);
 
-// refuseResolvablePath stops a request whose path a URL would change
-// before it is sent. A path segment of "." or ".." (in any spelling a
-// browser reads as one: "%2e" is a dot, and a backslash is a slash) is
-// resolved away, and an empty segment is a missing id. Either sends the request to
-// another route: DELETE /api/sessions/{id}/tasks/.. is DELETE
-// /api/sessions/{id}, which deletes the conversation. Checked here, for
-// every request whatever built its path, so a wrapper that put an id in
-// unencoded cannot do it. (Found by review, for the schedule routes after
-// the task routes were closed.)
+// refuseResolvablePath stops a request whose path a URL would read
+// differently from the way it was written.
+//
+// A browser resolves a "." or ".." segment away before the request is
+// sent, so an id that is one sends the request to another route: DELETE
+// /api/sessions/{id}/tasks/.. is DELETE /api/sessions/{id}, which deletes
+// the conversation. It reads "%2e" as a dot and a backslash as a slash.
+// It drops a tab, newline or carriage return wherever one is, so ".\t."
+// is "..", and spaces and control characters at either end. An empty
+// segment is a missing id. Checked here, for every request whatever built
+// its path, so a wrapper that put an id in unencoded cannot do it. (Found
+// by review, in three rounds.)
 function refuseResolvablePath(path) {
-  const segments = String(path).split(/[?#]/, 1)[0].split(/[/\\]/);
+  const p = String(path);
+  const refuse = () => {
+    throw new ApiError(400, `refusing to send ${JSON.stringify(p)}: a browser would read its path differently`);
+  };
+  if (/[\u0000-\u001f\u007f]/.test(p) || p !== p.trim()) refuse();
+  if (p === '/') return;
+  const segments = p.split(/[?#]/, 1)[0].split(/[/\\]/);
   for (let i = 1; i < segments.length; i++) {
     const seg = segments[i].toLowerCase().replace(/%2e/g, '.');
-    if (seg === '' || seg === '.' || seg === '..') {
-      throw new ApiError(400, `refusing to send ${path}: a path segment in it would be resolved away`);
-    }
+    if (seg === '' || seg === '.' || seg === '..') refuse();
   }
 }
 
