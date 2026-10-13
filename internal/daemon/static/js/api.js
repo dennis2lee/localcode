@@ -108,12 +108,27 @@ export const switchAgent = (sessionID, agent) => api('POST', `/api/sessions/${se
 export const sendChatMessage = (sessionID, text, images) =>
   api('POST', `/api/sessions/${sessionID}/messages`, (images && images.length) ? { text, images } : { text });
 export const cancelTask = (taskID) => api('POST', `/api/tasks/${taskID}/cancel`, {});
+// pathSegment is an id as one segment of a URL path.
+//
+// encodeURIComponent leaves "." alone, and a URL resolves "." and ".."
+// segments before the request is sent: a task id of ".." turned
+// DELETE /api/sessions/{id}/tasks/.. into DELETE /api/sessions/{id},
+// which deletes the conversation. Such an id is refused here rather than
+// sent anywhere.
+function pathSegment(id) {
+  const s = encodeURIComponent(String(id ?? ''));
+  if (s === '' || s === '.' || s === '..') {
+    throw new ApiError(400, `refusing to put ${JSON.stringify(String(id ?? ''))} in a URL path`);
+  }
+  return s;
+}
+
 // Removing a row from a conversation's task panel: the task is stopped if
 // it is still running, and its conversation is deleted with everything
 // under it. The second removes every row the panel has.
-export const deleteTask = (sessionID, taskID) =>
-  api('DELETE', `/api/sessions/${encodeURIComponent(sessionID)}/tasks/${encodeURIComponent(taskID)}`);
-export const deleteAllTasks = (sessionID) => api('DELETE', `/api/sessions/${encodeURIComponent(sessionID)}/tasks`);
+export const deleteTask = async (sessionID, taskID) =>
+  api('DELETE', `/api/sessions/${pathSegment(sessionID)}/tasks/${pathSegment(taskID)}`);
+export const deleteAllTasks = async (sessionID) => api('DELETE', `/api/sessions/${pathSegment(sessionID)}/tasks`);
 export const revealWorkspace = (sessionID) =>
   api('POST', '/api/workspace/reveal' + (sessionID ? `?session=${encodeURIComponent(sessionID)}` : ''), {});
 export const cancelSessionTurn = (sessionID) => api('POST', `/api/sessions/${sessionID}/cancel`, {});

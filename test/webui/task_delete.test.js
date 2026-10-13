@@ -316,3 +316,17 @@ test("the row's delete does not reach the row it sits on", async () => {
   await app.settle();
   assert.equal(stopped, true);
 });
+
+// A URL resolves "." and ".." segments before the request goes, and
+// encodeURIComponent leaves dots alone: a task id of ".." addressed the
+// conversation itself. Such an id is refused before anything is sent.
+test('a task id that is a dot segment is never put in a URL', async () => {
+  const app = await load({ routes: { 'DELETE /api/sessions/*': { status: 204 }, [ROW]: { status: 204 } } });
+  task(app, '..', 'completed');
+
+  deleteButtonOf(app, '..').click();
+  await app.settle();
+
+  assert.equal(app.calls.filter((c) => c.method === 'DELETE').length, 0, 'a request went out');
+  assert.match(rowOf(app, '..').textContent, /could not delete: .*refusing/);
+});

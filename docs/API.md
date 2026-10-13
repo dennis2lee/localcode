@@ -46,6 +46,12 @@ client to the same release when both are yours.
     a session after an update) holds the session; both shipped clients
     queue on it. `500` the change applied but did not persist, or the
     operation failed mid-way. `501` shutdown is not wired in this daemon.
+* A write whose path is not canonical (a `.` or `..` segment, or a
+  doubled slash) is answered `400` rather than redirected
+  (`canonicalWrites` in `internal/daemon/canonical.go`). A client follows
+  a redirect with the method it started with, so
+  `DELETE /api/sessions/{id}/tasks/..` reached `DELETE /api/sessions/{id}`.
+  Reads are still redirected to the cleaned path.
 * Writes to `/api/sessions/{id}/...` pass through the ownership gate
   (`ownershipGate` in `internal/daemon/handoff.go`): while the daemon this
   one replaced is still finishing a session, writes to it get `409` and
