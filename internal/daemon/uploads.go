@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,10 @@ import (
 // mainly) — generous enough for source files/screenshots without letting
 // a client exhaust disk space.
 const maxUploadBytes = 32 << 20 // 32MB
+
+// uploadFraming is the multipart framing allowed around one file: its
+// boundaries, its part headers and the form field name.
+const uploadFraming = 64 << 10
 
 // handleUploadFile saves a drag-and-dropped file to
 // ~/.localcode/uploads/<session-id>/<sanitized-filename> and returns its
@@ -29,7 +34,17 @@ func (d *Daemon) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The body is bounded as well as the file: ParseMultipartForm keeps
+	// what does not fit in memory in temporary files, so an unbounded body
+	// was an unbounded write to the disk before any check below ran. The
+	// slack is the multipart framing around one file.
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+uploadFraming)
 	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("upload is over the %d MB limit", maxUploadBytes>>20))
+			return
+		}
 		writeError(w, http.StatusBadRequest, fmt.Errorf("parse upload: %w", err))
 		return
 	}
@@ -67,8 +82,18 @@ func (d *Daemon) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer dst.Close()
-	if _, err := io.Copy(dst, io.LimitReader(file, maxUploadBytes)); err != nil {
+	// One byte past the limit is read so a file over it can be told apart
+	// from one exactly at it. A larger file used to be cut at the limit and
+	// answered 200, so the model read a truncated file as the whole of it.
+	n, err := io.Copy(dst, io.LimitReader(file, maxUploadBytes+1))
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("write %s: %w", path, err))
+		return
+	}
+	if n > maxUploadBytes {
+		dst.Close()
+		os.Remove(path)
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("%s is over the %d MB upload limit", name, maxUploadBytes>>20))
 		return
 	}
 

@@ -45,9 +45,10 @@ A stage that declares returns gets an Answer tool in that exact shape, and only 
 
 Prompts take three substitutions and no others: {{task}}, {{item}} inside a fanout, and {{input}} for what earlier stages kept.
 
-Ceilings, all refusals at validation rather than truncations while running: %d stages, %d items per fanout, %d copies, %d agents in a whole run, %d declared fields per stage. Each agent turn gets %s and the run gets %s. Everything runs while you wait, and Esc stops all of it.`,
+Ceilings: %d stages, %d items per fanout, %d copies, %d agents in a whole run, %d declared fields per stage. A plan past one is refused before anything runs. The one exception is a fanout over $earlierstage.field, whose width is known only once that stage has answered: it takes the first %d distinct items, items that would pass the run's %d agents are dropped and counted in the report, and a stage that would pass it stops the run. Each agent turn gets %s and the run gets %s. Everything runs while you wait, and Esc stops all of it.`,
 		maxParallel,
 		maxStages, maxFanout, maxCopies, maxRunAgents, maxReturnFields,
+		maxFanout, maxRunAgents,
 		stageTimeout, runTimeout)
 }
 

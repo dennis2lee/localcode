@@ -39,11 +39,33 @@ func profileViewsImages(profile config.Profile, modelOverride string) bool {
 }
 
 // agentViewsImages answers for a delegation target, so the agent list the
-// delegation tools show can say which agents can be handed an image.
+// delegation tools show can say which agents can be handed an image: its
+// model is sent images, and view_image is among the tools it would be
+// offered. The model alone was the test, and the built-in specialists run
+// on a Claude profile with a read-only list that does not name the tool:
+// each was marked as one to hand an image path to, and none could open it.
 func (l *Loop) agentViewsImages(ctx context.Context, agentName string) bool {
 	sessionID, _ := SessionIDFromContext(ctx)
 	_, profile, err := l.profileFor(ctx, sessionID, agentName)
-	return err == nil && profile.ViewsImages()
+	if err != nil || !profile.ViewsImages() || l.Tools == nil {
+		return false
+	}
+	// From the allowlist, the hidden set and the registry, not from the
+	// specs a turn would be shown: building those renders the delegation
+	// tools' descriptions, whose agent list asks this question again.
+	asTarget := config.WithAgent(withViewsImages(ctx, true), agentName)
+	if l.hiddenTools(asTarget)[tools.ViewImageName] {
+		return false
+	}
+	if !tools.IsAllowed(l.toolsForTurn(asTarget, l.agentConfig(asTarget, agentName)), tools.ViewImageName) {
+		return false
+	}
+	for _, name := range l.Tools.Names() {
+		if name == tools.ViewImageName {
+			return true
+		}
+	}
+	return false
 }
 
 // takeImages decides which of a tool call's images go to the model, says

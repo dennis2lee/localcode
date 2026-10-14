@@ -61,3 +61,18 @@ test('no module reads modal state back out of the class list', () => {
     );
   }
 });
+
+// The auto-delegate target must be an agent declared in config.json: the
+// daemon refuses a built-in specialist. The list offered all six while
+// orchestration was on, each a choice that failed when made.
+test('the auto-delegate panel offers only declared agents', async () => {
+  const app = await load({ routes: { 'GET /api/agents': [
+    { name: 'general-purpose', model: 'm1' },
+    { name: 'reviewer', model: 'm2' },
+    { name: 'explore', model: 'm3', builtin: true },
+  ] } });
+  app.el('auto-delegate-btn').click();
+  await app.settle();
+  const offered = Array.from(app.el('delegate-agent-select').children, (o) => o.value).filter(Boolean);
+  assert.deepEqual(offered, ['general-purpose', 'reviewer']);
+});

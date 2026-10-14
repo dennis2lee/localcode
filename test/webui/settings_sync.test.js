@@ -109,3 +109,15 @@ test('the checkbox posts the change to the daemon', async () => {
   assert.equal(app.callsTo('POST', '/api/settings/keep-going').length, 1);
   assert.equal(app.state.keepGoing, false);
 });
+
+// model_invocable is in the snapshot too, and moves the open panel's box:
+// it was announced and left out, so a second window kept the old state.
+test('a model command switch changed elsewhere moves the box here', async () => {
+  const app = await load();
+  app.el('settings-btn').click();
+  await app.settle();
+  app.applyEvent({ type: 'settings.changed', data: { model_invocable: true } });
+  assert.equal(app.el('model-invocable-checkbox').checked, true, 'the open panel shows a stale box');
+  app.applyEvent({ type: 'settings.changed', data: { model_invocable: false } });
+  assert.equal(app.el('model-invocable-checkbox').checked, false);
+});

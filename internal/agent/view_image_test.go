@@ -200,6 +200,7 @@ func TestAnImageThatWouldPassTheMessageLimitIsLeftOut(t *testing.T) {
 // that cannot see knows whom to give the path to.
 func TestTheAgentListSaysWhoCanViewImages(t *testing.T) {
 	loop, p, sessionID := delegationLoop(t, [][]provider.StreamEvent{textReply("ok")}, "general-purpose", "vision")
+	loop.Tools.Register(tools.ViewImage{})
 	yes := true
 	loop.Config.Profiles["seeing"] = config.Profile{Provider: "local", Model: "qwen2.5-vl", Vision: &yes}
 	loop.Config.Agents["vision"] = config.AgentConfig{Profile: "seeing", Description: "Looks at images."}
@@ -238,5 +239,33 @@ func TestSwitchingReadOffSwitchesViewImageOff(t *testing.T) {
 		if tools.IsAllowed(allowed, name) {
 			t.Errorf("%s is allowed for an agent that switched read off", name)
 		}
+	}
+}
+
+// Marked for the model only when the agent can open the file: a model
+// that sees, and view_image among the tools it is offered. The built-in
+// specialists run on a Claude profile with a read-only list that does not
+// name the tool, and each was marked as one to hand an image path to.
+func TestAnAgentWithoutTheToolIsNotMarkedAsViewingImages(t *testing.T) {
+	loop, _, _ := delegationLoop(t, [][]provider.StreamEvent{textReply("ok")}, "general-purpose")
+	loop.Tools.Register(tools.ViewImage{})
+	yes := true
+	loop.Config.Profiles["seeing"] = config.Profile{Provider: "local", Model: "claude-sonnet-5-5", Vision: &yes}
+	loop.Config.Agents["reader"] = config.AgentConfig{Profile: "seeing", Tools: []string{"read_file"}}
+	loop.Config.Agents["looker"] = config.AgentConfig{Profile: "seeing", Tools: []string{"read_file", tools.ViewImageName}}
+	ctx := loop.pinSmart(context.Background())
+	if loop.agentViewsImages(ctx, "reader") {
+		t.Error("an agent whose tools do not include view_image was marked as viewing images")
+	}
+	if !loop.agentViewsImages(ctx, "looker") {
+		t.Error("an agent with view_image on a model that sees was not marked")
+	}
+	for name := range loop.specialists(ctx) {
+		if loop.agentViewsImages(ctx, name) {
+			t.Errorf("the specialist %q, which has no view_image, was marked", name)
+		}
+	}
+	if len(loop.specialists(ctx)) == 0 {
+		t.Fatal("no specialists to check")
 	}
 }

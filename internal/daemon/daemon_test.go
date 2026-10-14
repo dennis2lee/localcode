@@ -1986,6 +1986,19 @@ func TestTheSettingsEndpointsAlsoAnnounce(t *testing.T) {
 	if data := waitForSettings(t, evCh); data["smart_agent"] != true {
 		t.Errorf("smart_agent = %v, want true", data["smart_agent"])
 	}
+
+	// Every switch the settings window has an endpoint for is in what it
+	// announces. model_invocable was announced and left out, so a second
+	// window went on showing the old state.
+	resp, err = http.Post(httpSrv.URL+"/api/settings/model-invocable", "application/json",
+		strings.NewReader(`{"enabled":true}`))
+	if err != nil {
+		t.Fatalf("POST model-invocable: %v", err)
+	}
+	resp.Body.Close()
+	if data := waitForSettings(t, evCh); data["model_invocable"] != true {
+		t.Errorf("model_invocable = %v, want true", data["model_invocable"])
+	}
 }
 
 // A background task's row in the panel is built from the parent's own

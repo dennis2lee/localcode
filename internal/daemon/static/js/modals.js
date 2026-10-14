@@ -152,7 +152,11 @@ export function renderDelegatePanel() {
   none.value = '';
   none.textContent = '(no agent chosen — nothing is delegated)';
   delegateAgentSelect.appendChild(none);
+  // Only agents declared in config.json: the daemon refuses a built-in
+  // specialist as the target, and the list used to offer all six while
+  // orchestration was on, each one a choice that failed when made.
   for (const a of app.agents) {
+    if (a.builtin) continue;
     const opt = document.createElement('option');
     opt.value = a.name;
     opt.textContent = a.model ? `${a.name} (${a.model})` : a.name;

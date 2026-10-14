@@ -380,7 +380,7 @@ func SlashCommands() []SlashCommand {
 		{Name: "memory", Description: "show the auto-memory directory and index"},
 		{Name: "config", Description: "show settings, or change one with /config <name> on|off", Usage: "[<name> on|off]"},
 		{Name: "smart-agent", Description: "turn the Smart Agent bundle on or off", Usage: "[on|off]"},
-		{Name: "orchestrate", Description: "turn the Orchestrate tool on or off", Usage: "[on|off]"},
+		{Name: "orchestrate", Description: "turn delegation on or off: the specialists, Task, TaskBackground, TaskCollect and Orchestrate", Usage: "[on|off]"},
 		{Name: "auto-delegate", Description: "turn auto-delegation on or off", Usage: "[on|off]"},
 		{Name: "permission-skip-all", Description: "allow every prompt in this conversation, the workspace boundary included", Usage: "[on|off]"},
 		{Name: "permission-skip-tools", Description: "allow every tool prompt, but still ask before leaving the workspace", Usage: "[on|off]"},

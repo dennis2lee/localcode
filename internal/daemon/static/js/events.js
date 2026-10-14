@@ -16,7 +16,7 @@ import {
   applyEffort,
 } from './modals.js';
 import { applyScheduleEvent } from './schedules.js';
-import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen } from './settings.js';
+import { refreshSmartAgentIfOpen, refreshOrchestrateIfOpen, refreshKeepGoingIfOpen, refreshRepeatLimitIfOpen, refreshFoldThinkingIfOpen, refreshModelInvocableIfOpen } from './settings.js';
 import { refreshTaskViewStatus, taskDeleted } from './taskview.js';
 // events.js and sessions.js import each other (session.renamed reloads the
 // session list; selectSession opens the event stream). Both references are
@@ -471,6 +471,10 @@ const handlers = {
     if (typeof d.keep_going === 'boolean') {
       app.keepGoing = d.keep_going;
       refreshKeepGoingIfOpen();
+    }
+    if (typeof d.model_invocable === 'boolean') {
+      app.modelInvocable = d.model_invocable;
+      refreshModelInvocableIfOpen();
     }
     if (typeof d.fold_thinking === 'boolean') app.foldThinking = d.fold_thinking;
     // Redrawn on either, since the note says when show_thinking is

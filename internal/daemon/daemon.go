@@ -21,6 +21,7 @@ import (
 	"localcode/internal/agent"
 	"localcode/internal/events"
 	"localcode/internal/mcp"
+	"localcode/internal/provider"
 	"sync"
 )
 
@@ -320,6 +321,9 @@ func (d *Daemon) announceSettings() {
 			"show_thinking":   d.Loop.ShowThinking(),
 			"show_timestamps": d.Loop.ShowTimestamps(),
 			"orchestrate":     d.Loop.OrchestrateEnabled(),
+			// Announced by its own endpoint and missing from what was
+			// announced, so a second window kept showing the old state.
+			"model_invocable": d.Loop.ModelInvocableEnabled(),
 		},
 	})
 }
@@ -424,6 +428,19 @@ const maxJSONBody = 1 << 20
 // decode, which every caller already handles as a bad request.
 func jsonBody(w http.ResponseWriter, r *http.Request) io.Reader {
 	return http.MaxBytesReader(w, r.Body, maxJSONBody)
+}
+
+// maxMessageBody is the cap on a message, which carries pasted images as
+// base64: the 10 MB of images one message may hold, encoded, plus the
+// ordinary cap for the text and the JSON around it. Under maxJSONBody a
+// message failed to decode once its images passed about 768 KB, so the
+// 10 MB limit the page checks and the daemon names could not be reached,
+// and an ordinary screenshot was refused as "request body too large".
+const maxMessageBody = maxJSONBody + (provider.MaxImageBytesPerMessage+2)/3*4
+
+// messageBody is jsonBody for the messages route.
+func messageBody(w http.ResponseWriter, r *http.Request) io.Reader {
+	return http.MaxBytesReader(w, r.Body, maxMessageBody)
 }
 
 // httpError carries a status alongside a message, so work done inside a

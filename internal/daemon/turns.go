@@ -310,12 +310,18 @@ func (d *Daemon) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			Data      []byte `json:"data"`
 		} `json:"images"`
 	}
-	if err := json.NewDecoder(jsonBody(w, r)).Decode(&req); err != nil {
+	if err := json.NewDecoder(messageBody(w, r)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	if req.Text == "" && len(req.Images) == 0 {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("text is required"))
+		return
+	}
+	// The body's larger cap is room for images. The text keeps the cap
+	// every other body has: it goes into the session log whole.
+	if len(req.Text) > maxJSONBody {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("the message text is over the %d MB limit", maxJSONBody>>20))
 		return
 	}
 

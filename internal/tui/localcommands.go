@@ -123,6 +123,13 @@ func localCommands() []localCommand {
 							return m.switchAgent(a.Name)
 						}
 					}
+					// The words the daemon's own /model reads as "back to
+					// the agent's model". Sent on as a profile name, they
+					// were refused as "no profile called default".
+					switch strings.ToLower(arg) {
+					case "default", "unset", "clear":
+						return m.setModel("")
+					}
 					return m.setModel(arg)
 				}
 				// One round trip, because which profiles exist is the

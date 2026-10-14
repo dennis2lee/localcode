@@ -485,3 +485,19 @@ func TestTheToolDescriptionStatesHowWideAFanoutRuns(t *testing.T) {
 		t.Error("the description still says a fanout runs all at once")
 	}
 }
+
+// The description said every ceiling was a refusal before anything ran.
+// A fanout over an earlier stage's field is the exception the run itself
+// handles, and a model sizing a plan on the old sentence expected a
+// refusal where the run dropped items and went on.
+func TestTheToolDescriptionNamesTheCeilingTheRunEnforces(t *testing.T) {
+	desc := NewOrchestrateTool(nil).DescriptionFor(context.Background())
+	if strings.Contains(desc, "all refusals at validation") {
+		t.Error("the description still says every ceiling is checked before the run")
+	}
+	for _, want := range []string{"refused before anything runs", fmt.Sprintf("first %d distinct items", maxFanout), "dropped and counted in the report"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("the description does not say %q:\n%s", want, desc)
+		}
+	}
+}
