@@ -2,15 +2,13 @@
 
 ## Summary
 
-Open and partial work remains in security, orchestration, and client behavior. The numbered records below retain completed fixes and their release versions.
+Open and partial work remains in orchestration, client behavior, and desktop window verification. The numbered records below retain completed fixes and their release versions.
 
 | Area | Recorded remaining work |
 |---|---|
-| Security | Network destination controls and structural source provenance in summaries |
-| Orchestration | Resume, loops, per-item pipelines, child-session retention, and permission feasibility |
-| Agent selection | Direct selection of dynamic Smart Agent specialists |
-| Client behavior | Rewind recovery and the UI items below |
-| Coverage | No Linux or macOS CI; 23 tested packages never run on Windows; the fmt check cannot fail |
+| Orchestration | Resuming a run (item 36) |
+| Client behavior | The open UI ideas below |
+| Coverage | Links and drags in the macOS window are unverified (item 64) |
 
 Original review: 2026-07-18. Item numbers and recorded version statuses are preserved.
 
@@ -40,11 +38,11 @@ Completed findings remain in this list to preserve item numbers and release hist
    * `internal/shell` selects `sh` on PATH, then Git for Windows' `bash.exe` at known paths, then `cmd /c`.
    * The bash tool description identifies use of `cmd`.
 
-2. **Turn serialization. Partially done.**
+2. **Turn serialization. Done in v0.122.0.**
 
    * The daemon's per-session busy flag rejects concurrent turns with HTTP 409.
    * Since v0.24.0, clients queue a rejected message and retry on `turn.done`.
-   * Remaining: `/compact` can overlap a running turn.
+   * Since v0.122.0, `/compact` no longer reaches a running turn. The daemon refuses it with a 409 the clients show, as it does `/clear`, `/rewind`, `/redo`, and a `/workspace` move (`heldUntilIdle` in `internal/daemon/turns.go`).
    * Since v0.37.0, both clients explicitly refuse commands entered during a turn. Commands are not queued as model input.
 
 3. **Bash permission matching. Done in v0.20.0.**
@@ -207,7 +205,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Total: four markers, the API limit.
     * OpenAI-compatible requests receive no explicit cache controls. Local servers may cache prefixes themselves. Hosted providers with explicit controls remain unsupported.
 
-26. **Turn-log retention. Done in v0.55.0; compression and independent tracing remain open.**
+26. **Turn-log retention. Done in v0.55.0; compression declined (item 63); tracing without Smart Agent remains open.**
 
     * Pruning runs after configured limits are applied at startup and at daily rotation.
     * Round 10 found pruning under the default 30-day limit before `trace_max_age_days` was applied. `Open` now deletes nothing.
@@ -215,7 +213,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * `trace_max_total_mb`: optional total-size limit, deleting oldest files first.
     * Today's file is never deleted.
     * Retention uses rotation-generated filenames rather than mtime.
-    * Remaining: compression, and tracing that writes without Smart Agent. Note what that second half actually is: the writer is already independent — `cmd/localcode/wire.go` opens the trace writer and applies retention unconditionally, because a daemon started with Smart Agent off may have it turned on ten minutes later. What is still gated is the switch that decides what gets written: `Loop.tracer` returns nil unless Smart Agent is on for the turn (`internal/agent/observe.go`), deliberately, since the trace records which models answered and what they cost. Independence means ungating that switch, not building the writer.
+    * Remaining: tracing that writes without Smart Agent. Compression was declined (item 63). Note what the tracing half actually is: the writer is already independent. `cmd/localcode/wire.go` opens the trace writer and applies retention unconditionally, because a daemon started with Smart Agent off may have it turned on ten minutes later. What is still gated is the switch that decides what gets written: `Loop.tracer` returns nil unless Smart Agent is on for the turn (`internal/agent/observe.go`), deliberately, since the trace records which models answered and what they cost. Independence means ungating that switch, not building the writer.
 
 27. **Retrying an endpoint before fallback. Done in v0.55.0.**
 
@@ -252,12 +250,13 @@ Completed findings remain in this list to preserve item numbers and release hist
     * They do not restrict network destinations used by an executing shell command or MCP server.
     * Destination allowlists or deny-by-default egress require a separate mechanism.
 
-30. **MCP server trust records. Mostly done in v0.55.0.**
+30. **MCP server trust records. Done in v0.55.0; declared-version pinning added in v0.122.0.**
 
     * Tool names, descriptions, and schemas are fingerprinted in `~/.localcode/mcp-pins.json` on first connection.
     * A changed fingerprint produces a startup warning naming the server, then updates the stored fingerprint.
     * The record includes first-seen and last-changed timestamps.
-    * Remaining: a known-server registry and declared-version pinning.
+    * Declared-version pinning shipped in v0.122.0. A pin records the version the server declares, and the warning says when the surface changed under an unchanged version (`internal/mcp/pins.go`).
+    * A known-server registry was declined (item 63).
     * Fingerprints describe the advertised interface. They cannot detect behavior changes that leave that interface unchanged.
 
 31. **Debate review capabilities. Four planned parts completed in v0.69.0, each since grown past its bullet.**
@@ -283,14 +282,16 @@ Completed findings remain in this list to preserve item numbers and release hist
     * Unverified: Bedrock support for `adaptive`, which newer families accept through the direct API.
     * Reasoning is streamed but not stored. Reload loses it, and `/context` does not account for its cost. Partly done in v0.148.0: a muse model's reasoning blocks are stored and drawn again after a reload while `fold_thinking` is on. Other models' reasoning is still not stored, and `/context` still does not count it.
 
-33. **CI test enforcement. Open for commits; enforced for releases.**
+33. **CI test enforcement. Done in v0.121.0.**
 
+    * `gate.yml` runs `scripts/check.sh` on ubuntu and macOS for every push to `main` and every pull request.
     * `gui-windows.yml` performs checkout, version resolution, build, smoke check, and upload.
-    * It runs `go test` on the Windows-specific and directory-resolution packages with `CGO_ENABLED=0`, so those are also built pure-Go. It does not run `go vet`, or a pure-Go build of every package. See item 41 for the scope.
+    * Its `test-windows` job runs `go vet ./...` and `go test ./...` on Windows with `CGO_ENABLED=0`. See item 41 for how that scope grew.
     * `make check` records a local verification stamp. Release preflight requires a matching stamp.
     * The stamp does not enforce checks on commits or verify another machine.
     * A push-triggered workflow could provide both checks.
     * The recorded decision was to defer that workflow because development and releases use one machine and another workflow adds maintenance.
+    * That decision was reversed in v0.121.0, after v0.118.0 shipped green with 27 failing Windows tests.
 
 34. **Unused functions. Resolved; test-environment gaps remain.**
 
@@ -302,7 +303,7 @@ Completed findings remain in this list to preserve item numbers and release hist
     * `turnTracker.running` remains required by `handleListSessions`. It was restored after an initial removal caused `go build` to fail.
     * The obsolete `memory.SystemPromptSection` wrapper was also removed. Its two tests now exercise `PolicySection` and `IndexSection`, which `cmd/localcode/wire.go` calls.
     * A duplicate memory assertion in `internal/agent` was removed.
-    * `scripts/deadcode.allow` contains seven entries in the accepted categories: test-only reachability and build-tag variants.
+    * `scripts/deadcode.allow` contains sixteen entries: four reachable only from tests, one test hook, two build-tag variants, and nine helpers that only the Windows MSI path calls.
 
     | Remaining verification gap | Evidence or constraint |
     |---|---|
@@ -603,32 +604,32 @@ Completed findings remain in this list to preserve item numbers and release hist
 
 | Idea | Status and scope |
 |---|---|
-| Markdown rendering | Done in v0.27.0. The dependency-free renderer supports headings, emphasis, code, lists, blockquotes, links, and rules in the Web UI and GUI. Code syntax highlighting remains open. |
+| Markdown rendering | Done in v0.27.0. The dependency-free renderer supports headings, emphasis, code, lists, blockquotes, links, and rules in the Web UI and GUI. Code blocks are highlighted in the Web UI since v0.122.0. The terminal does not highlight code, by decision: it would need a dependency. |
 | Collapsible tool-call cards | Done. `internal/daemon/static/js/transcript.js` expands tool input and output. The row said "Open" until the v0.120.0 sweep read the code. |
-| Diff viewer | Open. Before-and-after views for `edit` and `write_file` results. |
+| Diff viewer | Partial in v0.122.0. Both clients draw a collapsed minus/plus diff for `edit`, and a created file's lines for `write_file`. Remaining: the before half of a `write_file` that replaced a file, which needs the old text on the wire. |
 | Persistent permission approval | Done in v0.20.0. Options: allow once, allow for session, and always allow. The last option writes a matching config rule. |
 | Usage visualization | Partial. Per-model token bars done in v0.122.0: the Web UI's usage window draws one segmented bar per model, one segment per token kind, from `GET /api/usage` since v0.146.0. Remaining: a graphical context-use indicator; the status line shows a percentage. |
 | Session completion indication | Done in v0.40.0. The session light identifies running work and unread completed replies. Cross-client activity sources were aligned in v0.42.0. Running indicators became amber in v0.52.0 across the session list, prompt status, and task panel. Green indicates an available session. |
-| Session search and filter | Open. Search by title and workspace. Manual card ordering shipped in v0.43.0. |
+| Session search and filter | Done in v0.122.0. The Web UI filters the session list by title and full workspace path. Manual card ordering shipped in v0.43.0. |
 | Scroll control | Done in TUI v0.31.0 and Web UI v0.51.0. Output follows only when the view was already at the bottom before an update. Web UI and background-task windows provide a jump-to-bottom control. |
 | Workspace is process-wide | Done in v0.39.0. Relative paths resolve per session. `os.Chdir` was removed. File tools use the session directory and bash uses `cmd.Dir`. Only the session's own running turn blocks its workspace switch. |
 | Per-session workspace | Added in v0.28.0; underlying isolation completed in v0.39.0. Switching one client's session no longer changes another client's workspace. |
 | Dark/light theme and mobile layout | **Declined.** v0.52.0 introduced role-based color properties with a test for undefined properties, so a light theme is a second value set away — and the decision is not to add one, nor a mobile layout, nor `/themes`. |
-| MCP server status | Partial. `/status` reports each server's connection state and its last error (v0.116.0), and `/mcps` turns one off for one conversation (v0.119.0). Remaining: a control in the Web UI panel. The cheap version sends `/reset-mcp`, which is a machine-wide reset rather than a per-row retry. |
+| MCP server status | Partial. `/status` reports each server's connection state and its last error (v0.116.0), and `/mcps` turns one off for one conversation (v0.119.0). Since v0.122.0 the Web UI panel has a "reconnect all" button, which sends `/reset-mcp` and resets every server machine-wide. Remaining: a per-server retry. |
 
 ### TUI
 
 | Idea | Status and scope |
 |---|---|
-| Markdown and code rendering | Open. Consider a renderer such as glamour. |
-| In-program session picker | Done in v0.59.0. `/session` selects a conversation without restart. `/model` provides agent selection. Session deletion remains in the startup picker, not the in-program picker. |
-| Tool progress | Done in v0.25.0; extended in v0.32.11. Displays the running tool, queue depth, and background-task count. Transcript tool-call entries persist. Elapsed time remains open. |
-| Context indicator | Done in v0.119.0. The terminal was ignoring usage events entirely; it warns at 70% of the window and again at 90%, matching the Web UI. The 85% in the original proposal was not adopted — the two clients agreeing matters more. Remaining: a graphical bar rather than a percentage. Note that auto-compaction fires at 50% by default, before either warning. |
+| Markdown and code rendering | Markdown done in v0.122.0, in `internal/tui/markdown.go` with no markdown dependency. Code is not highlighted in the terminal, by decision: it would need a dependency. |
+| In-program session picker | Done in v0.59.0. `/session` selects a conversation without restart. `/model` provides agent selection. Since v0.122.0, Ctrl+D deletes a session from the in-program picker, after a second press to confirm. |
+| Tool progress | Done in v0.25.0; extended in v0.32.11 and v0.122.0. Displays the running tool, queue depth, and background-task count. Transcript tool-call entries persist. Elapsed time on the running tool since v0.122.0. |
+| Context indicator | Done in v0.119.0. The terminal was ignoring usage events entirely; it warns at 70% of the window and again at 90%, matching the Web UI. The 85% in the original proposal was not adopted, because the two clients agreeing matters more. A bar beside the percentage since v0.122.0. Note that auto-compaction fires at 50% by default, before either warning. |
 | History search | Open. Search earlier output with the `/` key. |
 
 ### Both clients
 
 | Idea | Status and scope |
 |---|---|
-| Daemon-provided help | Partial in v0.60.0. `GET /api/slash-commands` supplies command names and descriptions for completion. Help strings remain client-owned. Release-verification tests require both help strings to include every `SlashCommands()` entry. Initial tests found one missing TUI command and eight missing Web UI commands. A shared endpoint such as `GET /api/commands/help` remains a proposal. |
+| Daemon-provided help | Partial in v0.60.0; done in v0.119.0. `GET /api/slash-commands` supplies command names and descriptions for completion. Release-verification tests required both help strings to include every `SlashCommands()` entry. Initial tests found one missing TUI command and eight missing Web UI commands. Since v0.119.0 each command also carries its usage, and both clients render `/help` from that list. Each client still writes help for the commands it answers itself. A guard test fails if a client copy of the daemon's list comes back. |
 | English program output | Done in v0.13.0. Documentation followed in v0.19.0. |

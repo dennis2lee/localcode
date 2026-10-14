@@ -56,22 +56,31 @@ test('a turn ends on turn.done', async () => {
 `load(opts)` returns the module graph's exports (see the bottom of
 `js/main.js` for the list) plus these helpers:
 
-- `app.state.*` — a flat view over `js/state.js`'s `session`/`app` objects,
+- `app.state.*`: a flat view over `js/state.js`'s `session`/`app` objects,
   readable and writable, so a test can put the page into a condition without
   driving the whole UI to get there
-- `app.el(id)` — an element from `index.html`
-- `app.doc` — the document itself, for the listeners the app attaches there
+- `app.el(id)`: an element from `index.html`
+- `app.doc`: the document itself, for the listeners the app attaches there
   rather than to an element (global keys, a panel drag's pointer events)
-- `app.transcript()` — everything written to the transcript, as HTML
-- `app.sse` — the fake event stream: `.emit(event)`, `.raw(text)`, `.fail()`
-- `app.streamFor(fragment)` — one open stream by a piece of its URL, for a
+- `app.transcript()`: everything written to the transcript, as HTML
+- `app.userTurns()`: the text of each of the person's own prompts, in order
+- `app.sse`: the fake event stream of the conversation being looked at:
+  `.emit(event)`, `.raw(text)`, `.fail()` (a drop the browser retries),
+  `.failFatally()` (a refused stream, never retried), `.reopen()` (the
+  reconnect after `.fail()`)
+- `app.streamFor(fragment)`: one open stream by a piece of its URL, for a
   task window's own transcript
-- `app.calls` / `app.callsTo(method, path)` — the requests the page made
+- `app.calls` / `app.callsTo(method, path)`: the requests the page made
   (`path` may be a string or a RegExp)
-- `app.type(text)` / `app.press(key, props)` — drive the prompt box
-- `app.settle()` — let pending promise chains finish
-- `app.wait(ms)` — let real time pass, for the few behaviours that are about
+- `app.type(text)` / `app.press(key, props)`: drive the prompt box
+- `app.fireWindow(type, ev)`: fire a window-level event, such as `resize`
+- `app.settle()`: let pending promise chains finish
+- `app.wait(ms)`: let real time pass, for the few behaviours that are about
   a deadline rather than an event
+- `app.reloads`: how many times the page asked to be reloaded
+- `app.consoleErrors`: what the page logged with `console.error`
+- `app.storage` / `app.sessionStorage`: the page's stored values, as maps
+- `app.internals`: the module namespace, for calling an export directly
 
 `load(opts)` also takes:
 
@@ -80,14 +89,17 @@ test('a turn ends on turn.done', async () => {
 | `routes` | overrides the fake daemon per test (see below) |
 | `globals` | extra globals in the page's sandbox |
 | `localStorage` | the stored values the page starts with |
-| `init` | run before the modules are evaluated, for a page condition that has to exist at load time |
+| `sessionStorage` | the per-window stored values the page starts with |
+| `init` | `false` returns as soon as the modules are evaluated, without waiting for the page's own `init()`. The default waits for it, then settles. |
 
 Questions the page asks go through the in-page dialog (js/prompt.js),
 driven like any other element: set `prompt-input` and click `prompt-ok`,
 or click `prompt-cancel`. There are no stubbed browser dialogs.
 
-A route value is either a JSON body (answered `200`) or `{status, body}`, and
-a route may be a function taking `{method, path, query}`:
+A route value is a JSON body (answered `200`), `{status, body}`, or
+`{networkError: "..."}`, which makes the fetch itself reject. A route may also
+be a function. It is called as `(body, {method, path, query})`, with the
+parsed request body first:
 
 ```js
 await load({ routes: { 'POST /api/sessions/*/messages': { status: 409 } } });

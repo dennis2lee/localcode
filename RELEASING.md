@@ -64,7 +64,7 @@ reports the right version, and the fix you are shipping is simply absent from
 the desktop build. Check the run's `headSha` against your commit.
 
 ```bash
-make check                 # the whole gate, in parallel, ~15s warm
+make check                 # the whole gate, in parallel; 197s measured alone (see AGENTS.md)
 git add -A && git commit   # code + docs together, never docs "later"
 git push origin main
 ```
@@ -120,7 +120,15 @@ rm -rf dist
 
 **Publish every asset `AssetFor` knows how to pick.** The update check in
 the settings window asks GitHub for the release's asset list and looks for
-the one matching this platform and install shape — the `.msi`, either macOS
-tarball, and on Linux either the `.deb` or the tarball. An asset left out of
-the upload is not a missing file to the person on that platform: it is
-"release vx.y.z has nothing for linux/amd64", from a release that built it.
+the one matching this platform and install shape:
+
+* Windows amd64: the `.msi`, with the zip as its fallback.
+* Windows arm64: the zip, the only arm64 asset.
+* A handoff on Windows always takes the zip.
+* macOS: either tarball.
+* Linux: either the `.deb` or the tarball.
+
+An asset left out of the upload is not a missing file to the person on that
+platform: it is "release vx.y.z has nothing for linux/amd64", from a release
+that built it. `make dist` ends with `scripts/check-dist.sh`, which refuses a
+`dist/` missing any of the nine assets or holding one from another version.

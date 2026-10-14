@@ -192,7 +192,7 @@ The `[1m]` suffix requests the Anthropic 1M context beta. Example: `"us.anthropi
 
 **Opus 4.6 and Sonnet 4.6 do not need the suffix.** Anthropic's Bedrock documentation, checked 2026-08-19, lists a 1M token context for those models and for newer models unverified with localcode. Sonnet 4.5 and older models retain a 200k default context.
 
-`internal/modelinfo` uses 1M for Opus 4.6, Sonnet 4.6, and 5-series families. It uses 200k for other families. A profile `context_window` overrides these values.
+`internal/modelinfo` uses 1M for Opus 4.6 and later, Sonnet 4.6 and later, Fable, and Mythos. It uses 200k for every other Claude family and 128k for a model it does not recognize. A profile `context_window` overrides these values.
 
 > **Not verified:** the beta field and behavior have not been tested with a real Bedrock account that has 1M context access. The implementation uses the Anthropic direct API convention. Bedrock may require a different field or may not support the beta.
 
@@ -253,6 +253,7 @@ Since v0.38.0, localcode reads the context limit from the server. The configured
 |---|---|
 | `context_window` | Set only when the server does not report a context limit |
 | `max_tokens` | Maximum response length; default 4096 |
+| `vision` | Set `true` for a model that accepts images. Unset, only a Claude model is sent images, and any other model gets a note in place of each image. The `view_image` tool is offered only when this is on. |
 
 ```json
 {
@@ -268,6 +269,15 @@ Since v0.38.0, localcode reads the context limit from the server. The configured
   "default_profile": "local-fast"
 }
 ```
+
+### Ollama
+
+1. Pull a model, for example `ollama pull qwen3:30b`.
+2. Set `base_url` to `http://localhost:11434/v1`.
+3. Set `model` to the name `ollama list` shows, for example `qwen3:30b`.
+4. Set `context_window` to the context Ollama loads for that model.
+
+localcode cannot read the loaded context from Ollama. Ollama's `/v1/models` reply carries none of the context fields localcode looks for, and Ollama serves no `/props`. Without `context_window`, localcode estimates from the model name: 32,768 for a `qwen3` name and 128,000 for a name it does not recognize. An estimate above the loaded context lets a request grow past what the model sees.
 
 ### A local model that stops mid-task
 
