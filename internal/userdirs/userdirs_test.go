@@ -150,17 +150,19 @@ func TestPathsUseThePlatformSeparator(t *testing.T) {
 }
 
 // Skills are the other rule: every root is read, the project's before the
-// home's, and inside each .claude, then .opencode, then .localcode. The
+// home's, and inside each .localcode, then .claude, then .opencode. The
 // loader keeps the first skill of a name, so this order is the precedence.
+// localcode's own comes first for skills while it comes last for commands:
+// a skill written in .localcode was written for this program.
 func TestSkillDirsListEveryRootProjectFirst(t *testing.T) {
 	got := SkillDirs(filepath.Join("/repo"), filepath.Join("/home", "u"))
 	want := []string{
+		filepath.Join("/repo", ".localcode", "skills"),
 		filepath.Join("/repo", ".claude", "skills"),
 		filepath.Join("/repo", ".opencode", "skills"),
-		filepath.Join("/repo", ".localcode", "skills"),
+		filepath.Join("/home", "u", ".localcode", "skills"),
 		filepath.Join("/home", "u", ".claude", "skills"),
 		filepath.Join("/home", "u", ".opencode", "skills"),
-		filepath.Join("/home", "u", ".localcode", "skills"),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("SkillDirs = %v, want %v", got, want)
@@ -200,8 +202,8 @@ func TestSkillDirsNameDirectoriesThatDoNotExistYet(t *testing.T) {
 func TestSkillDirsNamesEachDirectoryOnceWhenTheProjectIsTheHome(t *testing.T) {
 	home := t.TempDir()
 	got := SkillDirs(home, home)
-	if len(got) != len(Order) {
-		t.Fatalf("SkillDirs(home, home) = %v, want %d entries", got, len(Order))
+	if len(got) != len(SkillOrder) {
+		t.Fatalf("SkillDirs(home, home) = %v, want %d entries", got, len(SkillOrder))
 	}
 	seen := map[string]bool{}
 	for _, d := range got {
@@ -211,7 +213,7 @@ func TestSkillDirsNamesEachDirectoryOnceWhenTheProjectIsTheHome(t *testing.T) {
 		seen[d] = true
 	}
 	// Spelled differently, still one place.
-	if again := SkillDirs(home+string(filepath.Separator), home); len(again) != len(Order) {
+	if again := SkillDirs(home+string(filepath.Separator), home); len(again) != len(SkillOrder) {
 		t.Errorf("a trailing separator made it two places: %v", again)
 	}
 }
@@ -229,8 +231,8 @@ func TestSkillDirsNamesTheHomeOnceWhenTheProjectIsALinkToIt(t *testing.T) {
 		{"the project is the link", link, home},
 		{"the home is the link", home, link},
 	} {
-		if got := SkillDirs(c.project, c.home); len(got) != len(Order) {
-			t.Errorf("%s: %d directories named, want %d: %v", c.name, len(got), len(Order), got)
+		if got := SkillDirs(c.project, c.home); len(got) != len(SkillOrder) {
+			t.Errorf("%s: %d directories named, want %d: %v", c.name, len(got), len(SkillOrder), got)
 		}
 	}
 }

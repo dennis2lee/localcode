@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.158.0
+
+A skill in `.localcode` now wins over a same-named one in `.claude` or `.opencode`.
+
+**Changed**
+
+* Skill priority inside the project and inside the home directory: `.localcode`, then `.claude`, then `.opencode` (was `.claude`, `.opencode`, `.localcode`). The project still comes before the home directory, and commands and global rules keep their order
+* Skill names that differ only in case treated as one name, so `/name` and the model's `Skill` tool reach the same skill
+* USAGE.md lists the six skills directories in priority order
+
 ## v0.157.0
 
 A first install reaches a first answer, the documentation matches the code again, and the bugs the audit found are fixed.

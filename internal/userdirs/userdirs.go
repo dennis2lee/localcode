@@ -13,7 +13,7 @@
 // Two rules, because the two kinds are not alike.
 //
 // Skills are merged. Every skills directory that exists is read, in the
-// order .claude, .opencode, .localcode, and a skill name seen first wins:
+// order .localcode, .claude, .opencode, and a skill name seen first wins:
 // see SkillDirs. A skill is one self-contained directory with a name, so
 // two roots holding different skills have nothing to disagree about, and a
 // person with Claude Code skills in ~/.claude and opencode skills in
@@ -58,10 +58,22 @@ import (
 	"path/filepath"
 )
 
-// Order is the search order, as directory names under a home or project
-// directory. The last is localcode's own, which is the answer when no
-// other root is there.
+// Order is the search order for commands and global rules, as directory
+// names under a home or project directory. The last is localcode's own,
+// which is the answer when no other root is there.
 var Order = []string{".claude", ".opencode", ".localcode"}
+
+// SkillOrder is the order skills directories are read in inside one place,
+// and so which of two same-named skills wins: localcode's own first, then
+// Claude Code's, then opencode's.
+//
+// localcode's own first because a skill put there was written for this
+// program. Somebody who keeps a skill in ~/.claude for Claude Code and wants
+// localcode to do the same job differently writes a same-named one in
+// ~/.localcode, and that is the one they mean here; under Order it lost to
+// the file it was written to replace, and the only way to change what
+// localcode ran was to edit the other agent's copy.
+var SkillOrder = []string{".localcode", ".claude", ".opencode"}
 
 // Root is the one root that answers for commands and global rules.
 type Root struct {
@@ -110,12 +122,7 @@ func At(dir string) Root {
 // SkillDirs is every directory a skill is read from, in the order they are
 // tried, and the first skill of a given name wins: the project's before the
 // home's, so a project skill beats a global one of the same name, and within
-// each of those .claude before .opencode before .localcode.
-//
-// The order inside a place is the order the first-root rule used, so a name
-// that resolved to a skill before still resolves to that skill. What is new
-// is that the directories that lost then are read now, and their skills are
-// added.
+// each of those SkillOrder, .localcode before .claude before .opencode.
 //
 // Every candidate is named, whether or not it exists: the loader skips a
 // missing directory, and a directory created after startup is found by
@@ -133,7 +140,7 @@ func SkillDirs(projectDir, home string) []string {
 	}
 	var out []string
 	for _, dir := range places {
-		for _, name := range Order {
+		for _, name := range SkillOrder {
 			out = append(out, filepath.Join(dir, name, "skills"))
 		}
 	}

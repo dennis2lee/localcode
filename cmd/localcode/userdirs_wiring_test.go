@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,19 +90,62 @@ func TestTheProjectAndTheHomeEachContributeEveryRoot(t *testing.T) {
 	}
 }
 
-// A name that two roots both have is one skill. The project's wins over the
-// home's, as it always has; inside one place .claude comes before .opencode
-// before .localcode, which is the order that decided the first-root rule, so
-// a skill that resolved to a file before still does.
-func TestTheEarlierRootWinsAName(t *testing.T) {
+// A name that several roots have is one skill, and which one is fixed by six
+// directories in order: the project's .localcode, .claude and .opencode, then
+// the home's in the same order. Each is removed in turn from the top, and the
+// next one down must be the only skill of that name, the one listed, and the
+// body the model gets from the Skill tool. A skill typed as /shared is found
+// in that same list, so being the only one of its name is what makes the
+// person typing it and the model calling it get the same file.
+func TestASkillNameResolvesThroughEveryRootInOrder(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
-	write(t, filepath.Join(home, ".claude", "skills", "shared", "SKILL.md"), skillFile("shared", "from home claude"))
-	write(t, filepath.Join(home, ".opencode", "skills", "shared", "SKILL.md"), skillFile("shared", "from home opencode"))
-	write(t, filepath.Join(home, ".localcode", "skills", "shared", "SKILL.md"), skillFile("shared", "from home localcode"))
+	chain := []string{
+		filepath.Join(cwd, ".localcode"),
+		filepath.Join(cwd, ".claude"),
+		filepath.Join(cwd, ".opencode"),
+		filepath.Join(home, ".localcode"),
+		filepath.Join(home, ".claude"),
+		filepath.Join(home, ".opencode"),
+	}
+	for i, root := range chain {
+		write(t, filepath.Join(root, "skills", "shared", "SKILL.md"),
+			fmt.Sprintf("---\nname: shared\ndescription: level %d\n---\n\nbody from level %d\n", i+1, i+1))
+	}
+	for i, root := range chain {
+		loop := &agent.Loop{}
+		registry := startupTestRegistry(t)
+		if _, err := reloadProjectAssets(loop, registry, cwd, home); err != nil {
+			t.Fatal(err)
+		}
+		var found []string
+		for _, sk := range loop.SkillList() {
+			if strings.EqualFold(sk.Name, "shared") {
+				found = append(found, sk.Path)
+			}
+		}
+		wantPath := filepath.Join(root, "skills", "shared", "SKILL.md")
+		if len(found) != 1 || found[0] != wantPath {
+			t.Fatalf("level %d: skills named shared = %v, want only %s", i+1, found, wantPath)
+		}
+		res := registry.Call(context.Background(), "Skill", json.RawMessage(`{"name":"shared"}`), "")
+		if want := fmt.Sprintf("body from level %d", i+1); res.IsError || !strings.Contains(res.Content, want) {
+			t.Errorf("level %d: the Skill tool returned %q, want %q", i+1, res.Content, want)
+		}
+		if err := os.RemoveAll(filepath.Join(root, "skills", "shared")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A different name in a lower root is not shadowed by anything: every root
+// still contributes the skills only it has.
+func TestALowerRootStillAddsItsOwnSkills(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	write(t, filepath.Join(cwd, ".localcode", "skills", "shared", "SKILL.md"), skillFile("shared", "project localcode"))
+	write(t, filepath.Join(home, ".opencode", "skills", "shared", "SKILL.md"), skillFile("shared", "home opencode"))
 	write(t, filepath.Join(home, ".opencode", "skills", "only-here", "SKILL.md"), skillFile("only-here", "home opencode"))
-	write(t, filepath.Join(home, ".localcode", "skills", "only-here", "SKILL.md"), skillFile("only-here", "home localcode"))
-	write(t, filepath.Join(cwd, ".localcode", "skills", "only-here", "SKILL.md"), skillFile("only-here", "project localcode"))
 
 	list, err := loadSkills(cwd, home)
 	if err != nil {
@@ -107,16 +153,10 @@ func TestTheEarlierRootWinsAName(t *testing.T) {
 	}
 	byName := map[string]string{}
 	for _, sk := range list {
-		if _, dup := byName[sk.Name]; dup {
-			t.Errorf("skill %q was loaded twice", sk.Name)
-		}
 		byName[sk.Name] = sk.Description
 	}
-	if got := byName["shared"]; got != "from home claude" {
-		t.Errorf("shared = %q, want the .claude one", got)
-	}
-	if got := byName["only-here"]; got != "project localcode" {
-		t.Errorf("only-here = %q, want the project's over every home root", got)
+	if len(list) != 2 || byName["shared"] != "project localcode" || byName["only-here"] != "home opencode" {
+		t.Errorf("skills = %v, want shared from the project's .localcode and only-here from the home's .opencode", byName)
 	}
 }
 

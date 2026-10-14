@@ -475,3 +475,27 @@ func TestASkillWrittenInNotepadReads(t *testing.T) {
 		t.Errorf("loaded %+v, want the skill with its name and description", list)
 	}
 }
+
+// Names that differ only in case are one name, and the earlier directory's
+// wins. `/deploy` finds a skill without regard to case and the Skill tool by
+// the exact name, so with both loaded the person typing it got the earlier
+// directory's and the model calling Deploy got the later one's.
+func TestASkillNameDifferingOnlyInCaseIsTheSameName(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	writeSkill(t, first, "deploy", "name: deploy\ndescription: first", "first body")
+	writeSkill(t, second, "Deploy", "name: Deploy\ndescription: second", "second body")
+	writeSkill(t, second, "other", "name: other\ndescription: kept", "other body")
+
+	list, err := LoadAll(first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, s := range list {
+		names = append(names, s.Name+"="+s.Description)
+	}
+	if len(list) != 2 || list[0].Description != "first" || list[1].Name != "other" {
+		t.Errorf("skills = %v, want deploy=first and other=kept", names)
+	}
+}

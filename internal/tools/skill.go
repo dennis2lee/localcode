@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"localcode/internal/skills"
 )
@@ -42,6 +43,17 @@ func (t SkillTool) Execute(_ context.Context, input json.RawMessage) Result {
 	}
 
 	sk, ok := t.byName[args.Name]
+	if !ok {
+		// Without regard to case after that, as `/name` finds a skill: the
+		// loader keeps one skill per name compared this way, so at most one
+		// can match.
+		for name, s := range t.byName {
+			if strings.EqualFold(name, args.Name) {
+				sk, ok = s, true
+				break
+			}
+		}
+	}
 	if !ok {
 		return Result{Content: fmt.Sprintf("unknown skill %q", args.Name), IsError: true}
 	}

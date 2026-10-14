@@ -41,3 +41,20 @@ func TestSkillToolRequiresNoPermission(t *testing.T) {
 		t.Error("Skill tool should never require permission")
 	}
 }
+
+// The tool finds a skill the way `/name` does: an exact name first, then
+// one that differs only in case. The loader keeps one skill per name
+// compared that way, so the model asking for "PDF" reaches the skill a
+// person typing /PDF runs, rather than "unknown skill".
+func TestSkillToolFindsANameWithoutRegardToCase(t *testing.T) {
+	tool := NewSkillTool([]skills.Skill{
+		{Name: "pdf", Body: "lower"},
+		{Name: "Report", Body: "report body"},
+	})
+	for name, want := range map[string]string{"pdf": "lower", "PDF": "lower", "report": "report body"} {
+		input, _ := json.Marshal(map[string]string{"name": name})
+		if result := tool.Execute(context.Background(), input); result.IsError || result.Content != want {
+			t.Errorf("Skill(%q) = %q (error %v), want %q", name, result.Content, result.IsError, want)
+		}
+	}
+}

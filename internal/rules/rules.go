@@ -79,8 +79,9 @@ type globalFile struct {
 }
 
 // findGlobalRules reads the global rules out of one home directory: the
-// one that also answers for skills and custom commands (internal/userdirs
-// picks it — ~/.claude, else ~/.opencode, else ~/.localcode).
+// one that also answers for custom commands (internal/userdirs picks it:
+// ~/.claude, else ~/.opencode, else ~/.localcode). Skills are read from
+// every root instead; see userdirs.SkillDirs.
 //
 // One root rather than all of them, because a person's standing
 // instructions are a single voice. Two roots' worth spliced together is

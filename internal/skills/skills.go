@@ -45,7 +45,10 @@ type frontmatter struct {
 // Directories are scanned in order and a skill name seen in an earlier
 // directory wins over the same name in a later one — callers should list
 // project-local skill dirs before the global one so a project can
-// override a global skill.
+// override a global skill. Names that differ only in case are the same
+// name, because `/name` finds a skill that way: two of them loaded, the
+// person typing it and the model calling the Skill tool could each get a
+// different one.
 //
 // A skill that cannot be read or parsed, and a skills directory that cannot
 // be listed, is skipped with one log line naming its path and the reason,
@@ -74,7 +77,6 @@ func LoadAll(dirs ...string) ([]Skill, error) {
 func LoadAllWithWarnings(dirs ...string) ([]Skill, []string, error) {
 	var out []Skill
 	var warnings []string
-	seen := map[string]bool{}
 	// The same directory, given twice, is read once.
 	//
 	// The two roots are the project's and the person's, and they are the
@@ -138,14 +140,24 @@ func LoadAllWithWarnings(dirs ...string) ([]Skill, []string, error) {
 			if sk.Name == "" {
 				sk.Name = e.Name()
 			}
-			if seen[sk.Name] {
+			if loaded(out, sk.Name) {
 				continue
 			}
-			seen[sk.Name] = true
 			out = append(out, sk)
 		}
 	}
 	return out, warnings, nil
+}
+
+// loaded reports whether a skill of this name is already in list, compared
+// the way `/name` compares it.
+func loaded(list []Skill, name string) bool {
+	for _, s := range list {
+		if strings.EqualFold(s.Name, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // isSkillDir reports whether a skills-directory entry is a directory to
