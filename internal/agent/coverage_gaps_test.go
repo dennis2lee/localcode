@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"localcode/internal/config"
 	"localcode/internal/events"
 	"localcode/internal/provider"
 	"localcode/internal/tools"
@@ -91,5 +93,62 @@ func TestWithoutViewImageSpellsOutANilAllowlist(t *testing.T) {
 	// And a list it is given keeps its order without view_image.
 	if got := withoutViewImage(reg, []string{"glob", tools.ViewImageName, "read_file"}); len(got) != 2 || got[0] != "glob" || got[1] != "read_file" {
 		t.Errorf("got %v, want [glob read_file]", got)
+	}
+}
+
+// Smart Agent's work policy goes to the turn a person is having, not to a
+// delegated one: a sub-agent follows its own prompt and the task it was
+// handed. Swapping the two went unnoticed by every test.
+func TestTheWorkPolicyGoesToATopLevelTurnAndNotToADelegatedOne(t *testing.T) {
+	srv, recorded := smartServer(t)
+	defer srv.Close()
+	loop := newSmartLoop(t, srv.URL)
+	loop.SetSmartAgentEnabled(true)
+
+	sendOne(t, loop, "top", "general-purpose")
+	if _, err := loop.Store.CreateSession("child", "top", "general-purpose", false); err != nil {
+		t.Fatal(err)
+	}
+	sendOne(t, loop, "child", "general-purpose")
+
+	reqs := recorded()
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests, want 2", len(reqs))
+	}
+	const marker = "Work in this order."
+	if !strings.Contains(reqs[0].system, marker) {
+		t.Error("the top-level turn was not given the work policy")
+	}
+	if strings.Contains(reqs[1].system, marker) {
+		t.Error("the delegated turn was given the work policy")
+	}
+}
+
+// The notice a person reads says how many images were left out, in the
+// singular for one.
+func TestTheLeftOutNoticeCountsTheImages(t *testing.T) {
+	run := modelRun{profileName: "onprem", profile: config.Profile{Model: "deepseek-v4.1-flash"}}
+	if got := imagesLeftOutNotice(run, 1); !strings.Contains(got, "the image attached to this message was left out") {
+		t.Errorf("one image: %q", got)
+	}
+	if got := imagesLeftOutNotice(run, 3); !strings.Contains(got, "the 3 images attached to this message were left out") {
+		t.Errorf("three images: %q", got)
+	}
+	if got := imagesLeftOutNotice(modelRun{profile: config.Profile{Model: "m"}}, 1); !strings.Contains(got, `"vision": true on its profile`) {
+		t.Errorf("no profile name: %q", got)
+	}
+}
+
+// The images of one step may total exactly the per-message limit: the
+// limit is what the wire refuses past, as ValidateMessageImages has it.
+func TestTakeImagesAttachesAnImageThatReachesTheLimitExactly(t *testing.T) {
+	ctx := withViewsImages(context.Background(), true)
+	used := provider.MaxImageBytesPerMessage - 64
+	res := tools.Result{Content: "fig", Images: []provider.Block{provider.ImageBlock("image/png", make([]byte, 64))}}
+	if kept := takeImages(ctx, &res, &used); len(kept) != 1 || res.IsError {
+		t.Errorf("an image that reaches the limit exactly was left out: kept %d, error %v", len(kept), res.IsError)
+	}
+	if err := provider.ValidateMessageImages(provider.Message{Content: []provider.Block{provider.ImageBlock("image/png", make([]byte, provider.MaxImageBytesPerMessage))}}); err != nil {
+		t.Errorf("the wire check disagrees about the limit: %v", err)
 	}
 }
