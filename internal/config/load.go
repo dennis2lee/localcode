@@ -58,8 +58,8 @@ func loadMergedFrom(sources []source, home string) (*Config, []string, error) {
 	return cfg, notes, nil
 }
 
-// firstRunURL is the minimal configs a new install is pointed to.
-const firstRunURL = "https://github.com/dennis2lee/localcode#first-run"
+// FirstRunURL is the minimal configs a new install is pointed to.
+const FirstRunURL = "https://github.com/dennis2lee/localcode#first-run"
 
 func loadMergedDetail(sources []source, home string) (*Config, []string, []string, error) {
 	var cfg *Config
@@ -101,7 +101,7 @@ func loadMergedDetail(sources []source, home string) (*Config, []string, []strin
 			"Write %s with one provider, one profile and \"default_profile\": "+
 			"the README's First run section has one for each kind of model (%s). "+
 			"A file written for opencode or Claude Code is read only when a config.json lists it under \"include\"",
-			strings.Join(names, ", "), names[0], firstRunURL)
+			strings.Join(names, ", "), names[0], FirstRunURL)
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid merged config: %w%s", err, listedFiles(listed))

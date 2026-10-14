@@ -111,7 +111,7 @@ func TestAnOpencodeFileAloneIsNotAConfig(t *testing.T) {
 		t.Fatal("an opencode file nobody listed was enough to start with")
 	}
 	// And what to do next, since this is the first thing a new install says.
-	for _, want := range []string{"no config found", filepath.Join(home, ".localcode", "config.json"), `"include"`, firstRunURL, `"default_profile"`} {
+	for _, want := range []string{"no config found", filepath.Join(home, ".localcode", "config.json"), `"include"`, FirstRunURL, `"default_profile"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}

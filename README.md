@@ -69,7 +69,7 @@ The Windows MSI, the macOS `.app` and the Debian packages are on the [releases p
    }
    ```
 
-   **Amazon Bedrock.** Needs AWS credentials and model access in the region. `localcode login bedrock` signs in through IAM Identity Center without the AWS CLI. See [MODELS.md](docs/MODELS.md#amazon-bedrock).
+   **Amazon Bedrock.** Needs AWS credentials and model access in the region. With credentials from `aws configure` or `aws sso login`, the block below is complete. `localcode login bedrock` signs in through IAM Identity Center without the AWS CLI and saves an AWS profile: add `"profile": "localcode-bedrock"` to the provider then. See [MODELS.md](docs/MODELS.md#amazon-bedrock).
 
    ```json
    {

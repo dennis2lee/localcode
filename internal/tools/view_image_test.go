@@ -181,3 +181,25 @@ func TestTheDescribedLimitIsTheLimit(t *testing.T) {
 		t.Errorf("the description does not say %q: %q", want, desc)
 	}
 }
+
+// A call whose input is not JSON is an error the model is told about, not
+// a result it reads as success.
+func TestViewImageRefusesInputThatIsNotJSON(t *testing.T) {
+	res := ViewImage{}.Execute(context.Background(), json.RawMessage(`{"path":`))
+	if !res.IsError || len(res.Images) != 0 || !strings.Contains(res.Content, "invalid input") {
+		t.Errorf("result = %+v, want an error saying the input is invalid", res)
+	}
+}
+
+// The limit is the largest file attached, not the smallest refused.
+func TestViewImageAttachesAFileOfExactlyTheLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "edge.png")
+	body := append(append([]byte(nil), pngBytes...), make([]byte, MaxViewImageBytes-len(pngBytes))...)
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := viewImage(t, context.Background(), path)
+	if res.IsError || len(res.Images) != 1 || len(res.Images[0].Data) != MaxViewImageBytes {
+		t.Errorf("a file of exactly %d bytes: error %v, %d images, %q", MaxViewImageBytes, res.IsError, len(res.Images), res.Content)
+	}
+}

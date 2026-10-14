@@ -15,6 +15,7 @@ import (
 
 	"localcode/internal/awssso"
 	"localcode/internal/childproc"
+	"localcode/internal/config"
 	"localcode/internal/credentials"
 )
 
@@ -221,6 +222,9 @@ func loginBedrock(args []string) error {
 	fmt.Printf("Saved: [profile %s] in ~/.aws/config, token cache in ~/.aws/sso/cache\n", *profileName)
 	fmt.Println(`Add this provider to config.json:`)
 	fmt.Printf("  \"providers\": { \"bedrock\": { \"type\": \"bedrock\", \"region\": %q, \"profile\": %q } }\n", *region, *profileName)
+	// The provider alone starts and then fails the first message for want
+	// of a profile, which is what the anthropic login used to print too.
+	fmt.Println("With no config yet, it also needs a profile on that provider and \"default_profile\": see " + config.FirstRunURL)
 	return nil
 }
 

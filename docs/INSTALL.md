@@ -135,7 +135,7 @@ The [README's First run section](../README.md#first-run) has a minimal config fo
 | Provider | How |
 |---|---|
 | Anthropic API | `localcode login anthropic` saves the key and prints a starter config. Or put `"api_key": "{env:ANTHROPIC_API_KEY}"` on the provider: localcode does not read `ANTHROPIC_API_KEY` unless the config names it. A provider with no key does not stop localcode; the first request through it says what to do. |
-| Amazon Bedrock | The standard AWS credential chain: `aws configure`, `aws sso login`, the `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` variables, or an instance role. `localcode login bedrock` signs in through IAM Identity Center without the AWS CLI. Model access must be enabled in the Bedrock console, in the same region. |
+| Amazon Bedrock | The standard AWS credential chain: `aws configure`, `aws sso login`, the `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` variables, or an instance role. `localcode login bedrock` signs in through IAM Identity Center without the AWS CLI and saves the AWS profile `localcode-bedrock`: name it on the provider with `"profile": "localcode-bedrock"`. Model access must be enabled in the Bedrock console, in the same region. |
 | Local server | Its address as `base_url`, and the model name it lists. See [MODELS.md](MODELS.md) for LM Studio, Ollama, vLLM and llama.cpp. |
 
 ### The workspace
@@ -144,7 +144,7 @@ The directory localcode starts in is the workspace: the model reads and edits fi
 
 * **Terminal:** `cd` into the project, then run `localcode`.
 * **Windows window:** the Start menu entries start in `C:\Program Files\LocalCode`. Click the workspace path at the top of the window and choose your project folder.
-* **Browser client:** open `http://127.0.0.1:4096` while localcode runs. The workspace path at the top changes it the same way.
+* **Browser client:** open `http://127.0.0.1:4096` while localcode runs. Click the workspace path at the top and type the project's path: a browser has no folder picker to open.
 
 ## 3. Updating and uninstalling
 
@@ -152,7 +152,7 @@ localcode installs a newer release when it starts. Set `"auto_update": false` in
 
 | Installed with | Upgrade | Remove |
 |---|---|---|
-| Script | Automatic, or run the script again. The new binary is renamed into place, so a running process keeps its file. | `install.sh --uninstall` |
+| Script | Automatic, or run the script again. The new binary is renamed into place, so a running process keeps its file. | The script with `--uninstall`, as in [Install on Linux](#install-on-linux) |
 | `.deb` | Install the newer package | `sudo apt remove localcode` |
 | MSI | Automatic, or run the newer MSI | Settings, then Apps |
 
