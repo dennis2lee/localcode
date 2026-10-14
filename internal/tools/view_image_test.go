@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,5 +168,16 @@ func TestViewImageRefusesAFileThatGrewAfterItsSizeWasChecked(t *testing.T) {
 	res := viewImage(t, context.Background(), path)
 	if !res.IsError || len(res.Images) != 0 || !strings.Contains(res.Content, "grew past") {
 		t.Errorf("a file that grew after the check was not refused: error %v, %d images, %q", res.IsError, len(res.Images), res.Content)
+	}
+}
+
+// The model is told the limit in the tool's description, and it sizes
+// what it asks for by that. A description that drifted from the constant
+// sends it to make copies the tool then refuses, or stops it short of
+// files the tool would take.
+func TestTheDescribedLimitIsTheLimit(t *testing.T) {
+	want := fmt.Sprintf("up to %g MB", float64(MaxViewImageBytes)/1e6)
+	if desc := (ViewImage{}).Description(); !strings.Contains(desc, want) {
+		t.Errorf("the description does not say %q: %q", want, desc)
 	}
 }

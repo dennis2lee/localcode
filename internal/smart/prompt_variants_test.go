@@ -230,3 +230,40 @@ func TestGptOssGetsTheLocalVariantRatherThanTheFrontierPrompt(t *testing.T) {
 		}
 	}
 }
+
+// Smart Agent's work policy is chosen by the same family table as the
+// orchestration prompt: a model that gets the local orchestration variant
+// gets the local work policy, and every other model the base one. Two
+// lookups that drifted apart would give a local model the long policy it
+// was written to avoid.
+func TestWorkPolicyFollowsTheFamilyTable(t *testing.T) {
+	for _, v := range promptVariants {
+		want, which := baseWorkPolicy, "base"
+		if v.prompt == localVariant {
+			want, which = localWorkPolicy, "local"
+		}
+		if got := WorkPolicy(v.match + "-30b"); got != want {
+			t.Errorf("WorkPolicy(%q) is not the %s policy", v.match+"-30b", which)
+		}
+	}
+	for _, model := range []string{"claude-sonnet-5-5", "us.anthropic.claude-opus-5", "some-new-model"} {
+		if WorkPolicy(model) != baseWorkPolicy {
+			t.Errorf("WorkPolicy(%q) is not the base policy", model)
+		}
+	}
+}
+
+// Smart Agent does not delegate: handing work to another agent belongs to
+// the orchestrate switch. Its work policy is in every Smart Agent request,
+// so a policy that told the model to delegate would undo the split with
+// Orchestration off.
+func TestTheWorkPolicyNeverTellsTheModelToDelegate(t *testing.T) {
+	for name, policy := range map[string]string{"base": baseWorkPolicy, "local": localWorkPolicy} {
+		lower := strings.ToLower(policy)
+		for _, word := range []string{"task tool", "taskbackground", "taskcollect", "orchestrate", "delegat", "sub-agent", "specialist"} {
+			if strings.Contains(lower, word) {
+				t.Errorf("the %s work policy mentions %q", name, word)
+			}
+		}
+	}
+}
