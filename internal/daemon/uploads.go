@@ -86,6 +86,13 @@ func (d *Daemon) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.Remove(dst.Name())
 	defer dst.Close()
+	// The mode os.Create gave it under the usual umask. CreateTemp's 0600
+	// would refuse the file to a program the model hands it to that runs
+	// as another user, a container's for one.
+	if err := dst.Chmod(0o644); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("create %s: %w", path, err))
+		return
+	}
 	// One byte past the limit is read so a file over it can be told apart
 	// from one exactly at it. A larger file used to be cut at the limit and
 	// answered 200, so the model read a truncated file as the whole of it.

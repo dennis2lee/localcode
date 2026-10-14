@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"localcode/internal/config"
@@ -56,10 +57,19 @@ func TestARunOnAMinimalConfigAnswersAsTheDefaultAgent(t *testing.T) {
 	if got := cfg.Profiles[cfg.DefaultProfile].Model; got != "claude-opus-5" {
 		t.Errorf("--model applied to %q, want the default profile's model replaced", got)
 	}
-	if _, err := applyModelChoice(load(), runOptions{agent: defaultRunAgent, profile: "main"}); err != nil {
-		t.Errorf("--profile on an undeclared default agent: %v", err)
+	cfg = load()
+	cfg.Profiles["fast"] = config.Profile{Provider: "anthropic", Model: "claude-haiku-5"}
+	if _, err := applyModelChoice(cfg, runOptions{agent: defaultRunAgent, profile: "fast"}); err != nil {
+		t.Fatalf("--profile on an undeclared default agent: %v", err)
 	}
-	if _, err := applyModelChoice(load(), runOptions{agent: "genral-purpose"}); err == nil {
-		t.Error("a mistyped agent ran on the default profile")
+	if got := cfg.Agents[defaultRunAgent].Profile; got != "fast" {
+		t.Errorf("--profile fast left the default agent on %q", got)
+	}
+	_, err := applyModelChoice(load(), runOptions{agent: "genral-purpose"})
+	if err == nil {
+		t.Fatal("a mistyped agent ran on the default profile")
+	}
+	if !strings.Contains(err.Error(), "declares no agents. Leave --agent out") {
+		t.Errorf("the refusal does not say what to do instead: %v", err)
 	}
 }

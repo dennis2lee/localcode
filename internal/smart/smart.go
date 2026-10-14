@@ -74,9 +74,9 @@ const (
 )
 
 // DelegationTools are the tools that only mean anything when there is
-// somewhere to delegate to. Named as a set so the loop can hide them in
-// the one case where they are noise (a config with a single agent and
-// Smart Agent off) and so no specialist can be given one by accident.
+// somewhere to delegate to. Named as a set so the loop can hide them
+// while orchestration is off, and so no specialist can be given one by
+// accident.
 var DelegationTools = []string{ToolTask, ToolSpawn, ToolCollect}
 
 // readOnly is the tool set for the agents that investigate rather than

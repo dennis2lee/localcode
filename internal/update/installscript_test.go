@@ -74,6 +74,13 @@ func fakeRelease(t *testing.T, version string, body []byte, digest string) *http
 // its combined output.
 func runInstall(t *testing.T, home string, srv *httptest.Server, args ...string) (string, error) {
 	t.Helper()
+	return runInstallEnv(t, home, srv, nil, args...)
+}
+
+// runInstallEnv is runInstall with more environment, which wins over the
+// test process's own.
+func runInstallEnv(t *testing.T, home string, srv *httptest.Server, env []string, args ...string) (string, error) {
+	t.Helper()
 	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "install.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +92,7 @@ func runInstall(t *testing.T, home string, srv *httptest.Server, args ...string)
 		"LOCALCODE_REPO=o/r",
 		"LOCALCODE_DIR="+filepath.Join(home, ".local", "bin"),
 	)
+	cmd.Env = append(cmd.Env, env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -201,5 +209,28 @@ func TestInstallScriptReplacesAnEarlierInstall(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Errorf("the install left something else in %s: %v", bin, entries)
+	}
+}
+
+// The PATH line goes in the file the login shell reads. zsh, the default
+// on macOS, never reads ~/.bashrc, and the hint used to name only that,
+// so a Mac user followed it and still had no localcode on PATH. The next
+// step for a first install, a config, is named too.
+func TestInstallScriptNamesTheShellsOwnStartupFile(t *testing.T) {
+	needsUnix(t)
+	body, digest := installArchive(t, "0.49.0")
+	srv := fakeRelease(t, "0.49.0", body, digest)
+	for shell, rc := range map[string]string{"/bin/zsh": ".zshrc", "/bin/bash": ".bashrc", "": ".bashrc"} {
+		home := t.TempDir()
+		out, err := runInstallEnv(t, home, srv, []string{"SHELL=" + shell})
+		if err != nil {
+			t.Fatalf("install.sh with SHELL=%q: %v\n%s", shell, err, out)
+		}
+		if want := ">> " + filepath.Join(home, rc); !strings.Contains(out, want) {
+			t.Errorf("SHELL=%q: the PATH hint does not append to %s:\n%s", shell, rc, out)
+		}
+		if !strings.Contains(out, "#first-run") {
+			t.Errorf("SHELL=%q: a first install is not pointed at a config:\n%s", shell, out)
+		}
 	}
 }

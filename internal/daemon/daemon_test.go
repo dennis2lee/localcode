@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -610,6 +611,17 @@ func TestDaemonUploadFile(t *testing.T) {
 	}
 	if string(data) != "hello upload" {
 		t.Errorf("uploaded content = %q, want %q", data, "hello upload")
+	}
+	// Readable by a program the model hands the file to that runs as
+	// another user, as it was before uploads went through a temporary file.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o644 {
+			t.Errorf("uploaded file mode = %v, want 0644", perm)
+		}
 	}
 }
 

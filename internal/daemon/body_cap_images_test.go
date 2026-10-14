@@ -149,3 +149,42 @@ func TestARefusedUploadKeepsTheEarlierFile(t *testing.T) {
 		t.Errorf("uploads dir holds %v, want only keep.bin", names)
 	}
 }
+
+// The body is bounded, not only the file: a small "file" part with a large
+// part beside it was parsed whole, the large part written to a temporary
+// file on disk, and the request answered 200 because the file it kept was
+// small.
+func TestAnUploadBodyOverTheLimitIsRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	d, srv, done := plainDaemon(t)
+	defer done()
+	if _, err := d.Loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile("file", "small.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	part.Write([]byte("hello"))
+	extra, err := mw.CreateFormFile("extra", "big.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra.Write(make([]byte, maxUploadBytes+uploadFraming))
+	mw.Close()
+
+	resp, err := http.Post(srv.URL+"/api/sessions/s1/uploads", mw.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("a body over the limit around a small file: status %d (%s), want 413", resp.StatusCode, body)
+	}
+}

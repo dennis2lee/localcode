@@ -501,3 +501,33 @@ func TestTheToolDescriptionNamesTheCeilingTheRunEnforces(t *testing.T) {
 		}
 	}
 }
+
+// /orchestrate's description names every tool the switch takes away. It
+// said "the Orchestrate tool" while the switch also took Task,
+// TaskBackground and TaskCollect, so a person turning it off to stop one
+// tool lost delegation without being told.
+func TestTheOrchestrateSwitchNamesWhatItHides(t *testing.T) {
+	loop, _, _ := delegationLoop(t, nil, "general-purpose")
+	ctx := context.Background()
+	off := loop.hiddenTools(config.WithOrchestrate(ctx, false))
+	on := loop.hiddenTools(config.WithOrchestrate(ctx, true))
+	var desc string
+	for _, c := range SlashCommands() {
+		if c.Name == "orchestrate" {
+			desc = c.Description
+		}
+	}
+	var controlled int
+	for name := range off {
+		if on[name] {
+			continue
+		}
+		controlled++
+		if !strings.Contains(desc, name) {
+			t.Errorf("/orchestrate hides %s and its description does not say so: %q", name, desc)
+		}
+	}
+	if controlled < 4 {
+		t.Errorf("the switch hides %d tools, want Task, TaskBackground, TaskCollect and Orchestrate", controlled)
+	}
+}

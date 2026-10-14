@@ -23,6 +23,7 @@ A first install reaches a first answer, the documentation matches the code again
 * INSTALL.md reordered for a first install: release first, each platform's first run, credentials, updating and uninstalling
 * Every live Markdown document checked against the code and corrected; MODELS.md gains an Ollama section
 * `install.sh` names `~/.zshrc` for zsh
+* Tests for the lines changed since v0.153.0 that no test reached, each shown to fail when its line's comparison or condition is flipped
 
 ## v0.156.0
 
