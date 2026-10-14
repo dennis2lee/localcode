@@ -55,6 +55,7 @@ func TestCleanPathIsTheMuxRule(t *testing.T) {
 	for in, want := range map[string]string{
 		"":                         "/",
 		"/":                        "/",
+		"a/b":                      "/a/b",
 		"/api/sessions":            "/api/sessions",
 		"/api/sessions/":           "/api/sessions/",
 		"/api/sessions/x/tasks/..": "/api/sessions/x",
