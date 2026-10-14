@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.157.0
+
+A first install reaches a first answer, the documentation matches the code again, and the bugs the audit found are fixed.
+
+**Fixed**
+
+* A config naming an anthropic provider with no key no longer stops startup; the first request through it says how to add one, and a key saved later is used without a restart
+* `localcode login anthropic` prints a whole starter config, and the no-config error names the next step
+* `localcode run` on a config with no `agents` answers as the default agent
+* Pasted images over about 768 KB refused as "request body too large"; the 10 MB limit is reachable
+* An upload over 32 MB truncated and accepted; now refused with `413`
+* Built-in specialists marked as able to view images
+* The Orchestrate tool description claiming every ceiling is checked before the run
+* `settings.changed` missing `model_invocable`
+* The auto-delegate panel offering built-in specialists the daemon refuses
+* The TUI's `/model default` sent as a profile name
+
+**Changed**
+
+* README First run section with a minimal config for the Anthropic API, Bedrock and a local server
+* INSTALL.md reordered for a first install: release first, each platform's first run, credentials, updating and uninstalling
+* Every live Markdown document checked against the code and corrected; MODELS.md gains an Ollama section
+* `install.sh` names `~/.zshrc` for zsh
+
 ## v0.156.0
 
 Background tasks can be deleted from the Web UI's task panel, one row at a time or all at once.

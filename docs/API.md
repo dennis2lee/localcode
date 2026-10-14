@@ -30,8 +30,10 @@ client to the same release when both are yours.
   `{"error": "..."}`; a few handlers use plain-text `http.Error` instead,
   which the tables call out as `text error`.
 * JSON request bodies are capped at 1 MB (`maxJSONBody` in
-  `internal/daemon/daemon.go`). Uploads are multipart and capped
-  separately at 32 MB per file.
+  `internal/daemon/daemon.go`). A message's body is capped higher, to
+  carry 10 MB of base64 images, and its text keeps the 1 MB cap. Uploads
+  are multipart, at most 32 MB per file: a larger file is refused with
+  `413`, not truncated.
 * Status codes and what each client does with them:
   * `200` read or applied change, `201` created (session, task, booking),
     `202` message accepted for a turn (`{"status": "accepted"}`) or queued
@@ -198,8 +200,8 @@ implementations.
 | `POST /api/sessions/{id}/fork` | nothing | `201` the new session: a verbatim event-log copy (minus `session.renamed`), same effort levels and model choice, titled `fork of X` | `404` unknown source; `409` a turn is running in the source, or delete-all is |
 | `POST /api/sessions/{id}/archive` | nothing | `200` the session. Refuses rather than stops running work | `404` unknown session; `400` store refusal; `409` a turn is running, background tasks are running (names them), scheduled runs are in progress, or delete-all is |
 | `POST /api/sessions/{id}/retrieve` | nothing | `200` the session, history rebuilt from the log; shelved schedule rows come back, missed ones marked missed | `404` unknown session; `409` busy, or delete-all is |
-| `POST /api/sessions/{id}/messages` | `{"text", "images"?}`. `images` is `[{"media_type", "data"}]` with base64 `data`. Text is required unless images are present. `/clear`, `/rewind`, `/redo`, `/compact`, `/workspace <path>` and a `!` command sent while a turn runs are refused with `409 {"held": ...}` rather than queued | `202 {"status": "accepted"}` (a turn starts; the reply arrives on the stream) or `202 {"status": "injected"}` (handed to the running turn). A message with images is never handed to a running turn | `400` bad body, empty text with no images, an image type other than PNG, JPEG, GIF or WEBP, or images over 10 MB in total; `403` archived; `404` unknown session; `409` with `{"held": "/clear"...}` when the text must wait for idle, plain `409` when a turn is running and the message carries images, when the begin race is lost repeatedly, when the old daemon still owns the session, or while delete-all runs |
-| `POST /api/sessions/{id}/uploads` | multipart form, `file` field; name is sanitized to its base, max 32 MB | `200 {"path"}` under `~/.localcode/uploads/<id>/`; splice the path into the next message, the model reads it with file tools | `400` unparseable form, missing field, bad filename; `403` archived; `404` unknown session; `500` disk failure |
+| `POST /api/sessions/{id}/messages` | `{"text", "images"?}`. `images` is `[{"media_type", "data"}]` with base64 `data`. Text is required unless images are present. `/clear`, `/rewind`, `/redo`, `/compact`, `/workspace <path>` and a `!` command sent while a turn runs are refused with `409 {"held": ...}` rather than queued | `202 {"status": "accepted"}` (a turn starts; the reply arrives on the stream) or `202 {"status": "injected"}` (handed to the running turn). A message with images is never handed to a running turn | `400` bad body, empty text with no images, text over 1 MB, an image type other than PNG, JPEG, GIF or WEBP, or images over 10 MB in total; `403` archived; `404` unknown session; `409` with `{"held": "/clear"...}` when the text must wait for idle, plain `409` when a turn is running and the message carries images, when the begin race is lost repeatedly, when the old daemon still owns the session, or while delete-all runs |
+| `POST /api/sessions/{id}/uploads` | multipart form, `file` field; name is sanitized to its base, max 32 MB | `200 {"path"}` under `~/.localcode/uploads/<id>/`; splice the path into the next message, the model reads it with file tools | `400` unparseable form, missing field, bad filename; `403` archived; `404` unknown session; `413` file over 32 MB, nothing kept; `500` disk failure |
 
 ### Event stream
 
@@ -315,7 +317,7 @@ log events carry `seq`; transient broadcast events (`task.progress`,
 | `session.renamed` | `{"title"}` |
 | `session.forked` | `{"from", "from_title", "copied"}`; reader note, ignored rebuilding history. `copied` is how many events after it are the copy of the source's log; usage totals skip them. Absent in logs written before it existed |
 | `session.scheduled` | `{"schedule", "name", "run", "run_total", "at", "repeat", "from"}`; reader note, ignored rebuilding history |
-| `settings.changed` | every daemon switch as a snapshot, daemon-wide |
+| `settings.changed` | `{"auto_compact_enabled", "show_tps", "auto_delegate", "smart_agent", "skip_permissions", "keep_going", "fold_thinking", "repeat_limit", "auto_compact_percent", "show_thinking", "show_timestamps", "orchestrate", "model_invocable"}` as a snapshot, daemon-wide. The auto-delegate target and patterns and the permission rules are not in it: re-read `GET /api/settings` for those |
 | `config.changed` | `{"auto_compact_enabled", "show_tps", "auto_delegate", "smart_agent", "orchestrate"?}`; per session. Written by `/config` and by the toggle commands; `orchestrate` comes only from the toggle commands |
 | `workspace.changed` | `{"path"}`; per session |
 | `usage` | `{"input_tokens", "output_tokens", "cached_input_tokens", "cache_read_tokens", "cache_write_tokens", "measured", "measured_images", "max_context", "percent", "tps", "show_tps", "model", "estimated"}`; from reported usage. The daemon also broadcasts live estimates during a stream, `{"tps", "show_tps", "estimated": true}`, which are not logged; the settled event carries `estimated: false`. `percent` is `input_tokens` plus `cached_input_tokens` plus `output_tokens` over `max_context`: the whole prompt the provider read and the reply it wrote, which the next request carries. `input_tokens` alone is what was billed at the full rate. `cache_read_tokens` and `cache_write_tokens` split `cached_input_tokens` the way it is billed: served from the prompt cache, or written to it. Logs written before the split carry `cached_input_tokens` alone. `measured` is the daemon's own character estimate of the same messages, for sizing after a restart, and `measured_images` the number of images among them. Draw a gauge from `percent`, not from `input_tokens` |
