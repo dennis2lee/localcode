@@ -54,5 +54,27 @@ func SaveAnthropicAPIKey(home, apiKey string) error {
 	if err != nil {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
-	return os.WriteFile(p, data, 0o600)
+	// Written beside and renamed into place, so a reader never sees half a
+	// file: a running daemon reads this on a request that needs the key,
+	// and a login in another terminal can be writing it at that moment.
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".credentials-*.json")
+	if err != nil {
+		return fmt.Errorf("write credentials: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write credentials: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write credentials: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write credentials: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), p); err != nil {
+		return fmt.Errorf("write credentials: %w", err)
+	}
+	return nil
 }

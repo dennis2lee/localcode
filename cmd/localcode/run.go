@@ -436,6 +436,9 @@ func applyModelChoice(cfg *config.Config, o runOptions) (string, error) {
 	// somebody typed is still checked, since a typo there would otherwise
 	// answer on the default profile without a word.
 	if !ok && agentName != defaultRunAgent {
+		if len(cfg.Agents) == 0 {
+			return "", fmt.Errorf("no agent %q in config, which declares no agents. Leave --agent out to answer as %s on default_profile", agentName, defaultRunAgent)
+		}
 		return "", fmt.Errorf("no agent %q in config. Configured: %s", agentName, strings.Join(sortedNames(cfg.Agents), ", "))
 	}
 	profileName := agentCfg.Profile

@@ -751,31 +751,34 @@ func newAnthropic(apiKey, baseURL string) *provider.AnthropicDirect {
 // one, so logging in from another terminal is enough, and says how to get
 // one when there is none. Built like Bedrock, whose AWS setup also waits
 // for the first request: a provider nobody uses must not stop a daemon.
+//
+// Read on every request rather than once: the file is small, and a key
+// saved again, rotated, is then the key the next request carries. The
+// client is rebuilt only when the key has changed.
 type keylessAnthropic struct {
 	name, home, baseURL string
 
 	mu    sync.Mutex
+	key   string
 	ready *provider.AnthropicDirect
 }
 
 func (k *keylessAnthropic) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
-	k.mu.Lock()
-	if k.ready == nil {
-		creds, err := credentials.Load(k.home)
-		if err != nil {
-			k.mu.Unlock()
-			return nil, fmt.Errorf("load credentials for anthropic provider %q: %w", k.name, err)
-		}
-		if creds.AnthropicAPIKey != "" {
-			k.ready = newAnthropic(creds.AnthropicAPIKey, k.baseURL)
-		}
+	creds, err := credentials.Load(k.home)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic provider %q: %w. Run `localcode login anthropic` to write the key again", k.name, err)
 	}
-	ready := k.ready
-	k.mu.Unlock()
-	if ready == nil {
+	key := strings.TrimSpace(creds.AnthropicAPIKey)
+	if key == "" {
 		return nil, fmt.Errorf("provider %q (anthropic) has no API key: run `localcode login anthropic`, "+
 			"or set \"api_key\" on the provider in config.json", k.name)
 	}
+	k.mu.Lock()
+	if k.ready == nil || k.key != key {
+		k.key, k.ready = key, newAnthropic(key, k.baseURL)
+	}
+	ready := k.ready
+	k.mu.Unlock()
 	return ready.Chat(ctx, req)
 }
 
