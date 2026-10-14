@@ -111,3 +111,41 @@ func TestAnUploadOverTheLimitIsRefusedNotTruncated(t *testing.T) {
 		t.Errorf("the file at the limit was not kept whole: %v, %v", info, err)
 	}
 }
+
+// A refused upload leaves an earlier file of the same name as it was. The
+// file was opened under its own name before the copy, so a refusal
+// truncated or removed the copy the conversation already pointed at, and
+// nothing written on the way is left beside it.
+func TestARefusedUploadKeepsTheEarlierFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	d, srv, done := plainDaemon(t)
+	defer done()
+	if _, err := d.Loop.Store.CreateSession("s1", "", "general-purpose", true); err != nil {
+		t.Fatal(err)
+	}
+	url := srv.URL + "/api/sessions/s1/uploads"
+	dir := filepath.Join(home, ".localcode", "uploads", "s1")
+
+	if code, body := upload(t, url, "keep.bin", 5); code != http.StatusOK {
+		t.Fatalf("first upload: status %d (%s)", code, body)
+	}
+	if code, body := upload(t, url, "keep.bin", maxUploadBytes+1); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("second upload: status %d (%s), want 413", code, body)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "keep.bin")); err != nil || info.Size() != 5 {
+		t.Errorf("the earlier upload was not kept: %v, %v", info, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("uploads dir holds %v, want only keep.bin", names)
+	}
+}

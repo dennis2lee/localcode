@@ -76,11 +76,15 @@ func (d *Daemon) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := filepath.Join(dir, name)
-	dst, err := os.Create(path)
+	// Written beside and renamed into place, so a refused or failed upload
+	// leaves an earlier file of the same name as it was, not removed or
+	// cut short, and no half-written file is left under the name.
+	dst, err := os.CreateTemp(dir, ".upload-*")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("create %s: %w", path, err))
 		return
 	}
+	defer os.Remove(dst.Name())
 	defer dst.Close()
 	// One byte past the limit is read so a file over it can be told apart
 	// from one exactly at it. A larger file used to be cut at the limit and
@@ -91,9 +95,15 @@ func (d *Daemon) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n > maxUploadBytes {
-		dst.Close()
-		os.Remove(path)
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("%s is over the %d MB upload limit", name, maxUploadBytes>>20))
+		return
+	}
+	if err := dst.Close(); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("write %s: %w", path, err))
+		return
+	}
+	if err := os.Rename(dst.Name(), path); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("write %s: %w", path, err))
 		return
 	}
 

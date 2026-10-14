@@ -6,11 +6,11 @@ A first install reaches a first answer, the documentation matches the code again
 
 **Fixed**
 
-* A config naming an anthropic provider with no key no longer stops startup; the first request through it says how to add one, and a key saved later is used without a restart
-* `localcode login anthropic` prints a whole starter config, and the no-config error names the next step
+* A config naming an anthropic provider with no key no longer stops startup; the first request through it says how to add one, and a key saved or changed later is used without a restart
+* `localcode login anthropic` prints a whole starter config, and saves the key atomically; the no-config error names the next step
 * `localcode run` on a config with no `agents` answers as the default agent
 * Pasted images over about 768 KB refused as "request body too large"; the 10 MB limit is reachable
-* An upload over 32 MB truncated and accepted; now refused with `413`
+* An upload over 32 MB truncated and accepted; now refused with `413`, and an earlier file of the same name kept
 * Built-in specialists marked as able to view images
 * The Orchestrate tool description claiming every ceiling is checked before the run
 * `settings.changed` missing `model_invocable`
