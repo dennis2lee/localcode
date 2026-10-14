@@ -9,13 +9,13 @@ LocalCode supports interactive TUI, Web UI, desktop, daemon, and one-shot CLI wo
 | Run one prompt and exit | `localcode run "<prompt>"` |
 | Start a daemon without a TUI | `localcode --headless` |
 | Connect a TUI to an existing daemon | `localcode --server <url>` |
-| Open the desktop window | `localcode-gui` |
+| Open the desktop window | `localcode-gui`. Releases ship it only in the Windows MSI. On macOS it is a `-tags gui` source build. Linux has no desktop window. |
 
 ## Contents
 
 | Part | Sections |
 |---|---|
-| [1. Getting started](#part-1-getting-started) | [Run modes](#run-modes), [One prompt, no window](#one-prompt-no-window-localcode-run), [Desktop window](#desktop-window-experimental), [Remote daemon over an SSH tunnel](#remote-daemon-over-an-ssh-tunnel) |
+| [1. Getting started](#part-1-getting-started) | [Terms](#terms), [First session](#first-session), [Run modes](#run-modes), [One prompt, no window](#one-prompt-no-window-localcode-run), [Desktop window](#desktop-window-experimental), [Remote daemon over an SSH tunnel](#remote-daemon-over-an-ssh-tunnel) |
 | [2. Configuration](#part-2-configuration) | [Config file (config.json)](#config-file-configjson), [Managing MCP servers](#managing-mcp-servers-with-localcode-mcp), [Permission rules](#fine-grained-permission-rules), [Answering a permission prompt](#answering-a-permission-prompt-once-this-session-or-always), [Permission settings panel](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt), [Switching the workspace directory](#switching-the-workspace-directory), [Hooks](#hooks), [Authenticating with localcode login](#authenticating-with-localcode-login) |
 | [3. Project context](#part-3-project-context) | [Skills](#skills), [Where skills, commands and rules are read from](#where-skills-commands-and-global-rules-are-read-from), [AGENTS.md](#agentsmd-project-rules), [Per-model formatting notes](#per-model-formatting-notes), [Auto memory](#auto-memory) |
 | [4. Commands and screen controls](#part-4-commands-and-screen-controls) | [What stop reaches](#what-stop-reaches), [Screen controls](#screen-controls), [Running a skill](#running-a-skill), [/init](#init), [Custom commands](#custom-commands), [Shell escape](#shell-escape), [/tasks](#tasks), [/memory](#memory), [/config](#config), [/compact](#compact), [/clear](#clear), [/rewind](#rewind), [Sampling](#sampling-temperature-top_p-top_k), [/review](#review), [/redo](#redo), [/model-invocable](#model-invocable), [/usage totals](#usage-totals), [/export](#export), [/mcps](#mcps), [What the transcript shows](#what-the-transcript-shows), [Where localcode may connect](#where-localcode-may-connect), [What a session log holds](#what-a-session-log-holds-and-who-can-read-it), [/llm-doctor](#llm-doctor), [/context](#context), [The switches](#the-switches), [Other local commands](#other-local-commands) |
@@ -28,6 +28,30 @@ LocalCode supports interactive TUI, Web UI, desktop, daemon, and one-shot CLI wo
 
 Default operation: one local daemon, one attached TUI, and a Web UI on the same sessions. Other modes cover scripts, remote daemons, and the experimental desktop window.
 
+### Terms
+
+| Term | Meaning |
+|---|---|
+| Provider | A connection to a model service: `anthropic`, `bedrock` or `openai-compat`. Set under `providers`. |
+| Profile | One model on one provider, with its limits such as `max_tokens` and `context_window`. Set under `profiles`. |
+| `default_profile` | The profile a conversation uses when its agent names none. |
+| Agent | A role: a prompt, a tool list and a profile. Set under `agents`. `general-purpose` is the default agent. It has every tool and needs no entry. |
+| Smart Agent | An optional way of working for the session's own model: a work order, plan tools and fallback profiles. Off by default. It delegates nothing. See [Smart Agent](#smart-agent). |
+| Orchestrate | Optional delegation to other agents, including six built-in specialist sub-agents. Off by default. See [Orchestration](#orchestration). |
+| Skill | A `SKILL.md` file. The model sees its name and description, and loads the body on demand. See [Skills](#skills). |
+
+### First session
+
+Run `localcode` in the project directory. The TUI opens in the terminal. The Web UI is at `http://127.0.0.1:4096` on the same sessions. When that port is taken, the startup output names the address used instead.
+
+| Action | TUI | Web UI |
+|---|---|---|
+| Send a message | **Enter** | **Enter** |
+| Answer a permission prompt | `y` allow once, `s` allow for session, `a` always allow when offered, `n` deny. The prompt box must be empty. | The buttons in the dialog |
+| Stop the running turn | **Esc** | **Esc** |
+| List commands | `/help` | `/help` |
+| Quit | **Ctrl+C** on an empty prompt, or `exit`, `quit`, `:q`, `/exit`, `/quit`, `/q` | Close the tab |
+
 ### Run modes
 
 ```bash
@@ -36,7 +60,7 @@ localcode --agent general-purpose
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--config <path>` | none | Use only this file as config. Without it, `~/.localcode/config.json` and `./.localcode/config.json` are merged, with the project file winning. |
+| `--config <path>` | none | Use only this file, and the files its `include` lists, as config. Without it, `~/.localcode/config.json` and `./.localcode/config.json` are merged, with the project file winning. |
 | `--agent <name>` | `general-purpose` | Which model profile to use, resolved through the `agents` map in config |
 | `--listen <host:port>` | `127.0.0.1:4096` | Address the daemon binds. The Web UI is served here too. See [When the port is already taken](#when-the-port-is-already-taken). |
 | `--server <url>` | none | Do not start a local daemon. Attach the TUI to an already running daemon, which may be remote. |
@@ -66,7 +90,7 @@ Default execution characteristics:
 | Flag | Default | What it does |
 |---|---|---|
 | `--format` | `text` | `text` streams the answer as it arrives; `json` prints one object at the end; `stream-json` prints one event per line, the same events every other client reads. The `json` object's `usage` is the whole run: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cache_read_or_write_tokens` and `calls`, summed over every model call it made, a sub-agent's and an automatic compaction's included |
-| `--agent <name>` | `general-purpose` | Which agent from config answers |
+| `--agent <name>` | `general-purpose` | Which agent answers. The default `general-purpose` needs no entry under `agents` and runs on `default_profile`. Any other name must be declared under `agents`, or the run stops with an error. `default_agent` is not read. |
 | `--profile <name>` | the agent's own | Which model profile to use |
 | `--model <id>` | the profile's own | Override the model id inside that profile |
 | `--bare` | `false` | Load nothing but the base prompt |
@@ -84,7 +108,7 @@ The prompt may be an argument or stdin. Use stdin for prompts that contain newli
 | `--bare` | Loads only the base system prompt, workspace, and tools. Excludes `AGENTS.md`, `CLAUDE.md`, skills, memory, custom commands, and hooks. Creates no memory-index directory. Suitable for controlled comparisons. |
 | Permission request | Refused immediately because no interactive client can answer it. `--skip-permissions` is equivalent to `/permission-skip-all` for the run. |
 | Failure | Non-zero exit status. JSON output includes an `error` field. |
-| Smart Agent | Supports `update_plan` and the rest of Smart Agent when `smart_agent` is enabled. |
+| Smart Agent | Supports the work-order prompt, `update_plan`, fallback, cache markers and credential-path checks when `smart_agent` is enabled. The turn log is not written, and `ask_user` is not offered. |
 | Orchestration | The six specialists plus `Task`, `TaskBackground` and `TaskCollect` when `orchestrate` is enabled. The `Orchestrate` tool is available too, but every plan requires permission, and there is nobody here to ask. Without one of the following settings the tool is not offered at all, so the model does not orchestrate rather than being refused after planning. |
 
 ```
@@ -102,6 +126,7 @@ Unavailable tools:
 * `Schedule`: the process exits before scheduled execution
 * `session_read`: no other conversation is available
 * Debate: requires an interactive conversation
+* `ask_user`: nobody is present to answer
 * MCP tools: a turn `localcode run` builds itself does not start or connect MCP servers, with or without `--bare`. A `--session` turn routed to a running daemon uses the daemon's MCP tools.
 
 The process waits for outstanding background tasks before exit. The wait is reported on stderr and remains subject to `--timeout`.
@@ -124,7 +149,7 @@ Common commands:
 | `localcode` | Starts a local daemon and attaches the TUI. Open `http://127.0.0.1:4096` in a browser to use the Web UI on the same sessions at the same time. |
 | `localcode --headless --listen 0.0.0.0:4096` | Daemon only. Meant for a remote server. |
 | `localcode --server http://host:4096` | TUI only, attached to an existing daemon. |
-| `localcode-gui` | Experimental native desktop window. Built with `-tags gui`. See [Desktop window](#desktop-window-experimental). |
+| `localcode-gui` | Experimental native desktop window. Built with `-tags gui`. Releases ship it only in the Windows MSI. On macOS it is a source build. See [Desktop window](#desktop-window-experimental). |
 
 #### When the port is already taken
 
@@ -133,7 +158,8 @@ Common commands:
 | What holds the address | What happens |
 |---|---|
 | A localcode daemon in the same directory | Attach the TUI and use that daemon's sessions. |
-| A localcode daemon in another directory | Start a new daemon on a free port and report both workspaces. |
+| A localcode daemon in another directory, implicit default address | Start a new daemon on a free port and report both workspaces. |
+| A localcode daemon in another directory, explicit `--listen` | Return an error naming both directories. Run from that directory or choose another address. |
 | Another process, implicit default address | Bind a free port and report the Web UI address. |
 | Another process, explicit `--listen` | Return an error. Stop the process or choose another address. |
 
@@ -217,7 +243,7 @@ localcode --server http://localhost:4096   # terminal
 
 > Binding `0.0.0.0` exposes an arbitrary code execution API, since the bash tool is part of it. There is no auth token yet. Always reach the daemon over loopback plus an SSH tunnel, and never bind it directly to an untrusted network.
 
-The full route list lives in [docs/API.md](API.md): method and path, inputs, answers, and errors for all 59 routes, plus the event stream.
+The full route list lives in [docs/API.md](API.md): method and path, inputs, answers, and errors for all 67 routes, plus the event stream.
 
 ## Part 2. Configuration
 
@@ -229,6 +255,18 @@ Configuration uses a global file plus an optional project override. Use `config.
 |---|---|---|
 | Global | `~/.localcode/config.json` | Base settings |
 | Project | `<project>/.localcode/config.json` | Overrides global settings |
+
+A minimal config names one provider, one profile, and `default_profile`. Run [`localcode login anthropic`](#localcode-login-anthropic) first, so the key is stored outside the file.
+
+```json
+{
+  "providers": { "anthropic": { "type": "anthropic" } },
+  "profiles":  { "main": { "provider": "anthropic", "model": "claude-sonnet-4-6" } },
+  "default_profile": "main"
+}
+```
+
+The larger example below shows several providers, agents, and an MCP server together.
 
 ```json
 {
@@ -278,7 +316,7 @@ Any string value may include an environment placeholder. The syntax is compatibl
     "anthropic": { "type": "anthropic", "api_key": "{env:ANTHROPIC_API_KEY}" },
     "local":     { "type": "openai-compat", "base_url": "{env:LLM_URL:-http://localhost:1234/v1}" }
   },
-  "profiles": { "main": { "provider": "anthropic", "model": "{env:LOCALCODE_MODEL:-claude-opus-4-6-v1}" } },
+  "profiles": { "main": { "provider": "anthropic", "model": "{env:LOCALCODE_MODEL:-claude-opus-4-6}" } },
   "mcp_servers": {
     "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": { "GITHUB_TOKEN": "{env:GITHUB_TOKEN}" } },
     "remote": { "url": "https://{env:MCP_HOST}/mcp", "headers": { "Authorization": "Bearer {env:MCP_TOKEN}" } }
@@ -366,7 +404,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `providers` | Model backend connection details. `type` is `bedrock`, `anthropic`, or `openai-compat`. Bedrock AWS configuration is loaded lazily on its first request. Opencode spelling `provider` is also accepted. |
 | `profiles` | A named provider and model pairing. `max_tokens`, `temperature`, `context_window` and `keep_going` are optional. |
 | `agents` | Maps an agent name to a profile. `--agent` resolves through this. An unknown name falls back to `default_profile`. Opencode spelling `agent` (and deprecated `mode`) is also accepted. |
-| `default_agent` | Default agent role when `--agent` is omitted. An explicitly passed `--agent` flag overrides it. Must resolve to an entry in `agents`, or `general-purpose`. See [Default agent](#default-agent). |
+| `default_agent` | Default agent role when `--agent` is omitted. An explicitly passed `--agent` flag overrides it. Must resolve to an entry in `agents`, or `general-purpose`. `localcode run` does not read it. See [Default agent](#default-agent). |
 | `instructions` | Additional instruction files and glob patterns appended to workspace rules. Relative paths resolve against the project directory and must remain within it. Remote addresses are refused at load. See [Additional instruction files](#additional-instruction-files). |
 | `include` | Files written for another program that localcode reads, such as opencode's `opencode.jsonc` or Claude Code's `.mcp.json`. localcode reads none of them unless they are listed here. Each is laid under the file that lists it, in the order listed. See [Reading a config written for opencode or Claude Code](#reading-a-config-written-for-opencode-or-claude-code). |
 | `shell` | The program every bash tool call, hook and custom command runs under. Unset means `sh`, or on a Windows machine with no `sh` installed, `cmd.exe`. Naming a shell localcode does not know to be POSIX turns every bash `allow` rule into a prompt, because the rule is decided by splitting the command at POSIX operators and that split is only the shell's where the shell reads them the POSIX way. See [Naming the shell](#naming-the-shell). |
@@ -394,10 +432,10 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `mouse` | Whether the TUI takes the mouse for a clickable scrollbar beside the transcript. Off unless set to true. Read from the config on the machine running the TUI, never from the daemon. See [Screen controls](#screen-controls). |
 | `trace_max_age_days` | How long a day of the Smart Agent turn log is kept. 30 when unset; zero or below means that default, not "keep forever". See [What it did](#the-turn-log). |
 | `trace_max_total_mb` | Optional cap on the trace directory, and separately on the prompt-manifest directory beside it. When set, each is bounded on its own: the oldest files go until it fits, and today's file is never removed. See [What it did](#the-turn-log). |
-| `default_profile` | The profile used when an agent name resolves to nothing. |
+| `default_profile` | The profile a conversation runs on unless its agent names another. A config needs it unless every agent it uses names a profile. `general-purpose` with no entry under `agents` names none. |
 | `keep_going` | The carry-on nudge for Muse models. Daemon-wide, on unless set to false; `/keep-going` and the settings Muse tab toggle it. The per-profile `keep_going` below is a different, numeric setting. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
 | `repeat_limit` | How many steps in a row may only repeat earlier tool calls before the turn ends. Daemon-wide; unset or `0` is off, the default, and a number arms the guard at that ceiling, at most 50. `/repeat-limit` changes it. See [A model that repeats itself](#a-model-that-repeats-itself). |
-| `orchestrate` | The Orchestrate tool. Daemon-wide, off unless set; `/orchestrate` toggles it. Needs at least two agents to delegate to. See [Orchestration](#orchestration). |
+| `orchestrate` | Delegation: the six built-in specialists, `Task`, `TaskBackground`, `TaskCollect`, the delegation prompt and the `Orchestrate` tool. Daemon-wide, off unless set. Off means the model delegates to no agent, including agents declared under `agents`. `/orchestrate` toggles it. See [Orchestration](#orchestration). |
 | `auto_update` | Whether a newer release is installed at startup. Daemon-wide, on unless set to false; a project config.json can turn it off for that checkout alone. See [At startup](#at-startup). |
 | `verify_command` | The one command this project is checked with. Backs the `check` tool, which runs exactly this in the session's workspace and takes no arguments. Unset means the tool is not registered at all. A project config.json wins over the global one. See [Debate](#debate). |
 | `network` | Bounds where localcode itself connects. Daemon-wide; a project config.json's `network` block replaces the global one entirely rather than adding to it. See [Where localcode may connect](#where-localcode-may-connect). |
@@ -414,7 +452,7 @@ Two limits worth knowing. A provider's `whitelist` or `blacklist`, and `enabled_
 | `top_k` | Only sample from the top K candidates at each step. `0` is no limit on vLLM. Omit the key to send nothing at all. Native on Anthropic, in `additionalModelRequestFields` on Bedrock, and a vLLM extension on OpenAI-compatible servers. Dropped while reasoning. See [Sampling](#sampling-temperature-top_p-top_k). |
 | `effort` | How hard this model is asked to think. Unset sends nothing at all. See [Effort](#effort). |
 | `vision` | Whether this model is sent images: pasted ones, the ones already in the conversation, and `view_image`'s, which it is offered only when this is true. Unset means true for a model whose id contains `claude` and false for every other. Set `true` on any other model that can see. A model that is not sent images gets a note where each image was, so a conversation moved to it goes on. See [Pasting an image](#pasting-an-image). |
-| `keep_going` | Per-profile budget: maximum automatic continuations for Muse models. Zero or unset: 3. `-1`: disabled. Ignored for other model families. This numeric per-profile setting is different from the daemon-wide top-level `keep_going` switch. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
+| `keep_going` | Per-profile budget: maximum automatic continuations for Muse models. Zero or unset: 3. `-1`: disabled. Maximum: 10. A value outside `-1` to `10` stops startup. Ignored for other model families. This numeric per-profile setting is different from the daemon-wide top-level `keep_going` switch. See [A model that stops mid-task](#a-model-that-stops-mid-task). |
 | `fallback` | Other profile names to try, in order, when a request to this one fails for a reason another model could survive. Read only with [Smart Agent](#smart-agent) on. See [Fallback chains](#fallback-chains-when-a-model-will-not-answer). |
 | `context_window` | Total input and output limit. Discovery uses `GET /v1/models` or llama.cpp `/props`, then model-ID matching, then 128k. An explicit value overrides discovery. Do not exceed the model's actual limit. |
 
@@ -469,10 +507,10 @@ No continuation occurs in the following cases:
 | Last tool call refused | Further work lacks approval |
 | Reply ends with a question | User input is required |
 | Reply reached `max_tokens` | The notice under the reply names which limit cut it. The profile's own `max_tokens`: raise it, or set one if the profile has none and the built-in 4096 applied. The window: `/compact`, or a larger `context_window` if the figure in use was guessed or set too low. Both, when neither alone would let the next reply run longer. `/compact` is promised when it helps even with the longest summary a compaction keeps. It is offered with the longest summary that would still help when only a shorter one would. It is not offered when no summary would help. |
-| Previous continuation produced no new tool call | The task is complete or repeating work |
+| Previous continuation produced no new `write_file`, `edit` or `bash` call | The task is complete, or the model is only looking again |
 | User message already queued | The user message takes precedence |
 
-A tool call counts as new only when the same arguments have not already appeared in the turn. A build repeated after a file edit counts as new work because the intervening edit is new. Each automatic continuation is recorded in the transcript.
+A step counts as new work only when it makes a call not already made this turn and the step includes `write_file`, `edit` or `bash`. A new `read_file`, `grep`, `glob`, `check` or `Task` call alone is not new work. A build repeated after a file edit counts as new work because the intervening edit is new. Each automatic continuation is recorded in the transcript.
 
 #### Provider fields
 
@@ -492,10 +530,12 @@ See [MODELS.md](MODELS.md) for real model IDs, region prefixes, and Bedrock trou
 
 | Field | Meaning |
 |---|---|
-| `profile` | Which provider and model this agent uses. Required. |
+| `profile` | Which provider and model this agent uses. Omitted, the agent uses `default_profile`. An agent with no profile and no `default_profile` stops startup. |
 | `description` | One line shown to other agents choosing a delegate through the `Task` tool |
 | `prompt` | Extra system prompt appended when running as this agent |
-| `tools` | Restricts this agent to the listed tools. Leave it out for full access. |
+| `tools` | Restricts this agent to the listed tools. Leave it out for full access. An object of booleans switches named tools off instead. |
+| `permission` | Per-agent allow/ask/deny rules. An agent rule wins over the top-level `permission` block. |
+| `steps` | Maximum tool rounds per turn for this agent. When reached, the model is asked for a final answer without tools. `maxSteps` is accepted as an alias. |
 
 See [Combining agents](#combining-agents) for the full picture.
 
@@ -515,7 +555,8 @@ Supported transports: `stdio` for a local child process, `http` for streamable H
 
 * Omitted `type`: `http` when `url` exists, otherwise `stdio`. Legacy SSE requires explicit `"type": "sse"`.
 * Remote credentials: `headers`. `mcp list` and `mcp get` print header names but never values. User headers cannot replace protocol headers.
-* Timeout: no general request timeout; 60-second limit when a connected server never answers.
+* Timeout: none by default. `"timeout": <milliseconds>` on a server bounds each call to it. A remote server that never sends response headers fails after 60 seconds.
+* `"enabled": false` keeps a server from starting. `cwd` sets a stdio server's working directory.
 * Permission: every MCP tool call requires confirmation, regardless of server annotations.
 * Connection failure: only the affected server is skipped. The daemon starts and logs a warning.
 * If a connected server's session dies, the next call retries the connection once.
@@ -546,7 +587,7 @@ localcode mcp add-json weather '{"command":"node","args":["weather-server.js"],"
 
 localcode mcp list          # scope, command, and a live connection test per server
 localcode mcp list --no-test # just the listing, without starting anything
-localcode mcp get github    # full command, args, and env for one server
+localcode mcp get github    # command, args, and env names (values hidden) for one server
 localcode mcp remove github # unregister
 
 # already using Claude Code? pull its MCP servers in instead of retyping them
@@ -599,7 +640,7 @@ Default behavior without any rules:
 
 | Tool | Confirmation |
 |---|---|
-| `read_file`, `glob`, `grep` | Runs immediately |
+| `read_file`, `view_image`, `glob`, `grep`, `check`, and every built-in tool not named below | Runs immediately |
 | `bash` running a `git` command | Runs immediately (built in default, see below) |
 | `write_file`, `edit`, `bash` running anything else, `Orchestrate`, `Schedule`, `Debate`, MCP tools | Always asks |
 
@@ -635,7 +676,7 @@ What each pattern matches:
 | Tool | Match target |
 |---|---|
 | `bash` | The full command string |
-| `read_file`, `write_file`, `edit` | Target file path |
+| `read_file`, `view_image`, `write_file`, `edit` | Target file path |
 | `grep`, `glob` | Search directory |
 | `check` | Configured verification command |
 | `Debate`, `Schedule` | Reviewers and task summary; the time as written plus prompt summary |
@@ -927,7 +968,7 @@ Personal workflow: @~/.localcode/my-workflow.md
 
 ### Additional instruction files
 
-`instructions` appends files and glob patterns to workspace rules in the system prompt. LocalCode loads files in the order declared in the array, after project rules and global rules. Relative paths resolve against the project directory and must remain within the project tree. Path traversal sequences such as `..` and absolute paths outside the project directory are refused at configuration load. Network addresses beginning with `http://` or `https://` are refused at configuration load. Patterns matching no files log a notice without failing.
+`instructions` appends files and glob patterns to workspace rules in the system prompt. LocalCode loads files in the order declared in the array, after project rules and global rules. Relative paths resolve against the project directory and must remain within the project tree. Path traversal sequences such as `..` and every absolute path are refused at configuration load. An entry is always a path relative to the project directory. Network addresses beginning with `http://` or `https://` are refused at configuration load. Patterns matching no files log a notice without failing.
 
 ### Per-model formatting notes
 
@@ -990,17 +1031,19 @@ Common to the TUI and Web UI:
 | Recall a previous prompt | **Up** and **Down**, in either client |
 | Jump between your own prompts | **Alt+Up** and **Alt+Down**, Web UI only. Moves the view to the previous or next turn of yours and marks where it landed; it does not touch what is in the prompt box, which is what plain Up and Down are for. The TUI marks turns the same way but has no key for this. |
 | Find a word in the conversation | **Ctrl+F**, or **Cmd+F**, Web UI and desktop window. See [Finding a word in the conversation](#finding-a-word-in-the-conversation) |
-| Switch agent | **Tab** for the next, **Shift+Tab** for the previous, in either client |
+| Switch agent | **Tab** for the next, in either client. **Shift+Tab** for the previous, Web UI only. |
 | Quit the TUI | **Ctrl+C** on an empty prompt, or type `exit`, `quit`, `:q`, `/exit`, `/quit` or `/q`. With something typed, the first Ctrl+C clears the line the way a shell prompt does and the second leaves, so the key that stops things does not also throw away a half-written message. |
 | Let go of a sub-agent | **Ctrl+B**, TUI only, while a turn is waiting on one. The turn carries on without its answer and the sub-agent keeps working; **Esc** is the other answer to the same moment and throws the work away. |
 | Step the reasoning effort | **Ctrl+E**, TUI only. Moves to the next level this model tells apart and wraps at the end; `/effort-set` opens the same list. |
 | Open or fold the reasoning | **Ctrl+O**, TUI only. Opens every folded Muse reasoning block in the transcript, and folds them again on the next press. Blocks folded later follow the same choice. The Web UI opens one block per click on its line. See [What the transcript shows](#what-the-transcript-shows). |
 | Narrow a picker | Type, in any TUI picker. Case-insensitive substring over the row and its detail; **Backspace** removes a character and **Esc** clears the filter before it closes the list. |
+| Search prompt history | **Ctrl+R** on an empty prompt, TUI only. Opens a picker over this session's prompts. |
+| Delete a session from the list | **Ctrl+D** twice in the `/session` picker, TUI only. The first press marks the row. Moving, typing or Esc unmarks it. |
 
 Other behavior:
 
 * The input box grows as you type, up to about 10 lines, then scrolls internally.
-* A permission prompt appears whenever the model wants `write_file`, `edit`, a non-git `bash` command, or an MCP tool. Any client attached to the session can answer it, and answering closes the prompt on every other client.
+* A permission prompt appears whenever the model wants `write_file`, `edit`, a non-git `bash` command, `Orchestrate`, `Schedule`, `Debate`, an MCP tool, or a path outside the workspace. Any client attached to the session can answer it, and answering closes the prompt on every other client.
 * The TUI draws a rule above and below the input box, with a status line directly underneath showing `agent: <name>  ·  model: <model id>`, and beside them whatever else has an answer: `effort: <level>` when a level is set for that model, `context: <percent>` once a reply has reported usage — amber past 70% of the window and red past 90%, the same thresholds the Web UI uses — and `<n> tok/s` when `show_tps` is on. A setting nobody has touched is not named, so the line stays short. Switching with Tab updates only that line and adds nothing to the transcript.
 * The TUI places the real terminal cursor at the insertion point inside the prompt box, so IME composition for Korean, Japanese, and Chinese renders in the box while you type rather than below it.
 * **Running work shows below the prompt box, not in the conversation.** While a turn is in flight the TUI animates a line naming what it is doing (the running tool's name, or `working`), the queue depth, and how many background tasks are going. It disappears the moment the turn ends. The Web UI shows the same information in its status bar. Tool starts and finishes no longer write `[tool] ...` lines into the transcript.
@@ -1033,7 +1076,7 @@ Messages sent during a turn appear immediately and are delivered at the next too
 
 Slash commands are refused while a turn is running. Wait for completion or press Esc to cancel. TUI `exit` and `:q` remain available.
 
-`/clear` and `/rewind` are refused outright rather than queued, and the refusal is shown. Both decide what the conversation is, so neither goes to a turn already in progress; the other commands and ordinary messages are queued and delivered when the turn ends.
+The daemon refuses `/clear`, `/rewind`, `/redo`, `/compact`, `/workspace <path>` and a `!` shell escape while a turn runs, and the refusal is shown. Each changes the history or the working tree the running turn depends on, so none of them is handed to that turn or queued.
 
 A message beginning with `/` is read as a command and is never sent to the model. One that matches no built-in command, custom command or skill is answered with an error naming the closest match, because the alternative is worse: a model reading an unknown command as an instruction acts on what the word means, and it has a shell. A first word with a second slash or a dot in it — `/etc/hosts`, `/tmp/build.log` — is a path, and still reaches the model.
 
@@ -1079,7 +1122,7 @@ When two things share a name, precedence is:
 2. [Custom commands](#custom-commands)
 3. Skills
 
-A `/name` matching none of them is sent to the model as ordinary text.
+A `/name` matching none of them is refused with an error, which names the closest command when one is close. It is not sent to the model.
 
 > `/skill <name>` still works as the older spelling.
 
