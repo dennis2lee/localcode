@@ -14,8 +14,9 @@ found independently by more than one reviewer — those cross-confirmations
 are marked, and carry the most weight.
 
 **Status:** every critical is **fixed** — C1–C4, then C5–C7 (see the FIXED
-markers). Of the majors, only M19 is still open; M18 was fixed in v0.42.0 by
-work that came at it from a different direction (see its entry). The minors
+markers). Of the majors, none is open. M19 was fixed in v0.118.0 (see
+IMPROVEMENTS.md item 24). M18 was fixed in v0.42.0 by work that came at it
+from a different direction (see its entry). The minors
 are settled: 24 fixed, 2 already fixed, 3 deliberately left.
 
 This document is a record of one review, not a live task list. Findings are

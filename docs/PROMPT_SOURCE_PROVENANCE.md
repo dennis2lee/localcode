@@ -25,7 +25,11 @@ The same applies to every other category. The auto-memory split, the trust class
 
 Every prompt string shipped in the binary is authored in this repository and is visible in it:
 
-* `internal/smart/prompt.go`: the orchestration policy and the trust boundary.
+* `internal/agent/loop.go`: the default base prompt.
+* `internal/agent/prompt_assets.go`: the workspace statement.
+* `internal/smart/prompt.go`: the orchestration policy, the plan policy, the Smart Agent work policy, and the trust boundary.
+* `internal/smart/smart.go`: the six specialists' prompts.
+* `internal/agent/verify_policy.go`: the verify policy and the sentence on remaining context.
 * `internal/agent/quirks.go`: the per-model family notes.
 * `internal/agent/compact.go`: the summarizing instruction and the summary provenance header.
 * `internal/memory/memory.go`: the auto-memory policy and the recalled-notes boundary.

@@ -27,8 +27,10 @@ Project rules for agents working in this repo.
   thing that catches a stall in the part of `go test` that is not the
   test: downloading modules, compiling, linking, waiting on the build
   cache lock. A job timeout names nothing and cancels the run. Two tests
-  in `cmd/localcode` hold the inner two over the workflows and
-  `check.sh`. A `build` job with no bound at all ran 44 minutes on a
+  in `cmd/localcode` hold the innermost and the outermost bound. Every
+  `go test` in the workflows and `check.sh` must carry a `-timeout`.
+  Every workflow job must carry a `timeout-minutes`. No test checks the
+  step bound. A `build` job with no bound at all ran 44 minutes on a
   75-second step.
 * **Size a `-timeout` from the slowest package, not the lane**, because
   `go test` applies it per test binary. `internal/tui` under `-race` is
@@ -51,11 +53,13 @@ Project rules for agents working in this repo.
     is `go test` running package binaries side by side, which defaults to
     the core count.
     Measured: `-parallel 1` 10s, `-parallel 8` 9s, `-p 1` 61s.
-  * `go vet ./...`, `go build -tags gui ./...` plus `go test -tags gui
-    ./internal/gui/` (29 tests; CGo — the package is behind the tag, so
-    the race lane never compiles its tests; the gate runs them on macOS
-    and `gui-windows.yml` runs them on Windows), and both
-    cross-builds — `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
+  * `go vet ./...`, `go build -tags gui ./...`, and
+    `go test -tags gui -race ./internal/gui/ -count=1 -timeout 10m`
+    (29 tests, CGo). 23 of the 29 are behind the `gui` tag, and only this
+    check compiles them. The 6 in `chrome_test.go` and `logo_test.go` are
+    untagged on purpose, so the race lane runs them too. The gate runs all
+    29 on macOS, and `gui-windows.yml` runs them on Windows. Both
+    cross-builds run too: `GOOS=windows GOARCH=amd64` and `CGO_ENABLED=0
     GOOS=linux GOARCH=amd64`. Windows and Linux are release targets built
     from this machine, so a break in either is a break in the release.
   * `scripts/check-deadcode.sh` — `go tool deadcode` over `./cmd/localcode`,
