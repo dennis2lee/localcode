@@ -924,6 +924,7 @@ Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats o
 * Names that differ only in case are the same name. Typing `/name`, `/skill <name>` and the model's `Skill` tool all reach the one skill that won.
 * A skill whose name no higher directory holds is loaded from wherever it is. A skill only in `~/.opencode/skills` is available beside the ones in `~/.claude/skills`, with nothing to configure.
 * `.localcode` comes first inside each place. A skill there was written for LocalCode, so it overrides a same-named one kept for another agent without editing that agent's copy.
+* A higher skill whose `SKILL.md` does not parse is skipped with a log line naming its path, and a lower skill of the same name loads instead.
 * A directory reached under two names, such as `~/.opencode/skills` linked to `~/.claude/skills`, is read once, at the higher of its two places.
 * opencode's own global directory, `~/.config/opencode/skills`, is not read. Link it to `~/.opencode/skills` to use those skills.
 

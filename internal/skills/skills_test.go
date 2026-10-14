@@ -499,3 +499,31 @@ func TestASkillNameDifferingOnlyInCaseIsTheSameName(t *testing.T) {
 		t.Errorf("skills = %v, want deploy=first and other=kept", names)
 	}
 }
+
+// A higher skill whose SKILL.md does not parse does not hold its name: it is
+// skipped with a warning naming its path, and a lower one of the same name
+// loads. A broken file never drops the skills beside it, and the warning is
+// what tells somebody editing the higher one why the lower one ran.
+func TestABrokenHigherSkillLetsALowerOneOfTheSameNameLoad(t *testing.T) {
+	higher := t.TempDir()
+	lower := t.TempDir()
+	broken := filepath.Join(higher, "deploy", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(broken), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(broken, []byte("no frontmatter here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, lower, "deploy", "name: deploy\ndescription: lower", "lower body")
+
+	list, warnings, err := LoadAllWithWarnings(higher, lower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Description != "lower" {
+		t.Errorf("skills = %+v, want the lower deploy", list)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], broken) {
+		t.Errorf("warnings = %q, want one naming %s", warnings, broken)
+	}
+}

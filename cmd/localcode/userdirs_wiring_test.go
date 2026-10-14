@@ -96,7 +96,9 @@ func TestTheProjectAndTheHomeEachContributeEveryRoot(t *testing.T) {
 // next one down must be the only skill of that name, the one listed, and the
 // body the model gets from the Skill tool. A skill typed as /shared is found
 // in that same list, so being the only one of its name is what makes the
-// person typing it and the model calling it get the same file.
+// person typing it and the model calling it get the same file. The name's
+// case differs from level to level, and the tool is asked in a case none of
+// them uses, because names that differ only in case are one name.
 func TestASkillNameResolvesThroughEveryRootInOrder(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
@@ -108,9 +110,10 @@ func TestASkillNameResolvesThroughEveryRootInOrder(t *testing.T) {
 		filepath.Join(home, ".claude"),
 		filepath.Join(home, ".opencode"),
 	}
+	spelled := []string{"shared", "Shared", "SHARED", "shared", "sHared", "Shared"}
 	for i, root := range chain {
 		write(t, filepath.Join(root, "skills", "shared", "SKILL.md"),
-			fmt.Sprintf("---\nname: shared\ndescription: level %d\n---\n\nbody from level %d\n", i+1, i+1))
+			fmt.Sprintf("---\nname: %s\ndescription: level %d\n---\n\nbody from level %d\n", spelled[i], i+1, i+1))
 	}
 	for i, root := range chain {
 		loop := &agent.Loop{}
@@ -128,7 +131,7 @@ func TestASkillNameResolvesThroughEveryRootInOrder(t *testing.T) {
 		if len(found) != 1 || found[0] != wantPath {
 			t.Fatalf("level %d: skills named shared = %v, want only %s", i+1, found, wantPath)
 		}
-		res := registry.Call(context.Background(), "Skill", json.RawMessage(`{"name":"shared"}`), "")
+		res := registry.Call(context.Background(), "Skill", json.RawMessage(`{"name":"ShArEd"}`), "")
 		if want := fmt.Sprintf("body from level %d", i+1); res.IsError || !strings.Contains(res.Content, want) {
 			t.Errorf("level %d: the Skill tool returned %q, want %q", i+1, res.Content, want)
 		}
