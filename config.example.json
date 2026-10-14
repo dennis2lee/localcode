@@ -1,5 +1,5 @@
 {
-  "//": "config.example.json is two things at once: every key localcode reads, with a note on each, and a worked orchestration setup that works as it stands. Copy it to ~/.localcode/config.json for every project or .localcode/config.json for one; the two are merged, with the project's winning. This file is plain JSON so it can be copied anywhere, but localcode reads JSONC: your own config may use // and /* */ comments and a trailing comma, and localcode keeps them when it rewrites the file for you (a permission rule, a \"/smart-agent on\"). Full reference: docs/USAGE.md.",
+  "//": "config.example.json is two things at once: every key localcode reads, with a note on each, and a worked setup with three providers (Bedrock, the Anthropic API and a local server). It works as it stands only where all three can be reached: with one provider, start from the minimal config for it in the README's First run section instead. Copy it to ~/.localcode/config.json for every project or .localcode/config.json for one; the two are merged, with the project's winning. This file is plain JSON so it can be copied anywhere, but localcode reads JSONC: your own config may use // and /* */ comments and a trailing comma, and localcode keeps them when it rewrites the file for you (a permission rule, a \"/smart-agent on\"). Full reference: docs/USAGE.md.",
   "providers": {
     "bedrock": {
       "type": "bedrock",
@@ -62,7 +62,7 @@
   "//default_profile": "The profile your own turns run on: the model that talks to you and, with orchestrate on, decides what to delegate. An agent with no profile of its own falls back to this one.",
   "default_profile": "smart-deep",
   "//default_agent": "Default agent role to answer as when --agent is omitted on the command line. An explicitly typed --agent always takes precedence. Must name an entry in agents, or general-purpose. See docs/USAGE.md.",
-  "//shell": "The program bash tool calls run under. Default: sh, or cmd.exe on a Windows box with no sh. Naming a non-POSIX shell turns bash allow rules into prompts.",
+  "//shell": "The program bash tool calls run under. Default: sh, or Git for Windows' bash, or cmd.exe on a Windows box with neither. Naming a non-POSIX shell turns bash allow rules into prompts. This file names /bin/bash: delete the key on Windows, where that path does not exist.",
   "shell": "/bin/bash",
   "default_agent": "general-purpose",
   "//smart_agent": "How one agent works, and the one setting in this file that is not at its shipped default: it is off in localcode and on here, because this file is also a worked setup. On, the session's own model is given an order to work in (understand, look narrowly, do the work, verify, report), the update_plan and ask_user tools, the fallback chains above, the turn log in ~/.localcode/trace/, the prompt-cache markers and the credential-path guard. It delegates nothing: sub-agents are orchestrate's. Set it to false for the shipped behaviour. \"/smart-agent\" toggles it and writes the change back here, as does the settings window and \"/config smart_agent on|off\". See docs/USAGE.md.",
@@ -182,7 +182,7 @@
   "skip_permissions": false,
   "//skip_tool_permissions": "The useful middle: every tool prompt allowed, and a path that leaves the session's workspace still asked about. /permission-skip-tools.",
   "skip_tool_permissions": false,
-  "//read_outside_workspace": "Allow reading outside the session's own workspace without asking (read_file, grep, glob). Off means each new directory out there is asked about once, and the answer can be that directory or anywhere. /read-outside.",
+  "//read_outside_workspace": "Allow reading outside the session's own workspace without asking (read_file, view_image, grep, glob). Off means each new directory out there is asked about once, and the answer can be that directory or anywhere. /read-outside.",
   "read_outside_workspace": false,
   "//write_outside_workspace": "The same for writing (write_file, edit). Separate from reading because they are not the same risk. /write-outside.",
   "write_outside_workspace": false,
@@ -212,7 +212,7 @@
   "trace_max_age_days": 30,
   "//trace_max_total_mb": "Optional cap on the trace directory, applied separately to the prompt-manifest directory beside it. When set, each directory sheds its oldest files until it fits, and neither ever loses today's file. Unset (0) means no size cap. See docs/USAGE.md.",
   "trace_max_total_mb": 0,
-  "//update_url": "Where the update button looks instead of GitHub: one https address at which the current installers are published side by side, named the way localcode names them (localcode-1.2.3-darwin-universal.tar.gz, localcode-1.2.3-windows-amd64.msi, ...). The version is read out of the filenames, since on a directory of files that is the only place it is written down. For a machine that cannot reach github.com, or an organisation that would rather its own build were the one installed. https only, because the file is run as an installer. Unset means GitHub. See docs/USAGE.md.",
+  "//update_url": "Where the update button looks instead of GitHub: one https address at which the current installers are published side by side, named the way localcode names them (localcode-1.2.3-darwin-universal.tar.gz, localcode-1.2.3-windows-amd64.msi, ...). The version is read out of the filenames, since on a directory of files that is the only place it is written down. For a machine that cannot reach github.com, or an organisation that would rather its own build were the one installed. https, or http for a mirror on a network you trust: the file is run as an installer, a plain http source is not authenticated, and the update panel says so on every check and every install offer. Unset means GitHub. See docs/USAGE.md.",
   "update_url": "",
   "//verify_command": "The one command this project is checked with: its tests, its build, its linter. It backs the `check` tool, which runs exactly this in the session's workspace and takes no arguments at all — a model chooses whether to run the check, never what the check is. That is what lets a debate reviewer, which can read but never write, still find out whether the code runs: a reviewer with `bash` would be a second author, and a reviewer that cannot run anything judges by reading alone. Unset means the tool is not registered rather than registered and always failing. See docs/USAGE.md.",
   "verify_command": ""

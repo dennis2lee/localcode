@@ -738,6 +738,47 @@ func localMouseEnabled(configPath string) bool {
 	return cfg.Mouse != nil && *cfg.Mouse
 }
 
+func newAnthropic(apiKey, baseURL string) *provider.AnthropicDirect {
+	ad := provider.NewAnthropicDirect(apiKey)
+	if baseURL != "" {
+		ad.BaseURL = baseURL
+	}
+	return ad
+}
+
+// keylessAnthropic is an anthropic provider declared with no api_key. It
+// reads the key `localcode login anthropic` saves when a request needs
+// one, so logging in from another terminal is enough, and says how to get
+// one when there is none. Built like Bedrock, whose AWS setup also waits
+// for the first request: a provider nobody uses must not stop a daemon.
+type keylessAnthropic struct {
+	name, home, baseURL string
+
+	mu    sync.Mutex
+	ready *provider.AnthropicDirect
+}
+
+func (k *keylessAnthropic) Chat(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	k.mu.Lock()
+	if k.ready == nil {
+		creds, err := credentials.Load(k.home)
+		if err != nil {
+			k.mu.Unlock()
+			return nil, fmt.Errorf("load credentials for anthropic provider %q: %w", k.name, err)
+		}
+		if creds.AnthropicAPIKey != "" {
+			k.ready = newAnthropic(creds.AnthropicAPIKey, k.baseURL)
+		}
+	}
+	ready := k.ready
+	k.mu.Unlock()
+	if ready == nil {
+		return nil, fmt.Errorf("provider %q (anthropic) has no API key: run `localcode login anthropic`, "+
+			"or set \"api_key\" on the provider in config.json", k.name)
+	}
+	return ready.Chat(ctx, req)
+}
+
 func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]provider.Provider, error) {
 	out := map[string]provider.Provider{}
 	for name, pc := range cfg.Providers {
@@ -751,22 +792,17 @@ func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]
 		case config.ProviderOpenAICompat:
 			out[name] = provider.NewOpenAICompat(pc.BaseURL, pc.APIKey)
 		case config.ProviderAnthropic:
-			apiKey := pc.APIKey
-			if apiKey == "" {
-				creds, err := credentials.Load(e.home)
-				if err != nil {
-					return nil, fmt.Errorf("load credentials for anthropic provider %q: %w", name, err)
-				}
-				apiKey = creds.AnthropicAPIKey
+			if pc.APIKey != "" {
+				out[name] = newAnthropic(pc.APIKey, pc.BaseURL)
+				continue
 			}
-			if apiKey == "" {
-				return nil, fmt.Errorf("provider %q (anthropic) has no api_key and none saved — run `localcode login anthropic` first", name)
-			}
-			ad := provider.NewAnthropicDirect(apiKey)
-			if pc.BaseURL != "" {
-				ad.BaseURL = pc.BaseURL
-			}
-			out[name] = ad
+			// No key in the config: the one `localcode login anthropic`
+			// saved is looked for when a request needs it, not here. A
+			// key missing at startup stopped localcode for everyone whose
+			// config named the provider, including people who only ever
+			// use a local model and copied config.example.json, which
+			// names all three.
+			out[name] = &keylessAnthropic{name: name, home: e.home, baseURL: pc.BaseURL}
 		default:
 			return nil, fmt.Errorf("provider %q has unknown type %q", name, pc.Type)
 		}

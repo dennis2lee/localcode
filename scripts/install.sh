@@ -152,18 +152,24 @@ echo "==> installed $DIR/localcode ($("$DIR/localcode" version 2>/dev/null || ec
 case ":$PATH:" in
 *":$DIR:"*) ;;
 *)
+	# The file the login shell reads: zsh is the default on macOS and
+	# never reads ~/.bashrc, so the line used to be one a Mac ignored.
+	case "${SHELL:-}" in
+	*/zsh) RC="$HOME/.zshrc" ;;
+	*) RC="$HOME/.bashrc" ;;
+	esac
 	echo
-	echo "$DIR is not on your PATH. Add it:"
+	echo "$DIR is not on your PATH. Add it, then open a new terminal:"
 	echo
-	echo "    echo 'export PATH=\"$DIR:\$PATH\"' >> ~/.bashrc && . ~/.bashrc"
+	echo "    echo 'export PATH=\"$DIR:\$PATH\"' >> $RC"
 	echo
 	echo "(Ubuntu's own ~/.profile puts ~/.local/bin on PATH, but only from"
-	echo " the next login, so the line above is what makes this shell see it.)"
+	echo " the next login.)"
 	;;
 esac
 
 if [ ! -f "$HOME/.localcode/config.json" ]; then
 	echo
-	echo "Next: write ~/.localcode/config.json — see"
-	echo "https://github.com/$REPO/blob/main/docs/USAGE.md#config-file-configjson"
+	echo "Next: write ~/.localcode/config.json. A minimal one for each kind of"
+	echo "model is in https://github.com/$REPO#first-run"
 fi

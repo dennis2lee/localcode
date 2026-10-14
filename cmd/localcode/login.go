@@ -65,10 +65,20 @@ func loginAnthropic() error {
 
 	fmt.Println()
 	fmt.Println("Saved to: ~/.localcode/credentials.json")
-	fmt.Println(`Add this provider to config.json (the api_key field can be omitted — the saved key is used automatically):`)
-	fmt.Println(`  "providers": { "anthropic": { "type": "anthropic" } }`)
+	fmt.Println("With no config yet, this is a whole ~/.localcode/config.json for the key (api_key is left out, so the saved key is used):")
+	fmt.Println(anthropicStarterConfig)
+	fmt.Println(`With a config already, add "anthropic": { "type": "anthropic" } under "providers".`)
 	return nil
 }
+
+// anthropicStarterConfig is the config.json `localcode login anthropic`
+// suggests: a whole file, because a provider block alone starts and then
+// fails the first message for want of a profile and "default_profile".
+const anthropicStarterConfig = `{
+  "providers": { "anthropic": { "type": "anthropic" } },
+  "profiles": { "main": { "provider": "anthropic", "model": "claude-sonnet-5" } },
+  "default_profile": "main"
+}`
 
 // readSecret reads one line from stdin without echoing it, when stdin is a
 // real terminal; falls back to a plain (echoed) read otherwise — e.g. when

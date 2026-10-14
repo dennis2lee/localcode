@@ -74,7 +74,7 @@ func runOneShot(args []string) error {
 	fs.SetOutput(os.Stderr)
 	var o runOptions
 	fs.StringVar(&o.format, "format", formatText, "output format: text, json, or stream-json")
-	fs.StringVar(&o.agent, "agent", "general-purpose", "which agent from config to answer as")
+	fs.StringVar(&o.agent, "agent", defaultRunAgent, "which agent from config to answer as")
 	fs.StringVar(&o.profile, "profile", "", "model profile from config to use, overriding the agent's own")
 	fs.StringVar(&o.model, "model", "", "model id to use, overriding the profile's own")
 	fs.BoolVar(&o.bare, "bare", false, "load nothing but the base prompt: no AGENTS.md/CLAUDE.md, no skills, no memory, no hooks, no MCP, no custom commands")
@@ -417,6 +417,9 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 	}, nil
 }
 
+// defaultRunAgent is the agent a run answers as when --agent is not given.
+const defaultRunAgent = "general-purpose"
+
 // applyModelChoice resolves --agent, --profile and --model against the
 // config, and reports which agent to answer as.
 //
@@ -427,7 +430,12 @@ func buildOneShot(ctx context.Context, o runOptions) (*agent.Loop, string, func(
 func applyModelChoice(cfg *config.Config, o runOptions) (string, error) {
 	agentName := o.agent
 	agentCfg, ok := cfg.Agents[agentName]
-	if !ok {
+	// The default agent needs no entry, as it needs none for the daemon:
+	// it runs on default_profile. A minimal config, one provider and one
+	// profile, declares no agents at all, and the run refused it. A name
+	// somebody typed is still checked, since a typo there would otherwise
+	// answer on the default profile without a word.
+	if !ok && agentName != defaultRunAgent {
 		return "", fmt.Errorf("no agent %q in config. Configured: %s", agentName, strings.Join(sortedNames(cfg.Agents), ", "))
 	}
 	profileName := agentCfg.Profile
@@ -437,6 +445,9 @@ func applyModelChoice(cfg *config.Config, o runOptions) (string, error) {
 		}
 		profileName = o.profile
 		agentCfg.Profile = profileName
+		if cfg.Agents == nil {
+			cfg.Agents = map[string]config.AgentConfig{}
+		}
 		cfg.Agents[agentName] = agentCfg
 	}
 	if profileName == "" {
