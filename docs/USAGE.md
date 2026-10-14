@@ -1128,7 +1128,7 @@ The `` !`cmd` `` splice is one of two readings of `!`. The other is the [shell e
 
 Typing `!` followed by a shell command runs it in the session's workspace and puts its output in the conversation, without reaching a model on the way in: `!git status`, `!cat ~/abc.txt`. The model sees the output on the next turn, with the transcript showing you ran it. This is a shell escape, the thing an editor has always had: a person typing in their own window runs what they could have run in their own terminal. So it does not consult the permission rules, including a `deny`. That is a deliberate hole in an otherwise closed surface. A model can never cause one: a delegated or model-composed prompt starting with `!` is answered as text, never executed.
 
-Start with `!!` to send an ordinary message beginning with `!`. A lone `!` says what to run instead. Empty output shows `(no output)`. A failure shows its exit status, so a typo never reads as an empty answer. Output is handed back whole: neither the `bash` tool nor the turn loop trims what a command wrote, and trimming here would make `!` and the tool disagree about the same command. `!find /` puts everything it prints into the conversation. A command past the `bash` tool's timeout is reported as killed after it.
+Start with `!!` to send an ordinary message beginning with `!`. A lone `!` says what to run instead. Empty output shows `(no output)`. A failure shows its exit status, so a typo never reads as an empty answer. Output is capped. The `bash` tool keeps at most 4 MiB of what a command prints: the first half and the last half. The conversation keeps at most 128,000 bytes of that: the start and the end, with a note in the middle saying how many bytes were left out. `!find /` therefore shows the start and the end of its output, not all of it. A command past the `bash` tool's timeout is reported as killed after it.
 
 ### `/tasks`
 
@@ -1161,7 +1161,7 @@ Settings that can be toggled while running. They apply daemon wide rather than p
 | `/config show_tps on\|off` | The tokens per second reading under the prompt |
 | `/config auto_delegate on\|off` | Sending matching prompts to a cheaper sub agent, see [Auto delegation](#auto-delegation) |
 | `/config smart_agent on\|off` | Smart Agent, see [Smart Agent](#smart-agent). |
-| `/orchestrate on\|off` | Enable or disable validated stage plans. Default: off. Requires delegation targets. See [Orchestration](#orchestration). |
+| `/orchestrate on\|off` | Orchestration: the six specialists, `Task`, `TaskBackground`, `TaskCollect`, the delegation policy and the `Orchestrate` tool. Default: off. Saved to config.json. It is a command of its own: `/config orchestrate` is refused. See [Orchestration](#orchestration). |
 
 Each change records a `config.changed` event on that session and the Web UI updates its status bar right away. A newly opened client reads current values from `GET /api/settings`.
 
@@ -1487,11 +1487,14 @@ The following daemon commands work in both clients.
 
 | Command | Setting | What it does |
 |---|---|---|
-| `/smart-agent` | `smart_agent` | The work-order prompt, the fallback chain, the trace, the prompt cache markers and the guards. See [Smart Agent](#smart-agent). |
+| `/smart-agent` | `smart_agent` | The work-order prompt, the enhanced tools (paged reads, `update_plan`, `ask_user`), the fallback chain, the trace, the prompt cache markers and the guards. It delegates nothing. See [Smart Agent](#smart-agent). |
 | `/orchestrate` | `orchestrate` | Delegation: the specialist roster, `Task`, the background pair, the delegation policy and the Orchestrate tool. Reports the agents it can delegate to, or says why there are none. See [Orchestration](#orchestration). |
 | `/auto-delegate` | `auto_delegate` | Sends matching prompts to a cheaper agent. See [Auto delegation](#auto-delegation). |
 | `/keep-going` | `keep_going` | Automatic Muse-model continuation. See [A model that stops mid-task](#a-model-that-stops-mid-task). Also on the settings Muse tab. |
 | `/fold-thinking` | `fold_thinking` | A Muse model's reasoning as a labelled block that folds when the answer starts. See [What the transcript shows](#what-the-transcript-shows). Also on the settings Muse tab. |
+| `/thinking` | `show_thinking` | Whether the clients paint the model's reasoning. See [What the transcript shows](#what-the-transcript-shows). |
+| `/timestamps` | `show_timestamps` | A time beside each turn boundary in the Web UI. See [What the transcript shows](#what-the-transcript-shows). |
+| `/repeat-limit` | `repeat_limit` | How many steps that only repeat earlier tool calls end a turn. Off by default. See [A model that repeats itself](#a-model-that-repeats-itself). Also on the settings Turns tab. |
 | `/auto-compact` | `auto_compact_enabled`, `auto_compact_percent` | Auto-compaction. A number sets the threshold and turns it on: `/auto-compact 70` compacts past 70% of the context window. The default threshold is 50%. |
 | `/model-invocable` | `model_invocable` | Whether the model may run commands itself. Off unless set; each command still needs its own opt-in. See [/model-invocable](#model-invocable). |
 
@@ -1565,7 +1568,7 @@ These commands are recognized by the client or the daemon rather than sent to th
 | `/redo` | Puts back the turn `/rewind` just undid, files included. See [`/redo`](#redo). |
 | `/effort-set` | **TUI.** Lists the levels the current model tells apart and takes a choice. `/effort-set <level>` sets one directly. The Web UI has the `effort:` control instead. See [Effort](#effort). |
 | `/new` | **TUI.** Starts a conversation and switches to it. The Web UI has its New button. |
-| `/rename` | **TUI.** `/rename <title>` names this conversation. The Web UI has the pencil on the session card. |
+| `/rename` | **TUI.** `/rename <title>` names this conversation. The Web UI has the **rename** button on the session card. |
 | `/fork` | **TUI.** Copies this conversation into a new one holding everything so far, and switches to the copy. The Web UI has the fork button. |
 | `/delete` | **TUI.** Deletes this conversation for good. No confirmation step: `/archive` is the reversible one and sits beside it. See [Archiving a conversation](#archiving-a-conversation). |
 | `/archive` | **TUI.** Puts the conversation you are in away; it keeps everything. See [Archiving a conversation](#archiving-a-conversation). |
@@ -1689,8 +1692,8 @@ Sessions are identified and resumed by ID, so a `title` is purely for display.
 
 | Action | API | Also available from |
 |---|---|---|
-| Rename | `POST /api/sessions/{id}/rename` with `{"title": "..."}` | The rename button on the session card in the Web UI left panel |
-| Delete one | `DELETE /api/sessions/{id}` | The delete button per session in the Web UI, or `d<number>` in the TUI startup picker |
+| Rename | `POST /api/sessions/{id}/rename` with `{"title": "..."}` | The rename button on the session card in the Web UI left panel, or `/rename <title>` in the TUI for the current conversation |
+| Delete one | `DELETE /api/sessions/{id}` | The delete button per session in the Web UI, `/delete` in the TUI for the current conversation, or `d<number>` in the TUI startup picker |
 | Delete all | `DELETE /api/sessions` | The delete all button in the Web UI, or `da` in the TUI startup picker |
 
 * Rename records `session.renamed`.
@@ -1764,7 +1767,7 @@ If one session fails to restore, for example a corrupt `.meta.json`, the rest st
 
 ## Part 6. Web UI
 
-The Web UI shares daemon sessions with the TUI and desktop window. The left panel manages sessions. The right panel shows tasks and MCP servers. Status and permission controls are below the prompt.
+The Web UI shares daemon sessions with the TUI and desktop window. The left panel manages sessions. The right panel shows background tasks, scheduled tasks and MCP servers. Status and permission controls are below the prompt.
 
 ### Resizing and hiding the side panels
 
@@ -1839,7 +1842,8 @@ The current agent appears in the header selector and [status bar](#status-bar-un
 | Section | Contents |
 |---|---|
 | Background tasks | Live status of subtasks started by the `Task` tool or the background task API. Each row has a **delete** button, and **delete all tasks** under the rows removes every row. See [Deleting background tasks](#deleting-background-tasks). |
-| MCP servers | Names of currently connected servers, from `GET /api/mcp-servers`. Configured servers that failed to connect are absent here and logged as a daemon warning. |
+| Scheduled tasks | Prompts booked for later in this conversation. See [Scheduled tasks](#scheduled-tasks). |
+| MCP servers | Every configured server that is not switched off, from `GET /api/mcp-servers`. Each row has a light: green for connected, blinking green for degraded, grey for disconnected. The row's tooltip names the status and the last error. **reconnect all** under the rows asks first, then sends `/reset-mcp`, which reconnects every server for every conversation on the daemon. |
 
 #### Deleting background tasks
 
@@ -1858,13 +1862,14 @@ A deleted task is gone with its transcript and everything it delegated. The conv
 
 ### Drag and drop file attach
 
-Dropping a file on the input box uploads it through `POST /api/sessions/{id}/uploads` to `~/.localcode/uploads/<session id>/<filename>`, and inserts the absolute path into the input box.
+Dropping a file on the input box handles it by type:
 
-Uploads insert a path, not file contents. The model must read the path with `read_file` or `bash`. Text files are supported; image and binary content is not decoded.
+* **An image file:** attached to the message the same way a pasted image is, with the same type and size checks and the same `vision` rule. See [Pasting an image](#pasting-an-image). An image type other than PNG, JPEG, GIF or WEBP is refused and not uploaded.
+* **Any other file:** uploaded through `POST /api/sessions/{id}/uploads` to `~/.localcode/uploads/<session id>/<filename>`. The input box gets `[attached file: <absolute path>]`. The model reads the path with `read_file` or `bash`. File contents are not inserted, and binary content is not decoded.
 
 ### Pasting an image
 
-Pasting an image into the prompt box attaches it to the message, and the model receives the picture rather than a path. That is the difference from dropping a file above: a drop uploads bytes and hands the model a filename to read, which works for text and cannot work for a screenshot. The desktop window is this same page, so pasting works there too.
+Pasting an image into the prompt box attaches it to the message. A model that is sent images receives the picture rather than a path. Which models are sent images is decided by the `vision` rule below. Dropping an image file on the prompt box does the same as pasting it. The desktop window is this same page, so pasting works there too.
 
 PNG, JPEG, GIF and WEBP, and **ten megabytes for one message** counting every image in it together. Both are checked as you paste, naming the type or the limit, rather than after a turn has started. The bytes are sent as pasted — nothing is resized or re-encoded.
 
@@ -1882,13 +1887,17 @@ One line directly below the input box:
 
 | Element | Behavior |
 |---|---|
-| Agent and model | Agent for the next message. Initial model ID comes from its profile; after a reply, the provider-reported ID is used. |
+| Agent and model | Agent for the next message, and its model. A model chosen with `/model` for this agent is shown first. Without one, the provider-reported ID of the last reply is shown. Before any reply, the model from the agent's profile is shown. |
 | Context use | Yellow past 70%, red past 90% |
 | TPS | Generation rate across the full turn, excluding prefill and queue time. `~` marks a live stream estimate; the final count replaces it. Single-chunk replies show no rate. Controlled by `show_tps`. |
 | Activity light | Grey: disconnected from daemon. Solid green: connected and idle. Blinking green: turn or background work active. Steady amber: permission required. Uses daemon state and reconnects automatically. Tooltip distinguishes turns from tasks. |
 | Stop button | Cancels the active turn, including a turn started by another client, and the tool it is inside. Equivalent to Esc. See [What stop reaches](#what-stop-reaches). |
-| Let go button | **let go**. Appears only while the turn is waiting on a sub-agent. The turn carries on without the answer and the sub-agent keeps working; the Stop button is the other answer to the same moment and ends both. The TUI has this on **Ctrl+B**. |
+| Let go button | **let go**. Shown whenever a turn is running. When the turn is waiting on a sub agent, the turn carries on without the answer and the sub agent keeps working. Otherwise the transcript says there was nothing to let go of. The Stop button is the other answer to the same moment and ends both. The TUI has this on **Ctrl+B**. |
 | Auto-delegate pill | Opens target-agent and pattern settings. See [Auto delegation](#auto-delegation). |
+| Schedule pill | **schedule**. Books a prompt for later, with the time and the request in separate fields. See [Scheduled tasks](#scheduled-tasks). |
+| Debate pill | **debate**. Starts a debate from a form that shows the command line it sends. See [Debate](#debate). |
+| Effort pill | **effort:** and the level. Shows and changes how hard the current model is asked to think. See [Effort](#effort). |
+| Usage pill | **usage by model**. Opens the token usage window with the `/usage all` figures. See [/usage totals](#usage-totals). |
 | Permission pill | Shows permission state and opens its controls. See [Permission settings](#viewing-and-changing-permission-settings-without-waiting-for-a-prompt). |
 | Settings pill | **settings**. Opens the settings window, grouped into tabs. See [Settings](#settings). |
 
@@ -1936,7 +1945,7 @@ Backwards because that is what a find in a conversation is usually for: where a 
 
 ### Model output renders as markdown
 
-The built-in offline renderer supports headings, emphasis, code, lists, blockquotes, links, and horizontal rules. Unsupported Markdown and raw HTML are escaped as text. Model output cannot inject HTML.
+The built-in offline renderer supports headings, emphasis, inline code, fenced code with syntax highlighting, lists, blockquotes, links, horizontal rules, and GFM tables. Unsupported Markdown and raw HTML are escaped as text. Model output cannot inject HTML.
 
 ### Watching a long turn
 
@@ -1969,6 +1978,7 @@ Limits:
 
 * A new message does not interrupt a running tool. Stop or Esc cancels the turn and discards pending messages.
 * Slash commands are refused during an active turn. They are not queued or delivered as model text.
+* A message with an image is not delivered mid-turn. The Web UI refuses it and leaves the text and the image in the box.
 
 If the turn happens to finish in the instant between your pressing Enter and the daemon accepting the message, it is answered as an ordinary next message instead. Nothing is dropped either way.
 
@@ -1992,9 +2002,9 @@ Agents select models and tool scopes. Smart Agent changes how one agent works. O
 | `session_read` | No | Read another conversation on this daemon: `mode=summary` for what it concluded and which files it touched, `mode=transcript` for its messages a page at a time. Not offered to a delegated sub agent. See [Referring to another conversation](#referring-to-another-conversation-with-name) |
 | `mcp__<server>__<tool>` | Yes, always | Tools from each configured MCP server. Never in a turn `localcode run` builds itself, which connects no MCP servers; a `--session` turn routed to a running daemon has the daemon's. |
 | `Task` | No | Delegate to another named agent and wait for its result. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
-| `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [orchestration](#orchestration) on. |
-| `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [orchestration](#orchestration) on. |
-| `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on and at least two agents to delegate to. In a turn with nobody to ask (`localcode run` or a scheduled prompt) it is not offered at all unless something already authorizes it: `skip_all`, `skip_tools`, or an `"Orchestrate": "allow"` rule. A background task is not one of those turns: its permission question is mirrored into the conversation that started it and answered there, so with the switch on and two agents to delegate to it is offered the tool with nothing pre-authorizing it. A delegated sub-agent keeps the tool but is not given the orchestration prompt. It asks on every call and a run is up to 32 agent turns, so a turn that would have to ask loses the tool rather than building a whole plan and being refused at the last step. |
+| `TaskBackground` | No | Start a sub agent and return its task id straight away. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
+| `TaskCollect` | No | Wait for background sub agents and return what they found. Offered only with [orchestration](#orchestration) on and 2 or more agents to delegate to. |
+| `Orchestrate` | Yes, always | Run a validated plan of delegated stages. Offered only with [`/orchestrate`](#orchestration) on, and never inside a stage of a run. In a turn with nobody to ask (`localcode run` or a scheduled prompt) it is not offered at all unless something already authorizes it: `skip_all`, `skip_tools`, or an `"Orchestrate": "allow"` rule. A background task is not one of those turns: its permission question is mirrored into the conversation that started it and answered there, so with the switch on it is offered the tool with nothing pre-authorizing it. A delegated sub-agent keeps the tool but is not given the orchestration prompt. It asks on every call and a run is up to 32 agent turns, so a turn that would have to ask loses the tool rather than building a whole plan and being refused at the last step. |
 | `Answer` | No | Report a stage's result in the shape its plan declared. Offered only inside an orchestration stage that declared one. |
 | `Verdict` | No | Report a review's result as a boolean plus findings. Offered only to a reviewer inside a debate. See [Debate](#debate). |
 | `update_plan` | No | Write or update the checklist for work the model is doing itself, shown in the transcript. Exactly one step may be `in_progress`, and one-step plans are refused. The model is also told never to move a step from `pending` straight to `completed`, but that is guidance in the tool description rather than a refusal: the tool records the list it is given and does not compare it with the last one. Offered only with [Smart Agent](#smart-agent) on. Distinct from `Orchestrate`, which delegates stages to other agents. |
