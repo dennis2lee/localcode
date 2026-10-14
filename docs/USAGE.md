@@ -2101,14 +2101,15 @@ Two policies are added to top-level turns while the feature is on: the delegatio
 
 Use orchestration for independent review dimensions, per-item checks, or structured surveys. Use `Task` for one delegated question.
 
-The policy varies by model family:
+Both policies vary by roster and by model family, matched on the model id. The first row that applies wins:
 
-| Family | What is added |
-|---|---|
-| Default | The policy as above. |
-| gpt, o3, o4 | Adds an explicit stopping rule. |
-| gemini | Adds a concrete delegation threshold. |
-| Local open weight models | Short policy focused on a single list fanout. |
+| Case | Delegation policy | Plan policy |
+|---|---|---|
+| The quick, balanced and deep classes all resolve to one profile, for example with one profile configured | Solo policy, for any model family. Delegate only to keep long reading out of this context. Do not delegate review, planning, or running the build. | A stage buys a separate context and nothing else. Do not use a plan for several opinions on one question. |
+| Default | The full policy, for models that follow one stated once. | The full plan policy. |
+| GPT and o series (`gpt-`, `o3`, `o4`) | Adds a stopping rule: delegate a question once, and do not delegate the agent's own reasoning. | Adds a stopping rule: do not plan work the agent could simply do. |
+| Gemini | Adds a concrete delegation threshold. | Adds a concrete threshold for when a plan is worth it. |
+| Local open weight models (qwen, glm, kimi, llama, mistral, gemma, deepseek, `gpt-oss` and similar) | Short policy with one rule per line. Background delegation omitted. | Short policy focused on a single list fanout. |
 
 Stage agents receive neither the orchestration policy nor the `Orchestrate` tool.
 
@@ -2138,7 +2139,7 @@ A stage is one of three kinds:
 | `returns` | Field name to type (`string`, `bool`, `number`, `strings`). A stage that declares this gets an `Answer` tool in exactly that shape. |
 | `keep` | One returned field. Results where it is false or empty are dropped. |
 | `unanswered` | What to do when an agent does not answer in the declared shape: `skip` (default), `keep`, `fail`. |
-| `repeat_until` | One returned field. While it is false or empty the stage runs again, up to `max_rounds`. A rerun carries the earlier rounds in `{{input}}`. |
+| `repeat_until` | One returned field. While it is false or empty the stage runs again, up to `max_rounds`. A rerun carries the earlier rounds in `{{input}}`. Step and fanout stages only: a barrier with `repeat_until` is refused. |
 | `max_rounds` | Required with `repeat_until`. How many times the stage may run in total, at least 2. Counted against the run ceiling like any other launches. |
 
 `keep` filters results by one returned field. It supports no expression language. For example, `{"survives":"bool"}` with `keep: "survives"` retains true results.
@@ -2166,7 +2167,7 @@ A stage is one of three kinds:
 
 | Constraint | Behavior |
 |---|---|
-| Ceilings | 8 stages, 16 items per fanout, 8 copies, 32 agent turns per run, 5 declared fields per stage, 4 agents at once. Every one is a refusal at validation, not a truncation while running. |
+| Ceilings | 8 stages, 16 items per fanout, 8 copies, 32 agent turns per run, 5 declared fields per stage, 4 agents at once. A plan that exceeds one is refused at validation. A fanout over `$stage.field` is the exception, because its width is unknown until the run. It takes the first 16 distinct items. Items past the ceiling of 32 agent turns do not run, and the report gives their count. A stage that would pass that ceiling stops the run, and the report names the stage. |
 | Timeouts | 10 minutes per agent turn; 30 minutes per run. |
 | Cancellation | Every stage is a synchronous child, so Esc stops the whole run including the stage in flight. |
 | Permission | Confirmation before each run. Shows maximum limits because referenced fanout sizes are unknown until earlier stages complete. |
@@ -2192,6 +2193,8 @@ With one profile, all specialists use that profile. With no profiles, no roster 
 
 Profiles named `smart-quick`, `smart-balanced`, and `smart-deep` override automatic category matching. Otherwise, LocalCode classifies model IDs.
 
+Profiles named `opencode:` come from an opencode file listed under `include`. The roster uses them only when no other profile exists. It never uses an `opencode:agent:` profile.
+
 `config.example.json` includes the six built-in prompts. A test in `internal/smart` checks that these definitions match the roster.
 
 Declare the same agent name to replace its prompt, model, and tools. LocalCode does not merge the built-in definition into an explicit definition.
@@ -2210,7 +2213,7 @@ Declare the same agent name to replace its prompt, model, and tools. LocalCode d
 Enforced restrictions:
 
 * Specialists do not receive delegation tools.
-* Delegation depth is limited to three levels, including background tasks.
+* Delegation depth is limited by `subagent_depth`, three levels when unset, including background tasks. See [Subagent delegation depth](#subagent-delegation-depth).
 * `explore`, `librarian`, `oracle`, and `plan` have no shell access.
 
 Specialists are instructed to return fewer than 300 words, with file paths and line numbers instead of copied output. Their source-reading context remains separate from the parent context.
@@ -2227,7 +2230,7 @@ Specialists select a capability class from configured profiles, not a hard-coded
 | `balanced` | Implementation | `sonnet`, `coder`, `medium`, `gpt-4`, and mid parameter counts such as `-30b` |
 | `deep` | Complex analysis | `opus`, `gpt-5`, `pro`, `ultra`, `thinking`, `-r1`, and large parameter counts such as `-70b` |
 
-The lightest matching class wins. For example, `gpt-5-mini` is `quick`. Missing classes fall back to the nearest class, then `default_profile`. A single configured profile serves all specialists.
+The lightest matching class wins. For example, `gpt-5-mini` is `quick`. A missing class falls back to the nearest class, then the remaining one. After that it takes `default_profile` when the roster may use that profile, then the first usable profile by name. A single configured profile serves all specialists.
 
 Use explicit profile names to override classification:
 
@@ -2345,6 +2348,8 @@ Set `fallback` on the primary profile:
 
 Fallback rebuilds the request for the selected model family, including orchestration policy and formatting notes.
 
+A fallback to a profile without `vision` drops `view_image` from the request. Each image in the history is sent as a note saying it was left out. The history keeps the image itself.
+
 #### The turn log
 
 Smart Agent writes a structured record of what each turn did to `~/.localcode/trace/localcode-<date>.jsonl`, one JSON object per line.
@@ -2394,7 +2399,13 @@ Each specialist has its own session prefix and cache.
 
 The credential-path check requires Smart Agent. Explicit tool rules can override it. The workspace boundary is always enabled and requires separate outside-access approval.
 
-Smart Agent denies `read_file`, `view_image`, `write_file`, and `edit` for credential-like paths. The full list is `secretPatterns` in `internal/config/rules.go`; it covers `.env` and `*.env.*`, SSH keys (`*id_rsa*`, `*id_ed25519*`, `*id_ecdsa*`, `*id_dsa*`, `~/.ssh`), certificate and keystore files (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`), `~/.aws/credentials` and `~/.aws/config`, `~/.gnupg`, `~/.kube/config`, `~/.docker/config.json`, `~/.npmrc`, `~/.pypirc`, `*credentials.json`, `*service-account*.json`, `.netrc`, and `*.htpasswd`.
+Smart Agent denies `read_file`, `view_image`, `write_file`, and `edit` for credential-like paths. The full list is `secretPatterns` in `internal/config/rules.go`. Each pattern is matched against the path as the model wrote it, at any depth. A file in the project is denied the same as one in the home directory.
+
+* Environment files: `*.env` and `*.env.*`
+* SSH keys: `*id_rsa*`, `*id_ed25519*`, `*id_ecdsa*`, `*id_dsa*`, and anything under a `.ssh/` directory
+* Certificate and keystore files: `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`
+* Tool credentials: `.aws/credentials`, `.aws/config`, anything under a `.gnupg/` directory, `.kube/config`, `.docker/config.json`, `*.npmrc`, `*.pypirc`, `*.netrc`, `*.htpasswd`
+* Credential files: `*credentials.json`, `*service-account*.json`
 
 `skip_permissions` does not override a denial. To permit a credential path, add an explicit rule:
 
@@ -2412,7 +2423,7 @@ File-tool access outside the session workspace requires a separate permission de
 
 | Class | Tools | Switch |
 |---|---|---|
-| Reading | `read_file`, `grep`, `glob` | `read_outside` |
+| Reading | `read_file`, `view_image`, `grep`, `glob` | `read_outside` |
 | Writing | `write_file`, `edit` | `write_outside` |
 | Not covered | `bash` | None |
 
@@ -2449,23 +2460,12 @@ Delegated task text is not parsed as a slash command and is not rerouted through
 
 At first connection, LocalCode fingerprints MCP tool names, descriptions, and schemas in `~/.localcode/mcp-pins.json`. Later changes produce a startup warning naming the server. Changed tools remain available. Pinning operates with Smart Agent enabled or disabled.
 
-#### The prompt is written for the model
-
-Orchestration policy wording varies by model family:
-
-| Model family | Difference |
-|---|---|
-| Default | The full policy, for models that follow one stated once |
-| GPT and o series | Adds a stopping rule: delegate a question once; do not delegate the agent's own reasoning. |
-| Gemini | Adds a concrete delegation threshold. |
-| Local open weight models (qwen, glm, kimi, llama, mistral, gemma, deepseek and similar) | Short policy with one rule per line. Background delegation omitted. |
-
 #### What it does not do
 
 * Nothing is added to a session that is already a sub agent, so a specialist is never told to orchestrate.
 * Nothing is added when there is nowhere to delegate to, which is the case when config.json has no profiles at all.
 * It does not change permissions. Every tool a specialist calls goes through the same allow/ask/deny rules and the same prompt as any other tool call, asked in the session that spawned it.
-* The specialists do not appear in the agent picker. They are delegation targets rather than conversation modes, so `Tab`, `/agent` and the header dropdown still cycle only the agents in config.json.
+* While orchestration is on, the specialists appear in the agent picker. `Tab`, `/agent` and the header dropdown list them beside the agents in config.json. A specialist chosen this way gets none of the orchestration, work or plan policies.
 
 ### Plan mode
 
@@ -2515,8 +2515,8 @@ Start with a narrow list like this one and widen it once you have seen the answe
 
 | Field | Meaning |
 |---|---|
-| `enabled` | The starting value. `/config auto_delegate on\|off`, or the auto-delegate panel under the prompt box, changes it while running. |
-| `agent` | Which entry in `agents` handles delegated prompts. Must exist, or startup fails with an error. Changeable at runtime from the [auto-delegate panel](#configuring-it-from-the-web-ui-or-gui-window). |
+| `enabled` | The starting value. `/auto-delegate on\|off`, `/config auto_delegate on\|off`, or the auto-delegate panel under the prompt box, changes it while running. |
+| `agent` | Which entry in `agents` handles delegated prompts. A built-in specialist is not an entry there, so `explore` works only when `agents` declares it. An unknown name stops startup with an error. Changeable at runtime from the [auto-delegate panel](#configuring-it-from-the-web-ui-or-gui-window). |
 | `match` | Globs (`*` for any run of characters, `?` for one) tried case insensitively against the whole trimmed prompt. Any one matching delegates the prompt. Editable at runtime from the same panel. |
 
 Behavior:
@@ -2526,6 +2526,7 @@ Behavior:
 * Commands are never delegated. `/`-prefixed commands, skills, and `exit`/`:q` are all handled before the delegation check, so a pattern of `*` still leaves them working.
 * An empty `match` list delegates nothing. A half written config is inert rather than quietly routing everything to the cheap model.
 * Delegation never recurses. A session that already has a parent (any sub agent session) does not delegate again, and an agent never delegates to itself.
+* A prompt with a [`#<name>` reference](#referring-to-another-conversation-with-name) to another conversation is not delegated. A sub agent cannot read another conversation, so the main agent answers it.
 * Turning it on with no `auto_delegate` block in config.json tells you so rather than silently doing nothing.
 
 #### Configuring it from the Web UI or GUI window
@@ -2840,14 +2841,18 @@ Monthly schedules and intervals shorter than one minute are unsupported. Use wee
 
 Start another agent from a parent session and track its progress. The event types are the same as the `Task` tool, `task.spawned` and `task.status`, but this is **asynchronous**. The caller does not wait.
 
-This is API only for now. Neither client has a "run in background" button, only the sidebar that shows status.
+How one starts:
+
+* A person starts one through the API, below. Neither client has a button that starts a new background task.
+* The model starts one with `TaskBackground` while orchestration is on. See [Running several at once](#running-several-at-once).
+* A sub agent that a turn is waiting on can be left running in the background: **let go** in the Web UI, **Ctrl+B** in the TUI.
 
 ```bash
 curl -X POST http://127.0.0.1:4096/api/sessions/<parent-id>/tasks \
   -d '{"agent":"explore","prompt":"find every TODO under src/"}'
 ```
 
-`task.spawned` and `task.status` events, carrying running, completed, failed, or cancelled, flow into the parent session's stream and appear live in the Web UI sidebar and the TUI transcript. Background concurrency is capped by `max_concurrent_tasks`; a task cancelled while it is still queued reaches a terminal status like any other, and collecting it returns the cancellation rather than waiting.
+`task.spawned` and `task.status` events, carrying running, completed, failed, cancelled, or detached, flow into the parent session's stream and appear live in the Web UI sidebar and the TUI transcript. Background concurrency is capped by `max_concurrent_tasks`; a task cancelled while it is still queued reaches a terminal status like any other, and collecting it returns the cancellation rather than waiting.
 
 #### Watching one
 
@@ -2876,11 +2881,13 @@ Switching agents changes the profile, provider, model, system prompt, and tool s
 
 | Where | How |
 |---|---|
-| TUI | `Tab` cycles, `/agent <name>` switches the agent, `/model <profile>` changes only the model and keeps the agent's prompt, tools and permissions, `/model` on its own reports what answers now and lists what it could be |
+| TUI | `Tab` cycles, `/agent <name>` switches the agent, `/model <profile>` changes only the model and keeps the agent's prompt, tools and permissions, `/model <agent>` switches the agent, `/model` on its own opens a picker of agents and profiles whose last entry returns to the agent's model |
 | Web UI | The selector in the header, or `/agent <name>` |
 | Either | The switch is appended to the session log, so it survives a restart |
 
 Agents may use different providers. The selected model receives the preceding conversation, including earlier questions and answers.
+
+Images in that conversation reach the model only when its profile has `vision`. Unset, `vision` is true for a model id containing `claude` and false for any other. A model without it gets a note in place of each image. The image is sent again when the conversation returns to a model that can see.
 
 Switching agents invalidates the previous agent's cached system prompt and tool-schema prefix.
 
@@ -2916,6 +2923,7 @@ Wrapped invocations such as `env python3 x.py` and `xargs python3` are not cover
 2. Point `providers.local.base_url` at that address.
 3. Set the profile's `model` to exactly the model name LM Studio shows.
 4. Point an `agents` entry at that profile and run with `--agent`.
+5. If the model reads images, set `"vision": true` on its profile. Unset, a model whose id does not contain `claude` is sent no images and is not offered `view_image`.
 
 See [MODELS.md](MODELS.md#local-llms-over-an-openai-compatible-endpoint) for more, including remote proxies that need an API key.
 
@@ -2951,7 +2959,7 @@ The Program Files copy, and the window shell, are brought up to date by the sett
 
 #### `/update`
 
-The same install, on demand, from the prompt box in either client. In the terminal it hands the daemon over (next section), so whatever is running finishes on the old daemon and nothing is refused. Where no handoff is possible — the desktop window, or a daemon reached over `--server` — the install goes through the platform's installer or a restart, which would cut work in flight; there it refuses while anything is running anywhere on this daemon and names what it found. See the [command table](#part-4-commands-and-screen-controls).
+The same install, on demand, from the prompt box in either client. In the terminal and in the desktop window it hands the daemon over (next section), so whatever is running finishes on the old daemon and nothing is refused. A `--headless` daemon, and any daemon that listens beyond loopback, refuses `/update` and names where to get the release. Each still installs at startup unless `auto_update` is false. See the [command table](#part-4-commands-and-screen-controls).
 
 #### Handing over
 
@@ -3043,7 +3051,7 @@ GitHub assets are checked against their published SHA-256. Other sources may pro
 
 The panel names the source when it is not the public releases page, so an internal build is never reported as though it came from GitHub. An http source is additionally marked unverified on every check and every install offer, and the TUI's `/update` reply says the same where it names the source.
 
-Installation is offered for the desktop window and a daemon listening on loopback. Remote connections and non-loopback listeners support checks only and link to the release page.
+Installation is offered for the desktop window, and for the daemon a terminal starts when it listens on loopback only. A `--headless` daemon, remote connections, and non-loopback listeners support checks only and link to the release page.
 
 **What is downloaded.** The file that matches how localcode was installed:
 
@@ -3081,6 +3089,6 @@ Development builds reporting `dev` are not offered updates.
 * Long sessions initially load recent events. Use **Load the whole conversation** for the full transcript.
 * If an MCP server dies, the next tool call tries once to bring it back. If that fails, later calls to that server keep failing until `/reset-mcp`; nothing retries on its own, and the health poller does not re-dial a server it has given up on. `/reset-mcp` reconnects every server, so it affects every conversation.
 * There is no auth token. Anyone who can reach the `--listen` address gets the entire API, shell execution included. Expose it only over loopback plus an SSH tunnel.
-* On Windows, shell execution resolves to `sh` on PATH, then Git for Windows' `bash.exe` at its usual install paths, then `cmd /c`. Under the `cmd` fallback, bash-only syntax does not work; the bash tool tells the model so in its description. Installing Git for Windows gives the full POSIX behavior.
+* On Windows, unless [`shell`](#naming-the-shell) names a program, shell execution resolves to `sh` on PATH, then Git for Windows' `bash.exe` at its usual install paths, then `cmd /c`. Under the `cmd` fallback, bash-only syntax does not work; the bash tool tells the model so in its description. Installing Git for Windows gives the full POSIX behavior.
 * There is no desktop window on Linux. It links a native webview through CGo, which on Linux means WebKitGTK and a build per distribution; the daemon, the TUI, and the Web UI in a browser all work there. The `.deb` and the Linux tarballs carry the `localcode` binary only.
 * Manual compaction does not use ordinary turn serialization and can overlap an active turn on the same session.
