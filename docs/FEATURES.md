@@ -7,12 +7,12 @@ The full reference: every capability localcode ships, one line each, grouped by 
 | Capability | In one line |
 |---|---|
 | Debate | Review by up to three agents, each with its own model and session. |
-| Scheduled tasks | One-time work parsed locally from Korean or English prompts. |
+| Scheduled tasks | One-time or repeating work parsed locally from Korean or English prompts. |
 | Orchestrate | Structured multi-stage plans validated before model execution. |
 | Cross-session reference | `#S2` resolves to an optional session read tool call. Session content is not inserted into the user message. |
 | Provider mixing | Hosted and local models in the same conversation. |
 | Prompt inventory | `/context` reports the next request by source and trust class without a model call. |
-| Trace | JSON Lines records for model calls, tool calls, delegation, fallback, and compaction. One trace ID per turn. |
+| Trace | JSON Lines records for model calls, tool calls, delegation, fallback, and compaction. One trace ID per turn. Written only with Smart Agent on. |
 | Model-invocable commands | Optional slash command execution by the model. Explicit allowlist with no wildcard. |
 | Three front ends | TUI, browser, and native clients for the same daemon. |
 | Workspace boundary | Separate permission checks for physical paths outside the session workspace. |
@@ -29,9 +29,10 @@ The full reference: every capability localcode ships, one line each, grouped by 
 | Effort | `off`, `low`, `medium`, `high`, or `xhigh` per model, kept per model across switches. Only the levels a model tells apart are offered. See [USAGE.md](USAGE.md#effort). |
 | Sampling | `temperature`, `top_p`, and `top_k` on a profile. All three reach OpenAI-compatible, Anthropic, and Bedrock (`top_k` through `additionalModelRequestFields`); all three are dropped while a Claude model is reasoning. Out-of-range values are refused when the config loads. |
 | Reasoning display | Provider reasoning fields plus `<think>` splitting, never sent back to the model. muse reasoning folds and persists across reloads. See [USAGE.md](USAGE.md#per-model-formatting-notes). |
+| Images | Pasted or dropped PNG, JPEG, GIF, and WEBP images, up to 10 MB per message, reach models with `vision` on. `vision` defaults to on when the model ID contains `claude`, and off otherwise. `view_image` opens an image file of up to 3.75 MB for such a model. Any other model gets a note in place of each image. |
 | Context window | Server supplied values from `GET /v1/models` or llama.cpp `/props`. Length errors cause summarization and trimming until acceptance. |
-| Prompt cache | Breakpoints after the stable prefix (tool schemas and system prompt) and conversation tail. Anthropic uses `cache_control`; Bedrock uses `cachePoint`; providers with server-side prefix caching receive neither. |
-| Fallback | Two endpoint retries after 1 and 2 seconds, then the profile `fallback`. A 401 or unknown model ID skips the delay. localcode derives a new request for the fallback model and records the switch. |
+| Prompt cache | With Smart Agent on, breakpoints after the stable prefix (tool schemas and system prompt) and conversation tail. Anthropic uses `cache_control`; Bedrock uses `cachePoint`; providers with server-side prefix caching receive neither. |
+| Fallback | With Smart Agent on, two endpoint retries after 1 and 2 seconds, then the profile `fallback`. A 401 or unknown model ID skips the delay. localcode derives a new request for the fallback model and records the switch. |
 | Model specific handling | Additional prompt lines for required model families, automatic continuation for models that stop during tasks, `/keep-going off` to disable it, a folding reasoning block for muse, and LaTeX unwrapping for Gemma. The settings window's Muse tab holds the muse switches. |
 | Repeated tool calls | `/repeat-limit` ends a turn after N steps that only repeat tool calls already made, naming them. Off by default; `on` is 3. Some local models think by re-reading, which the guard would cut short. |
 | LLM doctor | `/llm-doctor` checks a local muse or gemma against canaries and a stored baseline. See [USAGE.md](USAGE.md#llm-doctor). |
@@ -40,12 +41,12 @@ The full reference: every capability localcode ships, one line each, grouped by 
 
 | Area | What you get |
 |---|---|
-| Multiple agents | Per role model, prompt, and tool scope. Delegation through `Task`. Bare `/model` reports the model in force and every profile this config can reach; `/model <profile>` changes only the model, while `/model <agent>` switches agent. |
+| Multiple agents | Per role model, prompt, and tool scope. Delegation through `Task` with Orchestrate on. Bare `/model` reports the model in force and every profile this config can reach; `/model <profile>` changes only the model, while `/model <agent>` switches agent. |
 | Automatic delegation | Matching prompts can use a lower cost agent without changing the main session cache. Configuration in the panel below the prompt bar, stored in config.json. |
-| Smart Agent | Disabled by default. Six specialists: `explore`, `librarian`, `oracle`, `plan`, `implement`, and `verify`. Separate session and context for each specialist. Models resolve from existing profiles or explicit `smart-quick`, `smart-balanced`, and `smart-deep` profiles. Specialist tool allowlists exclude delegation. |
+| Smart Agent | Disabled by default. The work order prompt, the `update_plan` and `ask_user` tools, fallback chains, the turn log, prompt cache markers, credential path checks, and the search and file tool refinements below. It delegates nothing; the specialists come with Orchestrate. See [USAGE.md](USAGE.md#smart-agent). |
 | Debate | Up to three concurrent reviewers on separate models, unanimous approval, round limit 3 (max 10). Via plain language, the debate button, or `/debate`. See [USAGE.md](USAGE.md#debate). |
-| Orchestrate | Disabled by default. Structured plans validated before execution: step, fanout, and barrier stages with `repeat_until` loops. Limits: 8 stages, 32 agent turns, 4 at a time. See [USAGE.md](USAGE.md#orchestration). |
-| Scheduled tasks | One-time work via plain language, `/schedule`, or the schedule button, parsed locally in Korean or English. Missed times report as missed. See [USAGE.md](USAGE.md#scheduled-tasks). |
+| Orchestrate | Disabled by default. Adds six specialists (`explore`, `librarian`, `oracle`, `plan`, `implement`, and `verify`), each with its own session and context, and the `Task`, `TaskBackground`, and `TaskCollect` tools. Specialist models resolve from existing profiles or explicit `smart-quick`, `smart-balanced`, and `smart-deep` profiles. Specialist tool allowlists exclude delegation. Structured plans validated before execution: step, fanout, and barrier stages with `repeat_until` loops. Limits: 8 stages, 32 agent turns, 4 at a time. See [USAGE.md](USAGE.md#orchestration). |
+| Scheduled tasks | One-time or repeating work via plain language, `/schedule`, or the schedule button, parsed locally in Korean or English. Repeats run every N minutes, hours, days, or weeks; months are refused. Missed times report as missed. See [USAGE.md](USAGE.md#scheduled-tasks). |
 | Model-invocable commands | Disabled by default, explicit allowlist with no wildcard. Commands run as separate turns. See [USAGE.md](USAGE.md#model-invocable). |
 | Concurrency | Optional provider limit through `max_concurrent_tasks`, acquired before the daemon limit. Work waiting for a local GPU does not consume a daemon slot. |
 
@@ -56,7 +57,7 @@ The full reference: every capability localcode ships, one line each, grouped by 
 | Event log | Append-only session events. Clients resume from a `since` sequence number without gaps or duplicates. A client outside the retained buffer receives an error and replays from the log. |
 | Workspace | Per session directory. Relative paths and bash commands use that directory, which permits multiple projects on one daemon. Every turn derives the current directory again for the system prompt. |
 | Cross-session reference | `#S2` resolves to a session read tool call, never spliced into the prompt. References are not transitive. See [USAGE.md](USAGE.md#referring-to-another-conversation-with-name). |
-| Archive and retrieve | Archived conversations stay readable on disk without slowing startup. Booked work disarms while archived. See [USAGE.md](USAGE.md#archiving-a-conversation). |
+| Archive and retrieve | Archived conversations stay readable on disk without slowing startup. Booked work does not run while archived. A booked time that passes is marked missed, and retrieving the conversation does not run it late. See [USAGE.md](USAGE.md#archiving-a-conversation). |
 | Undo a turn | `/rewind` removes the last exchange and restores files `write_file` or `edit` changed. `/redo` puts it back. See [USAGE.md](USAGE.md#rewind). |
 | Start fresh | `/clear` appends a history barrier. Earlier events remain visible, persistent, and excluded from later model context. |
 | Compaction | `/compact [instructions]` on demand, automatic past a threshold (`/auto-compact 70`, 50% by default), `/usage` for cumulative tokens per model, with `/usage all\|today\|week\|month` counting every conversation including archived ones. |
@@ -78,7 +79,7 @@ The full reference: every capability localcode ships, one line each, grouped by 
 | MCP | `stdio`, streamable `http`, and `sse` transports. `localcode mcp add/list/get/remove` without printing secrets. See [USAGE.md](USAGE.md#managing-mcp-servers-with-localcode-mcp). |
 | Egress | `network.egress` bounds localcode's own outbound connections when asked for. Shell and subprocess servers are out of scope. See [USAGE.md](USAGE.md#where-localcode-may-connect). |
 | Debug log | `/debug-log` toggles writing every model request and response, byte for byte and binary included, to one file per prompt in the workspace. Credentials are redacted; nothing else is. Off at every start. |
-| Trace | JSON Lines events per turn, inherited by child agents. See [USAGE.md](USAGE.md#the-turn-log). |
+| Trace | JSON Lines events per turn, inherited by child agents. Written only with Smart Agent on. See [USAGE.md](USAGE.md#the-turn-log). |
 | Prompt inventory | `/context` reports the next request by source and trust class without a model call. See [USAGE.md](USAGE.md#context). |
 
 ### Interfaces
@@ -98,12 +99,12 @@ The full reference: every capability localcode ships, one line each, grouped by 
 | Area | What you get |
 |---|---|
 | Single request | `localcode run` answers in process and exits. Text, JSON, and stream-JSON output. See [USAGE.md](USAGE.md#one-prompt-no-window-localcode-run). |
-| Config | `config.example.json` documents every key and includes a tested orchestration example. User config supports JSONC. localcode preserves comments during config writes. |
+| Config | localcode reads `~/.localcode/config.json` and the project's `.localcode/config.json`. A file written for opencode or Claude Code is read only when listed under `include`. `config.example.json` documents every key and includes a tested orchestration example. User config supports JSONC. localcode preserves comments during config writes. |
 | Environment values | String fields support `{env:NAME}` and `{env:NAME:-fallback}` at load time, including API keys, `base_url`, model IDs, and MCP environments. Missing variables produce an error with the variable and field names. Files retain the placeholder. |
 | Project context | Workspace rules from `AGENTS.md`/`CLAUDE.md` with `@path` imports. Skills and commands from project and home roots. `/init` drafts, auto memory persists. See [USAGE.md](USAGE.md#part-3-project-context). |
 | Updating | Newer releases install at startup or on `/update`, SHA-256 verified. `auto_update: false` turns it off. See [USAGE.md](USAGE.md#checking-for-updates). |
-| Windows | Shell selection order: `sh`, Git for Windows `bash.exe`, then `cmd /c`. Missing `python` or `python3`, including Microsoft Store stubs, produces a `winget install` command through the normal permission gate. Detection uses PATH lookup and does not depend on localized shell error text. |
-| Linux | User install of one static binary in `~/.local/bin`, with no writes outside `$HOME`. System `.deb` packages for Ubuntu and Debian. Portable tarballs for other distributions. `CGO_ENABLED=0` and no `Depends:` entry. Linux supports the daemon, TUI, and Web UI, but not the desktop window. |
+| Windows | Shell selection order: the `shell` config key when set, then `sh`, Git for Windows `bash.exe`, then `cmd /c`. Missing `python` or `python3`, including Microsoft Store stubs, produces a `winget install` command through the normal permission gate. Detection uses PATH lookup and does not depend on localized shell error text. |
+| Linux | User install of one static binary in `~/.local/bin`, with nothing left outside `$HOME`. System `.deb` packages for Ubuntu and Debian. Portable tarballs for other distributions. `CGO_ENABLED=0` and no `Depends:` entry. Linux supports the daemon, TUI, and Web UI, but not the desktop window. |
 
 ## Documentation
 
@@ -139,7 +140,7 @@ Sessions use append-only event logs. A TUI restart or new browser tab resumes fr
 curl -fsSL https://raw.githubusercontent.com/dennis2lee/localcode/main/scripts/install.sh | sh
 ```
 
-The script verifies the published SHA-256 and installs one static binary at `~/.local/bin/localcode`. It writes nothing outside `$HOME`, uses no package manager, and requests no password. Options after `-s --`: `--version x.y.z`, `--dir ~/bin`, and `--uninstall`. Run the installer again to upgrade.
+The script verifies the published SHA-256 and installs one static binary at `~/.local/bin/localcode`. It leaves nothing outside `$HOME`, uses no package manager, and requests no password. Options after `-s --`: `--version x.y.z`, `--dir ~/bin`, and `--uninstall`. Run the installer again to upgrade.
 
 `~/.local/bin` is the directory Ubuntu's own `~/.profile` puts on PATH when it exists; the script prints the line to add if this shell does not have it yet.
 
