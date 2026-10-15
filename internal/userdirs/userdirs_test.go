@@ -173,7 +173,7 @@ func TestSkillDirsNameDirectoriesThatDoNotExistYet(t *testing.T) {
 
 // Running localcode in a home directory makes the project and the home one
 // place. Each skills directory is named once, so neither the startup line
-// nor the reload report lists the same three paths twice.
+// nor the reload report lists the same paths twice.
 func TestSkillDirsNamesEachDirectoryOnceWhenTheProjectIsTheHome(t *testing.T) {
 	home := t.TempDir()
 	got := SkillDirs(home, home)
@@ -279,8 +279,12 @@ func TestOpencodeConfigDirFollowsXDGConfigHome(t *testing.T) {
 	if got := OpencodeConfigDir(home); got != filepath.Join(xdg, "opencode") {
 		t.Errorf("XDG_CONFIG_HOME=%s: %q", xdg, got)
 	}
-	if got := SkillDirs(home, home); got[len(got)-1] != filepath.Join(xdg, "opencode", "skills") {
-		t.Errorf("the last skills directory is %q, want the one under XDG_CONFIG_HOME", got[len(got)-1])
+	project := filepath.Join("/repo")
+	for _, got := range [][]string{SkillDirs(home, home), SkillDirs(project, home), CommandDirs(project, home)} {
+		want := filepath.Join(xdg, "opencode", filepath.Base(got[len(got)-1]))
+		if got[len(got)-1] != want {
+			t.Errorf("the last directory is %q, want %q under XDG_CONFIG_HOME", got[len(got)-1], want)
+		}
 	}
 	t.Setenv("XDG_CONFIG_HOME", "relative/dir")
 	if got := OpencodeConfigDir(home); got != filepath.Join(home, ".config", "opencode") {

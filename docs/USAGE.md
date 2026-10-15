@@ -907,7 +907,7 @@ Run a skill directly by its own name with `/<skill name>`. To run a file without
 
 ### Where skills, commands and global rules are read from
 
-Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. There are three roots, `.localcode`, `.claude` and `.opencode`, each under the project directory and under the home directory, and opencode's own global directory, `~/.config/opencode`, for skills and commands. Each root can hold `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md` and `CLAUDE.md`.
+Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. There are three roots, `.localcode`, `.claude` and `.opencode`, each under the project directory and under the home directory. Each can hold `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md` and `CLAUDE.md`. opencode's own global directory, `~/.config/opencode`, is read for its skills and commands only.
 
 **Skills and commands are merged.** Every `skills` and `commands` directory below that exists is read. When two hold a skill of the same name, or a command of the same name, the higher one wins:
 

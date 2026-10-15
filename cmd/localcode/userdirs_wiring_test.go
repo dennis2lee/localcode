@@ -114,7 +114,7 @@ func TestACommandNameResolvesThroughEveryRootInOrder(t *testing.T) {
 		filepath.Join(home, ".localcode", "commands"),
 		filepath.Join(home, ".claude", "commands"),
 		filepath.Join(home, ".opencode", "command"),
-		filepath.Join(home, ".config", "opencode", "commands"),
+		filepath.Join(home, ".config", "opencode", "command"),
 	}
 	for i, dir := range chain {
 		write(t, filepath.Join(dir, "ship.md"), commandFile(fmt.Sprintf("level %d", i+1)))
@@ -151,10 +151,13 @@ func commandFile(description string) string {
 // in that same list, so being the only one of its name is what makes the
 // person typing it and the model calling it get the same file. The name's
 // case differs from level to level, and the tool is asked in a case none of
-// them uses, because names that differ only in case are one name.
+// them uses, because names that differ only in case are one name. The last
+// level is found through XDG_CONFIG_HOME, as opencode finds it.
 func TestASkillNameResolvesThroughEveryRootInOrder(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
 	chain := []string{
 		filepath.Join(cwd, ".localcode"),
 		filepath.Join(cwd, ".claude"),
@@ -162,7 +165,7 @@ func TestASkillNameResolvesThroughEveryRootInOrder(t *testing.T) {
 		filepath.Join(home, ".localcode"),
 		filepath.Join(home, ".claude"),
 		filepath.Join(home, ".opencode"),
-		filepath.Join(home, ".config", "opencode"),
+		filepath.Join(xdg, "opencode"),
 	}
 	spelled := []string{"shared", "Shared", "SHARED", "shared", "sHared", "Shared", "shareD"}
 	for i, root := range chain {

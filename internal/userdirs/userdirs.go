@@ -128,11 +128,11 @@ func CommandDirs(projectDir, home string) []string {
 // first: MergedOrder under the project, then under the home, then
 // opencode's own global directory.
 //
-// Three, when the project is the home directory, which it is whenever
+// Four, when the project is the home directory, which it is whenever
 // localcode is run in one, and however its path is spelled: see
 // SameDirectory. The loaders read a directory once however many times it
 // is named, but the log line and the reload report list what they are
-// given, and the same three paths twice read as a bug in the line.
+// given, and the same paths twice read as a bug in the line.
 func mergedRoots(projectDir, home string) []string {
 	places := []string{projectDir}
 	if !SameDirectory(projectDir, home) {
