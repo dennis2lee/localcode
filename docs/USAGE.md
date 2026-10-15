@@ -2071,6 +2071,13 @@ The loop ends when the model stops requesting tools. `Verdict` and `Answer` also
 
 Unambiguous tool-name variants such as `bash.command`, `functions.bash`, or `readFile` resolve only against tools available to that agent. The result reports the resolved name. An unresolved name returns the allowed tool list. Resolution cannot bypass tool restrictions.
 
+A call whose arguments are not a JSON object, such as one missing its closing brace, is not run.
+
+* Its result tells the model what was wrong and how the arguments ended, so the model can call again.
+* Later requests carry the call with `{}` as its arguments. An endpoint that parses the history (LiteLLM, the Anthropic API, Bedrock) would otherwise refuse that request and every one after it.
+* The session log keeps the arguments as the model wrote them.
+* Arguments that are empty or `null` are a call with no arguments, and it runs.
+
 ### Combining agents
 
 Agents map names to profiles. Add `description`, `prompt`, `tools`, `permission`, and `steps` to define specialized delegation roles.
@@ -2404,7 +2411,7 @@ Set `fallback` on the primary profile:
 | Before fallback | Transient failures retry the same endpoint twice, after 1s and 2s. Credential and model-identity failures skip retry. Cancellation during backoff records cancellation, not an unattempted retry. |
 | Eligible failures | Exhausted rate-limit or quota retries, 5xx and gateway errors, refused or timed-out connections, unavailable model, or invalid credentials. |
 | Excluded failures | Context overflow uses same-model compaction. Invalid parameters and schemas end the request. A partially emitted answer does not switch models. |
-| Classification | Uses the reported cause, not only the exception type. For Bedrock `ValidationException`, missing models and access entitlement may trigger fallback; invalid fields do not. |
+| Classification | Uses the reported cause, not only the exception type. For Bedrock `ValidationException`, missing models and access entitlement may trigger fallback; invalid fields do not. An Anthropic API or OpenAI-compatible error reply is read up to its first 2 KB, for the transcript and for this decision, because some endpoints echo the whole request back after the cause. |
 | Ineligible error | Ends the turn without contacting or consuming a fallback entry. |
 | Order | Primary profile's flat list, in order. Fallback profiles' own lists are not followed. |
 | Visibility | Transcript records each retry and model switch with the failure reason. |

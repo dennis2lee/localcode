@@ -215,17 +215,34 @@ func TestToBedrockMessagesToolResult(t *testing.T) {
 	}
 }
 
+// A call whose arguments are not a JSON object goes back as {} rather than
+// failing the request. It used to fail it, and every request after it, since
+// each carries the same history: the conversation could not go on.
 func TestToBedrockMessagesInvalidToolInput(t *testing.T) {
-	msgs := []Message{
-		{Role: RoleAssistant, Content: []Block{{
-			Type:      BlockToolUse,
-			ToolUseID: "call_1",
-			ToolName:  "glob",
-			ToolInput: json.RawMessage(`{not valid json`),
-		}}},
-	}
-	if _, err := toBedrockMessages(msgs); err == nil {
-		t.Fatal("expected an error for invalid tool_use input JSON")
+	for _, raw := range []string{`{not valid json`, `{"a": ["b"]`, `[1, 2]`, `"text"`, `null`} {
+		msgs := []Message{
+			{Role: RoleAssistant, Content: []Block{{
+				Type:      BlockToolUse,
+				ToolUseID: "call_1",
+				ToolName:  "glob",
+				ToolInput: json.RawMessage(raw),
+			}}},
+		}
+		out, err := toBedrockMessages(msgs)
+		if err != nil {
+			t.Fatalf("arguments %s failed the request: %v", raw, err)
+		}
+		use, ok := out[0].Content[0].(*types.ContentBlockMemberToolUse)
+		if !ok {
+			t.Fatalf("Content[0] = %T, want a tool use", out[0].Content[0])
+		}
+		got, err := use.Value.Input.MarshalSmithyDocument()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "{}" {
+			t.Errorf("arguments %s went as %s, want {}", raw, got)
+		}
 	}
 }
 

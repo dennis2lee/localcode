@@ -7,9 +7,11 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -425,6 +427,56 @@ func isVisionRefusal(err error) bool {
 		}
 	}
 	return false
+}
+
+// SendableToolInput is a tool call's arguments as they go back to a model in
+// the history: as they are when they are a JSON object, and "{}" otherwise.
+//
+// A model can write arguments that are not JSON at all: a closing brace left
+// off, a quote escaped that should have ended the string. The call is kept in
+// the history, because the result answering it is there too, and every
+// endpoint refuses it on the way back: LiteLLM cannot convert it, Anthropic's
+// encoder cannot serialise it, Bedrock cannot unmarshal it. The request was
+// refused, and so was every one after it, since each carries the same
+// history: the conversation could not go on. What the model actually wrote
+// stays in the session log; the result of the call says what was wrong.
+func SendableToolInput(raw json.RawMessage) json.RawMessage {
+	if IsToolInputObject(raw) {
+		return raw
+	}
+	return json.RawMessage("{}")
+}
+
+// IsToolInputObject reports whether raw is a JSON object, the only shape
+// every endpoint takes as a tool call's arguments.
+func IsToolInputObject(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '{' && json.Valid(trimmed)
+}
+
+// maxErrorBody is how much of an endpoint's error reply goes into the error.
+const maxErrorBody = 2 << 10
+
+// errorBody reads an endpoint's error reply for the error it becomes, cut at
+// maxErrorBody.
+//
+// Some endpoints echo the whole request back: LiteLLM's refusals end with
+// every message of the conversation. Read whole, that was the conversation
+// printed into the transcript as one error. It is also text the retry and
+// fallback decisions search for phrases such as "quota" or "server error",
+// and a conversation that happened to contain one made a request that will
+// be refused every time look like one worth sending again. The cause comes
+// first in every reply seen, so the head is kept.
+func errorBody(r io.Reader) string {
+	data, _ := io.ReadAll(io.LimitReader(r, maxErrorBody+1))
+	if len(data) <= maxErrorBody {
+		return string(data)
+	}
+	cut := maxErrorBody
+	for cut > 0 && data[cut]&0xC0 == 0x80 {
+		cut--
+	}
+	return string(data[:cut]) + fmt.Sprintf(" [cut at %d KB]", maxErrorBody>>10)
 }
 
 // wrapVisionRefusal turns an endpoint's refusal into the sentence

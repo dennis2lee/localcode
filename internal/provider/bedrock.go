@@ -313,13 +313,12 @@ func toBedrockMessages(msgs []Message) ([]types.Message, error) {
 				blocks = append(blocks, &types.ContentBlockMemberText{Value: b.Text})
 
 			case BlockToolUse:
+				// Arguments that are not a JSON object go as {}, rather
+				// than failing this request and every one after it. See
+				// SendableToolInput.
 				var input any
-				if len(b.ToolInput) > 0 {
-					if err := json.Unmarshal(b.ToolInput, &input); err != nil {
-						return nil, fmt.Errorf("unmarshal tool_use input for %s: %w", b.ToolName, err)
-					}
-				} else {
-					input = map[string]any{}
+				if err := json.Unmarshal(SendableToolInput(b.ToolInput), &input); err != nil {
+					return nil, fmt.Errorf("unmarshal tool_use input for %s: %w", b.ToolName, err)
 				}
 				blocks = append(blocks, &types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{
 					ToolUseId: aws.String(b.ToolUseID),

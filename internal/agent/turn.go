@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -900,10 +901,34 @@ func withSendableInputs(blocks, calls []provider.Block) []provider.Block {
 }
 
 func sendableInput(raw json.RawMessage) json.RawMessage {
-	if json.Valid(raw) {
-		return raw
+	return provider.SendableToolInput(raw)
+}
+
+// unreadableArguments is the result for a call whose arguments are not a
+// JSON object, or "" when they are one, or are nothing at all.
+//
+// The call is not run. Its arguments cannot be trusted to be what the model
+// meant, and guessing at the missing part is how a cut-off shell command
+// would run. The model is told what was wrong and how the arguments ended,
+// because the history it reads next carries {} in their place: see
+// provider.SendableToolInput.
+func unreadableArguments(tu provider.Block) string {
+	raw := bytes.TrimSpace(tu.ToolInput)
+	if len(raw) == 0 || string(raw) == "null" || provider.IsToolInputObject(raw) {
+		return ""
 	}
-	return json.RawMessage("{}")
+	why := "they are JSON, but not an object"
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		why = err.Error()
+	}
+	tail := string(raw)
+	if r := []rune(tail); len(r) > 80 {
+		tail = "..." + string(r[len(r)-80:])
+	}
+	return fmt.Sprintf("not run: the arguments for %s were not a JSON object (%s), so the tool was not called. "+
+		"They ended: %s\n\nThis call is kept with {} as its arguments. Call %s again with one complete JSON object.",
+		tu.ToolName, why, tail, tu.ToolName)
 }
 
 // answerCallsNotRun gives each call a result that says it was not run,
@@ -954,6 +979,16 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 				"input":       string(tu.ToolInput),
 			})
 			results = append(results, provider.ToolResultBlock(tu.ToolUseID, res.Content, true))
+			continue
+		}
+		if why := unreadableArguments(tu); why != "" {
+			l.Store.Append(sessionID, events.TypeToolEnd, map[string]any{
+				"tool_use_id": tu.ToolUseID,
+				"content":     why,
+				"is_error":    true,
+				"input":       string(tu.ToolInput),
+			})
+			results = append(results, provider.ToolResultBlock(tu.ToolUseID, why, true))
 			continue
 		}
 

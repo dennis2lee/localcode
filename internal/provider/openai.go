@@ -296,13 +296,13 @@ func toOpenAIMessages(system string, msgs []Message) []oaMessage {
 				case BlockToolUse:
 					tc := oaToolCall{ID: b.ToolUseID, Type: "function"}
 					tc.Function.Name = b.ToolName
-					// "{}" for no input, as the Anthropic and Bedrock
-					// encoders send it. arguments is a JSON string, and ""
-					// is not JSON: Ollama and LiteLLM both parse it.
-					tc.Function.Arguments = string(b.ToolInput)
-					if len(b.ToolInput) == 0 {
-						tc.Function.Arguments = "{}"
-					}
+					// "{}" for no input, and for input that is not a
+					// JSON object, as the Anthropic and Bedrock encoders
+					// send it. arguments is a JSON string that Ollama and
+					// LiteLLM both parse: "" is not JSON, and a model's
+					// broken arguments sent back were refused with every
+					// request after them. See SendableToolInput.
+					tc.Function.Arguments = string(SendableToolInput(b.ToolInput))
 					calls = append(calls, tc)
 				}
 			}
@@ -424,9 +424,7 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		var buf bytes.Buffer
-		_, _ = buf.ReadFrom(resp.Body)
-		return nil, wrapVisionRefusal(fmt.Errorf("openai-compat endpoint returned %d: %s", resp.StatusCode, buf.String()), req.Model)
+		return nil, wrapVisionRefusal(fmt.Errorf("openai-compat endpoint returned %d: %s", resp.StatusCode, errorBody(resp.Body)), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)

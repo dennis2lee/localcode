@@ -273,11 +273,9 @@ func toAnthropicMessages(msgs []Message) []anthMessage {
 			case BlockText:
 				blocks = append(blocks, anthContentBlock{Type: "text", Text: b.Text})
 			case BlockToolUse:
-				input := b.ToolInput
-				if len(input) == 0 {
-					input = json.RawMessage("{}")
-				}
-				blocks = append(blocks, anthContentBlock{Type: "tool_use", ID: b.ToolUseID, Name: b.ToolName, Input: input})
+				// A RawMessage that is not JSON fails the whole request
+				// at json.Marshal. See SendableToolInput.
+				blocks = append(blocks, anthContentBlock{Type: "tool_use", ID: b.ToolUseID, Name: b.ToolName, Input: SendableToolInput(b.ToolInput)})
 			case BlockToolResult:
 				blocks = append(blocks, anthContentBlock{Type: "tool_result", ToolUseID: b.ToolUseID, Content: b.ToolResultContent, IsError: b.IsError})
 			case BlockImage:
@@ -570,9 +568,7 @@ func (p *AnthropicDirect) Chat(ctx context.Context, req ChatRequest) (<-chan Str
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		var buf bytes.Buffer
-		_, _ = buf.ReadFrom(resp.Body)
-		return nil, wrapVisionRefusal(fmt.Errorf("anthropic API returned %d: %s", resp.StatusCode, buf.String()), req.Model)
+		return nil, wrapVisionRefusal(fmt.Errorf("anthropic API returned %d: %s", resp.StatusCode, errorBody(resp.Body)), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)
