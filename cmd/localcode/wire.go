@@ -519,43 +519,21 @@ func buildRegistry(cfg *config.Config, broker *agent.PermissionBroker, store *se
 // rather than re-derived from the process, so a daemon started in one
 // directory and working in another reads the project it works in.
 func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, projectDir, home string) (skillsSection, memoryPolicy, memorySection string, skillList []skills.Skill, cmdList []commands.Command, memDir string, err error) {
-	project, global := assetsFor(projectDir, home)
-	// Skills first, because they are the ones read from every root. Said
-	// whenever a directory outside .localcode is in play: that is the case
-	// where "where did this skill come from" has an answer worth giving,
-	// and on a machine with only .localcode it would be a line about the
-	// default on every start.
-	if dirs := skillDirsRead(projectDir, home); !allUnderLocalcode(dirs) {
+	// Said whenever a directory outside .localcode is in play: that is the
+	// case where "where did this skill come from" has an answer worth
+	// giving, and on a machine with only .localcode it would be a line
+	// about the default on every start.
+	if dirs := existingDirs(userdirs.SkillDirs(projectDir, home)); !allUnderLocalcode(dirs) {
 		log.Printf("skills: reading %s", strings.Join(dirs, ", "))
 	}
-	if project.Chosen != ".localcode" || global.Chosen != ".localcode" {
-		// Worth a line: an empty winner still wins, so "where did my
-		// commands go" is answered by the log rather than by reading this
-		// package's source.
-		//
-		// One path when the two roots are one directory, which they are
-		// whenever localcode is run in a home directory, or in a link to
-		// one. "reading X and X" reads as a bug in the line rather than as
-		// the fact it is.
-		if userdirs.SameDirectory(projectDir, home) {
-			log.Printf("commands and global rules: reading %s, which is both the project root and yours (config.json is always ~/.localcode/config.json)",
-				project.Path)
-		} else {
-			log.Printf("commands and global rules: reading %s and %s (config.json is always ~/.localcode/config.json)",
-				project.Path, global.Path)
-		}
+	if dirs := existingDirs(userdirs.CommandDirs(projectDir, home)); !allUnderLocalcode(dirs) {
+		log.Printf("commands: reading %s", strings.Join(dirs, ", "))
 	}
-	// And a second line only when something was actually lost. The first
-	// says where the commands came from; this one says where they did not,
-	// which is the half somebody is looking for when a command they wrote
-	// has stopped appearing. See internal/userdirs: for commands the first
-	// root wins whole, and running another agent once in a repository is
-	// enough to change which root that is.
-	for _, r := range []userdirs.Root{project, global} {
-		for _, name := range r.Shadowed {
-			log.Printf("commands: %s has commands and is not read, because %s comes first",
-				filepath.Join(filepath.Dir(r.Path), name), r.Chosen)
-		}
+	// Global rules are the one thing still taken from a single root, and
+	// an empty winner still wins, so "where did my rules go" is answered
+	// by the log rather than by reading internal/userdirs.
+	if global := userdirs.At(home); global.Chosen != ".localcode" {
+		log.Printf("global rules: reading %s (config.json is always ~/.localcode/config.json)", global.Path)
 	}
 
 	skillList, err = loadSkills(projectDir, home)
@@ -564,7 +542,7 @@ func buildSystemPrompt(cfg *config.Config, registry *tools.Registry, projectDir,
 	}
 	skillsSection = setSkillAssets(nil, registry, skillList)
 
-	cmdList, err = commands.LoadAll(project.Commands, global.Commands)
+	cmdList, err = loadCommands(projectDir, home)
 	if err != nil {
 		return "", "", "", nil, nil, "", err
 	}
@@ -592,11 +570,17 @@ func loadSkills(projectDir, home string) ([]skills.Skill, error) {
 	return skills.LoadAll(userdirs.SkillDirs(projectDir, home)...)
 }
 
-// skillDirsRead is the skills directories that exist, which is what a
-// skill is actually loaded from.
-func skillDirsRead(projectDir, home string) []string {
+// loadCommands reads the custom commands of every root under the project
+// and under the home, highest first, the way loadSkills reads skills.
+func loadCommands(projectDir, home string) ([]commands.Command, error) {
+	return commands.LoadAll(userdirs.CommandDirs(projectDir, home)...)
+}
+
+// existingDirs is the directories of dirs that exist, which is what
+// anything is actually loaded from.
+func existingDirs(dirs []string) []string {
 	var out []string
-	for _, dir := range userdirs.SkillDirs(projectDir, home) {
+	for _, dir := range dirs {
 		if info, err := os.Stat(dir); err == nil && info.IsDir() {
 			out = append(out, dir)
 		}
@@ -615,34 +599,25 @@ func allUnderLocalcode(dirs []string) bool {
 	return true
 }
 
-// assetsFor is the project root and the home root the assets are read out
-// of. One place, so the loaders cannot drift, and two chains, because a
-// repo's agent directory and a person's need not be the same one. Both
-// roots are inputs: the project is the workspace actually being worked
-// in, which on the desktop is not the directory the daemon started in.
-func assetsFor(projectDir, home string) (project, global userdirs.Root) {
-	return userdirs.At(projectDir), userdirs.At(home)
-}
-
 // reloadProjectAssets re-reads the project skills and custom commands for
 // one project directory plus the global ones, and swaps them into the
 // loop: the one answer both startup (through buildSystemPrompt) and
 // "/reset-skills" use, so the two cannot drift. It reports what it read
-// and where from, the way the startup log names both roots.
+// and where from: every skills and commands directory, highest first.
 func reloadProjectAssets(loop *agent.Loop, registry *tools.Registry, projectDir, home string) (string, error) {
-	project, global := assetsFor(projectDir, home)
 	skillDirs := userdirs.SkillDirs(projectDir, home)
 	skillList, err := skills.LoadAll(skillDirs...)
 	if err != nil {
 		return "", err
 	}
-	cmdList, err := commands.LoadAll(project.Commands, global.Commands)
+	cmdDirs := userdirs.CommandDirs(projectDir, home)
+	cmdList, err := commands.LoadAll(cmdDirs...)
 	if err != nil {
 		return "", err
 	}
 	setSkillAssets(loop, registry, skillList)
 	loop.SetCommands(cmdList)
-	return assetsReport(skillList, cmdList, skillDirs, project, global), nil
+	return assetsReport(skillList, cmdList, skillDirs, cmdDirs), nil
 }
 
 // setSkillAssets swaps the loop's skills and the Skill tool behind them.
@@ -666,10 +641,9 @@ func setSkillAssets(loop *agent.Loop, registry *tools.Registry, skillList []skil
 }
 
 // assetsReport says what a reload read and where it read it from. Every
-// skills directory is named, whether or not it exists, because the answer
-// to "where do I put a skill" is the list; the commands are the one root
-// that answers for them, under the project and under the home.
-func assetsReport(skillList []skills.Skill, cmdList []commands.Command, skillDirs []string, project, global userdirs.Root) string {
+// skills and commands directory is named, whether or not it exists,
+// because the answer to "where do I put one" is the list, highest first.
+func assetsReport(skillList []skills.Skill, cmdList []commands.Command, skillDirs, cmdDirs []string) string {
 	skillNames := make([]string, len(skillList))
 	for i, sk := range skillList {
 		skillNames[i] = sk.Name
@@ -678,10 +652,9 @@ func assetsReport(skillList []skills.Skill, cmdList []commands.Command, skillDir
 	for i, cmd := range cmdList {
 		cmdNames[i] = cmd.Name
 	}
-	return fmt.Sprintf("skills and commands reloaded: %d skill(s) (%s) from %s, %d command(s) (%s) from %s and %s",
+	return fmt.Sprintf("skills and commands reloaded: %d skill(s) (%s) from %s, %d command(s) (%s) from %s",
 		len(skillList), strings.Join(skillNames, ", "), strings.Join(skillDirs, ", "),
-		len(cmdList), strings.Join(cmdNames, ", "),
-		project.Commands, global.Commands)
+		len(cmdList), strings.Join(cmdNames, ", "), strings.Join(cmdDirs, ", "))
 }
 
 // resolvedConfigPath is where an "always allow" permission decision gets

@@ -16,19 +16,17 @@ func mkdirs(t *testing.T, home string, paths ...string) {
 	}
 }
 
-// The first root that exists answers for commands and the rest are never
-// looked at. Somebody with all three installed gets one of them, not a
-// merge of three. Skills are the other rule and are tested below.
+// The first root that exists answers for global rules and the rest are
+// never looked at. Somebody with all three installed gets one AGENTS.md,
+// not a merge of three. Skills and commands are the other rule and are
+// tested below.
 func TestTheFirstRootThatExistsWinsOutright(t *testing.T) {
 	home := t.TempDir()
-	mkdirs(t, home, ".claude/skills", ".opencode/skills", ".localcode/skills", ".localcode/commands")
+	mkdirs(t, home, ".claude", ".opencode", ".localcode")
 
 	got := At(home)
-	if got.Chosen != ".claude" {
-		t.Fatalf("chose %q, want .claude", got.Chosen)
-	}
-	if got.Commands != filepath.Join(home, ".claude", "commands") {
-		t.Errorf("commands = %q, want the winning root's own, not a lower one's", got.Commands)
+	if got.Chosen != ".claude" || got.Path != filepath.Join(home, ".claude") {
+		t.Fatalf("At = %+v, want .claude", got)
 	}
 }
 
@@ -54,72 +52,50 @@ func TestTheChainFallsThroughInOrder(t *testing.T) {
 	}
 }
 
-// A winner with nothing in it still wins. The directory is named anyway,
-// so a command added later is found without a restart of anything but the
-// loader, and so the loader reports "none" against a path a person can
-// read rather than against nothing.
-func TestAnEmptyWinnerStillWins(t *testing.T) {
-	home := t.TempDir()
-	mkdirs(t, home, ".claude", ".localcode/commands")
-
-	got := At(home)
-	if got.Chosen != ".claude" {
-		t.Fatalf("chose %q, want .claude even though it holds nothing", got.Chosen)
-	}
-	if _, err := os.Stat(got.Commands); err == nil {
-		t.Errorf("%s exists; the test meant to describe a root with no commands", got.Commands)
-	}
-	if filepath.Dir(got.Commands) != filepath.Join(home, ".claude") {
-		t.Errorf("%s is not under the winning root", got.Commands)
-	}
-}
-
-// opencode names its command directory in the singular. A root chosen
-// for its opencode commands that then looked for "commands" would find
-// nothing at all.
-func TestOpencodeCommandDirectoryIsAccepted(t *testing.T) {
-	home := t.TempDir()
-	mkdirs(t, home, ".opencode/command")
-
-	if got := At(home).Commands; got != filepath.Join(home, ".opencode", "command") {
-		t.Errorf("commands = %q, want the singular directory opencode creates", got)
-	}
-}
-
-// "commands" wins over "command" where a root somehow has both, so the
-// documented name is the one that answers.
-func TestThePluralNameWinsWhenBothExist(t *testing.T) {
-	home := t.TempDir()
-	mkdirs(t, home, ".opencode/command", ".opencode/commands")
-
-	if got := At(home).Commands; got != filepath.Join(home, ".opencode", "commands") {
-		t.Errorf("commands = %q", got)
-	}
-}
-
-// A home with nothing in it yet answers with localcode's own paths, so a
-// first run points where the documentation says to put a first skill.
+// A home with nothing in it yet answers with localcode's own root, so a
+// first run points where the documentation says to put a first file.
 func TestAFreshHomeAnswersWithLocalcode(t *testing.T) {
 	home := t.TempDir()
 	got := At(home)
-	if got.Chosen != ".localcode" || got.Commands != filepath.Join(home, ".localcode", "commands") {
+	if got.Chosen != ".localcode" || got.Path != filepath.Join(home, ".localcode") {
 		t.Errorf("At on an empty home = %+v", got)
 	}
 }
 
-// The chain knows nothing about homes: a project directory resolves the
-// same way, and the two answers are independent of each other.
-func TestAProjectResolvesIndependentlyOfAHome(t *testing.T) {
-	home := t.TempDir()
-	project := t.TempDir()
-	mkdirs(t, home, ".localcode/skills")
-	mkdirs(t, project, ".claude/skills", ".localcode/skills")
-
-	if got := At(home).Chosen; got != ".localcode" {
-		t.Errorf("home chose %q", got)
+// Commands are read from the six roots skills are, in the same order: the
+// project's .localcode, .claude, .opencode, then the home's. The loader keeps
+// the first command of a name, so this order is the precedence.
+func TestCommandDirsListEveryRootProjectFirst(t *testing.T) {
+	got := CommandDirs(filepath.Join("/repo"), filepath.Join("/home", "u"))
+	want := []string{
+		filepath.Join("/repo", ".localcode", "commands"),
+		filepath.Join("/repo", ".claude", "commands"),
+		filepath.Join("/repo", ".opencode", "commands"),
+		filepath.Join("/home", "u", ".localcode", "commands"),
+		filepath.Join("/home", "u", ".claude", "commands"),
+		filepath.Join("/home", "u", ".opencode", "commands"),
 	}
-	if got := At(project); got.Chosen != ".claude" || got.Commands != filepath.Join(project, ".claude", "commands") {
-		t.Errorf("project = %+v, want its own .claude", got)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("CommandDirs = %v, want %v", got, want)
+	}
+	if home := t.TempDir(); len(CommandDirs(home, home)) != len(MergedOrder) {
+		t.Errorf("the project as the home named %d directories, want %d", len(CommandDirs(home, home)), len(MergedOrder))
+	}
+}
+
+// opencode names its command directory in the singular. A root that has only
+// that is read from it; one that somehow has both is read from the plural,
+// the documented name.
+func TestOpencodeCommandDirectoryIsAccepted(t *testing.T) {
+	home := t.TempDir()
+	mkdirs(t, home, ".opencode/command", ".claude/command", ".claude/commands")
+
+	got := CommandDirs(home, home)
+	if got[1] != filepath.Join(home, ".claude", "commands") {
+		t.Errorf("a root with both: %q, want the plural", got[1])
+	}
+	if got[2] != filepath.Join(home, ".opencode", "command") {
+		t.Errorf("a root with only the singular: %q, want the singular", got[2])
 	}
 }
 
@@ -130,21 +106,12 @@ func TestPathsUseThePlatformSeparator(t *testing.T) {
 	dir := t.TempDir()
 	mkdirs(t, dir, ".claude/skills", ".claude/commands")
 
-	got := At(dir)
-	for name, path := range map[string]string{
-		"Path":     got.Path,
-		"Commands": got.Commands,
-	} {
-		if want := filepath.Clean(path); path != want {
-			t.Errorf("%s = %q, want the cleaned platform path %q", name, path, want)
-		}
+	if got := At(dir).Path; got != filepath.Clean(got) {
+		t.Errorf("At gave %q, want the cleaned platform path", got)
 	}
-	if filepath.Base(filepath.Dir(got.Commands)) != ".claude" {
-		t.Errorf("%s does not sit under the chosen root", got.Commands)
-	}
-	for _, d := range SkillDirs(dir, dir) {
+	for _, d := range append(SkillDirs(dir, dir), CommandDirs(dir, dir)...) {
 		if want := filepath.Clean(d); d != want {
-			t.Errorf("SkillDirs gave %q, want the cleaned platform path %q", d, want)
+			t.Errorf("a directory came back as %q, want the cleaned platform path %q", d, want)
 		}
 	}
 }
@@ -202,8 +169,8 @@ func TestSkillDirsNameDirectoriesThatDoNotExistYet(t *testing.T) {
 func TestSkillDirsNamesEachDirectoryOnceWhenTheProjectIsTheHome(t *testing.T) {
 	home := t.TempDir()
 	got := SkillDirs(home, home)
-	if len(got) != len(SkillOrder) {
-		t.Fatalf("SkillDirs(home, home) = %v, want %d entries", got, len(SkillOrder))
+	if len(got) != len(MergedOrder) {
+		t.Fatalf("SkillDirs(home, home) = %v, want %d entries", got, len(MergedOrder))
 	}
 	seen := map[string]bool{}
 	for _, d := range got {
@@ -213,7 +180,7 @@ func TestSkillDirsNamesEachDirectoryOnceWhenTheProjectIsTheHome(t *testing.T) {
 		seen[d] = true
 	}
 	// Spelled differently, still one place.
-	if again := SkillDirs(home+string(filepath.Separator), home); len(again) != len(SkillOrder) {
+	if again := SkillDirs(home+string(filepath.Separator), home); len(again) != len(MergedOrder) {
 		t.Errorf("a trailing separator made it two places: %v", again)
 	}
 }
@@ -231,8 +198,8 @@ func TestSkillDirsNamesTheHomeOnceWhenTheProjectIsALinkToIt(t *testing.T) {
 		{"the project is the link", link, home},
 		{"the home is the link", home, link},
 	} {
-		if got := SkillDirs(c.project, c.home); len(got) != len(SkillOrder) {
-			t.Errorf("%s: %d directories named, want %d: %v", c.name, len(got), len(SkillOrder), got)
+		if got := SkillDirs(c.project, c.home); len(got) != len(MergedOrder) {
+			t.Errorf("%s: %d directories named, want %d: %v", c.name, len(got), len(MergedOrder), got)
 		}
 	}
 }

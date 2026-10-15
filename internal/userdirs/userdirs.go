@@ -1,5 +1,5 @@
-// Package userdirs decides which directories a person's skills and custom
-// commands are read from.
+// Package userdirs decides which directories a person's skills, custom
+// commands and global rules are read from.
 //
 // localcode's own configuration stays in ~/.localcode and is not part of
 // this. Skills and commands are different: they are file formats other
@@ -10,36 +10,29 @@
 // one of those tools should not have to copy them into a third directory
 // to use them here.
 //
-// Two rules, because the two kinds are not alike.
+// Two rules.
 //
-// Skills are merged. Every skills directory that exists is read, in the
-// order .localcode, .claude, .opencode, and a skill name seen first wins:
-// see SkillDirs. A skill is one self-contained directory with a name, so
-// two roots holding different skills have nothing to disagree about, and a
-// person with Claude Code skills in ~/.claude and opencode skills in
-// ~/.opencode wants both. This used to be the other rule, and a person who
-// ran another agent once in a repository then found their own skills
-// unread, with nothing on screen tying the two together.
+// Skills and commands are merged. Every skills directory and every commands
+// directory that exists is read, and of two with the same name the higher
+// one wins, in six places: the project's .localcode, .claude and .opencode,
+// then the home's in the same order. See MergedOrder, SkillDirs and
+// CommandDirs. A skill or a command is one self-contained file with a name,
+// so two roots holding different ones have nothing to disagree about, and a
+// person with Claude Code's in ~/.claude and opencode's in ~/.opencode
+// wants both. Commands used to follow the other rule, and a repository
+// carrying .opencode had its .localcode/commands unread.
 //
-// Commands and the user-level AGENTS.md and CLAUDE.md are not. The first
-// root that exists answers for them outright: .claude, then .opencode,
-// then .localcode, and nothing is merged across roots. Two half-loaded
-// sets of commands with the same names would be worse than one set that
-// is clearly from one place, and global rules are text that is appended to
-// the prompt, which has no name to deduplicate by.
+// The user-level AGENTS.md and CLAUDE.md are not merged. The first root
+// that exists answers for them outright, .claude, then .opencode, then
+// .localcode: see At. They are text appended to the prompt, which has no
+// name to deduplicate by, and two people's worth of standing rules in one
+// prompt would be worse than one set from one place. An empty winner still
+// wins, which is why startup names the root it chose.
 //
 // Both rules run twice, under two directories: the project being worked
-// in and the home directory. A project's own skills and commands still
-// win over the global ones, exactly as before. The two places are
+// in and the home directory. The project comes first. The two places are
 // resolved independently, so a repo carrying .claude and a home carrying
 // only .localcode is an ordinary arrangement rather than a conflict.
-//
-// The consequence to know about for the first-root rule is that an empty
-// winner still wins. A ~/.claude with no commands directory in it means no
-// global commands, rather than a fall through to ~/.localcode. That is why
-// At reports the root it chose and which roots lost: startup names them,
-// so "my commands disappeared" is one line of output away from its answer
-// rather than a mystery.
 //
 // None of this is platform-specific. The roots are plain directory names
 // under a home or a project, joined with filepath.Join, and on Windows
@@ -58,90 +51,95 @@ import (
 	"path/filepath"
 )
 
-// Order is the search order for commands and global rules, as directory
-// names under a home or project directory. The last is localcode's own,
-// which is the answer when no other root is there.
+// Order is the search order for global rules, as directory names under a
+// home or project directory. The last is localcode's own, which is the
+// answer when no other root is there.
 var Order = []string{".claude", ".opencode", ".localcode"}
 
-// SkillOrder is the order skills directories are read in inside one place,
-// and so which of two same-named skills wins: localcode's own first, then
-// Claude Code's, then opencode's.
+// MergedOrder is the order skills and commands directories are read in
+// inside one place, and so which of two same-named ones wins: localcode's
+// own first, then Claude Code's, then opencode's.
 //
-// localcode's own first because a skill put there was written for this
-// program. Somebody who keeps a skill in ~/.claude for Claude Code and wants
-// localcode to do the same job differently writes a same-named one in
-// ~/.localcode, and that is the one they mean here; under Order it lost to
-// the file it was written to replace, and the only way to change what
-// localcode ran was to edit the other agent's copy.
-var SkillOrder = []string{".localcode", ".claude", ".opencode"}
+// localcode's own first because a skill or command put there was written
+// for this program. Somebody who keeps one in ~/.claude for Claude Code
+// and wants localcode to do the same job differently writes a same-named
+// one in ~/.localcode, and that is the one they mean here; under Order it
+// lost to the file it was written to replace, and the only way to change
+// what localcode ran was to edit the other agent's copy.
+var MergedOrder = []string{".localcode", ".claude", ".opencode"}
 
-// Root is the one root that answers for commands and global rules.
+// Root is the one root that answers for global rules.
 type Root struct {
 	// Path is the root that won, e.g. /home/x/.claude. Never empty.
 	Path string
-	// Commands is the directory of custom commands inside it. It is named
-	// whether or not it exists: the loader treats a missing directory as
-	// no commands, and naming it means a directory created after startup
-	// is found by "/reset-skills" without a code change.
-	Commands string
 	// Chosen is the bare name of the root (".claude"), for saying where
 	// things came from.
 	Chosen string
-	// Shadowed names the roots further down Order that exist and hold a
-	// commands directory, and lost anyway.
-	//
-	// Empty almost always, and the exception is a repository that carries
-	// both .opencode and .localcode: .opencode wins, and a person who ran
-	// opencode once in a repository of their own then finds their
-	// .localcode/commands silently unread, with nothing on screen tying
-	// the two together. First-wins is still the rule for commands — two
-	// half-loaded sets of same-named commands would be worse — but losing
-	// is worth saying out loud when there was something there to lose.
-	// Skills are not here: they are all read.
-	Shadowed []string
 }
 
-// At resolves the root for custom commands and global rules under dir,
-// which is either a home directory or a project directory.
+// At resolves the root for global rules under dir, which is either a home
+// directory or a project directory.
 //
 // The first directory in Order that exists wins. When none exists — a
 // first run, or a project that carries no agent directory at all — the
-// answer is .localcode, so the paths point where a person following the
-// documentation would put their first command.
+// answer is .localcode, so the path points where a person following the
+// documentation would put their first file.
 func At(dir string) Root {
-	for i, name := range Order {
+	for _, name := range Order {
 		root := filepath.Join(dir, name)
 		if isDir(root) {
-			return rootAt(root, name, shadowedBy(dir, Order[i+1:]))
+			return Root{Path: root, Chosen: name}
 		}
 	}
 	last := Order[len(Order)-1]
-	return rootAt(filepath.Join(dir, last), last, nil)
+	return Root{Path: filepath.Join(dir, last), Chosen: last}
 }
 
 // SkillDirs is every directory a skill is read from, in the order they are
 // tried, and the first skill of a given name wins: the project's before the
 // home's, so a project skill beats a global one of the same name, and within
-// each of those SkillOrder, .localcode before .claude before .opencode.
+// each of those MergedOrder, .localcode before .claude before .opencode.
 //
 // Every candidate is named, whether or not it exists: the loader skips a
 // missing directory, and a directory created after startup is found by
 // "/reset-skills" because this is asked again then.
+func SkillDirs(projectDir, home string) []string {
+	var out []string
+	for _, root := range mergedRoots(projectDir, home) {
+		out = append(out, filepath.Join(root, "skills"))
+	}
+	return out
+}
+
+// CommandDirs is every directory a custom command is read from, in the
+// order SkillDirs gives for skills, and the first command of a given name
+// wins. Each root contributes its commands directory, which is command/
+// where only that exists, as opencode names it.
+func CommandDirs(projectDir, home string) []string {
+	var out []string
+	for _, root := range mergedRoots(projectDir, home) {
+		out = append(out, commandsDir(root))
+	}
+	return out
+}
+
+// mergedRoots is the six roots skills and commands are read from, highest
+// first: MergedOrder under the project, then under the home.
 //
-// Once, when the project is the home directory, which it is whenever
+// Three, when the project is the home directory, which it is whenever
 // localcode is run in one, and however its path is spelled: see
-// SameDirectory. The loader reads a directory once however many times it
+// SameDirectory. The loaders read a directory once however many times it
 // is named, but the log line and the reload report list what they are
 // given, and the same three paths twice read as a bug in the line.
-func SkillDirs(projectDir, home string) []string {
+func mergedRoots(projectDir, home string) []string {
 	places := []string{projectDir}
 	if !SameDirectory(projectDir, home) {
 		places = append(places, home)
 	}
 	var out []string
 	for _, dir := range places {
-		for _, name := range SkillOrder {
-			out = append(out, filepath.Join(dir, name, "skills"))
+		for _, name := range MergedOrder {
+			out = append(out, filepath.Join(dir, name))
 		}
 	}
 	return out
@@ -168,36 +166,9 @@ func SameDirectory(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
-// shadowedBy is the roots among rest that exist and have commands in them.
-//
-// Existing is not enough to be worth a word: a bare .localcode holding
-// only a config.json loses nothing by losing, and saying so on every
-// start would teach people to ignore the line. Having a commands
-// directory in it is the case where something went unread.
-func shadowedBy(dir string, rest []string) []string {
-	var out []string
-	for _, name := range rest {
-		root := filepath.Join(dir, name)
-		if isDir(root) && isDir(commandsDir(root)) {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-func rootAt(path, name string, shadowed []string) Root {
-	return Root{
-		Path:     path,
-		Commands: commandsDir(path),
-		Chosen:   name,
-		Shadowed: shadowed,
-	}
-}
-
 // commandsDir is <root>/commands, except where only <root>/command
-// exists: opencode names that directory in the singular, and a root
-// chosen for its opencode commands that then looked for a directory
-// opencode does not create would find nothing.
+// exists: opencode names that directory in the singular, and looking only
+// for the plural would read a root of opencode commands as empty.
 func commandsDir(root string) string {
 	plural := filepath.Join(root, "commands")
 	if !isDir(plural) {

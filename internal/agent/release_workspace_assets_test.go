@@ -31,8 +31,6 @@ func writeAsset(t *testing.T, path, body string) {
 func wireWorkspaceReload(t *testing.T, loop *Loop, home string) {
 	t.Helper()
 	loop.ReloadSkills = func() (string, error) {
-		project := userdirs.At(loop.GetProjectDir())
-		global := userdirs.At(home)
 		list, err := skills.LoadAll(userdirs.SkillDirs(loop.GetProjectDir(), home)...)
 		if err != nil {
 			return "", err
@@ -42,7 +40,7 @@ func wireWorkspaceReload(t *testing.T, loop *Loop, home string) {
 			section = skills.SystemPromptSection(list)
 		}
 		loop.SetSkills(list, section)
-		cmdList, err := commands.LoadAll(project.Commands, global.Commands)
+		cmdList, err := commands.LoadAll(userdirs.CommandDirs(loop.GetProjectDir(), home)...)
 		if err != nil {
 			return "", err
 		}

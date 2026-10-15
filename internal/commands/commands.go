@@ -10,8 +10,11 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"localcode/internal/skills"
+	"log"
 	"os"
 	"time"
 
@@ -82,28 +85,46 @@ func checkModelInvocable(fm frontmatter, body string) (bool, string) {
 // LoadAll scans each directory in dirs for "*.md" files, one command per
 // file (the filename minus its extension becomes the command name).
 // Directories are scanned in order and a name seen in an earlier directory
-// wins over the same name in a later one — list project-local command
-// dirs before the global one so a project can override a global command.
+// wins over the same name in a later one: list them highest first. See
+// userdirs.CommandDirs.
+//
+// A command file that cannot be read or parsed, and a commands directory
+// that cannot be listed, is skipped with one log line naming its path and
+// the reason, rather than failing the load. Every root is read, so one of
+// these may sit in a root that used to be ignored, and a leftover there must
+// not stop startup. A command that is skipped does not hold its name: a
+// lower one of the same name loads instead.
 func LoadAll(dirs ...string) ([]Command, error) {
 	var out []Command
 	seen := map[string]bool{}
-	// The same directory, given twice, is read once: the project root and
-	// the home root are one directory whenever localcode is run in a home
-	// directory. See internal/skills for the whole of it.
+	// The same directory, given twice, is read once, judged by where it
+	// really is: the project root and the home root are one directory
+	// whenever localcode is run in a home directory, and ~/.opencode/command
+	// linked to ~/.claude/commands is one set of files under two names. See
+	// internal/skills for the whole of it.
 	readDirs := map[string]bool{}
 
 	for _, dir := range dirs {
-		if key := filepath.Clean(dir); readDirs[key] {
-			continue
-		} else {
-			readDirs[key] = true
+		key := filepath.Clean(dir)
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			key = real
 		}
+		if readDirs[key] {
+			continue
+		}
+		readDirs[key] = true
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read commands dir %s: %w", dir, err)
+			var pe *fs.PathError
+			reason := err.Error()
+			if errors.As(err, &pe) {
+				reason = pe.Err.Error()
+			}
+			log.Printf("commands: skipping %s: the commands directory cannot be read: %s", dir, reason)
+			continue
 		}
 
 		for _, e := range entries {
@@ -118,7 +139,10 @@ func LoadAll(dirs ...string) ([]Command, error) {
 			path := filepath.Join(dir, e.Name())
 			cmd, err := parseCommandFile(path)
 			if err != nil {
-				continue // skip malformed commands rather than failing startup
+				// The error names the file already: the read's and the
+				// frontmatter's both carry the path.
+				log.Printf("commands: skipping %v", err)
+				continue
 			}
 			cmd.Name = name
 			seen[name] = true

@@ -114,9 +114,9 @@ func TestStartupLoadsCommandsFromTheWorkspaceNotTheStartDirectory(t *testing.T) 
 	}
 }
 
-// The roots at startup: skills from every one of them, commands from the
-// first that exists, and the project and the home resolved independently.
-func TestStartupMergesSkillsAndKeepsTheCommandChain(t *testing.T) {
+// The roots at startup: skills and commands from every one of them, and the
+// project and the home resolved independently.
+func TestStartupMergesSkillsAndCommands(t *testing.T) {
 	home := t.TempDir()
 	write(t, filepath.Join(home, ".localcode", "skills", "home-skill", "SKILL.md"),
 		"---\nname: home-skill\ndescription: the home skill\n---\n\nhome\n")
@@ -132,9 +132,9 @@ func TestStartupMergesSkillsAndKeepsTheCommandChain(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspace, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Commands are the other rule. The empty .claude is the winner, so
-	// this one is not read.
-	write(t, filepath.Join(workspace, ".opencode", "commands", "never.md"), "no\n")
+	// Commands too. They used to come from the first root that exists,
+	// and the empty .claude beside this hid it.
+	write(t, filepath.Join(workspace, ".opencode", "commands", "from-opencode.md"), "yes\n")
 
 	registry := startupTestRegistry(t)
 	_, _, _, skillList, cmdList, _, err := buildSystemPrompt(startupTestConfig(), registry, workspace, home)
@@ -150,10 +150,12 @@ func TestStartupMergesSkillsAndKeepsTheCommandChain(t *testing.T) {
 			t.Errorf("skills = %v, want %q: every root is read, and the home resolves independently of the project", names, want)
 		}
 	}
+	var read bool
 	for _, cmd := range cmdList {
-		if cmd.Name == "never" {
-			t.Error("a command from a shadowed .opencode root loaded; the empty .claude winner must still win for commands")
-		}
+		read = read || cmd.Name == "from-opencode"
+	}
+	if !read {
+		t.Errorf("commands = %+v, want from-opencode: an empty .claude no longer hides the roots after it", cmdList)
 	}
 }
 

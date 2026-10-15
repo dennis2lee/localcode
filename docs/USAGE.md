@@ -886,7 +886,7 @@ Project rules, skills, and auto memory supply reusable context. Rules load each 
 
 ### Skills
 
-Put a skill at `<project>/.localcode/skills/<name>/SKILL.md` for a project scoped one, which wins over a skill of the same name in any other directory. The entry may be a symlink to a directory elsewhere. Every root under the project and under the home directory is searched, and the skills are merged; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from).
+Put a skill at `<project>/.localcode/skills/<name>/SKILL.md` for a project scoped one, which wins over a skill of the same name in any other directory. The entry may be a symlink to a directory elsewhere. Every root under the project and under the home directory is searched, and the skills are merged, as commands are; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from).
 
 ```markdown
 ---
@@ -907,32 +907,33 @@ Run a skill directly by its own name with `/<skill name>`. To run a file without
 
 ### Where skills, commands and global rules are read from
 
-Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. There are three roots, `.localcode`, `.claude` and `.opencode`, each under the project directory and under the home directory. Each root can hold `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md` and `CLAUDE.md`. Skills and commands follow different rules.
+Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. There are three roots, `.localcode`, `.claude` and `.opencode`, each under the project directory and under the home directory. Each root can hold `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md` and `CLAUDE.md`.
 
-**Skills are merged.** Every `skills` directory below that exists is read. When two hold a skill of the same name, the higher one wins:
+**Skills and commands are merged.** Every `skills` and `commands` directory below that exists is read. When two hold a skill of the same name, or a command of the same name, the higher one wins:
 
-| Priority | Directory |
-|---|---|
-| 1 | `<project>/.localcode/skills` |
-| 2 | `<project>/.claude/skills` |
-| 3 | `<project>/.opencode/skills` |
-| 4 | `~/.localcode/skills` |
-| 5 | `~/.claude/skills` |
-| 6 | `~/.opencode/skills` |
+| Priority | Skills | Commands |
+|---|---|---|
+| 1 | `<project>/.localcode/skills` | `<project>/.localcode/commands` |
+| 2 | `<project>/.claude/skills` | `<project>/.claude/commands` |
+| 3 | `<project>/.opencode/skills` | `<project>/.opencode/commands` |
+| 4 | `~/.localcode/skills` | `~/.localcode/commands` |
+| 5 | `~/.claude/skills` | `~/.claude/commands` |
+| 6 | `~/.opencode/skills` | `~/.opencode/commands` |
 
-* A skill's name is its frontmatter `name`, or its directory name when the frontmatter has none.
-* Names that differ only in case are the same name. Typing `/name`, `/skill <name>` and the model's `Skill` tool all reach the one skill that won.
-* A skill whose name no higher directory holds is loaded from wherever it is. A skill only in `~/.opencode/skills` is available beside the ones in `~/.claude/skills`, with nothing to configure.
-* `.localcode` comes first inside each place. A skill there was written for LocalCode, so it overrides a same-named one kept for another agent without editing that agent's copy.
-* A higher skill whose `SKILL.md` does not parse is skipped with a log line naming its path, and a lower skill of the same name loads instead.
+* `.localcode` comes first inside each place. A skill or command there was written for LocalCode, so it overrides a same-named one kept for another agent without editing that agent's copy.
+* A skill's name is its frontmatter `name`, or its directory name when the frontmatter has none. Names that differ only in case are the same name: typing `/name`, `/skill <name>` and the model's `Skill` tool all reach the one skill that won.
+* A command's name is its file name without `.md`, compared exactly.
+* A name no higher directory holds is loaded from wherever it is. A skill or command only in `~/.opencode` is available beside the ones in `~/.claude`, with nothing to configure.
+* In any root, `command/` is read when `commands/` does not exist, since opencode names that directory in the singular. `commands/` wins where a root has both.
+* A higher skill or command whose file does not parse is skipped with a log line naming its path, and a lower one of the same name loads instead.
 * A directory reached under two names, such as `~/.opencode/skills` linked to `~/.claude/skills`, is read once, at the higher of its two places.
-* opencode's own global directory, `~/.config/opencode/skills`, is not read. Link it to `~/.opencode/skills` to use those skills.
+* opencode's own global directory, `~/.config/opencode`, is not read. Link its `skills` and `command` directories into `~/.opencode` to use them.
 
-The roots run twice, independently: once under the project directory and once under the home directory. An entry in a skills directory may be a symlink to a directory elsewhere. A link that points nowhere, or at a file rather than a directory, is skipped silently; it does not stop the other skills from loading. A skills directory that cannot be read, such as a file where `skills` should be or a directory without permission, is skipped with one log line naming it and the reason, and does not stop startup. A directory holding a `SKILL.md` that will not parse is skipped with one log line naming its path and the reason; a directory with no `SKILL.md` at all stays silent, since it may be something else living beside the skills. A malformed skill never stops startup and never drops the skills beside it.
+An entry in a skills directory may be a symlink to a directory elsewhere. A link that points nowhere, or at a file rather than a directory, is skipped silently; it does not stop the other skills from loading. A skills or commands directory that cannot be read, such as a file where `skills` should be or a directory without permission, is skipped with one log line naming it and the reason, and does not stop startup. A directory holding a `SKILL.md` that will not parse is skipped with one log line naming its path and the reason; a directory with no `SKILL.md` at all stays silent, since it may be something else living beside the skills. A malformed skill or command never stops startup and never drops the ones beside it.
 
-**Commands and global rules are not merged.** The first root that exists, in the order `.claude`, `.opencode`, `.localcode`, answers for them outright, and nothing is read from the other two, including when they hold commands of their own. This runs once under the project and once under the home directory, and a project command wins over a global one of the same name. An empty winner still wins: `~/.claude` with no `commands` directory means no global commands rather than a fall through. In any root, `command/` is read when `commands/` does not exist, since opencode names that directory in the singular; `commands/` wins where a root has both.
+**Global rules are not merged.** The user-level `AGENTS.md` and `CLAUDE.md` come from the first root that exists in the home directory, in the order `.claude`, `.opencode`, `.localcode`, and nothing is read from the other two. An empty winner still wins: a `~/.claude` holding neither file means no global rules rather than a fall through. Rules are text added to the prompt, with no name to choose between, so two roots' worth would both apply.
 
-Startup logs every skills directory it reads whenever one of them is outside `.localcode`, logs the roots commands and global rules come from whenever either is not `.localcode`, and says when a root holding commands lost to an earlier one. `/reset-skills` names every skills directory it searched.
+Startup logs every skills and commands directory it reads whenever one of them is outside `.localcode`, and the root global rules come from whenever it is not `.localcode`. `/reset-skills` names every skills and commands directory it searched.
 
 The project directory is the session's workspace: the directory the daemon started in, until the workspace is switched. Switching the default workspace reloads that project's skills and custom commands automatically, and `/reset-skills` re-reads them from the live workspace on demand, so opening a project on the desktop picks up its assets without a restart. Per-session workspaces share the one daemon-wide list; a session moved into another project keeps the current list until the next reload.
 
@@ -1145,7 +1146,7 @@ The transcript shows only `/init`. Because it writes a file, expect a `write_fil
 
 ### Custom commands
 
-Put a markdown file at `commands/<name>.md` inside the project's agent directory, where it wins on a collision, or inside the home one for global scope; which agent directory that is comes from the root chain, see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from). Call it with `/<name>`. The format matches opencode's custom commands.
+Put a markdown file at `<project>/.localcode/commands/<name>.md`, where it wins over a command of the same name in any other directory, or at `~/.localcode/commands/<name>.md` for every project. Commands in `.claude` and `.opencode` are read too, under the project and the home directory; see [Where skills, commands and global rules are read from](#where-skills-commands-and-global-rules-are-read-from). Call it with `/<name>`. The format matches opencode's custom commands.
 
 ```markdown
 ---
@@ -1605,7 +1606,7 @@ These commands are recognized by the client or the daemon rather than sent to th
 | `/model` | Which model answers, apart from which agent does. Bare, it reports the model in force and every profile this config can reach. `/model <profile>` points this conversation at that profile's model and keeps the agent — its prompt, its tools, its permissions — so answering on a bigger model no longer means writing a second agent that is the first one with another profile. `/model <agent>` still switches agent, which is what the command always did. `default` goes back to the agent's own. **TUI:** bare opens a picker with agents and models in one list. The choice is kept per agent, survives a fork, and both clients follow it. |
 | `/session` | **TUI.** Opens a list of conversations to switch to. `/session <id>` switches directly. The Web UI has the left panel instead. See [Switching sessions](#switching-sessions). |
 | `/skill` | Lists registered skills; `/skill <path>` runs a skill file for this turn without installing it. See [Running a skill](#running-a-skill). |
-| `/commands` | Lists the custom commands registered from the project and home agent directories the root chain picked (`commands/*.md`, or `command/*.md`). See [Custom commands](#custom-commands). |
+| `/commands` | Lists the custom commands registered from the six commands directories under the project and the home directory (`commands/*.md`, or `command/*.md`). See [Custom commands](#custom-commands). |
 | `/tasks` | **TUI.** Lists background tasks in this session. The Web UI has the right panel instead. See [`/tasks`](#tasks). |
 | `/smart-agent` | Toggles the Smart Agent bundle and saves the choice. `/smart-agent on\|off` sets it outright. Answered by the daemon, so both clients have it. See [The switches](#the-switches). |
 | `/auto-delegate` | Toggles auto-delegation the same way. |

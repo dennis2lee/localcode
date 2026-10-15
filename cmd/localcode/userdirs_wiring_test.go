@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"localcode/internal/agent"
-	"localcode/internal/commands"
 	"localcode/internal/userdirs"
 )
 
@@ -18,24 +17,22 @@ func skillFile(name, description string) string {
 	return "---\nname: " + name + "\ndescription: " + description + "\n---\n\nbody of " + name + "\n"
 }
 
-// The resolver is only useful if the loaders actually use it. A skill
-// written for Claude Code, one written for opencode and one of localcode's
-// own, all in the one home, must all reach localcode without being copied
-// anywhere. Commands are the other rule: the first root answers for them
-// and the others are not read.
-func TestSkillsComeFromEveryRootAndCommandsFromTheChosenOne(t *testing.T) {
+// The resolver is only useful if the loaders actually use it. A skill or a
+// command written for Claude Code, one written for opencode and one of
+// localcode's own, all in the one home, must all reach localcode without
+// being copied anywhere. Commands used to come from the first root alone.
+func TestSkillsAndCommandsComeFromEveryRoot(t *testing.T) {
 	home := t.TempDir()
 	write(t, filepath.Join(home, ".claude", "skills", "deploy", "SKILL.md"), skillFile("deploy", "ship it"))
 	write(t, filepath.Join(home, ".opencode", "skills", "review", "SKILL.md"), skillFile("review", "read a diff"))
 	write(t, filepath.Join(home, ".localcode", "skills", "own", "SKILL.md"), skillFile("own", "a localcode one"))
-	write(t, filepath.Join(home, ".claude", "commands", "standup.md"),
-		"---\ndescription: daily standup\n---\n\nWhat did I do yesterday?\n")
-	// Present, and never read: the chain for commands stops at the first root.
-	write(t, filepath.Join(home, ".localcode", "commands", "ignored.md"), "no\n")
+	write(t, filepath.Join(home, ".claude", "commands", "standup.md"), commandFile("daily standup"))
+	// opencode's own directory name, in the singular.
+	write(t, filepath.Join(home, ".opencode", "command", "triage.md"), commandFile("sort the issues"))
+	write(t, filepath.Join(home, ".localcode", "commands", "mine.md"), commandFile("a localcode one"))
 
-	e := env{home: home, cwd: t.TempDir()}
-
-	list, err := loadSkills(e.cwd, e.home)
+	cwd := t.TempDir()
+	list, err := loadSkills(cwd, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,33 +46,35 @@ func TestSkillsComeFromEveryRootAndCommandsFromTheChosenOne(t *testing.T) {
 		}
 	}
 
-	_, global := assetsFor(e.cwd, e.home)
-	cmdList, err := commands.LoadAll(filepath.Join(e.cwd, ".localcode", "commands"), global.Commands)
+	cmdList, err := loadCommands(cwd, home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cmdList) != 1 || cmdList[0].Name != "standup" {
-		t.Errorf("commands = %+v, want only the one under ~/.claude", cmdList)
+	got = map[string]bool{}
+	for _, c := range cmdList {
+		got[c.Name] = true
+	}
+	for _, want := range []string{"standup", "triage", "mine"} {
+		if !got[want] {
+			t.Errorf("commands = %v, want %q too: every root is read", got, want)
+		}
 	}
 }
 
-// The roots run under the project too, and the two places are resolved
-// independently: a repo that keeps its skills in .claude and a home that
-// keeps its own in .localcode is an ordinary arrangement, not a clash.
+// The roots run under the project too, and every root of both places is
+// read: a repo that keeps its own in .claude and a home that keeps its own
+// in .localcode is an ordinary arrangement, not a clash.
 func TestTheProjectAndTheHomeEachContributeEveryRoot(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
 	write(t, filepath.Join(cwd, ".claude", "skills", "repo-lint", "SKILL.md"), skillFile("repo-lint", "this repo's linter"))
 	write(t, filepath.Join(cwd, ".localcode", "skills", "repo-own", "SKILL.md"), skillFile("repo-own", "the repo's localcode skill"))
 	write(t, filepath.Join(home, ".localcode", "skills", "global-one", "SKILL.md"), skillFile("global-one", "the home skill"))
+	write(t, filepath.Join(cwd, ".claude", "commands", "repo-cmd.md"), commandFile("the repo's"))
+	write(t, filepath.Join(cwd, ".localcode", "commands", "repo-own-cmd.md"), commandFile("the repo's localcode one"))
+	write(t, filepath.Join(home, ".opencode", "commands", "global-cmd.md"), commandFile("the home's"))
 
-	e := env{home: home, cwd: cwd}
-	project, global := assetsFor(e.cwd, e.home)
-	if project.Chosen != ".claude" || global.Chosen != ".localcode" {
-		t.Fatalf("commands: project chose %q, home chose %q", project.Chosen, global.Chosen)
-	}
-
-	list, err := loadSkills(e.cwd, e.home)
+	list, err := loadSkills(cwd, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,11 +82,61 @@ func TestTheProjectAndTheHomeEachContributeEveryRoot(t *testing.T) {
 	for _, sk := range list {
 		names[sk.Name] = true
 	}
-	for _, want := range []string{"repo-lint", "repo-own", "global-one"} {
+	cmdList, err := loadCommands(cwd, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cmdList {
+		names["/"+c.Name] = true
+	}
+	for _, want := range []string{"repo-lint", "repo-own", "global-one", "/repo-cmd", "/repo-own-cmd", "/global-cmd"} {
 		if !names[want] {
-			t.Errorf("skills = %v, want %q: nothing is left out for being in a root that lost", names, want)
+			t.Errorf("loaded %v, want %q: nothing is left out for the root it is in", names, want)
 		}
 	}
+}
+
+// A name that several roots have is one command, fixed by the same six
+// directories in the same order as a skill: the project's .localcode, .claude
+// and .opencode, then the home's. Each is removed in turn from the top, and
+// the next one down must be the only command of that name. opencode's roots
+// use its singular command/ directory, which counts the same.
+func TestACommandNameResolvesThroughEveryRootInOrder(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	chain := []string{
+		filepath.Join(cwd, ".localcode", "commands"),
+		filepath.Join(cwd, ".claude", "commands"),
+		filepath.Join(cwd, ".opencode", "command"),
+		filepath.Join(home, ".localcode", "commands"),
+		filepath.Join(home, ".claude", "commands"),
+		filepath.Join(home, ".opencode", "command"),
+	}
+	for i, dir := range chain {
+		write(t, filepath.Join(dir, "ship.md"), commandFile(fmt.Sprintf("level %d", i+1)))
+	}
+	for i, dir := range chain {
+		loop := &agent.Loop{}
+		if _, err := reloadProjectAssets(loop, startupTestRegistry(t), cwd, home); err != nil {
+			t.Fatal(err)
+		}
+		var found []string
+		for _, c := range loop.Commands {
+			if c.Name == "ship" {
+				found = append(found, c.Description)
+			}
+		}
+		if want := fmt.Sprintf("level %d", i+1); len(found) != 1 || found[0] != want {
+			t.Fatalf("level %d: commands named ship = %v, want only %q from %s", i+1, found, want, dir)
+		}
+		if err := os.Remove(filepath.Join(dir, "ship.md")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func commandFile(description string) string {
+	return "---\ndescription: " + description + "\n---\n\nDo the thing.\n"
 }
 
 // A name that several roots have is one skill, and which one is fixed by six
@@ -187,7 +236,7 @@ func TestResetSkillsReadsEveryRootAndNamesThem(t *testing.T) {
 			t.Errorf("the reload left out %q: %v", want, got)
 		}
 	}
-	for _, dir := range userdirs.SkillDirs(cwd, home) {
+	for _, dir := range append(userdirs.SkillDirs(cwd, home), userdirs.CommandDirs(cwd, home)...) {
 		if !strings.Contains(report, dir) {
 			t.Errorf("the report does not name %s: %s", dir, report)
 		}
@@ -217,7 +266,7 @@ func TestRunningInTheHomeNamesEachSkillsDirectoryOnce(t *testing.T) {
 	home := t.TempDir()
 	write(t, filepath.Join(home, ".claude", "skills", "a", "SKILL.md"), skillFile("a", "x"))
 
-	dirs := skillDirsRead(home, home)
+	dirs := existingDirs(userdirs.SkillDirs(home, home))
 	if len(dirs) != 1 {
 		t.Errorf("skillDirsRead = %v, want the one directory that exists, once", dirs)
 	}

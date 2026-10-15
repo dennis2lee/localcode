@@ -78,10 +78,10 @@ type globalFile struct {
 	content string
 }
 
-// findGlobalRules reads the global rules out of one home directory: the
-// one that also answers for custom commands (internal/userdirs picks it:
-// ~/.claude, else ~/.opencode, else ~/.localcode). Skills are read from
-// every root instead; see userdirs.SkillDirs.
+// findGlobalRules reads the global rules out of one home directory, the
+// first root that exists (internal/userdirs picks it: ~/.claude, else
+// ~/.opencode, else ~/.localcode). Skills and commands are read from every
+// root instead; see userdirs.SkillDirs and userdirs.CommandDirs.
 //
 // One root rather than all of them, because a person's standing
 // instructions are a single voice. Two roots' worth spliced together is
