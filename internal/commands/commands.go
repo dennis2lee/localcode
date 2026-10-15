@@ -113,11 +113,11 @@ func LoadAll(dirs ...string) ([]Command, error) {
 			continue
 		}
 		readDirs[key] = true
-		entries, err := os.ReadDir(dir)
+		entries, missing, err := skills.ListDir(dir)
+		if missing {
+			continue
+		}
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			var pe *fs.PathError
 			reason := err.Error()
 			if errors.As(err, &pe) {

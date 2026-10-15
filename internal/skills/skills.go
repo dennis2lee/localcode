@@ -103,11 +103,11 @@ func LoadAllWithWarnings(dirs ...string) ([]Skill, []string, error) {
 			continue
 		}
 		readDirs[key] = true
-		entries, err := os.ReadDir(dir)
+		entries, missing, err := ListDir(dir)
+		if missing {
+			continue
+		}
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			// A directory that cannot be listed loses its own skills and
 			// nothing else: a file where "skills" should be, a mode that
 			// forbids it, a link that loops. Every root is read, so one of
@@ -159,6 +159,31 @@ func loaded(list []Skill, name string) bool {
 	}
 	return false
 }
+
+// ListDir lists a skills or commands directory. missing is true when there
+// is nothing at dir; err is set when something is there and cannot be
+// listed.
+//
+// Windows answers "path not found" for a file where the directory should
+// be, which is the answer a directory that is not there gets, so a leftover
+// file was skipped without a word there and with one line everywhere else.
+// The path is looked at again before it is called missing.
+func ListDir(dir string) (entries []os.DirEntry, missing bool, err error) {
+	entries, err = os.ReadDir(dir)
+	if err == nil {
+		return entries, false, nil
+	}
+	if os.IsNotExist(err) {
+		info, statErr := os.Stat(dir)
+		if statErr != nil || info.IsDir() {
+			return nil, true, nil
+		}
+		return nil, false, &fs.PathError{Op: "readdir", Path: dir, Err: errNotADirectory}
+	}
+	return nil, false, err
+}
+
+var errNotADirectory = errors.New("not a directory")
 
 // isSkillDir reports whether a skills-directory entry is a directory to
 // load a skill from. DirEntry.IsDir does not follow symlinks, so a

@@ -9,6 +9,7 @@ Custom commands are read from every root, in the order skills are, rather than f
 * Commands read from six directories, highest first: the project's `.localcode`, `.claude` and `.opencode`, then the home's; a name in a higher one wins. They used to come from the first of `.claude`, `.opencode`, `.localcode` that existed, so an empty `.claude` hid every other root's commands, and a `.localcode` command lost to a `.claude` one of the same name
 * A commands directory that cannot be read skipped with a log line rather than stopping startup, and a command file that does not parse named in the log rather than skipped silently
 * Startup logs the commands directories it reads whenever one is outside `.localcode`, as it does skills; `/reset-skills` names all six
+* On Windows, a file where a skills or commands directory should be is named in the log, as elsewhere, rather than skipped without a word
 * Global rules (`AGENTS.md`, `CLAUDE.md` in the home roots) still come from the first root that exists
 
 ## v0.159.0
