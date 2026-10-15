@@ -98,11 +98,12 @@ func TestTheProjectAndTheHomeEachContributeEveryRoot(t *testing.T) {
 	}
 }
 
-// A name that several roots have is one command, fixed by the same six
+// A name that several roots have is one command, fixed by the same seven
 // directories in the same order as a skill: the project's .localcode, .claude
-// and .opencode, then the home's. Each is removed in turn from the top, and
-// the next one down must be the only command of that name. opencode's roots
-// use its singular command/ directory, which counts the same.
+// and .opencode, then the home's, then ~/.config/opencode. Each is removed in
+// turn from the top, and the next one down must be the only command of that
+// name. Two of opencode's roots use the singular command/ that older opencode
+// versions create, which counts the same.
 func TestACommandNameResolvesThroughEveryRootInOrder(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
@@ -113,6 +114,7 @@ func TestACommandNameResolvesThroughEveryRootInOrder(t *testing.T) {
 		filepath.Join(home, ".localcode", "commands"),
 		filepath.Join(home, ".claude", "commands"),
 		filepath.Join(home, ".opencode", "command"),
+		filepath.Join(home, ".config", "opencode", "commands"),
 	}
 	for i, dir := range chain {
 		write(t, filepath.Join(dir, "ship.md"), commandFile(fmt.Sprintf("level %d", i+1)))
@@ -141,9 +143,9 @@ func commandFile(description string) string {
 	return "---\ndescription: " + description + "\n---\n\nDo the thing.\n"
 }
 
-// A name that several roots have is one skill, and which one is fixed by six
+// A name that several roots have is one skill, and which one is fixed by seven
 // directories in order: the project's .localcode, .claude and .opencode, then
-// the home's in the same order. Each is removed in turn from the top, and the
+// the home's in the same order, then opencode's own ~/.config/opencode. Each is removed in turn from the top, and the
 // next one down must be the only skill of that name, the one listed, and the
 // body the model gets from the Skill tool. A skill typed as /shared is found
 // in that same list, so being the only one of its name is what makes the
@@ -160,8 +162,9 @@ func TestASkillNameResolvesThroughEveryRootInOrder(t *testing.T) {
 		filepath.Join(home, ".localcode"),
 		filepath.Join(home, ".claude"),
 		filepath.Join(home, ".opencode"),
+		filepath.Join(home, ".config", "opencode"),
 	}
-	spelled := []string{"shared", "Shared", "SHARED", "shared", "sHared", "Shared"}
+	spelled := []string{"shared", "Shared", "SHARED", "shared", "sHared", "Shared", "shareD"}
 	for i, root := range chain {
 		write(t, filepath.Join(root, "skills", "shared", "SKILL.md"),
 			fmt.Sprintf("---\nname: %s\ndescription: level %d\n---\n\nbody from level %d\n", spelled[i], i+1, i+1))

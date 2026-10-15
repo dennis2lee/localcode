@@ -14,9 +14,10 @@
 //
 // Skills and commands are merged. Every skills directory and every commands
 // directory that exists is read, and of two with the same name the higher
-// one wins, in six places: the project's .localcode, .claude and .opencode,
-// then the home's in the same order. See MergedOrder, SkillDirs and
-// CommandDirs. A skill or a command is one self-contained file with a name,
+// one wins, in seven places: the project's .localcode, .claude and
+// .opencode, then the home's in the same order, then opencode's own global
+// directory, ~/.config/opencode. See MergedOrder, SkillDirs, CommandDirs and
+// OpencodeConfigDir. A skill or a command is one self-contained file with a name,
 // so two roots holding different ones have nothing to disagree about, and a
 // person with Claude Code's in ~/.claude and opencode's in ~/.opencode
 // wants both. Commands used to follow the other rule, and a repository
@@ -114,7 +115,7 @@ func SkillDirs(projectDir, home string) []string {
 // CommandDirs is every directory a custom command is read from, in the
 // order SkillDirs gives for skills, and the first command of a given name
 // wins. Each root contributes its commands directory, which is command/
-// where only that exists, as opencode names it.
+// where only that exists, as older opencode versions name it.
 func CommandDirs(projectDir, home string) []string {
 	var out []string
 	for _, root := range mergedRoots(projectDir, home) {
@@ -123,8 +124,9 @@ func CommandDirs(projectDir, home string) []string {
 	return out
 }
 
-// mergedRoots is the six roots skills and commands are read from, highest
-// first: MergedOrder under the project, then under the home.
+// mergedRoots is the seven roots skills and commands are read from, highest
+// first: MergedOrder under the project, then under the home, then
+// opencode's own global directory.
 //
 // Three, when the project is the home directory, which it is whenever
 // localcode is run in one, and however its path is spelled: see
@@ -142,7 +144,23 @@ func mergedRoots(projectDir, home string) []string {
 			out = append(out, filepath.Join(dir, name))
 		}
 	}
-	return out
+	return append(out, OpencodeConfigDir(home))
+}
+
+// OpencodeConfigDir is opencode's own global directory, where it keeps its
+// skills and commands: $XDG_CONFIG_HOME/opencode when that is set to an
+// absolute path, else ~/.config/opencode. opencode resolves it that way on
+// every system, Windows included, so a person's opencode skills are where
+// this says whatever opencode was installed on.
+//
+// Last of the seven roots. ~/.opencode is the place for opencode's files
+// that this program reads, and this is opencode's own: a person who keeps
+// a same-named skill in both put the ~/.opencode one there for localcode.
+func OpencodeConfigDir(home string) string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" && filepath.IsAbs(x) {
+		return filepath.Join(x, "opencode")
+	}
+	return filepath.Join(home, ".config", "opencode")
 }
 
 // SameDirectory reports whether two paths name one directory, however each

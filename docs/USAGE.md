@@ -907,7 +907,7 @@ Run a skill directly by its own name with `/<skill name>`. To run a file without
 
 ### Where skills, commands and global rules are read from
 
-Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. There are three roots, `.localcode`, `.claude` and `.opencode`, each under the project directory and under the home directory. Each root can hold `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md` and `CLAUDE.md`.
+Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats other agents already use, so LocalCode reads them where they already are. There are three roots, `.localcode`, `.claude` and `.opencode`, each under the project directory and under the home directory, and opencode's own global directory, `~/.config/opencode`, for skills and commands. Each root can hold `skills/<name>/SKILL.md`, `commands/<name>.md`, `AGENTS.md` and `CLAUDE.md`.
 
 **Skills and commands are merged.** Every `skills` and `commands` directory below that exists is read. When two hold a skill of the same name, or a command of the same name, the higher one wins:
 
@@ -919,6 +919,7 @@ Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats o
 | 4 | `~/.localcode/skills` | `~/.localcode/commands` |
 | 5 | `~/.claude/skills` | `~/.claude/commands` |
 | 6 | `~/.opencode/skills` | `~/.opencode/commands` |
+| 7 | `~/.config/opencode/skills` | `~/.config/opencode/commands` |
 
 * `.localcode` comes first inside each place. A skill or command there was written for LocalCode, so it overrides a same-named one kept for another agent without editing that agent's copy.
 * A skill's name is its frontmatter `name`, or its directory name when the frontmatter has none. Names that differ only in case are the same name: typing `/name`, `/skill <name>` and the model's `Skill` tool all reach the one skill that won.
@@ -928,7 +929,7 @@ Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats o
 * In any root, `command/` is read when `commands/` does not exist, since opencode names that directory in the singular. `commands/` wins where a root has both.
 * A higher skill or command whose file does not parse is skipped with a log line naming its path, and a lower one of the same name loads instead.
 * A skills or commands directory reached under two names, such as `~/.opencode/skills` linked to `~/.claude/skills`, is read once, at the higher of its two places.
-* opencode's own global directory, `~/.config/opencode`, is not read. Link its `skills` and `command` directories into `~/.opencode` to use them.
+* Row 7 is opencode's own global directory, found the way opencode finds it: `$XDG_CONFIG_HOME/opencode` when that variable is set to an absolute path, else `~/.config/opencode`, on every system. It comes last, so a same-named skill or command in `~/.opencode` wins over it. Its `AGENTS.md` is not read as global rules.
 
 An entry in a skills directory may be a symlink to a directory elsewhere. A link that points nowhere, or at a file rather than a directory, is skipped silently; it does not stop the other skills from loading. A skills or commands directory that cannot be read, such as a file where `skills` should be or a directory without permission, is skipped with one log line naming it and the reason, and does not stop startup. A directory holding a `SKILL.md` that will not parse is skipped with one log line naming its path and the reason; a directory with no `SKILL.md` at all stays silent, since it may be something else living beside the skills. A malformed skill or command never stops startup and never drops the ones beside it.
 

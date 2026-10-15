@@ -7,6 +7,10 @@ import (
 	"testing"
 )
 
+// onePlace is how many roots are read when the project is the home: the
+// three under it, and opencode's own global directory.
+var onePlace = len(MergedOrder) + 1
+
 func mkdirs(t *testing.T, home string, paths ...string) {
 	t.Helper()
 	for _, p := range paths {
@@ -66,6 +70,7 @@ func TestAFreshHomeAnswersWithLocalcode(t *testing.T) {
 // project's .localcode, .claude, .opencode, then the home's. The loader keeps
 // the first command of a name, so this order is the precedence.
 func TestCommandDirsListEveryRootProjectFirst(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
 	got := CommandDirs(filepath.Join("/repo"), filepath.Join("/home", "u"))
 	want := []string{
 		filepath.Join("/repo", ".localcode", "commands"),
@@ -74,12 +79,13 @@ func TestCommandDirsListEveryRootProjectFirst(t *testing.T) {
 		filepath.Join("/home", "u", ".localcode", "commands"),
 		filepath.Join("/home", "u", ".claude", "commands"),
 		filepath.Join("/home", "u", ".opencode", "commands"),
+		filepath.Join("/home", "u", ".config", "opencode", "commands"),
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("CommandDirs = %v, want %v", got, want)
 	}
-	if home := t.TempDir(); len(CommandDirs(home, home)) != len(MergedOrder) {
-		t.Errorf("the project as the home named %d directories, want %d", len(CommandDirs(home, home)), len(MergedOrder))
+	if home := t.TempDir(); len(CommandDirs(home, home)) != onePlace {
+		t.Errorf("the project as the home named %d directories, want %d", len(CommandDirs(home, home)), onePlace)
 	}
 }
 
@@ -122,6 +128,7 @@ func TestPathsUseThePlatformSeparator(t *testing.T) {
 // localcode's own comes first for skills while it comes last for commands:
 // a skill written in .localcode was written for this program.
 func TestSkillDirsListEveryRootProjectFirst(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
 	got := SkillDirs(filepath.Join("/repo"), filepath.Join("/home", "u"))
 	want := []string{
 		filepath.Join("/repo", ".localcode", "skills"),
@@ -130,6 +137,7 @@ func TestSkillDirsListEveryRootProjectFirst(t *testing.T) {
 		filepath.Join("/home", "u", ".localcode", "skills"),
 		filepath.Join("/home", "u", ".claude", "skills"),
 		filepath.Join("/home", "u", ".opencode", "skills"),
+		filepath.Join("/home", "u", ".config", "opencode", "skills"),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("SkillDirs = %v, want %v", got, want)
@@ -169,8 +177,8 @@ func TestSkillDirsNameDirectoriesThatDoNotExistYet(t *testing.T) {
 func TestSkillDirsNamesEachDirectoryOnceWhenTheProjectIsTheHome(t *testing.T) {
 	home := t.TempDir()
 	got := SkillDirs(home, home)
-	if len(got) != len(MergedOrder) {
-		t.Fatalf("SkillDirs(home, home) = %v, want %d entries", got, len(MergedOrder))
+	if len(got) != onePlace {
+		t.Fatalf("SkillDirs(home, home) = %v, want %d entries", got, onePlace)
 	}
 	seen := map[string]bool{}
 	for _, d := range got {
@@ -180,7 +188,7 @@ func TestSkillDirsNamesEachDirectoryOnceWhenTheProjectIsTheHome(t *testing.T) {
 		seen[d] = true
 	}
 	// Spelled differently, still one place.
-	if again := SkillDirs(home+string(filepath.Separator), home); len(again) != len(MergedOrder) {
+	if again := SkillDirs(home+string(filepath.Separator), home); len(again) != onePlace {
 		t.Errorf("a trailing separator made it two places: %v", again)
 	}
 }
@@ -198,11 +206,11 @@ func TestSkillDirsNamesTheHomeOnceWhenTheProjectIsALinkToIt(t *testing.T) {
 		{"the project is the link", link, home},
 		{"the home is the link", home, link},
 	} {
-		if got := SkillDirs(c.project, c.home); len(got) != len(MergedOrder) {
-			t.Errorf("%s: %d directories named, want %d: %v", c.name, len(got), len(MergedOrder), got)
+		if got := SkillDirs(c.project, c.home); len(got) != onePlace {
+			t.Errorf("%s: %d directories named, want %d: %v", c.name, len(got), onePlace, got)
 		}
-		if got := CommandDirs(c.project, c.home); len(got) != len(MergedOrder) {
-			t.Errorf("%s: %d commands directories named, want %d: %v", c.name, len(got), len(MergedOrder), got)
+		if got := CommandDirs(c.project, c.home); len(got) != onePlace {
+			t.Errorf("%s: %d commands directories named, want %d: %v", c.name, len(got), onePlace, got)
 		}
 	}
 }
@@ -253,5 +261,29 @@ func TestSameDirectory(t *testing.T) {
 		if _, err := os.Stat(upper); err == nil && !SameDirectory(upper, dir) {
 			t.Errorf("%q and %q are one directory on this volume, and SameDirectory says they are not", upper, dir)
 		}
+	}
+}
+
+// opencode's own global directory is where opencode puts it:
+// $XDG_CONFIG_HOME/opencode when that is an absolute path, else
+// ~/.config/opencode. A relative XDG_CONFIG_HOME is invalid by the
+// specification and ignored, as opencode's resolver ignores it.
+func TestOpencodeConfigDirFollowsXDGConfigHome(t *testing.T) {
+	home := filepath.Join("/home", "u")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if got := OpencodeConfigDir(home); got != filepath.Join(home, ".config", "opencode") {
+		t.Errorf("no XDG_CONFIG_HOME: %q", got)
+	}
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	if got := OpencodeConfigDir(home); got != filepath.Join(xdg, "opencode") {
+		t.Errorf("XDG_CONFIG_HOME=%s: %q", xdg, got)
+	}
+	if got := SkillDirs(home, home); got[len(got)-1] != filepath.Join(xdg, "opencode", "skills") {
+		t.Errorf("the last skills directory is %q, want the one under XDG_CONFIG_HOME", got[len(got)-1])
+	}
+	t.Setenv("XDG_CONFIG_HOME", "relative/dir")
+	if got := OpencodeConfigDir(home); got != filepath.Join(home, ".config", "opencode") {
+		t.Errorf("a relative XDG_CONFIG_HOME was used: %q", got)
 	}
 }

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.161.0
+
+Skills and commands in opencode's own global directory, `~/.config/opencode`, are read.
+
+**Added**
+
+* `~/.config/opencode/skills` and `~/.config/opencode/commands` (or `command/`) as the seventh and lowest skills and commands directories, after `~/.opencode`; `$XDG_CONFIG_HOME/opencode` when that variable is an absolute path, as opencode resolves it
+* Global rules still come from the first of `~/.claude`, `~/.opencode`, `~/.localcode`; `~/.config/opencode/AGENTS.md` is not read
+
 ## v0.160.0
 
 Custom commands are read from every root, in the order skills are, rather than from the first root that exists.
