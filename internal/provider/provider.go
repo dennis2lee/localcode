@@ -461,7 +461,8 @@ func IsToolInputObject(raw json.RawMessage) bool {
 const maxErrorBody = 16 << 10
 
 // echoMarker is where LiteLLM starts printing the request back after the
-// cause of a refusal: every message of the conversation.
+// cause of a refusal: every message of the conversation, on a line of its
+// own.
 const echoMarker = "Received Messages="
 
 // errorBody reads an endpoint's error reply for the error it becomes: up to
@@ -475,12 +476,8 @@ const echoMarker = "Received Messages="
 // The cause comes before it, so the cut keeps the cause.
 func errorBody(r io.Reader) string {
 	data, _ := io.ReadAll(io.LimitReader(r, maxErrorBody+1))
-	if i := bytes.Index(data, []byte(echoMarker)); i >= 0 {
-		// Inside a JSON string the line break before the marker is the two
-		// characters \n, not a newline.
-		head := strings.TrimRight(string(data[:i]), " \n")
-		head = strings.TrimRight(strings.TrimSuffix(head, `\n`), " ")
-		return head + " [the request it echoed back is left out]"
+	if i := echoStart(data); i >= 0 {
+		return trimLineEnds(string(data[:i])) + " [the request it echoed back is left out]"
 	}
 	if len(data) <= maxErrorBody {
 		return string(data)
@@ -490,6 +487,43 @@ func errorBody(r io.Reader) string {
 		cut--
 	}
 	return string(data[:cut]) + fmt.Sprintf(" [cut at %d KB]", maxErrorBody>>10)
+}
+
+// echoStart is where LiteLLM's echo of the request begins in data, or -1.
+// Only the marker at the start of a line, after a cause that names LiteLLM:
+// the same words anywhere else are part of the cause, and cutting there
+// would drop the rest of it.
+func echoStart(data []byte) int {
+	for off := 0; ; {
+		i := bytes.Index(data[off:], []byte(echoMarker))
+		if i < 0 {
+			return -1
+		}
+		i += off
+		head := data[:i]
+		// Inside a JSON string the line break is the two characters \n.
+		line := bytes.TrimRight(head, " \t")
+		atLineStart := bytes.HasSuffix(line, []byte("\n")) || bytes.HasSuffix(line, []byte(`\n`))
+		if atLineStart && bytes.Contains(bytes.ToLower(head), []byte("litellm")) {
+			return i
+		}
+		off = i + len(echoMarker)
+	}
+}
+
+// trimLineEnds drops the spaces and line breaks a cut leaves at the end,
+// written out or escaped as they are inside a JSON string.
+func trimLineEnds(s string) string {
+	for {
+		t := strings.TrimRight(s, " \t\r\n")
+		for _, esc := range []string{`\n`, `\r`, `\t`} {
+			t = strings.TrimSuffix(t, esc)
+		}
+		if t == s {
+			return t
+		}
+		s = t
+	}
 }
 
 // wrapVisionRefusal turns an endpoint's refusal into the sentence

@@ -145,3 +145,25 @@ func TestAnEndpointThatEchoesTheRequestIsNotPrintedWhole(t *testing.T) {
 		}
 	}
 }
+
+// The echo is cut only where LiteLLM starts it: at the start of a line, in a
+// reply that names LiteLLM. The same words anywhere else are part of the
+// cause, and cutting there dropped the rest of it.
+func TestErrorBodyCutsOnlyLiteLLMsEcho(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"message":"Invalid input: Received Messages= must be formatted properly. Quota exceeded for model."}}`,
+		`{"error":{"message":"litellm.BadRequestError: the field Received Messages= is not allowed here; quota exceeded"}}`,
+		"plain text reply\nReceived Messages= is a header this server does not know; quota exceeded",
+	} {
+		if got := errorBody(strings.NewReader(body)); got != body {
+			t.Errorf("a reply that is not LiteLLM's echo was cut:\n%s\nbecame\n%s", body, got)
+		}
+	}
+	for _, sep := range []string{`\n`, `\r\n`, `\n\n`, "\n", "\r\n", ` \n `} {
+		body := `{"error":{"message":"litellm.BadRequestError: Failed to parse tool call.` + sep + `Received Messages=[{'role': 'user', 'content': 'quota'}]"}}`
+		want := `{"error":{"message":"litellm.BadRequestError: Failed to parse tool call. [the request it echoed back is left out]`
+		if got := errorBody(strings.NewReader(body)); got != want {
+			t.Errorf("line break %q before the echo:\ngot  %s\nwant %s", sep, got, want)
+		}
+	}
+}

@@ -194,6 +194,11 @@ func TestRunToolsHandsAToolOnlyAnObject(t *testing.T) {
 		if res := runOne(t, loop, sess.ID, "probe", raw); res != "ran" || len(got) != 1 || got[0] != want {
 			t.Errorf("arguments %q: result %q, tool given %q, want it given %q", raw, res, got, want)
 		}
+		// The same through a decorated name that resolves to the tool.
+		got = nil
+		if res := runOne(t, loop, sess.ID, "functions.probe", raw); !strings.HasSuffix(res, "ran") || len(got) != 1 || got[0] != want {
+			t.Errorf("functions.probe(%q): result %q, tool given %q, want it given %q", raw, res, got, want)
+		}
 	}
 	for _, raw := range []string{`[1]`, `"text"`, `7`, `{"a":`, `{"a":1}}`} {
 		got = nil
@@ -223,13 +228,16 @@ func TestBrokenArgumentsToAToolThatDoesNotExist(t *testing.T) {
 	}
 }
 
-// A bash call that was never run changed nothing, so it does not pay for
-// another carry-on nudge.
+// A call that was never run changed nothing, so it does not pay for another
+// carry-on nudge.
 func TestAnUnrunCallChangedNothing(t *testing.T) {
-	broken := provider.Block{Type: provider.BlockToolUse, ToolName: "bash", ToolInput: json.RawMessage(`{"command": "make`)}
-	if changedSomething([]provider.Block{broken}) {
-		t.Error("a bash call with broken arguments counted as a change")
+	for _, name := range []string{"bash", "write_file", "edit"} {
+		unrun := provider.Block{Type: provider.BlockToolUse, ToolName: name, ToolInput: json.RawMessage(`{"path": "a.go`)}
+		if changedSomething([]provider.Block{unrun}) {
+			t.Errorf("a %s call with broken arguments counted as a change", name)
+		}
 	}
+	broken := provider.Block{Type: provider.BlockToolUse, ToolName: "bash", ToolInput: json.RawMessage(`{"command": "make`)}
 	whole := provider.Block{Type: provider.BlockToolUse, ToolName: "bash", ToolInput: json.RawMessage(`{"command": "make"}`)}
 	if !changedSomething([]provider.Block{broken, whole}) {
 		t.Error("a bash call that ran did not count as a change")
