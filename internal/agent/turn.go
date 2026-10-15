@@ -981,16 +981,6 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 			results = append(results, provider.ToolResultBlock(tu.ToolUseID, res.Content, true))
 			continue
 		}
-		if why := unreadableArguments(tu); why != "" {
-			l.Store.Append(sessionID, events.TypeToolEnd, map[string]any{
-				"tool_use_id": tu.ToolUseID,
-				"content":     why,
-				"is_error":    true,
-				"input":       string(tu.ToolInput),
-			})
-			results = append(results, provider.ToolResultBlock(tu.ToolUseID, why, true))
-			continue
-		}
 
 		started := time.Now()
 		// The name the model asked for, resolved against the roster it was
@@ -1014,16 +1004,33 @@ func (l *Loop) runTools(ctx context.Context, sessionID string, toolUses []provid
 		name := tu.ToolName
 		offered := l.Tools.AllowedNames(allowedTools)
 		match, exact, candidates := tools.Nearest(offered, name)
+		// Arguments that are not a JSON object are not handed to the tool,
+		// and are judged after the name: a call to a tool that does not
+		// exist is told so first, rather than told to call it again.
+		// Nothing and null are a call with no arguments, and the tool is
+		// given {}, which is what the history will say it was given.
+		resolved := tu
+		if !exact && match != "" {
+			resolved.ToolName = match
+		}
+		why := ""
+		if exact || match != "" {
+			why = unreadableArguments(resolved)
+		}
+		input := provider.SendableToolInput(tu.ToolInput)
 		switch {
+		case why != "":
+			name = resolved.ToolName
+			res = tools.Result{Content: why, IsError: true}
 		case exact:
-			res = l.Tools.Call(ctx, name, tu.ToolInput, "")
+			res = l.Tools.Call(ctx, name, input, "")
 		case match != "":
 			// Said, not silent. A call that ran under a different name
 			// than the model wrote is a fact the transcript should carry,
 			// and a model told which spelling worked stops producing the
 			// other one.
 			name = match
-			res = l.Tools.Call(ctx, match, tu.ToolInput, "")
+			res = l.Tools.Call(ctx, match, input, "")
 			res.Content = fmt.Sprintf("(there is no tool %q; ran %q, which is what that names. Use %q.)\n\n%s",
 				tu.ToolName, match, match, res.Content)
 		default:

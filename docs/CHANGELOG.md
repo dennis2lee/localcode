@@ -8,7 +8,7 @@ A tool call whose arguments are not valid JSON no longer stops the conversation.
 
 * A tool call with arguments that are not a JSON object refused by the endpoint on every later request (LiteLLM's "Failed to parse tool call arguments"); it now goes back as `{}`, through the Anthropic API, Bedrock and OpenAI-compatible endpoints alike, and conversations already stuck this way continue
 * Such a call answered without calling the tool, with a result that tells the model what was wrong and how the arguments ended
-* An endpoint's error reply printed whole into the transcript, including the conversation LiteLLM echoes back; now cut at 2 KB
+* An endpoint's error reply printed whole into the transcript, including the conversation LiteLLM echoes back after the cause; the echo is now left out and a reply is kept to 16 KB
 
 ## v0.158.0
 

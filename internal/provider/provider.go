@@ -454,21 +454,34 @@ func IsToolInputObject(raw json.RawMessage) bool {
 	return len(trimmed) > 0 && trimmed[0] == '{' && json.Valid(trimmed)
 }
 
-// maxErrorBody is how much of an endpoint's error reply goes into the error.
-const maxErrorBody = 2 << 10
+// maxErrorBody is how much of an endpoint's error reply goes into the error:
+// enough that a cause written after a long preamble is still there for
+// isContextOverflow, isVisionRefusal and the fallback decisions to find,
+// and a bound on a reply that would otherwise be held and printed whole.
+const maxErrorBody = 16 << 10
 
-// errorBody reads an endpoint's error reply for the error it becomes, cut at
-// maxErrorBody.
+// echoMarker is where LiteLLM starts printing the request back after the
+// cause of a refusal: every message of the conversation.
+const echoMarker = "Received Messages="
+
+// errorBody reads an endpoint's error reply for the error it becomes: up to
+// maxErrorBody, and with the request LiteLLM echoes after the cause left
+// out.
 //
-// Some endpoints echo the whole request back: LiteLLM's refusals end with
-// every message of the conversation. Read whole, that was the conversation
-// printed into the transcript as one error. It is also text the retry and
-// fallback decisions search for phrases such as "quota" or "server error",
-// and a conversation that happened to contain one made a request that will
-// be refused every time look like one worth sending again. The cause comes
-// first in every reply seen, so the head is kept.
+// The echo was the conversation printed into the transcript as one error.
+// It is also text the retry and fallback decisions search for phrases such
+// as "quota" or "server error", so a conversation that happened to contain
+// one made a request that is refused every time look worth sending again.
+// The cause comes before it, so the cut keeps the cause.
 func errorBody(r io.Reader) string {
 	data, _ := io.ReadAll(io.LimitReader(r, maxErrorBody+1))
+	if i := bytes.Index(data, []byte(echoMarker)); i >= 0 {
+		// Inside a JSON string the line break before the marker is the two
+		// characters \n, not a newline.
+		head := strings.TrimRight(string(data[:i]), " \n")
+		head = strings.TrimRight(strings.TrimSuffix(head, `\n`), " ")
+		return head + " [the request it echoed back is left out]"
+	}
 	if len(data) <= maxErrorBody {
 		return string(data)
 	}

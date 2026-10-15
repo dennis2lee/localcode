@@ -316,8 +316,14 @@ func endsWithQuestion(text string) bool {
 // carry on. Task is excluded on the same ground and one more: on a
 // one-profile roster it is the model delegating to itself, which is the
 // last thing another nudge should pay for.
+//
+// A call whose arguments could not be read was never run, so it changed
+// nothing either: see unreadableArguments.
 func changedSomething(toolUses []provider.Block) bool {
 	for _, tu := range toolUses {
+		if unreadableArguments(tu) != "" {
+			continue
+		}
 		switch tu.ToolName {
 		case "write_file", "edit", "bash":
 			return true

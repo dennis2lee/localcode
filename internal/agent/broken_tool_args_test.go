@@ -13,6 +13,7 @@ import (
 
 	"localcode/internal/events"
 	"localcode/internal/provider"
+	"localcode/internal/tools"
 )
 
 // brokenArgs is the shape of the call that stopped a conversation: an
@@ -150,20 +151,87 @@ func TestBrokenToolArgumentsDoNotStopTheConversation(t *testing.T) {
 	}
 }
 
-// Arguments that are nothing, or null, are a call with no arguments, which a
-// model may send for a tool that takes none. That still runs.
-func TestEmptyOrNullToolArgumentsStillRun(t *testing.T) {
-	for _, raw := range []string{"", "  ", "null"} {
-		if why := unreadableArguments(provider.Block{ToolName: "bash", ToolInput: json.RawMessage(raw)}); why != "" {
-			t.Errorf("arguments %q refused: %s", raw, why)
+// recordingTool keeps the arguments it was called with.
+type recordingTool struct {
+	name string
+	got  *[]string
+}
+
+func (t recordingTool) Name() string        { return t.name }
+func (t recordingTool) Description() string { return "records its input" }
+func (t recordingTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+func (t recordingTool) RequiresPermission(json.RawMessage) bool { return false }
+func (t recordingTool) Execute(_ context.Context, input json.RawMessage) tools.Result {
+	*t.got = append(*t.got, string(input))
+	return tools.Result{Content: "ran"}
+}
+
+func runOne(t *testing.T, loop *Loop, sessionID, name, raw string) string {
+	t.Helper()
+	call := provider.Block{Type: provider.BlockToolUse, ToolUseID: "call_" + name, ToolName: name, ToolInput: json.RawMessage(raw)}
+	blocks, _, _ := loop.runTools(context.Background(), sessionID, []provider.Block{call}, nil, 1<<20)
+	if len(blocks) == 0 {
+		t.Fatalf("no result for %s(%s)", name, raw)
+	}
+	return blocks[0].ToolResultContent
+}
+
+// Through runTools: nothing and null are a call with no arguments, and the
+// tool is given {}, which is what the history says it was given. A JSON
+// object runs as written. Anything else is not handed to the tool.
+func TestRunToolsHandsAToolOnlyAnObject(t *testing.T) {
+	loop, store := newCustomCommandTestLoop(t, "", nil)
+	var got []string
+	loop.Tools.Register(recordingTool{name: "probe", got: &got})
+	sess, err := store.CreateSession("s1", "", "general-purpose", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for raw, want := range map[string]string{"": "{}", "  ": "{}", "null": "{}", ` {"a": 1} `: ` {"a": 1} `} {
+		got = nil
+		if res := runOne(t, loop, sess.ID, "probe", raw); res != "ran" || len(got) != 1 || got[0] != want {
+			t.Errorf("arguments %q: result %q, tool given %q, want it given %q", raw, res, got, want)
 		}
 	}
-	for _, raw := range []string{`[1]`, `"text"`, `{"a":`, `{"a":1}}`} {
-		if why := unreadableArguments(provider.Block{ToolName: "bash", ToolInput: json.RawMessage(raw)}); why == "" {
-			t.Errorf("arguments %q ran", raw)
+	for _, raw := range []string{`[1]`, `"text"`, `7`, `{"a":`, `{"a":1}}`} {
+		got = nil
+		res := runOne(t, loop, sess.ID, "probe", raw)
+		if len(got) != 0 || !strings.Contains(res, "not run") || !strings.Contains(res, "Call probe again") {
+			t.Errorf("arguments %q: tool given %q, result %q", raw, got, res)
 		}
 	}
-	if why := unreadableArguments(provider.Block{ToolName: "bash", ToolInput: json.RawMessage(` {"a": 1} `)}); why != "" {
-		t.Errorf("an object with spaces around it was refused: %s", why)
+}
+
+// The name is judged before the arguments. A tool that does not exist is
+// said not to exist, rather than the model being told to call it again; a
+// decorated name that resolves to a tool is told to call that tool.
+func TestBrokenArgumentsToAToolThatDoesNotExist(t *testing.T) {
+	loop, store := newCustomCommandTestLoop(t, "", nil)
+	var got []string
+	loop.Tools.Register(recordingTool{name: "probe", got: &got})
+	sess, err := store.CreateSession("s1", "", "general-purpose", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := runOne(t, loop, sess.ID, "nonesuch", `{"a":`); strings.Contains(res, "Call nonesuch again") || !strings.Contains(res, "probe") {
+		t.Errorf("a tool that does not exist, with broken arguments: %q", res)
+	}
+	if res := runOne(t, loop, sess.ID, "functions.probe", `{"a":`); !strings.Contains(res, "Call probe again") || len(got) != 0 {
+		t.Errorf("a decorated name with broken arguments: %q, tool given %q", res, got)
+	}
+}
+
+// A bash call that was never run changed nothing, so it does not pay for
+// another carry-on nudge.
+func TestAnUnrunCallChangedNothing(t *testing.T) {
+	broken := provider.Block{Type: provider.BlockToolUse, ToolName: "bash", ToolInput: json.RawMessage(`{"command": "make`)}
+	if changedSomething([]provider.Block{broken}) {
+		t.Error("a bash call with broken arguments counted as a change")
+	}
+	whole := provider.Block{Type: provider.BlockToolUse, ToolName: "bash", ToolInput: json.RawMessage(`{"command": "make"}`)}
+	if !changedSomething([]provider.Block{broken, whole}) {
+		t.Error("a bash call that ran did not count as a change")
 	}
 }
