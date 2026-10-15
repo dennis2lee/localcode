@@ -923,10 +923,11 @@ Skills, custom commands and the user-level `AGENTS.md`/`CLAUDE.md` are formats o
 * `.localcode` comes first inside each place. A skill or command there was written for LocalCode, so it overrides a same-named one kept for another agent without editing that agent's copy.
 * A skill's name is its frontmatter `name`, or its directory name when the frontmatter has none. Names that differ only in case are the same name: typing `/name`, `/skill <name>` and the model's `Skill` tool all reach the one skill that won.
 * A command's name is its file name without `.md`, compared exactly.
+* A command and a skill of the same name do not compete by directory. Typing `/name` runs the command, and the skill stays reachable as `/skill <name>` and through the `Skill` tool.
 * A name no higher directory holds is loaded from wherever it is. A skill or command only in `~/.opencode` is available beside the ones in `~/.claude`, with nothing to configure.
 * In any root, `command/` is read when `commands/` does not exist, since opencode names that directory in the singular. `commands/` wins where a root has both.
 * A higher skill or command whose file does not parse is skipped with a log line naming its path, and a lower one of the same name loads instead.
-* A directory reached under two names, such as `~/.opencode/skills` linked to `~/.claude/skills`, is read once, at the higher of its two places.
+* A skills or commands directory reached under two names, such as `~/.opencode/skills` linked to `~/.claude/skills`, is read once, at the higher of its two places.
 * opencode's own global directory, `~/.config/opencode`, is not read. Link its `skills` and `command` directories into `~/.opencode` to use them.
 
 An entry in a skills directory may be a symlink to a directory elsewhere. A link that points nowhere, or at a file rather than a directory, is skipped silently; it does not stop the other skills from loading. A skills or commands directory that cannot be read, such as a file where `skills` should be or a directory without permission, is skipped with one log line naming it and the reason, and does not stop startup. A directory holding a `SKILL.md` that will not parse is skipped with one log line naming its path and the reason; a directory with no `SKILL.md` at all stays silent, since it may be something else living beside the skills. A malformed skill or command never stops startup and never drops the ones beside it.

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -288,5 +290,49 @@ func write(t *testing.T, path, body string) {
 	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Startup says which commands directories it read when one is outside
+// .localcode, as it does for skills, and says nothing about the default. A
+// leftover where a commands directory should be costs that root its
+// commands, with one line naming it once, and does not cost the start.
+func TestStartupNamesTheCommandsItReadsAndSurvivesALeftover(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	write(t, filepath.Join(workspace, ".localcode", "commands", "mine.md"), commandFile("mine"))
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	if _, _, _, _, _, _, err := buildSystemPrompt(startupTestConfig(), startupTestRegistry(t), workspace, home); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "commands: reading") {
+		t.Errorf("a line about the default .localcode commands: %q", logs.String())
+	}
+
+	theirs := filepath.Join(workspace, ".claude", "commands")
+	write(t, filepath.Join(theirs, "theirs.md"), commandFile("theirs"))
+	leftover := filepath.Join(home, ".opencode", "commands")
+	write(t, leftover, "a file, not a directory\n")
+	logs.Reset()
+	_, _, _, _, cmdList, _, err := buildSystemPrompt(startupTestConfig(), startupTestRegistry(t), workspace, home)
+	if err != nil {
+		t.Fatalf("a file where a commands directory should be stopped startup: %v", err)
+	}
+	names := map[string]bool{}
+	for _, c := range cmdList {
+		names[c.Name] = true
+	}
+	if !names["mine"] || !names["theirs"] {
+		t.Errorf("commands = %v, want mine and theirs", names)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "commands: reading") || !strings.Contains(out, theirs) {
+		t.Errorf("startup did not name %s: %q", theirs, out)
+	}
+	if n := strings.Count(out, leftover); n != 1 || !strings.Contains(out, "cannot be read") {
+		t.Errorf("the leftover is named %d times, want once in a line saying it cannot be read: %q", n, out)
 	}
 }

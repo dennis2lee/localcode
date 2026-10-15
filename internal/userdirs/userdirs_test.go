@@ -201,6 +201,9 @@ func TestSkillDirsNamesTheHomeOnceWhenTheProjectIsALinkToIt(t *testing.T) {
 		if got := SkillDirs(c.project, c.home); len(got) != len(MergedOrder) {
 			t.Errorf("%s: %d directories named, want %d: %v", c.name, len(got), len(MergedOrder), got)
 		}
+		if got := CommandDirs(c.project, c.home); len(got) != len(MergedOrder) {
+			t.Errorf("%s: %d commands directories named, want %d: %v", c.name, len(got), len(MergedOrder), got)
+		}
 	}
 }
 
