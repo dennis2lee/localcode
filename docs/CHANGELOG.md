@@ -13,7 +13,7 @@
 **Fixed**
 
 * An `api_key` pasted into config.json with a newline or a space around it sent as written, so Go refused the request or the server read the space as part of the key; it is sent trimmed, as `check-jwt-key` sends it
-* A redirect from an https endpoint to plain http followed with the API key or JWT still in the `Authorization` header, which Go forwards to the same host whatever the scheme; such a redirect is refused
+* A redirect from an https OpenAI-compatible or Anthropic API endpoint to plain http followed with the API key or JWT still in the `Authorization` header, which Go forwards to the same host whatever the scheme; such a redirect is refused
 
 ## v0.161.0
 

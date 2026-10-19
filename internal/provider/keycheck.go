@@ -32,7 +32,14 @@ type JWTClaims struct {
 // algorithm, and a claims object. Nothing in it panics on a malformed key,
 // since a key pasted by hand is often a part of one.
 func ParseJWT(key string) (JWTClaims, bool) {
-	parts := strings.Split(strings.TrimSpace(key), ".")
+	key = strings.TrimSpace(key)
+	// Only base64url, its padding, and the dots. Go's decoder skips a line
+	// break inside a segment, so a token with one in it read as a JWT and
+	// then could not be sent: net/http refuses such a header.
+	if strings.IndexFunc(key, func(c rune) bool { return !isJWTChar(c) }) >= 0 {
+		return JWTClaims{}, false
+	}
+	parts := strings.Split(key, ".")
 	if len(parts) != 3 {
 		return JWTClaims{}, false
 	}
@@ -72,6 +79,11 @@ func ParseJWT(key string) (JWTClaims, bool) {
 	out.NotBefore = epoch(claims["nbf"])
 	out.IssuedAt = epoch(claims["iat"])
 	return out, true
+}
+
+func isJWTChar(c rune) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
+		c == '-' || c == '_' || c == '=' || c == '.'
 }
 
 // decodeSegment base64url-decodes one part of a JWT, padded or not, into

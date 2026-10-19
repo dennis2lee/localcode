@@ -338,7 +338,7 @@ func TestTheReportTakesOutPartsOfTheKey(t *testing.T) {
 		t.Errorf("a one-letter key rewrote the line: %s", out.String())
 	}
 	out.Reset()
-	r.describeFile("k", []string{filepath.Join(t.TempDir(), "config.json")})
+	r.describeFile("k", []string{filepath.Join(t.TempDir(), "config.json")}, "")
 	if !strings.Contains(out.String(), "not looked for") {
 		t.Errorf("a one-letter key was looked for in config files: %s", out.String())
 	}
@@ -525,5 +525,78 @@ func TestCheckJWTKeyWarnsOfCleartext(t *testing.T) {
 	}
 	if got := chatModel("none", mustConfig(t, `{"providers": {"gw": {"type": "openai-compat", "base_url": "http://x/v1"}}}`), "", nil); got != "" {
 		t.Errorf("no flag, no profile and no list: %q, want none", got)
+	}
+}
+
+// From the second review. A refusal on the model list stays the answer
+// when the chat request then fails some other way; arguments after "--"
+// are positional; an empty provider name is refused; the project's config
+// file is warned about however it was named.
+func TestCheckJWTKeySecondReview(t *testing.T) {
+	home, project := keyCheckEnv(t)
+	key := testJWT(t, time.Now().Add(-24*time.Hour))
+	srv := newScriptedGateway(t, status(401, `{"error":"expired"}`), status(500, `{"error":"upstream down"}`))
+	cfgPath := filepath.Join(home, ".localcode", "config.json")
+	writeKeyConfig(t, cfgPath, srv.URL+"/v1", key, 0o600)
+	var out bytes.Buffer
+	if err := checkJWTKey(nil, &out); err == nil {
+		t.Errorf("a refused key passed:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "refused it (401), and the token has expired") {
+		t.Errorf("the refusal was lost to the chat failure:\n%s", out.String())
+	}
+
+	for _, args := range [][]string{{"--", "gw"}, {"--no-chat", "--", "gw"}} {
+		out.Reset()
+		if err := checkJWTKey(args, &out); err == nil || !strings.Contains(out.String(), "provider gw") {
+			t.Errorf("%v: %v\n%s", args, err, out.String())
+		}
+	}
+	if err := checkJWTKey([]string{"--", "gw", "--no-chat"}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Errorf("a flag after -- was not read as a second provider: %v", err)
+	}
+	if err := checkJWTKey([]string{""}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "the provider name is empty") {
+		t.Errorf("an empty provider name: %v", err)
+	}
+
+	good := testJWT(t, time.Now().Add(24*time.Hour))
+	g := newFakeGateway(t, good)
+	projectCfg := filepath.Join(project, ".localcode", "config.json")
+	writeKeyConfig(t, projectCfg, g.URL+"/v1", good, 0o600)
+	out.Reset()
+	if err := checkJWTKey([]string{"--no-chat", "--config", projectCfg}, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "the project's config file") {
+		t.Errorf("the project's file named with --config was not warned about:\n%s", out.String())
+	}
+}
+
+// The edges the second review showed could move unnoticed: a run of
+// exactly minEchoLen characters is hidden and one shorter is not; a 403
+// with no model to ask is still a refusal.
+func TestCheckJWTKeyEdges(t *testing.T) {
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	sig := strings.Split(key, ".")[2]
+	if got := redactKey("x "+sig[:minEchoLen]+" y", key); got != "x [the key] y" {
+		t.Errorf("a run of exactly %d: %q", minEchoLen, got)
+	}
+	if got := redactKey("x "+sig[:minEchoLen-1]+" y", key); strings.Contains(got, "[the key]") {
+		t.Errorf("a run of %d was hidden: %q", minEchoLen-1, got)
+	}
+
+	home, _ := keyCheckEnv(t)
+	srv := newScriptedGateway(t, status(403, `{"error":"forbidden"}`), status(500, "unused"))
+	cfg := `{"providers": {"gw": {"type": "openai-compat", "base_url": "` + srv.URL + `/v1", "api_key": "` + key + `"}}}`
+	if err := os.MkdirAll(filepath.Join(home, ".localcode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".localcode", "config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	checkJWTKey(nil, &out)
+	if !strings.Contains(out.String(), "refused it (403)") {
+		t.Errorf("a 403 with no model to ask:\n%s", out.String())
 	}
 }

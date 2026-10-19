@@ -48,18 +48,34 @@ func checkJWTKey(args []string, out io.Writer) error {
 	// Flags before the provider name, after it, or both: the flag package
 	// stops at the first word that is not a flag, so the name is taken out
 	// and the rest parsed again.
+	//
+	// After "--" nothing is a flag: the flag package stops there and drops
+	// it, so whatever follows is positional, and parsing it again would
+	// read it as flags.
 	var name string
+	named := false
 	for {
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
-		if fs.NArg() == 0 {
+		rest := fs.Args()
+		if len(rest) == 0 {
 			break
 		}
-		if name != "" {
+		if named {
 			return errors.New(checkJWTKeyUsage)
 		}
-		name, args = fs.Arg(0), fs.Args()[1:]
+		name, named = rest[0], true
+		if consumed := len(args) - len(rest); consumed > 0 && args[consumed-1] == "--" {
+			if len(rest) > 1 {
+				return errors.New(checkJWTKeyUsage)
+			}
+			break
+		}
+		args = rest[1:]
+	}
+	if named && strings.TrimSpace(name) == "" {
+		return errors.New("the provider name is empty. " + checkJWTKeyUsage)
 	}
 
 	e, err := resolveEnv()
@@ -75,6 +91,7 @@ func checkJWTKey(args []string, out io.Writer) error {
 		return err
 	}
 	files := keyFiles(*configPath, e)
+	project := projectConfigFile(e)
 
 	var failed []string
 	for i, n := range names {
@@ -83,7 +100,7 @@ func checkJWTKey(args []string, out io.Writer) error {
 		}
 		pc := cfg.Providers[n]
 		r := &keyReport{out: out, key: pc.APIKey}
-		ok := r.check(n, pc, cfg, files, *model, *noChat, *timeout)
+		ok := r.check(n, pc, cfg, files, project, *model, *noChat, *timeout)
 		if !ok {
 			failed = append(failed, n)
 		}
@@ -146,6 +163,16 @@ func keyFiles(explicit string, e env) []string {
 	}
 }
 
+// projectConfigFile is the project's own config file, the one committed
+// with it, or "" when the project is the home directory and has none of
+// its own.
+func projectConfigFile(e env) string {
+	if userdirs.SameDirectory(e.cwd, e.home) {
+		return ""
+	}
+	return filepath.Join(e.cwd, ".localcode", "config.json")
+}
+
 // keyReport writes one provider's report. Every line goes through line,
 // which takes the key out of anything an endpoint said back, so a server
 // that echoes the Authorization header does not put the key on screen.
@@ -196,12 +223,12 @@ func redactKey(text, key string) string {
 	return b.String()
 }
 
-func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Config, files []string, model string, noChat bool, timeout time.Duration) bool {
+func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Config, files []string, project, model string, noChat bool, timeout time.Duration) bool {
 	key := strings.TrimSpace(pc.APIKey)
 	fmt.Fprintln(r.out, redactKey(fmt.Sprintf("provider %s (openai-compat, %s)", name, pc.BaseURL), key))
 
 	expired := r.describeKey(key)
-	r.describeFile(key, files)
+	r.describeFile(key, files, project)
 	if sendsKeyInClear(pc.BaseURL) {
 		r.line("warning", "base_url is http and not this machine: the key goes over the network unencrypted")
 	}
@@ -260,7 +287,14 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 	cancel()
 	if err != nil {
 		r.line("chat", "%s: %v", m, err)
-		r.result(false, expired, chatStatus(err))
+		// A refusal from either request is the answer: a chat request that
+		// failed some other way after the model list refused the key does
+		// not make the key less refused.
+		verdict := chatStatus(err)
+		if verdict != 401 && verdict != 403 && (status == 401 || status == 403) {
+			verdict = status
+		}
+		r.result(false, expired, verdict)
 		return false
 	}
 	r.line("chat", "accepted: %s answered %q (%d + %d tokens)", m, shortReply(reply.Content), reply.PromptTokens, reply.OutputTokens)
@@ -303,12 +337,12 @@ func (r *keyReport) describeKey(key string) bool {
 // describeFile says which config file holds the key and who can read it. A
 // key written into the project's file travels with the project, and a file
 // others can read gives them the key.
-func (r *keyReport) describeFile(key string, files []string) {
+func (r *keyReport) describeFile(key string, files []string, project string) {
 	if len(key) < minSecretLen {
 		r.line("written", "not looked for: a key this short would match text that is not the key")
 		return
 	}
-	for i, path := range files {
+	for _, path := range files {
 		data, err := os.ReadFile(path)
 		if err != nil || !strings.Contains(string(data), key) {
 			continue
@@ -320,7 +354,7 @@ func (r *keyReport) describeFile(key string, files []string) {
 			}
 		}
 		r.line("written", "in %s", shown)
-		if i == 0 && len(files) > 1 {
+		if project != "" && userdirs.SameDirectory(path, project) {
 			r.line("warning", "that is the project's config file: it is committed with the project unless ignored. Keep the token in ~/.localcode/config.json, or write {env:NAME} and keep it in the environment")
 		}
 		if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {

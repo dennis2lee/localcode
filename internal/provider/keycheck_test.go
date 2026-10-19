@@ -188,3 +188,25 @@ func TestModelListNeedsAList(t *testing.T) {
 		}
 	}
 }
+
+// A token with anything but base64url, padding and dots in it, a line
+// break inside a part above all, is not read as a JWT: Go's decoder would
+// skip the break, and net/http would then refuse to send the header.
+// An exp of exactly one second is a date, the earliest there is.
+func TestParseJWTRefusesStrayCharacters(t *testing.T) {
+	good := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": 1})
+	parts := strings.Split(good, ".")
+	for _, bad := range []string{
+		parts[0] + "." + parts[1][:4] + "\n" + parts[1][4:] + "." + parts[2],
+		parts[0] + "." + parts[1] + "." + parts[2][:3] + "\r" + parts[2][3:],
+		parts[0] + " ." + parts[1] + "." + parts[2],
+		parts[0] + "." + parts[1] + "." + parts[2] + "+",
+	} {
+		if _, ok := ParseJWT(bad); ok {
+			t.Errorf("%q read as a JWT", bad)
+		}
+	}
+	if c, ok := ParseJWT(good); !ok || c.Expires.Unix() != 1 {
+		t.Errorf("exp 1: %v %v", c.Expires, ok)
+	}
+}
