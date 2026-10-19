@@ -119,3 +119,72 @@ func TestModelListReportsTheAnswer(t *testing.T) {
 		t.Error("no answer at all was not an error")
 	}
 }
+
+// The dates are read claim by claim, and a number outside what a date can
+// hold does not wrap round: a token valid past the year 9999 is not read
+// as having expired, and an exp under one second is no exp at all.
+func TestParseJWTDatesAndEdges(t *testing.T) {
+	c, ok := ParseJWT(makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"iat": 1000, "nbf": 2000, "exp": 1e19, "aud": []any{"", "api"}}))
+	if !ok {
+		t.Fatal("not read as a JWT")
+	}
+	if c.IssuedAt.Unix() != 1000 || c.NotBefore.Unix() != 2000 {
+		t.Errorf("iat %d, nbf %d: each claim must be read as itself", c.IssuedAt.Unix(), c.NotBefore.Unix())
+	}
+	if c.Expires.Year() != 9999 {
+		t.Errorf("an exp past what a date holds became %v", c.Expires)
+	}
+	if strings.Join(c.Audience, ",") != "api" {
+		t.Errorf("an empty audience was kept: %q", c.Audience)
+	}
+	if c, _ := ParseJWT(makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": 0.5, "aud": ""})); !c.Expires.IsZero() || c.Audience != nil {
+		t.Errorf("an exp under a second or an empty aud: %+v", c)
+	}
+
+	good := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": 1})
+	parts := strings.Split(good, ".")
+	// One padding character, as well as two, is still the segment.
+	header := base64.URLEncoding.EncodeToString([]byte(`{"alg":"ES256","x":123}`))
+	if !strings.HasSuffix(header, "=") || strings.HasSuffix(header, "==") {
+		t.Fatalf("the test header %q does not end in exactly one =", header)
+	}
+	if _, ok := ParseJWT(header + "." + parts[1] + "." + parts[2]); !ok {
+		t.Error("a header padded with one = was refused")
+	}
+	// A gateway's token is signed: the third part is there and is base64url.
+	for _, sig := range []string{"", "!!!", "==="} {
+		if _, ok := ParseJWT(parts[0] + "." + parts[1] + "." + sig); ok {
+			t.Errorf("a signature part %q was accepted", sig)
+		}
+	}
+}
+
+// Only an object with a data array is a model list. A sign-in page or an
+// {"error": ...} answered with 200 is not, and reads as no list, not as an
+// empty one the key was accepted for. The list is asked for with GET on
+// /models under the base URL.
+func TestModelListNeedsAList(t *testing.T) {
+	var method, path string
+	body := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	p := NewOpenAICompat(srv.URL+"/v1", "k")
+
+	body = `{"data":[]}`
+	ids, status, detail, err := p.ModelList(t.Context())
+	if err != nil || status != 200 || len(ids) != 0 || detail != "" {
+		t.Errorf("an empty list: %v %d %q %v", ids, status, detail, err)
+	}
+	if method != http.MethodGet || path != "/v1/models" {
+		t.Errorf("asked with %s %s, want GET /v1/models", method, path)
+	}
+	for _, b := range []string{`{"error":{"message":"sign in first"}}`, `{"data":null}`, `[]`} {
+		body = b
+		if _, _, detail, _ := p.ModelList(t.Context()); !strings.HasPrefix(detail, "the answer is not a model list") {
+			t.Errorf("a 200 of %s read as a list (detail %q)", b, detail)
+		}
+	}
+}

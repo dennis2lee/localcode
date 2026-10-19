@@ -902,7 +902,7 @@ result: the key works
 |---|---|
 | `key` | The token's algorithm, key id, issuer and audience. It is decoded, not verified: the endpoint holds the key that checks it. |
 | `expires` | The JWT's `exp`, and how long is left. An expired token is still sent, because the endpoint decides and a clock here can be wrong. |
-| `written` | Which config file holds the token. A warning follows when the file is the project's own, which is committed with the project, or when other users can read it. |
+| `written` | Which config file holds the token as written text: the project's `.localcode/config.json`, `~/.localcode/config.json`, or the file `--config` names. A file listed under `include` is not looked in. A warning follows when the file is the project's own, which is committed with the project, or when other users can read it. Run in the home directory, the home's file is not the project's. |
 | `models` | `GET <base_url>/models` with the key: the models listed, or the status the endpoint answered. |
 | `chat` | One short `POST <base_url>/chat/completions` reply, the request every turn makes. The model is `--model`, else the model of a profile on that provider (`default_profile` first), else the first model listed. |
 | `result` | `the key works` exits 0. Anything else exits 1. A refusal (401 or 403) says what to change, and says so when the token has expired. |
@@ -910,7 +910,8 @@ result: the key works
 * `--no-chat` sends only the model list request. A model list can be open to anybody, so this proves less than the chat request.
 * `--config <path>` checks that file instead of the merged `~/.localcode` and project files. `--timeout` bounds each request, one minute by default.
 * A warning is printed when `base_url` is plain `http` to another machine, since the key would cross the network unencrypted. Every provider, and this check, refuses a redirect from `https` to plain `http` for the same reason.
-* The token is never printed. Text the endpoint sends back has the token, and each of its three parts, replaced with `[the key]`.
+* The token is never printed. In text the endpoint sends back, every run of 12 or more characters that also appears in the token is replaced with `[the key]`, so a reply that repeats part of the token, or is cut short part way through it, does not show the rest. A key shorter than 8 characters is not hidden.
+* The provider name may come before or after the flags.
 
 ## Part 3. Project context
 

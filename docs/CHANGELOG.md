@@ -7,7 +7,7 @@
 **Added**
 
 * `localcode check-jwt-key [provider]`: for each `openai-compat` provider whose `api_key` is a JWT, what the token claims and when it expires (decoded, not verified), the config file it is written in, the endpoint's model list, and one short chat reply; exits 1 unless the key works. A key that is not a JWT is not checked
-* Warnings for a token in the project's config file, a config file other users can read, and a plain `http` base URL to another machine; the token is never printed, and an endpoint's reply that repeats it, or any of its three parts, is shown with `[the key]` in its place
+* Warnings for a token in the project's config file, a config file other users can read, and a plain `http` base URL to another machine; the token is never printed, and in an endpoint's reply every run of 12 or more of its characters is shown as `[the key]`, including what is left of it in a reply cut short
 * USAGE.md and MODELS.md describe putting a gateway's JWT in `api_key` and checking it
 
 **Fixed**

@@ -103,10 +103,16 @@ func keyCheckEnv(t *testing.T) (home, project string) {
 	return home, project
 }
 
+// noKeyIn fails when any run of minEchoLen characters of the key is in the
+// report: the whole key, one of its parts, or what is left of it after a
+// reply was cut short.
 func noKeyIn(t *testing.T, out, key string) {
 	t.Helper()
-	if strings.Contains(out, key) {
-		t.Errorf("the key is in the report:\n%s", out)
+	for i := 0; i+minEchoLen <= len(key); i++ {
+		if run := key[i : i+minEchoLen]; strings.Contains(out, run) {
+			t.Errorf("%q, part of the key, is in the report:\n%s", run, out)
+			return
+		}
 	}
 }
 
@@ -335,5 +341,189 @@ func TestTheReportTakesOutPartsOfTheKey(t *testing.T) {
 	r.describeFile("k", []string{filepath.Join(t.TempDir(), "config.json")})
 	if !strings.Contains(out.String(), "not looked for") {
 		t.Errorf("a one-letter key was looked for in config files: %s", out.String())
+	}
+}
+
+// A gateway that answers each path with what the test gives it.
+func newScriptedGateway(t *testing.T, models func(w http.ResponseWriter), chat func(w http.ResponseWriter)) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			models(w)
+		case "/v1/chat/completions":
+			chat(w)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func status(code int, body string) func(w http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		w.WriteHeader(code)
+		w.Write([]byte(body))
+	}
+}
+
+// What the check concludes from each kind of answer. A refusal is an
+// answer whatever else could be asked, 403 as much as 401; a 200 that is
+// not a model list does not count as the key being accepted.
+func TestCheckJWTKeyVerdicts(t *testing.T) {
+	home, _ := keyCheckEnv(t)
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	cfgPath := filepath.Join(home, ".localcode", "config.json")
+	for _, tc := range []struct {
+		name         string
+		models, chat func(w http.ResponseWriter)
+		args         []string
+		noProfile    bool
+		works        bool
+		want         string
+	}{
+		{"403 on chat", status(200, `{"data":[{"id":"CodeA"}]}`), status(403, `{"error":"no access to this model"}`), nil, false, false,
+			"result: the key does not work: the endpoint refused it (403)"},
+		{"refused, --no-chat", status(401, `{"error":"invalid token"}`), nil, []string{"--no-chat"}, false, false,
+			"result: the key does not work: the endpoint refused it (401)"},
+		{"sign-in page, --no-chat", status(200, "<html>sign in</html>"), nil, []string{"--no-chat"}, false, false,
+			"result: not known"},
+		{"error object, --no-chat", status(200, `{"error":"sign in"}`), nil, []string{"--no-chat"}, false, false,
+			"no model list (200): the answer is not a model list"},
+		{"refused, nothing to ask", status(401, `{"error":"invalid token"}`), nil, nil, true, false,
+			"result: the key does not work: the endpoint refused it (401)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chat := tc.chat
+			if chat == nil {
+				chat = status(500, "not expected")
+			}
+			srv := newScriptedGateway(t, tc.models, chat)
+			if tc.noProfile {
+				cfg := `{"providers": {"gw": {"type": "openai-compat", "base_url": "` + srv.URL + `/v1", "api_key": "` + key + `"}}}`
+				if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeKeyConfig(t, cfgPath, srv.URL+"/v1", key, 0o600)
+			}
+			var out bytes.Buffer
+			err := checkJWTKey(tc.args, &out)
+			if (err == nil) != tc.works {
+				t.Errorf("err = %v, want works=%v", err, tc.works)
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Errorf("the report does not say %q:\n%s", tc.want, out.String())
+			}
+		})
+	}
+}
+
+// A reply cut short before the report sees it can end part way through the
+// key, and a base URL can carry the key in its query. Neither puts a run
+// of the key on screen.
+func TestCheckJWTKeyHidesACutKeyAndOneInTheURL(t *testing.T) {
+	home, _ := keyCheckEnv(t)
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	echo := strings.Repeat("x", 250) + " token was " + key
+	srv := newScriptedGateway(t, status(401, `{"error":"`+echo+`"}`), status(401, `{"error":"`+echo+`"}`))
+	cfgPath := filepath.Join(home, ".localcode", "config.json")
+	writeKeyConfig(t, cfgPath, srv.URL+"/v1", key, 0o600)
+	var out bytes.Buffer
+	checkJWTKey(nil, &out)
+	if !strings.Contains(out.String(), "refused (401)") || !strings.Contains(out.String(), "token was [the key]") {
+		t.Fatalf("the test did not reach a refusal that repeats the cut key:\n%s", out.String())
+	}
+	noKeyIn(t, out.String(), key)
+
+	writeKeyConfig(t, cfgPath, srv.URL+"/v1?token="+key, key, 0o600)
+	out.Reset()
+	checkJWTKey(nil, &out)
+	if !strings.Contains(out.String(), "/v1?token=[the key])") {
+		t.Errorf("the provider line does not hide the key in its URL:\n%s", out.String())
+	}
+	noKeyIn(t, out.String(), key)
+	if got := redactKey("an ordinary sentence with no key in it", key); got != "an ordinary sentence with no key in it" {
+		t.Errorf("text with no key in it was changed: %q", got)
+	}
+}
+
+// The provider may come before the flags, after them, or between them; two
+// providers are an error that says how the command is used.
+func TestCheckJWTKeyArgumentOrder(t *testing.T) {
+	home, _ := keyCheckEnv(t)
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	g := newFakeGateway(t, key)
+	writeKeyConfig(t, filepath.Join(home, ".localcode", "config.json"), g.URL+"/v1", key, 0o600)
+	for _, args := range [][]string{
+		{"gw", "--no-chat"},
+		{"--no-chat", "gw"},
+		{"--model", "CodeA", "gw", "--no-chat"},
+	} {
+		var out bytes.Buffer
+		if err := checkJWTKey(args, &out); err != nil {
+			t.Errorf("%v: %v\n%s", args, err, out.String())
+		}
+	}
+	err := checkJWTKey([]string{"gw", "--no-chat", "other"}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "[--timeout d]") {
+		t.Errorf("two providers: %v, want the usage with every flag", err)
+	}
+}
+
+// How long is left is counted in days, exactly, and a far expiry is not cut
+// off where a time.Duration stops.
+func TestCheckJWTKeyCountsTheDaysLeft(t *testing.T) {
+	var out bytes.Buffer
+	r := &keyReport{out: &out}
+	r.describeKey(testJWT(t, time.Now().Add(400*24*time.Hour+time.Hour)))
+	if !strings.Contains(out.String(), "(400 days left)") {
+		t.Errorf("400 days and an hour: %s", out.String())
+	}
+	out.Reset()
+	r.describeKey(testJWT(t, time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)))
+	if strings.Contains(out.String(), "106751") || !strings.Contains(out.String(), "9999-12-31") {
+		t.Errorf("an expiry in 9999: %s", out.String())
+	}
+}
+
+// Run in the home directory, the home's config file is not the project's;
+// a file only the world can read is still a file others can read.
+func TestCheckJWTKeyFileWarnings(t *testing.T) {
+	home, _ := keyCheckEnv(t)
+	t.Chdir(home)
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	g := newFakeGateway(t, key)
+	writeKeyConfig(t, filepath.Join(home, ".localcode", "config.json"), g.URL+"/v1", key, 0o604)
+	var out bytes.Buffer
+	if err := checkJWTKey([]string{"--no-chat"}, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "project's config file") {
+		t.Errorf("the home's file was called the project's:\n%s", out.String())
+	}
+	if runtime.GOOS != "windows" && !strings.Contains(out.String(), "readable by other users (mode 0604)") {
+		t.Errorf("a world-readable file was not warned about:\n%s", out.String())
+	}
+}
+
+// The check says so when the base URL would send the key unencrypted. The
+// address is a documentation one nothing answers on, and the timeout is
+// short, since only the warning is wanted.
+func TestCheckJWTKeyWarnsOfCleartext(t *testing.T) {
+	home, _ := keyCheckEnv(t)
+	key := testJWT(t, time.Now().Add(24*time.Hour))
+	writeKeyConfig(t, filepath.Join(home, ".localcode", "config.json"), "http://192.0.2.1:9/v1", key, 0o600)
+	var out bytes.Buffer
+	checkJWTKey([]string{"--no-chat", "--timeout", "200ms"}, &out)
+	if !strings.Contains(out.String(), "base_url is http and not this machine") {
+		t.Errorf("no cleartext warning:\n%s", out.String())
+	}
+	if !sendsKeyInClear("http://192.0.2.1/v1") || sendsKeyInClear("http://LOCALHOST:1234/v1") {
+		t.Error("sendsKeyInClear judged a remote or an upper-case localhost wrongly")
+	}
+	if got := chatModel("none", mustConfig(t, `{"providers": {"gw": {"type": "openai-compat", "base_url": "http://x/v1"}}}`), "", nil); got != "" {
+		t.Errorf("no flag, no profile and no list: %q, want none", got)
 	}
 }

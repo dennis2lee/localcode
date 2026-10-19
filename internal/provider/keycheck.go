@@ -47,14 +47,23 @@ func ParseJWT(key string) (JWTClaims, bool) {
 	if !decodeSegment(parts[1], &claims) || claims == nil {
 		return JWTClaims{}, false
 	}
+	// A token a gateway issues is signed, so the third part is there and is
+	// base64url, whatever it says.
+	if sig := strings.TrimRight(parts[2], "="); sig == "" {
+		return JWTClaims{}, false
+	} else if _, err := base64.RawURLEncoding.DecodeString(sig); err != nil {
+		return JWTClaims{}, false
+	}
 	out := JWTClaims{Algorithm: header.Alg, KeyID: header.Kid}
 	out.Issuer, _ = claims["iss"].(string)
 	switch aud := claims["aud"].(type) {
 	case string:
-		out.Audience = []string{aud}
+		if aud != "" {
+			out.Audience = []string{aud}
+		}
 	case []any:
 		for _, a := range aud {
-			if s, ok := a.(string); ok {
+			if s, ok := a.(string); ok && s != "" {
 				out.Audience = append(out.Audience, s)
 			}
 		}
@@ -75,14 +84,19 @@ func decodeSegment(seg string, out any) bool {
 	return json.Unmarshal(data, out) == nil
 }
 
+// maxEpoch is the last second of the year 9999. A NumericDate past it is
+// read as it: converted as it stood, a number past int64 wrapped round to a
+// date in the past, and an unexpired token read as expired.
+const maxEpoch = 253402300799
+
 // epoch is a NumericDate claim as a time, or the zero time when the claim
-// is absent or not a number.
+// is absent, not a number, or under a second.
 func epoch(v any) time.Time {
 	n, ok := v.(float64)
-	if !ok || n <= 0 {
+	if !ok || n < 1 {
 		return time.Time{}
 	}
-	return time.Unix(int64(n), 0).UTC()
+	return time.Unix(int64(min(n, maxEpoch)), 0).UTC()
 }
 
 // ModelList asks the endpoint which models it serves, sending the key, and
@@ -111,15 +125,18 @@ func (p *OpenAICompat) ModelList(ctx context.Context) (ids []string, status int,
 	if resp.StatusCode != http.StatusOK {
 		return nil, resp.StatusCode, shortDetail(string(raw)), nil
 	}
+	// A model list is an object with a data array. A sign-in page or an
+	// {"error": ...} answered with 200 is not one, and was read as an
+	// empty list that the key had been accepted for.
 	var body struct {
-		Data []struct {
+		Data *[]struct {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if json.Unmarshal(raw, &body) != nil {
+	if json.Unmarshal(raw, &body) != nil || body.Data == nil {
 		return nil, resp.StatusCode, "the answer is not a model list: " + shortDetail(string(raw)), nil
 	}
-	for _, m := range body.Data {
+	for _, m := range *body.Data {
 		if m.ID != "" {
 			ids = append(ids, m.ID)
 		}

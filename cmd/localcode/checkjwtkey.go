@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 
 	"localcode/internal/config"
 	"localcode/internal/provider"
+	"localcode/internal/userdirs"
 )
 
 // runCheckJWTKey answers "does the JWT I put in config.json work": for each
@@ -34,25 +36,30 @@ func runCheckJWTKey(args []string) error {
 	return checkJWTKey(args, os.Stdout)
 }
 
+const checkJWTKeyUsage = "usage: localcode check-jwt-key [provider] [--model M] [--no-chat] [--config path] [--timeout d]"
+
 func checkJWTKey(args []string, out io.Writer) error {
-	var name string
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		name, args = args[0], args[1:]
-	}
 	fs := flag.NewFlagSet("check-jwt-key", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	configPath := fs.String("config", "", "config file to read instead of the merged ~/.localcode and project ones")
 	model := fs.String("model", "", "model for the chat check; default: the model of a profile on the provider, else the first one the endpoint lists")
 	noChat := fs.Bool("no-chat", false, "only ask for the model list, and send no chat request")
 	timeout := fs.Duration("timeout", time.Minute, "how long to wait for each answer")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	switch {
-	case fs.NArg() == 1 && name == "":
-		name = fs.Arg(0)
-	case fs.NArg() > 0:
-		return fmt.Errorf("usage: localcode check-jwt-key [provider] [--model M] [--no-chat] [--config path]")
+	// Flags before the provider name, after it, or both: the flag package
+	// stops at the first word that is not a flag, so the name is taken out
+	// and the rest parsed again.
+	var name string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		if name != "" {
+			return errors.New(checkJWTKeyUsage)
+		}
+		name, args = fs.Arg(0), fs.Args()[1:]
 	}
 
 	e, err := resolveEnv()
@@ -123,10 +130,15 @@ func isJWT(key string) bool {
 }
 
 // keyFiles is the config files a key may be written in, the project one
-// first: the files LoadMerged reads, or the one --config names.
+// first: the files LoadMerged reads, or the one --config names. One file
+// when the project is the home directory, where it is not a project's own.
+// A file listed under include is not among them.
 func keyFiles(explicit string, e env) []string {
 	if explicit != "" {
 		return []string{explicit}
+	}
+	if userdirs.SameDirectory(e.cwd, e.home) {
+		return []string{filepath.Join(e.home, ".localcode", "config.json")}
 	}
 	return []string{
 		filepath.Join(e.cwd, ".localcode", "config.json"),
@@ -143,40 +155,50 @@ type keyReport struct {
 }
 
 func (r *keyReport) line(label, format string, a ...any) {
-	text := fmt.Sprintf(format, a...)
-	for _, s := range secretsOf(r.key) {
-		text = strings.ReplaceAll(text, s, "[the key]")
-	}
-	fmt.Fprintf(r.out, "  %-9s %s\n", label, text)
+	fmt.Fprintf(r.out, "  %-9s %s\n", label, redactKey(fmt.Sprintf(format, a...), r.key))
 }
 
-// minSecretLen is the shortest string the report treats as part of a key.
-// Shorter, and replacing it rewrites ordinary words while hiding nothing a
-// guess would not find.
+// minSecretLen is the shortest key the report hides. Shorter, and hiding
+// it rewrites ordinary words while protecting nothing a guess would not
+// find.
 const minSecretLen = 8
 
-// secretsOf is what the report must not print: the key, then each of its
-// dot-separated parts, longest first, since a server may echo a JWT's
-// signature alone.
-func secretsOf(key string) []string {
+// minEchoLen is the shortest run of the key's characters taken out of a
+// line: long enough that ordinary text does not match it by chance, short
+// enough that what is left of a key cut off mid-way is no use to anyone.
+const minEchoLen = 12
+
+// redactKey replaces every run of minEchoLen or more characters that also
+// appears, in that order, in the key: the whole key, one of a JWT's three
+// parts, or the part of one that survived an endpoint's reply being cut
+// short before it got here. Matching the key whole missed all but the
+// first of those.
+func redactKey(text, key string) string {
 	key = strings.TrimSpace(key)
-	var out []string
-	if len(key) >= minSecretLen {
-		out = append(out, key)
+	if len(key) < minSecretLen {
+		return text
 	}
-	parts := strings.Split(key, ".")
-	sort.Slice(parts, func(i, j int) bool { return len(parts[i]) > len(parts[j]) })
-	for _, part := range parts {
-		if len(part) >= minSecretLen && part != key {
-			out = append(out, part)
+	least := min(minEchoLen, len(key))
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		j := i
+		for j < len(text) && strings.Contains(key, text[i:j+1]) {
+			j++
 		}
+		if j-i >= least {
+			b.WriteString("[the key]")
+			i = j
+			continue
+		}
+		b.WriteByte(text[i])
+		i++
 	}
-	return out
+	return b.String()
 }
 
 func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Config, files []string, model string, noChat bool, timeout time.Duration) bool {
 	key := strings.TrimSpace(pc.APIKey)
-	fmt.Fprintf(r.out, "provider %s (openai-compat, %s)\n", name, pc.BaseURL)
+	fmt.Fprintln(r.out, redactKey(fmt.Sprintf("provider %s (openai-compat, %s)", name, pc.BaseURL), key))
 
 	expired := r.describeKey(key)
 	r.describeFile(key, files)
@@ -192,7 +214,7 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 	switch {
 	case err != nil:
 		r.line("models", "no answer: %v", err)
-	case status == 200:
+	case status == 200 && detail == "":
 		listed = true
 		r.line("models", "accepted: %d model(s)%s", len(ids), listOf(ids))
 	case status == 401 || status == 403:
@@ -218,7 +240,13 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 	m := chatModel(name, cfg, model, ids)
 	if m == "" {
 		r.line("chat", "not sent: no model to ask. Pass --model, or add a profile on provider %q", name)
-		fmt.Fprintln(r.out, "result: not known")
+		// A refusal is an answer, whether or not a chat request could be
+		// made after it.
+		if status == 401 || status == 403 {
+			r.result(false, expired, status)
+		} else {
+			fmt.Fprintln(r.out, "result: not known")
+		}
 		return false
 	}
 	body, _ := json.Marshal(map[string]any{
@@ -264,10 +292,10 @@ func (r *keyReport) describeKey(key string) bool {
 	case c.Expires.IsZero():
 		r.line("expires", "never: the token carries no exp")
 	case now.After(c.Expires):
-		r.line("expires", "EXPIRED on %s (%s ago)", c.Expires.Format("2006-01-02 15:04 MST"), days(now.Sub(c.Expires)))
+		r.line("expires", "EXPIRED on %s (%s ago)", c.Expires.Format("2006-01-02 15:04 MST"), timeBetween(c.Expires, now))
 		return true
 	default:
-		r.line("expires", "%s (%s left)", c.Expires.Format("2006-01-02 15:04 MST"), days(c.Expires.Sub(now)))
+		r.line("expires", "%s (%s left)", c.Expires.Format("2006-01-02 15:04 MST"), timeBetween(now, c.Expires))
 	}
 	return false
 }
@@ -371,11 +399,18 @@ func shortReply(s string) string {
 	return s
 }
 
-func days(d time.Duration) string {
-	if n := int(d.Hours() / 24); n >= 1 {
+// timeBetween is how long from a to b, in days when it is one or more. In
+// seconds rather than a time.Duration, which tops out at 292 years and so
+// read a far expiry as 106751 days.
+func timeBetween(a, b time.Time) string {
+	secs := b.Unix() - a.Unix()
+	switch n := secs / 86400; {
+	case n == 1:
+		return "1 day"
+	case n > 1:
 		return fmt.Sprintf("%d days", n)
 	}
-	return d.Round(time.Minute).String()
+	return (time.Duration(secs) * time.Second).Round(time.Minute).String()
 }
 
 // sendsKeyInClear reports whether a key sent to baseURL crosses a network
@@ -386,7 +421,7 @@ func sendsKeyInClear(baseURL string) bool {
 }
 
 func isLoopbackHost(host string) bool {
-	if host == "localhost" {
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
