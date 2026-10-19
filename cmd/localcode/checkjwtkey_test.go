@@ -92,7 +92,7 @@ func writeKeyConfig(t *testing.T, path, baseURL, key string, mode os.FileMode) {
 	}
 }
 
-// keyCheckEnv is a home and a project directory to run check-key in, with
+// keyCheckEnv is a home and a project directory to run check-jwt-key in, with
 // the process in the project.
 func keyCheckEnv(t *testing.T) (home, project string) {
 	t.Helper()
@@ -113,15 +113,15 @@ func noKeyIn(t *testing.T, out, key string) {
 // A key the gateway accepts is reported as working: what the JWT says,
 // when it expires, where it is written, the models the gateway lists, and
 // one chat reply from the default profile's model. The key is not printed.
-func TestCheckKeyReportsAWorkingJWT(t *testing.T) {
+func TestCheckJWTKeyReportsAWorkingJWT(t *testing.T) {
 	home, _ := keyCheckEnv(t)
 	key := testJWT(t, time.Now().Add(400*24*time.Hour))
 	g := newFakeGateway(t, key)
 	writeKeyConfig(t, filepath.Join(home, ".localcode", "config.json"), g.URL+"/v1", key, 0o600)
 
 	var out bytes.Buffer
-	if err := checkKey(nil, &out); err != nil {
-		t.Fatalf("check-key: %v\n%s", err, out.String())
+	if err := checkJWTKey(nil, &out); err != nil {
+		t.Fatalf("check-jwt-key: %v\n%s", err, out.String())
 	}
 	report := out.String()
 	for _, want := range []string{
@@ -146,7 +146,7 @@ func TestCheckKeyReportsAWorkingJWT(t *testing.T) {
 // A key the gateway refuses is reported as not working, with the status,
 // and the check fails. The gateway's answer repeats the key, and the
 // report does not. An expired token says so in the last line.
-func TestCheckKeyReportsARefusedKey(t *testing.T) {
+func TestCheckJWTKeyReportsARefusedKey(t *testing.T) {
 	home, _ := keyCheckEnv(t)
 	g := newFakeGateway(t, "the-only-key-it-takes")
 	for _, tc := range []struct {
@@ -161,7 +161,7 @@ func TestCheckKeyReportsARefusedKey(t *testing.T) {
 			key := testJWT(t, tc.exp)
 			writeKeyConfig(t, filepath.Join(home, ".localcode", "config.json"), g.URL+"/v1", key, 0o600)
 			var out bytes.Buffer
-			err := checkKey([]string{"gw"}, &out)
+			err := checkJWTKey([]string{"gw"}, &out)
 			if err == nil || !strings.Contains(err.Error(), "the key of gw did not work") {
 				t.Fatalf("a refused key: err %v\n%s", err, out.String())
 			}
@@ -180,35 +180,35 @@ func TestCheckKeyReportsARefusedKey(t *testing.T) {
 }
 
 // --no-chat asks only for the model list and sends no chat request.
-func TestCheckKeyWithoutChat(t *testing.T) {
+func TestCheckJWTKeyWithoutChat(t *testing.T) {
 	home, _ := keyCheckEnv(t)
 	key := testJWT(t, time.Now().Add(24*time.Hour))
 	g := newFakeGateway(t, key)
 	writeKeyConfig(t, filepath.Join(home, ".localcode", "config.json"), g.URL+"/v1", key, 0o600)
 
 	var out bytes.Buffer
-	if err := checkKey([]string{"--no-chat"}, &out); err != nil {
-		t.Fatalf("check-key --no-chat: %v\n%s", err, out.String())
+	if err := checkJWTKey([]string{"--no-chat"}, &out); err != nil {
+		t.Fatalf("check-jwt-key --no-chat: %v\n%s", err, out.String())
 	}
 	if g.chats.Load() != 0 || !strings.Contains(out.String(), "no chat request sent") {
 		t.Errorf("%d chat requests; report:\n%s", g.chats.Load(), out.String())
 	}
 }
 
-// A key written where others can read it, or in the project's own config
-// file, is said to be at risk. A plain API key is checked as one.
-func TestCheckKeyWarnsWhereTheKeyIsWritten(t *testing.T) {
+// A token written where others can read it, or in the project's own config
+// file, is said to be at risk.
+func TestCheckJWTKeyWarnsWhereTheKeyIsWritten(t *testing.T) {
 	_, project := keyCheckEnv(t)
-	key := "sk-plain-test-key-123"
+	key := testJWT(t, time.Now().Add(24*time.Hour))
 	g := newFakeGateway(t, key)
 	writeKeyConfig(t, filepath.Join(project, ".localcode", "config.json"), g.URL+"/v1", key, 0o644)
 
 	var out bytes.Buffer
-	if err := checkKey([]string{"gw", "--model", "CodeA"}, &out); err != nil {
-		t.Fatalf("check-key: %v\n%s", err, out.String())
+	if err := checkJWTKey([]string{"gw", "--model", "CodeA"}, &out); err != nil {
+		t.Fatalf("check-jwt-key: %v\n%s", err, out.String())
 	}
 	report := out.String()
-	wants := []string{"not a JWT (21 characters)", "the project's config file", `CodeA answered "OK from CodeA"`}
+	wants := []string{"the project's config file", `CodeA answered "OK from CodeA"`}
 	if runtime.GOOS != "windows" {
 		wants = append(wants, "readable by other users (mode 0644)")
 	}
@@ -220,11 +220,13 @@ func TestCheckKeyWarnsWhereTheKeyIsWritten(t *testing.T) {
 	noKeyIn(t, report, key)
 }
 
-// What check-key covers, and what it refuses before sending anything.
-func TestCheckKeyChoosesItsProviders(t *testing.T) {
+// What check-jwt-key covers, and what it refuses before sending anything:
+// it checks JWT keys only, so a provider whose api_key is anything else is
+// refused by name and passed over when no name is given.
+func TestCheckJWTKeyChoosesItsProviders(t *testing.T) {
 	home, _ := keyCheckEnv(t)
 	cfg := `{"providers": {
-		"gw": {"type": "openai-compat", "base_url": "http://127.0.0.1:9/v1", "api_key": "k"},
+		"gw": {"type": "openai-compat", "base_url": "http://127.0.0.1:9/v1", "api_key": "sk-not-a-jwt-key"},
 		"local": {"type": "openai-compat", "base_url": "http://127.0.0.1:9/v1"},
 		"claude": {"type": "anthropic", "api_key": "a"}},
 	  "profiles": {"main": {"provider": "gw", "model": "m"}}, "default_profile": "main"}`
@@ -236,13 +238,15 @@ func TestCheckKeyChoosesItsProviders(t *testing.T) {
 	}
 	for args, want := range map[string]string{
 		"nosuch": `no provider "nosuch" in config. Configured: claude, gw, local`,
-		"claude": `provider "claude" is anthropic; check-key checks openai-compat providers`,
+		"claude": `provider "claude" is anthropic; check-jwt-key checks openai-compat providers`,
 		"local":  `provider "local" has no api_key to check`,
-		"a b":    "usage: localcode check-key",
+		"gw":     `provider "gw"'s api_key is not a JWT`,
+		"":       "no openai-compat provider in config has a JWT in api_key",
+		"a b":    "usage: localcode check-jwt-key",
 	} {
-		err := checkKey(strings.Fields(args), &bytes.Buffer{})
+		err := checkJWTKey(strings.Fields(args), &bytes.Buffer{})
 		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("check-key %s: %v, want %q", args, err, want)
+			t.Errorf("check-jwt-key %s: %v, want %q", args, err, want)
 		}
 	}
 }
@@ -300,4 +304,36 @@ func mustConfig(t *testing.T, text string) *config.Config {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+// A server can echo part of a key: a JWT's signature alone, say. Each part
+// long enough to matter is taken out as the whole key is. A key too short
+// to be a secret is left alone, rather than every letter like it in the
+// report being replaced.
+func TestTheReportTakesOutPartsOfTheKey(t *testing.T) {
+	key := "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE5MDAwMDAwMDB9.c2lnbmF0dXJlLXNlY3JldC12YWx1ZS0xMjM0NTY3ODkw"
+	parts := strings.Split(key, ".")
+	var out bytes.Buffer
+	r := &keyReport{out: &out, key: " " + key + "\n"}
+	r.line("chat", "echoed: %s | %s | %s | %s", key, parts[2], parts[1], parts[0])
+	for _, p := range append(parts, key) {
+		if strings.Contains(out.String(), p) {
+			t.Errorf("%q was printed: %s", p, out.String())
+		}
+	}
+	if n := strings.Count(out.String(), "[the key]"); n != 4 {
+		t.Errorf("%d replacements, want 4: %s", n, out.String())
+	}
+
+	out.Reset()
+	r = &keyReport{out: &out, key: "k"}
+	r.line("models", `refused (401): {"error": "token check failed"}`)
+	if strings.Contains(out.String(), "[the key]") {
+		t.Errorf("a one-letter key rewrote the line: %s", out.String())
+	}
+	out.Reset()
+	r.describeFile("k", []string{filepath.Join(t.TempDir(), "config.json")})
+	if !strings.Contains(out.String(), "not looked for") {
+		t.Errorf("a one-letter key was looked for in config files: %s", out.String())
+	}
 }

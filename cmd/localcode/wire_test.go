@@ -121,3 +121,28 @@ func TestAnAnthropicProviderWithAKeyIsBuiltAtOnce(t *testing.T) {
 		t.Errorf("provider = %#v, want the key and base URL from the config", providers["anthropic"])
 	}
 }
+
+// A key pasted into config.json with a newline or a space around it is sent
+// without them, the way "localcode check-jwt-key" sends it. Sent as written, a
+// newline made Go refuse the request and a space became part of the key,
+// so the check could pass while every turn failed.
+func TestAProviderKeyIsSentWithoutSurroundingSpace(t *testing.T) {
+	cfg := &config.Config{Providers: map[string]config.ProviderConfig{
+		"gw":        {Type: config.ProviderOpenAICompat, BaseURL: "https://gateway.example.com/v1", APIKey: " eyJ.a.b\n"},
+		"anthropic": {Type: config.ProviderAnthropic, APIKey: "\tsk-ant-config \n"},
+		"blank":     {Type: config.ProviderAnthropic, APIKey: "  \n"},
+	}}
+	providers, err := buildProviders(context.Background(), cfg, env{home: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oa, ok := providers["gw"].(*provider.OpenAICompat); !ok || oa.APIKey != "eyJ.a.b" {
+		t.Errorf("openai-compat provider = %#v, want the key trimmed", providers["gw"])
+	}
+	if ad, ok := providers["anthropic"].(*provider.AnthropicDirect); !ok || ad.APIKey != "sk-ant-config" {
+		t.Errorf("anthropic provider = %#v, want the key trimmed", providers["anthropic"])
+	}
+	if _, ok := providers["blank"].(*keylessAnthropic); !ok {
+		t.Errorf("a key of only spaces = %#v, want the stored key looked up instead", providers["blank"])
+	}
+}

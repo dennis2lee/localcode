@@ -335,10 +335,10 @@ A gateway that issues a JWT takes it the same way: put the whole token in `api_k
 ```
 
 ```bash
-localcode check-key gw
+localcode check-jwt-key gw
 ```
 
-It decodes the token and shows its expiry, lists the models the gateway serves, and sends one short chat request. See [`localcode check-key`](USAGE.md#checking-a-key-localcode-check-key). A token that expires is replaced by hand: localcode does not renew it.
+It decodes the token and shows its expiry, lists the models the gateway serves, and sends one short chat request. See [`localcode check-jwt-key`](USAGE.md#checking-a-jwt-key-localcode-check-jwt-key). A token that expires is replaced by hand: localcode does not renew it.
 
 Some opencode fields have no localcode equivalent:
 

@@ -766,10 +766,14 @@ func buildProviders(ctx context.Context, cfg *config.Config, e env) (map[string]
 			// make a local-only daemon depend on ~/.aws or an AWS profile.
 			out[name] = provider.NewBedrock(pc.Region, pc.Profile)
 		case config.ProviderOpenAICompat:
-			out[name] = provider.NewOpenAICompat(pc.BaseURL, pc.APIKey)
+			// Trimmed, as a key pasted into config.json often carries a
+			// newline or a space: Go refuses to send a header with a newline
+			// in it, and a server reads a trailing space as part of the key.
+			// "localcode check-jwt-key" sends the key the same way.
+			out[name] = provider.NewOpenAICompat(pc.BaseURL, strings.TrimSpace(pc.APIKey))
 		case config.ProviderAnthropic:
-			if pc.APIKey != "" {
-				out[name] = newAnthropic(pc.APIKey, pc.BaseURL)
+			if key := strings.TrimSpace(pc.APIKey); key != "" {
+				out[name] = newAnthropic(key, pc.BaseURL)
 				continue
 			}
 			// No key in the config: the one `localcode login anthropic`

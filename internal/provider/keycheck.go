@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// What "localcode check-key" asks of a key: what it says about itself, and
+// What "localcode check-jwt-key" asks of a key: what it says about itself, and
 // whether the endpoint takes it.
 
 // JWTClaims is what a key that is a JWT says about itself. Read, not

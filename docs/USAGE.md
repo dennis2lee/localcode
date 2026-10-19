@@ -68,7 +68,7 @@ localcode --agent general-purpose
 | `--gui` | on for a `-tags gui` build, off otherwise | Open the native desktop window instead of the TUI. `--gui=false` forces the TUI on a build that has the window. |
 | `-version`, `--version` | `false` | Print the build version and exit |
 
-Subcommands: `run`, `login`, `check-key`, `mcp`, `version`. `localcode version` is equivalent to `-version`.
+Subcommands: `run`, `login`, `check-jwt-key`, `mcp`, `version`. `localcode version` is equivalent to `-version`.
 
 ### One prompt, no window: `localcode run`
 
@@ -521,7 +521,7 @@ A step counts as new work only when it makes a call not already made this turn a
 | `anthropic.api_key` | Optional. Omit it and the key stored by `localcode login anthropic` in `~/.localcode/credentials.json` is used. |
 | `anthropic.base_url` | Defaults to `api.anthropic.com`. Override it to go through a corporate proxy. |
 | `openai-compat.base_url` | The URL prefix in front of `/chat/completions` |
-| `openai-compat.api_key` | Optional, usually unnecessary for a local server. Sent as `Authorization: Bearer <key>`. A JWT that a gateway issues works as is. [`localcode check-key`](#checking-a-key-localcode-check-key) checks that the endpoint accepts it. |
+| `openai-compat.api_key` | Optional, usually unnecessary for a local server. Sent as `Authorization: Bearer <key>`. A JWT that a gateway issues works as is. [`localcode check-jwt-key`](#checking-a-jwt-key-localcode-check-jwt-key) checks that the endpoint accepts it. |
 | `<type>.max_concurrent_tasks` | Concurrent background-task limit for one provider endpoint. Acquired before the global limit. Zero or unset: no per-provider limit, so the endpoint is bounded only by the daemon-wide `max_concurrent_tasks`, which defaults to 1. Maximum: 64. Validated at startup. |
 
 See [MODELS.md](MODELS.md) for real model IDs, region prefixes, and Bedrock troubleshooting.
@@ -880,12 +880,12 @@ Reads an API key from `console.anthropic.com`, hidden from the screen on a real 
 
 config.json then needs only `"providers": {"anthropic": {"type":"anthropic"}}`. Leaving out `api_key` uses the stored key.
 
-### Checking a key: `localcode check-key`
+### Checking a JWT key: `localcode check-jwt-key`
 
-`localcode check-key` reports whether the endpoint accepts the `api_key` in config.json, without starting the daemon. It checks each `openai-compat` provider that has an `api_key`, or the one named.
+`localcode check-jwt-key` reports whether the endpoint accepts the JWT in a provider's `api_key`, without starting the daemon. It checks each `openai-compat` provider whose `api_key` is a JWT, or the one named. It checks JWT keys only: a named provider whose `api_key` is anything else is refused, and one not named is passed over.
 
 ```bash
-localcode check-key gw
+localcode check-jwt-key gw
 ```
 
 ```text
@@ -900,17 +900,17 @@ result: the key works
 
 | Line | What it says |
 |---|---|
-| `key` | A JWT is decoded: algorithm, key id, issuer, audience. It is not verified; the endpoint holds the key that checks it. Any other key is checked as a plain API key. |
+| `key` | The token's algorithm, key id, issuer and audience. It is decoded, not verified: the endpoint holds the key that checks it. |
 | `expires` | The JWT's `exp`, and how long is left. An expired token is still sent, because the endpoint decides and a clock here can be wrong. |
-| `written` | Which config file holds the key. A warning follows when the file is the project's own, which is committed with the project, or when other users can read it. |
+| `written` | Which config file holds the token. A warning follows when the file is the project's own, which is committed with the project, or when other users can read it. |
 | `models` | `GET <base_url>/models` with the key: the models listed, or the status the endpoint answered. |
 | `chat` | One short `POST <base_url>/chat/completions` reply, the request every turn makes. The model is `--model`, else the model of a profile on that provider (`default_profile` first), else the first model listed. |
-| `result` | `the key works` exits 0. A refusal (401 or 403) exits 1 and says what to change, and says so when the token has expired. |
+| `result` | `the key works` exits 0. Anything else exits 1. A refusal (401 or 403) says what to change, and says so when the token has expired. |
 
 * `--no-chat` sends only the model list request. A model list can be open to anybody, so this proves less than the chat request.
 * `--config <path>` checks that file instead of the merged `~/.localcode` and project files. `--timeout` bounds each request, one minute by default.
-* A warning is printed when `base_url` is plain `http` to another machine, since the key would cross the network unencrypted.
-* The key is never printed. Text the endpoint sends back has the key replaced with `[the key]`.
+* A warning is printed when `base_url` is plain `http` to another machine, since the key would cross the network unencrypted. Every provider, and this check, refuses a redirect from `https` to plain `http` for the same reason.
+* The token is never printed. Text the endpoint sends back has the token, and each of its three parts, replaced with `[the key]`.
 
 ## Part 3. Project context
 

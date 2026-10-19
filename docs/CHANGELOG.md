@@ -2,13 +2,18 @@
 
 ## v0.162.0
 
-`localcode check-key` reports whether an endpoint accepts the `api_key` in config.json, including a JWT that a gateway issues.
+`localcode check-jwt-key` reports whether an endpoint accepts the JWT a gateway issued, put in a provider's `api_key` in config.json.
 
 **Added**
 
-* `localcode check-key [provider]`: for each `openai-compat` provider with an `api_key`, the key's kind (a JWT is decoded, not verified, with its expiry), the config file it is written in, the endpoint's model list, and one short chat reply; exits 1 when the endpoint refuses the key
-* Warnings for a key in the project's config file, a config file other users can read, and a plain `http` base URL to another machine; the key is never printed, and an endpoint's reply that repeats it is shown with `[the key]` in its place
+* `localcode check-jwt-key [provider]`: for each `openai-compat` provider whose `api_key` is a JWT, what the token claims and when it expires (decoded, not verified), the config file it is written in, the endpoint's model list, and one short chat reply; exits 1 unless the key works. A key that is not a JWT is not checked
+* Warnings for a token in the project's config file, a config file other users can read, and a plain `http` base URL to another machine; the token is never printed, and an endpoint's reply that repeats it, or any of its three parts, is shown with `[the key]` in its place
 * USAGE.md and MODELS.md describe putting a gateway's JWT in `api_key` and checking it
+
+**Fixed**
+
+* An `api_key` pasted into config.json with a newline or a space around it sent as written, so Go refused the request or the server read the space as part of the key; it is sent trimmed, as `check-jwt-key` sends it
+* A redirect from an https endpoint to plain http followed with the API key or JWT still in the `Authorization` header, which Go forwards to the same host whatever the scheme; such a redirect is refused
 
 ## v0.161.0
 

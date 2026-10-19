@@ -19,26 +19,27 @@ import (
 	"localcode/internal/provider"
 )
 
-// runCheckKey answers "does the key I put in config.json work": for each
-// OpenAI-compatible provider that has an api_key, or the one named, it says
-// what the key is (a JWT is decoded, not verified: the endpoint holds the
-// key that checks it), where it is written and who can read that file, and
-// then asks the endpoint with it: once for its model list and once for one
-// short chat reply. The key itself is never printed.
+// runCheckJWTKey answers "does the JWT I put in config.json work": for each
+// OpenAI-compatible provider whose api_key is a JWT, or the one named, it
+// says what the token claims (decoded, not verified: the endpoint holds the
+// key that checks it), when it expires, where it is written and who can
+// read that file, and then asks the endpoint with it: once for its model
+// list and once for one short chat reply. The token itself is never
+// printed. A key that is not a JWT is not its business.
 //
 // The chat reply is the answer. A model list can be open to anybody or not
 // offered at all, so a 200 there proves less than the request every turn
 // will make.
-func runCheckKey(args []string) error {
-	return checkKey(args, os.Stdout)
+func runCheckJWTKey(args []string) error {
+	return checkJWTKey(args, os.Stdout)
 }
 
-func checkKey(args []string, out io.Writer) error {
+func checkJWTKey(args []string, out io.Writer) error {
 	var name string
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		name, args = args[0], args[1:]
 	}
-	fs := flag.NewFlagSet("check-key", flag.ContinueOnError)
+	fs := flag.NewFlagSet("check-jwt-key", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	configPath := fs.String("config", "", "config file to read instead of the merged ~/.localcode and project ones")
 	model := fs.String("model", "", "model for the chat check; default: the model of a profile on the provider, else the first one the endpoint lists")
@@ -51,7 +52,7 @@ func checkKey(args []string, out io.Writer) error {
 	case fs.NArg() == 1 && name == "":
 		name = fs.Arg(0)
 	case fs.NArg() > 0:
-		return fmt.Errorf("usage: localcode check-key [provider] [--model M] [--no-chat] [--config path]")
+		return fmt.Errorf("usage: localcode check-jwt-key [provider] [--model M] [--no-chat] [--config path]")
 	}
 
 	e, err := resolveEnv()
@@ -62,7 +63,7 @@ func checkKey(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	names, err := keyedProviders(cfg, name)
+	names, err := jwtProviders(cfg, name)
 	if err != nil {
 		return err
 	}
@@ -86,32 +87,39 @@ func checkKey(args []string, out io.Writer) error {
 	return nil
 }
 
-// keyedProviders is the providers a check covers: the one named, or every
-// OpenAI-compatible provider with an api_key, in name order.
-func keyedProviders(cfg *config.Config, name string) ([]string, error) {
+// jwtProviders is the providers a check covers: the one named, or every
+// OpenAI-compatible provider whose api_key is a JWT, in name order.
+func jwtProviders(cfg *config.Config, name string) ([]string, error) {
 	if name != "" {
 		pc, ok := cfg.Providers[name]
 		switch {
 		case !ok:
 			return nil, fmt.Errorf("no provider %q in config. Configured: %s", name, strings.Join(sortedNames(cfg.Providers), ", "))
 		case pc.Type != config.ProviderOpenAICompat:
-			return nil, fmt.Errorf("provider %q is %s; check-key checks openai-compat providers, which send api_key as a bearer token", name, pc.Type)
+			return nil, fmt.Errorf("provider %q is %s; check-jwt-key checks openai-compat providers, which send api_key as a bearer token", name, pc.Type)
 		case strings.TrimSpace(pc.APIKey) == "":
-			return nil, fmt.Errorf("provider %q has no api_key to check. Put the key in providers.%s.api_key", name, name)
+			return nil, fmt.Errorf("provider %q has no api_key to check. Put the JWT in providers.%s.api_key", name, name)
+		case !isJWT(pc.APIKey):
+			return nil, fmt.Errorf("provider %q's api_key is not a JWT (three dot-separated base64url parts with a header naming its algorithm); check-jwt-key checks JWT keys only", name)
 		}
 		return []string{name}, nil
 	}
 	var out []string
 	for n, pc := range cfg.Providers {
-		if pc.Type == config.ProviderOpenAICompat && strings.TrimSpace(pc.APIKey) != "" {
+		if pc.Type == config.ProviderOpenAICompat && isJWT(pc.APIKey) {
 			out = append(out, n)
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no openai-compat provider in config has an api_key. Put the key in providers.<name>.api_key, or name the provider to check")
+		return nil, fmt.Errorf("no openai-compat provider in config has a JWT in api_key. Put the token in providers.<name>.api_key, or name the provider to check")
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+func isJWT(key string) bool {
+	_, ok := provider.ParseJWT(key)
+	return ok
 }
 
 // keyFiles is the config files a key may be written in, the project one
@@ -136,10 +144,34 @@ type keyReport struct {
 
 func (r *keyReport) line(label, format string, a ...any) {
 	text := fmt.Sprintf(format, a...)
-	if k := strings.TrimSpace(r.key); k != "" {
-		text = strings.ReplaceAll(text, k, "[the key]")
+	for _, s := range secretsOf(r.key) {
+		text = strings.ReplaceAll(text, s, "[the key]")
 	}
 	fmt.Fprintf(r.out, "  %-9s %s\n", label, text)
+}
+
+// minSecretLen is the shortest string the report treats as part of a key.
+// Shorter, and replacing it rewrites ordinary words while hiding nothing a
+// guess would not find.
+const minSecretLen = 8
+
+// secretsOf is what the report must not print: the key, then each of its
+// dot-separated parts, longest first, since a server may echo a JWT's
+// signature alone.
+func secretsOf(key string) []string {
+	key = strings.TrimSpace(key)
+	var out []string
+	if len(key) >= minSecretLen {
+		out = append(out, key)
+	}
+	parts := strings.Split(key, ".")
+	sort.Slice(parts, func(i, j int) bool { return len(parts[i]) > len(parts[j]) })
+	for _, part := range parts {
+		if len(part) >= minSecretLen && part != key {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Config, files []string, model string, noChat bool, timeout time.Duration) bool {
@@ -208,15 +240,11 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 	return true
 }
 
-// describeKey says what the key is, and reports whether it is a JWT that
-// has expired. The server decides; an expired token is still sent, because
-// a clock here can be wrong and the endpoint is the one that knows.
+// describeKey says what the token claims, and reports whether it has
+// expired. The server decides; an expired token is still sent, because a
+// clock here can be wrong and the endpoint is the one that knows.
 func (r *keyReport) describeKey(key string) bool {
-	c, ok := provider.ParseJWT(key)
-	if !ok {
-		r.line("key", "not a JWT (%d characters); checked as a plain API key", len(key))
-		return false
-	}
+	c, _ := provider.ParseJWT(key)
 	parts := []string{"JWT", c.Algorithm}
 	if c.KeyID != "" {
 		parts = append(parts, "key id "+c.KeyID)
@@ -248,6 +276,10 @@ func (r *keyReport) describeKey(key string) bool {
 // key written into the project's file travels with the project, and a file
 // others can read gives them the key.
 func (r *keyReport) describeFile(key string, files []string) {
+	if len(key) < minSecretLen {
+		r.line("written", "not looked for: a key this short would match text that is not the key")
+		return
+	}
 	for i, path := range files {
 		data, err := os.ReadFile(path)
 		if err != nil || !strings.Contains(string(data), key) {
@@ -261,7 +293,7 @@ func (r *keyReport) describeFile(key string, files []string) {
 		}
 		r.line("written", "in %s", shown)
 		if i == 0 && len(files) > 1 {
-			r.line("warning", "that is the project's config file: it is committed with the project unless ignored. Keep the key in ~/.localcode/config.json, or write {env:NAME} and keep it in the environment")
+			r.line("warning", "that is the project's config file: it is committed with the project unless ignored. Keep the token in ~/.localcode/config.json, or write {env:NAME} and keep it in the environment")
 		}
 		if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 			r.line("warning", "%s is readable by other users (mode %04o). Run: chmod 600 %s", shown, info.Mode().Perm(), path)
@@ -280,7 +312,7 @@ func (r *keyReport) result(ok, expired bool, status int) {
 	case (status == 401 || status == 403) && expired:
 		fmt.Fprintf(r.out, "result: the key does not work: the endpoint refused it (%d), and the token has expired. Get a new one and replace api_key\n", status)
 	case status == 401 || status == 403:
-		fmt.Fprintf(r.out, "result: the key does not work: the endpoint refused it (%d). Check that api_key holds the whole token, and that it is for this endpoint\n", status)
+		fmt.Fprintf(r.out, "result: the key does not work: the endpoint refused it (%d). Check that api_key holds the whole token, and that it was issued for this endpoint\n", status)
 	default:
 		fmt.Fprintln(r.out, "result: the key was not confirmed: the request failed for another reason, shown above")
 	}
