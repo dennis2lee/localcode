@@ -210,3 +210,55 @@ func TestParseJWTRefusesStrayCharacters(t *testing.T) {
 		t.Errorf("exp 1: %v %v", c.Expires, ok)
 	}
 }
+
+// A refusal (401 or 403) of a JWT api_key says what the token's date is:
+// expired and when, or valid until when and so not the cause. Nothing is
+// added for another status, a key that is not a JWT, or a token with no exp.
+func TestJWTRefusalHint(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	past := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": now.Add(-72 * time.Hour).Unix()})
+	future := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": now.Add(300 * 24 * time.Hour).Unix()})
+	noExp := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"iss": "x"})
+	for _, tc := range []struct {
+		status int
+		key    string
+		want   string
+	}{
+		{401, past, "expired on 2026-10-16 12:00 UTC. Get a new token"},
+		{403, past, "expired on 2026-10-16 12:00 UTC"},
+		{401, future, "valid until 2027-08-15 12:00 UTC, so its date is not why it was refused"},
+		{500, past, ""},
+		{404, past, ""},
+		{401, "sk-not-a-jwt", ""},
+		{401, noExp, ""},
+	} {
+		got := jwtRefusalHint(tc.status, tc.key, now)
+		if tc.want == "" && got != "" || tc.want != "" && !strings.Contains(got, tc.want) {
+			t.Errorf("status %d, key %.12s: %q, want %q", tc.status, tc.key, got, tc.want)
+		}
+		if strings.Contains(got, tc.key) {
+			t.Errorf("the hint carries the key: %q", got)
+		}
+	}
+}
+
+// The hint arrives on the error a turn sees, after the endpoint's own words.
+func TestOpenAICompatRefusalSaysWhenTheJWTExpired(t *testing.T) {
+	expired := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": time.Now().Add(-48 * time.Hour).Unix()})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":{"message":"invalid or expired token"}}`))
+	}))
+	defer srv.Close()
+	_, err := NewOpenAICompat(srv.URL, expired).Chat(t.Context(), ChatRequest{Model: "m", Messages: []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}}})
+	if err == nil {
+		t.Fatal("a 401 was not an error")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "openai-compat endpoint returned 401: ") || !strings.Contains(msg, "invalid or expired token") {
+		t.Errorf("the endpoint's own words were lost: %s", msg)
+	}
+	if !strings.Contains(msg, "hint: the JWT in this provider's api_key expired on ") || !strings.Contains(msg, "localcode check-jwt-key") {
+		t.Errorf("no expiry hint: %s", msg)
+	}
+}

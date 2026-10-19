@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 // OpenAICompat talks to any OpenAI-compatible /v1/chat/completions endpoint
@@ -424,7 +425,8 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, wrapVisionRefusal(fmt.Errorf("openai-compat endpoint returned %d: %s", resp.StatusCode, errorBody(resp.Body)), req.Model)
+		return nil, wrapVisionRefusal(fmt.Errorf("openai-compat endpoint returned %d: %s%s",
+			resp.StatusCode, errorBody(resp.Body), jwtRefusalHint(resp.StatusCode, p.APIKey, time.Now())), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)

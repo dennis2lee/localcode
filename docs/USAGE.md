@@ -521,7 +521,7 @@ A step counts as new work only when it makes a call not already made this turn a
 | `anthropic.api_key` | Optional. Omit it and the key stored by `localcode login anthropic` in `~/.localcode/credentials.json` is used. |
 | `anthropic.base_url` | Defaults to `api.anthropic.com`. Override it to go through a corporate proxy. |
 | `openai-compat.base_url` | The URL prefix in front of `/chat/completions` |
-| `openai-compat.api_key` | Optional, usually unnecessary for a local server. Sent as `Authorization: Bearer <key>`. A JWT that a gateway issues works as is. [`localcode check-jwt-key`](#checking-a-jwt-key-localcode-check-jwt-key) checks that the endpoint accepts it. |
+| `openai-compat.api_key` | Optional, usually unnecessary for a local server. Sent as `Authorization: Bearer <key>`. A JWT that a gateway issues works as is. [`localcode check-jwt-key`](#checking-a-jwt-key-localcode-check-jwt-key) checks that the endpoint accepts it. When the endpoint refuses a JWT (401 or 403), the error in the transcript says when the token expired, or that it is still valid until a date and so its date is not the cause. |
 | `<type>.max_concurrent_tasks` | Concurrent background-task limit for one provider endpoint. Acquired before the global limit. Zero or unset: no per-provider limit, so the endpoint is bounded only by the daemon-wide `max_concurrent_tasks`, which defaults to 1. Maximum: 64. Validated at startup. |
 
 See [MODELS.md](MODELS.md) for real model IDs, region prefixes, and Bedrock troubleshooting.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -164,4 +165,28 @@ func shortDetail(s string) string {
 		return string(r[:300]) + "…"
 	}
 	return s
+}
+
+// jwtRefusalHint is what an endpoint's refusal (401 or 403) says about a
+// JWT api_key's date: that it has expired, and when, or that it has not, so
+// a person reading "401" in a transcript knows whether to get a new token
+// or look elsewhere. Empty for any other status, a key that is not a JWT,
+// and a token with no exp.
+//
+// The date and nothing else: the retry and fallback decisions read this
+// text, and a count such as "503 days" would read as a server error worth
+// retrying.
+func jwtRefusalHint(status int, key string, now time.Time) string {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return ""
+	}
+	c, ok := ParseJWT(key)
+	if !ok || c.Expires.IsZero() {
+		return ""
+	}
+	when := c.Expires.Format("2006-01-02 15:04 MST")
+	if now.After(c.Expires) {
+		return fmt.Sprintf("\n\nhint: the JWT in this provider's api_key expired on %s. Get a new token, put it in api_key, and run `localcode check-jwt-key` to confirm the endpoint takes it", when)
+	}
+	return fmt.Sprintf("\n\nhint: the JWT in this provider's api_key is valid until %s, so its date is not why it was refused. Run `localcode check-jwt-key` to see what the endpoint says", when)
 }

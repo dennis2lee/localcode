@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.163.0
+
+A JWT that an OpenAI-compatible endpoint refuses is reported with its expiry date.
+
+**Added**
+
+* A refusal (401 or 403) of an `openai-compat` provider whose `api_key` is a JWT says when the token expired, or that it is valid until a date and so its date is not the cause, and points to `localcode check-jwt-key`. The date is given without a day count, which the retry and fallback decisions could read as a status code
+
 ## v0.162.0
 
 `localcode check-jwt-key` reports whether an endpoint accepts the JWT a gateway issued, put in a provider's `api_key` in config.json.
