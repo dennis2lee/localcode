@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.162.0
+
+`localcode check-key` reports whether an endpoint accepts the `api_key` in config.json, including a JWT that a gateway issues.
+
+**Added**
+
+* `localcode check-key [provider]`: for each `openai-compat` provider with an `api_key`, the key's kind (a JWT is decoded, not verified, with its expiry), the config file it is written in, the endpoint's model list, and one short chat reply; exits 1 when the endpoint refuses the key
+* Warnings for a key in the project's config file, a config file other users can read, and a plain `http` base URL to another machine; the key is never printed, and an endpoint's reply that repeats it is shown with `[the key]` in its place
+* USAGE.md and MODELS.md describe putting a gateway's JWT in `api_key` and checking it
+
 ## v0.161.0
 
 Skills and commands in opencode's own global directory, `~/.config/opencode`, are read.

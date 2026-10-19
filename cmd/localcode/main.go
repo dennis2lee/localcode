@@ -24,10 +24,11 @@ var version = "dev"
 // "git <subcommand>" or "go <subcommand>" works — each owns its own
 // argument syntax rather than sharing run()'s flag.FlagSet.
 var subcommands = map[string]func(args []string) error{
-	"login":   runLogin,
-	"mcp":     runMCP,
-	"run":     runOneShot,
-	"version": runVersionCommand,
+	"check-key": runCheckKey,
+	"login":     runLogin,
+	"mcp":       runMCP,
+	"run":       runOneShot,
+	"version":   runVersionCommand,
 }
 
 // subcommandNames lists what main dispatches on, for the error above.

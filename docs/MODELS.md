@@ -318,6 +318,28 @@ For an existing LiteLLM or similar proxy in opencode's `opencode.jsonc`, copy th
 }
 ```
 
+A gateway that issues a JWT takes it the same way: put the whole token in `api_key`. Keep it in `~/.localcode/config.json` with mode 600, not in a project's config file, which is committed with the project, or write `{env:NAME}` and keep the token in the environment. Then check that the gateway accepts it:
+
+```json
+{
+  "providers": {
+    "gw": {
+      "type": "openai-compat",
+      "base_url": "https://gateway.example.com/v1",
+      "api_key": "eyJhbGciOiJSUzI1NiIs...REPLACE-WITH-YOUR-TOKEN"
+    }
+  },
+  "profiles": { "main": { "provider": "gw", "model": "model-a" } },
+  "default_profile": "main"
+}
+```
+
+```bash
+localcode check-key gw
+```
+
+It decodes the token and shows its expiry, lists the models the gateway serves, and sends one short chat request. See [`localcode check-key`](USAGE.md#checking-a-key-localcode-check-key). A token that expires is replaced by hand: localcode does not renew it.
+
 Some opencode fields have no localcode equivalent:
 
 | opencode field | Why there is no equivalent |

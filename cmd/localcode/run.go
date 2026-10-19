@@ -637,7 +637,7 @@ func (w *runWriter) finish(sessionID string, turnErr error) error {
 // sortedNames and sortedProfiles name what is configured, for the two
 // refusals above. A refusal that says only "no such agent" leaves the
 // reader guessing at spelling.
-func sortedNames(m map[string]config.AgentConfig) []string {
+func sortedNames[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
