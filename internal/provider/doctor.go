@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The probes behind "/llm-doctor". They ask an OpenAI-compatible server
@@ -281,7 +282,9 @@ func (p *OpenAICompat) RawChat(ctx context.Context, body []byte) (RawReply, erro
 		if len(msg) > 300 {
 			msg = msg[:300] + "…"
 		}
-		return RawReply{}, fmt.Errorf("the server answered %d: %s", resp.StatusCode, msg)
+		// The JWT hint as a turn gets it, so a canary that fails on an
+		// expired token is not read as the server having changed.
+		return RawReply{}, fmt.Errorf("the server answered %d: %s%s", resp.StatusCode, msg, jwtRefusalHint(resp.StatusCode, p.APIKey, string(raw), time.Now()))
 	}
 	var parsed struct {
 		Choices []struct {

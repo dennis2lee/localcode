@@ -286,7 +286,10 @@ func (r *keyReport) check(name string, pc config.ProviderConfig, cfg *config.Con
 	reply, err := p.RawChat(ctx, body)
 	cancel()
 	if err != nil {
-		r.line("chat", "%s: %v", m, err)
+		// The status and the endpoint's words; the hint RawChat adds after
+		// them is what the result line below says in its own terms.
+		said, _, _ := strings.Cut(err.Error(), "\n\nhint:")
+		r.line("chat", "%s: %s", m, said)
 		// A refusal from either request is the answer: a chat request that
 		// failed some other way after the model list refused the key does
 		// not make the key less refused.

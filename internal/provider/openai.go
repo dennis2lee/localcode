@@ -425,8 +425,9 @@ func (p *OpenAICompat) Chat(ctx context.Context, req ChatRequest) (<-chan Stream
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
+		body := errorBody(resp.Body)
 		return nil, wrapVisionRefusal(fmt.Errorf("openai-compat endpoint returned %d: %s%s",
-			resp.StatusCode, errorBody(resp.Body), jwtRefusalHint(resp.StatusCode, p.APIKey, time.Now())), req.Model)
+			resp.StatusCode, body, jwtRefusalHint(resp.StatusCode, p.APIKey, body, time.Now())), req.Model)
 	}
 
 	out := make(chan StreamEvent, 16)

@@ -78,18 +78,60 @@ func TestARefusedExpiredJWTSaysWhenItExpired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sendErr := loop.SendMessage(context.Background(), sess.ID, "", "hello")
+	loop.SendMessage(context.Background(), sess.ID, "", "hello")
 	evs, err := store.Events(sess.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seen := fmt.Sprint(sendErr)
+	var logged []string
 	for _, ev := range evs {
 		if ev.Type == events.TypeError {
-			seen += fmt.Sprint(ev.Data["error"])
+			logged = append(logged, fmt.Sprint(ev.Data["error"]))
 		}
 	}
-	if !strings.Contains(seen, "expired on "+exp.UTC().Format("2006-01-02 15:04 MST")) {
-		t.Errorf("the person was not told when the token expired: %s", seen)
+	if !strings.Contains(strings.Join(logged, "\n"), "expired on "+exp.UTC().Format("2006-01-02 15:04 MST")) {
+		t.Errorf("the turn's error event does not say when the token expired: %q", logged)
+	}
+}
+
+// The valid-until hint changes nothing about the decisions either, and a
+// notice that puts a cause in parentheses keeps it on one line: a cause
+// with a hint paragraph split the notice and left ")" after the hint.
+func TestAJWTHintKeepsDecisionsAndNoticesWhole(t *testing.T) {
+	valid := expiredJWT(t, time.Now().Add(400*24*time.Hour))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":"forbidden"}`))
+	}))
+	defer srv.Close()
+	_, err := provider.NewOpenAICompat(srv.URL, valid).Chat(context.Background(),
+		provider.ChatRequest{Model: "m", Messages: []provider.Message{{Role: provider.RoleUser, Content: []provider.Block{provider.TextBlock("hi")}}}})
+	if err == nil || !strings.Contains(err.Error(), "valid until") {
+		t.Fatalf("a 403 of a valid token: %v", err)
+	}
+	if retryableInPlace(err) || !worthFallingBackOver(err) {
+		t.Errorf("the valid-until hint changed a 403's handling: retry %v, fall back %v", retryableInPlace(err), worthFallingBackOver(err))
+	}
+	if got := causeOnOneLine(err); strings.Contains(got, "\n") || !strings.Contains(got, "403") || !strings.Contains(got, "valid until") {
+		t.Errorf("not one line, or lost its content: %q", got)
+	}
+
+	// Through the notice itself.
+	loop, store := newCustomCommandTestLoop(t, "", nil)
+	sess, serr := store.CreateSession("s1", "", "general-purpose", true)
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	loop.reportFallback(sess.ID, modelRun{profileName: "max", profile: config.Profile{Model: "big"}},
+		modelRun{profileName: "fast", profile: config.Profile{Model: "small"}}, err)
+	evs, _ := store.Events(sess.ID, 0)
+	var notice string
+	for _, ev := range evs {
+		if ev.Type == events.TypeError {
+			notice = fmt.Sprint(ev.Data["error"])
+		}
+	}
+	if strings.Contains(notice, "\n") || !strings.HasSuffix(notice, "); falling back to small (fast)") || !strings.Contains(notice, "valid until") {
+		t.Errorf("the fallback notice: %q", notice)
 	}
 }

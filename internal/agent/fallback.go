@@ -396,8 +396,8 @@ func (l *Loop) maybeRetrySameEndpoint(ctx context.Context, sessionID string, run
 	// is announced: the reader of a turn that paused needs to know it
 	// was waiting on purpose.
 	l.Store.Append(sessionID, events.TypeError, map[string]any{
-		"error": fmt.Sprintf("%s did not answer (%v); retrying it in %s (attempt %d of %d) before any fallback",
-			describeRun(run), err, wait, attempt, maxSameEndpointRetries),
+		"error": fmt.Sprintf("%s did not answer (%s); retrying it in %s (attempt %d of %d) before any fallback",
+			describeRun(run), causeOnOneLine(err), wait, attempt, maxSameEndpointRetries),
 		"recovered": true,
 	})
 	runRetryWaitBarrier(sessionID)
@@ -714,11 +714,21 @@ func (l *Loop) nextFallback(chain []attempt, at *int, err error) (attempt, bool)
 // session that mysteriously got worse.
 func (l *Loop) reportFallback(sessionID string, from, to modelRun, cause error) {
 	l.Store.Append(sessionID, events.TypeError, map[string]any{
-		"error": fmt.Sprintf("%s did not answer (%v); falling back to %s",
-			describeRun(from), cause, describeRun(to)),
+		"error": fmt.Sprintf("%s did not answer (%s); falling back to %s",
+			describeRun(from), causeOnOneLine(cause), describeRun(to)),
 		"recovered": true,
 		"fallback":  to.profile.Model,
 	})
+}
+
+// causeOnOneLine is an error on one line, for a notice that puts it in
+// parentheses: a cause carrying a "\n\nhint:" paragraph split the notice
+// across a blank line and left the closing parenthesis after the hint.
+func causeOnOneLine(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return strings.Join(strings.Fields(err.Error()), " ")
 }
 
 func describeRun(r modelRun) string {

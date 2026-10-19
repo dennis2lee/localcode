@@ -176,17 +176,30 @@ func shortDetail(s string) string {
 // The date and nothing else: the retry and fallback decisions read this
 // text, and a count such as "503 days" would read as a server error worth
 // retrying.
-func jwtRefusalHint(status int, key string, now time.Time) string {
+func jwtRefusalHint(status int, key, body string, now time.Time) string {
 	if status != http.StatusUnauthorized && status != http.StatusForbidden {
 		return ""
 	}
 	c, ok := ParseJWT(key)
-	if !ok || c.Expires.IsZero() {
+	if !ok {
 		return ""
 	}
-	when := c.Expires.Format("2006-01-02 15:04 MST")
-	if now.After(c.Expires) {
-		return fmt.Sprintf("\n\nhint: the JWT in this provider's api_key expired on %s. Get a new token, put it in api_key, and run `localcode check-jwt-key` to confirm the endpoint takes it", when)
+	const layout = "2006-01-02 15:04 MST"
+	switch {
+	// Expired from the exp instant on, as RFC 7519 4.1.4 has it.
+	case !c.Expires.IsZero() && !now.Before(c.Expires):
+		return fmt.Sprintf("\n\nhint: the JWT in this provider's api_key expired on %s. Get a new token, put it in api_key, and run `localcode check-jwt-key` to confirm the endpoint takes it", c.Expires.Format(layout))
+	case !c.NotBefore.IsZero() && now.Before(c.NotBefore):
+		// Not valid yet is a date as much as expired is: "valid until"
+		// would have said the date was not the cause when it was.
+		return fmt.Sprintf("\n\nhint: the JWT in this provider's api_key is not valid until %s. Wait until then, or check the clock on this machine and on the endpoint", c.NotBefore.Format(layout))
+	case !c.Expires.IsZero() && strings.Contains(strings.ToLower(body), "expire"):
+		// The endpoint says expired and this machine's clock says not: the
+		// two clocks disagree, and saying the date is not the cause would
+		// contradict the endpoint's own words.
+		return fmt.Sprintf("\n\nhint: the endpoint says the token expired, but by this machine's clock the JWT in this provider's api_key is valid until %s. Check the clock here, or get a new token", c.Expires.Format(layout))
+	case !c.Expires.IsZero():
+		return fmt.Sprintf("\n\nhint: the JWT in this provider's api_key is valid until %s, so its date is not why it was refused. Run `localcode check-jwt-key` to see what the endpoint says", c.Expires.Format(layout))
 	}
-	return fmt.Sprintf("\n\nhint: the JWT in this provider's api_key is valid until %s, so its date is not why it was refused. Run `localcode check-jwt-key` to see what the endpoint says", when)
+	return ""
 }

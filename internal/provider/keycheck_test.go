@@ -219,6 +219,8 @@ func TestJWTRefusalHint(t *testing.T) {
 	past := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": now.Add(-72 * time.Hour).Unix()})
 	future := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": now.Add(300 * 24 * time.Hour).Unix()})
 	noExp := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"iss": "x"})
+	early := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"nbf": now.Add(2 * time.Hour).Unix(), "exp": now.Add(400 * 24 * time.Hour).Unix()})
+	earlyNoExp := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"nbf": now.Add(2 * time.Hour).Unix()})
 	for _, tc := range []struct {
 		status int
 		key    string
@@ -231,8 +233,10 @@ func TestJWTRefusalHint(t *testing.T) {
 		{404, past, ""},
 		{401, "sk-not-a-jwt", ""},
 		{401, noExp, ""},
+		{401, early, "not valid until 2026-10-19 14:00 UTC"},
+		{403, earlyNoExp, "not valid until 2026-10-19 14:00 UTC"},
 	} {
-		got := jwtRefusalHint(tc.status, tc.key, now)
+		got := jwtRefusalHint(tc.status, tc.key, "", now)
 		if tc.want == "" && got != "" || tc.want != "" && !strings.Contains(got, tc.want) {
 			t.Errorf("status %d, key %.12s: %q, want %q", tc.status, tc.key, got, tc.want)
 		}
@@ -260,5 +264,67 @@ func TestOpenAICompatRefusalSaysWhenTheJWTExpired(t *testing.T) {
 	}
 	if !strings.Contains(msg, "hint: the JWT in this provider's api_key expired on ") || !strings.Contains(msg, "localcode check-jwt-key") {
 		t.Errorf("no expiry hint: %s", msg)
+	}
+}
+
+// From the review of the hint: it is a paragraph of its own that names the
+// check, and never a part of the token; a token is expired from its exp
+// instant on; an endpoint that says "expired" while this clock says valid
+// is told apart from a refusal the date has nothing to do with.
+func TestJWTRefusalHintEdges(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	atExp := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": now.Unix()})
+	future := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": now.Add(300 * 24 * time.Hour).Unix()})
+
+	if got := jwtRefusalHint(401, atExp, "", now); !strings.Contains(got, "expired on 2026-10-19 12:00 UTC") {
+		t.Errorf("at the exp instant: %q", got)
+	}
+	got := jwtRefusalHint(401, future, `{"error":"Token has expired"}`, now)
+	if !strings.Contains(got, "the endpoint says the token expired, but by this machine's clock") || strings.Contains(got, "is not why") {
+		t.Errorf("an endpoint saying expired, a clock saying valid: %q", got)
+	}
+	for _, key := range []string{atExp, future} {
+		for _, body := range []string{"", "expired"} {
+			h := jwtRefusalHint(403, key, body, now)
+			if !strings.HasPrefix(h, "\n\nhint: the ") || !strings.Contains(h, "JWT") {
+				t.Errorf("not a hint paragraph: %q", h)
+			}
+			for _, part := range strings.Split(key, ".") {
+				if len(part) >= 8 && strings.Contains(h, part) {
+					t.Errorf("the hint carries part of the token: %q", h)
+				}
+			}
+		}
+	}
+	if h := jwtRefusalHint(401, future, "", now); !strings.Contains(h, "localcode check-jwt-key") {
+		t.Errorf("the valid-until hint does not name the check: %q", h)
+	}
+}
+
+// The hint is added for a refusal only, from the status the endpoint sent,
+// on the chat path and on /llm-doctor's raw requests alike.
+func TestTheHintFollowsTheStatus(t *testing.T) {
+	expired := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": time.Now().Add(-48 * time.Hour).Unix()})
+	valid := makeJWT(t, map[string]any{"alg": "RS256"}, map[string]any{"exp": time.Now().Add(48 * time.Hour).Unix()})
+	code := http.StatusInternalServerError
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(code)
+		w.Write([]byte(`{"error":"no"}`))
+	}))
+	defer srv.Close()
+	chat := func(key string) string {
+		_, err := NewOpenAICompat(srv.URL, key).Chat(t.Context(), ChatRequest{Model: "m", Messages: []Message{{Role: RoleUser, Content: []Block{TextBlock("hi")}}}})
+		return err.Error()
+	}
+	if msg := chat(expired); strings.Contains(msg, "hint:") {
+		t.Errorf("a 500 got a JWT hint: %s", msg)
+	}
+	code = http.StatusUnauthorized
+	if msg := chat(valid); !strings.Contains(msg, "valid until") {
+		t.Errorf("a 401 of a valid token: %s", msg)
+	}
+	_, err := NewOpenAICompat(srv.URL, expired).RawChat(t.Context(), []byte(`{"model":"m","messages":[]}`))
+	if err == nil || !strings.HasPrefix(err.Error(), "the server answered 401: ") || !strings.Contains(err.Error(), "expired on ") {
+		t.Errorf("RawChat on an expired token: %v", err)
 	}
 }

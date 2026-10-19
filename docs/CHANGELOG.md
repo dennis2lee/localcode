@@ -6,7 +6,11 @@ A JWT that an OpenAI-compatible endpoint refuses is reported with its expiry dat
 
 **Added**
 
-* A refusal (401 or 403) of an `openai-compat` provider whose `api_key` is a JWT says when the token expired, or that it is valid until a date and so its date is not the cause, and points to `localcode check-jwt-key`. The date is given without a day count, which the retry and fallback decisions could read as a status code
+* A refusal (401 or 403) of an `openai-compat` provider whose `api_key` is a JWT with an expiry or a start date says what the date has to do with it: expired and when, not valid yet, an endpoint that says expired while this machine's clock disagrees, or valid until a date and so not the cause. It points to `localcode check-jwt-key`, and `/llm-doctor`'s requests say the same. The date is given without a day count, which the retry and fallback decisions could read as a status code
+
+**Changed**
+
+* Retry and fallback notices put the cause on one line, so a cause with a hint paragraph no longer splits the notice and leaves its closing parenthesis after the hint
 
 ## v0.162.0
 

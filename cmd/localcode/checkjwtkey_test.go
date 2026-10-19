@@ -177,6 +177,9 @@ func TestCheckJWTKeyReportsARefusedKey(t *testing.T) {
 					t.Errorf("the report does not say %q:\n%s", want, report)
 				}
 			}
+			if strings.Contains(report, "hint:") {
+				t.Errorf("the chat line carries the turn's hint paragraph:\n%s", report)
+			}
 			if got := strings.Contains(report, "EXPIRED on") && strings.Contains(report, "and the token has expired"); got != tc.expired {
 				t.Errorf("expired said %v, want %v:\n%s", got, tc.expired, report)
 			}
