@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"reflect"
 	"testing"
 
 	"localcode/internal/events"
@@ -67,5 +68,42 @@ func TestReplayLeavesALogWithNoFinishedReplyAlone(t *testing.T) {
 	}
 	if got := collapseFinishedDeltas(in); len(got) != 2 {
 		t.Errorf("replayed %d of 2 events", len(got))
+	}
+}
+
+// A reply that asked for a tool is logged as its fragments, the call's
+// tool.start, and then its end: the stream is drained before any tool
+// runs. With every fragment dropped, a re-opened conversation drew each
+// tool call above the sentence that introduced it. One fragment stays,
+// where the reply began, carrying the whole reply.
+func TestReplayKeepsAReplyAboveTheToolCallsItAskedFor(t *testing.T) {
+	in := []events.Event{
+		ev(events.TypeUserMessage, 1, "q"),
+		ev(events.TypeMessagePartDelta, 2, "Let me "),
+		ev(events.TypeMessagePartDelta, 3, "look."),
+		{Type: events.TypeToolStart, Seq: 4, Data: map[string]any{"name": "glob"}},
+		{Type: events.TypeToolStart, Seq: 5, Data: map[string]any{"name": "grep"}},
+		ev(events.TypeMessagePartEnd, 6, "Let me look."),
+		{Type: events.TypeToolEnd, Seq: 7},
+		{Type: events.TypeToolStart, Seq: 8, Data: map[string]any{"name": "bash"}},
+		ev(events.TypeMessagePartEnd, 9, ""),
+		ev(events.TypeMessagePartDelta, 10, "Done."),
+		ev(events.TypeMessagePartEnd, 11, "Done."),
+		ev(events.TypeTurnDone, 12, ""),
+	}
+	out := collapseFinishedDeltas(in)
+	var got []uint64
+	for _, e := range out {
+		got = append(got, e.Seq)
+	}
+	if want := []uint64{1, 2, 4, 5, 6, 7, 8, 9, 11, 12}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("replayed seqs %v, want %v", got, want)
+	}
+	if text := out[1].Data["text"]; text != "Let me look." {
+		t.Errorf("the fragment kept is %q, want the whole reply", text)
+	}
+	// The log's own event is shared with every reader of it.
+	if text := in[1].Data["text"]; text != "Let me " {
+		t.Errorf("the logged fragment was rewritten to %q", text)
 	}
 }

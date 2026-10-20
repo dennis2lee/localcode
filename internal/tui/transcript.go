@@ -91,9 +91,11 @@ func (m *Model) appendEntry(kind entryKind, text string) {
 // carried an image is displayed with a note saying so, while the echo it
 // replaces has to be matched on what was actually typed.
 func (m *Model) appendUser(rawText, displayText string) {
+	// A new prompt starts a new reply, whether or not the last one's end
+	// ever came.
+	m.streamOpen = false
 	m.resolvePendingUser(rawText)
 	m.appendEntry(entryUser, displayText)
-	m.streamOpen = false
 }
 
 // appendSent draws a message handed to a turn that is already running.
@@ -116,7 +118,6 @@ func (m *Model) appendSent(text string) {
 // response to that is to type it again.
 func (m *Model) appendPendingUser(text string) {
 	m.appendEntry(entryPending, text)
-	m.streamOpen = false
 	// Called from the key handler, not applyEvent, so it refreshes itself.
 	m.refreshViewport()
 }
@@ -140,6 +141,9 @@ func (m *Model) resolvePendingUser(text string) bool {
 		}
 		m.transcript = append(m.transcript[:i:i], m.transcript[i+1:]...)
 		m.transcriptRev++
+		if m.streamOpen && i < m.streamAt {
+			m.streamAt--
+		}
 		return true
 	}
 	return false
@@ -181,11 +185,10 @@ func (m *Model) abandonPendingUsers() {
 // client-side (well, /version does hit the daemon, but the answer isn't
 // part of the session's event log either way).
 func (m *Model) appendLocal(text string) {
-	m.appendEntry(entryLocal, text)
 	// A local reply (most commonly "[queued] ...", fired while a turn is
-	// mid-stream) always starts a fresh paragraph rather than gluing onto
-	// whatever model entry happens to be open — see appendModelDelta.
-	m.streamOpen = false
+	// mid-stream) is its own entry below the reply, and the reply goes on
+	// streaming above it — see appendModelDelta.
+	m.appendEntry(entryLocal, text)
 	// Called from key handlers, not applyEvent, so it refreshes on its own.
 	m.refreshViewport()
 }
@@ -198,14 +201,34 @@ func (m *Model) appendLocal(text string) {
 // from message.part.end) closes it, so the next delta — the start of a
 // different model message — begins a new entry instead of continuing this
 // one.
+//
+// The open entry is not always the last one. A tool line, or a line this
+// client wrote, can sit below a reply that is still streaming, and the
+// rest of the reply goes into the reply, not after them.
 func (m *Model) appendModelDelta(text string) {
-	if m.streamOpen && len(m.transcript) > 0 {
-		m.transcript[len(m.transcript)-1].text += text
+	if i := m.openReply(); i >= 0 {
+		m.transcript[i].text += text
 		m.transcriptRev++
-	} else {
-		m.appendEntry(entryModel, text)
-		m.streamOpen = true
+		return
 	}
+	m.appendEntry(entryModel, text)
+	m.streamOpen = true
+	m.streamAt = len(m.transcript) - 1
+}
+
+// openReply is the index of the model message streaming now, or -1.
+//
+// Checked rather than trusted: an index into a slice that other code
+// appends to, inserts into and deletes from is right only while every
+// one of those keeps it right, and a stale one would write a reply over
+// some other line. One that no longer names a model entry is treated as
+// no reply at all, which at worst draws the rest of the reply as a new
+// one.
+func (m *Model) openReply() int {
+	if !m.streamOpen || m.streamAt < 0 || m.streamAt >= len(m.transcript) || m.transcript[m.streamAt].kind != entryModel {
+		return -1
+	}
+	return m.streamAt
 }
 
 // endModelStream closes one model message. text is the whole reply as the
@@ -229,10 +252,10 @@ func (m *Model) appendModelDelta(text string) {
 // entry is not open and the text starts one. See collapseFinishedDeltas
 // in the daemon.
 func (m *Model) endModelStream(text string) {
-	switch {
+	switch i := m.openReply(); {
 	case text == "":
-	case m.streamOpen && len(m.transcript) > 0:
-		m.transcript[len(m.transcript)-1].text = text
+	case i >= 0:
+		m.transcript[i].text = text
 		m.transcriptRev++
 	default:
 		m.appendModelDelta(text)
@@ -241,11 +264,10 @@ func (m *Model) endModelStream(text string) {
 }
 
 // appendTool adds a server-driven status line — [delegated to x],
-// [cancelled] — which, like appendLocal, always starts fresh rather than
-// extending an in-progress model entry.
+// [cancelled] — which, like appendLocal, is its own entry rather than an
+// extension of an in-progress model entry.
 func (m *Model) appendTool(text string) {
 	m.appendEntry(entryTool, text)
-	m.streamOpen = false
 }
 
 // refreshViewport re-renders the transcript into the viewport at its

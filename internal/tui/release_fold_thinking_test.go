@@ -290,9 +290,10 @@ func TestWhitespaceReasoningOpensNoBlock(t *testing.T) {
 	}
 }
 
-// Ctrl+O with nothing to open says so only between replies: a note
-// written while an answer streams closed it, and the rest of the answer
-// was then drawn again below the note.
+// Ctrl+O with nothing to open, while an answer streams, leaves the answer
+// drawn once. A note written then used to close the answer, and the rest
+// of it was drawn again below the note; the note is now written below an
+// answer that stays open (see TestLinesWrittenMidReplyLeaveItOpen).
 func TestCtrlOWithNothingToOpenLeavesAStreamingAnswerAlone(t *testing.T) {
 	m := newTestModel()
 	m.applyEvent(events.Event{Type: events.TypeMessagePartDelta, Data: map[string]any{"text": "Hello"}})

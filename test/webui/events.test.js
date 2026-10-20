@@ -618,3 +618,20 @@ test('a turn that ends with a call still running closes out its row', async () =
   assert.ok(!app.el('transcript').innerHTML.includes('running'), 'the row is still spinning after the turn ended');
   assert.ok(app.el('transcript').innerHTML.includes('not run'), app.el('transcript').innerHTML);
 });
+
+// The daemon logs a message's tool.start before its message.part.end, so
+// the end arrives below the call's row. It is written into the reply above
+// the row, not drawn again under it; the TUI drew every such reply twice.
+// On a re-open the reply's fragments are replayed as one, in the reply's
+// place, and the same order holds.
+test('a reply that asked for a tool is drawn once, above the call', async () => {
+  const app = await load();
+  app.applyEvent({ type: 'message.part.delta', data: { text: 'Let me ' } });
+  app.applyEvent({ type: 'message.part.delta', data: { text: 'look.' } });
+  app.applyEvent({ type: 'tool.start', data: { tool_use_id: 't1', name: 'glob', input: '{"pattern":"*.go"}' } });
+  app.applyEvent({ type: 'message.part.end', data: { text: 'Let me look.' } });
+
+  const html = app.transcript();
+  assert.equal(html.split('Let me look.').length - 1, 1, html);
+  assert.ok(html.indexOf('Let me look.') < html.indexOf('msg-toolcall'), html);
+});

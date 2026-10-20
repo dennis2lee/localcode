@@ -121,10 +121,18 @@ type Model struct {
 	transcript []transcriptEntry
 	// streamOpen is true between the first message.part.delta of a model
 	// message and its message.part.end — while true, the next delta
-	// extends the last transcript entry instead of starting a new one, so a
+	// extends the entry at streamAt instead of starting a new one, so a
 	// reply that streams in dozens of small chunks becomes one entry, not
 	// dozens.
+	//
+	// streamAt rather than the last entry, because lines are written
+	// below a reply while it is still open: the daemon logs a message's
+	// tool.start before its message.part.end, and a message sent into the
+	// running turn is drawn the moment it is sent. Each of those used to
+	// close the reply, and the end that followed drew the whole reply a
+	// second time below them. See openReply.
 	streamOpen bool
+	streamAt   int
 	// transcriptRev counts writes to transcript. applyEvent compares it
 	// across an event to decide whether to re-render: most events
 	// (tool.start, task.status, agent.switched, usage) only move the status

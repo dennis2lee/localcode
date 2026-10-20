@@ -77,13 +77,13 @@ func (m *Model) appendThinkingDelta(text string) {
 	m.thinkingSince = time.Now()
 	m.thinkingLive = true
 	block := transcriptEntry{kind: entryThinking, text: text, live: true, note: thinkingLiveNote(0)}
-	if last := len(m.transcript) - 1; m.streamOpen && last >= 0 {
+	if i := m.openReply(); i >= 0 {
 		// The model reasons after it has started answering. The block
 		// goes in front of the answer, which is where reasoning sits in
 		// the message, and the answer stays the open entry: splitting
 		// it here would have message.part.end write the whole reply
 		// again below the block, the part above it included.
-		m.transcript = append(m.transcript[:last], block, m.transcript[last])
+		m.insertBeforeReply(i, block)
 	} else {
 		m.transcript = append(m.transcript, block)
 	}
@@ -111,12 +111,19 @@ func (m *Model) settleThinkingBlock(text string, elapsed time.Duration) {
 	block := transcriptEntry{
 		kind: entryThinking, text: text, note: "Thought for " + formatElapsed(elapsed), open: m.thinkingExpanded,
 	}
-	if last := len(m.transcript) - 1; m.streamOpen && last >= 0 {
-		m.transcript = append(m.transcript[:last], block, m.transcript[last])
+	if i := m.openReply(); i >= 0 {
+		m.insertBeforeReply(i, block)
 	} else {
 		m.transcript = append(m.transcript, block)
 	}
 	m.transcriptRev++
+}
+
+// insertBeforeReply puts block in front of the open reply at i, which
+// moves the reply down one.
+func (m *Model) insertBeforeReply(i int, block transcriptEntry) {
+	m.transcript = append(m.transcript[:i], append([]transcriptEntry{block}, m.transcript[i:]...)...)
+	m.streamAt = i + 1
 }
 
 // foldThinking closes the block streaming now, if there is one. elapsed

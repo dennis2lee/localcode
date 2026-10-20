@@ -94,6 +94,9 @@ func (m *Model) endTurn() {
 	// A cancelled call never gets its tool.end, so whatever its start
 	// left behind would otherwise sit here until a call reuses its id.
 	clear(m.pendingTools)
+	// Every reply of the turn has ended by now. One still open is one
+	// whose end never came, and the next turn's reply is not part of it.
+	m.streamOpen = false
 }
 
 func (m *Model) applyEvent(ev events.Event) {
@@ -259,7 +262,10 @@ func (m *Model) applyEvent(ev events.Event) {
 		}
 		m.foldThinking(0)
 		m.skipFoldDeltas = false
-		m.endModelStream("")
+		// The reply stays open. Its message.part.end is still to come,
+		// after every tool.start of the message, and it writes the whole
+		// reply into the entry above this line; closing it here had the
+		// end draw the reply a second time below the line instead.
 		if arg := summarizeToolInput(input); arg != "" {
 			m.appendEntry(entryTool, "▸ "+name+"  "+arg)
 		} else {

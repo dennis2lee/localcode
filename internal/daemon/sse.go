@@ -36,6 +36,14 @@ var heartbeatInterval = 20 * time.Second
 // message.part.end belong to a reply still streaming, where they are the
 // only text there is — that is what makes re-opening a conversation while
 // the model is mid-sentence show the sentence so far rather than nothing.
+//
+// A finished reply that asked for a tool keeps one delta, in the place of
+// its first, carrying the whole reply. The message's tool.start events
+// are logged before its message.part.end, so with every delta gone the
+// first sign of the reply was its end, below the tool lines: a
+// conversation re-opened showed each tool call above the sentence that
+// introduced it. The one delta opens the reply where it began, and the
+// end then writes the same text into it.
 func collapseFinishedDeltas(evs []events.Event) []events.Event {
 	lastEnd := -1
 	for i, ev := range evs {
@@ -46,10 +54,35 @@ func collapseFinishedDeltas(evs []events.Event) []events.Event {
 	if lastEnd < 0 {
 		return evs
 	}
+	// The first delta of each finished reply a tool.start interrupts,
+	// and the whole text its end carries.
+	opens := map[int]string{}
+	first, tool := -1, false
+	for i := 0; i <= lastEnd; i++ {
+		switch evs[i].Type {
+		case events.TypeMessagePartDelta:
+			if first < 0 {
+				first = i
+			}
+		case events.TypeToolStart:
+			tool = first >= 0
+		case events.TypeMessagePartEnd:
+			if text, _ := evs[i].Data["text"].(string); first >= 0 && tool && text != "" {
+				opens[first] = text
+			}
+			first, tool = -1, false
+		}
+	}
 	out := make([]events.Event, 0, len(evs))
 	for i, ev := range evs {
 		if i < lastEnd && ev.Type == events.TypeMessagePartDelta {
-			continue
+			text, ok := opens[i]
+			if !ok {
+				continue
+			}
+			// A new map: the event is the store's, shared with every
+			// other reader of the log.
+			ev.Data = map[string]any{"text": text}
 		}
 		out = append(out, ev)
 	}
