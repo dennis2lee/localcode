@@ -52,10 +52,10 @@ func clientOr(c *http.Client) *http.Client {
 }
 
 // refuseDowngrade is the half of the redirect policy that refuses: Go's
-// own, ten redirects at most, and no redirect from https to plain http. Go forwards the Authorization
-// header to a redirect on the same host whatever its scheme, so an https
-// endpoint that redirected to http sent the API key or the JWT across the
-// network unencrypted.
+// own, ten redirects at most, and no redirect from https to plain http.
+// Go forwards the Authorization header to a redirect on the same host
+// whatever its scheme, so an https endpoint that redirected to http sent
+// the API key or the JWT across the network unencrypted.
 func refuseDowngrade(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
